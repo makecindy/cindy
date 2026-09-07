@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { createBackgroundConnection } from './backgroundConnection';
+import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import {
@@ -77,7 +78,6 @@ import {
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import {
   runSessionMessagesSnapshotSingleFlight,
-  settleProgressiveSnapshot,
   runSessionPendingInteractionsSnapshotSingleFlight,
   runSessionProjectionSnapshotSingleFlight,
 } from '@/device-link/sessionSnapshotSingleFlight';
@@ -185,6 +185,7 @@ export interface DeviceLinkContextValue {
 }
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
+const recoveryDiagnostics = new WeakMap<DeviceLinkClient, ReturnType<typeof createRecoveryDiagnostics>>();
 
 /**
  * 本控制端声明的端到端可选能力(link-open 与 subscribe 两处共用同一份,漏一处会让
@@ -429,7 +430,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     topics: readonly Topic[],
   ) => {
     const releaseGeneration = backgroundReleaseGenerationRef.current;
-    const startedAt = Date.now();
+    const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochRef.current);
     await confirmTrackedSubscription({
       isCurrent: () => !backgroundReleaseInFlightRef.current
         && backgroundReleaseGenerationRef.current === releaseGeneration && clientRef.current === client,
@@ -447,10 +448,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       ),
       acknowledge: (toSend) => {
         // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
-        noteSessionLiveStreamsAcked(
-          markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend),
-        );
-        console.debug('[device-link] recovery subscription acknowledged', { elapsedMs: Date.now() - startedAt });
+        const held = markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
+        noteSessionLiveStreamsAcked(held);
+        if (held.length > 0) record?.('subscription', 'applied', held.length);
       },
     });
   }, []);
@@ -800,6 +800,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
     });
     clientRef.current = client;
+    const diagnostics = createRecoveryDiagnostics(
+      (event) => mobileDeviceLinkLogger.info('recovery phase', event),
+      () => connectionEpochRef.current,
+    );
+    recoveryDiagnostics.set(client, diagnostics);
+    if (AppState.currentState === 'active') diagnostics.foreground();
     const offIssue = client.onConnectionIssue(setConnectionIssue);
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
@@ -1114,6 +1120,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
+        diagnostics.foreground();
         backgroundReleaseInFlightRef.current = false;
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
@@ -1125,6 +1132,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         void rehydrateWithClient(client);
       }
       if (next === 'background') {
+        diagnostics.background();
         backgroundReleaseInFlightRef.current = true;
         backgroundReleaseGenerationRef.current += 1;
         // App 生命周期暂停全部恢复执行，但各 peer 状态仍彼此独立；回前台统一
@@ -1155,6 +1163,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
     return () => {
       disposed = true;
+      diagnostics.background();
+      recoveryDiagnostics.delete(client);
       networkSubscription?.remove();
       sub.remove();
       backgroundConnection.dispose();
@@ -1403,6 +1413,9 @@ async function rebuildSessionSnapshot(
   opts: DeviceLinkRehydrateSendOptions | undefined,
   isCurrent: () => boolean,
 ): Promise<void> {
+  const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpoch);
+  const measured = <T,>(phase: RecoveryPhase, read: Promise<T>, apply: (value: T) => boolean) =>
+    settleMeasuredSnapshot(read, apply, (outcome) => record?.(phase, outcome));
   // 这四个并发请求是同一轮补齐:一次路由抖动可能让它们同时等满超时,但这只
   // 代表一个独立故障观测。共享显式 cohort,避免单轮 fan-out 直接凑满 3 次阈值。
   const sendOpts: SendInvokeOptions = {
@@ -1426,7 +1439,7 @@ async function rebuildSessionSnapshot(
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
   // 暂不在补齐范围(需扩桌面端 invoke 白名单)。
   const applyHistory = (value: RemoteMessage[]) => {
-    if (!isCurrent()) return;
+    if (!isCurrent()) return false;
     if (Array.isArray(value)) {
       // moreBeyondWindow:这一页上沿之外服务端还有历史(满 80 条,或被 device-link 裁过行)。为真时
       // store 不保留早于本页的缓存段 —— 断连期间漏收的 push 可能正落在两段之间,保留就在窗口里
@@ -1435,7 +1448,7 @@ async function rebuildSessionSnapshot(
         moreBeyondWindow: hasMoreOlderMessages(value, RECONNECT_MESSAGE_WINDOW_LIMIT),
       };
       if (messageAuthorityAtRequestStart) {
-        remoteSessionStore.setLatestMessageWindow(sessionId, value, {
+        return remoteSessionStore.setLatestMessageWindow(sessionId, value, {
           ...windowOptions,
           authority: messageAuthorityAtRequestStart,
         });
@@ -1450,36 +1463,42 @@ async function rebuildSessionSnapshot(
         // enter / leave / forget / clear，生命周期 fence 就会失效，旧重连响应不得越过
         // 新生命周期。Store 同时校验 regular retention 与物理设备归属，避免旧设备响应
         // 写回新 shard。
-        remoteSessionStore.setLatestMessageWindow(sessionId, value, windowOptions);
+        return remoteSessionStore.setLatestMessageWindow(sessionId, value, windowOptions);
       }
     }
+    return false;
   };
   const applyPending = (value: PendingInteraction[]) => {
-    if (!isCurrent()) return;
+    if (!isCurrent()) return false;
     if (Array.isArray(value)) {
       remoteSessionStore.setPendingInteractions(sessionId, value, { finalizeStreaming: true });
+      return true;
     }
+    return false;
   };
   const applyProjection = (value: InputProjection) => {
-    if (!isCurrent()) return;
+    if (!isCurrent()) return false;
     if (value) {
-      remoteSessionStore.setInputProjectionIfCurrent(
+      return remoteSessionStore.setInputProjectionIfCurrent(
         sessionId,
         value,
         projectionEpochAtRequestStart,
       );
     }
+    return false;
   };
   const applyGoal = (value: MobileGoalStatusPayload | null | undefined) => {
-    if (!isCurrent()) return;
+    if (!isCurrent()) return false;
     // undefined = 未拿到/未知(兼容形态的空返回),不能当作权威「无 goal」落库——
     // 那会把在世的 goal 卡清掉直到下一条 push;只有显式 null 才代表确认无 goal。
     if (value !== undefined) {
       remoteSessionStore.setGoalStatus(sessionId, value);
+      return true;
     }
+    return false;
   };
   const [history, pending, projection, goal] = await Promise.all([
-    settleProgressiveSnapshot(runSessionMessagesSnapshotSingleFlight(
+    measured('history', runSessionMessagesSnapshotSingleFlight(
       snapshotScope,
       RECONNECT_MESSAGE_WINDOW_LIMIT,
       messageAuthorityAtRequestStart
@@ -1497,7 +1516,7 @@ async function rebuildSessionSnapshot(
         sendOpts,
       ),
     ), applyHistory),
-    settleProgressiveSnapshot(runSessionPendingInteractionsSnapshotSingleFlight(
+    measured('pending', runSessionPendingInteractionsSnapshotSingleFlight(
       snapshotScope,
       pendingSnapshotAtRequestStart,
       () => sendInvokeWithAccessHandling<PendingInteraction[]>(
@@ -1508,7 +1527,7 @@ async function rebuildSessionSnapshot(
         sendOpts,
       ),
     ), applyPending),
-    settleProgressiveSnapshot(runSessionProjectionSnapshotSingleFlight(
+    measured('projection', runSessionProjectionSnapshotSingleFlight(
       snapshotScope,
       projectionEpochAtRequestStart,
       () => sendInvokeWithAccessHandling<InputProjection>(
@@ -1519,7 +1538,7 @@ async function rebuildSessionSnapshot(
         sendOpts,
       ),
     ), applyProjection),
-    settleProgressiveSnapshot(sendInvokeWithAccessHandling<MobileGoalStatusPayload | null | undefined>(
+    measured('goal', sendInvokeWithAccessHandling<MobileGoalStatusPayload | null | undefined>(
       client,
       deviceId,
       'maker:goal:get-status',
