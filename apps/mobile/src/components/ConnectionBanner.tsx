@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { LoaderCircle } from 'lucide-react-native';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { Text } from '@/components/AppText';
 import type { DeviceLinkConnectionIssue, DeviceLinkStatus } from '@cindy/device-link';
 import {
@@ -93,6 +95,7 @@ export function ConnectionBanner({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const reduceMotion = useReduceMotionEnabled();
   const { t } = useTranslation();
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
@@ -168,19 +171,26 @@ export function ConnectionBanner({
           </Text>
         ) : null}
       </View>
-      {showRecoveryProgress ? (
+      {showSyncAction ? (
+        <ConnectionSyncButton
+          compact={compact}
+          loading={loading}
+          onPress={onSync}
+          testID="connection.syncButton"
+        />
+      ) : showRecoveryProgress ? reduceMotion === false ? (
         <ActivityIndicator
           accessibilityLabel={`${title} · ${copy}`}
           color={colors.textSecondary}
           size="small"
           testID="connection.recoveryProgress"
         />
-      ) : showSyncAction ? (
-        <ConnectionSyncButton
-          compact={compact}
-          loading={loading}
-          onPress={onSync}
-          testID="connection.syncButton"
+      ) : (
+        <LoaderCircle
+          accessibilityLabel={`${title} · ${copy}`}
+          color={colors.textSecondary}
+          size={20}
+          testID="connection.recoveryProgressStatic"
         />
       ) : null}
     </View>
