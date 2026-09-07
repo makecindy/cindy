@@ -39,6 +39,15 @@ function createSessionSerializer() {
 }
 
 describe('remote directory grant atomic update', () => {
+  it('revokes stale runtime Library access even when the persisted grant is already empty', async () => {
+    const state = createState();
+    state.runtime.extraDirs = ['cindy-library:/old'];
+    expect((await state.update('extraDirs', [])).changed).toBe(false);
+    expect(state.setExtraDirs).toHaveBeenCalledWith([]);
+    expect(state.runtime.extraDirs).toEqual([]);
+    expect(state.persist).not.toHaveBeenCalled();
+  });
+
   it.each(['extraDirs', 'writableDirs'] as const)('does not rebroadcast identical %s, but restores rebuilt runtime grants', async (axis) => {
     const state = createState(['/reference'], ['/output']);
     state.runtime[axis] = [];

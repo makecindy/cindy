@@ -5913,6 +5913,46 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
 });
 
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  it.each([0, 2])('refunds a failed fragmented send after %s physical frames so another peer can reply', async (written) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      const send = socket.send.bind(socket);
+      let sent = 0;
+      socket.send = (data) => {
+        const env = JSON.parse(data) as Envelope;
+        if (env.dst === 'a' && parseTransportPayload(env.payload)) {
+          if (sent === written) throw new Error('socket raced');
+          sent++;
+        }
+        send(data);
+      };
+      const attempt = () => h.client.sendInvokeResult('a', 'large', { ok: true, result: 'x'.repeat(12 * 128 * 1024) });
+      if (written === 0) expect(attempt).toThrow('socket raced');
+      else expect(attempt).not.toThrow();
+      expect(sent).toBe(written);
+      socket.send = send;
+      h.client.sendInvokeResult('b', 'healthy', { ok: true, result: 'ok' });
+      expect(socket.sent.some((env) => env.dst === 'b' && env.kind === 'invoke-result')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('paces all reliable sends after 1013 without starving another peer or control ACKs', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: {

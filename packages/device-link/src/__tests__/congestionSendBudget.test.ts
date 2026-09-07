@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { CongestionSendBudget } from '../congestionSendBudget.js';
 
 describe('relay congestion frame budget', () => {
+  it('refunds unwritten frames without erasing the cost of a partial send', () => {
+    const budget = new CongestionSendBudget();
+    const peers = ['a', 'b'];
+    expect(budget.take('a', 32, peers, 0)).toBe(true);
+    budget.refund('a', 32);
+    expect(budget.take('a', 32, peers, 0)).toBe(true);
+    budget.refund('a', 30);
+    expect(budget.take('b', 4, peers, 0)).toBe(true);
+    expect(budget.take('a', 2, peers, 0)).toBe(true);
+    expect(budget.take('a', 1, peers, 0)).toBe(false);
+    expect(budget.take('b', 4, peers, 250)).toBe(true);
+  });
+
   it('bounds combined peer bursts including repeated ACK-triggered passes', () => {
     const budget = new CongestionSendBudget();
     const peers = ['a', 'b'];

@@ -22,6 +22,9 @@ export function libraryExtraDirSyncTargets(
       targets.add(row.id);
     }
   }
+  // Runtime lifetime is independent of DB visibility/status. A live archived or
+  // hidden task must still revoke its old Library slot when focus changes.
+  for (const id of liveIds) targets.add(id);
   if (focused) targets.add(focused);
   return targets;
 }

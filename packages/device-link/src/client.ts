@@ -2789,11 +2789,12 @@ export class DeviceLinkClient {
       this.getTransportBaseSeq(peer),
     );
     this.assertWebSocketCapacity(this.measureReliableFrames(frames));
-    if (this.congestionCloseStreak > 0) {
+    const congestionBudget = this.congestionCloseStreak > 0 ? this.congestionSendBudget : null;
+    if (congestionBudget) {
       const peers = [...this.peerTransport.entries()]
         .filter(([, candidate]) => candidate.reliable && this.isPeerSendReady(candidate))
         .map(([id]) => id);
-      if (!this.congestionSendBudget.take(
+      if (!congestionBudget.take(
         pending.envelope.dst!, frames.length, peers, this.monotonicNow(),
       )) return 0;
     }
@@ -2813,6 +2814,7 @@ export class DeviceLinkClient {
         err,
       );
     } finally {
+      congestionBudget?.refund(pending.envelope.dst!, frames.length - sent);
       if (sent > 0) {
         pending.sent = true;
         pending.attempts++;

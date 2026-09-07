@@ -12,6 +12,12 @@ export class CongestionSendBudget {
     this.byPeer.clear();
   }
 
+  /** Settle the synchronous send attempt: only frames actually written cost credit. */
+  refund(peer: string, unsentFrames: number): void {
+    this.spent = Math.max(0, this.spent - unsentFrames);
+    this.byPeer.set(peer, Math.max(0, (this.byPeer.get(peer) ?? 0) - unsentFrames));
+  }
+
   take(peer: string, frames: number, peers: readonly string[], now: number): boolean {
     const window = Math.floor(now / 250);
     if (window !== this.window) {
