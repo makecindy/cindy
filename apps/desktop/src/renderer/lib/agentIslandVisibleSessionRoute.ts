@@ -22,7 +22,8 @@ export function resolveAgentIslandVisibleSessionIdFromPath(
 }
 
 export function resolveAgentIslandVisibleBotSessionIdFromPath(pathname: string, botProfiles: readonly BotProfile[]): string | null {
-  const m = matchPath('/bots/:botId/(session|history)/:sessionId', pathname);
+  const m = matchPath('/bots/:botId/session/:sessionId', pathname) ??
+    matchPath('/bots/:botId/history/:sessionId', pathname);
   if (m?.params.sessionId) return m.params.sessionId;
   const b = matchPath('/bots/:botId', pathname);
   return botProfiles.find(p => p.id === b?.params.botId)?.sessions.find(x => x.role === 'canonical')?.id ?? null;
