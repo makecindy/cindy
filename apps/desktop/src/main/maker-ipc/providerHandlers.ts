@@ -237,7 +237,7 @@ export interface ProviderHandlerDeps {
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
    * key = `${agent}:${providerId}:${modelId}`,与 renderer modelVisibilityPrefs.keyOf 一致。
    */
-  getModelVisibilityOverrides(): Record<string, boolean>;
+  getModelVisibilityOverrides(providers: readonly ProviderView[]): Record<string, boolean>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
   /**
@@ -1029,7 +1029,7 @@ export function registerProviderHandlers(
         ownerGeneration: ownerAtIngress?.generation ?? 0,
         providers: providers.map(withoutProviderHeaderCredentials),
         providerOrder,
-        modelVisibilityOverrides: deps.getModelVisibilityOverrides(),
+        modelVisibilityOverrides: deps.getModelVisibilityOverrides(providers),
       };
     },
   );

@@ -2,7 +2,7 @@
  * modelVisibilityPrefs.test.ts
  * ---------------------------------------------------------------------------
  * 回归 state/modelVisibilityPrefs.ts 的核心约定:
- *   1. 无 override → 跟随目录默认值(defaultEnabled 缺省=开 / =false 默认关 / =true 默认开)
+ *   1. 新配置首次目录初始化；已初始化或既有配置不因目录默认改变
  *   2. set override 覆盖目录默认(把默认开的关掉 / 把默认关的打开)
  *   3. set/get 往返 + owner-scoped localStorage 持久化(模拟 app 重启)
  *   4. 按 (agent, providerId, modelId) 分槽:同名模型在 cc / codex 互不覆盖
@@ -10,7 +10,7 @@
  *   6. 跨 agent 的一次用户操作原子落盘，失败不留下部分状态
  *   7. 同值写入短路(不抛)
  *   8. 旧全局 key 只由 Main 仲裁出的首个 owner 认领,新账号默认隔离
- *   9. schema 损坏 / 脏数据 → 静默回退,跟随目录默认
+ *   9. schema 损坏 / 脏数据 → 不猜测开启未知模型
  *  10. main 镜像同步异步失败时不产生未处理 rejection
  *
  * 项目 vitest env=node,无 window。沿用 providerModelMemory.test.ts 的最小 localStorage stub。
@@ -131,14 +131,16 @@ describe('modelVisibilityPrefs store', () => {
 
   it('按 (agent, providerId, modelId) 分槽:同名 gpt-5.5 在 cc / codex 互不覆盖', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
+    setModelVisibility('codex', 'xd', 'gpt-5.5', true);
     setModelVisibility('claude-code', 'xd', 'gpt-5.5', false); // cc 下关掉
-    // codex 下不受影响,仍跟随默认(开)
+    // codex 已开启的配置不受影响
     expect(isModelEnabled('claude-code', 'xd', { id: 'gpt-5.5' })).toBe(false);
     expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(true);
   });
 
   it('同一来源不同 provider 互不影响(xd vs openai)', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
+    setModelVisibility('codex', 'openai', 'gpt-5.5', true);
     setModelVisibility('codex', 'xd', 'gpt-5.5', false);
     expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(false);
     expect(isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(true);
@@ -374,10 +376,10 @@ describe('modelVisibilityPrefs store', () => {
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1')).not.toBeNull();
   });
 
-  it('schema 损坏的 localStorage → 静默回退,跟随目录默认', async () => {
+  it('旧配置损坏时不把未知模型自动开启', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', '{ not valid json');
     const { isModelEnabled } = await loadModuleForOwner();
-    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(true);
+    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(false);
   });
 
   it('脏数据条目(value 非 boolean)被过滤', async () => {
@@ -391,8 +393,8 @@ describe('modelVisibilityPrefs store', () => {
     );
     const { isModelEnabled } = await loadModuleForOwner();
     expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(false); // 合法 override 生效
-    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(true); // 脏数据丢弃 → 默认开
-    expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(true); // 脏数据丢弃 → 默认开
+    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(false); // 无有效旧开关，不自动开启
+    expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(false); // 无有效旧开关，不自动开启
   });
 });
 
@@ -411,7 +413,7 @@ it('restoring model visibility deletes overrides and follows future online defau
 
 describe('compact model defaults upgrade', () => {
   const scopedKey = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
-  const markerKey = 'xdt:modelVisibilityPrefs:v1.defaults-migration.v1.owner.owner-a';
+  const markerKey = 'xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a';
   const provider = {
     id: 'xd', name: 'Cindy AI', connected: true, source: 'builtin',
     agents: ['claude-code', 'codex', 'pi'], auth: { method: 'token' },
@@ -449,109 +451,101 @@ describe('compact model defaults upgrade', () => {
     expect(JSON.parse(memStorage.getItem(scopedKey)!)).toEqual({});
   });
 
-  it('preserves old switches, selected no-effort models, favorites and compatibility engines', async () => {
+  it('preserves old on/off switches without enabling history, favorites, or new defaults', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({
       'claude-code:xd:chatgpt/fable-5': true,
       'claude-code:xd:chatgpt/fable-5-1': false,
-      'codex:xd:gemini': false,
     }));
     memStorage.setItem('xdt:providerModelMemory:v2:owner-a', JSON.stringify({
-      'codex:xd': { lastModel: 'fable-5', effortByModel: {}, fastByModel: {}, thinkingByModel: {} },
+      'codex:xd': { lastModel: 'fable-5', effortByModel: {} },
     }));
-    memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({
-      'xd:gemini': { agent: 'cc' },
-    }));
+    memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({ 'xd:gemini': { agent: 'cc' } }));
     const favorites = await import('@/state/modelFavorites');
     favorites.setModelFavoritesOwner('owner-a');
     favorites.addModelFavorite({ providerId: 'xd', modelId: 'fable-5', agent: 'pi' });
     const prefs = await upgrade();
     expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5', defaultEnabled: false })).toBe(true);
-    expect(prefs.isModelEnabled('codex', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(true);
-    expect(prefs.isModelEnabled('pi', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(true);
-    // A row with only explicit off switches remains off even with new default-on routes.
-    expect(prefs.isModelEnabled('pi', 'xd', { id: 'fable-5-1', defaultEnabled: true })).toBe(false);
-    // An explicit engine choice on another route is preserved; this route's off switch still wins.
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/gemini', defaultEnabled: false })).toBe(true);
-    expect(prefs.isModelEnabled('codex', 'xd', { id: 'gemini', defaultEnabled: false })).toBe(false);
-  });
-
-  it('restores a previously chosen compatibility route in the actual unified candidates', async () => {
-    memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({ 'xd:gemini': { agent: 'cc' } }));
-    const prefs = await upgrade();
+    for (const agent of provider.agents) {
+      for (const model of provider.models[agent]!) {
+        if (agent === 'claude-code' && model.id === 'chatgpt/fable-5') continue;
+        expect(prefs.isModelEnabled(agent, 'xd', { ...model, defaultEnabled: true })).toBe(false);
+      }
+    }
     const entries = unifiedModelEntries({ providers: [provider], isVisible: (pid, model, agent) => prefs.isModelEnabled(agent, pid, model) });
-    const model = entries.find((entry) => entry.modelId === 'gemini')!;
-    expect(model.candidates).toContain('claude-code');
-    expect(model.capabilities['claude-code']?.protocolMode).toBe('compatibility');
-    expect(model.candidates).not.toContain('codex');
-    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, expect.objectContaining({
-      'claude-code:xd:chatgpt/gemini': true,
-    }));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.candidates).toEqual(['claude-code']);
+    expect(entries[0]!.capabilities['claude-code']?.protocolMode).toBe('compatibility');
   });
 
-  it('maps only declared same-engine prefixes, without enabling another model version', async () => {
-    memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'claude-code:xd:fable-5': true }));
+  it('does not initialize an existing owner even when its override map is empty', async () => {
+    memStorage.setItem(scopedKey, '{}');
     const prefs = await upgrade();
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5', defaultEnabled: false })).toBe(true);
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5-1', defaultEnabled: false })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
   });
 
-  it('does not repeat after restart or undo reset-to-defaults', async () => {
-    memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({ 'xd:gemini': { agent: 'cc' } }));
+  it('freezes a new profile initial defaults and keeps later additions off across restart', async () => {
     const prefs = await upgrade();
-    prefs.resetModelVisibilities('xd', [{ agent: 'claude-code', modelId: 'chatgpt/gemini' }]);
+    const changed = {
+      ...provider,
+      models: { ...provider.models, pi: [
+        ...provider.models.pi!.map((model) => ({ ...model, defaultEnabled: !model.defaultEnabled })),
+        { ...provider.models.pi![0]!, id: 'brand-new', defaultEnabled: true },
+      ] },
+    };
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [changed]);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'fable-5', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'brand-new', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(false);
+    vi.resetModules();
+    const restarted = await upgrade('owner-a', 1, changed);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'brand-new', defaultEnabled: true })).toBe(false);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: false })).toBe(true);
+  });
+
+  it('preserves manually disabled defaults and allows manually enabling a new model', async () => {
+    const prefs = await upgrade();
+    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    prefs.setModelVisibility('codex', 'xd', 'brand-new', true);
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('codex', 'xd', { id: 'brand-new', defaultEnabled: false })).toBe(true);
+  });
+
+  it('Restore defaults applies only to explicitly named routes, including future online defaults', async () => {
+    const prefs = await upgrade();
+    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    expect(prefs.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'gemini' }])).toBe(true);
     vi.resetModules();
     const restarted = await upgrade();
-    expect(restarted.isModelVisibilityCustomized('claude-code', 'xd', 'chatgpt/gemini')).toBe(false);
-    expect(restarted.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/gemini', defaultEnabled: false })).toBe(false);
+    expect(restarted.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(false);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(true);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: false })).toBe(false);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'brand-new', defaultEnabled: true })).toBe(false);
   });
 
-  it.each(['claude-code', 'codex'] as const)(
-    'migrates late %s models after a Pi-only snapshot and restart without undoing a reset',
-    async (agent) => {
-      const engine = agent === 'claude-code' ? 'cc' : agent;
-      const wireId = agent === 'claude-code' ? 'chatgpt/fable-5' : 'fable-5';
-      memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({
-        'xd:fable-5': { agent: engine },
-        'xd:gemini': { agent: 'pi' },
-      }));
-      const partial = {
-        ...provider,
-        models: { pi: provider.models.pi, 'claude-code': [], codex: [] },
-      };
-      const prefs = await upgrade('owner-a', 1, partial);
-      expect(prefs.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(true);
-      expect(prefs.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'gemini' }])).toBe(true);
-
-      vi.resetModules();
-      const restarted = await upgrade();
-      expect(restarted.isModelEnabled(agent, 'xd', { id: wireId, defaultEnabled: false })).toBe(true);
-      expect(restarted.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(false);
-      const entries = unifiedModelEntries({
-        providers: [provider],
-        isVisible: (pid, model, kind) => restarted.isModelEnabled(kind, pid, model),
-      });
-      expect(entries.find((entry) => entry.modelId === 'fable-5')?.candidates).toContain(agent);
-    },
-  );
-
-  it('migrates a late model even when its agent already had other models', async () => {
-    memStorage.setItem('xdt:providerModelMemory:v2:owner-a', JSON.stringify({
-      'codex:xd': { lastModel: 'fable-5', effortByModel: {} },
-    }));
-    const partial = {
-      ...provider,
-      models: { ...provider.models, codex: provider.models.codex!.filter((model) => model.id !== 'fable-5') },
-    };
-    const prefs = await upgrade('owner-a', 1, partial);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
-    expect(prefs.isModelEnabled('codex', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(true);
-    expect(prefs.setModelVisibility('codex', 'xd', 'fable-5', false)).toBe(true);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [partial]);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
-    expect(prefs.isModelEnabled('codex', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(false);
+  it.each(['claude-code', 'codex'] as const)('late %s routes preserve explicit switches but never auto-enable missing switches', async (agent) => {
+    const wireId = agent === 'claude-code' ? 'chatgpt/fable-5' : 'fable-5';
+    memStorage.setItem(scopedKey, JSON.stringify({ [`${agent}:xd:${wireId}`]: true }));
+    const partial = { ...provider, models: { pi: provider.models.pi, 'claude-code': [], codex: [] } };
+    await upgrade('owner-a', 1, partial);
+    vi.resetModules();
+    const prefs = await upgrade();
+    expect(prefs.isModelEnabled(agent, 'xd', { id: wireId, defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled(agent, 'xd', { id: 'new-late-model', defaultEnabled: true })).toBe(false);
   });
 
-  it('defers until legacy import is safe, then honors the imported off switch', async () => {
+  it('maps only declared same-engine switches without replacing versions or restoring a reset alias', async () => {
+    memStorage.setItem(scopedKey, JSON.stringify({ 'claude-code:xd:fable-5': true }));
+    const prefs = await upgrade();
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5-1', defaultEnabled: true })).toBe(false);
+    expect(prefs.resetModelVisibilities('xd', [{ agent: 'claude-code', modelId: 'chatgpt/fable-5' }])).toBe(true);
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(prefs.isModelVisibilityCustomized('claude-code', 'xd', 'chatgpt/fable-5')).toBe(false);
+  });
+
+  it('waits for legacy ownership before initialization and preserves off switches on retry', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'claude-code:xd:chatgpt/gemini': false }));
     setOwnerClaim('owner-a', 1, true, false);
     const prefs = await upgrade();
@@ -562,32 +556,29 @@ describe('compact model defaults upgrade', () => {
     expect(memStorage.getItem(markerKey)).not.toBeNull();
   });
 
-  it('isolates accounts and rejects stale catalog generations', async () => {
-    memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({ 'xd:gemini': { agent: 'cc' } }));
-    await upgrade();
+  it('isolates owner baselines and rejects stale owner generations', async () => {
+    const first = await upgrade();
+    first.setModelVisibility('pi', 'xd', 'gemini', false);
     setOwnerClaim('owner-b', 2, false, false, true);
     const prefs = await upgrade('owner-b', 2);
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/gemini', defaultEnabled: false })).toBe(false);
-    const before = memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-b');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(true);
+    const before = memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-b');
     prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     prefs.migrateModelVisibilityDefaults('owner-b', 1, [provider]);
-    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-b')).toBe(before);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-b')).toBe(before);
   });
 
-  it('retries storage failure without claiming completion or losing a newer explicit off', async () => {
-    memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({ 'xd:gemini': { agent: 'cc' } }));
+  it('retries a baseline write failure without overwriting a newer explicit off switch', async () => {
     const original = memStorage.setItem.bind(memStorage);
     const spy = vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
-      if (key === scopedKey && value.includes('chatgpt/gemini')) throw new Error('storage full');
+      if (key === markerKey) throw new Error('storage full');
       original(key, value);
     });
     const prefs = await upgrade();
     expect(memStorage.getItem(markerKey)).toBeNull();
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/gemini', defaultEnabled: false })).toBe(false);
     spy.mockRestore();
-    prefs.setModelVisibility('claude-code', 'xd', 'chatgpt/gemini', false);
+    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
     prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/gemini', defaultEnabled: false })).toBe(false);
-    expect(memStorage.getItem(markerKey)).not.toBeNull();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
   });
 });

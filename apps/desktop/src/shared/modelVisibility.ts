@@ -23,3 +23,10 @@ export function isModelVisibilityLegacyOwnerClaim(
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).canInitialize === 'boolean'
   );
 }
+
+/** Optional append-only IPC policy; omitted by older renderers. */
+export interface ModelVisibilityPolicy {
+  fallback: false;
+  /** Only an explicit Restore defaults action may follow future catalog defaults. */
+  followCatalogKeys: string[];
+}

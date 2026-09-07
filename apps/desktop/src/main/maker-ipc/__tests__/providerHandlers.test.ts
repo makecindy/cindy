@@ -170,6 +170,7 @@ describe('provider:list IPC handler', () => {
   it('keeps providers in catalog order and returns display order as owner-scoped metadata', async () => {
     const harness = new IpcHarness();
     const views = [fakeView('xd', true), fakeView('anthropic', false)];
+    const getVisibility = vi.fn(() => overrides);
     const listProviders = vi.fn(async () => views);
     const overrides = { 'claude-code:xd:claude-opus-4-8': false };
     const providerOrder = ['anthropic', 'xd'];
@@ -177,7 +178,7 @@ describe('provider:list IPC handler', () => {
       harness,
       makeDeps({
         listProviders,
-        getModelVisibilityOverrides: () => overrides,
+        getModelVisibilityOverrides: getVisibility,
         getProviderOrder: () => providerOrder,
         currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
       }),
@@ -191,6 +192,7 @@ describe('provider:list IPC handler', () => {
       providerOrder,
       modelVisibilityOverrides: overrides,
     });
+    expect(getVisibility).toHaveBeenCalledWith(views);
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,

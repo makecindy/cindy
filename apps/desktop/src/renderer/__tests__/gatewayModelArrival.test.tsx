@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
 import { parseModelsSyncPayload } from '../../main/model-access/modelsSyncRefresh';
 import {
   getActiveCatalog,
@@ -10,7 +10,7 @@ import {
   setXdGatewayModels,
 } from '../../main/maker-host/active-catalog';
 import { UnifiedModelList } from '../components/settings/UnifiedModelList';
-import { __resetForTest, setModelVisibilityOwner } from '../state/modelVisibilityPrefs';
+import { __resetForTest, isModelEnabled, migrateModelVisibilityDefaults, setModelVisibilityOwner } from '../state/modelVisibilityPrefs';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../components/ui/confirm-dialog-provider', () => ({
@@ -57,8 +57,12 @@ it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
   },
 );
 
-it('shows a just-downloaded Gateway model through the real parser and active catalog without a registry entry or remount', () => {
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {} });
+it('lists downloaded Gateway models in settings without enabling them until the user chooses them', () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+    claimLegacyModelVisibilityOwner: () => ({ dataOwnerId: 'arrival-test', ownerGeneration: 1,
+      canWriteOwnerScoped: true, claimed: true, canInitialize: true }),
+    syncModelVisibility: vi.fn(async () => undefined),
+  } } });
   __resetForTest();
   setModelVisibilityOwner('arrival-test', 1, 'cloud');
   setActiveCatalog(BUNDLED_CATALOG);
@@ -92,6 +96,7 @@ it('shows a just-downloaded Gateway model through the real parser and active cat
     }) as ProviderView;
   const existing = raw('deepseek/deepseek-current', 'Existing Model');
   download([existing]);
+  migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
   // A known native family uses Pi by default while compatibility stays opt-in.
   expect(snapshot().models.pi?.find((m) => m.id === existing.id)).toMatchObject({
     nativeApi: 'openai-completions', piApi: 'openai-completions',
@@ -100,15 +105,25 @@ it('shows a just-downloaded Gateway model through the real parser and active cat
   const view = render(<UnifiedModelList provider={snapshot()} />);
   expect(screen.getByText('Existing Model')).toBeTruthy();
   expect(screen.queryByText('Future Model 9')).toBeNull();
-  const changed = vi.fn(() => view.rerender(<UnifiedModelList provider={snapshot()} />));
+  const changed = vi.fn(() => {
+    migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
+    view.rerender(<UnifiedModelList provider={snapshot()} />);
+  });
   setActiveCatalogChangedListener(changed);
   act(() => download([existing, raw('new-labs/future-9', 'Future Model 9')]));
   expect(changed).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: /settings.providers.models.hiddenGroup/ }));
   expect(screen.getByText('Future Model 9')).toBeTruthy();
-  expect(screen.getByText('new-labs')).toBeTruthy();
   expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe(
-    'true',
+    'false',
   );
+  const pickerEntries = () => unifiedModelEntries({ providers: [snapshot()],
+    isVisible: (providerId, model, agent) => isModelEnabled(agent, providerId, model) });
+  expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(false);
+  fireEvent.click(screen.getByRole('switch', { name: /Future Model 9/ }));
+  expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe('true');
+  expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(true);
+  expect(screen.getByText('new-labs')).toBeTruthy();
   expect(snapshot().models['claude-code']?.find((m) => m.id === 'new-labs/future-9')).toMatchObject(
     {
       contextWindow: 500_000,

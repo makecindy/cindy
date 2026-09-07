@@ -5,18 +5,18 @@
  * 背景:
  *   每个来源(provider)在某个 agent 下可能提供很多模型(XD 网关 Claude Code 有 20 个),
  *   用户本地全列出来会很长。设置 → 模型供应商 展开来源后,用户可逐个开关哪些模型显示。
- *   这里只存**用户显式改过的那些**(override),没改过的模型跟随目录里的系统默认值
- *   (CatalogModel.defaultEnabled,缺省 ⇒ 开)。
+ *   显式开关与新用户首次初始化的启用清单分开保存。既有账号不再跟随目录自动加模型；
+ *   只有用户点名恢复默认的路线继续读取目录 defaultEnabled。
  *
  * 为什么 key 必须带 agent:
  *   同一来源可同时服务多个 agent(XD = claude-code + codex),且两个 agent 下模型集不同、
  *   同名模型元数据也不同(gpt-5.5 cc=1M / codex=272k)。开关必须 per-agent 独立,否则
  *   在 Claude Code 下关掉 gpt-5.5 会连带影响 Codex。key = `${agent}:${providerId}:${modelId}`。
  *
- * 与系统默认值的关系(对齐 CLAUDE.md 规则 20):
- *   - 本 store 只记 override(布尔),**不**快照系统默认值。
- *   - 未被 override 的模型跟随当前目录默认值。精简默认上线时，一次性把可恢复的历史
- *     选模/收藏/引擎选择迁为 override；没有历史证据的条目继续跟随目录。
+ * 与系统默认值的关系（configuration-and-overrides.md 模型可见性例外）:
+ *   - 原 key 只记显式 override(布尔)，独立 owner key 保存一次性的初始化清单。
+ *   - 新用户初始化后默认不再漂移；老用户缺少开关记录的路线不会被自动补开。
+ *   - 收藏、历史选择不能改变开关；恢复默认只授权点名路线跟随当前/未来目录。
  *   - 「全部开启 / 全部关闭」是显式批量动作 → 为当前 agent 该来源的每个模型写显式 override。
  *
  * 谁读谁写:
@@ -33,8 +33,8 @@ import { useSyncExternalStore } from 'react';
 
 import { isModelVisible, type ProviderView } from '@cindy/model-providers';
 
-import { getProviderLastModel } from './providerModelMemory';
-import { getModelEngineOverride } from './modelEnginePrefs';
+import { hasAnyProviderModelOverride, hasProviderModelHistory } from './providerModelMemory';
+import { hasAnyModelEngineOverride } from './modelEnginePrefs';
 import { listModelFavorites } from './modelFavorites';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
@@ -44,6 +44,7 @@ const log = createLogger('ModelVisibilityPrefs');
 
 const LEGACY_STORAGE_KEY = 'xdt:modelVisibilityPrefs:v1';
 const STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.owner`;
+const INITIALIZATION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.initialization.owner`;
 const DEFAULTS_MIGRATION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.defaults-migration.v1.owner`;
 const MIGRATION_COMPLETE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.migration-complete.owner`;
 
@@ -73,6 +74,46 @@ let activeOwnerGeneration = 0;
 let activeOwnerReadyForWrites = false;
 let activeOwnerMigrationPending = false;
 let activeOwnerMode: 'signed-out' | 'local' | 'cloud' = 'signed-out';
+let mayInitializeDefaults = false;
+interface InitializationState {
+  defaults: VisibilityMap;
+  scopes: string[];
+  followCatalogKeys: string[];
+}
+let initialization: InitializationState | null = null;
+
+function initializationKey(ownerId: string): string {
+  return `${INITIALIZATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
+}
+function readInitialization(ownerId: string): InitializationState | null {
+  const raw = window.localStorage.getItem(initializationKey(ownerId));
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const strings = (value: unknown): string[] => Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string') : [];
+    return { defaults: sanitize(parsed?.defaults), scopes: strings(parsed?.scopes), followCatalogKeys: strings(parsed?.followCatalogKeys) };
+  } catch {
+    return { defaults: {}, scopes: [], followCatalogKeys: [] };
+  }
+}
+function saveInitialization(next: InitializationState): boolean {
+  if (!activeOwnerId) return false;
+  try {
+    window.localStorage.setItem(initializationKey(activeOwnerId), JSON.stringify(next));
+    initialization = next;
+    return true;
+  } catch (error) {
+    log.warn('model visibility initialization write failed', error);
+    return false;
+  }
+}
+function effectiveMap(map: VisibilityMap): VisibilityMap {
+  const defaults = { ...initialization?.defaults };
+  for (const key of initialization?.followCatalogKeys ?? []) delete defaults[key];
+  return { ...defaults, ...map };
+}
+
 
 function ownerStorageKey(ownerId: string): string {
   return `${STORAGE_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
@@ -143,7 +184,9 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
       return { readyForWrites: true, migrationPending: true };
     }
 
-    const legacy = readStoredMap(window.localStorage.getItem(LEGACY_STORAGE_KEY));
+    const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacyRaw !== null) mayInitializeDefaults = false;
+    const legacy = readStoredMap(legacyRaw);
     const scoped = readStoredMap(window.localStorage.getItem(scopedKey));
     // 非独占期间可能已经有新设置；完成迁移时由新设置覆盖同槽旧值，其余历史值仍被保留。
     window.localStorage.setItem(scopedKey, JSON.stringify({ ...legacy, ...scoped }));
@@ -203,7 +246,9 @@ function mirrorToMain(map: VisibilityMap): void {
     const syncPromise = window.electronAPI?.maker?.syncModelVisibility?.(
       activeOwnerId,
       activeOwnerGeneration,
-      map,
+      effectiveMap(map),
+      ...(activeOwnerId && (initialization || !mayInitializeDefaults || activeOwnerMigrationPending)
+        ? [{ fallback: false as const, followCatalogKeys: initialization?.followCatalogKeys ?? [] }] : []),
     );
     if (syncPromise) void syncPromise.catch(() => undefined);
   } catch {
@@ -248,6 +293,7 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
+  if (context.providerId !== '*') mayInitializeDefaults = false;
   version += 1;
   // 每次开关变更后把最新快照重推 main,保持 IM /model 与应用内可见性一致。
   mirrorToMain(map);
@@ -283,7 +329,18 @@ export function setModelVisibilityOwner(
   activeOwnerReadyForWrites = false;
   activeOwnerMigrationPending = false;
   cache = null;
+  initialization = null;
+  mayInitializeDefaults = false;
   if (ownerId && mode !== 'signed-out') {
+    try {
+      initialization = readInitialization(ownerId);
+      mayInitializeDefaults = initialization === null
+        && window.localStorage.getItem(ownerStorageKey(ownerId)) === null
+        && window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === null
+        && window.localStorage.getItem(`${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`) === null
+        && !hasAnyProviderModelOverride() && !hasProviderModelHistory() && !hasAnyModelEngineOverride() && listModelFavorites().length === 0;
+    } catch { /* Storage unavailable: never infer permission to initialize an existing profile. */ }
+
     const migration = migrateLegacyVisibility(ownerId, ownerGeneration);
     activeOwnerReadyForWrites = migration.readyForWrites;
     activeOwnerMigrationPending = migration.migrationPending;
@@ -294,10 +351,10 @@ export function setModelVisibilityOwner(
 }
 
 /**
- * Upgrade the compact-defaults rollout once per owner/provider/agent/model, before publishing the local
- * catalog. Existing switches win; selected/favorited harnesses remain reachable even when
- * their new catalog default is off. Never infer a model version replacement from its name.
- * Other devices' catalogs must not enter this migration.
+ * Initialize a new profile's first nonempty provider/agent catalogs once. Existing profiles
+ * keep their explicit switches; history/favorites never grant permission to enable a model.
+ * Missing routes remain off. Baselines are separate from user overrides so customization
+ * and Restore defaults retain their meaning. No remote catalog enters this path.
  */
 export function migrateModelVisibilityDefaults(
   ownerId: string | null,
@@ -307,81 +364,67 @@ export function migrateModelVisibilityDefaults(
   if (!ownerId || ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration) return;
   if (!ensureActiveOwnerReadyForWrites() || activeOwnerMigrationPending) return;
   try {
-    const markerKey = `${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
-    const raw: unknown = JSON.parse(window.localStorage.getItem(markerKey) ?? '[]');
-    const completed = new Set<string>(Array.isArray(raw) ? raw.filter((id) => typeof id === 'string') : []);
-    // Re-read: another renderer may have saved a switch since this window loaded its cache.
-    const previous = readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
-    const next = { ...previous };
-    const favorites = listModelFavorites();
-    let changed = false;
+    const stored = readInitialization(ownerId);
+    // Re-read other windows' completed scopes and overrides before adding anything.
+    const state = stored ?? initialization ?? { defaults: {}, scopes: [], followCatalogKeys: [] };
+    const next: InitializationState = { defaults: { ...state.defaults }, scopes: [...state.scopes], followCatalogKeys: [...state.followCatalogKeys] };
+    const map = readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
+    const aliases = { ...map };
     for (const provider of providers) {
-      const canonical = (agent: AgentKind, id: string) => {
-        for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
-          if (id.startsWith(prefix)) return id.slice(prefix.length);
-        }
-        return id;
-      };
-      const rows = new Map<string, { agent: AgentKind; modelId: string }[]>();
       for (const agent of provider.agents) {
-        for (const model of provider.models[agent] ?? []) {
-          const id = canonical(agent, model.id);
-          const row = rows.get(id) ?? [];
-          row.push({ agent, modelId: model.id });
-          rows.set(id, row);
-        }
-      }
-      // An unavailable/empty provider can be retried after its catalog loads.
-      if (!rows.size) continue;
-      for (const [modelId, routes] of rows) {
-        const oldValues = routes.map(({ agent, modelId: wireId }) =>
-          previous[keyOf(agent, provider.id, wireId)] ?? previous[keyOf(agent, provider.id, modelId)],
-        ).filter((value) => value !== undefined);
-        const explicitlyHidden = oldValues.length > 0 && oldValues.every((value) => value === false);
-        for (const { agent, modelId: wireId } of routes) {
-          const key = keyOf(agent, provider.id, wireId);
-          // Pi's static catalog may arrive before other agents, and dynamic discovery can
-          // add models to an already nonempty agent. Complete only this observed route;
-          // retain its marker after reset/removal so later refreshes cannot revive it.
-          if (completed.has(key)) continue;
-          completed.add(key);
-          if (Object.hasOwn(next, key)) continue;
-          const aliasOverride = previous[keyOf(agent, provider.id, modelId)];
-          const engine = agent === 'claude-code' ? 'cc' : agent;
-          const lastModel = getProviderLastModel(agent, provider.id);
-          const wasSelected = (lastModel !== undefined && canonical(agent, lastModel) === modelId)
-            || (getModelEngineOverride(provider.id, modelId) ?? getModelEngineOverride(provider.id, wireId)) === engine
-            || favorites.some((favorite) => favorite.providerId === provider.id
-              && favorite.agent === engine && canonical(agent, favorite.modelId) === modelId);
-          // A hidden row must not reopen solely because a new harness now defaults to enabled.
-          const inherited = aliasOverride ?? (wasSelected ? true : explicitlyHidden ? false : undefined);
-          if (inherited !== undefined) {
-            next[key] = inherited;
-            changed = true;
+        const models = provider.models[agent] ?? [];
+        if (!models.length) continue;
+        const scope = JSON.stringify([provider.id, agent]);
+        const initializeScope = mayInitializeDefaults && !next.scopes.includes(scope);
+        for (const model of models) {
+          const key = keyOf(agent, provider.id, model.id);
+          if (initializeScope) next.defaults[key] = model.defaultEnabled !== false;
+          // Only a declared same-engine bridge alias may carry an actual old switch.
+          // Never propagate another engine's choice or infer an on switch from favorites.
+          if (Object.hasOwn(map, key) || next.followCatalogKeys.includes(key)) continue;
+          for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
+            if (!model.id.startsWith(prefix)) continue;
+            const oldKey = keyOf(agent, provider.id, model.id.slice(prefix.length));
+            if (Object.hasOwn(map, oldKey)) aliases[key] = map[oldKey]!;
+            break;
           }
         }
+        if (!next.scopes.includes(scope)) next.scopes.push(scope);
       }
     }
-    // Data first, marker second. A failed write leaves the upgrade retryable; existing values
-    // always win on retry. Keep the old keys, so downgrading does not lose old preferences.
-    if (changed && !persist(next, { operation: 'bulk', providerId: '*', enabled: true })) return;
-    window.localStorage.setItem(markerKey, JSON.stringify([...completed]));
+    if (Object.keys(aliases).length !== Object.keys(map).length
+      && !persist(aliases, { operation: 'bulk', providerId: '*', enabled: true })) return;
+    if (JSON.stringify(state) === JSON.stringify(next) && stored !== null) {
+      initialization = stored;
+      return;
+    }
+    if (!saveInitialization(next)) return;
+    cache = aliases;
+    mirrorToMain(aliases);
+    version += 1;
+    for (const listener of listeners) listener();
   } catch (error) {
-    log.warn('model defaults migration deferred', error);
+    log.warn('model visibility initialization deferred', error);
   }
 }
 
 /**
- * 该 (agent, 来源, 模型) 当前是否应显示:用户 override 优先,否则跟随目录默认值。
+ * 该 (agent, 来源, 模型) 当前是否应显示:显式开关优先，其次初始化清单；未知路线关闭。
  * model 至少需带 id + 可选 defaultEnabled(直接传 CatalogModel 即可)。
- * 决策走共享包 `isModelVisible`(与 main 侧 IM /model 同一套口径,见 @cindy/model-providers)。
+ * 只有首次新用户与明确恢复默认的路线读取目录默认值。
  */
 export function isModelEnabled(
   agent: AgentKind,
   providerId: string,
   model: { id: string; defaultEnabled?: boolean },
 ): boolean {
-  return isModelVisible(load()[keyOf(agent, providerId, model.id)], model.defaultEnabled);
+  const key = keyOf(agent, providerId, model.id);
+  const override = load()[key];
+  if (override !== undefined) return override;
+  if (initialization?.followCatalogKeys.includes(key)) return isModelVisible(undefined, model.defaultEnabled);
+  if (initialization) return initialization.defaults[key] ?? false;
+  return !activeOwnerId || (mayInitializeDefaults && !activeOwnerMigrationPending)
+    ? isModelVisible(undefined, model.defaultEnabled) : false;
 }
 
 function setVisibilityTargets(
@@ -487,8 +530,23 @@ export function resetModelVisibilities(
   if (!ensureActiveOwnerReadyForWrites()) return false;
   const map = load();
   const next = { ...map };
-  for (const target of targets) delete next[keyOf(target.agent, providerId, target.modelId)];
-  if (Object.keys(next).length === Object.keys(map).length) return true;
+  if (targets.length === 0) return true;
+  let state: InitializationState;
+  try {
+    state = readInitialization(activeOwnerId!) ?? initialization ?? { defaults: {}, scopes: [], followCatalogKeys: [] };
+  } catch (error) {
+    log.warn('model visibility reset read failed', error);
+    return false;
+  }
+  const follows = new Set(state.followCatalogKeys);
+  for (const target of targets) {
+    const key = keyOf(target.agent, providerId, target.modelId);
+    delete next[key];
+    follows.add(key);
+  }
+  // Write permission to follow defaults first; the old explicit value keeps winning until
+  // its removal succeeds. A failed override write can be retried without losing the choice.
+  if (!saveInitialization({ ...state, followCatalogKeys: [...follows] })) return false;
   return persist(next, { operation: 'bulk', providerId, enabled: false, modelCount: targets.length });
 }
 
@@ -508,7 +566,10 @@ export function useModelVisibilityVersion(): number {
 export function __resetForTest(): void {
   const currentScopedKey = activeOwnerId ? ownerStorageKey(activeOwnerId) : null;
   const currentMigrationKey = activeOwnerId ? ownerMigrationCompleteKey(activeOwnerId) : null;
+  if (activeOwnerId) window.localStorage.removeItem(initializationKey(activeOwnerId));
   cache = null;
+  initialization = null;
+  mayInitializeDefaults = false;
   activeOwnerId = null;
   activeOwnerGeneration = 0;
   activeOwnerReadyForWrites = false;
