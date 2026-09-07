@@ -100,7 +100,7 @@ export function ModelHarnessPicker({
               </span>
               <span className="min-w-0 text-12 leading-4">{labelOf(engine)}</span>
             </button>
-            {engine === 'codex' && mode === 'compatibility' && (
+            {mode === 'compatibility' && (
               <span className="relative z-10 text-10 leading-4">
                 <ModelCompatibilityNotice />
               </span>
