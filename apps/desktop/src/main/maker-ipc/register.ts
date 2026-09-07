@@ -3315,6 +3315,10 @@ export function clearDeferredCodexRestartForOwnerBoundary(): void {
   deferredCodexRestartHolder?.clear();
 }
 
+export function clearWorkingDirectoryRecoveryForOwnerBoundary(): void {
+  workingDirectoryRecovery.clear();
+}
+
 /**
  * Goal / IM / scheduler 直发 `Session.send()` 的 deferred agent-switch 锁桥。
  *
@@ -4590,6 +4594,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }),
   );
   setSessionRuntimeCleanup((sessionId) => {
+    workingDirectoryRecovery.discard(sessionId);
     clearSessionRuntimeControlState(sessionId);
     clearSessionProvider(sessionId);
     setSessionEffort(sessionId, null);
@@ -11497,6 +11502,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await ensureRemoteReadyForSessionStart(params);
     },
     checkWorkDirExists,
+    readWorkingDirectoryRecoveryCreateOpts: async (sessionId) => {
+      const [row] = await getDbClient().drizzle.select().from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (!row?.workingDir) throw new Error(`Session ${sessionId} has no working directory`);
+      return {
+        id: sessionId,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        workspaceKind: row.workspaceKind,
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        effort: (row.effort ?? undefined) as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        planMode: !!row.planModeEnabled,
+        title: row.title ?? undefined,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+        codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
+      };
+    },
     peekWorkingDirectoryRecoveryNote: (sessionId) => workingDirectoryRecovery.peek(sessionId),
     consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
       workingDirectoryRecovery.consume(sessionId, note),
@@ -14580,6 +14607,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        workingDirectoryRecovery.discard(sid);
         resetAutomaticRecoveryForExplicitStop(sid);
         // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
         // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后

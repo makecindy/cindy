@@ -55,6 +55,9 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => false),
     readSessionExtraDirsFromDb: vi.fn(async () => []),
     readSessionWorkingDirFromDb: vi.fn(async () => null),
+    readWorkingDirectoryRecoveryCreateOpts: vi.fn(async (): Promise<MakerSessionCreateOpts> => ({
+      agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4',
+    })),
     withRehydrateCloseSuppressed: vi.fn(async (_sessionId, fn) => await fn()),
     bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => ({
       session: createSession({
@@ -1155,6 +1158,26 @@ describe('maker SEND transaction', () => {
     expect(session.send).not.toHaveBeenCalled();
   });
 
+  it('uses persisted settings to recover a live session when send has no createOpts', async () => {
+    const persisted: MakerSessionCreateOpts = {
+      agentKind: 'codex', workingDir: '/repaired/project',
+      model: 'persisted-model', resumeSessionId: 'native-history',
+      permissionMode: 'ask', planMode: true, providerId: 'provider', fastMode: true,
+    };
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => persisted.workingDir),
+      readWorkingDirectoryRecoveryCreateOpts: vi.fn(async () => ({ ...persisted })),
+      checkWorkDirExists: vi.fn(async (_id, dir) => dir === persisted.workingDir),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello'))
+      .resolves.toMatchObject({ accepted: true });
+    expect(deps.checkWorkDirExists).toHaveBeenNthCalledWith(
+      1, 'session-1', session.workDir, 'codex', null, { suppressMissingBroadcast: true },
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining(persisted));
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
   it('does not close the live runtime if native history reconciliation fails during directory recovery', async () => {
     const { deps, session } = createDeps({
       readSessionWorkingDirFromDb: vi.fn(async () => '/repaired/project'),
@@ -1997,6 +2020,27 @@ describe('mobile client prompt note', () => {
 });
 
 describe('session-agent-switch handoff injection', () => {
+  it.each([
+    '/compact',
+    { type: 'user' as const, content: '/compact focus on the bug' },
+    { type: 'user' as const, content: [{ type: 'text' as const, text: '/compact' }] },
+  ])('retains the recovery notice across a native compact command: %j', async (command) => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      consumeWorkingDirectoryRecoveryNote,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', command);
+    expect(session.send).toHaveBeenLastCalledWith(command, expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).not.toHaveBeenCalled();
+    await transaction.sendToAgentAccepted('session-1', 'continue');
+    expect(session.send).toHaveBeenLastCalledWith(expect.stringContaining('Directory recreated'), expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
+
   it('tells the agent about recreated cwd without changing the displayed user message', async () => {
     const consumeWorkingDirectoryRecoveryNote = vi.fn();
     const { deps, session } = createDeps({

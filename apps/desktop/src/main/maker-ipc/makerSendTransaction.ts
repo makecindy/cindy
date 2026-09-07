@@ -413,6 +413,7 @@ export interface MakerSendTransactionDeps {
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   peekWorkingDirectoryRecoveryNote?(sessionId: string): string | null;
+  readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
   consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
   /**
    * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
@@ -863,7 +864,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // Startup migration or a directory relocation may repair SQLite while a
         // live SDK still owns the old cwd. Only use that persisted replacement;
         // recreating an arbitrary project as an empty folder would lose its context.
-        const dbDir = createOpts && deps.reconcileCreateOptsWithDb && !sess.remoteHostId
+        const dbDir = !sess.remoteHostId
           ? await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null)
           : null;
         const fallbackDir = dbDir && dbDir !== sess.workDir ? dbDir : null;
@@ -876,7 +877,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         );
         if (!ok && fallbackDir) {
           const co = deps.buildCreateOptsWithStderr({
-            ...(createOpts as CreateOpts),
+            ...((createOpts as CreateOpts | undefined) ?? await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId)),
             id: sessionId,
             workingDir: fallbackDir,
             agentKind: sess.agentKind,
@@ -1019,7 +1020,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
-      const workdirRecoveryNote = deps.peekWorkingDirectoryRecoveryNote?.(sessionId) ?? null;
+      const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId) ?? null
+        : null;
       if (workdirRecoveryNote) {
         normalized = prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote);
       }
