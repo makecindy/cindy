@@ -64,7 +64,7 @@ describe('model harness choices', () => {
     expect(screen.getByRole('button', { name: /Codex · Responses · 兼容模式/ })).toBeTruthy();
     expect(container.querySelectorAll('[data-engine-capsule]')).toHaveLength(3);
     expect(screen.queryByText('原生支持')).toBeNull();
-    expect(screen.getAllByText('兼容模式')).toHaveLength(1);
+    expect(screen.getAllByText('兼容模式')).toHaveLength(2);
     expect(screen.queryByText('推荐 Pi')).toBeNull();
     expect(screen.queryByText('兼容')).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
@@ -90,7 +90,7 @@ describe('model harness choices', () => {
   it('opens the compatibility explanation without selecting its harness', async () => {
     const onChange = vi.fn();
     render(<ModelHarnessPicker entry={entry()} value="pi" onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: '兼容模式' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '兼容模式' })[0]!);
     expect((await screen.findByRole('tooltip')).textContent).toContain('建议有经验的用户使用');
     expect(onChange).not.toHaveBeenCalled();
   });

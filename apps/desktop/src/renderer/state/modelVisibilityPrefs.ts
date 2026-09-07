@@ -15,8 +15,8 @@
  *
  * 与系统默认值的关系(对齐 CLAUDE.md 规则 20):
  *   - 本 store 只记 override(布尔),**不**快照系统默认值。
- *   - 未被 override 的模型永远跟随当前版本目录的 defaultEnabled —— 新增模型默认开,
- *     未自定义的用户随版本自然吃到。
+ *   - 未被 override 的模型跟随当前目录默认值。精简默认上线时，一次性把可恢复的历史
+ *     选模/收藏/引擎选择迁为 override；没有历史证据的条目继续跟随目录。
  *   - 「全部开启 / 全部关闭」是显式批量动作 → 为当前 agent 该来源的每个模型写显式 override。
  *
  * 谁读谁写:
@@ -31,7 +31,11 @@
 
 import { useSyncExternalStore } from 'react';
 
-import { isModelVisible } from '@cindy/model-providers';
+import { isModelVisible, type ProviderView } from '@cindy/model-providers';
+
+import { getProviderLastModel } from './providerModelMemory';
+import { getModelEngineOverride } from './modelEnginePrefs';
+import { listModelFavorites } from './modelFavorites';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { createLogger } from '@/lib/logger';
@@ -40,6 +44,7 @@ const log = createLogger('ModelVisibilityPrefs');
 
 const LEGACY_STORAGE_KEY = 'xdt:modelVisibilityPrefs:v1';
 const STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.owner`;
+const DEFAULTS_MIGRATION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.defaults-migration.v1.owner`;
 const MIGRATION_COMPLETE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.migration-complete.owner`;
 
 /** override 表:key=`${agent}:${providerId}:${modelId}` → 用户显式设定的可见性。 */
@@ -286,6 +291,84 @@ export function setModelVisibilityOwner(
   load();
   version += 1;
   for (const listener of listeners) listener();
+}
+
+/**
+ * Upgrade the compact-defaults rollout once per owner/provider/agent/model, before publishing the local
+ * catalog. Existing switches win; selected/favorited harnesses remain reachable even when
+ * their new catalog default is off. Never infer a model version replacement from its name.
+ * Other devices' catalogs must not enter this migration.
+ */
+export function migrateModelVisibilityDefaults(
+  ownerId: string | null,
+  ownerGeneration: number,
+  providers: readonly ProviderView[],
+): void {
+  if (!ownerId || ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration) return;
+  if (!ensureActiveOwnerReadyForWrites() || activeOwnerMigrationPending) return;
+  try {
+    const markerKey = `${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
+    const raw: unknown = JSON.parse(window.localStorage.getItem(markerKey) ?? '[]');
+    const completed = new Set<string>(Array.isArray(raw) ? raw.filter((id) => typeof id === 'string') : []);
+    // Re-read: another renderer may have saved a switch since this window loaded its cache.
+    const previous = readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
+    const next = { ...previous };
+    const favorites = listModelFavorites();
+    let changed = false;
+    for (const provider of providers) {
+      const canonical = (agent: AgentKind, id: string) => {
+        for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
+          if (id.startsWith(prefix)) return id.slice(prefix.length);
+        }
+        return id;
+      };
+      const rows = new Map<string, { agent: AgentKind; modelId: string }[]>();
+      for (const agent of provider.agents) {
+        for (const model of provider.models[agent] ?? []) {
+          const id = canonical(agent, model.id);
+          const row = rows.get(id) ?? [];
+          row.push({ agent, modelId: model.id });
+          rows.set(id, row);
+        }
+      }
+      // An unavailable/empty provider can be retried after its catalog loads.
+      if (!rows.size) continue;
+      for (const [modelId, routes] of rows) {
+        const oldValues = routes.map(({ agent, modelId: wireId }) =>
+          previous[keyOf(agent, provider.id, wireId)] ?? previous[keyOf(agent, provider.id, modelId)],
+        ).filter((value) => value !== undefined);
+        const explicitlyHidden = oldValues.length > 0 && oldValues.every((value) => value === false);
+        for (const { agent, modelId: wireId } of routes) {
+          const key = keyOf(agent, provider.id, wireId);
+          // Pi's static catalog may arrive before other agents, and dynamic discovery can
+          // add models to an already nonempty agent. Complete only this observed route;
+          // retain its marker after reset/removal so later refreshes cannot revive it.
+          if (completed.has(key)) continue;
+          completed.add(key);
+          if (Object.hasOwn(next, key)) continue;
+          const aliasOverride = previous[keyOf(agent, provider.id, modelId)];
+          const engine = agent === 'claude-code' ? 'cc' : agent;
+          const lastModel = getProviderLastModel(agent, provider.id);
+          const wasSelected = (lastModel !== undefined && canonical(agent, lastModel) === modelId)
+            || (getModelEngineOverride(provider.id, modelId) ?? getModelEngineOverride(provider.id, wireId)) === engine
+            || favorites.some((favorite) => favorite.providerId === provider.id
+              && favorite.agent === engine && canonical(agent, favorite.modelId) === modelId);
+          // A hidden row must not reopen solely because a new harness now defaults to enabled.
+          const inherited = aliasOverride ?? (wasSelected ? true : explicitlyHidden ? false : undefined);
+          if (inherited !== undefined) {
+            next[key] = inherited;
+            changed = true;
+          }
+        }
+      }
+    }
+    // Data first, marker second. A failed write leaves the upgrade retryable; existing values
+    // always win on retry. Keep the old keys, so downgrading does not lose old preferences.
+    if (changed && !persist(next, { operation: 'bulk', providerId: '*', enabled: true })) return;
+    window.localStorage.setItem(markerKey, JSON.stringify([...completed]));
+  } catch (error) {
+    log.warn('model defaults migration deferred', error);
+  }
 }
 
 /**

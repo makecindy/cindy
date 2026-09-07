@@ -5,6 +5,7 @@
  * agent capabilities；这样 useProviders.refetch 可以复用联合刷新而不形成循环依赖。
  */
 import type { ProviderView } from '@cindy/model-providers';
+import { migrateModelVisibilityDefaults } from '@/state/modelVisibilityPrefs';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -86,6 +87,7 @@ export function commitProvidersSnapshot(
   next: ProvidersSnapshot,
 ): boolean {
   if (!isProvidersRefreshCurrent(token, next)) return false;
+  migrateModelVisibilityDefaults(next.dataOwnerId, next.ownerGeneration, next.providers);
   cachedProviders = next;
   for (const listener of providerListeners) listener(next);
   return true;
