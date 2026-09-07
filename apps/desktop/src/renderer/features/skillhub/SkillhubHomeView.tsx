@@ -6,7 +6,7 @@
  * 公开、可选的组织目录和本地技能在同一行切换；“更多”进入完整 Market。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
@@ -187,6 +187,8 @@ export function SkillhubHomeView({
     ? visibleLocalCount > 0
     : catalogItems.length > 0;
 
+  const skillhubScrollRef = useRef<HTMLElement | null>(null);
+
   // 推荐技能的预览浮层 + 安装选择器(复用 Market 那套):点推荐卡 = 下一步直接
   // 进入该技能的预览;关闭 = 回退到首页。
   const [previewSkill, setPreviewSkill] = useState<MarketSkill | null>(null);
@@ -284,6 +286,7 @@ export function SkillhubHomeView({
       )}
     >
       <main
+        ref={skillhubScrollRef}
         className={cn(
           'relative h-full w-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable_both-edges]',
           embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
@@ -490,6 +493,7 @@ export function SkillhubHomeView({
         <SkillhubMarketPreviewPanel
           open={previewSkill !== null}
           skill={previewSkill}
+          scrollLockRef={skillhubScrollRef}
           onClose={() => setPreviewSkill(null)}
           primaryAction={
             previewSkill && user

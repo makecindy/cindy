@@ -492,6 +492,7 @@ function SkillhubMarketListViewInner() {
       <SkillhubMarketPreviewPanel
         open={previewSkill !== null}
         skill={previewSkill}
+        scrollLockRef={marketScrollRef}
         onClose={handlePreviewClose}
         primaryAction={previewSkill && user
           ? (() => {
