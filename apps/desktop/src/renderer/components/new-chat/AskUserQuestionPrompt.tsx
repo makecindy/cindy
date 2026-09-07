@@ -101,6 +101,15 @@ interface AskUserQuestionPromptProps {
 // ---------------------------------------------------------------------------
 
 export function AskUserQuestionPrompt({
+  sessionId,
+  ...props
+}: AskUserQuestionPromptProps & { sessionId: string | undefined }) {
+  // Repeated snapshots keep this form mounted; another session or request
+  // starts from its own draft instead of inheriting the previous form's state.
+  return <AskUserQuestionForm key={`${sessionId}:${props.pending.requestId}`} {...props} />;
+}
+
+function AskUserQuestionForm({
   pending,
   onAnswer,
   viewerState,
@@ -120,10 +129,9 @@ export function AskUserQuestionPrompt({
   // batch — a stale draft from a previous question batch must be ignored.
   // Note: `requestId` is captured in the lazy initializer closure on first
   // render; subsequent prop updates do NOT re-run the initializer (that is
-  // useState's documented behavior). For a brand-new question batch the
-  // store has already cleared `askUserDraft` to null on the
-  // `ask_user_question` reducer path, so the lazy init falls through to
-  // defaults — no stale leak across batches.
+  // useState's documented behavior). The public wrapper remounts this form
+  // when the session or request changes. For a brand-new question batch the
+  // store has cleared `askUserDraft`, so the new form starts from defaults.
   const [currentIndex, setCurrentIndex] = useState<number>(() =>
     draft && draft.requestId === requestId ? draft.currentIndex : 0,
   );
