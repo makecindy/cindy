@@ -102,6 +102,45 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it.each(['missing table', 'legacy table', 'existing column'] as const)(
+    'replays the scheduled Harness migration safely with %s',
+    (state) => {
+      const { db, cleanup } = createTempDb();
+      const stagedDir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-scheduled-harness-'));
+      try {
+        db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+        const migration = listMigrations(drizzleDir()).find((item) => item.seq === 104)!;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        mkdirSync(path.join(stagedDir, 'scripts'));
+        copyFileSync(migration.tsScriptPath!, path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath!)));
+        if (state !== 'missing table') {
+          db.exec(`CREATE TABLE schedules (id TEXT PRIMARY KEY, agent_kind TEXT, model TEXT);
+            INSERT INTO schedules VALUES ('legacy-schedule', 'codex', 'legacy-model');`);
+          if (state === 'existing column') {
+            db.exec(`ALTER TABLE schedules ADD model_agent_kind TEXT;
+              UPDATE schedules SET model_agent_kind = 'pi';`);
+          }
+        }
+        for (let replay = 0; replay < 2; replay += 1) {
+          const result = runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: 103 });
+          expect(result.applied.map((item) => item.seq)).toEqual([104]);
+          if (state === 'missing table') {
+            expect(tableExists(db, 'schedules')).toBe(false);
+          } else {
+            expect(db.prepare('SELECT * FROM schedules').all()).toEqual([{
+              id: 'legacy-schedule', agent_kind: 'codex', model: 'legacy-model',
+              model_agent_kind: state === 'existing column' ? 'pi' : null,
+            }]);
+          }
+          expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('104');
+        }
+      } finally {
+        rmSync(stagedDir, { recursive: true, force: true });
+        cleanup();
+      }
+    },
+  );
+
   it('replays every drizzle migration into a fresh database', () => {
     const { db, cleanup } = createTempDb();
     try {
@@ -307,19 +346,8 @@ describeMigrationReplay('migration replay', () => {
         );
         CREATE TABLE sessions (
           id TEXT PRIMARY KEY NOT NULL,
-          permission_mode TEXT,
-          source TEXT,
-          title TEXT,
-          created_at INTEGER
+          permission_mode TEXT
         );
-        CREATE TABLE schedules (
-          id TEXT PRIMARY KEY NOT NULL,
-          agent_kind TEXT NOT NULL,
-          model TEXT,
-          name TEXT,
-          created_at INTEGER
-        );
-        INSERT INTO schedules (id, agent_kind, model) VALUES ('legacy-schedule', 'codex', 'legacy-model');
         CREATE TABLE schedule_runs (
           id TEXT PRIMARY KEY NOT NULL
         );
@@ -342,8 +370,6 @@ describeMigrationReplay('migration replay', () => {
         currentVersion: 73,
       });
 
-      expect(db.prepare('SELECT agent_kind, model, model_agent_kind FROM schedules WHERE id = ?')
-        .get('legacy-schedule')).toEqual({ agent_kind: 'codex', model: 'legacy-model', model_agent_kind: null });
       expect(result.applied.map((migration) => migration.seq)).toEqual(
         listMigrations(drizzleDir()).filter((migration) => migration.seq > 73).map((migration) => migration.seq),
       );
@@ -364,7 +390,9 @@ describeMigrationReplay('migration replay', () => {
           'cost_attribution',
         ]),
       );
-      expect(tableExists(db, 'schedules')).toBe(true);
+      // fixture 故意不建 schedules(最小库 + 各迁移自带守卫的设计):0084 的
+      // 裸 ALTER 靠 runner 的冻结缺陷守卫跳过,迁移链必须能走完而不是中途炸掉。
+      expect(tableExists(db, 'schedules')).toBe(false);
       expect(tableExists(db, 'project_aliases')).toBe(true);
       expect(tableExists(db, 'device_link_ownership')).toBe(true);
       expect(
