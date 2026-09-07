@@ -3,6 +3,8 @@ import { ArrowLeftRight, CircleAlert, LockKeyhole } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
+import { makerApiForDevice } from '@/lib/makerTransport';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { Spinner } from '@/components/ui/spinner';
 import {
   getDataOwnerGeneration,
@@ -25,7 +27,9 @@ export function BotDirectMessageView() {
   const navigate = useNavigate();
   const location = useLocation();
   const { botId, threadId } = useParams();
-  const profiles = useBotProfiles();
+  const deviceId = new URLSearchParams(location.search).get('deviceId');
+  const allProfiles = useBotProfiles();
+  const profiles = deviceId ? [] : allProfiles;
   const [state, setState] = useState<DirectMessageState>({ kind: 'loading' });
 
   useEffect(() => {
@@ -40,7 +44,7 @@ export function BotDirectMessageView() {
         return;
       }
       try {
-        const result = await window.electronAPI.maker.getBotDirectMessageThread(threadId, botId);
+        const result = await (deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker).getBotDirectMessageThread(threadId, botId);
         if (cancelled || version !== requestVersion || !isDataOwnerGenerationCurrent(owner)) return;
         setState(result.ok ? { kind: 'ready', thread: result.thread } : { kind: 'unavailable' });
       } catch {
@@ -50,16 +54,27 @@ export function BotDirectMessageView() {
       }
     };
     void load();
-    const unsubscribe = window.electronAPI.maker.onBotDirectMessageChanged((payload, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp) || payload.threadId !== threadId) return;
-      void load();
-    });
+    const unsubscribe = deviceId
+      ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
+          if (push.deviceId !== deviceId || push.channel !== 'maker:bot-direct-message:changed'
+            || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
+          if ((push.payload as { threadId?: string })?.threadId === threadId) void load();
+        })
+      : window.electronAPI.maker.onBotDirectMessageChanged((payload, ownerStamp) => {
+          if (!isDataOwnerPushCurrent(ownerStamp) || payload.threadId !== threadId) return;
+          void load();
+        });
+    const offStatus = deviceId ? window.electronAPI.deviceLink.onStatusChanged((state) => {
+      if (state.status === 'online') void load();
+      else requestVersion += 1;
+    }) : () => {};
     return () => {
+      offStatus();
       cancelled = true;
       requestVersion += 1;
       unsubscribe();
     };
-  }, [botId, threadId]);
+  }, [botId, deviceId, threadId]);
 
   const thread = state.kind === 'ready' ? state.thread : null;
   const profileFor = useCallback(
@@ -103,7 +118,9 @@ export function BotDirectMessageView() {
       candidate.startsWith('/bots/') &&
       !candidate.includes('/direct/')
         ? candidate
-        : botId
+        : deviceId && botId
+          ? `/bots/remote/${encodeURIComponent(deviceId)}/${encodeURIComponent(botId)}`
+          : botId
           ? `/bots/${encodeURIComponent(botId)}`
           : '/bots';
     navigate(returnTo, { replace: true });

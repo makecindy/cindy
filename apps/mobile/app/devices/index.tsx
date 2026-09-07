@@ -1,3 +1,4 @@
+import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { useFocusEffect, useIsFocused } from 'expo-router';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -74,6 +75,7 @@ import {
 import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
+  parseHomeScopePullDownAction,
   homeDisplayMenuPatch,
   type HomeDisplayMenuKey,
 } from '@/session/homeChromeMenus';
@@ -82,6 +84,12 @@ import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import {
+  discoverRemoteHomeCollections,
+  remoteResourceDiscoveryTargets,
+  serializeRemoteResourceTargets,
+  type RemoteHomeCollection,
+} from '@/device-link/remoteResources';
 import {
   createEmptyDeviceIdentityCache,
   loadDeviceIdentityCache,
@@ -424,6 +432,10 @@ function HomeScreenContent() {
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
+  const [resourceCacheAccount, setResourceCacheAccount] = useState<number | null>(null);
+  const remoteHomeCollectionsRef = useRef<RemoteHomeCollection[]>([]);
+  remoteHomeCollectionsRef.current = remoteHomeCollections;
   const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
   selectedDeviceIdRef.current = selectedDeviceId;
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1447,6 +1459,57 @@ function HomeScreenContent() {
     statusLabel: item.statusLabel,
   })), [deviceRows]);
   useEffect(() => {
+    let cancelled = false;
+    remoteHomeCollectionsRef.current = [];
+    setRemoteHomeCollections([]);
+    setResourceCacheAccount(null);
+    void readRemoteResourceSnapshot(homeCacheUserId).then((snapshot) => {
+      if (cancelled) return;
+      remoteHomeCollectionsRef.current = snapshot.home;
+      setRemoteHomeCollections(snapshot.home);
+      setResourceCacheAccount(accountGeneration);
+    });
+    return () => { cancelled = true; };
+  }, [accountGeneration, homeCacheUserId]);
+  useEffect(() => {
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
+    let cancelled = false;
+    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
+    if (targets.length === 0) {
+      remoteHomeCollectionsRef.current = [];
+      setRemoteHomeCollections([]);
+      return () => { cancelled = true; };
+    }
+    void discoverRemoteHomeCollections(
+      invoke,
+      targets,
+      i18nInstance.language,
+      remoteHomeCollectionsRef.current,
+    )
+      .then((collections) => {
+        if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
+          remoteHomeCollectionsRef.current = collections;
+          setRemoteHomeCollections(collections);
+          void cacheRemoteResourceHome(homeCacheUserId, collections);
+        }
+      })
+      .catch(() => {
+        // Optional capability discovery must not turn a healthy Sessions home into an error page.
+        // Keep the last same-account manifest during transient link failures.
+      });
+    return () => { cancelled = true; };
+  }, [
+    accountGeneration,
+    connectionEpoch,
+    resourceCacheAccount,
+    lastSyncedAt,
+    homeListCacheHydrated,
+    homeCacheUserId,
+    deviceModels,
+    i18nInstance.language,
+    invoke,
+  ]);
+  useEffect(() => {
     remoteSessionStore.setConversationSearchDeviceModels(deviceModels.map((item) => ({
       canOpen: item.canOpen,
       deviceId: item.deviceId,
@@ -2302,13 +2365,31 @@ function HomeScreenContent() {
     () => buildHomeScopePullDownActions(
       home.deviceFilters,
       t('devices.list.allConversations'),
+      remoteHomeCollections.map((collection) => ({
+        id: collection.id,
+        title: collection.title,
+      })),
     ),
-    [home.deviceFilters, t],
+    [home.deviceFilters, remoteHomeCollections, t],
   );
   const handleHomeScopeAction = useCallback((id: string) => {
-    const item = home.deviceFilters.find((filter) => filter.id === id);
+    const parsed = parseHomeScopePullDownAction(id);
+    if (parsed.kind === 'collection') {
+      const collection = remoteHomeCollections.find((item) => item.id === parsed.collectionId);
+      if (!collection) return;
+      guardedPush({
+        pathname: '/resources/[collectionId]',
+        params: {
+          collectionId: collection.id,
+          title: collection.title,
+          targets: serializeRemoteResourceTargets(collection.targets),
+        },
+      });
+      return;
+    }
+    const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
     if (item) selectHomeScope(item);
-  }, [home.deviceFilters, selectHomeScope]);
+  }, [guardedPush, home.deviceFilters, remoteHomeCollections, selectHomeScope]);
   const homeDisplayPullDownActions = useMemo(
     () => buildHomeDisplayPullDownActions({
       groupByProject,
@@ -2623,10 +2704,22 @@ function HomeScreenContent() {
         }}
       />
       <DeviceMenuModal
+        collections={remoteHomeCollections}
         connectionStates={deviceConnectionStates}
         filters={home.deviceFilters}
         onClose={() => setDeviceMenuOpen(false)}
         onClosed={handleDeviceMenuClosed}
+        onSelectCollection={(collection) => {
+          setDeviceMenuOpen(false);
+          guardedPush({
+            pathname: '/resources/[collectionId]',
+            params: {
+              collectionId: collection.id,
+              title: collection.title,
+              targets: serializeRemoteResourceTargets(collection.targets),
+            },
+          });
+        }}
         onSelect={(item) => {
           if (item.deviceId && item.state === 'access_revoked') {
             // 撤销授权提示同样是兄弟 Modal,必须等菜单卸载后再挂(见 pendingMenuActionRef 注释)。
@@ -2765,24 +2858,29 @@ function HomeInitialLoadingState({ style }: { style?: StyleProp<ViewStyle> }) {
 }
 
 function DeviceMenuModal({
+  collections,
   connectionStates,
   filters,
   onClose,
   onClosed,
   onSelect,
+  onSelectCollection,
   topOffset,
   visible,
 }: {
+  collections: readonly RemoteHomeCollection[];
   connectionStates: Record<string, HomeDeviceConnectionState>;
   filters: readonly MobileHomeDeviceFilterItem[];
   onClose(): void;
   /** 淡出动画完成、Modal 真正卸载后触发;父级用它把「打开第二个 Modal」延后到菜单卸载之后。 */
   onClosed?(): void;
   onSelect(item: MobileHomeDeviceFilterItem): void;
+  onSelectCollection(item: RemoteHomeCollection): void;
   topOffset: number;
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const { t } = useTranslation();
   const { height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -2822,6 +2920,18 @@ function DeviceMenuModal({
                 testID="home.deviceChip.all"
               />
             ) : null}
+            {collections.map((collection) => (
+              <DeviceMenuItem
+                icon={collection.iconName === 'users'
+                  ? <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                  : undefined}
+                key={`collection:${collection.id}`}
+                label={collection.title}
+                onPress={() => onSelectCollection(collection)}
+                selected={false}
+                testID={`home.remoteCollection.${collection.id}`}
+              />
+            ))}
             {deviceFilters.map((item) => (
               <DeviceMenuItem
                 connectionState={item.deviceId ? connectionStates[item.deviceId] ?? 'idle' : 'idle'}

@@ -192,9 +192,21 @@ function inlineGroup(
   };
 }
 
+export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
+
+export function parseHomeScopePullDownAction(
+  id: string,
+): { kind: "select"; filterId: string } | { kind: "collection"; collectionId: string } {
+  if (id.startsWith(HOME_SCOPE_COLLECTION_PREFIX)) {
+    return { kind: "collection", collectionId: id.slice(HOME_SCOPE_COLLECTION_PREFIX.length) };
+  }
+  return { kind: "select", filterId: id };
+}
+
 export function buildHomeScopePullDownActions(
   filters: readonly MobileHomeDeviceFilterItem[],
   allConversationsLabel: string,
+  collections: readonly { id: string; title: string }[] = [],
 ): NativePullDownAction[] {
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   const deviceFilters = filters.filter(
@@ -205,6 +217,12 @@ export function buildHomeScopePullDownActions(
     items.push(
       checkable(allFilter.id, allConversationsLabel, allFilter.selected),
     );
+  }
+  for (const collection of collections) {
+    items.push({
+      id: `${HOME_SCOPE_COLLECTION_PREFIX}${collection.id}`,
+      title: collection.title,
+    });
   }
   for (const item of deviceFilters) {
     if (!item.deviceId) continue;

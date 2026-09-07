@@ -1,3 +1,5 @@
+import { readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
+import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import { contentToPreview } from '@/utils/contentPreview';
@@ -107,6 +109,7 @@ export interface NormalizedRemoteMessage {
   modelMismatch?: { selected: string; actual: string };
   /** Orca 协同卡片(Lead 派活 / worker 回报);存在时由 MessageRenderer 渲染成专属卡片而非普通气泡。 */
   orcaCard?: OrcaCollabCard;
+  companion?: { kind: 'task'; meta: BotCollaborationMeta } | { kind: 'direct'; meta: BotDirectMessageMeta };
   /** tool 消息专用:tool_result 是否已到达(含被隐藏的 orca 空结果),驱动工具行 running/done 状态。 */
   toolSettled?: boolean;
   /** Large settled tool input is fetched only when the user asks to view it. */
@@ -195,6 +198,20 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
   const result: NormalizedRemoteMessage[] = [];
   for (const message of sorted) {
     if (message.role === 'tool_result') continue;
+    if (message.role === 'assistant') {
+      const task = readBotCollaborationMeta(message.agentMeta?.botCollaboration);
+      const direct = readBotDirectMessageMeta(message.agentMeta?.botDirectMessage);
+      if (task?.role === 'delegation-request' || task?.role === 'interjection' || direct) {
+        result.push({
+          key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
+          label: 'companion', body: typeof message.content === 'string' ? message.content : '',
+          align: 'agent', createdAt: message.createdAt,
+          companion: task && (task.role === 'delegation-request' || task.role === 'interjection')
+            ? { kind: 'task', meta: task } : { kind: 'direct', meta: direct! },
+        });
+        continue;
+      }
+    }
 
     if (message.role === 'tool_use') {
       const tool = parseToolUse(message);

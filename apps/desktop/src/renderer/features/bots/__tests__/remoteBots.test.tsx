@@ -15,9 +15,9 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
-import { useRemoteBotSync, useRemoteBots } from '../useRemoteBots';
+import { useRemoteBotSync, useRemoteBots, markRemoteBotRead } from '../useRemoteBots';
 import { parseRemoteCollectionListRequest } from '@cindy/device-link';
-import { parseRemoteBots, remoteBotKey } from '../remoteBotRoster';
+import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 const host = (deviceId: string, online = true) => ({
   deviceId,
   name: deviceId,
@@ -48,6 +48,7 @@ beforeEach(() => {
   window.electronAPI = {
     deviceLink: {
       invoke: h.invoke,
+      getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
       onStatusChanged: (fn: any) => {
         h.status = fn;
         return () => {};
@@ -88,6 +89,7 @@ describe('remote teammate roster', () => {
         }),
     );
     const { result } = renderHook(useRoster);
+    await waitFor(() => expect(h.invoke).toHaveBeenCalled());
     act(() => h.status({ status: 'stopped' }));
     await act(async () => finish(collection()));
     expect(result.current).toEqual([]);
@@ -101,6 +103,7 @@ describe('remote teammate roster', () => {
         }),
     );
     const { result, rerender } = renderHook(useRoster);
+    await waitFor(() => expect(h.invoke).toHaveBeenCalled());
     h.owner = 'new-account';
     h.devices = [];
     rerender();
@@ -120,4 +123,29 @@ describe('remote teammate roster', () => {
     wrong.items[0].ref.kind = 'document';
     expect(() => parseRemoteBots(wrong, 'a', 'A')).toThrow();
   });
+});
+
+
+it('does not let a late initial online state undo a stopped relay push', async () => {
+  let finish!: (state: unknown) => void;
+  (window.electronAPI.deviceLink.getState as any).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  renderHook(useRoster);
+  act(() => h.status({ status: 'stopped' }));
+  await act(async () => finish({ linkStatus: 'online' }));
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+it('keeps cached companions offline on reconnect and preserves device-qualified unread state', async () => {
+  const withReply = (at: number) => { const value = collection(); Object.assign(value.items[0].display, { lastReplyAt: at }); return value; };
+  h.invoke.mockResolvedValue(withReply(100));
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  expect(result.current.some(isRemoteBotUnread)).toBe(false);
+  act(() => h.status({ status: 'reconnecting' }));
+  expect(result.current.every((bot) => !bot.online)).toBe(true);
+  h.invoke.mockResolvedValue(withReply(200));
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(result.current.every(isRemoteBotUnread)).toBe(true));
+  act(() => markRemoteBotRead('a', 'same-bot', 200));
+  expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
+  expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'b')!)).toBe(true);
 });

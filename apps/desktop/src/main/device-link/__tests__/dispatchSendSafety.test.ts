@@ -663,6 +663,38 @@ describe('remote companion Session visibility at the device-link boundary', () =
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it.each(['hidden', 'missing'] as const)('rejects a private thread when the viewer Bot is %s, using Bot identity rather than the opaque thread ID', async (access) => {
+    const handler = vi.fn(() => ({ ok: true, thread: { messages: [{ content: 'private' }] } }));
+    registry.register('maker:bot-direct-message-thread:get', handler);
+    const lookup = vi.fn(async (id: string, kind?: 'session' | 'bot') =>
+      kind === 'bot' && id === 'viewer-bot' ? access : 'ordinary' as const);
+    setRemoteBotSessionLookup(lookup);
+    expect(await runInvoke('ctrl-1', { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] }))
+      .toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).not.toHaveBeenCalled();
+    expect(lookup).toHaveBeenCalledWith('viewer-bot', 'bot');
+  });
+
+  it('allows a visible private-thread viewer and rechecks that viewer before cached delivery', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async (id, kind) => kind === 'bot' && id === 'viewer-bot'
+      ? hidden ? 'hidden' : 'visible' : 'ordinary');
+    const handler = vi.fn(() => ({ ok: true, thread: { id: 'opaque-thread', messages: [{ content: 'private' }] } }));
+    registry.register('maker:bot-direct-message-thread:get', handler);
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const frame = client.onFrame.mock.calls[0][0];
+    const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-thread', payload: { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] } };
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+    expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: true, result: { ok: true } });
+    hidden = true;
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('rechecks visibility after an in-flight read and filters active task discovery', async () => {
     let hidden = false;
     setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');

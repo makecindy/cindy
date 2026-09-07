@@ -116,6 +116,7 @@ import {
 import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications';
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
+import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
@@ -849,6 +850,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages().catch(() => undefined),
+      clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
     ]);
     resetComposerPaletteCache();
@@ -2579,6 +2581,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearAllMobileVoiceDictionaryCaches().catch(() => undefined);
     await clearCachedSessionMessages().catch(() => undefined);
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
+    await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();

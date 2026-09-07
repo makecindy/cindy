@@ -1336,3 +1336,20 @@ describe('normalizeRemoteMessages — /goal 持久记录与 plan_review 状态',
     expect(items[0].label).toBe('plan_review:cancelled');
   });
 });
+
+
+describe('companion timeline', () => {
+  it('preserves empty task anchors and private thread links for the mobile renderer', () => {
+    const task = { v: 1, role: 'delegation-request', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
+    const direct = { v: 1, threadId: 'private', viewerBotId: 'bot', peerBotId: 'peer', peerBotName: 'Dash', direction: 'sent', sequence: 1, preview: 'Discuss report' };
+    const rows = normalizeRemoteMessages([
+      message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: task } }),
+      message({ id: 'direct', role: 'assistant', content: '', agentMeta: { botDirectMessage: direct } }),
+      message({ id: 'invalid', role: 'assistant', content: 'Regular reply', agentMeta: { botDirectMessage: { ...direct, v: 2 } } }),
+    ]);
+    expect(rows[0]).toMatchObject({ kind: 'system', companion: { kind: 'task', meta: task }, source: { sessionId: 's1' } });
+    expect(rows[1]).toMatchObject({ kind: 'system', companion: { kind: 'direct', meta: direct } });
+    expect(rows[2]).toMatchObject({ kind: 'assistant', body: 'Regular reply' });
+    expect(rows[2].companion).toBeUndefined();
+  });
+});

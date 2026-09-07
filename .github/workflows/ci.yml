@@ -143,6 +143,11 @@ jobs:
         # 通过 pnpm 启动 runner，保留当前 pnpm 入口与 workspace 解析语义。
         run: pnpm exec node scripts/test-workspaces.mjs --tier unit
 
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
+
   # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
   verify:
     name: verify
@@ -202,6 +207,11 @@ jobs:
 
       - name: Run client and package unit tests
         run: pnpm test:unit
+
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
   # 保留稳定的必需检查名，并确保任一分片失败或取消都会阻断汇总门禁。
   windows-unit:

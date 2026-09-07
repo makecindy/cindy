@@ -384,6 +384,7 @@ async function readCanonicalChatPreview(
   db: ReturnType<typeof getDbClient>['drizzle'],
   canonicalSessionId: string | null,
   clearedAt: number | null,
+  repliesOnly = false,
 ): Promise<{ preview: string | null; createdAt: number | null; role: BotChatRole | null }> {
   if (!canonicalSessionId) return { preview: null, createdAt: null, role: null };
   const rows = await db
@@ -396,9 +397,11 @@ async function readCanonicalChatPreview(
     .where(
       and(
         eq(messages.sessionId, canonicalSessionId),
-        inArray(messages.role, ['user', 'assistant']),
+        repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
         isNull(messages.rewindAt),
         sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.botPrivateReply') IS NOT 1)`,
         ...(clearedAt !== null ? [gt(messages.createdAt, clearedAt)] : []),
       ),
     )
@@ -698,6 +701,7 @@ export interface BotRemoteResourceSource {
   lastMessagePreview: string | null;
   lastMessageAt: number | null;
   lastMessageRole: BotChatRole | null;
+  lastReplyAt?: number;
   needsAttention: boolean;
   hiddenAt: number | null;
   pinnedAt: number | null;
@@ -720,6 +724,7 @@ async function readBotRemoteResourceSource(
     .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
     .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
   const latest = await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null);
+  const reply = latest.role === 'assistant' ? latest : await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null, true);
   owner.assertCurrent();
   return {
     id: profile.id,
@@ -732,6 +737,7 @@ async function readBotRemoteResourceSource(
     lastMessagePreview: latest.preview,
     lastMessageAt: latest.createdAt,
     lastMessageRole: latest.role,
+    lastReplyAt: reply.createdAt ?? 0,
     needsAttention: profile.attentionAt !== null &&
       BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
       isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),

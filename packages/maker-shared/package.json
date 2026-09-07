@@ -74,7 +74,10 @@
     "./usage-format": "./src/usageFormat.ts",
     "./work-activity-projection": "./src/workActivityProjection.ts",
     "./worktree-paths": "./src/worktreePaths.ts",
-    "./codex-usage-buckets": "./src/codexUsageBuckets.ts"
+    "./codex-usage-buckets": "./src/codexUsageBuckets.ts",
+    "./botCollaboration": "./src/botCollaboration.ts",
+    "./botDirectMessage": "./src/botDirectMessage.ts",
+    "./botDelegation": "./src/botDelegation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

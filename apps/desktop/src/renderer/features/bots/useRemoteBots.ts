@@ -10,11 +10,17 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
 
+const CACHE_PREFIX = 'cindy.remoteBots.v1.';
 let owner: string | null = null;
 let snapshot: RemoteBot[] = [];
 const listeners = new Set<() => void>();
 const publish = (next: RemoteBot[]) => {
   snapshot = next;
+  if (owner) {
+    try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false })));
+      if (value.length <= 256 * 1024) window.localStorage.setItem(CACHE_PREFIX + owner, value);
+    } catch { /* display cache may be unavailable */ }
+  }
   listeners.forEach((fn) => fn());
 };
 const subscribe = (fn: () => void) => {
@@ -43,11 +49,31 @@ export function useRemoteBotSync(): void {
     const nextOwner = isAuthenticated ? (dataOwnerId ?? null) : null;
     if (owner !== nextOwner) {
       owner = nextOwner;
-      publish([]);
+      let cached: RemoteBot[] = [];
+      try {
+        if (!nextOwner) {
+          for (const key of Object.keys(window.localStorage)) if (key.startsWith(CACHE_PREFIX)) window.localStorage.removeItem(key);
+        } else {
+          const raw = window.localStorage.getItem(CACHE_PREFIX + nextOwner);
+          if (raw && raw.length <= 256 * 1024) {
+            const rows = JSON.parse(raw);
+            if (Array.isArray(rows)) cached = rows.slice(0, 200).filter((bot) => bot && ['id', 'deviceId', 'deviceName', 'name', 'avatar', 'avatarColor', 'description', 'preview'].every((key) => typeof bot[key] === 'string') && Number.isFinite(bot.activityAt)).map((bot) => ({
+              id: bot.id, deviceId: bot.deviceId, deviceName: bot.deviceName, name: bot.name,
+              avatar: bot.avatar, avatarColor: bot.avatarColor, description: bot.description, preview: bot.preview,
+              activityAt: bot.activityAt, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
+              lastReplyAt: Number.isFinite(bot.lastReplyAt) ? bot.lastReplyAt : undefined,
+              readAt: Number.isFinite(bot.readAt) ? bot.readAt : undefined, online: false,
+            }));
+          }
+        }
+      } catch { /* missing/corrupt cache */ }
+      publish(cached);
     }
-    if (!nextOwner || !devices) return;
+    if (!nextOwner) return;
+    if (!devices) { publish(snapshot.map((bot) => ({ ...bot, online: false }))); return; }
     let disposed = false;
-    let relayAvailable = true;
+    let relayAvailable = false;
+    let statusRevision = 0;
     const hosts = devices.filter(
       (d) => !d.isSelf && d.controlEnabled && d.remoteControlEnabled && !revoked.has(d.deviceId),
     );
@@ -77,7 +103,9 @@ export function useRemoteBotSync(): void {
           [request],
         );
         if (!current() || generations.get(deviceId) !== epoch) return;
-        const bots = parseRemoteBots(result, deviceId, host.name);
+        const bots = parseRemoteBots(result, deviceId, host.name).map((bot) => ({
+          ...bot, readAt: snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0,
+        }));
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
       } catch {
         if (!current() || generations.get(deviceId) !== epoch) return;
@@ -90,7 +118,8 @@ export function useRemoteBotSync(): void {
     }
     // The app's existing remote-session synchronizer owns the sessions topic.
     // Sharing its pushes avoids competing subscribe/unsubscribe owners.
-    for (const host of hosts) if (host.online) void refresh(host.deviceId);
+    // Subscribe before reading status: a stopped/connecting relay cannot inherit
+    // a stale device directory's online flag, and a late GET cannot undo a push.
     const offPush = window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
       if (
         !current() ||
@@ -110,15 +139,26 @@ export function useRemoteBotSync(): void {
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((state) => {
       if (!current()) return;
+      statusRevision += 1;
       relayAvailable = state.status === 'online';
       if (state.status === 'online') {
         for (const host of hosts) if (host.online) void refresh(host.deviceId);
       } else {
         for (const id of byId.keys()) generations.set(id, (generations.get(id) ?? 0) + 1);
         publish(
-          state.status === 'stopped' ? [] : snapshot.map((bot) => ({ ...bot, online: false })),
+          snapshot.map((bot) => ({ ...bot, online: false })),
         );
       }
+    });
+    const revision = statusRevision;
+    void window.electronAPI.deviceLink.getState().then((state) => {
+      if (!current() || revision !== statusRevision) return;
+      relayAvailable = state.linkStatus === 'online';
+      if (relayAvailable) {
+        for (const host of hosts) if (host.online) void refresh(host.deviceId);
+      } else publish(snapshot.map((bot) => ({ ...bot, online: false })));
+    }).catch(() => {
+      if (current() && revision === statusRevision) publish(snapshot.map((bot) => ({ ...bot, online: false })));
     });
     return () => {
       disposed = true;
@@ -127,4 +167,10 @@ export function useRemoteBotSync(): void {
       timers.forEach(clearTimeout);
     };
   }, [dataOwnerId, isAuthenticated, devices, revoked]);
+}
+
+export function markRemoteBotRead(deviceId: string, botId: string, at: number): void {
+  if (!Number.isFinite(at) || at < 0) return;
+  if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) < at)) return;
+  publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));
 }
