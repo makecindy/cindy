@@ -2663,6 +2663,29 @@ const RenderItemView = memo(function RenderItemView({
           <PendingSendBubble
             actions={actions.pendingSend}
             item={item}
+            screenWidth={actions.screenWidth}
+            renderImage={(uri) => uri ? (
+              <MediaPreview key={uri} presentationOnly
+                layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })}
+                media={{ kind: 'image', url: uri, previewable: true }}
+                label=""
+                variant="attachment"
+              />
+            ) : (
+              <View style={[styles.attachmentImagePending, {
+                width: buildMessageContentLayout({ screenWidth: actions.screenWidth }).attachmentImageMaxWidth,
+                height: buildMessageContentLayout({ screenWidth: actions.screenWidth }).attachmentImageMaxHeight,
+              }]} />
+            )}
+            renderFile={(name, index) => (
+              <FileChip key={`${name}:${index}`} name={name} presentationOnly
+                layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
+            )}
+            renderText={(text, index) => (
+              <MarkdownBody key={`text:${index}`} text={text} streaming={false}
+                selectable={false} pinContentWidth={false}
+                layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
+            )}
             resolveRemoteMedia={actions.onResolveRemoteMedia}
           />
         )
@@ -5816,6 +5839,7 @@ function MediaPreview({
   onOpen,
   onResolveRemoteMedia,
   variant = 'card',
+  presentationOnly = false,
 }: {
   layout: MessageContentLayout;
   media: NormalizedToolMedia;
@@ -5823,6 +5847,7 @@ function MediaPreview({
   onOpen?: () => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   variant?: 'card' | 'attachment';
+  presentationOnly?: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
@@ -5914,6 +5939,7 @@ function MediaPreview({
     );
     return (
       <MessageContentOpenButton
+      presentationOnly={presentationOnly}
         accessibilityLabel={`${preview.actionLabel} ${preview.title}`}
         onPress={onOpen}
         style={styles.attachmentImageWrap}
@@ -5952,6 +5978,7 @@ function MediaPreview({
     const frameSize = { height: layout.imagePreviewHeight, width: layout.imagePreviewWidth };
     return (
       <MessageContentOpenButton
+      presentationOnly={presentationOnly}
         accessibilityLabel={`${preview.actionLabel} ${preview.title}`}
         onPress={onOpen}
         style={[
@@ -5984,6 +6011,7 @@ function MediaPreview({
 
   return (
     <MessageContentOpenButton
+      presentationOnly={presentationOnly}
       accessibilityLabel={`${preview.actionLabel} ${preview.title}`}
       onPress={onOpen}
       style={[
@@ -6035,17 +6063,20 @@ function FileChip({
   name,
   onOpen,
   path,
+  presentationOnly = false,
 }: {
   layout: MessageContentLayout;
   name: string;
   onOpen?: () => void;
   path?: string;
+  presentationOnly?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildFilePayload(name, path ?? ''));
   return (
     <MessageContentOpenButton
+      presentationOnly={presentationOnly}
       accessibilityLabel={`${preview.actionLabel} ${name}`}
       onPress={onOpen}
       style={[
@@ -6156,6 +6187,7 @@ function MessageContentOpenButton({
   accessibilityLabel,
   children,
   disabled = false,
+  presentationOnly = false,
   onPress,
   style,
   testID,
@@ -6163,12 +6195,14 @@ function MessageContentOpenButton({
   accessibilityLabel: string;
   children: ReactNode;
   disabled?: boolean;
+  presentationOnly?: boolean;
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const interactionDisabled = disabled || !onPress;
+  if (presentationOnly) return <View style={style} testID={testID}>{children}</View>;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}

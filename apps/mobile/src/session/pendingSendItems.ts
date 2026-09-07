@@ -63,6 +63,7 @@ export interface MobilePendingSendItem {
   thumbs: MobileOutboxThumb[];
   /** 非图片附件数(pdf / office 等,渲染「N 个文件」计数行)。 */
   fileCount: number;
+  fileNames?: string[];
   /** 附件总数与已上传数(uploading 阶段渲染「上传中 k/N」)。 */
   attachmentCount: number;
   uploadedCount: number;
@@ -231,6 +232,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       queueIndex,
       thumbs: attachments.thumbs,
       fileCount: attachments.fileCount,
+      fileNames: (item.files ?? []).filter((file) => file.category !== 'image').map((file) => file.name),
       attachmentCount: attachments.thumbs.length + attachments.fileCount,
       uploadedCount: attachments.thumbs.length + attachments.fileCount,
       errorText: null,
@@ -268,6 +270,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       queueIndex: null,
       thumbs: item.thumbnails,
       fileCount: item.fileCount,
+      fileNames: item.fileNames,
       attachmentCount: item.attachmentCount,
       uploadedCount: item.uploadedCount,
       errorText: item.errorText,

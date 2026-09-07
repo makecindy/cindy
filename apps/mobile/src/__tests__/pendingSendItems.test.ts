@@ -233,7 +233,8 @@ describe('pending_send 渲染接线', () => {
     ).replace(/\r\n/g, '\n');
     expect(bubbleSource).toContain('<SentInlineAtomBody');
     expect(bubbleSource).toContain('interactiveAtoms={false}');
-    expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
+    expect(bubbleSource).toContain('maxVisibleLines={collapsedLines}');
+    expect(bubbleSource).toContain('LONG_USER_MESSAGE_COLLAPSED_LINES');
     // 徽标与正文必须属于同一个 Pressable，点击用户直觉中的左侧状态图标也能展开条目。
     const bubblePressableStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
     const bubblePressableEnd = bubbleSource.indexOf('\n        </Pressable>', bubblePressableStart);

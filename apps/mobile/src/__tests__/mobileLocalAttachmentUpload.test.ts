@@ -659,6 +659,7 @@ describe('claim(划归乐观消息)', () => {
       failed: false,
       kind: 'image',
       previewUri: 'file:///tmp/a.jpg',
+      name: 'a.jpg',
     }]);
     controller.claim(claimable.map((task) => task.localId));
     // 托盘同步清空,限额与发送等待不再计入。
@@ -748,6 +749,7 @@ describe('claim(划归乐观消息)', () => {
       failed: true,
       kind: 'image',
       previewUri: 'file:///tmp/a.jpg',
+      name: 'a.jpg',
     }]);
 
     const snapshotCount = pendingSnapshots.length;
