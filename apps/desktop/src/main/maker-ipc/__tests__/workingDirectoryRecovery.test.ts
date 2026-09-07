@@ -10,6 +10,106 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it.runIf(process.platform === 'darwin')('distinguishes a bare /Volumes mount point from an alias to the system disk', async () => {
+    const allocate = vi.fn(async () => '/conversation');
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async () => ({ isDirectory: () => true, dev: 1 }), mkdir: vi.fn(),
+      realpath: async (dir) => dir === '/Volumes/System' ? '/' : dir,
+    }, allocate);
+    expect(await recovery.recover('system', '/Volumes/System/project')).toBe(true);
+    expect(allocate).not.toHaveBeenCalled();
+    const diagnostic = vi.fn(async () => null);
+    expect(await recovery.recover('external', '/Volumes/External/project', diagnostic)).toBe(true);
+    expect(allocate).toHaveBeenCalledOnce();
+    expect(diagnostic).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('uses a conversation workspace after the observed volume disappears (shadow exists: %s)', async (shadowExists) => {
+    const dir = path.resolve('/mounted/project');
+    const fallback = path.resolve('/conversation');
+    let mounted = true;
+    const mkdir = vi.fn();
+    const recovery = createWorkingDirectoryRecovery({
+      stat: vi.fn(async (target) => {
+        if (!mounted && target === dir && !shadowExists) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return { isDirectory: () => true, dev: mounted ? 2 : 1 };
+      }),
+      mkdir,
+      realpath: async (target) => target,
+    }, async () => fallback);
+    await recovery.observe('task', dir);
+    mounted = false;
+    expect(await recovery.recover('task', dir)).toBe(true);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(recovery.resolve('task', dir)).toBe(fallback);
+    const note = recovery.peek('task', fallback)!;
+    expect(note).toContain('not been restored or copied');
+    expect(note).toContain(JSON.stringify(dir));
+    recovery.consume('task', note);
+    mounted = true;
+    expect(await recovery.recover('task', dir)).toBe(true);
+    expect(recovery.resolve('task', dir)).toBe(fallback);
+    expect(recovery.peek('task', fallback)).toBeNull();
+    expect(recovery.resolve('task', '/chosen-project')).toBe('/chosen-project');
+    expect(recovery.resolve('task', dir)).toBe(dir);
+  });
+
+  it('recreates a deleted child on the same observed volume', async () => {
+    const dir = path.resolve('/mounted/project');
+    let missing = false;
+    const mkdir = vi.fn();
+    const allocate = vi.fn(async () => '/conversation');
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async (target) => {
+        if (missing && target === dir) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return { isDirectory: () => true, dev: 2 };
+      }, mkdir,
+    }, allocate);
+    await recovery.observe('task', dir);
+    missing = true;
+    expect(await recovery.recover('task', dir)).toBe(true);
+    expect(mkdir).toHaveBeenCalledWith(dir, { recursive: true });
+    expect(allocate).not.toHaveBeenCalled();
+  });
+
+  it('recreates a deleted fallback without returning to the original mount', async () => {
+    const mkdir = vi.fn();
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }, mkdir,
+    }, async () => '/conversation');
+    expect(await recovery.recover('task', '/offline/project')).toBe(true);
+    recovery.consume('task', recovery.peek('task')!);
+    expect(await recovery.recover('task', '/conversation')).toBe(true);
+    expect(mkdir).toHaveBeenCalledWith(path.resolve('/conversation'), { recursive: true });
+    expect(recovery.resolve('task', '/offline/project')).toBe(path.resolve('/conversation'));
+    expect(recovery.peek('task')).toContain('previous files have not been recovered');
+  });
+
+  it.each(['EIO', 'ENOTCONN', 'ENODEV', 'WORKDIR_PROBE_TIMEOUT'])('uses fallback for an unavailable filesystem probe: %s', async (code) => {
+    const mkdir = vi.fn();
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async () => { throw Object.assign(new Error('unavailable'), { code }); }, mkdir,
+    }, async () => '/conversation');
+    expect(await recovery.recover('task', '/network/project')).toBe(true);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(recovery.resolve('task', '/network/project')).toBe(path.resolve('/conversation'));
+  });
+
+  it('does not revive a fallback after cleanup during allocation', async () => {
+    let finish!: (dir: string) => void;
+    const allocate = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async () => { throw Object.assign(new Error('missing drive'), { code: 'ENOENT' }); }, mkdir: vi.fn(),
+    }, allocate);
+    const recovering = recovery.recover('task', '/unavailable/project');
+    await vi.waitFor(() => expect(allocate).toHaveBeenCalled());
+    recovery.discard('task');
+    finish('/conversation');
+    expect(await recovering).toBe(false);
+    expect(recovery.resolve('task', '/unavailable/project')).toBe('/unavailable/project');
+    expect(recovery.peek('task')).toBeNull();
+  });
+
   it('notifies physical aliases while preserving unrelated pending recovery', async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-cwd-alias-'));
     roots.push(root);

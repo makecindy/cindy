@@ -209,7 +209,8 @@ import {
   isDbClientNotReadyError,
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
-import { createWorkingDirectoryRecovery } from './workingDirectoryRecovery.js';
+import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { statWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -1051,7 +1052,8 @@ import { handleSessionEvent, type SessionEventDependencies } from './sessionEven
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
-const workingDirectoryRecovery = createWorkingDirectoryRecovery();
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: fsp.mkdir, realpath: fsp.realpath }, async (sessionId) =>
+  ensureDialogueWorkspaceDir(sessionId, Date.now()));
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -6242,6 +6244,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
   }> {
+    if (o.id && o.workingDir && !o.remoteHostId) {
+      o.workingDir = workingDirectoryRecovery.resolve(o.id, o.workingDir);
+      await workingDirectoryRecovery.observe(o.id, o.workingDir).catch(() => undefined);
+    }
     o.hostStartupPreferences = {
       userPrompt: o.userPrompt,
       makerMemoryEnabled: o.makerMemoryEnabled,
@@ -11507,6 +11513,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await ensureRemoteReadyForSessionStart(params);
     },
     checkWorkDirExists,
+    resolveRecoveredWorkingDir: (sessionId, dir) => workingDirectoryRecovery.resolve(sessionId, dir),
     preflightBotRuntimeResources: async (opts) => { await preflightBotRuntimeResources(opts); },
     readWorkingDirectoryRecoveryCreateOpts: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select().from(sessions)
@@ -17282,12 +17289,13 @@ async function checkWorkDirExists(
   // 或者 agent 真跑起来时由远端 codex 自己报 ENOENT)。这里直接放行。
   if (remoteHostId) return true;
   if (!workingDir?.trim()) return true;
+  workingDir = workingDirectoryRecovery.resolve(sessionId, workingDir);
   const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
   // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
   const suppress = opts?.suppressMissingBroadcast === true;
   try {
-    const stat = await fsp.stat(workingDir);
+    const stat = await statWorkingDirectory(workingDir);
     if (!stat.isDirectory()) {
       if (suppress) {
         log.warn('send: workdir not a directory (broadcast suppressed, caller has fallback)', {
@@ -17317,6 +17325,10 @@ async function checkWorkDirExists(
         return false;
       }
     }
+    if (getManagedWorktreeBasePath(normalizedWorkingDir) === null) {
+      if (!await workingDirectoryRecovery.recover(sessionId, workingDir)) return false;
+      await workingDirectoryRecovery.observe(sessionId, workingDir);
+    }
     return true;
   } catch (error) {
     // Cindy 托管 worktree 被外部 PR cleanup / 手动 git 命令移除时，先按 DB 中
@@ -17328,15 +17340,19 @@ async function checkWorkDirExists(
     }
     // Preserve the existing sibling-path diagnostic before mkdir makes the probe pass.
     // A fuzzy match is a lead for the agent, not authority to switch project identity.
-    const similar = suppress ? null : await findSimilarDirOnDisk(workingDir);
+    const unavailable = isUnavailableFilesystemError(error);
+    let similar: string | null = null;
     // A missing ordinary/dialogue cwd must not stop the conversation. Prefer a repaired
     // DB path when the caller has one; never turn a managed Git recovery into
     // an empty project, or treat permission/non-directory failures as ENOENT.
     if (
       !suppress &&
-      (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+      ((error as NodeJS.ErrnoException).code === 'ENOENT' || unavailable) &&
       getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
-      await workingDirectoryRecovery.recover(sessionId, workingDir, similar,
+      await workingDirectoryRecovery.recover(sessionId, workingDir, async () => {
+        similar = await findSimilarDirOnDisk(workingDir);
+        return similar;
+      },
         getMaker().listActiveSessions()
           .filter((session) => !session.remoteHostId)
           .map((session) => ({ id: session.id, workingDir: session.workDir })))

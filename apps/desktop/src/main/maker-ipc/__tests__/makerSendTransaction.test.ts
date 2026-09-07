@@ -1207,6 +1207,21 @@ describe('maker SEND transaction', () => {
     }));
   });
 
+  it.each(['codex', 'claude-code', 'pi'] as const)('restarts %s in the fallback workspace before dispatch', async (agentKind) => {
+    const session = createSession({ agentKind });
+    const recovered = createSession({ agentKind, workDir: '/conversation' });
+    const { deps } = createDeps({
+      getSession: () => session,
+      resolveRecoveredWorkingDir: () => '/conversation',
+      peekWorkingDirectoryRecoveryNote: () => 'Original filesystem unavailable; temporary conversation workspace',
+      bootstrapSession: vi.fn(async () => ({ session: recovered, didInjectOrcaInstructions: false, didInjectProjectContext: false })),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'continue')).resolves.toMatchObject({ accepted: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/conversation' }));
+    expect(session.send).not.toHaveBeenCalled();
+    expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('Original filesystem unavailable'), expect.anything());
+  });
+
   it('keeps the old runtime when Bot resource preflight fails, then resumes normally after repair', async () => {
     const session = createSession({ agentKind: 'pi' });
     const { deps } = createDeps({

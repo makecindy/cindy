@@ -40,7 +40,7 @@ if (parentPort) {
     }
     void stat(request.dir)
       .then<WorkdirProbeResult, WorkdirProbeResult>(
-        (entry) => ({ ok: true, isDirectory: entry.isDirectory() }),
+        (entry) => ({ ok: true, isDirectory: entry.isDirectory(), device: entry.dev }),
         (error) => ({ ok: false, code: filesystemErrorCode(error) }),
       )
       .then((result) => {

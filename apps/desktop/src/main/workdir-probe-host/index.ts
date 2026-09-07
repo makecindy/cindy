@@ -39,6 +39,13 @@ export const workdirProbeHostClient = new WorkdirProbeHostClient({
   log,
 });
 
+/** Bounded filesystem identity probe for local cwd recovery; never expose paths to a controller. */
+export async function statWorkingDirectory(dir: string): Promise<{ isDirectory(): boolean; dev?: number }> {
+  const result = await workdirProbeHostClient.probe(dir, path.resolve(dir), 5_000);
+  if (!result.ok) throw Object.assign(new Error('Working directory probe failed'), { code: result.code });
+  return { isDirectory: () => result.isDirectory, dev: result.device };
+}
+
 // 真实 Electron app 一定有 once；条件注册让引用 guard 的纯 Node 单测仍可使用
 // 只覆盖自身所需字段的窄 electron stub，而不必为未执行的生命周期补整套假实现。
 if (typeof app.once === 'function') {

@@ -311,6 +311,7 @@ export interface MakerSendTransactionDeps {
     remoteHostId?: string | null,
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean>;
+  resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
   /**
    * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create /
    * rehydrate 在 caller 传入的 workingDir 校验失败时用它兜底——输入队列崩溃
@@ -629,7 +630,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           createOpts.agentKind,
           createOpts.remoteHostId,
         );
-    if (ok) return true;
+    if (ok) {
+      if (!createOpts.remoteHostId && createOpts.workingDir) {
+        createOpts.workingDir = deps.resolveRecoveredWorkingDir?.(sessionId, createOpts.workingDir) ?? createOpts.workingDir;
+      }
+      return true;
+    }
     if (!fallbackDir) return false;
     const okDb = await deps.checkWorkDirExists(
       sessionId,
@@ -643,7 +649,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       staleWorkingDir: createOpts.workingDir,
       workingDir: fallbackDir,
     });
-    createOpts.workingDir = fallbackDir;
+    createOpts.workingDir = createOpts.remoteHostId ? fallbackDir :
+      deps.resolveRecoveredWorkingDir?.(sessionId, fallbackDir) ?? fallbackDir;
     return true;
   }
 
@@ -880,9 +887,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         );
         // Claude/Pi keep a process whose cwd can still reference the deleted inode.
         // The pending note also covers recovery performed by an earlier preflight.
-        const needsCwdRefresh = ok && !sess.remoteHostId &&
-          (sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
-          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir);
+        const recoveredDir = !sess.remoteHostId
+          ? deps.resolveRecoveredWorkingDir?.(sessionId, sess.workDir) ?? sess.workDir
+          : sess.workDir;
+        const needsCwdRefresh = ok && !sess.remoteHostId && (
+          recoveredDir !== sess.workDir ||
+          ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir)));
         if ((!ok && fallbackDir) || needsCwdRefresh) {
           const supplied = (createOpts as CreateOpts | undefined) ??
             await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
@@ -893,7 +904,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ...supplied,
             ...preferences,
             id: sessionId,
-            workingDir: needsCwdRefresh ? sess.workDir : fallbackDir!,
+            workingDir: needsCwdRefresh ? recoveredDir : fallbackDir!,
             agentKind: sess.agentKind,
             remoteHostId: sess.remoteHostId ?? undefined,
           });

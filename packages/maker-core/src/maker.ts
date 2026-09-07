@@ -914,7 +914,7 @@ export class Maker {
       id: meta.id,
       sessionInstanceId,
       agentKind: meta.agentKind,
-      workDir: meta.workDir,
+      workDir: startOpts.workingDir,
       handle,
       hostStartupPreferences: opts.hostStartupPreferences,
       capabilities: capabilitiesForSession(meta.agentKind, agent.capabilities, meta.remoteHostId),
