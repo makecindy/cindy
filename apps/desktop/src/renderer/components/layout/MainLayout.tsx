@@ -96,7 +96,7 @@ import {
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { getBotProfiles } from '@/features/bots/botStore';
+import { getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -423,7 +423,8 @@ export function MainLayout() {
     }
   }, [sidebarPeek.peekState, isRailMode, handleRailModeChange]);
 
-  const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname) ?? resolveAgentIslandVisibleBotSessionIdFromPath(location.pathname, getBotProfiles());
+  const botProfiles = useBotProfiles();
+  const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname) ?? resolveAgentIslandVisibleBotSessionIdFromPath(location.pathname, botProfiles);
   const splitVisibleSessionIds = useMemo(() => {
     const splitSessionIds = getSplitSessionIds(splitGroup.root);
     return routeSessionId && splitSessionIds.length >= 2
