@@ -1,9 +1,9 @@
-// External Chrome backend — wraps the vendored `BrowserControlRuntime` 1:1.
+// External Chrome backend — delegates to the vendored `BrowserControlRuntime`.
 //
 // This is the existing (and, in Phase 1, only) backend. It exists so the host
 // can talk to *any* control target through the same `BrowserBackend` contract,
-// not because the wrapping changes anything: every `call` is a direct
-// delegation, and `dispose` reuses the existing electron-free
+// with an explicit backend identity added to status results. Other calls are
+// passed through, and `dispose` reuses the existing electron-free
 // `stopRuntimeForQuit` (which already swallows errors per the quit-path
 // contract — see browser-dispose.ts).
 
@@ -28,8 +28,13 @@ export class ExternalChromeBackend implements BrowserBackend {
     private readonly logger: BackendLogger,
   ) {}
 
-  call(request: BackendRequest): Promise<BackendResult> {
-    return this.runtime.call(request);
+  async call(request: BackendRequest): Promise<BackendResult> {
+    const result = await this.runtime.call(request);
+    if (request.action !== 'status') return result;
+    // Both backends identify themselves explicitly; the agent must not confuse
+    // the Cindy Chrome profile with the sidebar's embedded browser.
+    const data = result.data && typeof result.data === 'object' ? result.data : {};
+    return { ...result, data: { ...data, backend: this.kind } };
   }
 
   /**

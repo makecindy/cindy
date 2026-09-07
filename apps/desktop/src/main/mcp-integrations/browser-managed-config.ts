@@ -63,16 +63,14 @@ export const MANAGED_CDP_PORT = 18800;
  * so this config is what a user who never touched the toggle gets.)
  *
  * SECURITY POSTURE:
- *  - Only the fake-IP ranges used by system proxies are exempted from the SSRF
- *    guard. This prevents Surge/Clash/sing-box DNS answers (198.18.0.0/15 or
- *    IPv6 ULA) from making ordinary public sites look like SSRF attempts while
- *    localhost, RFC1918, metadata, link-local, and other special-use addresses
- *    remain blocked.
- *  - Page-context `evaluate` (and recipe `evaluate` steps) run author/agent JS in
- *    Chromium, whose network stack is NOT subject to the Node SSRF guard — a
- *    same-origin `fetch` there can reach any host the browser can. This residual
- *    surface is accepted as inherent to browser automation (it's the same
- *    capability the `act:evaluate` tool already exposes), not a regression.
+ *  - The desktop agent may navigate to every host reachable from this machine,
+ *    including private, loopback, link-local and metadata addresses. A browser-
+ *    only network restriction is not an agent-wide boundary: terminal tools and
+ *    page-context JS do not share this Node guard. This is a deliberate product
+ *    policy for browser automation, not the default for other network consumers.
+ *  - Navigation protocol validation, Chromium sandboxing and website permissions
+ *    remain in force. The dedicated profile and consented login-copy rules stay
+ *    independent of network reachability.
  */
 export function buildManagedConfig(options?: {
   useRealProfile?: boolean;
@@ -90,8 +88,7 @@ export function buildManagedConfig(options?: {
       headless: false, // headed so the user can see + log into sites
       ...(executablePath ? { executablePath } : {}),
       ssrfPolicy: {
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
+        dangerouslyAllowPrivateNetwork: true,
       },
       profiles: {
         [defaultProfile]: {

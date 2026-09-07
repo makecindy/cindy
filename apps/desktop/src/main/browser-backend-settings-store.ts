@@ -42,8 +42,8 @@
  *           `preserveDefaults`), and an empty override map unlinks the file —
  *           so toggling external→rsb-webview under the old default erased the
  *           file it had just written;
- *       (b) `setActiveBrowserBackendKind` short-circuits on same-kind, so
- *           re-clicking the already-active backend never writes at all.
+ *       (b) the old `setActiveBrowserBackendKind` short-circuited on same-kind,
+ *           so re-clicking the already-active backend never wrote at all.
  *     `isCustomized` is `Object.keys(overrides).length > 0`, hence false for
  *     all of them.
  * Consequence worth stating plainly: a user who chose the sidebar browser *for

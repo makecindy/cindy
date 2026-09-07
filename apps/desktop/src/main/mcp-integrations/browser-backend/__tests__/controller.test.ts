@@ -31,6 +31,42 @@ function fakeBackend(kind: BackendKind): BrowserBackend & {
 }
 
 describe('BrowserBackendController', () => {
+  it('retries a failed save without recreating or disposing the active backend', async () => {
+    const external = fakeBackend('external');
+    const embedded = fakeBackend('rsb-webview');
+    const createRsbBackend = vi.fn(() => embedded);
+    const persistKind = vi.fn().mockImplementationOnce(() => { throw new Error('disk full'); });
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external, createRsbBackend, persistKind, logger: fakeLogger(),
+    });
+    await expect(controller.setKind('rsb-webview')).rejects.toThrow('disk full');
+    expect(controller.kind).toBe('rsb-webview');
+    await expect(controller.setKind('rsb-webview')).resolves.toBe(false);
+    expect(persistKind.mock.calls).toEqual([['rsb-webview'], ['rsb-webview']]);
+    expect(createRsbBackend).toHaveBeenCalledOnce();
+    expect(external.dispose).toHaveBeenCalledOnce();
+    expect(embedded.dispose).not.toHaveBeenCalled();
+  });
+
+  it('persists overlapping selections in the same order as activation', async () => {
+    const external = fakeBackend('external');
+    let release!: () => void;
+    external.dispose.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const persistKind = vi.fn();
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external,
+      createRsbBackend: () => fakeBackend('rsb-webview'), persistKind, logger: fakeLogger(),
+    });
+    const first = controller.setKind('rsb-webview');
+    await vi.waitFor(() => expect(external.dispose).toHaveBeenCalledOnce());
+    const second = controller.setKind('external');
+    expect(persistKind).not.toHaveBeenCalled();
+    release();
+    await Promise.all([first, second]);
+    expect(persistKind.mock.calls).toEqual([['rsb-webview'], ['external']]);
+    expect(controller.kind).toBe('external');
+  });
+
   it('creates a fresh embedded backend when switching away and back', async () => {
     const external = fakeBackend('external');
     const embedded: ReturnType<typeof fakeBackend>[] = [];

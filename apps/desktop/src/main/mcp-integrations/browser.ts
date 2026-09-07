@@ -217,6 +217,7 @@ const backendController = new BrowserBackendController({
   initialKind,
   externalBackend,
   createRsbBackend,
+  persistKind: writeBrowserBackendKind,
   logger,
 });
 const browserBackendHealthService = new BrowserBackendHealthService(backendController, logger);
@@ -273,7 +274,7 @@ export function setIsDetachedForBackend(impl: () => boolean): void {
 }
 
 /**
- * Switch the active backend. Called from the Phase 5 toggle IPC handler.
+ * Switch the active backend. Shared by Settings and browser MCP mode changes.
  * Persists the new kind to disk and disposes the outgoing backend (per
  * lifecycle controller contract).
  */
@@ -282,9 +283,7 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
   // Doing it here would race two Settings actions: a request for the current
   // kind could return early while an earlier queued request is about to switch
   // away from it.
-  const changed = await backendController.setKind(kind);
-  if (!changed) return;
-  writeBrowserBackendKind(kind);
+  await backendController.setKind(kind);
 }
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
@@ -331,6 +330,7 @@ export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
  */
 export function getBrowserMcpDeps(): {
   getRuntime(): BrowserControlRuntime;
+  setBackend(kind: BackendKind): Promise<BackendKind>;
   supportsResourceDownloads(): boolean;
   supportsSemanticQueries(): boolean;
   logger: typeof logger;
@@ -338,6 +338,10 @@ export function getBrowserMcpDeps(): {
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
 } {
   return {
+    setBackend: async (kind) => {
+      await setActiveBrowserBackendKind(kind);
+      return backendController.getCurrentBackendKind();
+    },
     // L2 user-recipe layer (userData/browser-recipes); merged over the bundled
     // L1 catalog inside the MCP. Empty/missing dir → bundled-only (== before).
     getUserRecipes: () => loadUserBrowserRecipes(),

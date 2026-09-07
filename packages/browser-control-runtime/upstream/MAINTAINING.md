@@ -9,6 +9,8 @@
 
 默认行为:启动**一个专属、持久、headed 的自动化浏览器**(profile 名 "Cindy"),登录态长期保留,与用户日常 Chrome 互不影响。
 
+工具支持 `browser({action:"setBackend", backend:"rsb-webview"|"external"})`,由 MCP 层调用宿主注入的 `setBackend`,复用设置页的 `setActiveBrowserBackendKind`。这是全局持久选择,影响其他任务,可能中断旧浏览器操作;不迁移 Cookie、标签页或元素引用。`status.data.backend` 明确返回实际模式。切换后重新获取状态和标签页,不能把 `start` 当成切换。非 Desktop 宿主可以不提供此能力,工具会明确返回不支持。
+
 用户可在设置 → 自动操作打开「使用我的浏览器登录态」(默认关)。打开后,host 在 `start` 前把系统 Chrome / Edge / Brave **当前 `profile.last_used`** 的 Cookies / Login Data 等 SQLite 库拷进 `browser-runtime/browser/Cindy-real/user-data/Default`(vendored `--user-data-dir` 是 `…/Cindy-real/user-data`),并把 dest `Local State` 的 `last_used` / `last_active_profiles` / `profiles_order` **改写成 Default**(原样拷贝会让 Chrome 打开空的 `Profile N`,窗口看起来已登出)。Chrome 右上角 chip **始终显示 `Cindy`**:磁盘目录必须叫 `Cindy-real`(不能叠到隔离身份 `Cindy` 上),host 通过 `displayName: "Cindy"` 传给 runtime,`launchOpenClawChrome` 用它 decorate,而不是用 map key。再用**同一只浏览器二进制**启动该目录。不 attach 日常 Chrome(Chrome 136+ 会拒绝调试默认 user-data-dir)。关掉开关即删除 `Cindy-real`,`Cindy` 隔离身份不动。失败必须 fail-closed,禁止启动一个看起来在浏览、其实全是登出的窗口。快照当凭证:不要写进日志正文、backup、device-link 或 worktree;`status` 只暴露 `{ enabled, applied, source }`,不暴露路径。快照实现在 `apps/desktop/src/main/mcp-integrations/browser-real-profile/`;chip 名例外见 `sync.mjs` 对 `chrome.ts` 的 LOCAL_PATCH。
 
 ## 2. 三层架构 + 文件清单
@@ -38,7 +40,7 @@ playwright-core → 托管 Chrome(Cindy profile, 持久 user-data-dir)
 
 ## 3. 配置流(以及那个静默 bug)
 
-host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ allowRfc2544BenchmarkRange:true, allowIpv6UniqueLocalRange:true }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。这两个窄开关只豁免 Surge/Clash/sing-box 等代理使用的 fake-IP DNS(`198.18.0.0/15` 与 IPv6 ULA),避免普通公网域名被误拦;localhost、RFC1918、cloud metadata、link-local 与其它 special-use 地址继续由 SSRF guard 阻断。上游 SSRF 层已经支持这两个字段,但 config resolver 尚未透传,所以 `sync.mjs` 用 fail-loud `LOCAL_PATCHES` 保留它们。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
+host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ dangerouslyAllowPrivateNetwork:true }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。Desktop 浏览器允许访问本机网络可达的所有 HTTP(S) 地址,包括 localhost、RFC1918、cloud metadata、link-local 与代理 fake-IP。这是明确的浏览器产品策略:Agent 的终端和页面内 JS 不受同一 Node guard 控制,不能把浏览器单独拦内网当成完整网络权限边界。协议校验、浏览器沙箱、网站权限和登录态隔离仍保留。该开关使用上游已有能力,不修改共享 SSRF 默认值或其它网络调用方;原有窄 fake-IP 配置及同步补丁继续为其它配置保留。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
 `getRuntimeConfigSourceSnapshot() ?? getRuntimeConfig()` 再取 `.browser` 拿到它。
 
 > ⚠️ **不变量(踩过的最大的坑):** `src/shim/runtime-config-snapshot.ts` 的 `getRuntimeConfigSourceSnapshot()` **必须返回 `OpenClawConfig | null`**(默认 `return null`)。它一旦返回 `{config, source}` 这种 wrapper,上面的 `?? getRuntimeConfig()` 永远短路、`.browser` 取到 `undefined`,**host 注入的整份 config 被静默丢弃、runtime 跑纯 vendored 默认值**(于是 profile 显示成上游默认名、颜色/目录全不对)。由 `src/__tests__/runtime-config-application.test.ts` 守护——别删那条测试。

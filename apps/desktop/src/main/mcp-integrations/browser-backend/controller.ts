@@ -10,6 +10,8 @@ export interface BrowserBackendControllerOptions {
   initialKind: BackendKind;
   externalBackend: BrowserBackend;
   createRsbBackend: () => BrowserBackend;
+  /** Save explicit selections inside the existing transition queue. */
+  persistKind?: (kind: BackendKind) => void;
   logger: ControllerLogger;
 }
 
@@ -49,9 +51,13 @@ export class BrowserBackendController implements BrowserBackend {
 
   setKind(kind: BackendKind): Promise<boolean> {
     return this.enqueue(async () => {
-      if (this.router.getCurrentBackendKind() === kind) return false;
-      await this.router.setBackend(this.createBackend(kind));
-      return true;
+      const changed = this.router.getCurrentBackendKind() !== kind;
+      if (changed) await this.router.setBackend(this.createBackend(kind));
+      // Persist even on same-kind retry: a prior save can fail after the target
+      // is already active. Keeping the save in this queue also prevents a later
+      // selection from being overwritten by an earlier transition's write.
+      this.opts.persistKind?.(kind);
+      return changed;
     });
   }
 

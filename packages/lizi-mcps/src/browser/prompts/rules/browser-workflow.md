@@ -19,6 +19,7 @@
 
 1. **先探测状态,别盲目开始**
    - `action: "status"` —— 浏览器是否可用、是否已启动;同时读结果里的 `data.backend` 认环境(见「两种浏览器模式」);不可用先看下面的「环境」。
+   - 用户明确指定内置或外置浏览器时,模式不匹配就调用 `action: "setBackend", backend: "rsb-webview"`(内置)或 `"external"`(外置),成功后重新查询 `status`。`start` 只启动当前模式,不会切换模式;工具名 `cindy_browser` 不代表内置浏览器。
    - `action: "tabs"` —— 列已有标签页,**复用**已开的页而不是无脑开新页(否则一屏堆满窗口)。
    - 怀疑环境异常时 `action: "doctor"` 自检。
 
@@ -61,7 +62,11 @@
 
 - **`data.backend === "rsb-webview"` = Cindy 侧边栏内置浏览器**:页面活在 Cindy 的会话侧边栏里,不是一个常规浏览器窗口。侧边栏本身可能内嵌在主窗口、也可能被用户开成独立子窗口,`status` **不区分**这两种承载方式——所以请用户看页面时说"Cindy 的侧边栏(若你把侧边栏开成了独立窗口,就是那个窗口)",不要断言窗口存在或不存在。系统默认的自动化后端是独立外置浏览器,不是侧边栏。
   - 仅此模式支持:`act:saveResource`(托管下载)、以及 `query` 语义元素查询(role / name / text / label / placeholder / testId / css)。在外置模式下用这两个会被 schema 或运行时门控直接拒掉,别当通用能力使。
-- **`data.backend` 不是 `"rsb-webview"`(通常没有该字段)= 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。
+- **`data.backend === "external"` = 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。旧宿主可能省略该字段,不要把缺少模式信息当成已使用内置浏览器。
+
+`setBackend` 与设置页修改同一个**全局、持久**选择,会影响其他正在使用浏览器的任务,旧模式的操作可能中断。仅按用户明确的模式要求切换,无需重复确认;不要因页面报错自行换模式。切换后重新 `tabs` / `snapshot`,不沿用旧模式的 targetId、ref 或登录态。宿主不支持切换或返回失败时如实说明,不能声称切换成功。
+
+两种模式均允许访问本机网络可达的内网 HTTP(S) 地址。遇到失败按实际连接、DNS、证书或登录错误诊断,不要仅因私有 IP 推断“禁止内网访问”,也不要让用户把内网服务暴露到公网。
 
 **两种模式彼此隔离**。侧边栏始终是独立身份。外置浏览器默认也是独立的 `Cindy` profile;仅当用户在设置里打开「使用我的浏览器登录态」且 `status.data.realProfile.applied === true` 时,外置窗口才带着系统 Chrome / Edge / Brave 的登录拷贝(可撤销,Agent 以用户身份访问)。**不要传 `profile`**,不要试图 attach 用户日常使用的 Chrome。
 
@@ -85,6 +90,7 @@
 | action | 用途 |
 |---|---|
 | `status` / `doctor` | 可用性 / 自检(读 `data.backend` 判环境,见「两种浏览器模式」) |
+| `setBackend` | 按用户要求切换并保存全局浏览器模式(`backend: rsb-webview / external`),随后重新获取状态与标签页 |
 | `start` / `stop` | 启停浏览器 |
 | `profiles` | 看 profile 列表(**不含**按站点登录态信号) |
 | `tabs` / `open` / `focus` / `close` | 标签页:列 / 开(带 label)/ 切 / 关 |

@@ -43,6 +43,66 @@ async function makeHarness(
 }
 
 describe('createBrowserMcpServer', () => {
+  it('switches modes in the same MCP instance and immediately updates backend capabilities', async () => {
+    let backend: 'external' | 'rsb-webview' = 'external';
+    const switched: string[] = [];
+    const h = await makeHarness({
+      setBackend: async (next) => { switched.push(next); backend = next; return backend; },
+      supportsSemanticQueries: () => backend === 'rsb-webview',
+      supportsResourceDownloads: () => backend === 'rsb-webview',
+    });
+    const call = (args: Record<string, unknown>) => h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+    try {
+      for (const next of ['rsb-webview', 'rsb-webview', 'external'] as const) {
+        const changed = await call({ action: 'setBackend', backend: next });
+        expect(JSON.parse((changed.content as Array<{ text: string }>)[0].text)).toMatchObject({
+          ok: true, action: 'setBackend', data: { backend: next, scope: 'global', persisted: true },
+        });
+        for (const request of [
+          { kind: 'click', query: { role: 'button', name: 'Submit' } },
+          { kind: 'saveResource', url: 'https://example.test/resource.png' },
+        ]) {
+          const result = await call({ action: 'act', targetId: 'fresh-tab', request });
+          expect(Boolean(result.isError)).toBe(next === 'external');
+        }
+      }
+      expect(switched).toEqual(['rsb-webview', 'rsb-webview', 'external']);
+      expect(h.calls).toHaveLength(4);
+      expect(h.calls.every((request) => (request as { action: string }).action === 'act')).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    { action: 'setBackend' },
+    { action: 'setBackend', backend: 'chrome' },
+    { action: 'open', backend: 'rsb-webview', url: 'https://example.test/' },
+  ])('rejects invalid mode arguments without navigation or switching: %j', async (args) => {
+    let switches = 0;
+    const h = await makeHarness({ setBackend: async (next) => { switches++; return next; } });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+      expect(result.isError).toBe(true);
+      expect(switches).toBe(0);
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    {},
+    { setBackend: async () => { throw new Error('switch failed'); } },
+    { setBackend: async () => 'external' as const },
+  ])('reports unsupported, failed or superseded switches without claiming success', async (deps) => {
+    const h = await makeHarness(deps);
+    try {
+      const result = await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'browser', args: { action: 'setBackend', backend: 'rsb-webview' } },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse((result.content as Array<{ text: string }>)[0].text).ok).toBe(false);
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
   it('lists browser automation entry tools', async () => {
     const h = await makeHarness();
     const result = await h.client.listTools();
