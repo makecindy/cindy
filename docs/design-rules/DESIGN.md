@@ -303,6 +303,21 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - Active: Light Gray bg (`--surface-chip`); Inactive: transparent
 - All pill-shaped (9999px)
 
+### Settings segmented controls
+
+- Use `components/settings/SettingsSegmentedControl.tsx` for a compact, mutually exclusive setting on a settings card. This is a radio group, not navigation between tab panels.
+- Use the original browser automation target treatment (user preference, 2026-09-07): a borderless pill track with `--surface-chip`, 32px height, 3px padding and 2px gap. Options: 28px height, 12px text with line-height 1, 12px horizontal padding and a reserved 1px border.
+- Selected: `--surface-elevated`, `--settings-section-title`, weight 500, and a 1px `--border-default` outline. The outline and raised fill distinguish selection from the track; `--surface-chip` is only the track, never the selected fill.
+- Unselected: transparent fill/border, `--text-secondary`, weight 400; enabled hover uses `--text-primary`. Disabled options retain the selected mark at 50% opacity and cannot change value or gain hover feedback. Keyboard focus uses `--focus-ring`.
+- Use `radiogroup` / `radio` / `aria-checked`. Tab enters at the selected option (or first option when no preset matches); arrows move focus and selection, wrap at the ends, and respect RTL. Home/End select the first/last option. Space/Enter activate the focused option.
+
+### Usage data graphics
+
+- `UsageHeatmap` and `UsageTokenBars` encode dates and quantities, including when clicking a mark filters by date. **Clickable data marks keep their data geometry; they are not ordinary pill buttons.** This registered exception is limited to these usage charts and their date hit targets (§5).
+- Heatmap: 12×12px square cells, 2px radius and 3px gaps in both read-only and clickable views. Reserve a 3px outer gutter so edge cells retain their focus/selected outlines. Preserve month alignment, the complete requested history window and the existing four-level neutral intensity scale.
+- Token bars: 30 equal-width slim columns fitted to the plot, 3px gaps, 2px outer radius, shared baseline and proportional stacked segments. Do not enforce a 24px minimum column width or clip the latest days behind horizontal scrolling. A low/zero bar may have a taller transparent hit target without inflating its data height.
+- Preserve semantic gray palettes, native date/value tooltips, accessible date/value labels, keyboard activation and visible focus/selected outlines. This is a geometry exception, not permission to introduce category colors or apply chart radii to other buttons.
+
 ## 5. Layout Principles
 
 ### Spacing System
@@ -328,7 +343,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 Three tiers — **these three only** (wording hardened 2026-08-29, designer ruling — see `design-decision-log.md` 08-29). **Tier assignment is a single decision tree in this §5 section; §4 component entries, the §7 Do/Don't lists and the §9 iteration guide restate it for convenience — when wording drifts, this section wins:**
 
-- **Pill (9999px)**: **every button is a pill — the only exemption is registered bare text buttons.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges — including buttons with transparent or outlined fills (dialog secondary/cancel are pills with a transparent fill; a control's fill style never changes its tier). The exemption is exactly **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no shape to round — text, not a button-shaped control — so they carry no radius at all. Register any new bare-text-button usage in the component entry that introduces it.
+- **Pill (9999px)**: **every ordinary button is a pill**; registered bare text buttons, keyboard keycaps and the usage data marks below follow their specific exceptions. Anything that commits a decision or triggers an action otherwise wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges — including buttons with transparent or outlined fills (dialog secondary/cancel are pills with a transparent fill; a control's fill style never changes its tier). **Bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category) have no shape to round — text, not a button-shaped control — so they carry no radius at all. Register any new bare-text-button usage in the component entry that introduces it.
 - **Container (12px)**: the box that holds content — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
 - **Keyboard keycap (4px)**: every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut, uses a 4px outer radius (`rounded-[4px]`). Keep its border, fill, padding, and text colors appropriate to the surrounding control; the radius is the shared cross-surface rule. This is the sole 4px exception and keeps keyboard hints visually distinct from pill buttons and containers.
 - **Inner control (8px)**: multi-line inputs (textarea) — **always 8px, whether the textarea sits inside a visible container or is the outermost control of a form area** — plus selected/hover row highlights in dropdowns/menus and small in-block cells nested inside a container. Implemented as Tailwind `rounded-lg` (8px).
@@ -336,6 +351,8 @@ Three tiers — **these three only** (wording hardened 2026-08-29, designer ruli
 _No 6px / 10px, and no arbitrary radii. **4px is reserved for keyboard keycaps** as defined above; other new components must not introduce it. Existing non-keycap `rounded-[4px]` usages remain registered debt. Bare `rounded` and `rounded-sm` are not substitutes for the keycap rule. Do not add tiers, and **"it looks small" is never a reason to move an element down a tier** — an element's tier follows what it IS (button / box / textarea — always 8px / nested non-button), not its size or nesting. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container; a pill there becomes a lozenge, 12px looks bloated._
 
 > **Narrow exception — status micro-cells (2px)** (registered 2026-07-28): non-interactive status squares of 8×8px or smaller keep a 2px radius — the workflow agent status strip's cells (background-tasks panel detail + workflow chat card) and the equivalent per-category square in SystemCard. At that size any tier radius rounds the square into a dot and destroys the "block strip" read that lets a large agent fleet be scanned at a glance. Scope is exactly this: **non-interactive, ≤8px, status-only**. Do NOT generalize to buttons, tags, rows, badges or containers — those still pick a tier.
+
+> **Narrow exception — usage data marks (2px)** (user ruling 2026-09-07): `UsageHeatmap` square cells and `UsageTokenBars` stacked columns, including their transparent date-filter buttons, use 2px outer radii. Their shape encodes data; adding click handling must not turn cells into dots, columns into pills, or enlarge the grid. See §4 Usage data graphics. This is independent of the non-interactive status exception above.
 
 ## 6. Depth & Elevation
 

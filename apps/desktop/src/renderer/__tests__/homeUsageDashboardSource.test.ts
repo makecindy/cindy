@@ -86,15 +86,14 @@ describe('HomeUsageDashboard source contract', () => {
     expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
   });
 
-  it('keeps chart visuals small while giving interactive controls a stable hit target', () => {
-    expect(heatmapSource).toContain('const INTERACTIVE_CELL_PX = 24;');
-    expect(heatmapSource).toContain('const cellSize = onDayClick ? INTERACTIVE_CELL_PX : CELL_PX;');
+  it('keeps clickable data geometry compact without widening the history plot', () => {
+    expect(heatmapSource).toContain('const cellSize = CELL_PX;');
     expect(heatmapSource).toContain('style={{ width: cellSize, height: cellSize }}');
     expect(tokenBarsSource).toContain('const hitHeight = Math.max(24, visualHeight);');
     expect(tokenBarsSource).toContain('height: visualHeight');
-    expect(tokenBarsSource).toContain('minWidth: bars.list.length * 24');
-    expect(tokenBarsSource).toContain('minWidth: 24');
-    expect(tokenBarsSource).toContain('overflow-x-auto');
+    expect(tokenBarsSource).not.toContain('minWidth: bars.list.length * 24');
+    expect(tokenBarsSource).not.toContain('minWidth: 24');
+    expect(tokenBarsSource).not.toContain('overflow-x-auto');
   });
 
   it('keeps the home heatmap non-interactive when no day callback is supplied', () => {

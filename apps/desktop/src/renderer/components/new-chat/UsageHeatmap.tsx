@@ -19,7 +19,6 @@ import { formatCompactTokens, formatMoney } from '@/lib/usageFormat';
 import { DEFAULT_USAGE_CURRENCY, type RegionalMoney } from '../../../shared/regionalMoney';
 
 const CELL_PX = 12;
-const INTERACTIVE_CELL_PX = 24;
 const GAP_PX = 3;
 const MIN_HEATMAP_WEEKS = 20;
 const EMPTY_MONEY_CURRENCY = DEFAULT_USAGE_CURRENCY;
@@ -177,11 +176,12 @@ export function UsageHeatmap({
   }, []);
 
   const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(windowDays / 7));
-  const cellSize = onDayClick ? INTERACTIVE_CELL_PX : CELL_PX;
+  // Data geometry stays compact when a cell also acts as a date filter (DESIGN.md §4).
+  const cellSize = CELL_PX;
   const visibleWeeks = resolveHeatmapWeeks({
     days,
     todayKey,
-    availableWidth,
+    availableWidth: Math.max(0, availableWidth - GAP_PX * 2),
     minimumWeeks,
     windowDays,
     metric,
@@ -257,7 +257,8 @@ export function UsageHeatmap({
 
   return (
     <div ref={plotRef} className="w-full min-w-0 overflow-x-auto">
-      <div className="flex min-w-max flex-col gap-1.5">
+      {/* Reserve the 2px outline + 1px offset at the scroll viewport edges. */}
+      <div className="flex min-w-max flex-col gap-1.5 p-[3px]">
         {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
         <div className="relative h-[14px]" style={{ width: columns.length * colPitch - GAP_PX }}>
           {monthLabels.map((m) => (
@@ -293,7 +294,7 @@ export function UsageHeatmap({
                       }`;
                 const title = `${cell.day} · ${usageSummary}`;
                 const accessibleLabel = `${dateFormatter.format(parseDayKey(cell.day))} · ${usageSummary}`;
-                const visualClassName = onDayClick ? 'rounded-full' : 'rounded-[3px]';
+                const visualClassName = 'rounded-[2px]';
                 const visualStyle = {
                   width: CELL_PX,
                   height: CELL_PX,
@@ -316,7 +317,7 @@ export function UsageHeatmap({
                     aria-label={accessibleLabel}
                     aria-pressed={selectedDay === cell.day}
                     onClick={() => onDayClick(cell.day)}
-                    className="flex cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                    className="flex cursor-pointer items-center justify-center rounded-[2px] border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
                     style={{ width: cellSize, height: cellSize }}
                   >
                     {visual}

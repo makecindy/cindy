@@ -15,6 +15,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
@@ -154,32 +156,15 @@ export function WindowBehaviorSection() {
             </p>
           </div>
 
-          <div
-            role="radiogroup"
+          <SettingsSegmentedControl
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
-            className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-          >
-            {closeBehaviorOptions.map((behavior) => {
-              const active = closeBehavior === behavior;
-              return (
-                <button
-                  key={behavior}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  onClick={() => setCloseBehavior(behavior)}
-                  className={cn(
-                    'rounded-full px-2.5 py-1 text-xs transition-colors',
-                    active
-                      ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                      : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                  )}
-                >
-                  {t(`settings.windowBehavior.closeBehavior.${behavior}`)}
-                </button>
-              );
-            })}
-          </div>
+            value={closeBehavior}
+            onValueChange={setCloseBehavior}
+            options={closeBehaviorOptions.map((behavior) => ({
+              value: behavior,
+              label: t(`settings.windowBehavior.closeBehavior.${behavior}`),
+            }))}
+          />
         </div>
       )}
 
