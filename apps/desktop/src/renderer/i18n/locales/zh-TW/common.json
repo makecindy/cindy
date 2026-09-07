@@ -8490,7 +8490,10 @@
       "copyContent": "複製內容",
       "openInExplorer": "在檔案管理器中開啟",
       "close": "關閉",
-      "editIndex": "編輯 {{index}}/{{total}}"
+      "editIndex": "編輯 {{index}}/{{total}}",
+      "omittedDiffSegments": "預覽中省略了 {{count}} 個額外差異片段",
+      "diffPreviewTruncated": "預覽中隱藏了部分差異行",
+      "diffPreviewLoading": "正在準備差異預覽…"
     },
     "textLightbox": {
       "unreadable": "無法讀取該檔案",

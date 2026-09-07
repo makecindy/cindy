@@ -8497,7 +8497,10 @@
       "copyContent": "Copy content",
       "openInExplorer": "Open in file manager",
       "close": "Close",
-      "editIndex": "Edit {{index}}/{{total}}"
+      "editIndex": "Edit {{index}}/{{total}}",
+      "omittedDiffSegments": "{{count}} additional diff segments omitted from preview",
+      "diffPreviewTruncated": "Some diff lines are hidden in this preview",
+      "diffPreviewLoading": "Preparing diff preview…"
     },
     "textLightbox": {
       "unreadable": "Unable to read this file",

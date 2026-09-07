@@ -8491,7 +8491,10 @@
       "copyContent": "내용 복사",
       "openInExplorer": "파일 관리자에서 열기",
       "close": "닫기",
-      "editIndex": "편집 {{index}}/{{total}}"
+      "editIndex": "편집 {{index}}/{{total}}",
+      "omittedDiffSegments": "미리보기에서 추가 diff 세그먼트 {{count}}개를 생략했습니다",
+      "diffPreviewTruncated": "미리보기에서 일부 diff 줄을 숨겼습니다",
+      "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
     },
     "textLightbox": {
       "unreadable": "이 파일을 읽을 수 없습니다",

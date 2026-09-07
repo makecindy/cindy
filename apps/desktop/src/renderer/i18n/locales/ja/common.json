@@ -8491,7 +8491,10 @@
       "copyContent": "内容をコピー",
       "openInExplorer": "ファイルマネージャーで開く",
       "close": "閉じる",
-      "editIndex": "編集 {{index}}/{{total}}"
+      "editIndex": "編集 {{index}}/{{total}}",
+      "omittedDiffSegments": "プレビューでは追加の差分 {{count}} 件を省略しています",
+      "diffPreviewTruncated": "プレビューでは一部の差分行を非表示にしています",
+      "diffPreviewLoading": "差分プレビューを準備しています…"
     },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",

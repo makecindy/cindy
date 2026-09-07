@@ -170,14 +170,37 @@ function isDocModeFile(name: string): boolean {
  * Implementation:
  *   - Sibling subdirs are walked in parallel (Promise.all over the level)
  *     so a top-level dir like apps/desktop/ doesn't serialize 50 subwalks.
- *   - A shared `Found` cell short-circuits: any walk that's about to start
- *     bails if some other branch has already returned true.
+ *   - Overlapping probes share only the in-flight `readdir` for each absolute
+ *     directory. Traversals keep their own `Found` cell, preserving sibling
+ *     short-circuiting without allowing one probe's result to contaminate
+ *     another; completed directory reads are never cached.
  *
  * Worst case (deep subtree with no matching file): walks the whole subtree
  * once, but in parallel. BUILTIN_IGNORE prunes node_modules / Library /
  * etc., which are the only realistic huge subtrees.
  */
 type Found = { v: boolean };
+
+/** In-flight-only sharing for overlapping doc-mode directory reads. */
+const docDirentsInFlight = new Map<string, Promise<Dirent[]>>();
+
+function readDocDirents(abs: string): Promise<Dirent[]> {
+  const key = path.resolve(abs);
+  const current = docDirentsInFlight.get(key);
+  if (current) return current;
+
+  const read = fs.readdir(abs, { withFileTypes: true });
+  docDirentsInFlight.set(key, read);
+  void read.then(
+    () => {
+      if (docDirentsInFlight.get(key) === read) docDirentsInFlight.delete(key);
+    },
+    () => {
+      if (docDirentsInFlight.get(key) === read) docDirentsInFlight.delete(key);
+    },
+  );
+  return read;
+}
 
 async function hasDocDescendantInner(
   abs: string,
@@ -188,7 +211,7 @@ async function hasDocDescendantInner(
   if (found.v) return true;
   let dirents: Dirent[];
   try {
-    dirents = await fs.readdir(abs, { withFileTypes: true });
+    dirents = await readDocDirents(abs);
   } catch {
     return false;
   }
@@ -208,8 +231,8 @@ async function hasDocDescendantInner(
     }
   }
   if (subdirs.length === 0 || found.v) return found.v;
-  // Pass 2: recurse all subdirs in parallel. Each child re-checks `found`
-  // at entry, so a fast hit anywhere in the tree stops new work cheaply.
+  // Pass 2: recurse all subdirs in parallel. Each traversal keeps the same
+  // `Found` cell, so a fast hit stops deeper work in sibling branches.
   const results = await Promise.all(
     subdirs.map((s) =>
       hasDocDescendantInner(path.join(abs, s.name), s.childRel, matcher, found),
@@ -240,7 +263,13 @@ export async function listDir(
 ): Promise<DirEntry[]> {
   const sub = assertInsideWorkdir(workdir, relPath);
   const abs = sub === '' ? workdir : path.join(workdir, sub);
-  const dirents = await fs.readdir(abs, { withFileTypes: true });
+  // In doc mode this top-level read participates in the same in-flight map as
+  // recursive descendant probes. An overlapping `listDir('src')` can thus
+  // reuse the read already started while listing the root, without retaining
+  // a completed snapshot.
+  const dirents = opts.docMode
+    ? await readDocDirents(abs)
+    : await fs.readdir(abs, { withFileTypes: true });
 
   // Process all entries in parallel. With docMode on, each surviving subdir
   // triggers a recursive hasDocDescendant probe — running siblings in

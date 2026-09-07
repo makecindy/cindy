@@ -8491,7 +8491,10 @@
       "copyContent": "复制内容",
       "openInExplorer": "在文件管理器中打开",
       "close": "关闭",
-      "editIndex": "编辑 {{index}}/{{total}}"
+      "editIndex": "编辑 {{index}}/{{total}}",
+      "omittedDiffSegments": "预览中省略了 {{count}} 个额外差异片段",
+      "diffPreviewTruncated": "预览中隐藏了部分差异行",
+      "diffPreviewLoading": "正在准备差异预览…"
     },
     "textLightbox": {
       "unreadable": "无法读取该文件",
