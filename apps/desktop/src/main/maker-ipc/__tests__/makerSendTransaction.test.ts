@@ -1158,6 +1158,34 @@ describe('maker SEND transaction', () => {
     expect(session.send).not.toHaveBeenCalled();
   });
 
+  it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {
+    const oldSession = createSession({ agentKind });
+    const recovered = createSession({ agentKind });
+    const { deps } = createDeps({
+      getSession: () => oldSession,
+      readSessionWorkingDirFromDb: async () => oldSession.workDir,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        agentKind, workingDir: oldSession.workDir, model: 'persisted-model',
+        resumeSessionId: 'native-history', permissionMode: 'ask', planMode: true,
+      }),
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated; original files remain missing',
+      consumeWorkingDirectoryRecoveryNote: vi.fn(),
+      bootstrapSession: vi.fn(async () => ({
+        session: recovered, didInjectOrcaInstructions: false, didInjectProjectContext: false,
+      })),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'continue'))
+      .resolves.toMatchObject({ accepted: true });
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: oldSession.workDir, resumeSessionId: 'native-history',
+      permissionMode: 'ask', planMode: true,
+    }));
+    expect(oldSession.send).not.toHaveBeenCalled();
+    expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('original files remain missing'), expect.anything());
+    expect(deps.consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
+
   it('uses persisted settings to recover a live session when send has no createOpts', async () => {
     const persisted: MakerSessionCreateOpts = {
       agentKind: 'codex', workingDir: '/repaired/project',
@@ -2031,6 +2059,9 @@ describe('session-agent-switch handoff injection', () => {
       getSession: () => session,
       peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
       consumeWorkingDirectoryRecoveryNote,
+      bootstrapSession: vi.fn(async () => ({
+        session, didInjectOrcaInstructions: false, didInjectProjectContext: false,
+      })),
     });
     const transaction = createMakerSendTransaction(deps);
     await transaction.sendToAgentAccepted('session-1', command);

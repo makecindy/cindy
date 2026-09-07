@@ -875,11 +875,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           sess.remoteHostId,
           ...(fallbackDir ? [{ suppressMissingBroadcast: true }] : []),
         );
-        if (!ok && fallbackDir) {
+        // Claude/Pi keep a process whose cwd can still reference the deleted inode.
+        // The pending note also covers recovery performed by an earlier preflight.
+        const needsCwdRefresh = ok && !sess.remoteHostId &&
+          (sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId);
+        if ((!ok && fallbackDir) || needsCwdRefresh) {
           const co = deps.buildCreateOptsWithStderr({
             ...((createOpts as CreateOpts | undefined) ?? await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId)),
             id: sessionId,
-            workingDir: fallbackDir,
+            workingDir: needsCwdRefresh ? sess.workDir : fallbackDir!,
             agentKind: sess.agentKind,
             remoteHostId: sess.remoteHostId ?? undefined,
           });
