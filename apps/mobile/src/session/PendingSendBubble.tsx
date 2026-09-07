@@ -211,10 +211,16 @@ export function PendingSendBubble({
   const [measuredBody, setMeasuredBody] = useState<{ body: string; lines: number } | null>(null);
   const [expandedBody, setExpandedBody] = useState<string | null>(null);
   const measureBody = mayExceedVisualLineThreshold(displayBody);
-  const shouldCollapse = measureBody && resolveUserMessageCollapse(
+  const collapseResolved = measureBody && resolveUserMessageCollapse(
     displayBody, measuredBody?.body === displayBody ? measuredBody.lines : null,
     LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
   );
+  const [collapseLatchBody, setCollapseLatchBody] = useState<string | null>(null);
+  const collapseLatched = collapseLatchBody === displayBody;
+  useEffect(() => {
+    if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);
+  }, [collapseResolved, collapseLatched, displayBody]);
+  const shouldCollapse = (measureBody && collapseLatched) || collapseResolved;
   const expanded = expandedBody === displayBody;
   const collapsedLines = shouldCollapse && !expanded ? LONG_USER_MESSAGE_COLLAPSED_LINES : undefined;
   const hasBody = !!displayBody;
@@ -222,18 +228,6 @@ export function PendingSendBubble({
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
       <View style={styles.bubbleRow}>
-        <View pointerEvents="none" style={styles.badge} testID={`pendingSend.badge.${item.phase}`}>
-          {failed ? (
-            <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : spinning ? (
-            <ActivityIndicator color={colors.textTertiary} size="small" />
-          ) : editing ? (
-            <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : (
-            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
-            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          )}
-        </View>
         <Pressable
           accessibilityHint={item.hint ?? undefined}
           accessibilityLabel={failed
@@ -246,14 +240,28 @@ export function PendingSendBubble({
           accessibilityRole="button"
           accessibilityState={{ expanded: selected, disabled: !interactive }}
           disabled={!interactive}
-          hitSlop={{ left: iconSize.xl + spacing.sm }}
+          hitSlop={spacing.sm}
           onPress={() => actions.onSelect(selected ? null : item.clientId)}
-          style={({ pressed }) => [
+          style={({ pressed }) => [styles.badge, pressed && styles.pressed]}
+          testID={`pendingSend.badge.${item.phase}`}
+        >
+          {failed ? (
+            <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : spinning ? (
+            <ActivityIndicator color={colors.textTertiary} size="small" />
+          ) : editing ? (
+            <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : (
+            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
+            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          )}
+        </Pressable>
+        <View
+          style={[
             styles.content,
             item.phase === 'settling' && styles.bubbleSettling,
             selected && styles.bubbleSelected,
             editing && styles.bubbleEditing,
-            pressed && styles.pressed,
           ]}
           testID={`pendingSend.bubble.${item.clientId}`}
         >
@@ -332,7 +340,7 @@ export function PendingSendBubble({
               {item.errorText}
             </Text>
           ) : null}
-        </Pressable>
+        </View>
       </View>
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
@@ -445,7 +453,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'flex-end',
     width: '100%',
   },
-  badge: { alignItems: 'center', position: 'absolute', left: 0, top: spacing.md, zIndex: 1 },
+  badge: { alignItems: 'center', justifyContent: 'center', width: 28, minHeight: 44, position: 'absolute', left: 0, top: 0, zIndex: 1 },
   // 与已发送用户气泡同款,但整体半透明:「这就是你的消息,只是还没生效」。
   textChunk: { flexBasis: '100%', flexShrink: 1, maxWidth: '100%' },
   content: { alignItems: 'flex-end', gap: 2, width: '100%', opacity: 0.62 },
