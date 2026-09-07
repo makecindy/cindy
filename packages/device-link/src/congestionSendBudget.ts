@@ -19,6 +19,14 @@ export class CongestionSendBudget {
   }
 
   take(peer: string, frames: number, peers: readonly string[], now: number): boolean {
+    if (!this.canTake(peer, frames, peers, now)) return false;
+    this.spent += frames;
+    this.byPeer.set(peer, (this.byPeer.get(peer) ?? 0) + frames);
+    return true;
+  }
+
+  /** Check admission without reserving credit; take uses exactly the same gate. */
+  canTake(peer: string, frames: number, peers: readonly string[], now: number): boolean {
     const window = Math.floor(now / 250);
     if (window !== this.window) {
       this.spent = this.window >= 0 && window > this.window
@@ -40,8 +48,6 @@ export class CongestionSendBudget {
     if (frames > share) {
       if (offset !== 0 || used !== 0 || this.spent >= 8) return false;
     } else if (this.spent + frames > 8 || used + frames > share) return false;
-    this.spent += frames;
-    this.byPeer.set(peer, used + frames);
     return true;
   }
 }

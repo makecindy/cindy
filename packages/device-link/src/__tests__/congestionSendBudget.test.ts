@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { CongestionSendBudget } from '../congestionSendBudget.js';
 
 describe('relay congestion frame budget', () => {
+  it('uses the same admission gate without charging previews', () => {
+    const budget = new CongestionSendBudget();
+    const peers = ['a', 'b'];
+    for (let i = 0; i < 20; i++) expect(budget.canTake('a', 4, peers, 0)).toBe(true);
+    expect(budget.take('a', 4, peers, 0)).toBe(true);
+    expect(budget.canTake('a', 1, peers, 0)).toBe(false);
+    expect(budget.take('a', 1, peers, 0)).toBe(false);
+    expect(budget.canTake('a', 4, peers, 250)).toBe(true);
+    expect(budget.take('a', 4, peers, 250)).toBe(true);
+  });
+
   it('refunds unwritten frames without erasing the cost of a partial send', () => {
     const budget = new CongestionSendBudget();
     const peers = ['a', 'b'];

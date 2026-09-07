@@ -2710,7 +2710,10 @@ export class DeviceLinkClient {
     // 真会发送时仍在驱逐/腾位之前预检(旧 P1:先驱逐再拒会清空镜像历史)。
     const additionalFrames = Math.max(1, frames.length);
     const willSendNow = this.isPeerSendReady(peer)
-      && !this.shouldHoldRecoverySend(peer, additionalFrames);
+      && !this.shouldHoldRecoverySend(peer, additionalFrames)
+      && (this.congestionCloseStreak === 0 || this.congestionSendBudget.canTake(
+        env.dst, additionalFrames, this.getReadyReliablePeers(), this.monotonicNow(),
+      ));
     if (willSendNow) {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     }
@@ -2788,18 +2791,15 @@ export class DeviceLinkClient {
       pending.seq,
       this.getTransportBaseSeq(peer),
     );
-    this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     const congestionBudget = this.congestionCloseStreak > 0 ? this.congestionSendBudget : null;
     if (congestionBudget) {
-      const peers = [...this.peerTransport.entries()]
-        .filter(([, candidate]) => candidate.reliable && this.isPeerSendReady(candidate))
-        .map(([id]) => id);
       if (!congestionBudget.take(
-        pending.envelope.dst!, frames.length, peers, this.monotonicNow(),
+        pending.envelope.dst!, frames.length, this.getReadyReliablePeers(), this.monotonicNow(),
       )) return 0;
     }
     let sent = 0;
     try {
+      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
       for (const frame of frames) {
         // pending 可在 link down 时入队，并在后续 link generation 才首次上网；
         // 路由错误必须归属每次真实物理发送，而不是逻辑消息的入队代次。
@@ -2822,6 +2822,12 @@ export class DeviceLinkClient {
       }
     }
     return sent;
+  }
+
+  private getReadyReliablePeers(): string[] {
+    return [...this.peerTransport.entries()]
+      .filter(([, peer]) => peer.reliable && this.isPeerSendReady(peer))
+      .map(([id]) => id);
   }
 
   private measureReliableFrames(frames: readonly Envelope[]): number {

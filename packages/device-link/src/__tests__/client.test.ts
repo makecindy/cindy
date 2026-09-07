@@ -5913,6 +5913,56 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
 });
 
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  it('queues paced sends despite a full socket and refunds failed retry capacity checks', async () => {
+    vi.useFakeTimers();
+    const debug = vi.fn();
+    const h = makeHarness({ logger: { debug, warn: vi.fn(), info: vi.fn(), error: vi.fn() }, timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      for (let i = 0; i < 4; i++) h.client.sendPush('a', 'maker:event', { part: i });
+      expect(socket.sent).toHaveLength(4);
+      const last = parseTransportPayload(socket.sent.at(-1)!.payload)!.meta;
+      socket.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+      expect(() => h.client.sendPush('a', 'maker:event', { part: 'queued' })).not.toThrow();
+      expect(() => h.client.sendInvokeResult('a', 'queued-result', { ok: true, result: 'ok' })).not.toThrow();
+      expect(h.client.getReliableSendQueueDepth('a')).toBe(6);
+      // An unpaced peer still checks socket capacity before queue admission.
+      expect(() => h.client.sendInvokeResult('b', 'full', { ok: true, result: 'ok' })).toThrow();
+      expect(h.client.getReliableSendQueueDepth('b')).toBe(0);
+      debug.mockClear();
+      socket.push({ v: 1, kind: 'push', src: 'a', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: last.streamId, ackSeq: last.seq },
+      } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(debug.mock.calls.some(([message]) => String(message).includes('retry failed'))).toBe(false);
+      // The next window permits a retry but the full socket rejects it; no credit
+      // may remain charged when capacity subsequently recovers in the same window.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(debug.mock.calls.some(([message]) => String(message).includes('retry failed'))).toBe(true);
+      socket.bufferedAmount = 0;
+      const before = socket.sent.length;
+      for (let i = 0; i < 4; i++) h.client.sendPush('a', 'maker:event', { afterCapacity: i });
+      expect(socket.sent.length - before).toBe(4);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(socket.sent.some((env) => env.id === 'queued-result')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it.each([0, 2])('refunds a failed fragmented send after %s physical frames so another peer can reply', async (written) => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: {
