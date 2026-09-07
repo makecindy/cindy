@@ -430,7 +430,7 @@ describe('compact model defaults upgrade', () => {
     ])),
   } as unknown as ProviderView;
 
-  async function upgrade(ownerId = 'owner-a', generation = 1) {
+  async function upgrade(ownerId = 'owner-a', generation = 1, snapshot = provider) {
     const memory = await import('@/state/providerModelMemory');
     const engines = await import('@/state/modelEnginePrefs');
     const favorites = await import('@/state/modelFavorites');
@@ -438,7 +438,7 @@ describe('compact model defaults upgrade', () => {
     engines.setModelEnginePrefsOwner(ownerId);
     favorites.setModelFavoritesOwner(ownerId);
     const prefs = await loadModuleForOwner(ownerId, generation);
-    prefs.migrateModelVisibilityDefaults(ownerId, generation, [provider]);
+    prefs.migrateModelVisibilityDefaults(ownerId, generation, [snapshot]);
     return prefs;
   }
 
@@ -503,6 +503,52 @@ describe('compact model defaults upgrade', () => {
     const restarted = await upgrade();
     expect(restarted.isModelVisibilityCustomized('claude-code', 'xd', 'chatgpt/gemini')).toBe(false);
     expect(restarted.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/gemini', defaultEnabled: false })).toBe(false);
+  });
+
+  it.each(['claude-code', 'codex'] as const)(
+    'migrates late %s models after a Pi-only snapshot and restart without undoing a reset',
+    async (agent) => {
+      const engine = agent === 'claude-code' ? 'cc' : agent;
+      const wireId = agent === 'claude-code' ? 'chatgpt/fable-5' : 'fable-5';
+      memStorage.setItem('xdt:modelEnginePrefs:v1:owner-a', JSON.stringify({
+        'xd:fable-5': { agent: engine },
+        'xd:gemini': { agent: 'pi' },
+      }));
+      const partial = {
+        ...provider,
+        models: { pi: provider.models.pi, 'claude-code': [], codex: [] },
+      };
+      const prefs = await upgrade('owner-a', 1, partial);
+      expect(prefs.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(true);
+      expect(prefs.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'gemini' }])).toBe(true);
+
+      vi.resetModules();
+      const restarted = await upgrade();
+      expect(restarted.isModelEnabled(agent, 'xd', { id: wireId, defaultEnabled: false })).toBe(true);
+      expect(restarted.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(false);
+      const entries = unifiedModelEntries({
+        providers: [provider],
+        isVisible: (pid, model, kind) => restarted.isModelEnabled(kind, pid, model),
+      });
+      expect(entries.find((entry) => entry.modelId === 'fable-5')?.candidates).toContain(agent);
+    },
+  );
+
+  it('migrates a late model even when its agent already had other models', async () => {
+    memStorage.setItem('xdt:providerModelMemory:v2:owner-a', JSON.stringify({
+      'codex:xd': { lastModel: 'fable-5', effortByModel: {} },
+    }));
+    const partial = {
+      ...provider,
+      models: { ...provider.models, codex: provider.models.codex!.filter((model) => model.id !== 'fable-5') },
+    };
+    const prefs = await upgrade('owner-a', 1, partial);
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(prefs.isModelEnabled('codex', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(true);
+    expect(prefs.setModelVisibility('codex', 'xd', 'fable-5', false)).toBe(true);
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [partial]);
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(prefs.isModelEnabled('codex', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(false);
   });
 
   it('defers until legacy import is safe, then honors the imported off switch', async () => {

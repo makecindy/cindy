@@ -294,7 +294,7 @@ export function setModelVisibilityOwner(
 }
 
 /**
- * Upgrade the compact-defaults rollout once per owner/provider, before publishing the local
+ * Upgrade the compact-defaults rollout once per owner/provider/agent/model, before publishing the local
  * catalog. Existing switches win; selected/favorited harnesses remain reachable even when
  * their new catalog default is off. Never infer a model version replacement from its name.
  * Other devices' catalogs must not enter this migration.
@@ -316,7 +316,6 @@ export function migrateModelVisibilityDefaults(
     const favorites = listModelFavorites();
     let changed = false;
     for (const provider of providers) {
-      if (completed.has(provider.id)) continue;
       const canonical = (agent: AgentKind, id: string) => {
         for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
           if (id.startsWith(prefix)) return id.slice(prefix.length);
@@ -341,6 +340,11 @@ export function migrateModelVisibilityDefaults(
         const explicitlyHidden = oldValues.length > 0 && oldValues.every((value) => value === false);
         for (const { agent, modelId: wireId } of routes) {
           const key = keyOf(agent, provider.id, wireId);
+          // Pi's static catalog may arrive before other agents, and dynamic discovery can
+          // add models to an already nonempty agent. Complete only this observed route;
+          // retain its marker after reset/removal so later refreshes cannot revive it.
+          if (completed.has(key)) continue;
+          completed.add(key);
           if (Object.hasOwn(next, key)) continue;
           const aliasOverride = previous[keyOf(agent, provider.id, modelId)];
           const engine = agent === 'claude-code' ? 'cc' : agent;
@@ -357,7 +361,6 @@ export function migrateModelVisibilityDefaults(
           }
         }
       }
-      completed.add(provider.id);
     }
     // Data first, marker second. A failed write leaves the upgrade retryable; existing values
     // always win on retry. Keep the old keys, so downgrading does not lose old preferences.
