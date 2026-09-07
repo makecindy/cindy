@@ -108,6 +108,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const restoreFocusRef = useRef(false);
   const [showTranslocatedDialog, setShowTranslocatedDialog] = useState(false);
   const [showWindowsRuntimeDialog, setShowWindowsRuntimeDialog] = useState(false);
+  const [showLinuxInstallationDialog, setShowLinuxInstallationDialog] = useState(false);
   const { t } = useTranslation();
 
   const [showSpawnFailedDialog, setShowSpawnFailedDialog] = useState(false);
@@ -120,7 +121,13 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const isSpawnFailed = status === 'error' && errorCode === 'updater_spawn_failed';
   const isWindowsRuntimeMissing =
     status === 'ready' && errorCode === 'windows_vc_runtime_missing';
+  const isLinuxInstallationUnsupported =
+    status === 'ready' && errorCode === 'linux_installation_unsupported';
   const isPreparing = status === 'superseding';
+
+  useEffect(() => {
+    if (isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
+  }, [isLinuxInstallationUnsupported]);
 
   useEffect(() => {
     if (isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
@@ -137,11 +144,11 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 一旦不再是 ready(如被 superseding 顶掉 / 出错),复位确认态,避免残留一个
   // 指向旧补丁的「仍要重启」;同时作废在飞的探针 —— 它的结论建立在「当前补丁可装」之上。
   useEffect(() => {
-    if (status !== 'ready' || isWindowsRuntimeMissing) {
+    if (status !== 'ready' || isWindowsRuntimeMissing || isLinuxInstallationUnsupported) {
       relaunchEpochRef.current += 1;
       setConfirming(false);
     }
-  }, [status, isWindowsRuntimeMissing]);
+  }, [status, isWindowsRuntimeMissing, isLinuxInstallationUnsupported]);
 
   // 卸载时同样作废在飞的探针。卸载后 setConfirming 只是一次无效更新,但 handleRelaunch
   // 会真的把 app 重启掉 —— 这条 cleanup 不是防 React 警告,是防意外重启。
@@ -236,10 +243,18 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 卸载、已就绪补丁可能被 superseding 顶掉。少了它们,「点了稍后却重启」「装回旧补丁」
   // 「confirming 残留到下次唤回」三种都会真实发生。
   const handleRelaunchClick = async (): Promise<void> => {
+    if (isLinuxInstallationUnsupported) {
+      setShowLinuxInstallationDialog(true);
+      return;
+    }
     if (isWindowsRuntimeMissing) {
       setShowWindowsRuntimeDialog(true);
       return;
     }
+    await probeBeforeRelaunch();
+  };
+
+  const probeBeforeRelaunch = async (): Promise<void> => {
     if (relaunchProbeRef.current) return;
     relaunchProbeRef.current = true;
     const epoch = relaunchEpochRef.current;
@@ -281,7 +296,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     void window.electronAPI.openExternal(WINDOWS_VC_RUNTIME_DOWNLOAD_URL);
   };
 
-  const handleWindowsRuntimeRetry = () => {
+  const handlePrerequisiteRetry = () => {
     const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
     window.electronAPI.relaunchToUpdate(theme);
   };
@@ -301,8 +316,29 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // nothing because the patch has already been cleared).
   const isErrorOnly = isTranslocated || isSpawnFailed;
 
-  const withWindowsRuntimeDialog = (content: ReactNode) => (
+  const withPrerequisiteDialogs = (content: ReactNode) => (
     <>
+      {isLinuxInstallationUnsupported && (
+        <ConfirmDialog
+          open={showLinuxInstallationDialog}
+          onOpenChange={setShowLinuxInstallationDialog}
+          title={t('update.linuxInstallation.title')}
+          description={t('update.linuxInstallation.description')}
+          confirmText={t('update.linuxInstallation.guide')}
+          tertiaryText={t('update.linuxInstallation.retry')}
+          cancelText={t('update.linuxInstallation.later')}
+          autoFocusConfirm
+          onConfirm={() => {
+            setShowLinuxInstallationDialog(false);
+            void window.electronAPI.openExternal('https://github.com/makecindy/cindy/blob/main/docs/linux.md');
+          }}
+          onCancel={() => setShowLinuxInstallationDialog(false)}
+          onTertiary={() => {
+            setShowLinuxInstallationDialog(false);
+            void probeBeforeRelaunch();
+          }}
+        />
+      )}
       {isWindowsRuntimeMissing && (
         <ConfirmDialog
           open={showWindowsRuntimeDialog}
@@ -314,7 +350,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
           cancelText={t('update.windowsRuntimeMissing.later')}
           autoFocusConfirm
           onConfirm={handleWindowsRuntimeDownload}
-          onTertiary={handleWindowsRuntimeRetry}
+          onTertiary={handlePrerequisiteRetry}
           onCancel={() => setShowWindowsRuntimeDialog(false)}
         />
       )}
@@ -363,9 +399,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // The prerequisite dialog must not be suppressed by the normal busy/dismiss
   // rules. After the user chooses "later", the usual banner visibility rules
   // resume and clicking the update entry opens this dialog again.
-  if (!isCollapsed && hideExpandedBanner) return withWindowsRuntimeDialog(null);
+  if (!isCollapsed && hideExpandedBanner) return withPrerequisiteDialogs(null);
   if (isCollapsed && dismissed && reason === 'user' && (status === 'ready' || isPreparing)) {
-    return withWindowsRuntimeDialog(null);
+    return withPrerequisiteDialogs(null);
   }
 
   // ── Collapsed state: icon only ──
@@ -373,7 +409,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     // 确认态(仅在有任务在跑时出现):上方 ✓(仍要重启,占据原 Flame 图标位置,鼠标零位移),
     // 下方 ✕(取消)。收起态没有文案位置,「会打断进行中的任务」只能落在 ✓ 的 tooltip 上。
     if (confirming && !isPreparing) {
-      return withWindowsRuntimeDialog(
+      return withPrerequisiteDialogs(
         <div className="flex flex-col items-center gap-0.5 border-t border-sidebar-border py-1.5">
           <Tip text={t('update.banner.confirmTooltip')} side="right">
             <button
@@ -406,7 +442,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
       );
     }
 
-    return withWindowsRuntimeDialog(
+    return withPrerequisiteDialogs(
       <div className="flex flex-col items-center border-t border-sidebar-border">
         <Tip
           text={isPreparing
@@ -442,7 +478,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   }
 
   // ── Expanded state: full banner ──
-  return withWindowsRuntimeDialog(
+  return withPrerequisiteDialogs(
     <div className="flex select-none flex-col border-t border-sidebar-border">
       <div className="relative flex flex-col items-center gap-[10px] px-4 py-3">
         {/* X dismiss —— 右上角。error 态 body 本就隐藏,superseding 允许 dismiss。

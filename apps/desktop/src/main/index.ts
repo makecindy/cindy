@@ -3,6 +3,7 @@ import fixPath from 'fix-path';
 import { app } from 'electron';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -12,6 +13,20 @@ import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { linuxPasswordStoreFallback } from './linuxPasswordStore.js';
+import { findLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
+
+// Before bootstrap/auth modules and app.ready. Updates use this same entry,
+// so Hyprland does not depend on a launcher to select its existing keyring.
+const passwordStore = linuxPasswordStoreFallback(
+  process.platform, process.env.XDG_CURRENT_DESKTOP,
+  app.commandLine.hasSwitch('password-store'),
+);
+if (passwordStore) app.commandLine.appendSwitch('password-store', passwordStore);
+if (process.platform === 'linux' && app.isPackaged) {
+  const installation = findLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
+  if (installation) app.setDesktopName(linuxUserDesktopName(installation.prefix));
+}
 
 // 正式目录保持历史兼容：global 构建继续使用 CindyGlobal，cn 版继续使用
 // productName 默认的 Cindy；dev 也按构建区域选择对应 profile。必须在

@@ -504,7 +504,8 @@ async function finishLinux({ artifactDir, baseName, arch }) {
   // 包一致:归集时写死 amd64 会让 arm64 产物顶着 amd64 的名字发出去。
   const installerPath = path.join(artifactDir, `${baseName}-${debianArch(arch)}.deb`);
   fs.copyFileSync(debPath, installerPath);
-  // Linux 没有 hotfix zip；应用内更新下载这份 installer .deb，再用 pkexec 覆盖安装。
+  // One verified payload: Debian uses pkexec; managed user installs on Arch /
+  // Omarchy extract it without elevation and atomically switch releases.
   return { files: [fileEntry('installer', installerPath)], signing: { mode: 'none' } };
 }
 

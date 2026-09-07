@@ -41,6 +41,9 @@ API keys, or use local models.
 See [cindy.app](https://cindy.app) for service details,
 [pricing](https://cindy.app/#pricing), and [downloads](https://cindy.app/download/).
 
+Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
+for installation, updates, keyring setup and migration from a manual install.
+
 ## Yours to shape
 
 Open source means more than visible — it means changeable:

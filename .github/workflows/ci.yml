@@ -139,6 +139,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
+      - name: Install Linux user-installer test tools
+        run: sudo apt-get update && sudo apt-get install --yes libarchive-tools binutils desktop-file-utils xdg-utils
+
       - name: Run client and package unit test shard
         # 通过 pnpm 启动 runner，保留当前 pnpm 入口与 workspace 解析语义。
         run: pnpm exec node scripts/test-workspaces.mjs --tier unit
