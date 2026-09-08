@@ -4535,6 +4535,10 @@ interface ElectronAPI {
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
       }>;
+      resetModelChainSettings: () => Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }>;
       setModelChainSettings: (body: {
         modelChain: import('../shared/botModelChain').BotModelRoute[];
       }) => Promise<{

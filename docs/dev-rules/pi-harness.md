@@ -50,6 +50,11 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
   Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
+  展示层通过共享 `parseMessageToolUse` 将网关调用还原为既有 MCP 工具名与参数；实时事件、
+  Pi 分支历史和旧持久化消息共用此解析，保留 toolUseId，不改变 Pi 原生 transcript 或授权路径。
+  MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
+  正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
+  仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 
@@ -71,11 +76,35 @@ provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
+Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
+Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、
+`CARGO_BUILD_JOBS` 与非 Windows 的 `MAKEFLAGS`；用户已有 env 优先，关闭设置后新进程不注入，
+SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新增 PI 专属开关。
+
 放任 pi 默认(未写 settings.json):`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、
 `compaction.keepRecentTokens`、`defaultProjectTrust`。Cindy 会在每次 startSession 覆写
 `transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
 未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
 
+
+### 全局约定入口
+
+普通 Pi 任务从执行设备用户的 `~/.pi/agent` 继承约定，按 Pi 原生顺序选择首个文件：
+`AGENTS.override.md` → `AGENTS.md` → `AGENTS.MD` → `CLAUDE.md` → `CLAUDE.MD`。
+本机尊重启动 Cindy 时的 `PI_CODING_AGENT_DIR`
+覆写（支持 `~`）。SSH 使用远端 `$HOME/.pi/agent`，不读取控制端个人文件；手机／设备互联
+控制本机任务复用桌面链路。Bot 保持 `--no-context-files`，不读取或复制这些全局约定。
+
+每次启动读取软链目标并复制内容到独立 `configHome`，不建立指向用户文件的可写链接。
+用户更新约定后，新启动的任务读取新版；运行中的任务保留启动快照。SSH 的配置目录身份
+包含约定内容哈希，内容不变可以 attach，变化或删除不能覆盖仍存活的旧运行时快照。
+只继承上述约定文件，不整目录复制 settings、auth、extensions，也不复制会替换 Pi 默认
+系统提示词的 `SYSTEM.md`。远端沿用文件读取通道的 4 MiB 上限，触及上限明确报错，不能
+静默截断。文件不存在允许正常启动，读取／写入失败须报错，不能假称约定已加载。
+远端探测使用系统 `stat`（GNU／BSD，固定 C locale）区分明确缺失与权限／探测失败，
+不能用 shell `-f`／`-e` 的 false 推断文件不存在，也不能依赖首次启动尚未安装的 Node。
+内建 Pi 子代理从父任务 `configHome` 复制选中的约定快照到自己的持久运行目录；
+不重读用户原文件，父任务卸载后子代理仍保留同一份约定。
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 

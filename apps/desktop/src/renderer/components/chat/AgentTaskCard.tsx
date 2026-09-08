@@ -14,6 +14,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
+  formatAgentTaskTitle,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 
@@ -246,12 +247,17 @@ export function AgentTaskCard({
   // 是「后台命令」—— 终端图标 + shell provider 标签,避免用户把跑测试的 bash
   // 误读成一个子 Agent。
   const isBash = update?.taskType === 'local_bash';
+  const isSubagent = !isWorkflow && !isBash;
+  const provider = update?.provider
+    ?? (toolCall?.toolName?.startsWith('collab:')
+      ? 'codex'
+      : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME ? 'pi' : 'claude-code');
   const AvatarIcon = isWorkflow ? Workflow : isBash ? SquareTerminal : Bot;
   const title = compactText(
-    (isWorkflow ? update?.workflowName : undefined) ??
+    formatAgentTaskTitle(provider, (isWorkflow ? update?.workflowName : undefined) ??
       update?.title ??
       readInputString(toolCall?.toolInput, ['description', 'task', 'name']) ??
-      readInputString(toolCall?.toolInput, ['prompt']),
+      readInputString(toolCall?.toolInput, ['prompt'])),
     96,
   ) ?? t(isWorkflow ? 'chat.agentTask.provider.workflow' : 'chat.agentTask.emptyTitle');
   const description = compactText(
@@ -271,7 +277,7 @@ export function AgentTaskCard({
   const summary = spawnReceiptName
     ? (update
         ? detailText(update.summary)
-        : t('chat.agentTask.subagentStarted', { name: spawnReceiptName }))
+        : t('chat.agentTask.subagentStarted', { name: formatAgentTaskTitle(provider, spawnReceiptName) }))
     : resultIsPiLaunchReceipt
       ? detailText(update?.summary, result)
       : detailText(result, update?.summary);
@@ -281,14 +287,6 @@ export function AgentTaskCard({
       && (summary.length > 320 || summary.split(/\r?\n/).length > 4),
   );
   const duration = formatDuration(update?.usage?.durationMs);
-  // provider 推断与 maker-shared 的 buildAgentTaskCardModel 同口径(裸 `subagent` 是 pi
-  // 扩展注册的工具名);历史回放没有 live update 时也不会把 pi 卡标成 Claude。
-  const provider = update?.provider
-    ?? (toolCall?.toolName?.startsWith('collab:')
-      ? 'codex'
-      : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME
-        ? 'pi'
-        : 'claude-code');
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
     : isBash
@@ -391,7 +389,6 @@ export function AgentTaskCard({
   const meta = useMemo(() => {
     const parts: Array<{ key: string; text: string }> = [
       { key: 'provider', text: providerLabel },
-      { key: 'status', text: t(`chat.agentTask.status.${status}`) },
     ];
     if (typeof update?.usage?.totalTokens === 'number') {
       parts.push({
@@ -404,7 +401,7 @@ export function AgentTaskCard({
     }
     if (duration) parts.push({ key: 'duration', text: duration });
     return parts;
-  }, [duration, providerLabel, status, t, update?.usage?.totalTokens, update?.usage?.toolUses]);
+  }, [duration, providerLabel, t, update?.usage?.totalTokens, update?.usage?.toolUses]);
 
   return (
     // data-message-client-id:MessageStream 的消息级 focus(后台任务面板行点击 /
@@ -414,14 +411,14 @@ export function AgentTaskCard({
       className="flex w-full justify-start"
       {...(toolCall?.clientId ? { 'data-message-client-id': toolCall.clientId } : {})}
     >
-      <div className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2">
+      <div className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2">
         {/* 头部按钮:普通卡 = 展开 toggle;workflow 卡 = 打开后台任务面板入口。
             button 不能嵌套,停止按钮以兄弟节点挂在右侧(仅 running 时出现)。 */}
         <div className="flex w-full items-start gap-2">
         <button
           type="button"
           onClick={isWorkflow && canOpenInPanel ? openInPanel : toggle}
-          className="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="flex min-w-0 flex-1 items-start gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           {...(isWorkflow && canOpenInPanel
             ? { 'aria-label': t('chat.agentTask.openInPanel') }
             : {
@@ -431,22 +428,21 @@ export function AgentTaskCard({
                   : t('chat.agentTask.showDetails'),
               })}
         >
-          <span className="mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+          <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
             <AvatarIcon size={14} aria-hidden="true" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <Spinner
-                icon={StatusIcon}
-                size={14}
-                spinning={status === 'running'}
-                className={statusIconClassName}
-              />
-              <span className="truncate text-14 font-medium leading-5 text-[var(--text-primary)]">
+            <span className="flex min-w-0 items-center gap-2">
+              {isSubagent && <span className="shrink-0 text-11 text-[var(--text-secondary)]">{t('rightSidebar.tabs.kinds.subagents')}</span>}
+              <span className="min-w-0 flex-1 truncate text-14 font-medium leading-[1.428571] text-[var(--text-primary)]">
                 {title}
               </span>
+              <span className={cn('inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-12 leading-[1.333333]', statusIconClassName)}>
+                <Spinner icon={StatusIcon} size={12} spinning={status === 'running'} />
+                {t(`chat.agentTask.status.${status}`)}
+              </span>
             </span>
-            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-12 leading-4 text-[var(--text-tertiary)]">
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-12 leading-[1.333333] text-[var(--text-tertiary)]">
               {meta.map((part) => (
                 <Fragment key={part.key}>
                   <span>{part.text}</span>
@@ -457,7 +453,7 @@ export function AgentTaskCard({
                       data-agent-task-model-chip="true"
                       // 字体不特殊处理:size / weight / color 全部继承 meta 行
                       // (text-12 / normal / --text-tertiary),只保留 chip 的底色与圆角。
-                      className="inline-flex items-center rounded-[4px] bg-[var(--surface-chip)] px-1.5 py-0.5"
+                      className="inline-flex items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5"
                     >
                       {chipLabel}
                     </span>
@@ -500,7 +496,7 @@ export function AgentTaskCard({
               size={14}
               className={cn(
                 'mt-1 shrink-0 text-[var(--text-tertiary)]',
-                'transition-transform duration-[var(--motion-fast,150ms)]',
+                'transition-transform duration-[var(--motion-fast,150ms)] motion-reduce:transition-none',
                 expanded && 'rotate-90',
               )}
               aria-hidden="true"
@@ -515,7 +511,7 @@ export function AgentTaskCard({
             aria-label={t('chat.agentTask.openInPanel')}
             data-agent-task-open-subagents="true"
             className={cn(
-              'mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
+              'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
               'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
               'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             )}
@@ -532,7 +528,7 @@ export function AgentTaskCard({
             aria-label={t('chat.agentTask.stop')}
             data-agent-task-stop="true"
             className={cn(
-              'mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px]',
+              'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
               'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
               'transition-colors disabled:cursor-not-allowed disabled:opacity-50',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',

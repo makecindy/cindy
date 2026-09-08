@@ -22,6 +22,7 @@
  */
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -5653,11 +5654,9 @@ export function handleStreamEvent(
 
     case 'tool_use': {
       dismissVisionBridgeToast(event.sessionId);
-      const { toolUseId, toolName, input } = event.data as {
-        toolUseId: string;
-        toolName: string;
-        input: unknown;
-      };
+      const { toolUseId, toolName, input } = parseMessageToolUse({
+        role: 'tool_use', content: event.data,
+      });
 
       // F1-a: 在飞 assistant 文本 + tool_use 的落库都已收口 main(messagePersistBroadcaster
       // 在 tool_use 边界先 flushAssistantBlock 再落 tool_use),renderer 这里只做 UI:
@@ -16561,13 +16560,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   const mapped = ordered.map((m) => {
     if (m.role === 'tool_use' && m.content && typeof m.content === 'object') {
       const c = m.content as Record<string, unknown>;
-      const toolName = typeof c.toolName === 'string' ? c.toolName : '';
-      const toolInput = c.input ?? null;
+      const { toolName, input: toolInput, toolUseId } = parseMessageToolUse(m);
       const agentTaskStatus = normalizeAgentTaskTerminalStatus(m.agentMeta?.agentTaskStatus);
       // toolUseId 来源:DB 列(新数据) → fallback 旧数据存在 content.toolUseId 里
-      const toolUseId =
-        (typeof m.toolUseId === 'string' && m.toolUseId.length > 0 ? m.toolUseId : undefined) ??
-        (typeof c.toolUseId === 'string' && c.toolUseId.length > 0 ? c.toolUseId : undefined);
       return {
         clientId: m.clientId,
         role: m.role,

@@ -581,6 +581,26 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
+  it.each(['local', 'remote'] as const)('passes route context to behavior flags on %s spawn', async (mode) => {
+    const deps = buildDeps();
+    const remoteTransport = deps.getRemotePiTransport!;
+    deps.getRemotePiTransport = async (host, options) => {
+      captured.env = options.env;
+      return remoteTransport(host, options);
+    };
+    const behaviorFlags = vi.fn(({ spawnMode }: { spawnMode?: string }): Record<string, string> =>
+      spawnMode === 'remote' ? { CINDY_TEST_ROUTE: 'remote' } : { VITEST_MAX_THREADS: '2' });
+    deps.runtimeConfig.behaviorFlags = behaviorFlags;
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'flags', workingDir: cwd, model: 'm',
+      ...(mode === 'remote' ? { remoteHostId: 'remote-1' } : {}),
+    });
+    expect(behaviorFlags).toHaveBeenCalledWith(expect.objectContaining({ spawnMode: mode }));
+    expect(captured.env[mode === 'remote' ? 'CINDY_TEST_ROUTE' : 'VITEST_MAX_THREADS'])
+      .toBe(mode === 'remote' ? 'remote' : '2');
+    await handle.close();
+  });
+
   it('lets Pi discover user-installed packages natively instead of gating them on Cindy metadata', async () => {
     const packageRoot = path.join(agentHome, 'future-pi-package-shape');
     mkdirSync(packageRoot, { recursive: true });
@@ -2590,6 +2610,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('keeps Bot tools and memory independent of global memory while honoring task permissions', async () => {
     const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.resolvePiGlobalContextHome = vi.fn(() => { throw new Error('Bot must not read user context'); });
     deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
     deps.runtimeConfig.memoryEnabled = false;
     const handle = await new PiAgent(deps).startSession({
@@ -2626,6 +2647,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
       ]));
       expect(captured.args).toContain('--no-context-files');
+      expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
       const promptIndex = captured.args.indexOf('--append-system-prompt');
       expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
       expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');

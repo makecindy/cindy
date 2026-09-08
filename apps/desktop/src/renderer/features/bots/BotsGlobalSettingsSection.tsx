@@ -1,10 +1,12 @@
 /** Shared default model chain; individual teammates may override it. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
 import {
   getEffectiveBotModelChain,
+  isBotGlobalModelChainCustomized,
+  resetBotGlobalModelChain,
   setBotGlobalModelChain,
   subscribeBotGlobalModel,
 } from './botStore';
@@ -27,11 +29,22 @@ export function BotsGlobalSettingsSection() {
 
   useEffect(() => subscribeBotGlobalModel(() => bumpModelSettings((value) => value + 1)), []);
   const modelChain = getEffectiveBotModelChain();
+  const customized = isBotGlobalModelChainCustomized();
+  const pendingRef = useRef(false);
+  const [pending, setPending] = useState(false);
 
-  const saveModelChain = (next: typeof modelChain) => {
+  const changeModelChain = (operation: () => Promise<void>, restoring = false) => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
     setNotice(null);
-    void setBotGlobalModelChain(next).catch((error: unknown) => {
-      setNotice(error instanceof Error ? error.message : String(error));
+    void operation().catch((error: unknown) => {
+      setNotice(restoring
+        ? t('bots.globalSettings.restoreFailed')
+        : error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      pendingRef.current = false;
+      setPending(false);
     });
   };
 
@@ -51,7 +64,16 @@ export function BotsGlobalSettingsSection() {
             {t('bots.globalSettings.description')}
           </p>
         </div>
-        <BotModelChainEditor value={modelChain} onChange={saveModelChain} />
+        <fieldset disabled={pending} aria-busy={pending} className="min-w-0">
+          <BotModelChainEditor
+            value={modelChain}
+            onChange={(next) => changeModelChain(() => setBotGlobalModelChain(next))}
+            onRestoreDefault={customized !== false
+              ? () => changeModelChain(resetBotGlobalModelChain, true)
+              : undefined}
+          />
+        </fieldset>
+        <p className={ROW_HINT_CLASS}>{t('bots.globalSettings.restoreHint')}</p>
         {notice ? (
           <p className={ROW_HINT_CLASS} role="status">
             {notice}

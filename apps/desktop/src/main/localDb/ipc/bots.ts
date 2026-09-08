@@ -35,6 +35,7 @@ import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootst
 import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store.js';
 import {
   readBotModelChainSettingsState,
+  resetBotModelChainSettings,
   readEffectiveBotModelChain,
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
@@ -1091,6 +1092,20 @@ export function registerBotIpc(): void {
       raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const state = await writeBotModelChainSettings(body.modelChain);
     return { modelChain: state.value.modelChain, isCustomized: state.isCustomized };
+  });
+
+  // Global model preferences are desktop-local settings, like get/set above.
+  ipcMain.handle('local-db:bots:model-chain-settings-reset', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = captureBotOperationOwner();
+    try {
+      const state = await resetBotModelChainSettings();
+      owner.assertCurrent();
+      return { modelChain: state.value.modelChain, isCustomized: state.isCustomized };
+    } catch {
+      owner.assertCurrent();
+      throwIpcError('INTERNAL', 'Could not restore Bot model defaults');
+    }
   });
 
   ipcMain.handle('local-db:bots:list', async (event, raw: unknown) => {
