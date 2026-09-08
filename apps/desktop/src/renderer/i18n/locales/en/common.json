@@ -7193,6 +7193,8 @@
       "composerPlaceholderLatin": "Say something to {{name}}…"
     },
     "globalSettings": {
+      "restoreHint": "Restoring defaults follows the client’s default model settings. Individual teammates’ custom models stay unchanged.",
+      "restoreFailed": "Could not restore defaults. Try again.",
       "title": "Teammates",
       "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
       "rosterNote": "The shipped roster grows with each release."

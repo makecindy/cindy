@@ -282,6 +282,26 @@ const BOT_GLOBAL_MODEL_CHAIN_KEY = 'cindy.bots.global-model-chain.v2';
 type BotModelVendor = ReturnType<typeof vendorForHarness>;
 const botModelListeners = new Set<() => void>();
 let globalModelChainCache: BotModelRoute[] | null = null;
+let globalModelChainCustomized = false;
+// Serialize writes and legacy migration with settings reads. A late read must not
+// reapply an old override, and a migration must finish before a requested reset.
+let modelSettingsQueue: Promise<unknown> = Promise.resolve();
+
+function queueModelSettings<T>(operation: () => Promise<T>): Promise<T> {
+  ensureProfileOwner();
+  const owner = getDataOwnerGeneration();
+  const result = modelSettingsQueue.then(async () => {
+    assertCurrentOwner(owner);
+    return operation();
+  });
+  modelSettingsQueue = result.catch(() => undefined);
+  return result;
+}
+
+export function isBotGlobalModelChainCustomized(): boolean {
+  ensureProfileOwner();
+  return globalModelChainCustomized;
+}
 
 function readGlobalModelOverrides(): Partial<Record<BotModelVendor, BotModelOverride>> {
   if (typeof window === 'undefined') return {};
@@ -371,22 +391,20 @@ export function getEffectiveBotModelChain(
   ];
 }
 
-export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
-  ensureProfileOwner();
-  const owner = getDataOwnerGeneration();
-  const api = botsApi();
-  if (!api || typeof api.setModelChainSettings !== 'function') {
-    throw new Error('Bot model settings are not ready');
-  }
-  const normalized = normalizeBotModelChain(chain);
-  if (normalized.length === 0) throw new Error('Choose at least one Bot model route');
-  const state = await api.setModelChainSettings({ modelChain: normalized });
-  assertCurrentOwner(owner);
+function applyGlobalModelChain(state: { modelChain: BotModelRoute[]; isCustomized: boolean }): void {
   const persisted = normalizeBotModelChain(state.modelChain);
-  if (persisted.length === 0) throw new Error('Bot model settings were not saved');
   globalModelChainCache = persisted;
+  globalModelChainCustomized = state.isCustomized;
   window.localStorage.removeItem(BOT_GLOBAL_MODEL_CHAIN_KEY);
-  const primary = persisted[0]!;
+  projectGlobalModelChain();
+  for (const listener of botModelListeners) listener();
+  emit();
+}
+
+function projectGlobalModelChain(): void {
+  const chain = globalModelChainCache;
+  if (!chain) return;
+  const primary = chain[0] ?? { model: '', providerId: null, effort: '', fastMode: false };
   profiles = profiles.map((bot) =>
     bot.capabilities.modelChainOverride === null
       ? {
@@ -395,14 +413,45 @@ export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<vo
             ...bot.capabilities,
             ...primary,
             modelOverride: null,
-            modelChain: persisted,
+            modelChain: chain,
             modelChainOverride: null,
           },
         }
       : bot,
   );
-  for (const listener of botModelListeners) listener();
-  emit();
+}
+
+export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
+  const normalized = normalizeBotModelChain(chain);
+  if (normalized.length === 0) throw new Error('Choose at least one Bot model route');
+  return queueModelSettings(async () => {
+    const owner = getDataOwnerGeneration();
+    const api = botsApi();
+    if (!api || typeof api.setModelChainSettings !== 'function') {
+      throw new Error('Bot model settings are not ready');
+    }
+    const state = await api.setModelChainSettings({ modelChain: normalized });
+    assertCurrentOwner(owner);
+    if (normalizeBotModelChain(state.modelChain).length === 0) {
+      throw new Error('Bot model settings were not saved');
+    }
+    applyGlobalModelChain(state);
+  });
+}
+
+export function resetBotGlobalModelChain(): Promise<void> {
+  return queueModelSettings(async () => {
+    const owner = getDataOwnerGeneration();
+    const api = botsApi();
+    if (!api || typeof api.resetModelChainSettings !== 'function') {
+      throw new Error('Bot model settings are not ready');
+    }
+    const state = await api.resetModelChainSettings();
+    assertCurrentOwner(owner);
+    // A default resolver may return no available models. Do not turn that into
+    // a failed reset or save the derived chain as a new override.
+    applyGlobalModelChain(state);
+  });
 }
 
 function defaultCapabilities(
@@ -485,6 +534,8 @@ function ensureProfileOwner(): void {
   profiles = [];
   unreadCounts = {};
   globalModelChainCache = null;
+  globalModelChainCustomized = false;
+  modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
   hydrationPromises.clear();
   hydrationGeneration += 1;
@@ -702,19 +753,17 @@ async function hydrateFromDatabase(): Promise<void> {
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {
-        let state = await api.getModelChainSettings();
-        if (!isCurrent()) return;
-        const legacy = readLegacyBotGlobalModelChain();
-        if (!state.isCustomized && legacy && typeof api.setModelChainSettings === 'function') {
-          state = await api.setModelChainSettings({ modelChain: legacy });
+        await queueModelSettings(async () => {
           if (!isCurrent()) return;
-        }
-        const persisted = normalizeBotModelChain(state.modelChain);
-        if (persisted.length > 0) {
-          globalModelChainCache = persisted;
-          window.localStorage.removeItem(BOT_GLOBAL_MODEL_CHAIN_KEY);
-          for (const listener of botModelListeners) listener();
-        }
+          let state = await api.getModelChainSettings();
+          if (!isCurrent()) return;
+          const legacy = readLegacyBotGlobalModelChain();
+          if (!state.isCustomized && legacy && typeof api.setModelChainSettings === 'function') {
+            state = await api.setModelChainSettings({ modelChain: legacy });
+            if (!isCurrent()) return;
+          }
+          applyGlobalModelChain(state);
+        });
       } catch {
         // Profile hydration remains usable if the settings file is temporarily
         // unavailable. A later explicit refresh retries the Main-owned source.
@@ -725,6 +774,7 @@ async function hydrateFromDatabase(): Promise<void> {
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
+    projectGlobalModelChain();
     applyUnreadCounts(rows);
     // A Bot we have never tracked starts read: shipping unread badges must not
     // retroactively mark every existing conversation as unread. Pruning keeps

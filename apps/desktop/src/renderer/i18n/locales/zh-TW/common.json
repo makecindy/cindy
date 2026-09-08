@@ -7191,6 +7191,8 @@
       "composerPlaceholderLatin": "跟 {{name}} 說點什麼…"
     },
     "globalSettings": {
+      "restoreHint": "恢復預設後將跟隨用戶端預設模型設定，個別夥伴的自訂模型保持不變。",
+      "restoreFailed": "恢復預設失敗，請重試。",
       "title": "伙伴",
       "description": "和伙伴有關的通用設定。單個伙伴的設定在{{pronoun}}自己的頁面裡。",
       "rosterNote": "預置陣容會隨版本更新。"

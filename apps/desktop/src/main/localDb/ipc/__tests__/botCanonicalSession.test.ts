@@ -145,6 +145,7 @@ import {
   listBotRemoteResourceSources,
 } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
+import * as modelSettings from '../../../maker-host/bot-model-chain-settings-store.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context.js';
 import {
@@ -418,6 +419,36 @@ beforeEach(async () => {
       model: 'grok-4.5',
       permissions: 'trusted',
     },
+  });
+});
+
+describe('Bot global model restore IPC', () => {
+  it('checks the sender before clearing settings', async () => {
+    const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementationOnce(() => { throw new Error('untrusted'); });
+    try {
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).rejects.toThrow('untrusted');
+      expect(reset).not.toHaveBeenCalled();
+    } finally { reset.mockRestore(); }
+  });
+
+  it('returns the resolved state and sanitizes filesystem failures', async () => {
+    const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
+    try {
+      reset.mockResolvedValueOnce({ value: { modelChain: [] }, defaults: { modelChain: [] }, isCustomized: false, customizedKeys: [] });
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).resolves.toEqual({ modelChain: [], isCustomized: false });
+      reset.mockRejectedValueOnce(new Error('/private/account/settings.json: denied'));
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).rejects.toThrow('Could not restore Bot model defaults');
+    } finally { reset.mockRestore(); }
+  });
+
+  it('rejects an account transition before clearing settings', async () => {
+    const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
+    try {
+      h.ownerBoundaryPending = true;
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).rejects.toThrow('PRECONDITION_FAILED');
+      expect(reset).not.toHaveBeenCalled();
+    } finally { reset.mockRestore(); }
   });
 });
 

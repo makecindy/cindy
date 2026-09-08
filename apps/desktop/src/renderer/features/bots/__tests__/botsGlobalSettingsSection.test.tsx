@@ -18,6 +18,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  resetBotGlobalModelChain: vi.fn(async (): Promise<void> => undefined),
+  customized: true,
   setBotGlobalModelChain: vi.fn(async (_chain: unknown[]) => undefined),
 }));
 
@@ -31,7 +33,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector" />,
 }));
 vi.mock('../BotModelChainEditor', () => ({
-  BotModelChainEditor: ({ onChange }: { onChange: (value: unknown[]) => void }) => (
+  BotModelChainEditor: ({ onChange, onRestoreDefault }: { onChange: (value: unknown[]) => void; onRestoreDefault?: () => void }) => (
+    <>
     <button type="button" onClick={() => onChange([{
       harness: 'pi',
       model: 'z-ai/glm-5.3-flash',
@@ -39,9 +42,13 @@ vi.mock('../BotModelChainEditor', () => ({
       effort: 'high',
       fastMode: false,
     }])}>model-chain-editor</button>
+    {onRestoreDefault && <button onClick={onRestoreDefault}>restore-default</button>}
+    </>
   ),
 }));
 vi.mock('../botStore', () => ({
+  isBotGlobalModelChainCustomized: () => mocks.customized,
+  resetBotGlobalModelChain: () => mocks.resetBotGlobalModelChain(),
   getEffectiveBotModelChain: () => [{
     harness: 'pi',
     model: 'z-ai/glm-5.3-flash',
@@ -57,6 +64,8 @@ import { BotsGlobalSettingsSection } from '../BotsGlobalSettingsSection';
 
 beforeEach(() => {
   mocks.setBotGlobalModelChain.mockClear();
+  mocks.resetBotGlobalModelChain.mockReset();
+  mocks.customized = true;
 });
 
 afterEach(() => cleanup());
@@ -96,4 +105,33 @@ describe('设置 › 伙伴', () => {
       expect.objectContaining({ harness: 'pi', model: 'z-ai/glm-5.3-flash' }),
     ]));
   });
+  it('restores through the dedicated reset operation and prevents duplicate clicks', async () => {
+    let finish!: () => void;
+    mocks.resetBotGlobalModelChain.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<BotsGlobalSettingsSection />);
+    fireEvent.click(screen.getByText('restore-default'));
+    fireEvent.click(screen.getByText('restore-default'));
+    fireEvent.click(screen.getByText('model-chain-editor'));
+    expect(mocks.resetBotGlobalModelChain).toHaveBeenCalledOnce();
+    expect(mocks.setBotGlobalModelChain).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(screen.getByText('restore-default').closest('fieldset')?.disabled).toBe(false));
+  });
+
+  it('keeps failures visible and allows retry without saving a default snapshot', async () => {
+    mocks.resetBotGlobalModelChain.mockRejectedValueOnce(new Error('internal path'));
+    render(<BotsGlobalSettingsSection />);
+    fireEvent.click(screen.getByText('restore-default'));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('bots.globalSettings.restoreFailed'));
+    fireEvent.click(screen.getByText('restore-default'));
+    await waitFor(() => expect(mocks.resetBotGlobalModelChain).toHaveBeenCalledTimes(2));
+    expect(mocks.setBotGlobalModelChain).not.toHaveBeenCalled();
+  });
+
+  it('only offers restore for an explicit customization', () => {
+    mocks.customized = false;
+    render(<BotsGlobalSettingsSection />);
+    expect(screen.queryByText('restore-default')).toBeNull();
+  });
+
 });

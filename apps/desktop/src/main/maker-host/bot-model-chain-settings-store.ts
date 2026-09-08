@@ -11,7 +11,7 @@ import {
   normalizeBotModelChain,
   type BotModelRoute,
 } from '../../shared/botModelChain.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
@@ -65,7 +65,7 @@ function currentStore(rootPath?: string) {
       label: 'bot-model-chain',
       scopeKey: rootPath
         ? () => `root:${rootPath}`
-        : () => getActiveAppSession().dataOwnerId ?? '<global>',
+        : activeOwnerScopeKey,
     });
     stores.set(key, current);
   }
@@ -98,6 +98,18 @@ export async function writeBotModelChainSettings(
   await store.writePatchAtomic({ modelChain: normalized }, { preserveDefaults: true });
   log.info('Bot model chain setting written', { routeCount: normalized.length });
   return store.readState();
+}
+
+/** Clear only the current owner's global override, then use the normal default resolver. */
+export async function resetBotModelChainSettings(
+  options?: Parameters<typeof readBotModelChainSettingsState>[0],
+): Promise<OverrideSettingsState<BotModelChainSettings>> {
+  const owner = activeOwnerScopeKey();
+  await currentStore(options?.rootPath).resetAtomic();
+  if (!options?.rootPath && activeOwnerScopeKey() !== owner) {
+    throw new Error('Bot model settings owner changed');
+  }
+  return readBotModelChainSettingsState(options);
 }
 
 /**
