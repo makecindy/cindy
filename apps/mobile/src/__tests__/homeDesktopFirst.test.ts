@@ -3,10 +3,36 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
+import { isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
+import { resolveConnectionBannerSyncActionVisibility } from '@/components/connectionBannerVisibility';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
+
+describe('mobile Home connection feedback', () => {
+  it('does not offer manual sync for the device-prefixed unresponsive error shown on Home', () => {
+    expect(resolveConnectionBannerSyncActionVisibility({
+      online: true,
+      hasActiveIssue: false,
+      deviceUnresponsive: false,
+      hasRequestError: true,
+      requestErrorAutoRecovering: isAutoRecoveringRemoteError('MacBook: [DEVICE_UNRESPONSIVE] circuit open'),
+    })).toBe(false);
+  });
+
+  it('wires Home itself to the shared recovery indicator instead of an unconditional retry button', () => {
+    const source = readSource('app/devices/index.tsx');
+    expect(source).toContain('isAutoRecoveringRemoteError(error)');
+    expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
+    const row = source.slice(source.indexOf('{showConnectionRow ? ('), source.indexOf('<SectionList'));
+    expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
+    const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
+    expect(progress).toContain('<ConnectionRecoveryProgress');
+    expect(progress).not.toContain('onPress');
+    expect(progress).not.toContain('<Pressable');
+  });
+});
 
 describe('mobile Home startup reads', () => {
   it('returns the local value when the read settles in time', async () => {

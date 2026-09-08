@@ -94,8 +94,6 @@ export function ConnectionBanner({
   recovery?: 'syncing' | 'recovered';
 }) {
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  const reduceMotion = useReduceMotionEnabled();
   const { t } = useTranslation();
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
@@ -178,22 +176,31 @@ export function ConnectionBanner({
           onPress={onSync}
           testID="connection.syncButton"
         />
-      ) : showRecoveryProgress ? reduceMotion === false ? (
-        <ActivityIndicator
-          accessibilityLabel={`${title} · ${copy}`}
-          color={colors.textSecondary}
-          size="small"
-          testID="connection.recoveryProgress"
-        />
-      ) : (
-        <LoaderCircle
-          accessibilityLabel={`${title} · ${copy}`}
-          color={colors.textSecondary}
-          size={iconSize.action}
-          testID="connection.recoveryProgressStatic"
-        />
+      ) : showRecoveryProgress ? (
+        <ConnectionRecoveryProgress accessibilityLabel={`${title} · ${copy}`} />
       ) : null}
     </View>
+  );
+}
+
+/** Shared by the Home connection row and detail banners; never a press target. */
+export function ConnectionRecoveryProgress({ accessibilityLabel }: { accessibilityLabel: string }) {
+  const { colors } = useTheme();
+  const reduceMotion = useReduceMotionEnabled();
+  return reduceMotion === false ? (
+    <ActivityIndicator
+      accessibilityLabel={accessibilityLabel}
+      color={colors.textSecondary}
+      size="small"
+      testID="connection.recoveryProgress"
+    />
+  ) : (
+    <LoaderCircle
+      accessibilityLabel={accessibilityLabel}
+      color={colors.textSecondary}
+      size={iconSize.action}
+      testID="connection.recoveryProgressStatic"
+    />
   );
 }
 
