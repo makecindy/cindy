@@ -22438,13 +22438,31 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
   });
 
+  it('refuses visible counts without an event boundary when excluded native turns were retried', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadTurnsList) return {
+        data: [
+          { id: 'excluded-retry', status: 'failed', startedAt: 300 },
+          { id: 'excluded-original', status: 'failed', startedAt: 200 },
+          { id: 'copied-silent-turn', status: 'failed', startedAt: 100 },
+        ], nextCursor: null,
+      };
+    }, { userAgent: 'mock-codex/0.153.4' });
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source', upToMessageId: undefined, tailTurnsToDrop: 1,
+    })).rejects.toMatchObject({ stage: 'source-prepare' });
+    expect(host.request).not.toHaveBeenCalled();
+    expect(host.unsubscribeThread).not.toHaveBeenCalled();
+  });
+
   it('does not allocate a child or fall back to rollback if native boundary lookup fails', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => {
       if (method === Method.ThreadTurnsList) throw new Error('native read failed');
     }, { userAgent: 'mock-codex/0.153.4' });
     await expect(agent.forkSdkSession({
-      sourceSdkSessionId: 'source', upToMessageId: undefined, tailTurnsToDrop: 1,
+      sourceSdkSessionId: 'source', upToMessageId: undefined, tailTurnsToDrop: 1, forkAtTimestampMs: 110_123,
     })).rejects.toMatchObject({ stage: 'source-prepare' });
     expect(host.request).toHaveBeenCalledTimes(1);
     expect(host.unsubscribeThread).not.toHaveBeenCalled();

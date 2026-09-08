@@ -13637,7 +13637,6 @@ export class CodexAgent extends BaseAgent {
         lastTurnId = await resolveForkTurnAnchor(
           (method, params) => host.request(method, params),
           opts.sourceSdkSessionId,
-          tailTurnsToDrop,
           opts.forkAtTimestampMs,
         );
       }
