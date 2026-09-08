@@ -203,6 +203,7 @@ export function applyTemplateToMobileScheduleDraft(
   paramValues: Record<string, string> = {},
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
+  const model = template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind));
   return {
     ...draft,
     name: template.name || draft.name,
@@ -214,8 +215,9 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     intervalMinutesTouched: true,
     agentKind,
-    ...(draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
-    model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
+    // A template producing a model is an explicit choice, including a legacy bound draft.
+    ...(model.trim() || draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
+    model,
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
     providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
@@ -484,7 +486,8 @@ export function updateDraftAgentKind(
   return {
     ...draft,
     agentKind,
-    ...(draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
+    // Selecting another Harness must leave follow mode even on pre-upgrade bindings.
+    ...(draft.modelAgentKind || draft.targetSessionId.trim() ? { modelAgentKind: agentKind } : {}),
     model: defaultModelFor(agentKind),
     providerId: '',
     effort: '',

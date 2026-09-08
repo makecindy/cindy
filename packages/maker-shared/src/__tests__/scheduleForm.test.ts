@@ -461,6 +461,48 @@ function hasOwn(value: object, key: string): boolean {
 
 
 describe('mobile explicit Harness round-trip', () => {
+  it.each(['bound', MOBILE_SCHEDULE_PENDING_SESSION_ID])('creates a Harness override when a legacy binding (%s) is explicitly switched', (targetSessionId) => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'claude-code', model: 'claude-sonnet-4-6',
+      targetSessionId, providerId: 'old-source', effort: 'high', fastMode: true }));
+    const selected = updateDraftAgentKind(draft, 'codex');
+    expect(selected.modelAgentKind).toBe('codex');
+    // Complete the pending picker before simulating the device-link JSON boundary.
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, targetSessionId: 'bound' })));
+    expect(input).toMatchObject({ targetSessionId: 'bound', agentKind: 'codex', modelAgentKind: 'codex',
+      model: 'gpt-5.5', providerId: '', effort: '', fastMode: false });
+    expect(draft.modelAgentKind).toBeUndefined();
+    expect(updateDraftAgentKind(draft, 'claude-code')).toBe(draft);
+  });
+
+  it('retains the explicit Pi choice while the user fills its dynamic model', () => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', model: 'gpt-5.5', targetSessionId: 'bound' }));
+    const selected = updateDraftAgentKind(draft, 'pi');
+    expect(selected).toMatchObject({ modelAgentKind: 'pi', model: '' });
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, model: 'pi-model', providerId: 'pi-source' })));
+    expect(input).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', model: 'pi-model', providerId: 'pi-source' });
+  });
+
+  it.each([false, true])('materializes a template model on a followed binding (worktree: %s)', (useWorktree) => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', model: '', targetSessionId: 'bound' }));
+    const template: RemoteScheduleTemplate = { id: 'pi-template', name: 'Pi task', description: '', category: 'custom',
+      source: 'user', agentKind: 'pi', model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true, useWorktree };
+    const selected = applyTemplateToMobileScheduleDraft(draft, template);
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput(selected)));
+    expect(input).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', model: 'pi-model',
+      providerId: 'pi-source', effort: 'high', fastMode: true, useWorktree });
+    if (useWorktree) expect(input).not.toHaveProperty('targetSessionId');
+    else expect(input.targetSessionId).toBe('bound');
+    expect(draft.modelAgentKind).toBeUndefined();
+  });
+
+  it('does not create a model override for an empty-model template or an untouched fresh Pi choice', () => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', model: '', targetSessionId: 'bound' }));
+    const selected = applyTemplateToMobileScheduleDraft(draft, { id: 'follow', name: 'Follow', description: '', category: 'custom',
+      source: 'user', agentKind: 'pi', model: '' });
+    expect(buildMobileScheduleInput(selected)).not.toHaveProperty('modelAgentKind');
+    expect(buildMobileScheduleInput(updateDraftAgentKind(createMobileScheduleDraft(), 'pi'))).not.toHaveProperty('modelAgentKind');
+  });
+
   it('displays and preserves the Desktop override through a JSON update', () => {
     const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
       model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: true, targetSessionId: 'bound' }));
