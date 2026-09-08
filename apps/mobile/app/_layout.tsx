@@ -1,3 +1,4 @@
+import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -350,6 +351,7 @@ function RootAfterEndpoints() {
 }
 
 function RootLayout() {
+  useEffect(() => startLocalDiagnostics(), []);
   // Dev-only:注册开发者菜单的"清缓存 + reload"项(内部 __DEV__ gate,生产为 no-op)。
   useEffect(() => {
     registerDevCacheMenu();

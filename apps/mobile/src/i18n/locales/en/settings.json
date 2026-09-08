@@ -1,4 +1,25 @@
 {
+  "localLogs": {
+    "reset": "Reset recording to default",
+    "upload": "Upload logs",
+    "uploadHint": "Send diagnostic events and app/system versions to support. No content, credentials, or account identifiers.",
+    "copyCode": "Copy upload code",
+    "uploadResult": {
+      "unavailable": "Log upload is unavailable in this build.",
+      "consentRequired": "Accept the Privacy Policy before uploading logs.",
+      "empty": "No recent logs. Enable recording and reproduce the problem first.",
+      "failed": "Upload failed. Logs are still saved on this phone."
+    },
+    "title": "Diagnostic logs",
+    "record": "Record locally",
+    "hint": "Keeps up to 500 connection and performance events from the last 7 days on this phone. No content or credentials; never uploaded automatically.",
+    "export": "Export logs",
+    "clear": "Clear logs",
+    "busy": "Working…",
+    "failed": "Unable to save or share logs. Please try again.",
+    "clearHint": "Delete the saved diagnostic logs?",
+    "cancel": "Cancel"
+  },
   "title": "Settings",
   "language": {
     "title": "Language",

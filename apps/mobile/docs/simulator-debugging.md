@@ -265,8 +265,12 @@ For device-link network symptoms, collect:
 
 ## Render Storm Forensics And Regression Measurement
 
-背景:2026-07 会话白屏/卡死排查确立的取证与回归测量体系(手机端无落盘日志,
-这套是唯一的量化通道)。触碰 `remoteSessionStore` 订阅链、首页/详情页列表派生
+Release 也可在设置 → 调试 / 开发者打开本地诊断记录，复现后导出；配置了日志服务的
+构建还可手动上传并复制上传编号。仅记录白名单生命周期、连接与停摆事件，默认关闭，
+最多保存最近 7 天的 500 条；不包含 console 正文或完整渲染 trace。
+
+背景:2026-07 会话白屏/卡死排查确立的取证与回归测量体系。
+触碰 `remoteSessionStore` 订阅链、首页/详情页列表派生
 (索引 useMemo、sections、行 memo)、或做相关重构时,改动前后各测一轮对比。
 
 三层信号,从粗到细:

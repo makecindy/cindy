@@ -15,6 +15,7 @@ import { afterEach, test } from 'node:test';
 import {
   LOG_UPLOAD_TARGET_ENV,
   desktopLogUploadBuildEnv,
+  mobileLogUploadBuildEnv,
   loadLogUploadTargets,
   slsEndpointHost,
 } from '../shared/log-upload-build-env.mjs';
@@ -25,6 +26,20 @@ const VALID = {
   global: { project: 'global-proj', logstore: 'global-log', slsRegion: 'ap-southeast-1' },
   dev: null,
 };
+
+test('mobile build env shares desktop validation and injects only the selected region', () => {
+  const configPath = writeConfig(VALID);
+  for (const authRegion of ['cn', 'global', 'dev']) {
+    const mobile = mobileLogUploadBuildEnv({ authRegion, configPath });
+    assert.deepEqual(Object.keys(mobile), ['EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET']);
+    assert.equal(mobile.EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET,
+      desktopLogUploadBuildEnv({ authRegion, configPath })[LOG_UPLOAD_TARGET_ENV]);
+  }
+  const missing = path.join(makeTempDir('cindy-mobile-upload-'), 'missing.json');
+  assert.throws(() => mobileLogUploadBuildEnv({ authRegion: 'global', configPath: missing }), /缺少日志上报配置/);
+  assert.equal(mobileLogUploadBuildEnv({ authRegion: 'global', configPath: missing, allowMissing: true }).EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET, '');
+  assert.throws(() => mobileLogUploadBuildEnv({ authRegion: 'global', configPath: writeConfig('{bad'), allowMissing: true }), /不是合法 JSON/);
+});
 
 /**
  * 本文件建过的临时目录。用 `afterEach` 统一回收，与 `client-endpoint-build-env.test.mjs`

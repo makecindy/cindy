@@ -3,6 +3,7 @@ import { createBackgroundConnection } from './backgroundConnection';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
+import { recordDiagnostic } from '@/debug/localDiagnostics';
 import {
   DeviceLinkClient,
   DeviceLinkError,
@@ -1899,6 +1900,7 @@ const mobileDeviceLinkLogger = {
 };
 
 function logMobileDeviceLink(level: MobileDeviceLinkLogLevel, args: unknown[]): void {
+  recordDiagnostic(...args);
   if (!__DEV__ && level === 'debug') return;
   if (level === 'error') {
     console.error('[device-link]', ...args);

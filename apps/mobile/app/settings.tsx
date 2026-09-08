@@ -1,3 +1,5 @@
+import { diagnosticUploadConfigured, uploadMobileDiagnostics } from '@/debug/mobileDiagnosticUpload';
+import { clearDiagnostics, diagnosticsEnabled, exportDiagnostics, hydrateDiagnostics, resetDiagnosticsEnabled, setDiagnosticsEnabled } from '@/debug/localDiagnostics';
 import Constants from 'expo-constants';
 import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
@@ -139,6 +141,42 @@ export default function SettingsScreen() {
   const { lastPresenceSnapshot, status, invoke } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [localLogsEnabled, setLocalLogsEnabled] = useState(false);
+  const [localLogsReady, setLocalLogsReady] = useState(false);
+  const [localLogsBusy, setLocalLogsBusy] = useState(false);
+  const [localLogUploadCode, setLocalLogUploadCode] = useState<string | null>(
+    null,
+  );
+  const localLogsLock = useRef(false);
+  useEffect(() => {
+    let mounted = true;
+    void hydrateDiagnostics().then(() => {
+      if (mounted) {
+        setLocalLogsEnabled(diagnosticsEnabled());
+        setLocalLogsReady(true);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  const runLocalLogAction = async (action: () => Promise<void>) => {
+    if (localLogsLock.current) return;
+    localLogsLock.current = true;
+    setLocalLogsBusy(true);
+    try {
+      await action();
+    } catch {
+      Alert.alert(
+        t('settings.localLogs.title'),
+        t('settings.localLogs.failed'),
+      );
+    } finally {
+      setLocalLogsEnabled(diagnosticsEnabled());
+      setLocalLogsBusy(false);
+      localLogsLock.current = false;
+    }
+  };
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
@@ -1128,6 +1166,115 @@ export default function SettingsScreen() {
           >
             {debugExpanded
               ? [
+                  <View
+                    key="local-logs-toggle"
+                    style={styles.switchRow}
+                    testID="settings.localLogs"
+                  >
+                    <View style={styles.switchTexts}>
+                      <Text style={styles.rowLabel}>
+                        {t('settings.localLogs.title')}
+                      </Text>
+                      <Text style={styles.hint}>
+                        {t('settings.localLogs.hint')}
+                      </Text>
+                    </View>
+                    <NativeSwitch
+                      accessibilityLabel={t('settings.localLogs.record')}
+                      disabled={!localLogsReady || localLogsBusy}
+                      value={localLogsEnabled}
+                      seedColor={colors.inputCaret}
+                      onValueChange={(value) =>
+                        void runLocalLogAction(() =>
+                          setDiagnosticsEnabled(value),
+                        )
+                      }
+                    />
+                  </View>,
+                  <ActionInfoRow
+                    key="local-logs-reset"
+                    accessibilityLabel={t('settings.localLogs.reset')}
+                    label={t('settings.localLogs.reset')}
+                    value=""
+                    onPress={() =>
+                      void runLocalLogAction(resetDiagnosticsEnabled)
+                    }
+                  />,
+                  <ActionInfoRow
+                    key="local-logs-export"
+                    accessibilityLabel={t('settings.localLogs.export')}
+                    label={t('settings.localLogs.export')}
+                    value={localLogsBusy ? t('settings.localLogs.busy') : ''}
+                    onPress={() => void runLocalLogAction(exportDiagnostics)}
+                  />,
+                  ...(diagnosticUploadConfigured()
+                    ? [
+                        <ActionInfoRow
+                          key="local-logs-upload"
+                          accessibilityLabel={t('settings.localLogs.upload')}
+                          label={t('settings.localLogs.upload')}
+                          detail={t('settings.localLogs.uploadHint')}
+                          value={
+                            localLogsBusy ? t('settings.localLogs.busy') : ''
+                          }
+                          onPress={() =>
+                            void runLocalLogAction(async () => {
+                              const result = await uploadMobileDiagnostics();
+                              if (result.kind === 'uploaded')
+                                setLocalLogUploadCode(result.uploadCode);
+                              else
+                                Alert.alert(
+                                  t('settings.localLogs.title'),
+                                  t(
+                                    `settings.localLogs.uploadResult.${result.kind}`,
+                                  ),
+                                );
+                            })
+                          }
+                        />,
+                      ]
+                    : []),
+                  ...(localLogUploadCode
+                    ? [
+                        <ActionInfoRow
+                          key="local-logs-upload-code"
+                          accessibilityLabel={t('settings.localLogs.copyCode')}
+                          label={t('settings.localLogs.copyCode')}
+                          value={localLogUploadCode}
+                          onPress={() =>
+                            void runLocalLogAction(async () => {
+                              await Clipboard.setStringAsync(
+                                localLogUploadCode,
+                              );
+                            })
+                          }
+                        />,
+                      ]
+                    : []),
+                  <ActionInfoRow
+                    key="local-logs-clear"
+                    accessibilityLabel={t('settings.localLogs.clear')}
+                    label={t('settings.localLogs.clear')}
+                    value=""
+                    onPress={() =>
+                      Alert.alert(
+                        t('settings.localLogs.clear'),
+                        t('settings.localLogs.clearHint'),
+                        [
+                          {
+                            text: t('settings.localLogs.cancel'),
+                            style: 'cancel',
+                          },
+                          {
+                            text: t('settings.localLogs.clear'),
+                            style: 'destructive',
+                            onPress: () =>
+                              void runLocalLogAction(clearDiagnostics),
+                          },
+                        ],
+                      )
+                    }
+                  />,
                 ...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED
                   ? [
                       <ActionInfoRow
