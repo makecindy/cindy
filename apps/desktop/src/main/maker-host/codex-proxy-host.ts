@@ -41,6 +41,7 @@ import {
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesCustomToolFunctionAdapter,
+  normalizeResponsesToolItemIds,
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
@@ -168,17 +169,14 @@ const _customContextStartPromises = new Map<
   { authInjection: CodexProxyAuthInjection; routeSignature: string; promise: Promise<void> }
 >();
 const _customContextGenerations = new Map<string, number>();
+/** Each handle owns its live thread/socket mapping, including isolated Host proxies. */
+function* activeCodexProxyHandles(): Iterable<ProxyHandle> {
+  if (_handle) yield _handle;
+  yield* _controlPlaneHandles.values();
+  for (const entry of _customContextHandles.values()) yield entry.handle;
+}
 let _disposeGeneration = 0;
 let dumpSeq = 0;
-
-/** All transports share thread identities, but each owns its own sockets. */
-function activeCodexProxyHandles(): ProxyHandle[] {
-  return [...new Set([
-    ...(_handle ? [_handle] : []),
-    ..._controlPlaneHandles.values(),
-    ...Array.from(_customContextHandles.values(), (entry) => entry.handle),
-  ])];
-}
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -200,10 +198,20 @@ const CODEX_BODY_RECOVERY_RULES = [
   vllmResponsesCompatibilityRule,
 ] as const;
 
+/** Only fall back for the exact dialect mismatches the outgoing normalizer can repair. */
+function isRepairableToolItemIdError(errorText: string): boolean {
+  // Codex additionalDetails may contain an escaped JSON error inside another error envelope.
+  const text = errorText.replace(/\\+(?=["'])/g, '');
+  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
+  if (!match) return false;
+  return ({ fc: 'ctc', fco: 'ctco', ctc: 'fc', ctco: 'fco' } as Record<string, string>)[match[1]!]
+    === match[2]!;
+}
+
 /**
  * WS 已建立后 proxy 只转发 socket，真正的上游请求错误会由 app-server 报给 maker-core。
- * maker-core 把错误文本回传到这里，由与 HTTP recovery 完全相同的 rule 判定并登记：
- * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，既有 strip+retry 接管。
+ * maker-core 把错误文本回传到这里，仅识别 HTTP recovery rule 或已知可校正的工具 ID 错配。
+ * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，由请求校正／strip 接管。
  */
 export function armCodexHttpRecovery(args: {
   sessionId: string;
@@ -221,7 +229,8 @@ export function armCodexHttpRecovery(args: {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  if (!rule) return null;
+  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
   const existingSessionId = threadToSession.get(threadId);
@@ -233,11 +242,11 @@ export function armCodexHttpRecovery(args: {
     });
     return null;
   }
-  httpRecoveryReasonByThread.set(threadId, rule.id);
-  const disconnectedWebSockets = activeCodexProxyHandles().reduce(
-    (count, handle) => count + (handle.disconnectWebSocketsForThread?.(threadId) ?? 0),
-    0,
-  );
+  httpRecoveryReasonByThread.set(threadId, reason);
+  let disconnectedWebSockets = 0;
+  for (const handle of activeCodexProxyHandles()) {
+    disconnectedWebSockets += handle.disconnectWebSocketsForThread?.(threadId) ?? 0;
+  }
   if (disconnectedWebSockets === 0) {
     httpRecoveryReasonByThread.delete(threadId);
     // startup-prewarm 没有稳定 thread header，且 shared app-server 会跨业务 session
@@ -246,7 +255,7 @@ export function armCodexHttpRecovery(args: {
     log.info('codex websocket recovery left to native transport; no scoped socket found', {
       sessionId,
       threadId,
-      reason: rule.id,
+      reason,
     });
     return null;
   }
@@ -262,10 +271,10 @@ export function armCodexHttpRecovery(args: {
   log.info('codex websocket recovery fallback armed', {
     sessionId,
     threadId,
-    reason: rule.id,
+    reason,
     disconnectedWebSockets,
   });
-  return rule.id;
+  return reason;
 }
 
 // codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
@@ -3257,6 +3266,9 @@ function createTransformRequestChain(
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
     buildVisionBridgeProxyTransform(log),
+    // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
+    // This covers native-custom routes and tool-less /responses/compact without changing call_id.
+    normalizeResponsesToolItemIds,
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -3365,9 +3377,26 @@ function createCodexProxyHandle(
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter),
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter).map(
+      (transform): RequestTransform => {
+        // Namespaced Responses use a frozen Provider route. Preserve its native
+        // fields and model; only repair known tool ID mismatches on this path.
+        if (transform === normalizeResponsesToolItemIds) return transform;
+        const scoped: RequestTransform = (body, ctx) =>
+          isCodexCustomProviderNamespacePath(ctx.url) ? null : transform(body, ctx);
+        // Keep adapter rejection and request-state cleanup on ordinary routes.
+        scoped.errorMode = transform.errorMode;
+        scoped.onRequestSettled = transform.onRequestSettled;
+        return scoped;
+      },
+    ),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
-    bypassRequestTransforms: (_body, ctx) => isCodexCustomProviderNamespacePath(ctx.url),
+    bypassRequestTransforms: (_body, ctx) => {
+      const path = parseCodexCustomProviderPath(ctx.url);
+      // Image payloads (including JSON) retain their byte-for-byte bypass.
+      return path.kind !== 'not-custom-provider-route'
+        && !(path.kind === 'route' && path.pathKind === 'responses');
+    },
     transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
       contentType: ctx.responseHeaders['content-type'] ?? '',
       contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',

@@ -31,6 +31,11 @@ describe('isBotToolsetAvailableOnTarget', () => {
       expect(isBotToolsetAvailableOnTarget({
         agentKind,
         remoteHostId: 'host-1',
+        toolsetId: 'xdt_helper',
+      })).toBe(true);
+      expect(isBotToolsetAvailableOnTarget({
+        agentKind,
+        remoteHostId: 'host-1',
         toolsetId: 'browser',
       })).toBe(false);
     }

@@ -17,6 +17,7 @@ export {
 export { ChatBridgeToolContext, type ChatBridgeToolKind, type ChatBridgeToolSpec } from './tool-context.js';
 export {
   createResponsesCustomToolFunctionAdapter,
+  normalizeResponsesToolItemIds,
   type ResponsesCustomToolFunctionAdapter,
 } from './custom-tool-function-adapter.js';
 export {

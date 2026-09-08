@@ -131,6 +131,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
 
   it('reads a fixture through a real commandExecution and returns it without Web Search', async () => {
     const providerRequests: Array<Record<string, unknown>> = [];
+    const codexRequests: Array<Record<string, unknown>> = [];
     const idPrefixViolations: string[] = [];
     let execFunctionName = '';
     const command =
@@ -253,7 +254,10 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
     const adapter = createResponsesCustomToolFunctionAdapter(['exec']);
     const proxy: ProxyHandle = await createAnthropicCompatProxy({
       upstream: providerUrl,
-      transformRequest: [(body, ctx) => adapter.adaptRequest(body, ctx.reqId)],
+      transformRequest: [(body, ctx) => {
+        codexRequests.push(structuredClone(body) as Record<string, unknown>);
+        return adapter.adaptRequest(body, ctx.reqId);
+      }],
       transformResponse: (ctx) =>
         adapter.createResponseTransform(ctx.reqId, {
           contentType: ctx.responseHeaders['content-type'] ?? '',
@@ -374,6 +378,16 @@ stream_max_retries = 0
     expect(firstTools).not.toContainEqual(
       expect.objectContaining({ type: 'custom', name: 'exec' }),
     );
+
+    // Inspect the native replay BEFORE outbound adaptation can hide a response-side mismatch.
+    // This is the same custom-tool history a native compact endpoint would validate.
+    const nativeInput = codexRequests[1]?.input as Array<Record<string, unknown>>;
+    expect(nativeInput).toContainEqual(expect.objectContaining({
+      type: 'custom_tool_call', id: 'ctc_exec_call_1', call_id: 'exec-call-1',
+    }));
+    expect(nativeInput).toContainEqual(expect.objectContaining({
+      type: 'custom_tool_call_output', call_id: 'exec-call-1',
+    }));
 
     const secondInput = providerRequests[1]?.input as Array<Record<string, unknown>>;
     const execOutput = secondInput.find(

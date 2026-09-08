@@ -4793,6 +4793,14 @@ export class CodexAgent extends BaseAgent {
         );
       }
     }
+    const readSessionMcpConfig = (): Record<string, unknown> => {
+      const config = host.getSessionMcpConfig(opts.sessionInstanceId);
+      if (opts.remoteHostId && opts.botRuntimeProfile?.mcpPolicy
+        && typeof config['mcp_servers.cindy_helper.url'] !== 'string') {
+        throw new Error('Remote Codex Bot tools are not ready. Retry after the active remote task finishes.');
+      }
+      return config;
+    };
     let botMcpConfig: Record<string, unknown> = {};
     if (!reviewMode && opts.botRuntimeProfile?.mcpPolicy) {
       try {
@@ -4803,11 +4811,15 @@ export class CodexAgent extends BaseAgent {
         assertCurrentHost('Bot MCP configuration');
         const transports = new Set(Object.entries(asRecord(asRecord(response.config).mcp_servers))
           .filter(([, value]) => hasCodexMcpTransport(value)).map(([name]) => name));
-        for (const [key, value] of Object.entries(host.getSessionMcpConfig(opts.sessionInstanceId))) {
+        for (const [key, value] of Object.entries(readSessionMcpConfig())) {
           const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.(?:url|command)$/.exec(key);
           if (match && typeof value === 'string' && value.trim()) transports.add(match[1]);
         }
         botMcpConfig = buildCodexBotMcpConfigOverrides(opts.botRuntimeProfile.mcpPolicy, transports);
+        // Remote daemons keep this shared transport disabled for ordinary tasks.
+        if (opts.remoteHostId && transports.has('cindy_helper')) {
+          botMcpConfig['mcp_servers.cindy_helper.enabled'] = true;
+        }
         if (!makerMemoryEnabled && transports.has('cindy_memory')) {
           botMcpConfig['mcp_servers.cindy_memory.enabled'] = false;
         }
@@ -5586,8 +5598,19 @@ export class CodexAgent extends BaseAgent {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       const threadContextWindow = effectiveThreadContextWindow(contextLimit);
       const config = {
+        // Apply transport defaults before the per-session Bot capability policy.
+        ...(reviewMode ? {} : readSessionMcpConfig()),
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
+        // Bot memory and delegation belong to its Cindy Profile and Session
+        // tasks, not the shared native home or hidden harness child threads.
+        ...(opts.botRuntimeProfile ? {
+          'features.multi_agent': false,
+          'features.multi_agent_v2': false,
+          'agents.enabled': false,
+          'memories.generate_memories': false,
+          'memories.use_memories': false,
+        } : {}),
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         ...(reviewMode
@@ -5600,7 +5623,6 @@ export class CodexAgent extends BaseAgent {
               'features.remote_plugin': false,
             }
           : {}),
-        ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
         ...(!makerMemoryEnabled && !opts.botRuntimeProfile
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
@@ -5948,6 +5970,15 @@ export class CodexAgent extends BaseAgent {
     let codexThreadModelProviderId: string | undefined;
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
+    const withMcpDiscoveryContext = <T>(run: () => Promise<T>): Promise<T> => {
+      if (reviewMode || !sid || !opts.sessionInstanceId || !this.deps.withCodexMcpDiscoveryContext) return run();
+      return this.deps.withCodexMcpDiscoveryContext({
+        sessionId: sid, sessionInstanceId: opts.sessionInstanceId,
+        workingDir: opts.workingDir, vendorOptions: vo,
+        ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
+      }, run);
+    };
+
     /**
      * Start a replacement thread after the exact provider proof that the
      * persisted thread has no rollout. This is intentionally narrower than a
@@ -5966,9 +5997,9 @@ export class CodexAgent extends BaseAgent {
       };
       acquireHostBindingLeaseIfNeeded();
       assertCurrentHost('thread/start');
-      const resp = await host.request<ThreadStartResponse>(Method.ThreadStart, params, {
+      const resp = await withMcpDiscoveryContext(() => host.request<ThreadStartResponse>(Method.ThreadStart, params, {
         timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-      });
+      }));
       assertCurrentHost('thread/start');
       if (Object.hasOwn(resp, 'serviceTier')) {
         mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -6080,9 +6111,9 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
+        const resp = await withMcpDiscoveryContext(() => host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
           timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-        });
+        }));
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;

@@ -974,7 +974,7 @@ describe('makerChatStore active view tracking', () => {
     await makerChatStore.loadAroundMessage(sessionId, 'hit', { radius: 60 });
     // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
-    expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(sessionId).historyWindowIslands).toHaveLength(1);
     expect(makerChatStore.getLightSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
@@ -994,8 +994,8 @@ describe('makerChatStore active view tracking', () => {
     ]);
     // 阶段二:最新页落地 → 游标交还给它的下沿,往上翻才会穿过孤岛与尾段之间的缺失区间。
     expect(snapshot.oldestMessageId).toBe('latest-page-oldest');
-    // 洞还在,孤岛标记不清 —— 下一次跳转仍会尝试补齐。
-    expect(snapshot.historyWindowHasIsland).toBe(true);
+    // 洞还在,孤岛区间不清 —— 下一次跳转仍会尝试补齐。
+    expect(snapshot.historyWindowIslands).toHaveLength(1);
   });
 
   it('keeps loadOlder history chronological after thinking timestamps are backdated', async () => {

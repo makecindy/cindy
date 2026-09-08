@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { once } from 'node:events';
+import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -2703,13 +2705,13 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
+        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          mockState.stripNonAnthropicFields,
+          expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -2734,6 +2736,10 @@ describe('codex proxy host', () => {
     );
     expect(requestScopedTransforms).toHaveLength(1);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
+    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-1);
+    const body = { model: 'gpt-5', input: [] };
+    strip(body, { url: '/responses' });
+    expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
@@ -2826,6 +2832,139 @@ describe('codex proxy host', () => {
     );
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-encrypted');
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
+  });
+
+  it.each(['shared', 'custom-context', 'control-plane'] as const)(
+    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
+    const host = await freshCodexProxyHost();
+    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const legacy = { model: 'gpt-6', input: [
+      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+    ] };
+    const httpBodies: Array<{ input: typeof legacy.input }> = [];
+    const wsBodies: unknown[] = [];
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      httpBodies.push(body);
+      const valid = body.input[0].id === 'ctc_legacy';
+      res.writeHead(valid ? 200 : 400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(valid ? { output: [] } : { error: { message: errorMessage } }));
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    upstream.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, ws => {
+      ws.on('message', data => {
+        const body = JSON.parse(data.toString());
+        wsBodies.push(body);
+        ws.send(JSON.stringify(body.input ? { error: { message: errorMessage } } : { pong: true }));
+      });
+    }));
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        ...opts,
+        upstream: upstreamUrl,
+        resolveOutboundProxy: () => null,
+        resolveWebSocketUpstream: ctx => opts.resolveWebSocketUpstream?.(ctx) ? upstreamUrl : null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }),
+    );
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    const clients: WebSocket[] = [];
+    try {
+      let proxyUrl: string;
+      if (proxyKind === 'shared') {
+        await host.ensureCodexProxyReady();
+        proxyUrl = host.getCodexProxyEndpoint()!;
+      } else if (proxyKind === 'custom-context') {
+        await host.ensureCodexCustomContextProxyReady('context-recovery', 'oauth-bearer', []);
+        proxyUrl = host.getCodexCustomContextProxyEndpoint('context-recovery');
+      } else {
+        await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
+        proxyUrl = host.getCodexControlPlaneProxyEndpoint('oauth-bearer');
+      }
+      await host.ensureCodexCustomContextProxyReady('context-sibling', 'oauth-bearer', []);
+      host.registerComposed('session-bad-ids', 'thread-bad-ids', 'PRODUCT_PROMPT');
+      host.registerComposed('session-good-ids', 'thread-good-ids', 'PRODUCT_PROMPT');
+      const connect = async (thread: string, endpoint = proxyUrl) => {
+        const client = new WebSocket(endpoint.replace(/^http/, 'ws') + '/v1/responses', { headers: { 'thread-id': thread } });
+        clients.push(client);
+        await once(client, 'open');
+        return client;
+      };
+      const bad = await connect('thread-bad-ids');
+      const good = await connect('thread-good-ids');
+      const independent = await connect('thread-independent', host.getCodexCustomContextProxyEndpoint('context-sibling'));
+      expect(host.armCodexHttpRecovery({ sessionId: 'session-unknown', threadId: 'thread-without-socket', message: errorMessage })).toBeNull();
+      const rejection = once(bad, 'message');
+      bad.send(JSON.stringify(legacy));
+      const [payload] = await rejection;
+      expect(wsBodies[0]).toEqual(legacy); // WS really bypassed the request transforms.
+      expect(httpBodies).toHaveLength(0);
+      const closed = once(bad, 'close');
+      expect(host.armCodexHttpRecovery({ sessionId: 'session-bad-ids', threadId: 'thread-bad-ids', message: JSON.parse(payload.toString()).error.message })).toBe('tool_item_id');
+      await closed;
+      const retry = new WebSocket(proxyUrl.replace(/^http/, 'ws') + '/v1/responses', { headers: { 'thread-id': 'thread-bad-ids' } });
+      clients.push(retry);
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        retry.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode); });
+        retry.once('error', reject);
+      });
+      expect(status).toBe(426);
+      // Native Codex falls back to HTTP after 426. Exercise both ordinary replay and unary compact.
+      for (const endpoint of ['/v1/responses', '/v1/responses/compact']) {
+        const code = await new Promise<number | undefined>((resolve, reject) => {
+          const req = httpRequest(proxyUrl + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'thread-bad-ids' } }, res => {
+            res.resume(); res.once('end', () => resolve(res.statusCode));
+          });
+          req.once('error', reject); req.end(JSON.stringify(legacy));
+        });
+        expect(code).toBe(200);
+      }
+      expect(httpBodies).toHaveLength(2);
+      for (const body of httpBodies) expect(body.input).toEqual([{ ...legacy.input[0], id: 'ctc_legacy' }, legacy.input[1]]);
+      // Unregister must clear the marker and each owning proxy's successful-WS proof.
+      host.unregister('session-bad-ids');
+      host.registerComposed('session-bad-ids', 'thread-bad-ids', 'PRODUCT_PROMPT');
+      const resumed = await connect('thread-bad-ids');
+      const resumedClosed = once(resumed, 'close');
+      host.unregister('session-bad-ids');
+      await resumedClosed;
+      for (const sibling of [good, independent]) {
+        expect(sibling.readyState).toBe(WebSocket.OPEN);
+        const pong = once(sibling, 'message'); sibling.send(JSON.stringify({ ping: true }));
+        expect(JSON.parse((await pong)[0].toString())).toEqual({ pong: true });
+      }
+    } finally {
+      for (const client of clients) { client.on('error', () => {}); client.terminate(); }
+      for (const ws of wss.clients) ws.terminate();
+      host.unregister('session-bad-ids'); host.unregister('session-good-ids');
+      await host.disposeCodexProxy();
+      await new Promise<void>(resolve => wss.close(() => resolve()));
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
+    [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
+    ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[2].id': 'fc_old'. Expected an ID that begins with 'msg'.", null],
+    ["Invalid 'input[2].id': 'unknown_old'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[2].id': 'FC_old'. Expected an ID that begins with 'ctc'.", null],
+    ['invalid_value', null],
+  ])('arms recovery only for repairable tool item errors: %s', async (message, expected) => {
+    const host = await freshCodexProxyHost();
+    const disconnect = vi.fn(() => 1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', disconnectWebSocketsForThread: disconnect, dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    expect(host.armCodexHttpRecovery({ sessionId: 'session-prefix', threadId: 'thread-prefix', message: 'Bad request', additionalDetails: message })).toBe(expected);
+    expect(disconnect).toHaveBeenCalledTimes(expected ? 1 : 0);
   });
 
   it('keeps the parent websocket while observing every subagent over HTTP', async () => {
@@ -3970,7 +4109,7 @@ describe('codex proxy host', () => {
         { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAA' },
         {
           type: 'function_call',
-          id: 'ctc_1',
+          id: 'fc_1',
           name: 'exec',
           arguments: '{"input":"console.log(1)"}',
           call_id: 'call_exec_1',
@@ -4598,6 +4737,30 @@ describe('codex proxy host', () => {
     });
   });
 
+  it.each(['env-key', 'oauth-bearer'] as const)('repairs legacy tool ids in tool-less compact requests (%s)', async (auth) => {
+    const host = await freshCodexProxyHost();
+    host.setCodexProxyAuthInjection(auth);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    const original = {
+      model: 'gpt-6',
+      input: [
+        { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+        { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+      ],
+    };
+    let current: unknown = original;
+    for (const transform of config.transformRequest) {
+      current = transform(current, { reqId: 8001, method: 'POST', url: '/responses/compact', headers: {} }) ?? current;
+    }
+    expect(current).toMatchObject({ input: [
+      { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+    ] });
+    expect(original.input[0].id).toBe('fc_legacy');
+    expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
+  });
+
   it('round-trips exec for a custom Responses Provider that lacks native custom tools', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
@@ -4682,7 +4845,7 @@ describe('codex proxy host', () => {
         responseTransform.once('end', resolve);
         responseTransform.once('error', reject);
       });
-      const call = { type: 'function_call', name: 'exec', call_id: 'call_exec', arguments: '' };
+      const call = { type: 'function_call', id: 'fc_1', name: 'exec', call_id: 'call_exec', arguments: '' };
       responseTransform.end([
         { type: 'response.output_item.added', output_index: 0, item: call },
         { type: 'response.function_call_arguments.done', item_id: 'fc_1', output_index: 0,
@@ -4699,8 +4862,10 @@ describe('codex proxy host', () => {
         'response.custom_tool_call_input.done',
         'response.output_item.done',
       ]);
-      expect(events[1]).toMatchObject({ item_id: 'fc_1', delta: 'text("local")' });
+      expect(events[1]).toMatchObject({ item_id: 'ctc_1', delta: 'text("local")' });
+      expect(events[0].item.id).toBe('ctc_1');
       expect(events[3].item).toEqual({
+        id: 'ctc_1',
         type: 'custom_tool_call',
         name: 'exec',
         call_id: 'call_exec',
@@ -6103,7 +6268,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(21); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(22); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), 工具 ID 校正, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
@@ -7387,6 +7552,80 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     }
   });
 
+  it('repairs namespaced Responses history over HTTP without rewriting native fields or image JSON', async () => {
+    const received: Array<{ path: string; body: string }> = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({ path: req.url ?? '', body: Buffer.concat(chunks).toString('utf8') });
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const host = await freshCodexProxyHost();
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>(
+      '@cindy/anthropic-compat-proxy',
+    );
+    mockState.createAnthropicCompatProxy.mockImplementationOnce(actualProxy.createAnthropicCompatProxy);
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'native-tool-id-provider', name: 'Native tools',
+      runtimes: { codex: {
+        baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+        wireProtocol: 'openai-responses', supportsImageGeneration: true,
+        models: [{ id: 'codex/native-model', name: 'Native model' }],
+      } },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'fake-native-key');
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    try {
+      await host.ensureCodexProxyReady();
+      const endpoint = host.getCodexProxyEndpoint();
+      const body = {
+        model: 'codex/native-model', max_tokens: 123, vendor_field: { retain: true },
+        tools: [{ type: 'custom', name: 'exec', format: { type: 'text' } }],
+        input: [
+          { type: 'custom_tool_call', id: 'fc_legacy', call_id: 'call_same', name: 'exec', input: '你好' },
+          { type: 'custom_tool_call_output', id: 'fco_legacy', call_id: 'call_same', output: 'result' },
+          { type: 'item_reference', id: 'fc_server_owned' },
+          { type: 'compaction', encrypted_content: 'opaque' },
+        ],
+      };
+      const repaired = { ...body, input: body.input.map((item, index) => index < 2
+        ? { ...item, id: index === 0 ? 'ctc_legacy' : 'ctco_legacy' } : item) };
+      const post = async (path: string, raw: string) => {
+        const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/${path}`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+      };
+      await post('responses?native=true', JSON.stringify(body));
+      expect(received[0]?.path).toBe('/v1/responses?native=true');
+      expect(JSON.parse(received[0]!.body)).toEqual(repaired);
+      const unchanged = JSON.stringify(repaired, null, 2);
+      await post('responses', unchanged);
+      expect(received[1]?.body).toBe(unchanged);
+      // Even an image JSON body containing tool-shaped input remains byte-identical.
+      const imageBody = JSON.stringify({ ...body, model: 'gpt-image-2', prompt: 'draw' }, null, 2);
+      await post('images/generations', imageBody);
+      expect(received[2]?.body).toBe(imageBody);
+    } finally {
+      await host.disposeCodexProxy();
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
   it('owns every private custom Provider prefix before opaque body transforms', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -7411,7 +7650,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
           url: '/_cindy/custom-provider/0123456789abcdefabcd/responses',
         },
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       options.routeOpaqueRequestBody({
         url: '/_cindy/custom-provider%2F0123456789abcdefabcd%2Fimages%2Fedits',

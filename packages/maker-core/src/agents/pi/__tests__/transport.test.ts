@@ -9,6 +9,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -204,7 +205,7 @@ describe('createPiStdioTransport', () => {
 
 describe('attachJsonlReader', () => {
   function makeStream() {
-    return new EventEmitter() as EventEmitter & { pipe(): void };
+    return new PassThrough();
   }
 
   it('splits lines across chunk boundaries (UTF-8 safe)', () => {

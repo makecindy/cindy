@@ -6,6 +6,8 @@ import { rmSync } from 'node:fs';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
+import { isBotToolsetAvailableOnTarget } from '../../../../shared/botRemoteCapabilities';
+import { resolveBotAllowedBuiltinPluginIds } from '../../../maker-host/plugins/types';
 
 import {
   botDelegations,
@@ -1212,7 +1214,12 @@ describe('Bot canonical Session lifecycle', () => {
     expect(snapshots).toEqual([]);
   });
 
-  it('resolves every remote capability catalog against the target host', async () => {
+  it.each([
+    { agentKind: 'codex' as const, helperEnabled: true },
+    { agentKind: 'claude-code' as const, helperEnabled: true },
+    { agentKind: 'codex' as const, helperEnabled: false },
+    { agentKind: 'claude-code' as const, helperEnabled: false },
+  ])('resolves remote capabilities and helper guidance from the same catalog ($agentKind, helper=$helperEnabled)', async ({ agentKind, helperEnabled }) => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
       expectedCanonicalSessionId: null,
@@ -1221,7 +1228,7 @@ describe('Bot canonical Session lifecycle', () => {
     const inputs: Array<{ kind: string; remoteHostId?: string }> = [];
     const opts: MakerSessionCreateOpts = {
       id: created.session.id,
-      agentKind: 'codex',
+      agentKind,
       workingDir: '/srv/cindy-bot',
       remoteHostId: 'remote-host-1',
       workspaceKind: 'project',
@@ -1240,7 +1247,10 @@ describe('Bot canonical Session lifecycle', () => {
       },
       listToolsets: async (input) => {
         inputs.push({ kind: 'toolsets', remoteHostId: input.remoteHostId });
-        return [];
+        return [{
+          id: 'xdt_helper', name: 'Helper', essential: true,
+          available: helperEnabled && isBotToolsetAvailableOnTarget({ ...input, toolsetId: 'xdt_helper' }),
+        }];
       },
     });
 
@@ -1249,6 +1259,10 @@ describe('Bot canonical Session lifecycle', () => {
       { kind: 'mcp', remoteHostId: 'remote-host-1' },
       { kind: 'toolsets', remoteHostId: 'remote-host-1' },
     ]);
+    const policy = opts.botRuntimeProfile!.toolsetPolicy;
+    const allowed = resolveBotAllowedBuiltinPluginIds(policy.catalog, policy.configured);
+    expect(allowed.includes('xdt_helper')).toBe(helperEnabled);
+    expect(opts.botProfileContextPrompt?.includes('`start_session_task`')).toBe(helperEnabled);
   });
 
   it('keeps ambient catalogs only as explicit disabled rows under legacy inherit', async () => {

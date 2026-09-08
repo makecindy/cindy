@@ -291,20 +291,15 @@ describe('session runtime control wiring', () => {
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    const guard = setModel.indexOf(
-      "if (internalOptions.source === 'user' && !internalOptions.sessionLockHeld && !isDeviceLinkInvoke()) {",
-    );
-    expect(guard).toBeGreaterThan(-1);
-    expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeGreaterThan(
-      guard,
-    );
-    expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeLessThan(
-      setModel.indexOf("typeof sessionId !== 'string'"),
-    );
+    const ingress = setModel.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
+    expect(ingress).toBeGreaterThan(-1);
+    expect(setModel.slice(0, ingress)).not.toContain('assertTrustedAppRendererEvent(');
+    expect(setModel.slice(ingress)).toContain('assertTrustedSender: (event) => assertTrustedAppRendererEvent(');
+    expect(setModel.slice(ingress)).toContain('isDeviceLinkInvoke,');
     expect(setModel).toContain('!isSupportedRuntimeEffort(selectionEffort)');
     expect(setModel).toContain("internalOptions.source !== 'user'");
     expect(registerSource).toMatch(
-      /handleSetModel\(\s*undefined,\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
+      /handleSetModel\(\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
     );
     expect(setModel).toMatch(/\{\s*source:\s*'user',?\s*\}/);
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');

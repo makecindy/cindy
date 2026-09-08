@@ -601,7 +601,9 @@ describe('claude generation pause boundaries', () => {
     queue.end();
     const events: AgentEvent[] = [];
     for await (const event of queue) events.push(event);
-    const statuses = events.filter((event) => event.type === 'status');
+    const statuses = events.filter((event) => event.type === 'status').map((event) => ({
+      ...event, data: event.data as { outputTokens?: number; generationDurationMs?: number },
+    }));
     expect(statuses.filter((event) => event.data.outputTokens === 100)).toHaveLength(5);
     for (const event of statuses.filter((event) => event.data.outputTokens === 100)) {
       expect(event.data.generationDurationMs).toBe(1_000);

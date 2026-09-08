@@ -244,7 +244,7 @@ async function startSession(
         canUseTool?: CanUseToolFn;
       hooks?: Record<
           string,
-          Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>
+          Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<unknown>> }>
         >;
         env?: Record<string, string>;
       }

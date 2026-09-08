@@ -3768,7 +3768,7 @@ describe('CodexAgent reference directories', () => {
       expect(events.filter((event) => event.type === 'done')).toHaveLength(2),
     );
 
-    const doneEvents = events.filter((event): event is Extract<AgentEvent, { type: 'done' }> =>
+    const doneEvents = events.filter((event) =>
       event.type === 'done',
     );
     expect((doneEvents[0]?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toHaveLength(1);
@@ -5360,7 +5360,15 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       developerInstructions?: string;
+      config?: Record<string, unknown>;
     };
+    expect(params.config).toMatchObject({
+      'features.multi_agent': false,
+      'features.multi_agent_v2': false,
+      'agents.enabled': false,
+      'memories.generate_memories': false,
+      'memories.use_memories': false,
+    });
     expect(params.developerInstructions).toContain('BOT SOUL');
     expect(params.developerInstructions).toContain('BOT HOME CONTEXT');
     expect(params.developerInstructions).not.toContain('GLOBAL CINDY HOST PROMPT');
@@ -5525,7 +5533,7 @@ describe('CodexAgent fast mode service tier', () => {
     await sendPromise;
     await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
 
-    const done = events.find((event): event is Extract<AgentEvent, { type: 'done' }> => event.type === 'done');
+    const done = events.find((event) => event.type === 'done');
     expect((done?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toEqual([
       expect.objectContaining({ inputTokens: 20, outputTokens: 10, priceVariant: 'standard' }),
     ]);
@@ -8480,6 +8488,98 @@ describe('CodexAgent MCP thread context hooks', () => {
     );
   });
 
+  it.each([{ resume: false, remote: false }, { resume: true, remote: false }, { resume: false, remote: true }, { resume: true, remote: true }])('registers discovery identity around native startup ($resume, $remote)', async ({ resume, remote }) => {
+    const order: string[] = [];
+    const deps = createDeps();
+    deps.withCodexMcpDiscoveryContext = async (ctx, run) => {
+      expect(ctx).toMatchObject({ sessionId: 'bot-parent', sessionInstanceId: 'bot-instance' });
+      expect(ctx.remoteHostId).toBe(remote ? 'remote-bot-host' : undefined);
+      order.push('discovery');
+      try { return await run(); } finally { order.push('released'); }
+    };
+    const agent = new CodexAgent(deps);
+    const host = installFakeHost(agent);
+    const original = host.request.getMockImplementation()!;
+    host.request.mockImplementation(async (...args) => {
+      if (args[0] === Method.ThreadStart || args[0] === Method.ThreadResume) {
+        expect(order).toEqual(['discovery']);
+        order.push('native');
+      }
+      return original(...args);
+    });
+    const handle = await agent.startSession({
+      sessionId: 'bot-parent', sessionInstanceId: 'bot-instance', workingDir: '/bot', model: 'gpt-5.4',
+      ...(remote ? { remoteHostId: 'remote-bot-host' } : {}),
+      ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+    });
+    expect(order).toEqual(['discovery', 'native', 'released']);
+    await handle.close();
+  });
+
+  it.each([{ bot: true, resume: false }, { bot: true, resume: true }, { bot: false, resume: false }])(
+    'enables the remote helper transport only for a Bot (bot=$bot, resume=$resume)', async ({ bot, resume }) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, undefined, {
+        userAgent: 'mock-codex/0.145.0',
+        buildSessionMcpConfig: (instance) => ({
+          'mcp_servers.cindy_helper.url': `http://127.0.0.1:47921/mcp/cindy_helper?instance=${instance}`,
+          'mcp_servers.cindy_helper.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+          'mcp_servers.cindy_helper.enabled': false,
+        }),
+      });
+      const handle = await agent.startSession({
+        sessionId: 'remote-bot', sessionInstanceId: 'remote-instance', remoteHostId: 'ssh-host', workingDir: '/bot', model: 'gpt-5.4',
+        ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+        ...(bot ? { botRuntimeProfile: {
+          botId: 'bot-1', profileVersion: 1,
+          skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        } } : {}),
+      });
+      const params = host.request.mock.calls.find(([method]) => method === (resume ? Method.ThreadResume : Method.ThreadStart))?.[1] as { config: Record<string, unknown> };
+      expect(params.config['mcp_servers.cindy_helper.enabled']).toBe(bot);
+      expect(params.config['mcp_servers.cindy_helper.url']).toBe('http://127.0.0.1:47921/mcp/cindy_helper?instance=remote-instance');
+      await handle.close();
+    },
+  );
+
+  it.each([
+    { resume: false, driftAfterRead: false }, { resume: true, driftAfterRead: false },
+    { resume: false, driftAfterRead: true }, { resume: true, driftAfterRead: true },
+  ])('does not start a remote Bot with unapplied helper config (resume=$resume, late=$driftAfterRead)', async ({ resume, driftAfterRead }) => {
+    const agent = new CodexAgent(createDeps());
+    let ready = false;
+    let reads = 0;
+    const host = installFakeHost(agent, (method) => method === Method.ConfigRead
+      ? { config: { mcp_servers: { cindy_helper: { url: 'http://127.0.0.1:47921/mcp/cindy_helper' } } } }
+      : undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      // config/read can still contain an old daemon transport. Only the Host's
+      // current instance-bound config proves its generation has been applied.
+      buildSessionMcpConfig: () => ready || (driftAfterRead && reads++ === 0)
+        ? { 'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47921/mcp/cindy_helper?instance=remote-instance' }
+        : {},
+    });
+    const opts = {
+      sessionId: 'remote-bot', sessionInstanceId: 'remote-instance', remoteHostId: 'ssh-host', workingDir: '/bot', model: 'gpt-5.4',
+      ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+      botRuntimeProfile: {
+        botId: 'bot-1', profileVersion: 1,
+        skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+      },
+    };
+    await expect(agent.startSession(opts)).rejects.toThrow('Remote Codex Bot tools are not ready');
+    expect(host.request.mock.calls.some(([method]) =>
+      method === Method.ThreadStart || method === Method.ThreadResume || method === Method.TurnStart)).toBe(false);
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt)).toBe(false);
+    ready = true;
+    const handle = await agent.startSession(opts);
+    await handle.close();
+  });
+
   it('applies instance-bound MCP URLs to both thread/start and thread/resume', async () => {
     const buildConfig = (sessionInstanceId?: string) => ({
       'mcp_servers.cindy_ghosts.url': `http://127.0.0.1:47100/mcp/cindy_ghosts?instance=${sessionInstanceId}`,
@@ -8885,8 +8985,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
     }
 
-    it('arms HTTP fallback and retries the same zero-output turn once', async () => {
-      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+    it.each([
+      ['encrypted_content', ENCRYPTED_ERROR],
+      ['tool_item_id', "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'."],
+    ])('arms HTTP fallback and retries the same zero-output turn once (%s)', async (reason, recoveryError) => {
+      const armCodexHttpRecovery = vi.fn(() => reason);
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
       const host = installRecoveryHost(agent);
       const handle = await agent.startSession({
@@ -8909,7 +9012,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         willRetry: false,
         error: {
           message: 'Bad request',
-          additionalDetails: ENCRYPTED_ERROR,
+          additionalDetails: recoveryError,
           codexErrorInfo: 'badRequest',
         },
       });
@@ -8921,7 +9024,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         turn: {
           id: 'turn-1',
           status: 'failed',
-          error: { message: ENCRYPTED_ERROR },
+          error: { message: recoveryError },
         },
       });
 
@@ -8935,7 +9038,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         sessionId: 'session-ws-body-recovery',
         threadId: 'start-thread-id',
         message: 'Bad request',
-        additionalDetails: ENCRYPTED_ERROR,
+        additionalDetails: recoveryError,
       });
       expect(
         events.some(
@@ -8951,7 +9054,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         turn: {
           id: 'turn-1',
           status: 'failed',
-          error: { message: ENCRYPTED_ERROR },
+          error: { message: recoveryError },
         },
       });
       expect(handle.getCurrentTurnId?.()).toBe('turn-2');
@@ -9270,8 +9373,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     });
 
-    it('does not replay a recovery error after the turn has produced output', async () => {
-      const armCodexHttpRecovery = vi.fn(() => 'image_generation_id');
+    it.each([
+      ['image_generation_id', 'Image generation items without `id` are not supported for this request.'],
+      ['tool_item_id', "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'."],
+    ])('does not replay a recovery error after the turn has produced output (%s)', async (reason, recoveryError) => {
+      const armCodexHttpRecovery = vi.fn(() => reason);
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
       const host = installRecoveryHost(agent);
       const handle = await agent.startSession({
@@ -9295,7 +9401,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         turnId: 'turn-1',
         willRetry: false,
         error: {
-          message: 'Image generation items without `id` are not supported for this request.',
+          message: recoveryError,
           codexErrorInfo: 'badRequest',
         },
       });
@@ -13709,7 +13815,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (!handlers?.mcpServerElicitation) {
       throw new Error('expected mcpServerElicitation handler');
     }
-    handlers.itemStarted({
+    handlers.itemStarted!({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
       item: {
@@ -13744,7 +13850,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       toolName: 'mcp:cindy_contacts',
       suggestions: undefined,
     });
-    handlers.itemStarted({
+    handlers.itemStarted!({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
       item: {
@@ -13771,7 +13877,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     expect(resolver.mock.calls[1]?.[0]).not.toHaveProperty('toolUseId');
     for (const itemId of ['contacts-call-1', 'contacts-call-2']) {
-      handlers.itemCompleted({
+      handlers.itemCompleted!({
         threadId: 'start-thread-id',
         turnId: 'turn-wechat-mcp',
         item: {
@@ -13783,7 +13889,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         },
       } as never);
     }
-    handlers.itemUpdated({
+    handlers.itemUpdated!({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
       item: {
@@ -23228,7 +23334,7 @@ describe('CodexAgent turn lifecycle', () => {
           turnStartResponse.resolve({ turn: { id: 'turn-retry-state' } });
           await sendPromise;
         } else {
-          handlers.turnStarted({
+          handlers.turnStarted!({
             threadId: 'start-thread-id',
             turn: { id: 'turn-retry-state' },
           });
@@ -30482,7 +30588,7 @@ describe('CodexAgent context window reporting', () => {
           currentTurnResponse.resolve({ turn: { id: 'turn-current-diff' } });
           await sendPromise;
         } else {
-          handlers.turnStarted({
+          handlers.turnStarted!({
             threadId: 'start-thread-id',
             turn: { id: 'turn-current-diff' },
           });
