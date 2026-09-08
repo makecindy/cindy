@@ -38,6 +38,10 @@ function retainedFiles(now = Date.now()): File[] {
   });
 }
 
+export function pruneMobileDebugFiles(): void {
+  retainedFiles();
+}
+
 /** Batch append, bounded rotation. No disk access at import time; caller serializes flush/clear/export. */
 export function appendMobileDebugFile(batch: string): void {
   const files = retainedFiles();

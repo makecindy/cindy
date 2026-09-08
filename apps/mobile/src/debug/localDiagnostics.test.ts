@@ -8,11 +8,14 @@ const files = vi.hoisted(() => ({
   append: vi.fn(),
   clear: vi.fn(),
   copy: vi.fn(),
+  prune: vi.fn(),
 }));
+const lifecycle = vi.hoisted(() => ({ listen: vi.fn() }));
 vi.mock("./mobileDebugFiles", () => ({
   appendMobileDebugFile: files.append,
   clearMobileDebugFiles: files.clear,
   copyMobileDebugFiles: files.copy,
+  pruneMobileDebugFiles: files.prune,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: storage,
@@ -33,7 +36,7 @@ vi.mock("expo-sharing", () => ({
 vi.mock("react-native", () => ({
   AppState: {
     currentState: "active",
-    addEventListener: () => ({ remove() {} }),
+    addEventListener: lifecycle.listen,
   },
 }));
 afterEach(() => vi.useRealTimers());
@@ -46,11 +49,36 @@ beforeEach(() => {
   files.append.mockReset();
   files.clear.mockReset();
   files.copy.mockReset();
+  files.prune.mockReset();
+  lifecycle.listen.mockReset().mockReturnValue({ remove() {} });
   files.remove.mockReset();
   files.share.mockReset().mockResolvedValue(undefined);
   files.available.mockReset().mockResolvedValue(true);
 });
 describe("local journal persistence", () => {
+  it("prunes on disabled startup and foreground without recording or starting a probe", async () => {
+    vi.useFakeTimers();
+    storage.getItem.mockResolvedValue(
+      JSON.stringify({ enabled: false, events: [] }),
+    );
+    files.prune.mockImplementationOnce(() => {
+      throw new Error("storage unavailable");
+    });
+    const log = await import("./localDiagnostics");
+    const stop = log.startLocalDiagnostics();
+    await log.hydrateDiagnostics();
+    await log.flushDiagnostics();
+    expect(files.prune).toHaveBeenCalledTimes(1);
+    const change = lifecycle.listen.mock.calls[0][1];
+    change("background");
+    change("active");
+    await log.flushDiagnostics();
+    expect(files.prune).toHaveBeenCalledTimes(2);
+    expect(files.append).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    stop();
+  });
   it.each([false, true])(
     "keeps the previous preference when saving %s fails",
     async (next) => {

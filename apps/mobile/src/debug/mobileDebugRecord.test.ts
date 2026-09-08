@@ -8,6 +8,28 @@ import { serializeMobileDebugRecord } from "./mobileDebugRecord";
 
 afterEach(() => setMobileDebugSink(undefined));
 describe("detailed phone debug records", () => {
+  it.each([0, 1, 2, 3])(
+    "redacts credentials in JSON encoded %s times, including errors and causes",
+    (depth) => {
+      let text = JSON.stringify({
+        token: 'fixture-value with "quotes" and spaces',
+      });
+      for (let i = 0; i < depth; i++) text = JSON.stringify(text);
+      const error = new Error(text, { cause: new Error(text) });
+      const line = serializeMobileDebugRecord("error", "device-link", [
+        text,
+        error,
+      ]);
+      expect(line).not.toMatch(/fixture-value|quotes|and spaces/);
+      expect(JSON.parse(line).args[1].message).toContain("redacted");
+    },
+  );
+  it("redacts escaped credential values even when their key is not escaped", () => {
+    const line = serializeMobileDebugRecord("error", "device-link", [
+      String.raw`password=\"fixture-value with spaces\"`,
+    ]);
+    expect(line).not.toContain("fixture-value");
+  });
   it("does no work while disabled and never propagates sink failures", () => {
     const sink = vi.fn(() => {
       throw new Error("disk full");

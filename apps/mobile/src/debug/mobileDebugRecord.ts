@@ -5,6 +5,15 @@ const privateKey =
   /authorization|cookie|password|secret|token|api.?key|credential|^(body|payload|prompt|messages?|content|text|transcript|headers|args|input|output|data)$/i;
 const MAX_STRING = 4000;
 export function redactMobileDebugText(value: string): string {
+  // Escaped JSON may contain quoted delimiters inside the secret itself. Drop that text
+  // rather than partially matching a value and leaking its suffix (also handles nested encoding).
+  if (
+    /\\+["']/.test(value.slice(0, MAX_STRING)) &&
+    /\b[\w-]{0,40}(?:token|password|secret|api[-_]?key|authorization|cookie)[\w-]{0,40}["']?\s*[:=]/i.test(
+      value.slice(0, MAX_STRING).replace(/\\+["']/g, '"'),
+    )
+  )
+    return "[redacted escaped credential]";
   return value
     .slice(0, MAX_STRING)
     .replace(/\b(Bearer|Basic)\s+[^\s,;'"}]+/gi, "$1 [redacted]")

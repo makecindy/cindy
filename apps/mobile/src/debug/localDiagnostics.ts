@@ -8,6 +8,7 @@ import {
   appendMobileDebugFile,
   clearMobileDebugFiles,
   copyMobileDebugFiles,
+  pruneMobileDebugFiles,
 } from "./mobileDebugFiles";
 import { getMobileMarkdownRenderMetrics } from "../session/mobileMarkdownRenderMetrics";
 import { getMobileMessageWebViewMetrics } from "../session/mobileMessageWebViewMetrics";
@@ -223,6 +224,11 @@ export async function exportDiagnostics(): Promise<void> {
 
 /** Lifecycle flush plus a low-frequency foreground-only stall probe; no Metro dependency. */
 export function startLocalDiagnostics(): () => void {
+  // Retention is independent of recording. Reuse the write queue and lifecycle, not a timer.
+  const prune = () => {
+    writes = writes.then(pruneMobileDebugFiles).catch(() => {});
+  };
+  prune();
   let stopped = false;
   let state = AppState.currentState;
   let lastTick = performance.now();
@@ -231,6 +237,7 @@ export function startLocalDiagnostics(): () => void {
       mobileDebugLog("info", "lifecycle", "app started", { appState: state });
   });
   const listener = AppState.addEventListener("change", (next) => {
+    if (next === "active") prune();
     state = next;
     lastTick = performance.now();
     mobileDebugLog("info", "lifecycle", `app ${next}`);

@@ -78,6 +78,7 @@ import {
   appendMobileDebugFile,
   clearMobileDebugFiles,
   copyMobileDebugFiles,
+  pruneMobileDebugFiles,
   DEBUG_FILE_BYTES,
 } from "./mobileDebugFiles";
 
@@ -87,6 +88,11 @@ beforeEach(() => {
   disk.closed.mockClear();
 });
 describe("bounded debug files readable from the app container", () => {
+  it("does not create storage when pruning a never-enabled journal", () => {
+    pruneMobileDebugFiles();
+    expect(disk.dirs.size).toBe(0);
+    expect(disk.files.size).toBe(0);
+  });
   it("appends valid detailed lines and exports all chunks, closing input handles", () => {
     appendMobileDebugFile('{"level":"debug"}\n');
     appendMobileDebugFile('{"level":"error"}\n');
@@ -119,8 +125,9 @@ describe("bounded debug files readable from the app container", () => {
     const old = `file:///documents/cindy-debug/mobile-debug-${Date.now() - 8 * 86400_000}-0.ndjson`;
     disk.files.set(old, "expired\n");
     disk.files.set("file:///documents/cindy-debug/unrelated.txt", "keep");
-    appendMobileDebugFile("next\n");
+    pruneMobileDebugFiles();
     expect(disk.files.has(old)).toBe(false);
+    expect([...disk.files.values()]).toContain("recent\n");
     clearMobileDebugFiles();
     expect([...disk.files.entries()]).toEqual([
       ["file:///documents/cindy-debug/unrelated.txt", "keep"],
