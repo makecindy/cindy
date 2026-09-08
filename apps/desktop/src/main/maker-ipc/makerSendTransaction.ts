@@ -38,6 +38,10 @@ import type { MakerSessionCreateOpts } from './sessionRequest.js';
 type CreateOpts = MakerSessionCreateOpts;
 
 export interface BootstrapDirectoryGrantDeps {
+  /** Host-only: a temporary workspace must not turn unavailable grants into revocations. */
+  preservePersistedGrants?: boolean;
+  statDirectory?: (dir: string) => Promise<{ isDirectory(): boolean }>;
+  realpathDirectory?: (dir: string) => Promise<string>;
   readPersistedWritableDirs(sessionId: string): Promise<string[]>;
   persistExistingSession(
     sessionId: string,
@@ -65,10 +69,10 @@ export async function prepareDirectoryGrantsForBootstrap(
     typeof opts.id === 'string' && opts.id
       ? await deps.readPersistedWritableDirs(opts.id)
       : [];
-  const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir);
-  const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir);
+  const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir, deps.statDirectory);
+  const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir, deps.statDirectory);
   const extraDirs = extraValidation.valid;
-  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs);
+  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs, deps.realpathDirectory);
 
   if (opts.extraDirs !== undefined || extraDirs.length > 0) opts.extraDirs = extraDirs;
   if (opts.writableDirs !== undefined || writableDirs.length > 0) opts.writableDirs = writableDirs;
@@ -76,7 +80,7 @@ export async function prepareDirectoryGrantsForBootstrap(
   const changed =
     !sameDirectoryList(requestedExtraDirs, extraDirs) ||
     !sameDirectoryList(requestedWritableDirs, writableDirs);
-  if (!changed || opts.remoteHostId || typeof opts.id !== 'string' || !opts.id) return;
+  if (!changed || deps.preservePersistedGrants || opts.remoteHostId || typeof opts.id !== 'string' || !opts.id) return;
 
   await deps.persistExistingSession(opts.id, { extraDirs, writableDirs });
 }

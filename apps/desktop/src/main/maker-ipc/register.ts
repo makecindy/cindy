@@ -210,7 +210,7 @@ import {
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
 import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
-import { statWorkingDirectory } from '../workdir-probe-host/index.js';
+import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -1052,7 +1052,7 @@ import { handleSessionEvent, type SessionEventDependencies } from './sessionEven
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
-const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: fsp.mkdir, realpath: fsp.realpath }, async (sessionId) =>
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory }, async (sessionId) =>
   ensureDialogueWorkspaceDir(sessionId, Date.now()));
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
@@ -6267,7 +6267,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const didInjectProjectContext =
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
 
+    const usingFallback = !!o.id && !!o.workingDir && !o.remoteHostId &&
+      workingDirectoryRecovery.isFallback(o.id, o.workingDir);
     await prepareDirectoryGrantsForBootstrap(o, {
+      statDirectory: usingFallback ? statWorkingDirectory : undefined,
+      realpathDirectory: usingFallback ? realpathWorkingDirectory : undefined,
+      preservePersistedGrants: usingFallback,
       readPersistedWritableDirs: readSessionWritableDirsFromDb,
       persistExistingSession: async (sessionId, patch) => {
         const [existing] = await getDbClient()
@@ -17376,22 +17381,13 @@ async function checkWorkDirExists(
  * ENOENT 兜底:扫一下 parent 目录,找一个 trim/大小写 后等于目标 basename 的真实条目。
  * 命中的最典型场景是 macOS Finder 里目录名末尾带了不可见空格,而 sessions.ts 写库时
  * 做了 .trim() 把空格砍了 —— DB 里存的路径在磁盘上不存在,但同名带空格的目录是存在的。
- * 失败一律返回 null,不要在错误兜底里再抛新错。
+ * 普通诊断失败返回 null；文件系统不可用交给 recovery 的统一 fallback。
  */
 async function findSimilarDirOnDisk(workingDir: string): Promise<string | null> {
-  try {
-    const parent = path.dirname(workingDir);
-    const target = path.basename(workingDir);
-    if (!parent || parent === workingDir || !target) return null;
-    const entries = await fsp.readdir(parent);
-    const trimMatch = entries.find((n) => n !== target && n.trim() === target.trim());
-    if (trimMatch) return path.join(parent, trimMatch);
-    const ciMatch = entries.find((n) => n !== target && n.toLowerCase() === target.toLowerCase());
-    if (ciMatch) return path.join(parent, ciMatch);
+  return findSimilarWorkingDirectory(workingDir).catch((error) => {
+    if (isUnavailableFilesystemError(error)) throw error;
     return null;
-  } catch {
-    return null;
-  }
+  });
 }
 
 function emitWorkDirMissingError(

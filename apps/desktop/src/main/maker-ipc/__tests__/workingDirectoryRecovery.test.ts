@@ -10,6 +10,30 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it.each(['WORKDIR_PROBE_TIMEOUT', 'EIO', 'EACCES'])('handles a share failing during mkdir: %s', async (code) => {
+    const dir = path.resolve('/share/project');
+    const fallback = path.resolve('/conversation');
+    const allocate = vi.fn(async () => fallback);
+    const mkdir = vi.fn(async () => { throw Object.assign(new Error('write failed'), { code }); });
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async (target) => {
+        if (target === dir) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return { isDirectory: () => true, dev: 1 };
+      }, mkdir,
+    }, allocate);
+    const unavailable = code !== 'EACCES';
+    expect(await recovery.recover('task', dir)).toBe(unavailable);
+    expect(mkdir).toHaveBeenCalledOnce();
+    expect(allocate).toHaveBeenCalledTimes(unavailable ? 1 : 0);
+    expect(recovery.isFallback('task', dir)).toBe(unavailable);
+    if (unavailable) {
+      recovery.consume('task', recovery.peek('task')!);
+      expect(recovery.isFallback('task', fallback)).toBe(true);
+      expect(recovery.resolve('task', dir)).toBe(fallback);
+      expect(recovery.isFallback('task', '/explicit-new-project')).toBe(false);
+    }
+  });
+
   it.runIf(process.platform === 'darwin')('distinguishes a bare /Volumes mount point from an alias to the system disk', async () => {
     const allocate = vi.fn(async () => '/conversation');
     const recovery = createWorkingDirectoryRecovery({

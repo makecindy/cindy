@@ -64,6 +64,9 @@ export function createWorkingDirectoryRecovery(io: {
     resolve(sessionId: string, workingDir: string): string {
       return entryFor(sessionId, workingDir)?.fallback ?? workingDir;
     },
+    isFallback(sessionId: string, workingDir: string): boolean {
+      return !!entryFor(sessionId, workingDir)?.fallback;
+    },
     async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = []): Promise<boolean> {
       entryFor(sessionId, workingDir);
       const sessions = new Map(candidates.map((session) => [session.id, session.workingDir]));
@@ -75,8 +78,20 @@ export function createWorkingDirectoryRecovery(io: {
         pending.set(id, entry);
         return { id, dir, entry };
       });
+      const own = entryFor(sessionId, workingDir);
+      const useFallback = async (): Promise<boolean> => {
+        if (!own || !allocateFallback || pending.get(sessionId) !== own) return false;
+        const fallback = path.resolve(await allocateFallback(sessionId));
+        if (pending.get(sessionId) !== own) return false;
+        pending.set(sessionId, { ...own, fallback, note: [
+          '[Working directory recovery]',
+          `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
+          'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
+          'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
+        ].join('\n') });
+        return true;
+      };
       try {
-        const own = entryFor(sessionId, workingDir);
         if (own?.fallback) {
           try { return (await io.stat(own.fallback)).isDirectory(); } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
@@ -90,15 +105,7 @@ export function createWorkingDirectoryRecovery(io: {
           return true;
         }
         if (own && allocateFallback && await mountUnavailable(workingDir, own)) {
-          const fallback = path.resolve(await allocateFallback(sessionId));
-          if (pending.get(sessionId) !== own) return false;
-          pending.set(sessionId, { ...own, fallback, note: [
-            '[Working directory recovery]',
-            `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
-            'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
-            'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
-          ].join('\n') });
-          return true;
+          return await useFallback();
         }
         // A stale probe must not mistake a file, permission error, or a directory
         // restored by someone else for a missing directory.
@@ -106,7 +113,7 @@ export function createWorkingDirectoryRecovery(io: {
           const stat = await io.stat(workingDir);
           return stat.isDirectory();
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
         const similar = typeof similarPath === 'function' ? await similarPath() : similarPath;
         await io.mkdir(workingDir, { recursive: true });
@@ -130,7 +137,12 @@ export function createWorkingDirectoryRecovery(io: {
           }
         }));
         return true;
-      } catch {
+      } catch (error) {
+        // The share may disappear after stat, including during mkdir. Reuse the
+        // same fallback transition; never retry a timed-out write on the share.
+        if (!own?.fallback && isUnavailableFilesystemError(error)) {
+          return useFallback().catch(() => false);
+        }
         return false;
       }
     },

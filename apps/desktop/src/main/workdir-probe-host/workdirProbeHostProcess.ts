@@ -6,7 +6,8 @@
  * uncancellable libuv work in Electron's main process.
  */
 
-import { stat } from 'node:fs/promises';
+import { stat, mkdir, realpath, readdir } from 'node:fs/promises';
+import path from 'node:path';
 
 import type {
   WorkdirProbeRequest,
@@ -27,22 +28,43 @@ function filesystemErrorCode(error: unknown): string {
     : 'UNKNOWN';
 }
 
+export async function runDirectoryOperation(request: WorkdirProbeRequest): Promise<WorkdirProbeResult> {
+  try {
+    if (request.kind === 'mkdir') {
+      await mkdir(request.dir, { recursive: true });
+      return { ok: true, isDirectory: true };
+    }
+    if (request.kind === 'realpath') {
+      return { ok: true, isDirectory: true, path: await realpath(request.dir) };
+    }
+    if (request.kind === 'similar') {
+      const parent = path.dirname(request.dir);
+      const target = path.basename(request.dir);
+      if (!target || parent === request.dir) return { ok: true, isDirectory: false, path: null };
+      const entries = await readdir(parent);
+      const match = entries.find((n) => n !== target && n.trim() === target.trim()) ??
+        entries.find((n) => n !== target && n.toLowerCase() === target.toLowerCase());
+      return { ok: true, isDirectory: false, path: match ? path.join(parent, match) : null };
+    }
+    const entry = await stat(request.dir);
+    return { ok: true, isDirectory: entry.isDirectory(), device: entry.dev };
+  } catch (error) {
+    return { ok: false, code: filesystemErrorCode(error) };
+  }
+}
+
 if (parentPort) {
   parentPort.on('message', (event) => {
     const request = event.data as Partial<WorkdirProbeRequest>;
     if (
-      request.kind !== 'probe' ||
+      !['probe', 'mkdir', 'realpath', 'similar'].includes(request.kind ?? '') ||
       typeof request.id !== 'number' ||
       typeof request.dir !== 'string' ||
       request.dir.length === 0
     ) {
       return;
     }
-    void stat(request.dir)
-      .then<WorkdirProbeResult, WorkdirProbeResult>(
-        (entry) => ({ ok: true, isDirectory: entry.isDirectory(), device: entry.dev }),
-        (error) => ({ ok: false, code: filesystemErrorCode(error) }),
-      )
+    void runDirectoryOperation(request as WorkdirProbeRequest)
       .then((result) => {
         const response: WorkdirProbeResponse = {
           kind: 'result',
