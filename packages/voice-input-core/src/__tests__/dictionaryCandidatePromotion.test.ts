@@ -27,32 +27,32 @@ function candidates(node: string, aliases: string[]) {
 }
 
 describe('candidate admission', () => {
-  it('third observation admits without a model entry action and retains alias history', () => {
-    const two = candidates('a', ['Slate', 'Slak']);
-    expect(materializeDictionary(two.state).candidates[0].evidenceCount).toBe(2);
-    const third = recordLearningEvent(two.state, two.clock, {
+  it('second observation admits without a model entry action and retains alias history', () => {
+    const first = candidates('a', ['Slate']);
+    expect(materializeDictionary(first.state).candidates[0].evidenceCount).toBe(1);
+    const second = recordLearningEvent(first.state, first.clock, {
       text: 'Slack',
-      aliases: ['Slate'],
+      aliases: ['Slak'],
       stage: 'candidate',
       nowMs: 2000,
     });
-    const view = materializeDictionary(third.state);
+    const view = materializeDictionary(second.state);
     expect(view.candidates).toEqual([]);
-    expect(view.entries[0]).toMatchObject({ text: 'Slack', frequency: 3 });
+    expect(view.entries[0]).toMatchObject({ text: 'Slack', frequency: 2 });
     expect(view.entries[0].aliases.map((a) => [a.text, a.count])).toEqual([
-      ['Slate', 2],
       ['Slak', 1],
+      ['Slate', 1],
     ]);
-    expect(Object.values(third.state.records.slack.incarnations)[0].stage).toBe('entry');
+    expect(Object.values(second.state.records.slack.incarnations)[0].stage).toBe('entry');
   });
 
   it('merged candidate evidence admits once without changing counts or merge algebra', () => {
-    const a = candidates('a', ['Slate', 'Slate']);
+    const a = candidates('a', ['Slate']);
     const b = candidates('b', ['Slak']);
     const merged = mergeSyncStates(a.state, b.state);
-    expect(materializeDictionary(merged).candidates[0].evidenceCount).toBe(3);
+    expect(materializeDictionary(merged).candidates[0].evidenceCount).toBe(2);
     const promoted = promoteEligibleDictionaryCandidates(merged, a.clock, 3000);
-    expect(materializeDictionary(promoted.state).entries[0].frequency).toBe(3);
+    expect(materializeDictionary(promoted.state).entries[0].frequency).toBe(2);
     expect(promoteEligibleDictionaryCandidates(promoted.state, a.clock, 4000).changed).toBe(false);
     expect(materializeDictionary(mergeSyncStates(promoted.state, merged))).toEqual(
       materializeDictionary(promoted.state),
@@ -60,8 +60,8 @@ describe('candidate admission', () => {
   });
 
   it('also admits without aliases and respects deletion', () => {
-    const a = candidates('a', ['', '', '']);
-    expect(materializeDictionary(a.state).entries[0]).toMatchObject({ frequency: 3, aliases: [] });
+    const a = candidates('a', ['', '']);
+    expect(materializeDictionary(a.state).entries[0]).toMatchObject({ frequency: 2, aliases: [] });
     const deleted = deleteTerms(a.state, a.clock, { termKeys: ['slack'], nowMs: 3000 });
     const learned = recordLearningEvent(deleted.state, deleted.clock, {
       text: 'Slack',

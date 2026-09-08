@@ -1,7 +1,7 @@
 import type { DictationDictionaryLearningAction } from './DictationDictionaryAdvisor';
 import { dictionaryTermKey, normalizeDictionaryTermText } from './dictionary-sync/text';
 
-export const DICTIONARY_CANDIDATE_PROMOTION_COUNT = 3;
+export const DICTIONARY_CANDIDATE_PROMOTION_COUNT = 2;
 
 /** One advisor result contributes at most one observation per word and alias. */
 export function coalesceDictionaryLearningActions(
