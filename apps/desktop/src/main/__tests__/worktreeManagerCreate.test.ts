@@ -108,6 +108,14 @@ describe('createWorktree naming authority', () => {
     expect(storeMap.get('session-1')).toEqual(result.ok ? result.meta : undefined);
   });
 
+  it('does not write safe.directory after a successful worktree creation', async () => {
+    await expect(create('no-global-config')).resolves.toMatchObject({ ok: true });
+
+    expect(
+      gitExecMock.mock.calls.some((call) => (call[0] as string[]).includes('safe.directory')),
+    ).toBe(false);
+  });
+
   it('preserves an explicit legal name and still rejects an explicit illegal name', async () => {
     await expect(create('fix-login')).resolves.toMatchObject({
       ok: true,
