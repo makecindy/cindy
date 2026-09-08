@@ -4449,6 +4449,13 @@ export class PiAgent extends BaseAgent {
       const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!) : null;
       const spawnEnv: NodeJS.ProcessEnv = {
         ...(remote ? {} : process.env),
+        ...(typeof this.deps.runtimeConfig.behaviorFlags === 'function'
+          ? this.deps.runtimeConfig.behaviorFlags({
+              credentialMode,
+              sessionProviderId: authProviderId,
+              spawnMode: remote ? 'remote' : 'local',
+            })
+          : this.deps.runtimeConfig.behaviorFlags),
         ...authEnv,
         ...(proxyEnv ?? {}),
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。

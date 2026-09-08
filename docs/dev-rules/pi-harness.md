@@ -50,6 +50,11 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
   Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
+  展示层通过共享 `parseMessageToolUse` 将网关调用还原为既有 MCP 工具名与参数；实时事件、
+  Pi 分支历史和旧持久化消息共用此解析，保留 toolUseId，不改变 Pi 原生 transcript 或授权路径。
+  MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
+  正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
+  仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 
@@ -70,6 +75,11 @@ provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
+
+Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
+Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、
+`CARGO_BUILD_JOBS` 与非 Windows 的 `MAKEFLAGS`；用户已有 env 优先，关闭设置后新进程不注入，
+SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新增 PI 专属开关。
 
 放任 pi 默认(未写 settings.json):`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、
 `compaction.keepRecentTokens`、`defaultProjectTrust`。Cindy 会在每次 startSession 覆写

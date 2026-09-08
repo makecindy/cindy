@@ -581,6 +581,26 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
+  it.each(['local', 'remote'] as const)('passes route context to behavior flags on %s spawn', async (mode) => {
+    const deps = buildDeps();
+    const remoteTransport = deps.getRemotePiTransport!;
+    deps.getRemotePiTransport = async (host, options) => {
+      captured.env = options.env;
+      return remoteTransport(host, options);
+    };
+    const behaviorFlags = vi.fn(({ spawnMode }: { spawnMode?: string }): Record<string, string> =>
+      spawnMode === 'remote' ? { CINDY_TEST_ROUTE: 'remote' } : { VITEST_MAX_THREADS: '2' });
+    deps.runtimeConfig.behaviorFlags = behaviorFlags;
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'flags', workingDir: cwd, model: 'm',
+      ...(mode === 'remote' ? { remoteHostId: 'remote-1' } : {}),
+    });
+    expect(behaviorFlags).toHaveBeenCalledWith(expect.objectContaining({ spawnMode: mode }));
+    expect(captured.env[mode === 'remote' ? 'CINDY_TEST_ROUTE' : 'VITEST_MAX_THREADS'])
+      .toBe(mode === 'remote' ? 'remote' : '2');
+    await handle.close();
+  });
+
   it('lets Pi discover user-installed packages natively instead of gating them on Cindy metadata', async () => {
     const packageRoot = path.join(agentHome, 'future-pi-package-shape');
     mkdirSync(packageRoot, { recursive: true });

@@ -10,6 +10,11 @@ import {
 } from '../toolUseDescriptor';
 
 describe('parseToolName', () => {
+  it('describes persisted Pi MCP wrappers with the same descriptor as direct calls', () => {
+    const args = { query: 'card' };
+    expect(describeToolUse('cindy_mcp_call_tool', { server: 'custom', tool: 'search', args }))
+      .toEqual(describeToolUse('mcp__custom__search', args));
+  });
   it('parses Claude Code mcp__server__tool names', () => {
     expect(parseToolName('mcp__feishu__read_by_url')).toEqual({
       kind: 'mcp',

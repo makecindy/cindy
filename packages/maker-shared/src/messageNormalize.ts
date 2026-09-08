@@ -69,11 +69,24 @@ export function messageNormalizeKey(message: MessageNormalizeSourceMessageLike):
 export function parseMessageToolUse(message: MessageNormalizeSourceMessageLike): MessageNormalizeToolUse {
   const content = readRecord(message.content);
   const toolUseId = readNonEmptyString(message.toolUseId) ?? readNonEmptyString(content?.toolUseId);
-  const toolName = readNonEmptyString(content?.toolName) ?? '';
+  let toolName = readNonEmptyString(content?.toolName) ?? '';
+  let input = content?.input ?? null;
+  // Pi wraps all MCP calls. Normalize live events and persisted history through
+  // the existing descriptor contract; this is not an authorization decision.
+  if (toolName === 'cindy_mcp_call_tool') {
+    const gateway = readRecord(input);
+    const server = readNonEmptyString(gateway?.server);
+    const tool = readNonEmptyString(gateway?.tool);
+    const args = gateway?.args;
+    if (server && tool && (args === undefined || readRecord(args))) {
+      toolName = `mcp__${server}__${tool}`;
+      input = args ?? {};
+    }
+  }
   return {
     toolUseId: toolUseId ?? undefined,
     toolName,
-    input: content?.input ?? null,
+    input,
   };
 }
 

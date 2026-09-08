@@ -1,4 +1,5 @@
 import { basenameRemotePath } from './filePreview.js';
+import { parseMessageToolUse } from './messageNormalize.js';
 import { normalizeDisplayCommand } from './commandDisplay.js';
 import {
   commandIntentFromActions,
@@ -251,6 +252,7 @@ const DETAIL_MAX_CHARS = 80;
  * generic（文件/搜索/Web 类）或空串回退（command 类）。
  */
 export function describeToolUse(toolName: string, input: unknown): ToolUseDescriptor {
+  ({ toolName, input } = parseMessageToolUse({ role: 'tool_use', content: { toolName, input } }));
   const inp = readRecord(input);
 
   const parsed = parseToolName(toolName);

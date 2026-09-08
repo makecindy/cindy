@@ -41,6 +41,25 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  it('projects MCP gateway calls into ordinary tools while keeping result pairing intact', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const input = { ghost_id: 'demo', tool: 'show_card' };
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'card-1',
+      toolName: 'cindy_mcp_call_tool', args: { server: 'cindy', tool: 'ghost_call', args: input },
+    }), queue, ctx);
+    const fullText = JSON.stringify({ xdt_card_id: 'plugin-call' });
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'card-1',
+      toolName: 'cindy_mcp_call_tool', result: { content: [{ type: 'text', text: fullText }] },
+    }), queue, ctx);
+    expect(events.find(e => e.type === 'tool_use')?.data).toEqual({
+      toolUseId: 'card-1', toolName: 'mcp__cindy__ghost_call', input,
+    });
+    expect(events.find(e => e.type === 'tool_result_full')?.data).toMatchObject({
+      toolUseId: 'card-1', fullText,
+    });
+    disposePiTranslateContext(ctx);
+  });
   it('marks only the Cindy subagent tool as a durable lifecycle', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

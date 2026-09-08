@@ -26,6 +26,28 @@ function message(patch: Partial<FixtureMessage> & Pick<FixtureMessage, 'id' | 'r
 }
 
 describe('message normalize shared model', () => {
+  it('unwraps Pi MCP calls without changing their identity or nested arguments', () => {
+    const input = { ghost_id: 'demo', tool: 'show', args: { value: 1 } };
+    const raw = message({ id: 'pi', role: 'tool_use', toolUseId: 'call-pi', content: {
+      toolName: 'cindy_mcp_call_tool', input: { server: 'cindy', tool: 'ghost_call', args: input },
+    } });
+    const tool = parseMessageToolUse(raw);
+    expect(tool).toEqual({ toolUseId: 'call-pi', toolName: 'mcp__cindy__ghost_call', input });
+    expect(tool.input).toBe(input);
+    expect(parseMessageToolUse({ ...raw, content: tool })).toEqual(tool);
+    expect((raw.content as { toolName: string }).toolName).toBe('cindy_mcp_call_tool');
+    expect(parseMessageToolUse({ role: 'tool_use', content: {
+      toolName: 'cindy_mcp_call_tool', input: { server: 'custom', tool: 'status' },
+    } })).toMatchObject({ toolName: 'mcp__custom__status', input: {} });
+  });
+
+  it.each([null, [], {}, { server: 'cindy' }, { server: 'cindy', tool: 'ghost_call', args: [] }])(
+    'preserves malformed gateway inputs for diagnostics: %j', (input) => {
+      expect(parseMessageToolUse({ role: 'tool_use', content: { toolName: 'cindy_mcp_call_tool', input } }))
+        .toMatchObject({ toolName: 'cindy_mcp_call_tool', input });
+    },
+  );
+
   it('builds text previews from desktop content shapes', () => {
     expect(messageContentToPreview('plain')).toBe('plain');
     expect(messageContentToPreview([
