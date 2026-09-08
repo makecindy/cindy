@@ -252,8 +252,12 @@ export function expandedRegistryEntries(
     return [...groups.values()].map((value, index) => {
       let id = entry.id;
       if (index > 0) {
-        id = `${entry.id}::route-${index + 1}`;
-        while (usedIds.has(id)) id += "~";
+        let collision = 0;
+        do {
+          const suffix = `::route-${index + 1}${collision ? `~${collision}` : ""}`;
+          id = `${entry.id.slice(0, 256 - suffix.length)}${suffix}`;
+          collision += 1;
+        } while (usedIds.has(id));
         usedIds.add(id);
       }
       const agents = new Set(value.routes.flatMap((route) => route.agents));
@@ -275,6 +279,7 @@ export function expandedRegistryEntries(
       };
       if (Object.keys(perAgent).length) next.perAgent = perAgent;
       else delete next.perAgent;
+      if (!next.newSessionDefault?.length) delete next.newSessionDefault;
       return next;
     });
   });

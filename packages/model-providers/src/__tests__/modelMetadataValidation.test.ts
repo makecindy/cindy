@@ -22,6 +22,60 @@ function fixture(): ModelRegistry {
 }
 
 describe("V4 metadata validation boundaries", () => {
+  it.each([1, 247, 248, 256])(
+    "keeps split routes valid with a %i-character ID and reserved ID collisions",
+    (length) => {
+      const r = fixture();
+      const entry = r.models[0];
+      entry.id = "a".repeat(length);
+      entry.newSessionDefault = ["codex"];
+      entry.perAgent = { codex: { contextWindow: 1000 } };
+      entry.routes.push({
+        providerId: "other",
+        modelId: "route",
+        agents: ["claude-code"],
+        defaults: { contextWindow: 2000 },
+      });
+      const projectedId = entry.id.slice(0, 247) + "::route-2";
+      r.models.push({
+        id: projectedId,
+        name: "Reserved",
+        routes: [
+          { providerId: "reserved", modelId: "reserved", agents: ["codex"] },
+        ],
+      });
+      const expanded = expandedRegistryEntries(r);
+      expect(expanded).toHaveLength(3);
+      expect(expanded[0].id).toBe(entry.id);
+      expect(expanded[0].newSessionDefault).toEqual(["codex"]);
+      expect(expanded[1]).not.toHaveProperty("newSessionDefault");
+      expect(expanded[1]).not.toHaveProperty("perAgent");
+      expect(expanded[2].id).toBe(projectedId);
+      expect(new Set(expanded.map((model) => model.id)).size).toBe(3);
+      expect(expanded.every((model) => model.id.length <= 256)).toBe(true);
+      expect(expandedRegistryEntries(r)).toEqual(expanded);
+      expect(parseModelRegistry(r).ok).toBe(true);
+      for (const schemaVersion of [2, 3] as const) {
+        const legacy = expanded.map(({ modelRef, ...model }) => ({
+          ...model,
+          routes: model.routes.map(
+            ({ defaults, forceOverrides, overrideReason, ...route }) => route,
+          ),
+        }));
+        expect(
+          parseModelRegistry({
+            schemaVersion,
+            updatedAt: r.updatedAt,
+            models: legacy,
+          }).ok,
+        ).toBe(true);
+      }
+      // Projection does not mutate the original defaults or route membership.
+      expect(entry.newSessionDefault).toEqual(["codex"]);
+      expect(entry.routes).toHaveLength(2);
+    },
+  );
+
   it.each([
     ["name", 256],
     ["group", 128],
