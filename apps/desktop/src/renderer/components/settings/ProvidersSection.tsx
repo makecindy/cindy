@@ -49,6 +49,7 @@ import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import {
@@ -75,6 +76,10 @@ import {
 import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
+import {
+  ProviderAccountUsageModule,
+  type ProviderAccountUsageRuntimeView,
+} from './ProviderAccountUsageModule';
 import {
   requestXaiSubscriptionRefresh,
   useXaiSubscriptionUsage,
@@ -1737,14 +1742,44 @@ function OllamaHeader({ provider, onDelete }: { provider: ProviderView; onDelete
 
 function CustomProviderHeader({
   provider,
+  accountUsageMutationRevision,
   onEdit,
   onDelete,
 }: {
   provider: ProviderView;
+  accountUsageMutationRevision: number;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const accountUsageAgents = provider.agents.filter(
+    (agent) => provider.routing[agent]?.accountUsage !== undefined,
+  );
+  // 稳定字符串而非整个 ProviderView：目录每次重建都会换对象引用，但账户查询身份
+  // 只跟 provider、连接态、编辑代次和各 runtime 的非敏感端点配置走（PR #3472 review）。
+  const accountUsageRevision = [
+    provider.id,
+    provider.connected ? '1' : '0',
+    accountUsageMutationRevision,
+    ...accountUsageAgents.flatMap((agent) => [
+      agent,
+      provider.routing[agent]?.upstream ?? '',
+      provider.routing[agent]?.accountUsage?.integrationId ?? '',
+    ]),
+  ].join('\0');
+  const accountUsage = useProviderAccountUsage(
+    provider.id,
+    accountUsageAgents,
+    accountUsageRevision,
+  );
+  const accountUsageRuntimes = accountUsageAgents.map((agent) => {
+    const state = accountUsage.states[agent];
+    return {
+      agent,
+      result: state?.result ?? null,
+      refreshing: state?.refreshing ?? true,
+    } satisfies ProviderAccountUsageRuntimeView;
+  });
   const [loggingIn, setLoggingIn] = useState(false);
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
@@ -1846,6 +1881,14 @@ function CustomProviderHeader({
         )
       }
       detail={loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined}
+      assetModule={
+        accountUsageRuntimes.length > 0 ? (
+          <ProviderAccountUsageModule
+            runtimes={accountUsageRuntimes}
+            onRefresh={accountUsage.refresh}
+          />
+        ) : undefined
+      }
     />
   );
 }
@@ -2131,6 +2174,7 @@ export function ProvidersSection() {
         focusAgent?: AgentKind;
       }
   >(null);
+  const [accountUsageMutationRevision, setAccountUsageMutationRevision] = useState(0);
   const [focusedModel, setFocusedModel] = useState<{
     providerId: string;
     modelId: string;
@@ -2607,6 +2651,7 @@ export function ProvidersSection() {
     return (
       <CustomProviderHeader
         provider={p}
+        accountUsageMutationRevision={accountUsageMutationRevision}
         onEdit={() => setDialog({ mode: 'edit', config: providerViewToCustomProviderConfig(p) })}
         onDelete={() => void handleDelete(p)}
       />
@@ -2969,6 +3014,9 @@ export function ProvidersSection() {
           returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}
           onClose={() => setDialog(null)}
           onSaved={() => {
+            if (dialog.mode === 'edit') {
+              setAccountUsageMutationRevision((revision) => revision + 1);
+            }
             setDialog(null);
             refetch();
           }}

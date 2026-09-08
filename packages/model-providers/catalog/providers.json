@@ -420,6 +420,7 @@
       "regionHint": "global",
       "runtimes": {
         "claude-code": {
+          "accountUsage": { "integrationId": "openrouter-key-usage-v1" },
           "baseUrl": "https://openrouter.ai/api",
           "models": [
             {
@@ -438,6 +439,7 @@
           ]
         },
         "codex": {
+          "accountUsage": { "integrationId": "openrouter-key-usage-v1" },
           "baseUrl": "https://openrouter.ai/api/v1",
           "models": [
             {
@@ -451,6 +453,7 @@
           ]
         },
         "pi": {
+          "accountUsage": { "integrationId": "openrouter-key-usage-v1" },
           "baseUrl": "https://openrouter.ai/api/v1",
           "wireProtocol": "openai-chat",
           "modelsUrl": "https://openrouter.ai/api/v1/models",
@@ -478,6 +481,7 @@
       "docsUrl": "https://api-docs.deepseek.com/guides/anthropic_api",
       "runtimes": {
         "claude-code": {
+          "accountUsage": { "integrationId": "deepseek-balance-v1" },
           "baseUrl": "https://api.deepseek.com/anthropic",
           "models": [
             {
@@ -494,6 +498,7 @@
           "modelsUrl": "https://api.deepseek.com/models"
         },
         "codex": {
+          "accountUsage": { "integrationId": "deepseek-balance-v1" },
           "baseUrl": "https://api.deepseek.com",
           "wireProtocol": "openai-chat",
           "models": [
@@ -511,6 +516,7 @@
           "modelsUrl": "https://api.deepseek.com/models"
         },
         "pi": {
+          "accountUsage": { "integrationId": "deepseek-balance-v1" },
           "baseUrl": "https://api.deepseek.com",
           "wireProtocol": "openai-chat",
           "modelsUrl": "https://api.deepseek.com/models",
