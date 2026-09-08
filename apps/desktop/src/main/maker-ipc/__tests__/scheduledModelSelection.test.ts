@@ -67,6 +67,14 @@ describe('saved automation model selection at dispatch', () => {
     expect(deps.switchHarness).not.toHaveBeenCalled();
     expect(deps.applyModel).not.toHaveBeenCalled();
   });
+  it('clears stale Fast before switching Harness or applying the saved selection', async () => {
+    const deps = fixture();
+    deps.resolveSelection.mockImplementation(async (choice) => resolveScheduledModelSelection(choice, [provider('custom')]));
+    await applyScheduledModelSelection({ ...selection, providerId: null, fastMode: true }, deps);
+    const expected = { ...selection, effort: 'medium', fastMode: false };
+    expect(deps.switchHarness).toHaveBeenCalledWith(expected);
+    expect(deps.applyModel).toHaveBeenCalledWith(expected);
+  });
   it('rejects an unsupported bound Harness before route preparation or runtime mutation', async () => {
     const deps = { ...fixture(), getTarget: vi.fn(async () => ({
       agentKind: 'codex' as const, status: 'active', remoteHostId: 'ssh-host',
@@ -106,6 +114,14 @@ describe('saved effort uses the selected provider and Harness catalog copy', () 
     expect(resolveScheduledModelSelection({ ...selection, effort: 'high' }, [
       provider('custom', { efforts: [], defaultEffort: undefined }),
     ]).effort).toBeNull();
+  });
+  it.each([true, false, undefined])('uses only the selected route Fast capability (%s)', (supportsFastMode) => {
+    const selected = provider('custom', { supportsFastMode });
+    selected.models.codex = [{ ...selected.models.pi![0]!, supportsFastMode: true }];
+    const providers = [provider('other', { supportsFastMode: true }), selected];
+    expect(resolveScheduledModelSelection({ ...selection, fastMode: true }, providers).fastMode)
+      .toBe(supportsFastMode === true);
+    expect(resolveScheduledModelSelection(selection, providers).fastMode).toBe(false);
   });
 });
 

@@ -31,7 +31,7 @@ export function assertScheduledHarnessSupported(
   }
 }
 
-/** Saved selections may outlive catalog effort tiers; resolve the actual route first. */
+/** Saved selections may outlive catalog effort/Fast support; resolve the actual route first. */
 export function resolveScheduledModelSelection(
   selection: ScheduledModelSelection,
   providers: ProviderView[],
@@ -43,7 +43,12 @@ export function resolveScheduledModelSelection(
   if (!provider?.connected || !model) {
     throw new Error(`Scheduled model "${selection.model}" is unavailable from provider "${providerId ?? 'default'}"`);
   }
-  return { ...selection, providerId, effort: resolveCompatibleSessionRuntimeEffort(model, selection.effort) };
+  return {
+    ...selection,
+    providerId,
+    effort: resolveCompatibleSessionRuntimeEffort(model, selection.effort),
+    fastMode: selection.fastMode && model.supportsFastMode === true,
+  };
 }
 
 /** Reuse the ordinary history handoff; never stage an automation intent on a busy task. */
