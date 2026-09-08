@@ -112,9 +112,8 @@ import {
   formatRemoteError,
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
-import { resolveConnectionBannerSyncActionVisibility } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerSyncActionVisibility, resolveEffectiveHomeConnectionError } from '@/components/connectionBannerVisibility';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -1814,7 +1813,9 @@ function HomeScreenContent() {
     metricCount: 3,
     screenWidth,
   });
-  const connectionError = describeRemoteError(error);
+  const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
+  const effectiveHomeError = resolveEffectiveHomeConnectionError(error, homeDeviceUnresponsive);
+  const connectionError = describeRemoteError(effectiveHomeError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;
@@ -1842,18 +1843,17 @@ function HomeScreenContent() {
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
   const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
-  const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
-  const homeRequestAutoRecovering = isAutoRecoveringRemoteError(error);
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
     deviceUnresponsive: homeDeviceUnresponsive,
     hasRequestError: connectionError !== null,
-    requestErrorAutoRecovering: homeRequestAutoRecovering,
+    // loadHome has no outer retry after its bounded REST retries are exhausted.
+    requestErrorAutoRecovering: false,
   });
   const showHomeRecoveryProgress = (!activeConnectionIssue
     || activeConnectionIssue.kind === 'unstable' || activeConnectionIssue.kind === 'replaced')
-    && (status === 'connecting' || homeDeviceUnresponsive || homeRequestAutoRecovering);
+    && (status === 'connecting' || homeDeviceUnresponsive);
   const connectionTone = activeConnectionIssue
     ? 'off'
     : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
@@ -2562,7 +2562,7 @@ function HomeScreenContent() {
           >
             <RefreshCw color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
           </Pressable> : showHomeRecoveryProgress ? (
-            <ConnectionRecoveryProgress accessibilityLabel={connectionCopy ? `${connectionTitle} · ${connectionCopy}` : connectionTitle} />
+            <ConnectionRecoveryProgress />
           ) : null}
         </View>
         ) : null}

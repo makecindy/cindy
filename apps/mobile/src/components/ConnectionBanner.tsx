@@ -177,31 +177,31 @@ export function ConnectionBanner({
           testID="connection.syncButton"
         />
       ) : showRecoveryProgress ? (
-        <ConnectionRecoveryProgress accessibilityLabel={`${title} · ${copy}`} />
+        <ConnectionRecoveryProgress />
       ) : null}
     </View>
   );
 }
 
 /** Shared by the Home connection row and detail banners; never a press target. */
-export function ConnectionRecoveryProgress({ accessibilityLabel }: { accessibilityLabel: string }) {
+export function ConnectionRecoveryProgress() {
   const { colors } = useTheme();
   const reduceMotion = useReduceMotionEnabled();
-  return reduceMotion === false ? (
+  return <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+    {reduceMotion === false ? (
     <ActivityIndicator
-      accessibilityLabel={accessibilityLabel}
       color={colors.textSecondary}
       size="small"
       testID="connection.recoveryProgress"
     />
   ) : (
     <LoaderCircle
-      accessibilityLabel={accessibilityLabel}
       color={colors.textSecondary}
       size={iconSize.action}
       testID="connection.recoveryProgressStatic"
     />
-  );
+    )}
+  </View>;
 }
 
 function ConnectionSyncButton({

@@ -50,6 +50,12 @@ export function resolveConnectionBannerSyncActionVisibility(input: {
  * (banner 的 unresponsive 分支优先,error 本就不会被展示)。
  * hook 与组件都要用同一份结果,否则会出现「可见但无内容可渲染」的空壳。
  */
+/** Home joins device failures with ；. Preserve other failures when a circuit error expires. */
+export function resolveEffectiveHomeConnectionError(error: string | null, deviceUnresponsive: boolean): string | null {
+  if (!error || deviceUnresponsive) return error;
+  return error.split('；').filter((failure) => !failure.includes('DEVICE_UNRESPONSIVE')).join('；') || null;
+}
+
 export function resolveEffectiveConnectionError(
   error: string | null,
   deviceUnresponsive: boolean,
