@@ -22416,6 +22416,40 @@ describe('CodexAgent native fork anchor events', () => {
 });
 
 describe('CodexAgent.forkSdkSession', () => {
+  it('forks failed paginated history without rollback when no UI anchor was saved', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadTurnsList) return {
+        data: [
+          { id: 'retry-2', status: 'failed', startedAt: 400 }, { id: 'retry-1', status: 'failed', startedAt: 300 },
+          { id: 'hidden-retry', status: 'failed', startedAt: 200 },
+          { id: 'failed-boundary', status: 'interrupted', startedAt: 100 },
+        ], nextCursor: null,
+      };
+      if (method === Method.ThreadRollback) throw new Error('paginated threads do not support thread/rollback');
+    }, { userAgent: 'mock-codex/0.153.4' });
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source', upToMessageId: undefined, tailTurnsToDrop: 2, forkAtTimestampMs: 110_123,
+    })).resolves.toMatchObject({ newSdkSessionId: 'fork-thread-id', usedNativeForkAnchor: true });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'source', lastTurnId: 'failed-boundary', excludeTurns: true,
+    });
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+  });
+
+  it('does not allocate a child or fall back to rollback if native boundary lookup fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadTurnsList) throw new Error('native read failed');
+    }, { userAgent: 'mock-codex/0.153.4' });
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source', upToMessageId: undefined, tailTurnsToDrop: 1,
+    })).rejects.toMatchObject({ stage: 'source-prepare' });
+    expect(host.request).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).not.toHaveBeenCalled();
+  });
+
   it('keeps a startup cause and records a concurrent host retirement failure', async () => {
     const cause = new Error('ECONNRESET');
     const agent = new CodexAgent(createDeps());

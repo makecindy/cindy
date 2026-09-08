@@ -340,6 +340,7 @@ describe('forkSessionAtMessage', () => {
       providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
+      forkAtTimestampMs: 2500,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。
@@ -449,7 +450,7 @@ describe('forkSessionAtMessage', () => {
     ]);
   });
 
-  it('codex path: keeps the legacy fork path when the latest copied turn has no native anchor', async () => {
+  it('codex path: supplies event time for native lookup when the latest copied turn has no anchor', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorUser = makeMessageRow({ id: 'user-1', role: 'user', createdAt: 2000 });
     const olderAnchoredAssistant = makeMessageRow({
@@ -479,7 +480,10 @@ describe('forkSessionAtMessage', () => {
       makeSourceRow({ agentKind: 'codex', sdkSessionId: 'legacy-codex-thread' }),
     ]);
     selectQueue.push([target]);
-    selectQueue.push([priorUser, olderAnchoredAssistant, priorAssistant]);
+    selectQueue.push([priorUser, olderAnchoredAssistant, priorAssistant,
+      // Error rows have a synthetic display timestamp, not native event time.
+      makeMessageRow({ id: 'failed-error', role: 'error', createdAt: 2600 }),
+    ]);
     selectQueue.push([
       makeSourceRow({
         agentKind: 'codex',
@@ -498,6 +502,9 @@ describe('forkSessionAtMessage', () => {
     expect(forkSdkSessionMock).toHaveBeenCalledWith(
       'codex',
       expect.not.objectContaining({ lastTurnId: expect.anything() }),
+    );
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex', expect.objectContaining({ forkAtTimestampMs: 2500 }),
     );
     const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
       nativeForkAnchorSessionMap?: Array<[string, string]>;
@@ -2052,6 +2059,7 @@ describe('forkSessionAtMessage', () => {
       providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 1,
+      forkAtTimestampMs: 2500,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。

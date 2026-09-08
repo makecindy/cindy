@@ -2918,6 +2918,48 @@ describe('codex proxy host', () => {
     }
   });
 
+  it.each(['custom-context', 'control-plane'] as const)(
+    'recovers encrypted history on a %s proxy while preserving other threads', async (kind) => {
+      const host = await freshCodexProxyHost();
+      const sharedDisconnect = vi.fn(() => 0);
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210', disconnectWebSocketsForThread: sharedDisconnect,
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sockets = new Set(['thread-target', 'thread-sibling']);
+      const disconnect = vi.fn((id: string) => Number(sockets.delete(id)));
+      const forget = vi.fn();
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43211', disconnectWebSocketsForThread: disconnect,
+        forgetWebSocketStateForThread: forget, dispose: vi.fn(async () => undefined),
+      });
+      if (kind === 'custom-context') {
+        await host.ensureCodexCustomContextProxyReady('context-target', 'oauth-bearer', []);
+      } else {
+        await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
+      }
+      host.registerComposed('session-target', 'thread-target', 'PRODUCT_PROMPT');
+      const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[1][0];
+      expect(host.armCodexHttpRecovery({
+        sessionId: 'session-target', threadId: 'thread-target', message: 'invalid_encrypted_content',
+      })).toBe('encrypted_content');
+      expect(disconnect).toHaveBeenCalledWith('thread-target');
+      expect(sockets).toEqual(new Set(['thread-sibling']));
+      expect(proxyOpts.resolveWebSocketUpstream({
+        url: '/v1/responses', headers: { 'thread-id': 'thread-target' },
+      })).toBeNull();
+      expect(proxyOpts.resolveWebSocketUpstream({
+        url: '/v1/responses', headers: { 'thread-id': 'thread-sibling' },
+      })).toBe('https://chatgpt.com/backend-api/codex');
+      host.unregister('session-target');
+      expect(forget).toHaveBeenCalledExactlyOnceWith('thread-target');
+      expect(proxyOpts.resolveWebSocketUpstream({
+        url: '/v1/responses', headers: { 'thread-id': 'thread-target' },
+      })).toBe('https://chatgpt.com/backend-api/codex');
+    },
+  );
+
   it('keeps native websocket behavior when no scoped socket can be recovered safely', async () => {
     const host = await freshCodexProxyHost();
     const disconnectWebSocketsForThread = vi.fn(() => 0);
