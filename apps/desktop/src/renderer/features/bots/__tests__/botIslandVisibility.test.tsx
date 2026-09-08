@@ -88,8 +88,17 @@ describe.each([
 
   it('reports on refocus and clears on unmount, without background reads', async () => {
     vi.mocked(document.hasFocus).mockReturnValue(false);
+    let resolveGate!: (value: never) => void;
+    const pending = new Promise((resolve) => { resolveGate = resolve; });
+    if (View === BotSessionView) get.mockReturnValueOnce(pending);
+    else history.mockReturnValueOnce(pending);
     const view = render(<View />);
-    await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
+    expect(view.queryByTestId('chat')).toBeNull();
+    expect(report).not.toHaveBeenCalledWith('chat-a');
+    // Settle ownership and flush its passive effects before dispatching focus.
+    // Observing the chat DOM alone can precede the visibility effect's commit.
+    await act(async () => resolveGate((View === BotSessionView ? profile : [{ id: 'chat-a' }]) as never));
+    expect(view.getByTestId('chat')).toBeTruthy();
     expect(report).not.toHaveBeenCalledWith('chat-a');
     vi.mocked(document.hasFocus).mockReturnValue(true);
     act(() => window.dispatchEvent(new Event('focus')));
