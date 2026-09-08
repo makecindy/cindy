@@ -1,3 +1,4 @@
+import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
 /**
  * catalog-to-descriptors —— 把 @cindy/model-providers 目录派生成 maker-core 的 per-agent
  * availableModels（ModelDescriptor[]）。
@@ -175,6 +176,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
       // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
       const userProvider = provider.source === 'user';
+      if (isLegacyGptContextProfile(provider, m.id)) continue;
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
       const descriptor = toDescriptor(m, agent, {
         preserveExplicitPiEfforts:

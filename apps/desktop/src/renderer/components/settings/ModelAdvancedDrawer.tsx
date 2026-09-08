@@ -360,13 +360,19 @@ export function ModelAdvancedDrawer({
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
   const currentEffort = preferredEffort && commonEfforts.some((effort) => effort === preferredEffort)
     ? preferredEffort : commonEfforts[0] ?? null;
-  const shownEfforts = efforts;
+  const shownEfforts = EFFORT_ORDER.filter((effort) =>
+    row.avail.some((agent) => {
+      const model = row.byAgent[agent];
+      return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
+    }),
+  );
   /**
    * 推理强度的存储是 per (agent, provider, model) 的。这里按显示轴同一条哲学
    * **一次写该模型全部可用引擎** —— 用户在这个面板里选的是「这个模型默认想多用力」,
    * 同一选择写入全部可调引擎；不支持的档位只做能力适配，不留下另一套旧默认值。
    */
   const applyEffort = (effort: Effort) => {
+    if (!efforts.includes(effort)) return;
     for (const agent of row.avail) {
       const model = row.byAgent[agent];
       if (!model) continue;
@@ -573,7 +579,7 @@ export function ModelAdvancedDrawer({
                     </Section>
                   )}
 
-                  {conversational && efforts.length > 0 && (
+                  {conversational && shownEfforts.length > 0 && (
                     <Section
                       title={t('settings.providers.models.advanced.defaultEffort')}
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}

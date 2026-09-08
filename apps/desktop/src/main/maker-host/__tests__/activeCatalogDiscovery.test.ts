@@ -95,6 +95,51 @@ describe('active-catalog discovered augment', () => {
     setDiscoveredProviderMediaModels('xai', null);
   });
 
+  it('keeps native subscription maxima through Registry refresh and Claude projection', () => {
+    for (const window of [272000, 400000]) {
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      const entry = catalog.modelRegistry!.models.find((model) => model.id === 'openai/gpt-6-astra')!;
+      entry.contextWindow = window;
+      catalog.modelRegistry!.updatedAt = `2099-01-01T00:00:0${window === 272000 ? 1 : 2}.000Z`;
+      setActiveCatalog(catalog, { authorityCatalog: catalog });
+      setDiscoveredCodexModels([{
+        ...fake('gpt-6-astra'), contextWindow: 272000, contextWindowMax: 872000,
+        contextWindowVerified: true, supportsImageInput: false, supportsFastMode: false,
+      }]);
+      const openai = getActiveCatalog().providers.find((provider) => provider.id === 'openai')!;
+      for (const agent of ['codex', 'claude-code'] as const) {
+        expect(openai.models[agent]!.find((model) => model.id.endsWith('gpt-6-astra'))).toMatchObject({
+          contextWindow: 272000, contextWindowMax: 872000, supportsImageInput: false, supportsFastMode: false,
+        });
+      }
+      // Independent Pi metadata does not acquire Codex-only native limits.
+      expect(openai.models.pi!.find((model) => model.id.endsWith('gpt-6-astra'))?.contextWindowMax)
+        .not.toBe(872000);
+    }
+  });
+
+  it('partial live lists retain cached metadata, replace membership, and respect auth clearing', () => {
+    setActiveCatalog(bundledWithoutRegistry(), { authorityCatalog: bundledWithoutRegistry() });
+    const cached = {
+      ...fake('gpt-99'), contextWindow: 200000, contextWindowMax: 900000,
+      contextWindowVerified: true, supportsImageInput: false, supportsFastMode: true,
+    };
+    setDiscoveredCodexModels([cached, fake('gpt-removed')]);
+    const live = { ...fake('gpt-99'), contextWindow: 272000, supportsFastMode: false };
+    setDiscoveredCodexModels([live, fake('gpt-new')], { source: 'list' });
+    const models = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.models.codex!;
+    expect(models().map((model) => model.id)).not.toContain('gpt-removed');
+    expect(models().find((model) => model.id === 'gpt-99')).toMatchObject({
+      contextWindow: 200000, contextWindowMax: 900000, supportsImageInput: false, supportsFastMode: false,
+    });
+    setDiscoveredCodexModels([]);
+    setDiscoveredCodexModels([live], { source: 'list' });
+    const afterAuth = models().find((model) => model.id === 'gpt-99')!;
+    expect(afterAuth.contextWindow).toBe(272000);
+    expect(afterAuth.contextWindowMax).toBeUndefined();
+    expect(afterAuth.supportsImageInput).toBeUndefined();
+  });
+
   it('Codex discovery 只进入 Codex 与 Claude bridge，不改写 Pi 名单', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setDiscoveredCodexModels([fake('gpt-5.7')]);

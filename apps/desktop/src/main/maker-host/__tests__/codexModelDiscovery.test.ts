@@ -35,6 +35,46 @@ const SAMPLE = {
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it('retains native maximum and explicit image capability separately from defaults', () => {
+    const [model] = mapCodexModelsToCatalog({ models: [{
+      ...SAMPLE.models[0], context_window: 272000, max_context_window: 872000,
+      input_modalities: ['text', 'image'],
+    }] });
+    expect(model).toMatchObject({
+      contextWindow: 272000, contextWindowMax: 872000,
+      contextWindowVerified: true, supportsImageInput: true,
+    });
+    const [textOnly] = mapCodexModelsToCatalog({ models: [{
+      ...SAMPLE.models[0], input_modalities: ['text'],
+    }] });
+    expect(textOnly.supportsImageInput).toBe(false);
+    expect(textOnly.contextWindowMax).toBeUndefined();
+  });
+
+  it.each([undefined, 0, -1, NaN, Infinity, 2.5, 128000])(
+    'does not claim an invalid maximum (%s)', (maximum) => {
+      const [model] = mapCodexModelsToCatalog({ models: [{
+        ...SAMPLE.models[0], max_context_window: maximum,
+      }] });
+      expect(model.contextWindowMax).toBeUndefined();
+    },
+  );
+
+  it.each([0, -1, NaN, Infinity, 2.5])('does not mark an invalid working window verified (%s)', (window) => {
+    const [model] = mapCodexModelsToCatalog({ models: [{
+      ...SAMPLE.models[0], context_window: window,
+    }] });
+    expect(model.contextWindowVerified).toBeUndefined();
+  });
+
+  it('adapts a stale native default to supported efforts without selecting an unsupported tier', () => {
+    const [model] = mapCodexModelsToCatalog({ models: [{
+      ...SAMPLE.models[0], default_reasoning_level: 'ultra',
+      supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }],
+    }] });
+    expect(model.defaultEffort).toBe('medium');
+  });
+
   it('只留 visibility:list && supported_in_api:true,保留规范 slug', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.map((m) => m.id)).toEqual(['gpt-5.5', 'gpt-5.4', 'gpt-5.6']);
@@ -106,10 +146,10 @@ describe('mapCodexModelsToCatalog', () => {
     expect(m56!.effortDisplayNames).toEqual({ xhigh: 'Extra High' });
   });
 
-  it('service_tiers 含 priority → supportsFastMode:true;空/缺省不标(数据驱动,不猜)', () => {
+  it('service_tiers distinguishes supported, explicitly unsupported, and unknown', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.find((m) => m.id === 'gpt-5.5')?.supportsFastMode).toBe(true);
-    expect(out.find((m) => m.id === 'gpt-5.4')?.supportsFastMode).toBeUndefined();
+    expect(out.find((m) => m.id === 'gpt-5.4')?.supportsFastMode).toBe(false);
     expect(out.find((m) => m.id === 'gpt-5.6')?.supportsFastMode).toBeUndefined();
   });
 
@@ -277,4 +317,14 @@ describe('readCodexDiscoveredModelsForAuthRefresh', () => {
       readCodexDiscoveredModelsForAuthRefresh(vi.fn().mockResolvedValue(discovered)),
     ).resolves.toBe(discovered);
   });
+});
+
+
+it('does not put an unknown working default above an explicit smaller maximum', () => {
+  const [model] = mapCodexModelsToCatalog({ models: [{
+    slug: 'small-test', display_name: 'Small', visibility: 'list', supported_in_api: true,
+    max_context_window: 64_000,
+  }] });
+  expect(model).toMatchObject({ contextWindow: 64_000, contextWindowMax: 64_000 });
+  expect(model.contextWindowVerified).not.toBe(true);
 });

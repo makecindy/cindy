@@ -105,7 +105,7 @@ const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v3';
 const LEGACY_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v2';
 const LEGACY_V1_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
 const DISABLED_GROUP_KEY = '__disabled';
-/** 「未启用」沉底区的折叠 key。默认折叠(见渲染处注释),与能力组同一档默认。 */
+/** 旧「未启用」折叠记录的 key；该分区现在始终展开。 */
 const HIDDEN_GROUP_KEY = '__hidden';
 const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'image',
@@ -122,7 +122,7 @@ const DEFAULT_COLLAPSED_CATEGORIES = CAPABILITY_CATEGORIES;
 /** 某个折叠 key 未被用户显式改过时是否默认折叠(isCollapsed 与 toggleCollapsed 共用)。 */
 function defaultCollapsedFor(key: string): boolean {
   if (key === DISABLED_GROUP_KEY) return false;
-  if (key === HIDDEN_GROUP_KEY) return true;
+  if (key === HIDDEN_GROUP_KEY) return false;
   return DEFAULT_COLLAPSED_CATEGORIES.has(key.split(':', 1)[0] as ModelCategory);
 }
 
@@ -460,7 +460,7 @@ export function UnifiedModelList({
 
   // 折叠态:分组用 ModelCategory 作 key,两个沉底区用各自的常量 key。
   //   「已停用」默认**展开** —— 区里有东西说明是用户主动停的,找回路径要一眼可见;
-  //   「未启用」默认**折叠** —— 它通常比开着的模型多得多,展开会把启用清单顶出屏幕。
+  //   「未启用」始终展开，不再消费旧折叠记录。
   const isCollapsed = useCallback(
     (key: string) => collapsedMap[key] ?? defaultCollapsedFor(key),
     [collapsedMap],
@@ -1169,49 +1169,26 @@ export function UnifiedModelList({
             })
           )}
 
-          {/* 「未启用」分区:显示轴关闭的对话行跨分组沉底。与「已停用」是两回事 ——
-              这里的行只是不出现在模型选择器里,仍可被显式点名与自动兜底命中;下面那个
-              区是准入关。**默认折叠**:它通常比开着的模型多得多(一个来源几十个模型、
-              用户只开几个),默认展开会把刚看完的启用清单直接顶出屏幕。搜索时强制展开。 */}
-          {hiddenRows.length > 0 &&
-            (() => {
-              const collapsed = !query.trim() && isCollapsed(HIDDEN_GROUP_KEY);
-              return (
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-2 pb-0.5">
-                    <button
-                      type="button"
-                      onClick={() => toggleCollapsed(HIDDEN_GROUP_KEY)}
-                      aria-expanded={!collapsed}
-                      className="flex items-center gap-1 px-2 text-left transition-opacity hover:opacity-80"
-                    >
-                      <span
-                        className="inline-flex transition-transform duration-150"
-                        style={{
-                          color: 'var(--text-tertiary)',
-                          transform: collapsed ? 'rotate(-90deg)' : 'none',
-                        }}
-                      >
-                        <ChevronDown size={12} />
-                      </span>
-                      <span
-                        className="text-11 font-medium uppercase"
-                        style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
-                      >
-                        {t('settings.providers.models.hiddenGroup')}
-                      </span>
-                      <span
-                        className="text-11 tabular-nums"
-                        style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
-                      >
-                        {hiddenRows.length}
-                      </span>
-                    </button>
-                  </div>
-                  {!collapsed && hiddenRows.map((row) => renderModelRow(row))}
-                </div>
-              );
-            })()}
+          {/* 未启用型号保持展开，旧折叠偏好不再隐藏这些行。 */}
+          {hiddenRows.length > 0 && (
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1 px-2 pb-0.5">
+                <span
+                  className="text-11 font-medium uppercase"
+                  style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+                >
+                  {t('settings.providers.models.hiddenGroup')}
+                </span>
+                <span
+                  className="text-11 tabular-nums"
+                  style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
+                >
+                  {hiddenRows.length}
+                </span>
+              </div>
+              {hiddenRows.map((row) => renderModelRow(row))}
+            </div>
+          )}
 
           {/* 「已停用」分区:停用的行跨分组沉底;默认展开(区里有东西 = 用户主动停的,
               找回路径要一眼可见),搜索时强制展开。行内「启用此模型」即飞回原分组;

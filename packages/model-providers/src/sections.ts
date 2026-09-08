@@ -34,6 +34,7 @@ export interface SectionModel {
   displayName: string;
   description?: string;
   efforts: readonly Effort[];
+  displayEfforts?: readonly Effort[];
   defaultEffort: Effort | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
@@ -177,6 +178,7 @@ export function buildProviderSections(args: {
         id: m.id,
         displayName: m.name,
         efforts: m.efforts,
+        ...(m.displayEfforts ? { displayEfforts: m.displayEfforts } : {}),
         defaultEffort: m.defaultEffort,
         contextWindow: m.contextWindow,
       };

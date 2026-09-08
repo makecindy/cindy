@@ -1409,7 +1409,7 @@ export function getMaker(): Maker {
         );
       },
       onCodexLocalModelsListed: (models) => {
-        setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
+        setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models), { source: 'list' });
       },
       // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
       // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。

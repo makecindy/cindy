@@ -337,6 +337,8 @@ export interface CatalogModel {
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];
+  /** Display-only known tiers. Runtime admission always uses efforts; absent tiers render disabled. */
+  displayEfforts?: Effort[];
   /** 独立 Pi 远端目录的显式能力；缺席时保留旧目录兼容行为。 */
   reasoning?: boolean;
   reasoningEfforts?: PiReasoningEffort[];
