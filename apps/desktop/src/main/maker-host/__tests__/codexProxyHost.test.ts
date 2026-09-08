@@ -2834,7 +2834,8 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it('repairs legacy IDs over real HTTP after a scoped WebSocket rejection, leaving a sibling connected', async () => {
+  it.each(['shared', 'custom-context', 'control-plane'] as const)(
+    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
     const host = await freshCodexProxyHost();
     const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
     const legacy = { model: 'gpt-6', input: [
@@ -2863,7 +2864,7 @@ describe('codex proxy host', () => {
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
     const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
     const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
-    mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
       actual.createAnthropicCompatProxy({
         ...opts,
         upstream: upstreamUrl,
@@ -2875,18 +2876,30 @@ describe('codex proxy host', () => {
     host.setCodexProxyAuthInjection('oauth-bearer');
     const clients: WebSocket[] = [];
     try {
-      await host.ensureCodexProxyReady();
+      let proxyUrl: string;
+      if (proxyKind === 'shared') {
+        await host.ensureCodexProxyReady();
+        proxyUrl = host.getCodexProxyEndpoint()!;
+      } else if (proxyKind === 'custom-context') {
+        await host.ensureCodexCustomContextProxyReady('context-recovery', 'oauth-bearer', []);
+        proxyUrl = host.getCodexCustomContextProxyEndpoint('context-recovery');
+      } else {
+        await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
+        proxyUrl = host.getCodexControlPlaneProxyEndpoint('oauth-bearer');
+      }
+      await host.ensureCodexCustomContextProxyReady('context-sibling', 'oauth-bearer', []);
       host.registerComposed('session-bad-ids', 'thread-bad-ids', 'PRODUCT_PROMPT');
       host.registerComposed('session-good-ids', 'thread-good-ids', 'PRODUCT_PROMPT');
-      const proxyUrl = host.getCodexProxyEndpoint()!;
-      const connect = async (thread: string) => {
-        const client = new WebSocket(proxyUrl.replace(/^http/, 'ws') + '/v1/responses', { headers: { 'thread-id': thread } });
+      const connect = async (thread: string, endpoint = proxyUrl) => {
+        const client = new WebSocket(endpoint.replace(/^http/, 'ws') + '/v1/responses', { headers: { 'thread-id': thread } });
         clients.push(client);
         await once(client, 'open');
         return client;
       };
       const bad = await connect('thread-bad-ids');
       const good = await connect('thread-good-ids');
+      const independent = await connect('thread-independent', host.getCodexCustomContextProxyEndpoint('context-sibling'));
+      expect(host.armCodexHttpRecovery({ sessionId: 'session-unknown', threadId: 'thread-without-socket', message: errorMessage })).toBeNull();
       const rejection = once(bad, 'message');
       bad.send(JSON.stringify(legacy));
       const [payload] = await rejection;
@@ -2914,9 +2927,18 @@ describe('codex proxy host', () => {
       }
       expect(httpBodies).toHaveLength(2);
       for (const body of httpBodies) expect(body.input).toEqual([{ ...legacy.input[0], id: 'ctc_legacy' }, legacy.input[1]]);
-      expect(good.readyState).toBe(WebSocket.OPEN);
-      const pong = once(good, 'message'); good.send(JSON.stringify({ ping: true }));
-      expect(JSON.parse((await pong)[0].toString())).toEqual({ pong: true });
+      // Unregister must clear the marker and each owning proxy's successful-WS proof.
+      host.unregister('session-bad-ids');
+      host.registerComposed('session-bad-ids', 'thread-bad-ids', 'PRODUCT_PROMPT');
+      const resumed = await connect('thread-bad-ids');
+      const resumedClosed = once(resumed, 'close');
+      host.unregister('session-bad-ids');
+      await resumedClosed;
+      for (const sibling of [good, independent]) {
+        expect(sibling.readyState).toBe(WebSocket.OPEN);
+        const pong = once(sibling, 'message'); sibling.send(JSON.stringify({ ping: true }));
+        expect(JSON.parse((await pong)[0].toString())).toEqual({ pong: true });
+      }
     } finally {
       for (const client of clients) { client.on('error', () => {}); client.terminate(); }
       for (const ws of wss.clients) ws.terminate();

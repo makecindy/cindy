@@ -169,6 +169,12 @@ const _customContextStartPromises = new Map<
   { authInjection: CodexProxyAuthInjection; routeSignature: string; promise: Promise<void> }
 >();
 const _customContextGenerations = new Map<string, number>();
+/** Each handle owns its live thread/socket mapping, including isolated Host proxies. */
+function* activeCodexProxyHandles(): Iterable<ProxyHandle> {
+  if (_handle) yield _handle;
+  yield* _controlPlaneHandles.values();
+  for (const entry of _customContextHandles.values()) yield entry.handle;
+}
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
@@ -237,7 +243,10 @@ export function armCodexHttpRecovery(args: {
     return null;
   }
   httpRecoveryReasonByThread.set(threadId, reason);
-  const disconnectedWebSockets = _handle?.disconnectWebSocketsForThread?.(threadId) ?? 0;
+  let disconnectedWebSockets = 0;
+  for (const handle of activeCodexProxyHandles()) {
+    disconnectedWebSockets += handle.disconnectWebSocketsForThread?.(threadId) ?? 0;
+  }
   if (disconnectedWebSockets === 0) {
     httpRecoveryReasonByThread.delete(threadId);
     // startup-prewarm 没有稳定 thread header，且 shared app-server 会跨业务 session
@@ -3854,7 +3863,9 @@ function clearSessionThreads(sessionId: string): string[] {
       // Session 关闭既可能是普通释放，也可能是 OAuth ↔ 第三方模型的 route 切换。
       // 两种情况都必须撤销旧 thread 的 WS 成功证明：第三方恢复使用 cindy_gateway/HTTP，
       // 迟到的旧 upgrade 不能命中本次新增的 Cindy 侧 WS 保活；其他 thread 不受影响。
-      _handle?.forgetWebSocketStateForThread?.(threadId);
+      for (const handle of activeCodexProxyHandles()) {
+        handle.forgetWebSocketStateForThread?.(threadId);
+      }
       threadToSession.delete(threadId);
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);
