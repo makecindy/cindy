@@ -56,6 +56,15 @@ export function resolveEffectiveHomeConnectionError(error: string | null, device
   return error.split('；').filter((failure) => !failure.includes('DEVICE_UNRESPONSIVE')).join('；') || null;
 }
 
+/** A recovering device must not mask another device's actionable failure on Home. */
+export function resolveHomeConnectionFeedback(error: string | null, deviceUnresponsive: boolean) {
+  const manualError = resolveEffectiveHomeConnectionError(error, false);
+  return {
+    error: manualError ?? resolveEffectiveHomeConnectionError(error, deviceUnresponsive),
+    deviceRecovery: deviceUnresponsive && !manualError,
+  };
+}
+
 export function resolveEffectiveConnectionError(
   error: string | null,
   deviceUnresponsive: boolean,

@@ -113,7 +113,7 @@ import {
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
-import { resolveConnectionBannerSyncActionVisibility, resolveEffectiveHomeConnectionError } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -1814,7 +1814,7 @@ function HomeScreenContent() {
     screenWidth,
   });
   const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
-  const effectiveHomeError = resolveEffectiveHomeConnectionError(error, homeDeviceUnresponsive);
+  const { error: effectiveHomeError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeDeviceUnresponsive);
   const connectionError = describeRemoteError(effectiveHomeError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
@@ -1846,24 +1846,24 @@ function HomeScreenContent() {
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
-    deviceUnresponsive: homeDeviceUnresponsive,
+    deviceUnresponsive: homeDeviceRecovery,
     hasRequestError: connectionError !== null,
     // loadHome has no outer retry after its bounded REST retries are exhausted.
     requestErrorAutoRecovering: false,
   });
   const showHomeRecoveryProgress = (!activeConnectionIssue
     || activeConnectionIssue.kind === 'unstable' || activeConnectionIssue.kind === 'replaced')
-    && (status === 'connecting' || homeDeviceUnresponsive);
+    && (status === 'connecting' || homeDeviceRecovery);
   const connectionTone = activeConnectionIssue
     ? 'off'
-    : homeDeviceUnresponsive ? 'busy' : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+    : homeDeviceRecovery ? 'busy' : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const connectionTitle = activeConnectionIssue
     ? connectionIssueTitle(activeConnectionIssue.kind)
-    : homeDeviceUnresponsive ? t('deviceLink.deviceUnresponsiveTitle')
+    : homeDeviceRecovery ? t('deviceLink.deviceUnresponsiveTitle')
       : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
   const connectionCopy = activeConnectionIssue
     ? connectionIssueHint(activeConnectionIssue.kind)
-    : homeDeviceUnresponsive ? t('deviceLink.deviceUnresponsiveHint') : connectionError;
+    : homeDeviceRecovery ? t('deviceLink.deviceUnresponsiveHint') : connectionError;
   const emptyStateTitle = initialHomeError ? t('devices.list.syncFailed') : home.emptyTitle;
   const emptyStateCopy = initialHomeError ? (connectionError ?? t('devices.list.requestFailed')) : home.emptyCopy;
   // 无可控制电脑的引导态(landing)可见性,与 ListEmptyComponent 的分支同口径。

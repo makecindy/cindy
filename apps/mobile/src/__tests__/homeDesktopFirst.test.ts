@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
-import { resolveConnectionBannerSyncActionVisibility, resolveEffectiveHomeConnectionError } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerSyncActionVisibility, resolveEffectiveHomeConnectionError, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
@@ -22,10 +22,11 @@ describe('mobile Home connection feedback', () => {
 
   it('wires Home itself to the shared recovery indicator instead of an unconditional retry button', () => {
     const source = readSource('app/devices/index.tsx');
-    expect(source).toContain('resolveEffectiveHomeConnectionError(error, homeDeviceUnresponsive)');
+    expect(source).toContain('resolveHomeConnectionFeedback(error, homeDeviceUnresponsive)');
+    expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
     expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
     expect(source).toContain('const showConnectionRow = homeDeviceUnresponsive ||');
-    expect(source).toContain("homeDeviceUnresponsive ? t('deviceLink.deviceUnresponsiveTitle')");
+    expect(source).toContain("homeDeviceRecovery ? t('deviceLink.deviceUnresponsiveTitle')");
     const row = source.slice(source.indexOf('{showConnectionRow ? ('), source.indexOf('<SectionList'));
     expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
     const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
@@ -37,6 +38,24 @@ describe('mobile Home connection feedback', () => {
 
 describe('Home recovery completion', () => {
   const stale = 'MacBook: [DEVICE_UNRESPONSIVE] circuit open';
+  it.each([
+    [true, true, true],
+    [false, true, true],
+    [true, false, false],
+    [false, false, false],
+  ])('keeps mixed-device recovery independent (circuit=%s, manual=%s)', (circuit, manual, canSync) => {
+    const ordinary = 'Other: [REQUEST_TIMEOUT] failed';
+    const feedback = resolveHomeConnectionFeedback(manual ? `${stale}；${ordinary}` : stale, circuit);
+    expect(feedback.error).toBe(manual ? ordinary : circuit ? stale : null);
+    expect(feedback.deviceRecovery).toBe(circuit && !manual);
+    expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+      deviceUnresponsive: feedback.deviceRecovery, hasRequestError: feedback.error !== null,
+      requestErrorAutoRecovering: false,
+    })).toBe(canSync);
+  });
+  it('shows background recovery even without a stored request error', () => {
+    expect(resolveHomeConnectionFeedback(null, true)).toEqual({ error: null, deviceRecovery: true });
+  });
   it('clears the stale circuit error once probing succeeds', () => {
     expect(resolveEffectiveHomeConnectionError(stale, true)).toBe(stale);
     expect(resolveEffectiveHomeConnectionError(stale, false)).toBeNull();
