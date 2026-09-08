@@ -8013,6 +8013,18 @@
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
     },
+    "mediaDownload": {
+      "title": "Download the generated media?",
+      "description": "The media has been generated and needs to be downloaded from the address below.",
+      "scope": "Allow this download only.",
+      "source": "This address is not among the download sources confirmed by Cindy, so your confirmation is needed.",
+      "http": "This address uses unencrypted HTTP. Others on the network may read or alter the download.",
+      "port": "This address uses a non-default network port. Confirm access to that port.",
+      "credentials": "This download address includes login details. If allowed, those details will be sent only to this address.",
+      "network": "This address points to this device, a local network, or a reserved network. Access may reach internal services on the device.",
+      "allow": "Allow this download",
+      "defer": "Not now"
+    },
     "permissionPrompt": {
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",

@@ -3,7 +3,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 const MAX_LOG_STRING_CHARS = 20_000;
 const MAX_LOG_DEPTH = 24;
 const SENSITIVE_PARAM_NAME =
-  /(?:^|[-_.])(authorization|proxy[-_]?authorization|api[-_]?key|access[-_]?key(?:[-_]?id)?|private[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|signature|credential|cookie|session)(?:$|[-_.])/i;
+  /(?:^|[-_.])(authorization|proxy[-_]?authorization|api[-_]?key|access[-_]?key(?:[-_]?id)?|private[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|sig|signature|ossaccesskeyid|credential|cookie|session)(?:$|[-_.])/i;
 
 function boundedText(value: string): string {
   const redacted = redactSensitiveText(value);
