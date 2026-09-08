@@ -325,7 +325,7 @@ export function sanitizeModelCatalogOverrides(raw: unknown): SanitizeResult {
         0,
         MAX_OVERRIDE_ENTRIES_PER_SECTION,
       )) {
-        if (key && key.length <= 200 && validModelMetadata(value)) out.baseModels[key] = value;
+        if (key && key.length <= 256 && validModelMetadata(value)) out.baseModels[key] = value;
         else invalid.push(`baseModels:${key}`);
       }
     }

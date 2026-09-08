@@ -112,7 +112,7 @@ export function registryEntryDefaults(
       ? findBaseModel(registry, entry.modelRef)?.defaults
       : undefined,
     providerDefaults,
-    pickModelMetadata(entry.modelRef ? { ...entry, name: undefined } : entry),
+    pickModelMetadata(entry),
     route?.defaults,
     agent
       ? pickModelMetadata(

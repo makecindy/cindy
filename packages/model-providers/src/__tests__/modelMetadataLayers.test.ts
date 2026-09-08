@@ -41,6 +41,60 @@ const registry: ModelRegistry = {
     },
   ],
 };
+
+it("honors entry names below route, live, force and user names", () => {
+  const r = structuredClone(registry);
+  r.models[0].name = "Entry";
+  const route = r.models[0].routes[0];
+  expect(expandedRegistryEntries(r)[0].name).toBe("Entry");
+  expect(
+    resolveModelMetadata(
+      r,
+      "supplier",
+      "model",
+      undefined,
+      undefined,
+      undefined,
+      { name: "Provider default" },
+    ).name,
+  ).toBe("Entry");
+  expect(resolveModelMetadata(r, "unknown", "model").name).toBe("Model");
+  route.defaults = { name: "Route" };
+  expect(expandedRegistryEntries(r)[0].name).toBe("Route");
+  expect(
+    resolveModelMetadata(r, "supplier", "model", { name: "Live" }).name,
+  ).toBe("Live");
+  route.forceOverrides = { name: "Force" };
+  expect(
+    resolveModelMetadata(r, "supplier", "model", { name: "Live" }).name,
+  ).toBe("Force");
+  expect(
+    resolveModelMetadata(
+      r,
+      "supplier",
+      "model",
+      { name: "Live" },
+      { name: "User" },
+    ).name,
+  ).toBe("User");
+});
+
+it("requires public effort defaults to stand alone even without registry routes", () => {
+  const r = structuredClone(registry);
+  r.models = [];
+  const defaults = r.baseModels![0].defaults;
+  defaults.efforts = ["low"];
+  defaults.defaultEffort = "high";
+  expect(parseModelRegistry(r).ok).toBe(false);
+  defaults.defaultEffort = "low";
+  expect(parseModelRegistry(r).ok).toBe(true);
+  defaults.efforts = [];
+  expect(parseModelRegistry(r).ok).toBe(false);
+  defaults.defaultEffort = null;
+  expect(parseModelRegistry(r).ok).toBe(true);
+  delete defaults.defaultEffort;
+  expect(parseModelRegistry(r).ok).toBe(true);
+});
 describe("model metadata precedence", () => {
   it("inherits per field and lets supplier data beat defaults, explicit force beat supplier and user beat force", () => {
     expect(parseModelRegistry(registry).ok).toBe(true);

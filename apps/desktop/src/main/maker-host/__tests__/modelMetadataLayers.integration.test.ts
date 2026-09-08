@@ -106,6 +106,28 @@ afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
 });
 describe('metadata layers through the active catalog', () => {
+  it.each([200, 201, 256, 257])(
+    'aligns public override keys with the %i-character registry identity',
+    (length) => {
+      const r = registry();
+      const id = 'm'.repeat(length);
+      r.baseModels![0].id = id;
+      r.models[0].modelRef = id;
+      setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry: r });
+      setXdGatewayModels([
+        { id: 'model', name: 'Supplier', contextWindow: 3000, agents: ['codex'] },
+      ]);
+      const { overrides } = sanitizeModelCatalogOverrides({
+        version: 1,
+        baseModels: { [id]: { name: 'User name' } },
+      });
+      expect(overrides.baseModels?.[id]).toEqual(length <= 256 ? { name: 'User name' } : undefined);
+      if (length <= 256) {
+        setLocalCatalogOverrides(overrides);
+        expect(model('xd')?.name).toBe('User name');
+      }
+    },
+  );
   it('merges sparse Gateway facts, server force and user patches without inventing membership', () => {
     setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry: registry() });
     setXdGatewayModels([

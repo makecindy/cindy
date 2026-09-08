@@ -1270,6 +1270,13 @@ export function parseModelRegistry(
       )
         return fail("modelRegistry.baseModels contains invalid data");
       baseIds.add(base.id);
+      if (
+        base.defaults.efforts !== undefined &&
+        base.defaults.defaultEffort != null &&
+        !base.defaults.efforts.includes(base.defaults.defaultEffort)
+      ) {
+        return fail("modelRegistry.baseModels defaultEffort must be supported");
+      }
       for (const identity of [base.id, ...base.aliases]) {
         if (identities.has(identity))
           return fail("modelRegistry.baseModels identity is ambiguous");
