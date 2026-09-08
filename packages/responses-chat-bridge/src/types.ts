@@ -359,6 +359,11 @@ export interface ChatBridgeProviderConfig {
 export interface ChatBridgeHandleArgs {
   parsedBody: unknown;
   res: ServerResponse;
+  /**
+   * 经本地代理验证过的入站请求头快照(#4073)。bridge **不**透传它们,只从中解析稳定会话
+   * 标识映射为出站 `x-opencode-session`(见 session-header.ts);省略 = 不附加会话头。
+   */
+  requestHeaders?: Readonly<Record<string, string>>;
 }
 
 export interface ResponsesChatBridgeHandler {
