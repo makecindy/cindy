@@ -27,6 +27,11 @@ if (!command) {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const env = { ...process.env, XDT_DESKTOP_DEV_MODE: 'local' };
+// XDT_RESTART_MANAGED 是 restart 链路的一跳（one-hop）启动标记：restart 经白名单透传，
+// local 链（restart:desktop:local → 本 wrapper）同样会收到。这里消费它——删除后不进入
+// Electron 环境，避免被本地 Codex/Claude/PI agent 子进程继承，导致 agent 在 worktree
+// 跑裸 dev:remote 时误识别「受 restart 管理」而禁用自动隔离（review-pr P1, PR #2640）。
+delete env.XDT_RESTART_MANAGED;
 const startupConfig = applyDesktopDevStartupConfig({ argv: rawArgs, env, mode: 'local' });
 const args = stripDesktopDevRegionArgs(rawArgs);
 if (!env.XDT_ENDPOINT_MANIFEST_FILE?.trim()) {

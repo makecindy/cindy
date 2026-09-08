@@ -1,6 +1,18 @@
 import os from "node:os";
 import path from "node:path";
 
+/**
+ * 内置 worktree 目录段名（含迁移前形态）。命中时视为「worktree 会话内的 dev 启动」。
+ * 与 apps/desktop/src/main/worktree 的托管目录命名保持一致；判据刻意只认路径段，
+ * 不校验 baseRepo 是否真的注册过——防止把 worktree 名写进目录的任何拷贝都算数，
+ * 也避免脚本侧依赖 app 数据库。
+ */
+const WORKTREE_DIR_NAMES = new Set([".cindy-worktrees", ".xdt-worktrees"]);
+
+/** 与 apps/desktop/src/main/devCliFlags.ts 的 ISOLATION_NAME_RE 同款：合法名字才能进
+ * 命名沙箱（目录名跨平台安全 + 并入 deviceId 后不超服务端 64 字符白名单）。 */
+const ISOLATION_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
 /** Desktop dev 支持的区域身份。 */
 export const DESKTOP_DEV_REGIONS = Object.freeze(["cn", "global", "dev"]);
 
@@ -134,4 +146,100 @@ export function applyDesktopDevStartupConfig(options) {
     env.XDT_ENDPOINT_MANIFEST_FILE = config.endpointManifestFile;
   }
   return config;
+}
+
+/**
+ * 清除继承自宿主的 dev 启动覆写（返回清除后的新对象，不改入参）。
+ *
+ * 当宿主 Desktop 以 --isolated 模式运行、Agent 从它 spawn 时，XDT_USER_DATA_DIR /
+ * XDT_USER_DATA_DIR_EPOCH / XDT_DEVICE_ID_OVERRIDE 会留在 process.env 并被 agent
+ * 继承。worktree 自动隔离命中后若不清除，resolveDevCliFlags 会优先采用宿主 userData、
+ * 且因已有 device override 不派生新身份——注入的沙箱语义被覆盖（review-pr P1,
+ * PR #2640）。清除后沙箱目录与独立 deviceId 由注入的 XDT_ISOLATED / XDT_ISOLATED_NAME
+ * 正常派生。
+ */
+export function clearInheritedIsolationOverrides(env) {
+  const next = { ...env };
+  delete next.XDT_USER_DATA_DIR;
+  delete next.XDT_USER_DATA_DIR_EPOCH;
+  delete next.XDT_DEVICE_ID_OVERRIDE;
+  return next;
+}
+
+/**
+ * 从启动 cwd 提取托管 worktree 名；不在 worktree 目录下时返回 null。
+ * cwd 可以是 worktree 根或其任意子目录（如 apps/desktop），沿路径段找
+ * `.cindy-worktrees` / `.xdt-worktrees`，取紧随其后的目录名。
+ * 纯路径段判定（同时识别 `/` 与 `\`），不 resolve 到磁盘：worktree 名只取决于
+ * 路径形态，且相对路径在测试与真实 cwd 之间不应有差异。
+ */
+export function worktreeNameFromPath(cwd) {
+  const segments = cwd.split(/[\\/]+/).filter(Boolean);
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (WORKTREE_DIR_NAMES.has(segments[index])) {
+      return segments[index + 1];
+    }
+  }
+  return null;
+}
+
+/**
+ * 判定「worktree 会话内的裸 dev 启动」是否需要自动注入隔离意图。
+ *
+ * 背景（issue #2635）：内置 worktree 里跑 `pnpm dev:remote`（不经 restart 包装）时
+ * 若不带 `--isolated`，dev 会用区域默认 profile（global→CindyGlobal）+ 物理机
+ * machineId 作为 deviceId——与同区域 release 撞设备身份：dev 登录按 (userId,
+ * deviceId) 覆盖 release 的服务端 refresh token，release 下次续期即 401 被登出
+ * （日志形态：device-link 4409 乒乓 → INVALID_REFRESH_TOKEN → clearing auth）。
+ *
+ * 语义：
+ * - cwd 命中托管 worktree 且调用方未声明任何显式模式时返回 `{ worktreeName }`；
+ *   worktree 名不合法时返回 `{ worktreeName: null }`（仍隔离，回退默认沙箱，与
+ *   devCliFlags 的 invalidIsolationName 语义一致——回落到不隔离会混进正式版数据）；
+ * - 显式 `--isolated[=<名>]` / `--passive`（argv，人类裸跑 `pnpm dev:remote -- --passive`
+ *   的合法用法，Electron 侧 resolveDevCliFlags 认识并收敛为被动模式）已设置时返回
+ *   null（显式意图优先，不覆盖用户选择）；
+ * - `XDT_RESTART_MANAGED=1`（restart 链路：参数契约显式，默认=共库+正常调度、--isolated
+ *   =隔离、--passive / --preserve-running=共享，由 restart 自己负责，不套自动隔离）
+ *   已设置时返回 null——这是**唯一**可靠的 env 豁免标记（one-hop，dev-remote-env /
+ *   dev-local-env 判定后从 Electron env 删除，不会被子进程继承）；
+ * - 其余 env 变量**一律不豁免**（review-pr P1×3, PR #2640）：`XDT_ISOLATED` /
+ *   `XDT_USER_DATA_DIR` / `XDT_SCHEDULER_PASSIVE` 都是宿主 Desktop（可能以 --isolated /
+ *   --passive 模式运行）留在 process.env 的变量，会沿 Electron → agent 子进程继承
+ *   （buildCodexEnv / PI spawn env 复制 process.env）——agent 在 worktree 跑裸
+ *   dev:remote 时若凭它们豁免，会复用宿主 userData（单实例锁冲突立即退出 / passive
+ *   并发开沙箱）或重新共享 profile/deviceId 互踢。restart 链路的 --isolated /
+ *   --passive / --preserve-running 已由 XDT_RESTART_MANAGED 识别，无需也不应依赖这些
+ *   可长期继承的变量；
+ * - `--preserve-running` **不在** argv 豁免清单：裸 dev 路径上 Electron 侧不认这个参数
+ *   （只有 restart 会翻译成 XDT_SCHEDULER_PASSIVE=1），豁免它会共享 userData 却
+ *   正常调度 + 正常单实例锁（review-pr P1, PR #2640）；restart 链路经 env 标记识别；
+ * - baseRepo 直跑（cwd 不在 worktree 下）返回 null，保持既有共库语义不变。
+ */
+export function resolveWorktreeIsolationFromCwd({
+  cwd = process.cwd(),
+  argv = [],
+  env = process.env,
+} = {}) {
+  if (
+    argv.some(
+      (arg) =>
+        arg === "--isolated" ||
+        arg.startsWith("--isolated=") ||
+        arg === "--passive",
+    )
+  ) {
+    return null;
+  }
+  // restart 链路（restart-desktop-remote.mjs → desktop-dev-runner → dev:desktop:remote）
+  // 的启动参数契约是显式的，由 XDT_RESTART_MANAGED（one-hop 标记）识别——无参=共库+
+  // 正常调度、--isolated=隔离、--passive / --preserve-running=共享。该标记判定后即从
+  // Electron env 删除，不会被子进程继承，是可靠的 restart 识别信号。其它 env 变量
+  // （XDT_ISOLATED / XDT_USER_DATA_DIR / XDT_SCHEDULER_PASSIVE）都可能是宿主 Desktop
+  // 留在 process.env 的、会被 agent 继承的变量，一律不视为本次显式配置。
+  if (env.XDT_RESTART_MANAGED === "1") return null;
+
+  const name = worktreeNameFromPath(cwd);
+  if (name === null) return null;
+  return { worktreeName: ISOLATION_NAME_RE.test(name) ? name : null };
 }
