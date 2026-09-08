@@ -86,7 +86,7 @@ describe.each([
     expect(report.mock.calls.every(([id]) => id === null)).toBe(true);
   });
 
-  it('reports on refocus and clears on unmount, without background reads', async () => {
+  it('reports validated ownership before DOM focus settles, then resyncs and cleans up', async () => {
     vi.mocked(document.hasFocus).mockReturnValue(false);
     let resolveGate!: (value: never) => void;
     const pending = new Promise((resolve) => { resolveGate = resolve; });
@@ -99,7 +99,9 @@ describe.each([
     // Observing the chat DOM alone can precede the visibility effect's commit.
     await act(async () => resolveGate((View === BotSessionView ? profile : [{ id: 'chat-a' }]) as never));
     expect(view.getByTestId('chat')).toBeTruthy();
-    expect(report).not.toHaveBeenCalledWith('chat-a');
+    // Main owns foreground/pending-focus acceptance; do not lose its first ack.
+    expect(report).toHaveBeenLastCalledWith('chat-a');
+    report.mockClear();
     vi.mocked(document.hasFocus).mockReturnValue(true);
     act(() => window.dispatchEvent(new Event('focus')));
     expect(report).toHaveBeenLastCalledWith('chat-a');

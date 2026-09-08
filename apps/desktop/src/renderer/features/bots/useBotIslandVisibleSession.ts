@@ -6,9 +6,9 @@ export function useBotIslandVisibleSession(sessionId: string | null) {
   useEffect(() => {
     if (!isAgentIslandSupported()) return;
     const sync = () => {
-      if (document.hasFocus()) {
-        void window.electronAPI.agentIsland?.setVisibleSession?.(sessionId);
-      }
+      // Main accepts only a focused window or its pending notification target.
+      // A DOM focus check here can drop that ack before focus has settled.
+      void window.electronAPI.agentIsland?.setVisibleSession?.(sessionId);
     };
     sync();
     window.addEventListener('focus', sync);
