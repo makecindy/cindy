@@ -101,6 +101,7 @@ import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
+  isAgentIslandVisibleSessionOwnedByBotRoute,
   resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdFromPath,
@@ -435,6 +436,7 @@ export function MainLayout() {
     if (!isAgentIslandSupported()) return;
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
+    if (isAgentIslandVisibleSessionOwnedByBotRoute(location.pathname)) return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
       visibleSessions,
     );
@@ -498,7 +500,6 @@ export function MainLayout() {
       if (botRoute) {
         const target = botRoute;
         if (currentPathRef.current !== target) navigate(target);
-        if (isAgentIslandSupported()) void window.electronAPI.agentIsland?.setVisibleSession?.(sessionId);
         return;
       }
       // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get

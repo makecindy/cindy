@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
-  resolveAgentIslandVisibleBotSessionIdFromPath,
+  isAgentIslandVisibleSessionOwnedByBotRoute,
   resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail,
@@ -39,14 +39,14 @@ const ccAgentSessionViewSource = readTextLf(
 
 describe('bot and split route visibility', () => {
   it.each([
-    ['/bots/bot-a/session/chat-a', 'chat-a'],
-    ['/bots/bot-a/history/history-a', 'history-a'],
-    ['/bots/bot-a', null],
-    ['/bots', null],
-    ['/bots/roster', null],
-    ['/bots/bot-a/session', null],
-  ])('resolves %s only when it renders a chat', (pathname, expected) => {
-    expect(resolveAgentIslandVisibleBotSessionIdFromPath(pathname)).toBe(expected);
+    ['/bots/bot-a/session/chat-a', true],
+    ['/bots/bot-a/history/history-a', true],
+    ['/bots/bot-a', false],
+    ['/bots', false],
+    ['/bots/roster', false],
+    ['/bots/bot-a/session', false],
+  ])('delegates %s to the validating view', (pathname, expected) => {
+    expect(isAgentIslandVisibleSessionOwnedByBotRoute(pathname)).toBe(expected);
   });
 
   it('keeps stale splits out of bot pages across navigation and settings', () => {
@@ -67,7 +67,7 @@ describe('bot and split route visibility', () => {
       new URL(target, 'https://cindy.invalid').pathname,
       splits,
     ))).toEqual([
-      ['task-a', 'task-b'], null, null, 'chat-a', 'chat-a', 'history-a', null, null,
+      ['task-a', 'task-b'], null, null, null, null, null, null, null,
       ['task-a', 'task-b'],
     ]);
     expect(resolveAgentIslandVisibleSessionsFromPath('/cc-agent/task-a', [])).toBe('task-a');

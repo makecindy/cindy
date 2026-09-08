@@ -20,11 +20,11 @@ export function resolveAgentIslandVisibleSessionIdFromPath(
   return sessionId;
 }
 
-export function resolveAgentIslandVisibleBotSessionIdFromPath(pathname: string): string | null {
+export function isAgentIslandVisibleSessionOwnedByBotRoute(pathname: string): boolean {
   const sessionMatch = matchPath('/bots/:botId/session/:sessionId', pathname) ??
     matchPath('/bots/:botId/history/:sessionId', pathname);
-  // The short bot route renders settings, invitations or a redirect spinner, not a chat.
-  return sessionMatch?.params.sessionId ?? null;
+  // The matching view must validate ownership before reporting a visible session.
+  return Boolean(sessionMatch?.params.sessionId);
 }
 
 export function resolveAgentIslandVisibleSessionsFromPath(
@@ -36,7 +36,7 @@ export function resolveAgentIslandVisibleSessionsFromPath(
   if (sessionId && splitSessionIds.length >= 2) {
     return [...new Set([sessionId, ...splitSessionIds])];
   }
-  return sessionId ?? resolveAgentIslandVisibleBotSessionIdFromPath(pathname);
+  return sessionId;
 }
 
 /**
