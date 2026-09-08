@@ -17,9 +17,7 @@ const { gitExecMock } = vi.hoisted(() => ({
   gitExecMock: vi.fn(),
 }));
 vi.mock('../worktree/gitExec', async () => {
-  const actual = await vi.importActual<typeof import('../worktree/gitExec')>(
-    '../worktree/gitExec',
-  );
+  const actual = await vi.importActual<typeof import('../worktree/gitExec')>('../worktree/gitExec');
   return {
     ...actual,
     gitExec: (args: readonly string[], cwd?: string) => gitExecMock(args, cwd),
@@ -48,7 +46,8 @@ function setupGitMock(opts: {
     const a = args.join(' ');
     if (a === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
     if (a === 'rev-parse --show-toplevel') return { stdout: `${opts.toplevel}\n`, stderr: '' };
-    if (a === 'rev-parse --abbrev-ref HEAD') return { stdout: `${opts.branch ?? 'main'}\n`, stderr: '' };
+    if (a === 'rev-parse --abbrev-ref HEAD')
+      return { stdout: `${opts.branch ?? 'main'}\n`, stderr: '' };
     if (a === 'rev-parse --git-dir') return { stdout: `${opts.gitDir}\n`, stderr: '' };
     if (a === 'rev-parse --git-common-dir') return { stdout: `${opts.gitCommonDir}\n`, stderr: '' };
     throw new Error(`unexpected gitExec call: ${a}`);
@@ -56,6 +55,33 @@ function setupGitMock(opts: {
 }
 
 describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
+  it.each([
+    ['linked', '/repo/.git/worktrees/feature', '/repo/.git', 'feature', true],
+    ['main', '.git', '.git', 'main', false],
+    ['detached', '/repo/.git/worktrees/feature', '/repo/.git', 'HEAD', true],
+  ])(
+    'reads a %s worktree snapshot with one Git process',
+    async (_label, gitDir, commonDir, branch, linked) => {
+      gitExecMock.mockResolvedValue({ stdout: `/repo\n${branch}\n${gitDir}\n${commonDir}\n` });
+      expect(await detectCwd('/repo')).toEqual({
+        isGitRepo: true,
+        isInsideWorktree: linked,
+        gitInstalled: true,
+        supportsRecoveryKeyDiscard: true,
+        repoRoot: path.resolve('/repo'),
+        ...(branch !== 'HEAD' ? { currentBranch: branch } : {}),
+      });
+      expect(gitExecMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('retains separate queries when combined output has ambiguous newlines', async () => {
+    setupGitMock({ toplevel: '/repo', gitDir: '.git', gitCommonDir: '.git' });
+    gitExecMock.mockResolvedValueOnce({ stdout: '/repo\nwith-newline\nmain\n.git\n.git\n' });
+    expect(await detectCwd('/repo')).toMatchObject({ isGitRepo: true, isInsideWorktree: false });
+    expect(gitExecMock).toHaveBeenCalledTimes(6);
+  });
+
   it('returns isInsideWorktree=true for a Cindy-created worktree', async () => {
     const baseRepo = path.resolve('/tmp/repo');
     const wtPath = path.join(baseRepo, '.cindy-worktrees', 'jolly-turing');

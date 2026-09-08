@@ -2327,11 +2327,11 @@ export class AgentIslandService {
     }
 
     const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
+    if (focusChanged) this.publish();
     // Reuse the primary-window handoff: it retains navigation while the
     // renderer reloads and restores macOS app focus. A one-shot notification
     // sent during loading is lost before MainLayout can acknowledge the task.
     openMainWindowSession(nextSessionId);
-    if (focusChanged) this.publish();
   }
 
   private dispatchMainWindowCommand(

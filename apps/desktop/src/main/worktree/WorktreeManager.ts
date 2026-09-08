@@ -26,7 +26,12 @@ import {
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { classifyError, type ClassifyInput } from './errorClassifier';
-import { gitExec, GitExecError, globalSafeDirectoryLockPath, safeDirectorySpellings } from './gitExec';
+import {
+  gitExec,
+  GitExecError,
+  globalSafeDirectoryLockPath,
+  safeDirectorySpellings,
+} from './gitExec';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -112,9 +117,7 @@ function activeWorktreePath(meta: WorktreeMeta): string {
  * 返回实际成功清理或本就不存在(exit 5)的目标; 其余失败仅告警、不算已清理, 由调用方
  * 决定是否落盘推迟到下次启动再试。
  */
-async function unsetSafeDirectoryEntriesLocked(
-  targets: Iterable<string>,
-): Promise<string[]> {
+async function unsetSafeDirectoryEntriesLocked(targets: Iterable<string>): Promise<string[]> {
   const cleaned: string[] = [];
   for (const target of targets) {
     let failed = false;
@@ -393,6 +396,29 @@ async function withPrecreatedWorktreeOperationQueue<T>(
  * 探测 cwd 状态: 是否 git repo / 是否在 worktree 内 / git 是否可用 / 当前分支 / repo root
  */
 export async function detectCwd(cwd: string): Promise<DetectCwdResp> {
+  // One Git process returns the same snapshot that previously needed five.
+  // Unborn HEADs, older Git versions and newline-containing paths retain the
+  // individual-query fallback below rather than changing the IPC contract.
+  try {
+    const { stdout } = await gitExec(
+      ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
+      cwd,
+    );
+    const lines = stdout.trim().split(/\r?\n/);
+    if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
+      const [root, branch, gitDir, commonDir] = lines;
+      return {
+        isGitRepo: true,
+        isInsideWorktree: path.resolve(cwd, gitDir.trim()) !== path.resolve(cwd, commonDir.trim()),
+        gitInstalled: true,
+        supportsRecoveryKeyDiscard: true,
+        repoRoot: path.resolve(root.trim()),
+        ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
+      };
+    }
+  } catch {
+    // Preserve the existing partial results and error classification.
+  }
   const out: DetectCwdResp = {
     isGitRepo: false,
     isInsideWorktree: false,

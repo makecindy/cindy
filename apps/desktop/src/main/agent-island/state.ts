@@ -52,6 +52,7 @@ export const AGENT_ISLAND_REVEAL_DWELL_MS = 5_000;
 export const AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS = 8_000;
 export const AGENT_ISLAND_ERROR_REVEAL_DWELL_MS = 12_000;
 export const AGENT_ISLAND_EXPANDED_MIN_DWELL_MS = 1_000;
+const AGENT_ISLAND_OUTSIDE_CLICK_PROTECTION_MS = 300;
 export const AGENT_ISLAND_HOVER_EXPAND_DELAY_MS = 500;
 export const AGENT_ISLAND_MOUSE_LEAVE_COLLAPSE_DELAY_MS = 150;
 export const AGENT_ISLAND_HOVER_SHORT_COOLDOWN_MS = 300;
@@ -188,6 +189,7 @@ export interface AgentIslandState {
   activeTransientSessionId: string | null;
   transientRevealQueue: string[];
   pendingFocusSessionId: string | null;
+  pendingFocusDismissOnAck: boolean;
   // Short grace for a renderer ack before OS focus settles. Navigation itself
   // may take longer (for example a renderer reload); its bounded deadline is
   // derived from this timestamp by pendingFocusNavigationExpiresAt.
@@ -236,6 +238,7 @@ export function createAgentIslandState(): AgentIslandState {
     activeTransientSessionId: null,
     transientRevealQueue: [],
     pendingFocusSessionId: null,
+    pendingFocusDismissOnAck: false,
     pendingFocusUntil: null,
     lastDisplayMode: null,
     lastDisplayPolicy: null,
@@ -270,6 +273,7 @@ export function resetAgentIslandState(state: AgentIslandState): void {
   state.activeTransientSessionId = fresh.activeTransientSessionId;
   state.transientRevealQueue = fresh.transientRevealQueue;
   state.pendingFocusSessionId = fresh.pendingFocusSessionId;
+  state.pendingFocusDismissOnAck = fresh.pendingFocusDismissOnAck;
   state.pendingFocusUntil = fresh.pendingFocusUntil;
   state.lastDisplayMode = fresh.lastDisplayMode;
   state.lastDisplayPolicy = fresh.lastDisplayPolicy;
@@ -1005,6 +1009,7 @@ function forgetAgentIslandSession(state: AgentIslandState, sessionId: string): v
   removeQueuedTransientReveal(state, sessionId);
   if (state.pendingFocusSessionId === sessionId) {
     state.pendingFocusSessionId = null;
+    state.pendingFocusDismissOnAck = false;
     state.pendingFocusUntil = null;
   }
 }
@@ -1076,18 +1081,28 @@ export function requestAgentIslandSessionFocus(
 ): boolean {
   const nextSessionId = typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : null;
   if (!nextSessionId) return false;
+  // Closing a completion notification is immediate feedback, not a read ack.
+  // Keep navigation tracking below so a loading window can still open the task.
+  let completionDismissed = false;
+  const isCompletion = state.sessions.get(nextSessionId)?.phase === 'completed';
+  if (isCompletion) {
+    completionDismissed = dismissTransientReveals(state);
+    completionDismissed = collapseAgentIslandToCompact(state, now) || completionDismissed;
+  }
   if (state.visibleSessionIds.has(nextSessionId)) {
     const dismissed = dismissFocusedSessionReveal(state, nextSessionId, now);
     const collapsed = collapseAgentIslandToCompact(state, now);
     state.pendingFocusSessionId = null;
+    state.pendingFocusDismissOnAck = false;
     state.pendingFocusUntil = null;
-    return dismissed || collapsed;
+    return completionDismissed || dismissed || collapsed;
   }
   const previousSessionId = state.pendingFocusSessionId;
   const previousUntil = state.pendingFocusUntil;
   state.pendingFocusSessionId = nextSessionId;
+  state.pendingFocusDismissOnAck = !isCompletion;
   state.pendingFocusUntil = now + AGENT_ISLAND_FOCUS_VERIFY_TIMEOUT_MS;
-  return previousSessionId !== state.pendingFocusSessionId || previousUntil !== state.pendingFocusUntil;
+  return completionDismissed || previousSessionId !== state.pendingFocusSessionId || previousUntil !== state.pendingFocusUntil;
 }
 
 export function isAgentIslandPendingFocusAck(
@@ -1100,7 +1115,11 @@ export function isAgentIslandPendingFocusAck(
 }
 
 export function dismissAgentIslandActiveReveal(state: AgentIslandState, now: number): boolean {
-  if (isExpandedProtected(state, now) && (hasActiveTransientReveal(state, now) || hasActiveBlockingReveal(state, now))) {
+  // Explicit outside clicks have a shorter guard than automatic mouse-leave collapse.
+  const clickProtectedUntil = state.expandedProtectUntil === null ? null
+    : state.expandedProtectUntil - AGENT_ISLAND_EXPANDED_MIN_DWELL_MS + AGENT_ISLAND_OUTSIDE_CLICK_PROTECTION_MS;
+  if (clickProtectedUntil !== null && clickProtectedUntil > now
+    && (hasActiveTransientReveal(state, now) || hasActiveBlockingReveal(state, now))) {
     return false;
   }
   const dismissedTransientReveal = dismissPublishedTransientReveal(state);
@@ -1397,6 +1416,7 @@ function updateFocusVerificationLifecycle(state: AgentIslandState, now: number):
   // Allow slow renderer loading, but do not let an abandoned navigation turn a
   // much later ordinary visit into an acknowledgement of the old island click.
   state.pendingFocusSessionId = null;
+  state.pendingFocusDismissOnAck = false;
   state.pendingFocusUntil = null;
 }
 
@@ -1584,6 +1604,10 @@ function deferActiveTransientReveal(
 
 function dismissPublishedTransientReveal(state: AgentIslandState): boolean {
   if (state.lastDisplayMode !== 'expanded' || state.lastDisplayPolicy !== 'transient') return false;
+  return dismissTransientReveals(state);
+}
+
+function dismissTransientReveals(state: AgentIslandState): boolean {
   const transientSessionIds = [
     state.activeTransientSessionId,
     ...state.transientRevealQueue,
@@ -1967,8 +1991,13 @@ function applyVerifiedFocusIfMatched(
   updateFocusVerificationLifecycle(state, now);
   const focusedSessionId = state.pendingFocusSessionId;
   if (!focusedSessionId || !state.visibleSessionIds.has(focusedSessionId)) return false;
+  const dismissOnAck = state.pendingFocusDismissOnAck;
   state.pendingFocusSessionId = null;
+  state.pendingFocusDismissOnAck = false;
   state.pendingFocusUntil = null;
+  // Completion clicks already closed their notification. A delayed navigation
+  // must not close a newer reveal or a list the user has since reopened.
+  if (!dismissOnAck) return false;
   const dismissed = dismissFocusedSessionReveal(state, focusedSessionId, now);
   const collapsed = collapseAgentIslandToCompact(state, now);
   return dismissed || collapsed;
