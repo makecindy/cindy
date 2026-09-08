@@ -18,6 +18,54 @@ afterEach(() => {
 });
 
 describe('model defaults profile creation provenance', () => {
+  it.each(['EXDEV', 'EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS'])(
+    'publishes a complete new-profile marker without hard-link support (%s)', (code) => {
+      vi.spyOn(fs, 'linkSync').mockImplementation(() => { throw Object.assign(new Error('unsupported'), { code }); });
+      const rename = fs.renameSync;
+      const publish = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        expect(readModelDefaultsProfileOrigin(database)).toBe('pending');
+        expect(JSON.parse(fs.readFileSync(from, 'utf8'))).toEqual({ version: 1, origin: 'new' });
+        rename(from, to);
+      });
+      prepareModelDefaultsProfile(database);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(readModelDefaultsProfileOrigin(database)).toBe('new');
+      fs.writeFileSync(database, 'created database');
+      prepareModelDefaultsProfile(database);
+      expect(readModelDefaultsProfileOrigin(database)).toBe('new');
+      expect(publish).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('does not replace an authoritative marker found before fallback publication', () => {
+    const marker = `${database}.model-defaults-origin.v1.json`;
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+      fs.writeFileSync(marker, JSON.stringify({ version: 1, origin: 'existing' }));
+      throw Object.assign(new Error('unsupported'), { code: 'EPERM' });
+    });
+    const rename = vi.spyOn(fs, 'renameSync');
+    prepareModelDefaultsProfile(database);
+    expect(rename).not.toHaveBeenCalled();
+    expect(readModelDefaultsProfileOrigin(database)).toBe('existing');
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8')).origin).toBe('existing');
+  });
+
+  it('keeps failed fallback publication retryable without exposing a partial marker', () => {
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' });
+    });
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+    expect(() => prepareModelDefaultsProfile(database)).toThrow('disk full');
+    expect(readModelDefaultsProfileOrigin(database)).toBe('pending');
+    expect(fs.existsSync(database)).toBe(false);
+    expect(fs.readdirSync(root)).toEqual([]);
+    rename.mockRestore();
+    prepareModelDefaultsProfile(database);
+    expect(readModelDefaultsProfileOrigin(database)).toBe('new');
+  });
+
   it('recognizes only the published local snapshot across restart, not a reserved or competing target', () => {
     const snapshot = `${database}.snapshot`;
     fs.writeFileSync(snapshot, 'local snapshot');

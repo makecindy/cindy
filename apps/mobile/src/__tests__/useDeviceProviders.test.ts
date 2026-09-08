@@ -22,6 +22,22 @@ const result = (deviceId: string): Providers =>
   ({ providers: [{ id: `${deviceId}-xd` } as ProviderView] });
 
 describe('useDeviceProviders deviceId-aware cache', () => {
+  it('unsupported refresh retires only that device cache without publishing an empty success', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
+    await mod.fetchDeviceProviders('dev-2', async () => result('dev-2'));
+    const otherGen = mod.getDeviceProvidersGen('dev-2');
+    const readyListener = vi.fn();
+    mod.subscribeDeviceProviders('dev-1', readyListener);
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', async () => {
+      throw new Error('[CHANNEL_NOT_ALLOWED] unavailable');
+    })).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(mod.getCachedDeviceProviders('dev-1')).toBeUndefined();
+    expect(readyListener).not.toHaveBeenCalled();
+    expect(mod.getCachedDeviceProviders('dev-2')).toEqual(result('dev-2'));
+    expect(mod.getDeviceProvidersGen('dev-2')).toBe(otherGen);
+  });
+
   it('首次 fetch 调用注入的 fetcher', async () => {
     const fetcher = vi.fn(async () => result('dev-1'));
     const mod = await import('@/device-link/deviceProvidersCache');

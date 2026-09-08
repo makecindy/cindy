@@ -54,8 +54,28 @@ export function prepareModelDefaultsProfile(dbFilePath: string): void {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   try {
     fs.writeFileSync(temporary, JSON.stringify({ version: 1, origin: 'new' }),
-      { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
-    fs.linkSync(temporary, target);
+      { encoding: 'utf-8', flag: 'wx', mode: 0o600, flush: true });
+    try {
+      fs.linkSync(temporary, target);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!['EXDEV', 'EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS'].includes(code ?? '')) throw error;
+      // The caller holds this database's exclusive startup writer lease across
+      // classification, publication and DB creation. Recheck the destination
+      // under that same lease, then atomically publish the fully flushed file.
+      // Direct COPYFILE_EXCL into target could expose a partial JSON marker.
+      if (fs.existsSync(target)) return;
+      fs.renameSync(temporary, target);
+    }
+    let directory: number | undefined;
+    try {
+      directory = fs.openSync(path.dirname(target), 'r');
+      fs.fsyncSync(directory);
+    } catch (error) {
+      if (process.platform !== 'win32') throw error;
+    } finally {
+      if (directory !== undefined) fs.closeSync(directory);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   } finally {

@@ -104,6 +104,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     let cancelled = false;
     const unsubscribeError = subscribeDeviceProvidersError(deviceId, (error) => {
       if (cancelled) return;
+      if (isDeviceProvidersUnsupportedError(error)) setPayload(EMPTY_PAYLOAD);
       setReadyFor(null);
       setLoading(false);
       setError(formatRemoteError(error));

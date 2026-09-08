@@ -13,13 +13,14 @@ import {
   clearAllDeviceProviders,
   evictDeviceProviders,
   fetchDeviceProvidersFresh,
+  getCachedDeviceProviders,
 } from '@/device-link/deviceProvidersCache';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { canUseFlatModelFallback } from '@/session/modelPickerSheetModel';
 import { resolveNewSessionAutoDefault } from '@/session/newSession';
 
-const transport = vi.hoisted(() => ({ listProviders: vi.fn() }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ connectionEpoch: 0 }) }));
+const transport = vi.hoisted(() => ({ listProviders: vi.fn(), epoch: 0 }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ connectionEpoch: transport.epoch }) }));
 vi.mock('@/device-link/useMobileMakerTransport', () => ({ useMobileMakerTransport: () => transport }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -43,6 +44,7 @@ beforeEach(() => {
   clearModelVisibilityMirror();
   vi.useFakeTimers();
   transport.listProviders.mockReset();
+  transport.epoch = 0;
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => {
@@ -53,6 +55,32 @@ afterEach(() => {
 });
 
 describe('mobile provider visibility readiness', () => {
+  it('retires cached routes and overrides after reconnecting to an older host, including remount', async () => {
+    transport.listProviders.mockResolvedValue({ providers: [{ id: 'old-route' }],
+      modelVisibilityOverrides: { 'codex:old-route:old-model': false } });
+    await act(async () => { root.render(createElement(Probe)); });
+    expect(state.providers).toEqual([{ id: 'old-route' }]);
+    expect(state.ready).toBe(true);
+    transport.listProviders.mockRejectedValue(new Error('[CHANNEL_NOT_ALLOWED] unavailable'));
+    transport.epoch += 1;
+    await act(async () => { root.render(createElement(Probe)); });
+    expect(state).toMatchObject({ providers: [], ready: false, loading: false, unsupported: true });
+    expect(state.modelVisibilityOverrides).toBeUndefined();
+    expect(getCachedDeviceProviders('host')).toBeUndefined();
+    expect(allowsFlatFallback()).toBe(true);
+    await act(async () => { root.render(null); });
+    await act(async () => { root.render(createElement(Probe)); });
+    expect(transport.listProviders).toHaveBeenCalledTimes(3);
+    expect(state.providers).toEqual([]);
+    expect(allowsFlatFallback()).toBe(true);
+
+    transport.listProviders.mockResolvedValue({ providers: [{ id: 'new-route' }], modelVisibilityOverrides: {} });
+    transport.epoch += 1;
+    await act(async () => { root.render(createElement(Probe)); });
+    expect(state).toMatchObject({ providers: [{ id: 'new-route' }], ready: true, error: null, unsupported: false });
+    expect(allowsFlatFallback()).toBe(false);
+  });
+
   it('host timeout survives message-only IPC serialization; retries stop and neither picker nor defaults fail open', async () => {
     transport.listProviders.mockImplementation(async () => {
       try {

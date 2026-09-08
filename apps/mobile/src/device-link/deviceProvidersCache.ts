@@ -67,6 +67,9 @@ export function subscribeDeviceProvidersError(deviceId: string, listener: (error
 }
 
 function notifyDeviceProvidersError(deviceId: string, error: unknown): void {
+  // A downgraded host cannot serve any of the cached provider routes. Retire only
+  // that device's snapshot; an empty success notification would incorrectly mark it ready.
+  if (isDeviceProvidersUnsupportedError(error)) cache.delete(deviceId);
   for (const listener of errorListeners.get(deviceId) ?? []) listener(error);
 }
 
