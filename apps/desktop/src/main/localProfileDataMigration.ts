@@ -896,10 +896,11 @@ async function recoverIncompleteDatabasePublication(
   }
   if (marker.phase === 'published') {
     // The snapshot was fully flushed before marker cleanup. Preserve the
-    // target and retire only the bookkeeping marker.
-    if (targetState.mainExists) {
-      recordModelVisibilityAdoption(targetDb);
-    } else {
+    // target and retire only the bookkeeping marker. Its adoption receipt was
+    // persisted before `published`: leave it intact so readModelVisibilityAdoption
+    // can reject a replacement file. Older publications without a receipt must
+    // not acquire new permission to import local model preferences here.
+    if (!targetState.mainExists) {
       for (const suffix of DB_SIDECAR_SUFFIXES) {
         await deps.fs.removeIfExists(`${targetDb}${suffix}`);
       }

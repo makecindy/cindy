@@ -99,6 +99,38 @@ describe('adoptLocalProfileDatabase', () => {
     expect(readModelVisibilityAdoption(path.join(root, 'cindy-owner-b.db'))).toBe('absent');
   });
 
+  it.each(['original', 'replaced', 'legacy'] as const)(
+    'preserves the original receipt during published-copy recovery (%s target)', async (state) => {
+      const { root, deps } = await fixture();
+      const source = path.join(root, 'cindy-local-v1.db');
+      const target = path.join(root, 'cindy-owner-a.db');
+      const receipt = `${target}.model-visibility-adoption.v1.json`;
+      const pending = `${target}.local-profile-copy-pending`;
+      await fs.writeFile(source, 'local-db');
+      await createProductionLocalProfileDataMigrationDeps(root, 'cindy').fs.copyNoReplace(source, target);
+      const originalReceipt = await fs.readFile(receipt, 'utf8');
+      // Reproduce a crash after the durable published marker but before cleanup.
+      await fs.writeFile(pending, JSON.stringify({ version: 1, attemptId: 'interrupted', phase: 'published' }));
+      if (state === 'replaced') {
+        await fs.rename(target, `${target}.retained-original`);
+        await fs.writeFile(target, 'unrelated-cloud-db');
+      } else if (state === 'legacy') {
+        await fs.unlink(receipt);
+      }
+
+      expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('target-exists');
+      expect(readModelVisibilityAdoption(target)).toBe(state === 'original' ? 'adopted' : 'absent');
+      if (state === 'legacy') {
+        await expect(fs.access(receipt)).rejects.toThrow();
+      } else {
+        expect(await fs.readFile(receipt, 'utf8')).toBe(originalReceipt);
+      }
+      expect(await fs.readFile(target, 'utf8')).toBe(state === 'replaced' ? 'unrelated-cloud-db' : 'local-db');
+      expect(await fs.readFile(source, 'utf8')).toBe('local-db');
+      await expect(fs.access(pending)).rejects.toThrow();
+    },
+  );
+
   it('does not grant a handoff when a different target wins publication', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');
