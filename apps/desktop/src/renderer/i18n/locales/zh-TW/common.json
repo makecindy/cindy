@@ -136,7 +136,8 @@
       "help": "幫助",
       "about": "關於",
       "imBot": "IM 機器人",
-      "ghosts": "插件"
+      "ghosts": "插件",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "使用者",
@@ -5478,6 +5479,19 @@
       "hint": "遠端 IM 會為需要審批的操作保留確認流程。",
       "fullAccessDisabled": "遠端 IM 不支援完全訪問，避免無法安全確認的操作被直接執行。",
       "permissionModeDisabled": "遠端 IM 使用 Cindy 桌面端確認策略，因此該權限模式不可用。"
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "打開工具目錄",
+      "description": "下方卡片會檢查本機環境，並可安裝缺少的可攜工具。原生編譯工具缺失時會顯示官方下載指引。",
+      "checking": "正在檢查環境…",
+      "forceManaged": {
+        "title": "測試安裝：忽略系統工具",
+        "description": "僅開發版可用。可攜式工具只檢查 Cindy 管理的副本，並模擬 Windows 原生編譯工具缺失。切換開關只重新檢查，不會開始安裝。",
+        "ariaLabel": "測試安裝：忽略系統工具",
+        "enabledHint": "下方卡片可以測試 Windows 工具的下載與安裝，已安裝的 Cindy 工具會重複使用。開關立即生效，重新整理或重啟後關閉，不更動系統工具。",
+        "reportHint": "安裝測試已開啟：可攜式工具使用 Cindy 管理的副本。Windows 原生編譯工具會模擬缺失，以便測試官方安裝指引；關閉開關可檢查真實狀態。"
+      }
     }
   },
   "remoteDevice": {
@@ -8008,7 +8022,10 @@
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
       "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
-      "ruleSeparator": "、"
+      "ruleSeparator": "、",
+      "submitting": "正在送出確認…",
+      "submissionFailed": "未收到確認結果。請檢查連線，若確認框仍在，可重新點擊。",
+      "requestEnded": "這則權限請求已結束或已被處理，請以最新狀態為準。"
     },
     "deviceSwitcher": {
       "label": "裝置",
@@ -8884,7 +8901,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
       "LOCAL_OLLAMA_NOT_READY": "本機 Ollama 尚未就緒。請打開設定 → 模型供應商 → Ollama。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。"
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。",
+      "MCP_APPROVAL_AUTO_BLOCKED": "這次工具呼叫被自動審核攔截，未收到你手動拒絕的紀錄。",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "權限確認逾時，未收到有效的確認結果。僅憑逾時無法判斷你是否點過按鈕。",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "這次權限確認未完成，未收到你手動拒絕的紀錄。"
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
@@ -12018,5 +12038,145 @@
     "realtime": "用於即時語音交流。",
     "embedding": "依語意尋找相關內容。",
     "compression": "用於精簡冗長內容。"
+  },
+  "cindyMakeDoctor": {
+    "description": "檢查本機建置 Cindy 所需的環境。用法：/cindy-make-doctor",
+    "title": "Cindy Make · 環境檢查",
+    "scope": "檢查本機現有工具",
+    "limits": "本次只檢查，不安裝或取得原始碼。通過基本檢查後，建置時仍需檢查原始碼和專案相依套件。",
+    "running": "正在檢查",
+    "passed": "基本檢查已通過",
+    "needsAttention": "有項目需要處理",
+    "cancelled": "檢查已停止",
+    "failed": "檢查未完成，請重試",
+    "details": "展開檢查明細",
+    "hideDetails": "收起檢查明細",
+    "stop": "停止檢查",
+    "recheck": "重新檢查",
+    "timeout": "檢查逾時，請確認工具可正常啟動後重試。",
+    "commandUnavailable": "命令清單尚未就緒，或目前執行的版本尚未包含此命令。請稍後重試或更新 Cindy。",
+    "usage": "環境檢查不需要參數或附件。請單獨傳送 /cindy-make-doctor。",
+    "localOnly": "目前請在本機 Desktop 使用 /cindy-make-doctor；暫不支援 SSH 或裝置互聯。",
+    "checks": {
+      "platform": "系統與架構",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "原生編譯工具",
+      "storage": "儲存空間與權限"
+    },
+    "checkStatus": {
+      "pending": "待檢查",
+      "checking": "檢查中",
+      "passed": "已通過",
+      "missing": "未找到",
+      "incompatible": "版本不相容",
+      "failed": "未能驗證",
+      "warning": "需要留意",
+      "cancelled": "已停止",
+      "downloading": "下載中",
+      "installing": "安裝中"
+    },
+    "requirements": {
+      "platform": "支援 Windows x64、macOS x64/arm64、Linux x64/arm64，在對應系統上建置。",
+      "git": "需要可執行的 Git 2.x 或更新版本，不需要 GitHub 帳號。",
+      "gitLfs": "需要 Git LFS，以取得原始碼中的大型檔案。",
+      "node": "需要 Node.js ≥ 22.12。",
+      "pnpm": "需要 pnpm ≥ 10.7 且 < 11；建議 10.33.2。檢查時禁止自動下載。",
+      "python": "需要 Python 3.{{pythonMinor}} 或更新的 Python 3。",
+      "native": "需要目前系統的 C/C++ 編譯工具。",
+      "nativeWin": "需要 Visual Studio C++ 建置工具、MSBuild 和 Windows 10/11 SDK。",
+      "nativeMac": "需要 Xcode Command Line Tools、macOS SDK 和 make。",
+      "nativeLinux": "需要 g++ 和 make（通常由 build-essential 提供）。",
+      "storage": "檢查 Cindy 資料目錄的寫入權限；目前可用 {{freeGiB}} GiB。建議至少預留 10 GiB，實際用量隨建置而異。"
+    }
+  },
+  "cindyMake": {
+    "description": "檢查並準備本機工具，開始製作個人版 Cindy。用法：/cindy-make [修改需求]",
+    "localOnly": "/cindy-make 暫僅支援本機桌面任務。請切回本機後使用。",
+    "usage": "請使用 /cindy-make 或 /cindy-make 需求。環境檢查暫不支援附件、引用或註解，輸入已保留。",
+    "request": "修改需求",
+    "prepare": {
+      "scope": "重用相容工具，自動下載安裝缺少的可攜式工具",
+      "limits": "工具儲存在 Cindy 資料目錄，不修改全域工具和 PATH。系統編譯工具需透過系統安裝程式安裝。目前尚不取得原始碼或建置。",
+      "running": "正在準備工具",
+      "passed": "基礎環境已就緒",
+      "needsAttention": "部分項目需要處理",
+      "cancelled": "已停止準備",
+      "failed": "準備未完成，請重試。",
+      "stop": "停止",
+      "retry": "重試準備",
+      "source": {
+        "system": "現有工具",
+        "managed": "Cindy 管理"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "安裝指南",
+      "install": "安裝缺少的環境",
+      "errors": {
+        "downloadFailed": "下載失敗，請檢查網路後重試。",
+        "checksum": "下載檔案未通過完整性驗證，未安裝，請重試。",
+        "installFailed": "工具無法安裝或啟動。請檢查可用空間和系統相容性，或手動安裝相容工具後重試。",
+        "busy": "另一個環境準備正在執行，請等待完成後重試。"
+      },
+      "guidance": {
+        "windows": "安裝 Visual Studio Build Tools，勾選「使用 C++ 的桌面開發」、MSBuild 和 Windows 10/11 SDK，然後重試。",
+        "mac": "執行下方命令安裝 Xcode Command Line Tools（包含 Git 和 macOS SDK），完成後重試。",
+        "linux": "使用系統套件管理員安裝 Git 和 C/C++ 編譯工具。選擇下方對應發行版的命令，完成後重試。"
+      }
+    },
+    "upstream": {
+      "pending": "環境全部通過後，自動查詢上游。",
+      "needsRequest": "等待補充修改需求",
+      "needRequest": "填寫要修改的功能名稱或具體錯誤，查詢相關上游內容。",
+      "placeholder": "例如：修復訊息串流閃爍",
+      "search": "查詢上游",
+      "searching": "正在查詢上游 Issue 和 PR…",
+      "found": "找到可能相關的上游內容",
+      "notFound": "沒有找到符合的上游內容",
+      "failed": "上游查詢失敗",
+      "cancelled": "上游查詢已停止",
+      "terms": "查詢關鍵字：{{terms}}",
+      "author": "作者：{{author}}",
+      "updated": "更新於 {{date}}",
+      "notFoundHint": "沒有找到符合這些關鍵字的公開 Issue 或 PR，換一種描述可能會有其他結果。",
+      "resultHint": "請開啟連結判斷是否相關。這裡只顯示目前開放的 Issue 與 PR。",
+      "wait": "等待上游",
+      "personal": "繼續製作個人版",
+      "retry": "重新檢查並查詢",
+      "expand": "展開上游結果",
+      "collapse": "收起上游結果",
+      "count": "找到 {{count}} 筆可能相關的開放 Issue 或 PR",
+
+      "kind": {
+        "issue": "Issue",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "開啟中",
+        "closed": "已關閉",
+        "merged": "已合併",
+        "unknown": "已關閉 · 合併狀態未確認"
+      },
+      "choice": {
+        "wait": "已選擇等待上游",
+        "personal": "已選擇製作個人版"
+      },
+      "decisionHint": {
+        "wait": "本次流程已停止，尚未訂閱通知或設定自動更新。",
+        "personal": "選擇已記錄在本卡片中。原始碼準備和建置尚未接入，目前沒有下載或修改原始碼。"
+      },
+      "failure": {
+        "network": "無法連線 GitHub，請檢查網路後重試。",
+        "rateLimit": "GitHub 查詢次數受限，請稍後重試。",
+        "timeout": "上游查詢逾時，請重試。",
+        "invalidResponse": "GitHub 回傳的結果不完整或無法識別，請重試。"
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · 準備環境",
+    "stepUpstream": "2 · 查詢上游"
   }
 }

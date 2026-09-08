@@ -83,7 +83,7 @@ function makeFakeHost(deviceId: string) {
           requestId: args[0] as string,
           decision: args[1] as Record<string, unknown>,
         });
-        return null;
+        return { accepted: true };
       case 'maker:get-pending-interactions':
         return pending.get(args[0] as string) ?? [];
       case 'local-db:messages:list':
@@ -147,7 +147,7 @@ type FakeHost = ReturnType<typeof makeFakeHost>;
 /** window.electronAPI 桩:maker.* 本机响应通道用 vi.fn(校验「本机会话不经隧道」),deviceLink 接 FakeHost。 */
 function stubElectronApi(host: FakeHost) {
   const fanOut = () => () => () => {};
-  const localResolveInteraction = vi.fn(async () => {});
+  const localResolveInteraction = vi.fn(async () => ({ accepted: true }));
   const localSetPermissionMode = vi.fn(async () => {});
   const localSetFastMode = vi.fn(async () => {});
   const localGetPendingInteractions = vi.fn(
@@ -237,6 +237,39 @@ afterEach(() => {
 });
 
 describe('device-link 远程交互往返 — permission', () => {
+  it('远程确认失败只重查当前请求，不影响同一被控端的另一条确认', async () => {
+    const failedSession = sid();
+    const healthySession = sid();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: failedSession }, { id: healthySession }] as Session[]);
+    const request = { kind: 'permission', requestId: 'failed-receipt', toolName: 'Read', input: {} };
+    host.seedPending(failedSession, request);
+    host.hostInteraction(failedSession, request);
+    host.hostInteraction(healthySession, { ...request, requestId: 'healthy-receipt' });
+    host.invoke.mockRejectedValueOnce(new Error('receipt lost'));
+    makerChatStore.respondToPermission(failedSession, { behavior: 'allow' });
+    makerChatStore.respondToPermission(healthySession, { behavior: 'allow' });
+    await flush();
+    expect(makerChatStore.getSnapshot(failedSession).pendingPermission).toMatchObject({ submitting: false, submissionFailed: true });
+    expect(makerChatStore.getSnapshot(healthySession).pendingPermission).toBeNull();
+    expect(host.resolved.map((call) => call.requestId)).toEqual(['healthy-receipt']);
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [failedSession]);
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    expect(local.localGetPendingInteractions).not.toHaveBeenCalled();
+  });
+
+  it('切换数据归属后，旧的确认回包不得修改当前卡片', async () => {
+    const s = openRemoteSession();
+    let resolveReceipt!: (value: { accepted: boolean }) => void;
+    host.invoke.mockReturnValueOnce(new Promise((resolve) => { resolveReceipt = resolve; }));
+    host.hostInteraction(s, { kind: 'permission', requestId: 'old-owner', toolName: 'Read', input: {} });
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    const pending = makerChatStore.getSnapshot(s).pendingPermission;
+    setDataOwnerGeneration('new-owner', 1);
+    resolveReceipt({ accepted: true });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBe(pending);
+  });
+
   it('被控端 permission 请求 → 控制端置 pendingPermission → allow 经隧道回传', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {

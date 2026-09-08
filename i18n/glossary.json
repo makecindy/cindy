@@ -14,6 +14,18 @@
   ],
   "terms": [
     {
+      "id": "cindy-make",
+      "status": "proposed",
+      "en": "Cindy Make",
+      "translations": {
+        "zh-CN": "Cindy Make",
+        "zh-TW": "Cindy Make",
+        "ja": "Cindy Make",
+        "ko": "Cindy Make"
+      },
+      "note": "用户通过内置 /cindy-make 显式开启的 Cindy 个人版制作流程，先复用 /cindy-make-doctor 检查本机环境，再按平台补齐缺少的便携工具，并在消息流卡片中保留修改需求；Doctor 自身只检查，上游查询与构建分阶段接入。命令名已由用户指定，卡片保留同一专名。"
+    },
+    {
       "id": "cindy-ai-free-tier",
       "status": "proposed",
       "en": "Free tier",
