@@ -500,6 +500,8 @@ describe("cindy_helper MCP server", () => {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }
+      const direct = await client.callTool({ name: "start_session_task", arguments: { instruction: "do work" } });
+      expect(parsePayload(direct)).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       expect(callback).not.toHaveBeenCalled();
     } finally {
       await client.close();
@@ -623,6 +625,51 @@ describe("cindy_helper MCP server", () => {
         errorCode: "CAPABILITY_NOT_AVAILABLE",
       });
       expect(sendToSession).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("direct Bot MCP tools", () => {
+  it.each(["claude-code", "codex"] as const)("exposes and executes tasks on %s without discovery", async (agentKind) => {
+    let sessionId: string | undefined = "bot-parent";
+    const start = vi.fn(async () => ({ ok: true as const, taskId: "task-1" }));
+    const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async ({ sessionId }) => sessionId === "bot-parent" ? "bot" : "default",
+      sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
+    }, {
+      agentKind, workingDir: "",
+      getSessionContext: () => sessionId ? { agentKind, workingDir: "/bot", sessionId } : undefined,
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "direct-bot-test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const first = await client.listTools();
+      const task = first.tools.find(t => t.name === "start_session_task");
+      expect(task?.inputSchema.required).toContain("instruction");
+      expect(first.tools.map(t => t.name)).toEqual(expect.arrayContaining([
+        "start_session_task", "check_session_task", "message_session_task", "stop_session_task",
+      ]));
+      expect(await client.listTools()).toEqual(first);
+      const result = await client.callTool({ name: "start_session_task", arguments: {
+        instruction: "Fix the project", working_dir: "/repo", title: "Fix",
+      } });
+      expect(parsePayload(result)).toMatchObject({ ok: true });
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({
+        callerSessionId: "bot-parent", objective: "Fix the project", workingDir: "/repo", title: "Fix",
+      }));
+      // A shared Codex bridge must re-check the caller for both listing and execution.
+      for (const next of ["ordinary-task", undefined]) {
+        sessionId = next;
+        expect((await client.listTools()).tools.map(t => t.name).sort()).toEqual(["call_tool", "list_tools"]);
+        expect(parsePayload(await client.callTool({ name: "start_session_task", arguments: { instruction: "denied" } })))
+          .toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      }
+      expect(start).toHaveBeenCalledTimes(1);
     } finally {
       await client.close();
       await server.close();

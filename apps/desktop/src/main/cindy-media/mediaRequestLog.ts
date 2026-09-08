@@ -96,3 +96,11 @@ export function mediaRequestParamsForLog(value: unknown): unknown {
 
   return visit(value, null, 0);
 }
+
+/** Keep diagnostic reasons without logging error payloads, stacks, or credential-bearing URLs. */
+export function mediaErrorForLog(error: unknown): string {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string' ? error : `Non-Error thrown (${typeof error})`;
+  return redactSensitiveText(message.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, '[REDACTED_URL]')).slice(0, 1_000);
+}

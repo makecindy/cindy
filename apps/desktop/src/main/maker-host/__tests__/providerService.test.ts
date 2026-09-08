@@ -23,6 +23,24 @@ describe('createProviderService', () => {
     expect((await svc.listProviders()).find((p) => p.id === 'openai')?.availableMediaModelIds).toEqual([]);
   });
 
+  it('keeps guest provider configuration available when optional media discovery fails', async () => {
+    let failed = true;
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getAvailableMediaModels: () => {
+        if (failed) throw new Error('art: proxy.baseUrl is required');
+        return [{ providerId: 'openai', id: 'gpt-image-2' }];
+      },
+    });
+    const providers = await svc.listProviders();
+    expect(providers.map((provider) => provider.id)).toEqual(BUNDLED_CATALOG.providers.map((provider) => provider.id));
+    expect(providers.every((provider) => !provider.connected)).toBe(true);
+    expect(providers.every((provider) => provider.availableMediaModelIds?.length === 0)).toBe(true);
+    failed = false;
+    expect((await svc.listProviders()).find((provider) => provider.id === 'openai')?.availableMediaModelIds).toEqual(['gpt-image-2']);
+  });
+
   it('lists providers with injected connection state', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,
