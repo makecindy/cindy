@@ -207,9 +207,25 @@ export function expandedRegistryEntries(
         registryEntryDefaults(registry, entry, route),
         route.forceOverrides,
       );
-      const perAgent = entry.perAgent
+      // Legacy schemas cannot encode a runtime clear against a group default.
+      // Move that default to the other runtimes so omission remains an actual clear.
+      const runtimeClear =
+        metadata.defaultEffort != null &&
+        route.agents.some(
+          (agent) =>
+            mergeModelMetadata(
+              registryEntryDefaults(registry, entry, route, agent),
+              route.forceOverrides,
+            ).defaultEffort === null,
+        );
+      const overrides = runtimeClear
         ? Object.fromEntries(
-            Object.entries(entry.perAgent).map(([agent, override]) => {
+            route.agents.map((agent) => [agent, entry.perAgent?.[agent] ?? {}]),
+          )
+        : entry.perAgent;
+      const perAgent = overrides
+        ? Object.fromEntries(
+            Object.entries(overrides).map(([agent, override]) => {
               const effective = mergeModelMetadata(
                 registryEntryDefaults(registry, entry, route, agent),
                 route.forceOverrides,
@@ -242,8 +258,18 @@ export function expandedRegistryEntries(
         perAgent,
         ...(defaultEffort != null ? { defaultEffort } : {}),
       };
-      if (defaultEffort === null) delete expanded.defaultEffort;
-      const key = JSON.stringify({ ...expanded, routes: undefined });
+      if (defaultEffort === null || runtimeClear) delete expanded.defaultEffort;
+      const key = JSON.stringify(
+        { ...expanded, routes: undefined },
+        (_key, value) =>
+          value && typeof value === "object" && !Array.isArray(value)
+            ? Object.fromEntries(
+                Object.keys(value)
+                  .sort()
+                  .map((key) => [key, value[key]]),
+              )
+            : value,
+      );
       const previous = groups.get(key);
       if (previous) previous.routes.push(route);
       else groups.set(key, { ...expanded, routes: [route] });

@@ -142,7 +142,20 @@ export interface ModelRegistryEntryV1 extends ModelRegistryEntryBase {
   newSessionDefault?: never;
 }
 
-export interface ModelRegistryEntry extends ModelRegistryEntryBase {
+export interface ModelRegistryAgentOverride extends Omit<
+  ModelAgentOverride,
+  "defaultEffort"
+> {
+  defaultEffort?: ModelEffort | null;
+}
+
+export interface ModelRegistryEntry extends Omit<
+  ModelRegistryEntryBase,
+  "defaultEffort" | "perAgent"
+> {
+  /** V4 only: null explicitly clears an inherited default. */
+  defaultEffort?: ModelEffort | null;
+  perAgent?: Partial<Record<ModelAgent, ModelRegistryAgentOverride>>;
   newSessionDefault?: ModelAccessV2Agent[];
   /** V3: model's canonical API, independent of any harness. Null explicitly means unverified. */
   nativeApi?: ModelNativeApi | null;

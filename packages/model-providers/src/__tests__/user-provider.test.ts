@@ -1354,7 +1354,6 @@ describe("custom model defaults with partial registry metadata", () => {
         ],
       };
       if (declared === null) {
-        // @ts-expect-error Exercise malformed registry metadata outside the wire contract.
         modelRegistry.models[0].defaultEffort = declared;
       } else if (declared !== undefined) {
         modelRegistry.models[0].defaultEffort = declared;

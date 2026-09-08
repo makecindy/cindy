@@ -1101,6 +1101,7 @@ function registryEntryError(
   if (error) return error;
   if (
     value.defaultEffort !== undefined &&
+    !(schemaVersion >= 4 && value.defaultEffort === null) &&
     !isModelEffort(value.defaultEffort)
   ) {
     return `${path}.defaultEffort must be a supported effort value when present`;
@@ -1111,7 +1112,7 @@ function registryEntryError(
       : undefined;
   if (
     validateDependencies &&
-    value.defaultEffort !== undefined &&
+    value.defaultEffort != null &&
     efforts !== undefined &&
     !efforts.includes(value.defaultEffort as ModelEffort)
   ) {
@@ -1161,7 +1162,7 @@ function registryEntryError(
         `${path}.perAgent.${agent}`,
         efforts,
         MODEL_AGENT_OVERRIDE_FIELDS,
-        false,
+        schemaVersion >= 4,
         isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
         validateDependencies,
       );

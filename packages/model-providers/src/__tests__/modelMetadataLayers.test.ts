@@ -238,3 +238,95 @@ it("validates force corrections after per-agent defaults", () => {
     defaultEffort: "low",
   });
 });
+
+it("groups equal effective route metadata regardless of layer key insertion order", () => {
+  const r: ModelRegistry = {
+    schemaVersion: 4,
+    updatedAt: registry.updatedAt,
+    models: [
+      {
+        id: "stable",
+        name: "Stable",
+        routes: [
+          {
+            providerId: "one",
+            modelId: "model",
+            agents: ["codex"],
+            defaults: { contextWindow: 200, supportsFastMode: false },
+            forceOverrides: { maxOutputTokens: 20 },
+            overrideReason: "Verified limit",
+          },
+          {
+            providerId: "two",
+            modelId: "model",
+            agents: ["codex"],
+            defaults: { maxOutputTokens: 20, supportsFastMode: false },
+            forceOverrides: { contextWindow: 200 },
+            overrideReason: "Verified window",
+          },
+        ],
+      },
+    ],
+  };
+  const before = structuredClone(r);
+  expect(parseModelRegistry(r).ok).toBe(true);
+  const projected = expandedRegistryEntries(r);
+  expect(projected).toHaveLength(1);
+  expect(projected[0].id).toBe("stable");
+  expect(projected[0].routes.map((route) => route.providerId)).toEqual([
+    "one",
+    "two",
+  ]);
+  expect(r).toEqual(before);
+  r.models[0].routes[1].forceOverrides!.contextWindow = 300;
+  expect(expandedRegistryEntries(r)).toHaveLength(2);
+});
+
+it.each(["entry", "runtime"] as const)(
+  "accepts V4 null clears at the %s layer and keeps legacy wire valid",
+  (layer) => {
+    const r = structuredClone(registry);
+    r.models[0].routes[0].agents = ["codex", "claude-code"];
+    if (layer === "entry") r.models[0].defaultEffort = null;
+    else
+      r.models[0].perAgent = {
+        codex: { efforts: ["high"], defaultEffort: null },
+      };
+    expect(parseModelRegistry(r).ok).toBe(true);
+    expect(
+      resolveModelMetadata(
+        r,
+        "supplier",
+        "model",
+        undefined,
+        undefined,
+        "codex",
+      ).defaultEffort,
+    ).toBeNull();
+    const projected = expandedRegistryEntries(r);
+    expect(projected[0].defaultEffort).toBeUndefined();
+    expect(projected[0].perAgent?.codex?.defaultEffort).toBeUndefined();
+    if (layer === "runtime")
+      expect(projected[0].perAgent?.["claude-code"]?.defaultEffort).toBe("low");
+    for (const schemaVersion of [1, 2, 3] as const) {
+      const legacy = structuredClone(r);
+      legacy.schemaVersion = schemaVersion;
+      delete legacy.baseModels;
+      delete legacy.models[0].modelRef;
+      delete legacy.models[0].routes[0].defaults;
+      delete legacy.models[0].routes[0].forceOverrides;
+      delete legacy.models[0].routes[0].overrideReason;
+      expect(parseModelRegistry(legacy).ok).toBe(false);
+      legacy.models = structuredClone(projected);
+      for (const entry of legacy.models) {
+        delete entry.modelRef;
+        for (const route of entry.routes) {
+          delete route.defaults;
+          delete route.forceOverrides;
+          delete route.overrideReason;
+        }
+      }
+      expect(parseModelRegistry(legacy).ok).toBe(true);
+    }
+  },
+);
