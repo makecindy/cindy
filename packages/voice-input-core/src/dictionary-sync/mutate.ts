@@ -11,7 +11,7 @@
  * 恒等于真实事件数,与同步了多少次、以什么拓扑同步无关。
  */
 
-import { compareHlc, hlcWallMs, tickHlc, type HlcClock, type HlcTimestamp } from './hlc';
+import { compareHlc, formatHlc, hlcWallMs, tickHlc, type HlcClock, type HlcTimestamp } from './hlc';
 import { DICTIONARY_CANDIDATE_PROMOTION_COUNT } from '../dictionaryLearningPolicy';
 import { MATERIALIZED_ID_PREFIX, materializeDictionary, pickDisplayText } from './materialize';
 import { deriveMoveTag } from './move-tag';
@@ -131,7 +131,7 @@ export function recordLearningEvent(
           nowMs: input.nowMs,
         }),
       },
-    }),
+    }, ticked.clock),
     clock: ticked.clock,
     changed: true,
   };
@@ -186,14 +186,15 @@ export function promoteTermToEntry(
     return { state, clock, changed: false };
   }
 
+  const ticked = tickHlc(clock, input.nowMs);
   const incarnations = copyDictionaryMap(record.incarnations);
   for (const incarnation of live) {
     if (incarnation.stage === 'entry') continue;
     incarnations[incarnation.tag] = { ...incarnation, stage: 'entry', updatedAt: input.nowMs };
   }
   return {
-    state: putRecord(state, input.termKey, { ...record, incarnations }),
-    clock,
+    state: putRecord(state, input.termKey, { ...record, incarnations }, ticked.clock),
+    clock: ticked.clock,
     changed: true,
   };
 }
@@ -205,17 +206,20 @@ export function promoteEligibleDictionaryCandidates(
   nowMs: number,
 ): MutationResult {
   let next = state;
+  let nextClock = clock;
   for (const [key, record] of Object.entries(state.records)) {
     const live = listLiveIncarnations(record);
     if (hasDictionaryKey(state.suppressed, key) || live.some((item) => item.stage === 'entry')) continue;
     const count = live.reduce((sum, item) => sum + readCounterTotal(item.counters), 0);
     if (count < DICTIONARY_CANDIDATE_PROMOTION_COUNT) continue;
-    next = promoteTermToEntry(next, clock, {
+    const promoted = promoteTermToEntry(next, nextClock, {
       termKey: key,
       nowMs: Math.max(nowMs, ...live.map((item) => item.updatedAt)),
-    }).state;
+    });
+    next = promoted.state;
+    nextClock = promoted.clock;
   }
-  return { state: next, clock, changed: next !== state };
+  return { state: next, clock: nextClock, changed: next !== state };
 }
 
 export function seedTerm(
@@ -658,7 +662,7 @@ export function replaceTermAliases(
   }
 
   return {
-    state: putRecord(state, key, { ...record, incarnations }),
+    state: putRecord(state, key, { ...record, incarnations }, ticked.clock),
     clock: ticked.clock,
     changed: true,
   };
@@ -818,8 +822,13 @@ function putRecord(
   state: VoiceDictionarySyncState,
   key: string,
   record: DictionaryRecord,
+  mutationClock?: HlcClock,
 ): VoiceDictionarySyncState {
-  return { ...state, records: withDictionaryKey(state.records, key, record) };
+  const next = { ...state, records: withDictionaryKey(state.records, key, record) };
+  if (mutationClock) {
+    next.mutationVector = withDictionaryKey(state.mutationVector, mutationClock.nodeId, formatHlc(mutationClock));
+  }
+  return next;
 }
 
 function createIncarnation(input: {

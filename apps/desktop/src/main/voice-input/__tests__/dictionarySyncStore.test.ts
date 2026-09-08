@@ -47,6 +47,8 @@ const { sanitizeDictionaryLearningActions, voiceInputDataStore } = await import(
 const {
   DEFAULT_MATERIALIZE_LIMITS,
   addManualEntry,
+  buildStateVersionVector,
+  formatHlc,
   createEmptySyncState,
   createHlcClock,
   deleteTerms,
@@ -306,13 +308,18 @@ describe('词典同步落盘 —— 写入路径', () => {
     ]);
     // Simulate an old client sidecar that has the counts but has not promoted the stage.
     const stored = JSON.parse(fs.readFileSync(ownerPath(SYNC_FILE), 'utf8'));
+    delete stored.state.mutationVector;
     for (const item of Object.values(stored.state.records.slack.incarnations) as Array<{ stage: string }>) {
       item.stage = 'candidate';
     }
     fs.writeFileSync(ownerPath(SYNC_FILE), JSON.stringify(stored));
     resetStoreCaches();
     expect(voiceInputDataStore.getSettings().dictionaryEntries[0]).toMatchObject({ text: 'Slack', frequency: 2 });
-    const reloaded = JSON.parse(fs.readFileSync(ownerPath(SYNC_FILE), 'utf8')).state;
+    const persisted = JSON.parse(fs.readFileSync(ownerPath(SYNC_FILE), 'utf8'));
+    const reloaded = persisted.state;
+    expect(reloaded.mutationVector[persisted.nodeId]).toBe(formatHlc({ ...persisted.clock, nodeId: persisted.nodeId }));
+    resetStoreCaches();
+    expect(voiceDictionarySyncStore.getState().mutationVector).toEqual(reloaded.mutationVector);
     expect(Object.values(reloaded.records.slack.incarnations)).toEqual([
       expect.objectContaining({ stage: 'entry' }),
     ]);
@@ -320,6 +327,21 @@ describe('词典同步落盘 —— 写入路径', () => {
 });
 
 describe('词典同步落盘 —— 合并与回收', () => {
+  it('无别名计数和版本进度一起持久化，重启和旧副本重放不回退', () => {
+    writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
+    const action = { action: 'add_candidate' as const, term: 'Slack', aliases: [], type: 'product_name' as const, confidence: 'medium' as const };
+    voiceInputDataStore.recordDictionaryLearningActions([action]);
+    const stale = voiceDictionarySyncStore.getState();
+    voiceInputDataStore.recordDictionaryLearningActions([action]);
+    const fresh = voiceDictionarySyncStore.getState();
+    expect(buildStateVersionVector(fresh)).not.toEqual(buildStateVersionVector(stale));
+    resetStoreCaches();
+    expect(buildStateVersionVector(voiceDictionarySyncStore.getState())).toEqual(buildStateVersionVector(fresh));
+    voiceInputDataStore.mergeRemoteDictionaryState(stale);
+    expect(buildStateVersionVector(voiceDictionarySyncStore.getState())).toEqual(buildStateVersionVector(fresh));
+    expect(voiceInputDataStore.getSettings().dictionaryEntries[0]).toMatchObject({ text: 'Slack', frequency: 2 });
+  });
+
   it('本机一次候选加远端一次后转正式,同步重放和重启不重复累加', () => {
     writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
     const action = { action: 'add_candidate' as const, term: 'Slack', aliases: ['Slate'], type: 'product_name' as const, confidence: 'medium' as const };

@@ -391,7 +391,11 @@ export class VoiceDictionarySyncStore {
     // Keep write failures outside the read-error fallback: never replace valid data with empty state.
     if (!this.data.incompatible) {
       const promoted = promoteEligibleDictionaryCandidates(this.data.state, this.readClock(this.data), Date.now());
-      if (promoted.changed) this.persist({ ...this.data, state: promoted.state });
+      if (promoted.changed) this.persist({
+        ...this.data,
+        state: promoted.state,
+        clock: { wallMs: promoted.clock.wallMs, counter: promoted.clock.counter },
+      });
     }
     return this.data;
   }
@@ -403,7 +407,11 @@ export class VoiceDictionarySyncStore {
     const filePath = getDataFilePath();
     const combined = this.mergeWithOnDiskState(next, filePath);
     const promoted = promoteEligibleDictionaryCandidates(combined.state, this.readClock(combined), Date.now());
-    const merged = promoted.changed ? { ...combined, state: promoted.state } : combined;
+    const merged = promoted.changed ? {
+      ...combined,
+      state: promoted.state,
+      clock: { wallMs: promoted.clock.wallMs, counter: promoted.clock.counter },
+    } : combined;
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -563,7 +571,12 @@ function adoptDictionaryMaps(state: VoiceDictionarySyncState): VoiceDictionarySy
   }
   const suppressed = createDictionaryMap<DictionarySuppression>();
   for (const [key, value] of Object.entries(state.suppressed)) suppressed[key] = { ...value };
-  return { version: state.version, records, suppressed };
+  const adopted: VoiceDictionarySyncState = { version: state.version, records, suppressed };
+  if (state.mutationVector !== undefined) {
+    adopted.mutationVector = createDictionaryMap<string>();
+    for (const [nodeId, stamp] of Object.entries(state.mutationVector)) adopted.mutationVector[nodeId] = stamp;
+  }
+  return adopted;
 }
 
 /** 计数桶的键是 nodeId,同样来自不可信输入。 */
