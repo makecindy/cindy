@@ -1,0 +1,467 @@
+{
+  "version": 1,
+  "id": "voice-vocabulary-fresh-v2",
+  "labelPolicy": "24 analyst-constructed cases originally frozen before their first live evaluation. Subsequently used in prompt development; now a known regression set, not unseen validation. Not real user recordings. Labels remain unchanged; report separately from v1.",
+  "cases": [
+    {
+      "id": "raycast",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "瑞卡斯的搜索框打开不了。",
+        "afterText": "Raycast 的搜索框打开不了。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Raycast"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Raycast",
+          "alias": "瑞卡斯",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "otel",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "先检查 Open Telemetery 的日志导出。",
+        "afterText": "先检查 OpenTelemetry 的日志导出。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "OpenTelemetry"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "OpenTelemetry",
+          "alias": "Open Telemetery",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "docker-compose",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "我准备用 dock compose 起服务。",
+        "afterText": "我准备用 Docker Compose 起服务。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Docker Compose"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Docker Compose",
+          "alias": "dock compose",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "duckdb",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "这张表写到 duck be 里面了。",
+        "afterText": "这张表写到 DuckDB 里面了。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "DuckDB"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "DuckDB",
+          "alias": "duck be",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "raw-zustand",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "检查 zoo stand 中保存的状态。",
+        "afterText": "检查 Zustand 中保存的状态。",
+        "rawTranscriptText": "检查猪站中保存的状态。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Zustand"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Zustand",
+          "alias": "zoo stand",
+          "required": false
+        },
+        {
+          "term": "Zustand",
+          "alias": "猪站",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "repeat-name",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "Raycast 已安装，但瑞卡斯的快捷键不响应。",
+        "afterText": "Raycast 已安装，但 Raycast 的快捷键不响应。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Raycast"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Raycast",
+          "alias": "瑞卡斯",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "mixed-edit",
+      "split": "fresh_constructed",
+      "category": "fresh_correction",
+      "rationale": "明确词汇纠正；别名可省略，输出则须有依据",
+      "input": {
+        "beforeText": "帮忙看一下 dock compose 和 duck be 的连接。",
+        "afterText": "请仔细看一下 Docker Compose 和 DuckDB 的连接。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Docker Compose"
+          ],
+          "required": true
+        },
+        {
+          "accept": [
+            "DuckDB"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Docker Compose",
+          "alias": "dock compose",
+          "required": false
+        },
+        {
+          "term": "DuckDB",
+          "alias": "duck be",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "add-webrtc",
+      "split": "fresh_constructed",
+      "category": "fresh_addition",
+      "rationale": "补充名称或专门术语，词汇可学，无纠错别名",
+      "input": {
+        "beforeText": "排查一下连接为何会中断。",
+        "afterText": "排查一下 WebRTC 连接为何会中断。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "WebRTC"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "add-project",
+      "split": "fresh_constructed",
+      "category": "fresh_addition",
+      "rationale": "补充名称或专门术语，词汇可学，无纠错别名",
+      "input": {
+        "beforeText": "发布脚本要先测试。",
+        "afterText": "Atlas-9 发布脚本要先测试。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Atlas-9"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "add-name",
+      "split": "fresh_constructed",
+      "category": "fresh_addition",
+      "rationale": "补充名称或专门术语，词汇可学，无纠错别名",
+      "input": {
+        "beforeText": "帮我打开终端。",
+        "afterText": "帮我打开 Alacritty 终端。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Alacritty"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "switch-editor",
+      "split": "fresh_constructed",
+      "category": "fresh_addition",
+      "rationale": "补充名称或专门术语，词汇可学，无纠错别名",
+      "input": {
+        "beforeText": "先用 Sublime Text 打开这个文件。",
+        "afterText": "先改用 Zed 打开这个文件。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Zed"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "add-technology",
+      "split": "fresh_constructed",
+      "category": "fresh_addition",
+      "rationale": "补充名称或专门术语，词汇可学，无纠错别名",
+      "input": {
+        "beforeText": "这里请检查一下。",
+        "afterText": "这里请检查一下 CRDT。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "CRDT"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "add-multiple",
+      "split": "fresh_constructed",
+      "category": "fresh_addition",
+      "rationale": "补充名称或专门术语，词汇可学，无纠错别名",
+      "input": {
+        "beforeText": "这两个工具配合起来用。",
+        "afterText": "Tailscale 和 Syncthing 这两个工具配合起来用。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Tailscale"
+          ],
+          "required": true
+        },
+        {
+          "accept": [
+            "Syncthing"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "negative-move",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "DuckDB 已经装好了，请看一下启动耗时。",
+        "afterText": "DuckDB 已经装好了，请重点看一下启动耗时。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-update",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "Zed 可以打开文件，然后把结果发回来。",
+        "afterText": "Zed 可以打开文件，然后把结果更新回来。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-detail",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "脚本运行完以后，再处理后面的步骤。",
+        "afterText": "脚本运行完以后，再处理后面的步骤。如果没有成功，就显示错误提示并且让用户重新尝试。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-number",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "Atlas-9 的内存设置为四个 G。",
+        "afterText": "Atlas-9 的内存设置为八个 G。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-dirty",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "GPU 正常，Raycast 也能打开，你再看一下。",
+        "afterText": "GPU 正常，Raycast 也能打开，请你再看一下。",
+        "existingEntries": [
+          {
+            "term": "Raycast",
+            "source": "automatic",
+            "frequency": 30,
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 25
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-current",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "列表显示默认配置。",
+        "afterText": "列表显示当前配置。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-synonym",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "在这里展示所有按钮。",
+        "afterText": "在这里显示所有按钮。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-repeated",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "先执行这一步，然后执行下一步。",
+        "afterText": "先执行这一步，然后再执行下一步。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-context",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "把这个错误查清楚。",
+        "afterText": "请把这个错误查清楚。",
+        "context": {
+          "selectionBefore": "OpenTelemetry 接入清单，DuckDB 配置。"
+        }
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-punctuation",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "Atlas-9 已完成",
+        "afterText": "Atlas-9 已完成。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "negative-constraint",
+      "split": "fresh_constructed",
+      "category": "fresh_negative",
+      "rationale": "词汇未变或仅普通内容编辑，不学习",
+      "input": {
+        "beforeText": "Zed 的窗口挡住了菜单，最好移开一点。",
+        "afterText": "Zed 的窗口挡住了菜单，最好移开一点，但不要缩小窗口。"
+      },
+      "terms": [],
+      "aliases": []
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import type {
   DictationRefinementContext,
 } from '@cindy/voice-input-core';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { coalesceDictionaryLearningActions, DICTIONARY_CANDIDATE_PROMOTION_COUNT } from '@cindy/voice-input-core';
 export {
   compactVoiceInputHistoryIfNeeded,
   estimateVoiceInputHistoryContextChars,
@@ -741,19 +742,20 @@ export function applyVoiceInputDictionaryLearningActions(
   const now = Date.now();
   let changed = false;
 
-  actions.forEach((action) => {
+  coalesceDictionaryLearningActions(actions).forEach((action) => {
     const text = normalizeVoiceInputDictionaryEntryText(action.term);
     const aliasTexts = action.aliases
       .map(normalizeVoiceInputDictionaryEntryText)
       .filter((alias): alias is string => Boolean(alias && alias !== text));
-    if (!text || aliasTexts.length === 0 || action.confidence === 'low') return;
+    if (!text || action.confidence === 'low') return;
 
     const key = dictionaryTextKey(text);
     const entryIndex = dictionaryEntries.findIndex((entry) => dictionaryTextKey(entry.text) === key);
     const candidateIndex = dictionaryCandidates.findIndex((entry) => dictionaryTextKey(entry.text) === key);
     const existingCandidate = candidateIndex >= 0 ? dictionaryCandidates[candidateIndex] : null;
 
-    if (entryIndex >= 0 || action.action === 'add_entry' || action.action === 'update_entry') {
+    if (entryIndex >= 0 || action.action === 'add_entry' || action.action === 'update_entry'
+      || (existingCandidate?.evidenceCount ?? 0) + 1 >= DICTIONARY_CANDIDATE_PROMOTION_COUNT) {
       if (entryIndex >= 0) {
         const entry = dictionaryEntries[entryIndex];
         const nextEntry: VoiceInputDictionaryEntry = {

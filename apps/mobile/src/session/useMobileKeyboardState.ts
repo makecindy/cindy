@@ -11,6 +11,7 @@ import {
 import type { LoginKeyboardRect } from '@/auth/loginKeyboardAvoidance';
 import { isDockedKeyboard } from '@/auth/loginKeyboardAvoidance';
 import { getCachedReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 export interface MobileKeyboardState {
   /** 窗口底部实际被遮挡的高度，交互式收起时不等于键盘自身高度。 */
@@ -64,6 +65,7 @@ export function useMobileKeyboardState(): MobileKeyboardState {
       setState(next);
     };
     const update = (event: KeyboardEvent) => {
+      mobileDebugLog('debug', 'keyboard', 'frame received', { shown, durationMs: event.duration, easing: event.easing, frame: event.endCoordinates });
       latestEvent = event;
       if (Platform.OS === 'ios' && shown && event.endCoordinates.screenY === 0) {
         // 保留 RN KAV 的系统交叉淡化兼容：此时 screenY=0 不是全屏遮挡。
