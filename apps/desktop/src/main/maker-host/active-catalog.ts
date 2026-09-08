@@ -61,6 +61,10 @@ import {
 import { selectDefaultModels } from './model-default-selection.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import {
+  MANAGED_OLLAMA_PROVIDER_ID,
+  ollamaModelRefsEqual,
+} from '../../shared/localModelRuntime.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-access-policy.js';
 import {
@@ -1519,6 +1523,11 @@ function computeMerged(): Catalog {
   }
 
   if (providers === b.providers && !localOverrides.localModels) return b; // 无 augment、无 custom → 原样返回
+  const effectiveLocalModels = applyLocalModelCatalogOverrides(
+    b.modelRegistry?.localModels,
+    localOverrides.localModels,
+    b.modelRegistry?.baseModels,
+  );
   providers = providers.map((provider) => ({
     ...provider,
     models: Object.fromEntries(
@@ -1570,15 +1579,29 @@ function computeMerged(): Catalog {
               provider.id,
               model.id,
               agent === 'pi' ? undefined : (agent as RootAgentKind),
-            )?.entry.modelRef ?? findBaseModel(b.modelRegistry, model.id)?.id;
+            )?.entry.modelRef ??
+            (provider.id === MANAGED_OLLAMA_PROVIDER_ID
+              ? effectiveLocalModels?.models.find((local) =>
+                  local.variants.some((variant) =>
+                    ollamaModelRefsEqual(variant.libraryName, model.id),
+                  ),
+                )?.modelRef
+              : undefined) ??
+            findBaseModel(b.modelRegistry, model.id)?.id;
           const publicPatch = identity ? localOverrides.baseModels?.[identity] : undefined;
           if (publicPatch) {
-            next = applyModelMetadata(next, {
-              ...publicPatch,
-              ...(provider.source === 'user' && model.userModelConfig
-                ? runtimeUserModelMetadata(model.userModelConfig)
-                : {}),
-            });
+            next = applyModelMetadata(
+              next,
+              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(next), {
+                ...publicPatch,
+                // Managed Ollama fields are generated import facts, not form edits.
+                ...(provider.source === 'user' &&
+                provider.id !== MANAGED_OLLAMA_PROVIDER_ID &&
+                model.userModelConfig
+                  ? runtimeUserModelMetadata(model.userModelConfig)
+                  : {}),
+              }),
+            );
           }
           return applyExistingModelLocalPatch(
             provider.id,

@@ -73,6 +73,8 @@
 
 `baseModels` 是按公共 ID 的稀疏补丁；`patches` 支持已有订阅、Cindy AI、自定义供应商模型及 Pi。补丁不能凭空增加账号可用模型，尚未出现的条目静置。原有 `additions` 仍只适用于允许实体化的订阅根，不开放 Gateway 伪造。退役条目仍需完整合法 addition 才能复活。
 
+键中的供应商段使用 `encodeURIComponent` 编码，模型段保持原文。例如旧自定义 xAI 的运行时 ID 是 `custom:xai`，对应键为 `custom%3Axai:grok-model`；`xai:grok-model` 仍指内置 xAI，`custom:xai:grok-model` 仍指供应商 `custom` 的模型 `xai:grok-model`，三者不混用。
+
 `localModels` 支持 `patches`、完整 `additions`、`removedIds`、`featuredIds`；空推荐数组明确不推荐任何模型。名称和包装仍需通过本地域校验，不能下发命令、路径或下载 URL。删除补丁或对应字段就是恢复继承，远端刷新不会写回或删除这些用户字段。
 
 自定义供应商的接口结果单独保存在 `discoveredMetadata`；表单只持久化用户显式设置。旧数据缺少来源标记时保守保留旧名称和窗口，不猜测用户意图。刷新供应商信息会更新发现快照，不把发现值转成用户 override。

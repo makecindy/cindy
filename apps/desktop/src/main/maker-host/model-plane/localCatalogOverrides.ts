@@ -18,7 +18,7 @@ import {
  *   - 本地参考价 → usage/modelPriceOverrideStore;
  *   - RoutingDescriptor / auth / upstream → 永不属于任何 override 面。
  *
- * 形状(v1):key = `${providerId}:${modelId}`(**不含 agent**),一条记录经
+ * 形状(v1):key = `${encodeURIComponent(providerId)}:${modelId}`(**不含 agent**),一条记录经
  * base + perAgent(claude-code/codex) 表达跨 root 差异 —— 修 xAI Codex 专属
  * 思考档 = 一条 { perAgent: { codex: { efforts } } } patch,不用双写。
  *   - additions:完整新实体(base+perAgent 合成后须能力自洽),同 key 整条
@@ -99,7 +99,7 @@ export interface ModelCatalogOverrides {
   baseModels?: Record<string, ModelMetadata>;
   localModels?: LocalModelCatalogOverrides;
   version: 1;
-  /** key = `${providerId}:${modelId}`。 */
+  /** key = `${encodeURIComponent(providerId)}:${modelId}`。 */
   additions: Record<string, ModelCatalogOverrideEntry>;
   patches: Record<string, ModelCatalogOverrideEntry>;
 }
@@ -126,10 +126,17 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function parseKey(key: string): { providerId: string; modelId: string } | null {
   const sep = key.indexOf(':');
   if (sep <= 0 || sep === key.length - 1) return null;
-  const providerId = key.slice(0, sep);
+  let providerId: string;
+  try {
+    providerId = decodeURIComponent(key.slice(0, sep));
+  } catch {
+    return null;
+  }
   const modelId = key.slice(sep + 1);
-  // allowlist 之外(含 xd 与任意未知 provider)一律无效:本地不能造 XD/未知供应商实体。
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(providerId)) return null;
+  // Escape only the provider segment; model IDs may already contain colons.
+  // Require canonical encoding so parsing and direct lookups share one key.
+  if (encodeURIComponent(providerId) !== key.slice(0, sep)) return null;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/.test(providerId)) return null;
   if (modelId.length > 256) return null;
   return { providerId, modelId };
 }
@@ -543,7 +550,7 @@ export function hasLocalAddition(
   modelId: string,
   agent: RootAgentKind,
 ): boolean {
-  const entry = overrides.additions[`${providerId}:${modelId}`];
+  const entry = overrides.additions[`${encodeURIComponent(providerId)}:${modelId}`];
   if (!entry) return false;
   return entryRootAgents(entry, providerId).includes(agent);
 }
@@ -556,7 +563,7 @@ export function hasLocalContextWindowOverride(
   agent: RootAgentKind,
 ): boolean {
   return (['additions', 'patches'] as const).some((section) => {
-    const entry = overrides[section][`${providerId}:${modelId}`];
+    const entry = overrides[section][`${encodeURIComponent(providerId)}:${modelId}`];
     return (
       entry &&
       entryMembershipAgents(entry, providerId).includes(agent) &&
@@ -572,7 +579,7 @@ export function applyExistingModelLocalPatch(
   model: CatalogModel,
   overrides: ModelCatalogOverrides,
 ): CatalogModel {
-  const patch = overrides.patches[`${providerId}:${model.id}`];
+  const patch = overrides.patches[`${encodeURIComponent(providerId)}:${model.id}`];
   if (!patch || (patch.agents && !patch.agents.includes(agent))) return model;
   const result = overlayFields(model, { ...patch.base, ...patch.perAgent?.[agent] });
   return typeof result === 'string'

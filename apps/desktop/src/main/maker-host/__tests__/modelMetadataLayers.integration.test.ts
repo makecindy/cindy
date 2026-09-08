@@ -51,6 +51,7 @@ import {
 import {
   EMPTY_MODEL_CATALOG_OVERRIDES,
   applyLocalModelCatalogOverrides,
+  applyExistingModelLocalPatch,
   sanitizeModelCatalogOverrides,
 } from '../model-plane/localCatalogOverrides.js';
 
@@ -106,6 +107,155 @@ afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
 });
 describe('metadata layers through the active catalog', () => {
+  it('separates escaped supplier IDs from colon-containing model IDs', () => {
+    const { overrides, invalid } = sanitizeModelCatalogOverrides({
+      version: 1,
+      patches: {
+        'custom%3Axai:grok:model': { base: { name: 'Migrated', contextWindow: 8000 } },
+        'xai:grok:model': { base: { name: 'Built in' } },
+        'custom:xai:grok:model': { base: { name: 'Other supplier' } },
+        'custom%ZZ:grok:model': { base: { name: 'Malformed' } },
+      },
+    });
+    expect(invalid).toEqual(['patches:custom%ZZ:grok:model']);
+    const base = buildUserProvider({
+      id: 'relay',
+      name: 'Relay',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://relay.example/v1',
+          models: [{ id: 'grok:model', name: 'Original' }],
+        },
+      },
+    }).models.pi![0];
+    for (const agent of ['pi', 'codex', 'claude-code'] as const) {
+      expect(applyExistingModelLocalPatch('custom:xai', agent, base, overrides).name).toBe(
+        'Migrated',
+      );
+      expect(applyExistingModelLocalPatch('xai', agent, base, overrides).name).toBe('Built in');
+      expect(
+        applyExistingModelLocalPatch('custom', agent, { ...base, id: 'xai:grok:model' }, overrides)
+          .name,
+      ).toBe('Other supplier');
+    }
+  });
+
+  it('projects every public user field onto local variants and adapts the final default', () => {
+    const r = registry();
+    r.localModels = {
+      version: 1,
+      models: [
+        {
+          id: 'local',
+          modelRef: 'maker/model',
+          name: 'Local',
+          aliases: [],
+          variants: [{ libraryName: 'local:quant', sizeBytes: 2 ** 30, minUnifiedMemoryGb: 4 }],
+        },
+      ],
+      featuredIds: [],
+    };
+    setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry: r });
+    const runtime = {
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      models: [
+        {
+          id: 'local:quant',
+          name: 'Imported',
+          contextWindow: 2000,
+          reasoning: true,
+          reasoningEfforts: ['low', 'high'] as const,
+          reasoningDefaultEffort: 'high' as const,
+        },
+      ],
+    };
+    setCustomProviders(
+      ['cindy-local-ollama', 'relay'].map((id) =>
+        buildUserProvider(
+          {
+            id,
+            name: id,
+            runtimes: {
+              pi: {
+                ...runtime,
+                models: runtime.models.map((m) => ({
+                  ...m,
+                  reasoningEfforts: [...m.reasoningEfforts],
+                })),
+              },
+              codex: {
+                ...runtime,
+                models: runtime.models.map((m) => ({
+                  ...m,
+                  reasoningEfforts: [...m.reasoningEfforts],
+                })),
+              },
+            },
+          },
+          { modelRegistry: r },
+        ),
+      ),
+    );
+    const original = model('cindy-local-ollama', 'pi');
+    const apply = (specific = false, clear = false) =>
+      setLocalCatalogOverrides(
+        sanitizeModelCatalogOverrides({
+          version: 1,
+          baseModels: {
+            'maker/model': {
+              name: 'User local',
+              description: 'User description',
+              group: 'User group',
+              contextWindow: 9000,
+              maxOutputTokens: 80,
+              supportsImageInput: true,
+              supportsFastMode: true,
+              efforts: ['low'],
+              ...(clear ? { defaultEffort: null } : {}),
+            },
+          },
+          ...(specific
+            ? {
+                patches: {
+                  'cindy-local-ollama:local:quant': {
+                    base: { contextWindow: 12000, supportsImageInput: false },
+                  },
+                },
+              }
+            : {}),
+        }).overrides,
+      );
+    apply();
+    for (const agent of ['pi', 'codex'] as const) {
+      expect(model('cindy-local-ollama', agent)).toMatchObject({
+        name: 'User local',
+        description: 'User description',
+        group: 'User group',
+        contextWindow: 9000,
+        maxOutput: 80,
+        supportsImageInput: true,
+        supportsFastMode: true,
+        efforts: ['low'],
+        defaultEffort: 'low',
+      });
+      expect(model('relay', agent)).toMatchObject({
+        name: 'Imported',
+        contextWindow: 2000,
+        defaultEffort: 'high',
+      });
+    }
+    apply(true, true);
+    expect(model('cindy-local-ollama', 'pi')).toMatchObject({
+      contextWindow: 12000,
+      supportsImageInput: false,
+      efforts: ['low'],
+      defaultEffort: null,
+    });
+    expect(getActiveCatalog().modelRegistry?.localModels?.featuredIds).toEqual([]);
+    expect(getActiveCatalog().modelRegistry?.localModels?.models).toHaveLength(1);
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    expect(model('cindy-local-ollama', 'pi')).toEqual(original);
+  });
   it.each([200, 201, 256, 257])(
     'aligns public override keys with the %i-character registry identity',
     (length) => {
