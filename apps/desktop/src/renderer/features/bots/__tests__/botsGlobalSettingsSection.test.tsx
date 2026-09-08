@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   resetBotGlobalModelChain: vi.fn(async (): Promise<void> => undefined),
-  customized: true,
+  customized: true as boolean | null,
   setBotGlobalModelChain: vi.fn(async (_chain: unknown[]) => undefined),
 }));
 
@@ -132,6 +132,14 @@ describe('设置 › 伙伴', () => {
     mocks.customized = false;
     render(<BotsGlobalSettingsSection />);
     expect(screen.queryByText('restore-default')).toBeNull();
+  });
+
+  it('keeps restore reachable while customization is unknown after a failed read', async () => {
+    mocks.customized = null;
+    render(<BotsGlobalSettingsSection />);
+    fireEvent.click(screen.getByText('restore-default'));
+    await waitFor(() => expect(mocks.resetBotGlobalModelChain).toHaveBeenCalledOnce());
+    expect(mocks.setBotGlobalModelChain).not.toHaveBeenCalled();
   });
 
 });

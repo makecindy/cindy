@@ -68,7 +68,7 @@ export function BotsGlobalSettingsSection() {
           <BotModelChainEditor
             value={modelChain}
             onChange={(next) => changeModelChain(() => setBotGlobalModelChain(next))}
-            onRestoreDefault={customized
+            onRestoreDefault={customized !== false
               ? () => changeModelChain(resetBotGlobalModelChain, true)
               : undefined}
           />

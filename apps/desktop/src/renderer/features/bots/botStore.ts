@@ -282,7 +282,8 @@ const BOT_GLOBAL_MODEL_CHAIN_KEY = 'cindy.bots.global-model-chain.v2';
 type BotModelVendor = ReturnType<typeof vendorForHarness>;
 const botModelListeners = new Set<() => void>();
 let globalModelChainCache: BotModelRoute[] | null = null;
-let globalModelChainCustomized = false;
+// Unknown until Main answers; a failed read must not hide the recovery action.
+let globalModelChainCustomized: boolean | null = null;
 // Serialize writes and legacy migration with settings reads. A late read must not
 // reapply an old override, and a migration must finish before a requested reset.
 let modelSettingsQueue: Promise<unknown> = Promise.resolve();
@@ -298,7 +299,7 @@ function queueModelSettings<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export function isBotGlobalModelChainCustomized(): boolean {
+export function isBotGlobalModelChainCustomized(): boolean | null {
   ensureProfileOwner();
   return globalModelChainCustomized;
 }
@@ -534,7 +535,7 @@ function ensureProfileOwner(): void {
   profiles = [];
   unreadCounts = {};
   globalModelChainCache = null;
-  globalModelChainCustomized = false;
+  globalModelChainCustomized = null;
   modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
   hydrationPromises.clear();

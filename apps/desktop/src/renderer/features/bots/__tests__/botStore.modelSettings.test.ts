@@ -143,4 +143,17 @@ describe('global teammate model restore', () => {
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
     expect(store.isBotGlobalModelChainCustomized()).toBe(false);
   });
+  it('keeps initial read failure unknown and allows direct recovery without visiting the roster', async () => {
+    const api = apiFixture();
+    api.getModelChainSettings.mockRejectedValueOnce(new Error('temporarily unavailable'));
+    const store = await hydratedStore(api);
+    expect(store.isBotGlobalModelChainCustomized()).toBeNull();
+    await store.resetBotGlobalModelChain();
+    expect(api.getModelChainSettings).toHaveBeenCalledOnce();
+    expect(api.resetModelChainSettings).toHaveBeenCalledOnce();
+    expect(api.setModelChainSettings).not.toHaveBeenCalled();
+    expect(store.isBotGlobalModelChainCustomized()).toBe(false);
+    expect(store.getEffectiveBotModelChain()).toEqual(defaults.modelChain);
+  });
+
 });
