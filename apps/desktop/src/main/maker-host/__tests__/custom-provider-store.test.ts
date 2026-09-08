@@ -917,7 +917,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ).not.toHaveProperty('piCatalogProviderId');
   });
 
-  it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
+  it('round-trips explicit Pi reasoning choices separately from inheritance', async () => {
     mountDb();
     await createCustomProvider({
       id: 'reasoning-pi',
@@ -949,8 +949,27 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         reasoningDefaultEffort: 'xhigh',
       },
       { id: 'legacy', name: 'Legacy' },
-      { id: 'explicit-off', name: 'Explicit off' },
+      { id: 'explicit-off', name: 'Explicit off', reasoning: false },
     ]);
+  });
+
+  it.each(['codex', 'claude-code', 'pi'] as const)('preserves reasoning off across %s updates and restores inheritance on deletion', async (agent) => {
+    mountDb();
+    const provider = await createCustomProvider({
+      id: 'reasoning-choice', name: 'Choice', auth: { method: 'none' },
+      runtimes: { [agent]: { baseUrl: 'https://example.test/v1', models: [
+        { id: 'model', name: 'Model', reasoning: true, reasoningEfforts: ['low', 'high'], reasoningDefaultEffort: 'high' },
+      ] } },
+    });
+    provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model', reasoning: false }];
+    await updateCustomProvider(provider.id, provider);
+    expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).toEqual({
+      id: 'model', name: 'Model', reasoning: false,
+    });
+    expect((await listCustomProviders())[0]?.runtimes[agent]?.models[0]?.reasoning).toBe(false);
+    provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model' }];
+    await updateCustomProvider(provider.id, provider);
+    expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).not.toHaveProperty('reasoning');
   });
 
   it('round-trips Claude Code thinking toggle and reasoning efforts', async () => {

@@ -105,6 +105,7 @@ function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
+  if (model.reasoning === false) return { reasoning: false };
   if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
