@@ -13,7 +13,7 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
@@ -107,10 +107,20 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   // ── Action handlers ──
 
+  // P1 security: keep the requestId in a ref so callbacks created for the
+  // current card always carry the identity the user actually acted on. React
+  // may reuse this instance when the FIFO promotes the next card, so update
+  // synchronously during render rather than waiting for an effect.
+  const capturedRequestId = useRef(permission.requestId);
+  if (capturedRequestId.current !== permission.requestId) {
+    capturedRequestId.current = permission.requestId;
+  }
+
   const handleAllowOnce = useCallback(() => {
     onRespond({
       behavior: 'allow',
-    });
+      requestId: capturedRequestId.current,
+    } as CCAgentPermissionResult);
   }, [onRespond]);
 
   const handleAlwaysAllow = useCallback(() => {
@@ -122,7 +132,8 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       behavior: 'allow',
       updatedPermissions: sessionSuggestions,
       decisionClassification: 'user_permanent',
-    });
+      requestId: capturedRequestId.current,
+    } as CCAgentPermissionResult);
   }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions]);
 
   const handleDeny = useCallback(() => {
@@ -130,7 +141,8 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       behavior: 'deny',
       message: 'User denied',
       decisionClassification: 'user_reject',
-    });
+      requestId: capturedRequestId.current,
+    } as CCAgentPermissionResult);
   }, [onRespond]);
 
   // ── Keyboard shortcuts ──
@@ -143,6 +155,14 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      if (e.repeat) {
+        // Suppress Chromium's native button click activation on held Enter.
+        // Without preventDefault(), the browser fires click events on the
+        // focused <button> for repeated Enter keydowns, bypassing the global
+        // shortcut guard and approving/denying newly promoted cards.
+        if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault();
+        return;
+      }
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleAlwaysAllow();
