@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { once } from 'node:events';
+import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -2823,6 +2825,117 @@ describe('codex proxy host', () => {
     );
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-encrypted');
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
+  });
+
+  it('repairs legacy IDs over real HTTP after a scoped WebSocket rejection, leaving a sibling connected', async () => {
+    const host = await freshCodexProxyHost();
+    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const legacy = { model: 'gpt-6', input: [
+      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+    ] };
+    const httpBodies: Array<{ input: typeof legacy.input }> = [];
+    const wsBodies: unknown[] = [];
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      httpBodies.push(body);
+      const valid = body.input[0].id === 'ctc_legacy';
+      res.writeHead(valid ? 200 : 400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(valid ? { output: [] } : { error: { message: errorMessage } }));
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    upstream.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, ws => {
+      ws.on('message', data => {
+        const body = JSON.parse(data.toString());
+        wsBodies.push(body);
+        ws.send(JSON.stringify(body.input ? { error: { message: errorMessage } } : { pong: true }));
+      });
+    }));
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        ...opts,
+        upstream: upstreamUrl,
+        resolveOutboundProxy: () => null,
+        resolveWebSocketUpstream: ctx => opts.resolveWebSocketUpstream?.(ctx) ? upstreamUrl : null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }),
+    );
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    const clients: WebSocket[] = [];
+    try {
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-bad-ids', 'thread-bad-ids', 'PRODUCT_PROMPT');
+      host.registerComposed('session-good-ids', 'thread-good-ids', 'PRODUCT_PROMPT');
+      const proxyUrl = host.getCodexProxyEndpoint()!;
+      const connect = async (thread: string) => {
+        const client = new WebSocket(proxyUrl.replace(/^http/, 'ws') + '/v1/responses', { headers: { 'thread-id': thread } });
+        clients.push(client);
+        await once(client, 'open');
+        return client;
+      };
+      const bad = await connect('thread-bad-ids');
+      const good = await connect('thread-good-ids');
+      const rejection = once(bad, 'message');
+      bad.send(JSON.stringify(legacy));
+      const [payload] = await rejection;
+      expect(wsBodies[0]).toEqual(legacy); // WS really bypassed the request transforms.
+      expect(httpBodies).toHaveLength(0);
+      const closed = once(bad, 'close');
+      expect(host.armCodexHttpRecovery({ sessionId: 'session-bad-ids', threadId: 'thread-bad-ids', message: JSON.parse(payload.toString()).error.message })).toBe('tool_item_id');
+      await closed;
+      const retry = new WebSocket(proxyUrl.replace(/^http/, 'ws') + '/v1/responses', { headers: { 'thread-id': 'thread-bad-ids' } });
+      clients.push(retry);
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        retry.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode); });
+        retry.once('error', reject);
+      });
+      expect(status).toBe(426);
+      // Native Codex falls back to HTTP after 426. Exercise both ordinary replay and unary compact.
+      for (const endpoint of ['/v1/responses', '/v1/responses/compact']) {
+        const code = await new Promise<number | undefined>((resolve, reject) => {
+          const req = httpRequest(proxyUrl + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'thread-bad-ids' } }, res => {
+            res.resume(); res.once('end', () => resolve(res.statusCode));
+          });
+          req.once('error', reject); req.end(JSON.stringify(legacy));
+        });
+        expect(code).toBe(200);
+      }
+      expect(httpBodies).toHaveLength(2);
+      for (const body of httpBodies) expect(body.input).toEqual([{ ...legacy.input[0], id: 'ctc_legacy' }, legacy.input[1]]);
+      expect(good.readyState).toBe(WebSocket.OPEN);
+      const pong = once(good, 'message'); good.send(JSON.stringify({ ping: true }));
+      expect(JSON.parse((await pong)[0].toString())).toEqual({ pong: true });
+    } finally {
+      for (const client of clients) { client.on('error', () => {}); client.terminate(); }
+      for (const ws of wss.clients) ws.terminate();
+      host.unregister('session-bad-ids'); host.unregister('session-good-ids');
+      await host.disposeCodexProxy();
+      await new Promise<void>(resolve => wss.close(() => resolve()));
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
+    [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
+    ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[2].id': 'fc_old'. Expected an ID that begins with 'msg'.", null],
+    ["Invalid 'input[2].id': 'unknown_old'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[2].id': 'FC_old'. Expected an ID that begins with 'ctc'.", null],
+    ['invalid_value', null],
+  ])('arms recovery only for repairable tool item errors: %s', async (message, expected) => {
+    const host = await freshCodexProxyHost();
+    const disconnect = vi.fn(() => 1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', disconnectWebSocketsForThread: disconnect, dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    expect(host.armCodexHttpRecovery({ sessionId: 'session-prefix', threadId: 'thread-prefix', message: 'Bad request', additionalDetails: message })).toBe(expected);
+    expect(disconnect).toHaveBeenCalledTimes(expected ? 1 : 0);
   });
 
   it('keeps the parent websocket while observing every subagent over HTTP', async () => {

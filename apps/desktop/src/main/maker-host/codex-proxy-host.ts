@@ -192,10 +192,20 @@ const CODEX_BODY_RECOVERY_RULES = [
   vllmResponsesCompatibilityRule,
 ] as const;
 
+/** Only fall back for the exact dialect mismatches the outgoing normalizer can repair. */
+function isRepairableToolItemIdError(errorText: string): boolean {
+  // Codex additionalDetails may contain an escaped JSON error inside another error envelope.
+  const text = errorText.replace(/\\+(?=["'])/g, '');
+  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
+  if (!match) return false;
+  return ({ fc: 'ctc', fco: 'ctco', ctc: 'fc', ctco: 'fco' } as Record<string, string>)[match[1]!]
+    === match[2]!;
+}
+
 /**
  * WS 已建立后 proxy 只转发 socket，真正的上游请求错误会由 app-server 报给 maker-core。
- * maker-core 把错误文本回传到这里，由与 HTTP recovery 完全相同的 rule 判定并登记：
- * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，既有 strip+retry 接管。
+ * maker-core 把错误文本回传到这里，仅识别 HTTP recovery rule 或已知可校正的工具 ID 错配。
+ * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，由请求校正／strip 接管。
  */
 export function armCodexHttpRecovery(args: {
   sessionId: string;
@@ -213,7 +223,8 @@ export function armCodexHttpRecovery(args: {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  if (!rule) return null;
+  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
   const existingSessionId = threadToSession.get(threadId);
@@ -225,7 +236,7 @@ export function armCodexHttpRecovery(args: {
     });
     return null;
   }
-  httpRecoveryReasonByThread.set(threadId, rule.id);
+  httpRecoveryReasonByThread.set(threadId, reason);
   const disconnectedWebSockets = _handle?.disconnectWebSocketsForThread?.(threadId) ?? 0;
   if (disconnectedWebSockets === 0) {
     httpRecoveryReasonByThread.delete(threadId);
@@ -235,7 +246,7 @@ export function armCodexHttpRecovery(args: {
     log.info('codex websocket recovery left to native transport; no scoped socket found', {
       sessionId,
       threadId,
-      reason: rule.id,
+      reason,
     });
     return null;
   }
@@ -251,10 +262,10 @@ export function armCodexHttpRecovery(args: {
   log.info('codex websocket recovery fallback armed', {
     sessionId,
     threadId,
-    reason: rule.id,
+    reason,
     disconnectedWebSockets,
   });
-  return rule.id;
+  return reason;
 }
 
 // codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
