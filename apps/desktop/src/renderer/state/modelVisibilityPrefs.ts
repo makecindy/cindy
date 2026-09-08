@@ -447,9 +447,10 @@ export async function migrateModelVisibilityDefaults(
   ownerGeneration: number,
   providers: readonly ProviderView[],
   isCurrent: () => boolean = () => true,
-): Promise<void> {
-  if (!ownerId) return;
-  await withOwnerLock(ownerId, ownerGeneration, () => {
+): Promise<boolean> {
+  // Signed-out catalogs have no owner preferences to initialize.
+  if (!ownerId) return true;
+  return withOwnerLock(ownerId, ownerGeneration, () => {
     if (!isCurrent() || !ensureActiveOwnerReadyForWrites() || activeOwnerMigrationPending) return false;
     try {
       const stored = readInitialization(ownerId);

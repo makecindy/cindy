@@ -227,7 +227,7 @@ describe('model visibility across renderer windows', () => {
     const stale = a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi')], () => current);
     current = false;
     release();
-    await stale;
+    expect(await stale).toBe(false);
     expect(JSON.parse(memStorage.getItem(initKey)!).scopes).toEqual([]);
     await a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi', false)]);
     expect(a.isModelEnabled('pi', 'xd', model('pi'))).toBe(false);
@@ -890,11 +890,11 @@ describe('compact model defaults upgrade', () => {
       if (key === markerKey) throw new Error('storage full');
       original(key, value);
     });
-    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider])).toBe(false);
     expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
     spy.mockRestore();
     await prefs.setModelVisibility('pi', 'xd', 'gemini', false);
-    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider])).toBe(true);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
   });
 });
