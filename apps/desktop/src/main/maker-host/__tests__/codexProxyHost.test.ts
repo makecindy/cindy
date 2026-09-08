@@ -2700,13 +2700,13 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
+        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          mockState.stripNonAnthropicFields,
+          expect.any(Function), mockState.stripNonAnthropicFields,
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3922,7 +3922,7 @@ describe('codex proxy host', () => {
         { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAA' },
         {
           type: 'function_call',
-          id: 'ctc_1',
+          id: 'fc_1',
           name: 'exec',
           arguments: '{"input":"console.log(1)"}',
           call_id: 'call_exec_1',
@@ -4550,6 +4550,30 @@ describe('codex proxy host', () => {
     });
   });
 
+  it.each(['env-key', 'oauth-bearer'] as const)('repairs legacy tool ids in tool-less compact requests (%s)', async (auth) => {
+    const host = await freshCodexProxyHost();
+    host.setCodexProxyAuthInjection(auth);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    const original = {
+      model: 'gpt-6',
+      input: [
+        { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+        { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+      ],
+    };
+    let current: unknown = original;
+    for (const transform of config.transformRequest) {
+      current = transform(current, { reqId: 8001, method: 'POST', url: '/responses/compact', headers: {} }) ?? current;
+    }
+    expect(current).toMatchObject({ input: [
+      { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+    ] });
+    expect(original.input[0].id).toBe('fc_legacy');
+    expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
+  });
+
   it('round-trips exec for a custom Responses Provider that lacks native custom tools', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
@@ -4634,7 +4658,7 @@ describe('codex proxy host', () => {
         responseTransform.once('end', resolve);
         responseTransform.once('error', reject);
       });
-      const call = { type: 'function_call', name: 'exec', call_id: 'call_exec', arguments: '' };
+      const call = { type: 'function_call', id: 'fc_1', name: 'exec', call_id: 'call_exec', arguments: '' };
       responseTransform.end([
         { type: 'response.output_item.added', output_index: 0, item: call },
         { type: 'response.function_call_arguments.done', item_id: 'fc_1', output_index: 0,
@@ -4651,8 +4675,10 @@ describe('codex proxy host', () => {
         'response.custom_tool_call_input.done',
         'response.output_item.done',
       ]);
-      expect(events[1]).toMatchObject({ item_id: 'fc_1', delta: 'text("local")' });
+      expect(events[1]).toMatchObject({ item_id: 'ctc_1', delta: 'text("local")' });
+      expect(events[0].item.id).toBe('ctc_1');
       expect(events[3].item).toEqual({
+        id: 'ctc_1',
         type: 'custom_tool_call',
         name: 'exec',
         call_id: 'call_exec',
@@ -6055,7 +6081,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(21); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(22); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), 工具 ID 校正, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

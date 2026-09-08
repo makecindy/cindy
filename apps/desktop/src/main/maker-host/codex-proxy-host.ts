@@ -41,6 +41,7 @@ import {
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesCustomToolFunctionAdapter,
+  normalizeResponsesToolItemIds,
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
@@ -3242,6 +3243,9 @@ function createTransformRequestChain(
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
     buildVisionBridgeProxyTransform(log),
+    // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
+    // This covers native-custom routes and tool-less /responses/compact without changing call_id.
+    normalizeResponsesToolItemIds,
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
