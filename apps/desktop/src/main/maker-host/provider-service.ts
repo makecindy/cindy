@@ -12,6 +12,9 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import { createLogger } from '../logger.js';
+import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
+
 import {
   buildRegistry,
   type Catalog,
@@ -22,6 +25,8 @@ import {
   type ProviderView,
   type Provider,
 } from '@cindy/model-providers';
+
+const log = createLogger('provider-service');
 
 /**
  * 读取连接态时是否允许附带**本机副作用**（绑定自愈、随之而来的清单拉取）。
@@ -169,7 +174,17 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         if (failure) discoveryFailures[p.id] = failure;
       }
     }
-    const media = deps.getAvailableMediaModels?.();
+    let media: readonly { providerId: string; id: string }[] | undefined;
+    try {
+      media = deps.getAvailableMediaModels?.();
+    } catch (error) {
+      // Media is optional enrichment; configuration and chat providers remain usable.
+      media = [];
+      log.warn(
+        'Media readiness unavailable; returning provider configuration without media readiness',
+        { error: mediaErrorForLog(error) },
+      );
+    }
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map(
       (provider) =>
         media === undefined
