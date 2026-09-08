@@ -113,7 +113,7 @@ import {
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
-import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -318,7 +318,7 @@ type ProjectDragSession = {
   x: number;
 };
 type HydrateDeviceSessionsResult = {
-  failure: string | null;
+  failure: HomeDeviceFailure | null;
   needsRerun?: boolean;
   offline: boolean;
   superseded: boolean;
@@ -431,7 +431,7 @@ function HomeScreenContent() {
   // 首次网络同步必须等设备筛选偏好恢复，否则单机用户会先按默认“全部”拉一轮所有电脑。
   const [homeViewPreferencesHydrated, setHomeViewPreferencesHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
@@ -807,7 +807,7 @@ function HomeScreenContent() {
       if (offline) markDeviceOffline(device.deviceId);
       updateDeviceConnectionState(device.deviceId, 'failed');
       return {
-        failure: `${device.name}: ${formatRemoteError(err)}`,
+        failure: { deviceName: device.name, error: formatRemoteError(err) },
         offline,
         superseded: false,
       };
@@ -985,7 +985,7 @@ function HomeScreenContent() {
         remoteSessionStore.removeDevice(deviceId);
       }
 
-      const failures: string[] = [];
+      const failures: HomeDeviceFailure[] = [];
       const offlineDeviceIds = new Set<string>();
       const hydrateResults = await runHomeDeviceSyncBatch(syncRows, async (item) => {
         const result = await hydrateDeviceSessions(item.device, accountGenerationAtStart);
@@ -1015,7 +1015,7 @@ function HomeScreenContent() {
       lastSyncedAtRef.current = now;
       setLastSyncedAt(now);
       if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
-        setError(failures.length > 0 ? failures.slice(0, 2).join('；') : null);
+        setError(failures.length > 0 ? failures : null);
       }
       // loadHome 整轮成功后也回写一次:覆盖「设备全部下线 / 会话清空」的收敛场景——
       // 此时没有任何 hydrate 成功,只有这里能把缓存里的陈旧设备清掉。
@@ -1429,8 +1429,8 @@ function HomeScreenContent() {
       ) return;
       const failures = results
         .filter((result) => !result.superseded && result.failure)
-        .map((result) => result.failure as string);
-      if (failures.length > 0) setError(failures.slice(0, 2).join('；'));
+        .map((result) => result.failure as HomeDeviceFailure);
+      if (failures.length > 0) setError(failures);
       else if (results.some((result) => !result.superseded)) setError(null);
     });
   }, [accountGeneration, homeSyncDeviceIds, homeSyncRows, hydrateDeviceSessions, reconcileHomeDeviceSyncScope, selectedDeviceId]);
@@ -1814,8 +1814,7 @@ function HomeScreenContent() {
     screenWidth,
   });
   const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
-  const { error: effectiveHomeError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeDeviceUnresponsive);
-  const connectionError = describeRemoteError(effectiveHomeError);
+  const { error: connectionError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeDeviceUnresponsive, describeRemoteError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;

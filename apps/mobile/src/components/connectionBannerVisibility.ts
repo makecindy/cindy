@@ -50,18 +50,26 @@ export function resolveConnectionBannerSyncActionVisibility(input: {
  * (banner 的 unresponsive 分支优先,error 本就不会被展示)。
  * hook 与组件都要用同一份结果,否则会出现「可见但无内容可渲染」的空壳。
  */
-/** Home joins device failures with ；. Preserve other failures when a circuit error expires. */
-export function resolveEffectiveHomeConnectionError(error: string | null, deviceUnresponsive: boolean): string | null {
-  if (!error || deviceUnresponsive) return error;
-  return error.split('；').filter((failure) => !failure.includes('DEVICE_UNRESPONSIVE')).join('；') || null;
-}
+export type HomeDeviceFailure = { deviceName: string; error: string };
+export type HomeConnectionError = string | HomeDeviceFailure | HomeDeviceFailure[] | null;
 
 /** A recovering device must not mask another device's actionable failure on Home. */
-export function resolveHomeConnectionFeedback(error: string | null, deviceUnresponsive: boolean) {
-  const manualError = resolveEffectiveHomeConnectionError(error, false);
+export function resolveHomeConnectionFeedback(
+  error: HomeConnectionError,
+  deviceUnresponsive: boolean,
+  describe: (error: string) => string | null = (error) => error,
+) {
+  const failures = error === null ? [] : typeof error === 'string'
+    ? [{ deviceName: '', error }] : Array.isArray(error) ? error : [error];
+  // Classify only the raw error's leading code, before adding user-controlled names.
+  const manualFailures = failures.filter((failure) => !/^\[DEVICE_UNRESPONSIVE\](?:\s|$)/.test(failure.error));
+  const effectiveFailures = manualFailures.length > 0 ? manualFailures : deviceUnresponsive ? failures : [];
   return {
-    error: manualError ?? resolveEffectiveHomeConnectionError(error, deviceUnresponsive),
-    deviceRecovery: deviceUnresponsive && !manualError,
+    error: effectiveFailures.slice(0, 2).map((failure) => {
+      const message = describe(failure.error);
+      return failure.deviceName ? `${failure.deviceName}: ${message}` : message;
+    }).join('；') || null,
+    deviceRecovery: deviceUnresponsive && manualFailures.length === 0,
   };
 }
 
