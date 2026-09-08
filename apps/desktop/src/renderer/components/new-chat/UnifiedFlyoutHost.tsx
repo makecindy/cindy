@@ -152,7 +152,7 @@ export function UnifiedFlyoutHost({
         // 见上:MorphPopover 的 outside / focusin 判定靠这个属性认「自己人」。
         data-radix-popper-content-wrapper=""
         data-unified-flyout-wrapper=""
-        className="fixed z-50"
+        className={cn('fixed z-50', className)}
         style={{
           width: FLYOUT_WIDTH + UNIFIED_FLYOUT_GAP,
           // 行与浮层之间那条缝隙由**外层包装自己吃掉**:包装比卡片宽 gap 并把这段留白
