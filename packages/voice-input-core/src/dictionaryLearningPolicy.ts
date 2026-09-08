@@ -22,7 +22,7 @@ export function coalesceDictionaryLearningActions(
       if (aliasKey && aliasKey !== key && !aliases.has(aliasKey)) aliases.set(aliasKey, alias);
     }
     const preferred = previous && rank[previous.action] >= rank[action.action] ? previous : action;
-    words.set(key, { ...preferred, term: previous?.term ?? term, aliases: [...aliases.values()] });
+    words.set(key, { ...preferred, term: normalizeDictionaryTermText(preferred.term), aliases: [...aliases.values()] });
   }
   return [...words.values()];
 }

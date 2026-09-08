@@ -83,4 +83,20 @@ describe('candidate admission', () => {
     ]);
     expect(combined).toEqual([{ ...base, action: 'add_entry', aliases: ['Slate', 'Slak'] }]);
   });
+
+  it.each([
+    ['add_candidate', 'add_entry'],
+    ['add_candidate', 'update_entry'],
+    ['add_entry', 'update_entry'],
+  ] as const)('keeps preferred spelling for %s / %s in either order', (lower, higher) => {
+    const base = { type: 'product_name' as const, confidence: 'high' as const };
+    const low = { ...base, action: lower, term: 'slack', aliases: ['Slate'] };
+    const high = { ...base, action: higher, term: '  Slack  ', aliases: ['Slak'] };
+    for (const actions of [[low, high], [high, low]]) {
+      const result = coalesceDictionaryLearningActions(actions);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ ...base, action: higher, term: 'Slack' });
+      expect(result[0].aliases.slice().sort()).toEqual(['Slak', 'Slate']);
+    }
+  });
 });
