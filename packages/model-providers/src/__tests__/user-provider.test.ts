@@ -1,3 +1,4 @@
+import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 /**
  * buildUserProvider —— 用户自定义配置（per-runtime）→ 标准 Provider 的映射。
  *
@@ -22,6 +23,14 @@ import {
 import type { CustomProviderConfig } from "../types.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
 import { BUNDLED_CATALOG } from "../catalog.js";
+
+// Preserve the pre-V4 contract explicitly; layered V4 behavior has independent cases below.
+const LEGACY_REGISTRY: ModelRegistry = {
+  ...BUNDLED_CATALOG.modelRegistry!,
+  schemaVersion: 3,
+  baseModels: undefined,
+  models: expandedRegistryEntries(BUNDLED_CATALOG.modelRegistry!),
+};
 
 const codexOnly: CustomProviderConfig = {
   id: "openrouter",
@@ -64,7 +73,9 @@ describe("buildUserProvider (per-runtime)", () => {
   });
 
   it("projects official Imagine models onto the xAI API-key source", () => {
-    const source = BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!;
+    const source = BUNDLED_CATALOG.providers.find(
+      (provider) => provider.id === "xai",
+    )!;
     const xaiApi = buildUserProvider({
       id: XAI_API_CUSTOM_PROVIDER_ID,
       name: "xAI API",
@@ -78,12 +89,16 @@ describe("buildUserProvider (per-runtime)", () => {
     });
 
     const projected = projectXaiApiImageModels([source, xaiApi]);
-    expect(projected.find((provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID)?.imageModels)
-      .toEqual(source.imageModels);
+    expect(
+      projected.find((provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID)
+        ?.imageModels,
+    ).toEqual(source.imageModels);
   });
 
   it("does not project Imagine models onto a non-official API-key endpoint", () => {
-    const source = BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!;
+    const source = BUNDLED_CATALOG.providers.find(
+      (provider) => provider.id === "xai",
+    )!;
     const proxy = buildUserProvider({
       id: XAI_API_CUSTOM_PROVIDER_ID,
       name: "xAI-compatible proxy",
@@ -282,7 +297,7 @@ describe("buildUserProvider (per-runtime)", () => {
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
 
     expect(provider.routing).toMatchObject({
@@ -333,7 +348,7 @@ describe("buildUserProvider (per-runtime)", () => {
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
 
     expect(provider.models.codex?.[0]).toMatchObject({
@@ -347,102 +362,102 @@ describe("buildUserProvider (per-runtime)", () => {
     ).toBeUndefined();
   });
 
-it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)', () => {
+  it("strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)", () => {
     const p = buildUserProvider(
       {
-        id: 'my-provider',
-        name: 'My Provider',
+        id: "my-provider",
+        name: "My Provider",
         runtimes: {
           codex: {
-            baseUrl: 'https://my-provider.example/v1',
-            models: [{ id: 'xd/codex/gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+            baseUrl: "https://my-provider.example/v1",
+            models: [{ id: "xd/codex/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     // xd/codex/gpt-5.6-sol → strips to codex/gpt-5.6-sol → no exact match
     // → further strips? no, only openai/xd/chatgpt/ are stripped.
     // Actually xd/codex/gpt-5.6-sol starts with xd/ → stripped to codex/gpt-5.6-sol
     // which matches route.modelId for codex agent.
     expect(p.models.codex?.[0]).toMatchObject({
-      id: 'xd/codex/gpt-5.6-sol',
-      efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'medium',
+      id: "xd/codex/gpt-5.6-sol",
+      efforts: expect.arrayContaining(["ultra"]),
+      defaultEffort: "medium",
     });
   });
 
-  it('strips xd/ prefix to match registry effort metadata', () => {
+  it("strips xd/ prefix to match registry effort metadata", () => {
     const p = buildUserProvider(
       {
-        id: 'xd-relay',
-        name: 'XD Relay',
+        id: "xd-relay",
+        name: "XD Relay",
         runtimes: {
           codex: {
-            baseUrl: 'https://xd-relay.example/v1',
-            models: [{ id: 'xd/gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+            baseUrl: "https://xd-relay.example/v1",
+            models: [{ id: "xd/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     // xd/gpt-5.6-sol → strips to gpt-5.6-sol → matches registry entry
     expect(p.models.codex?.[0]).toMatchObject({
-      id: 'xd/gpt-5.6-sol',
-      efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'medium',
+      id: "xd/gpt-5.6-sol",
+      efforts: expect.arrayContaining(["ultra"]),
+      defaultEffort: "medium",
     });
   });
 
-  it('strips openai/ prefix to match registry effort metadata (entry.id ≠ custom id)', () => {
+  it("strips openai/ prefix to match registry effort metadata (entry.id ≠ custom id)", () => {
     const p = buildUserProvider(
       {
-        id: 'openai-relay',
-        name: 'OpenAI Relay',
+        id: "openai-relay",
+        name: "OpenAI Relay",
         runtimes: {
           codex: {
-            baseUrl: 'https://openai-relay.example/v1',
-            models: [{ id: 'openai/gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+            baseUrl: "https://openai-relay.example/v1",
+            models: [{ id: "openai/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     // openai/gpt-5.6-sol → strips to gpt-5.6-sol → matches registry entry
     // entry.id = 'gpt-5.6-sol' ≠ custom id 'openai/gpt-5.6-sol'
     expect(p.models.codex?.[0]).toMatchObject({
-      id: 'openai/gpt-5.6-sol',
-      efforts: expect.arrayContaining(['ultra']),
-      defaultEffort: 'medium',
+      id: "openai/gpt-5.6-sol",
+      efforts: expect.arrayContaining(["ultra"]),
+      defaultEffort: "medium",
     });
   });
 
-  it('unregistered prefix falls back to CUSTOM_EFFORTS', () => {
+  it("unregistered prefix falls back to CUSTOM_EFFORTS", () => {
     const p = buildUserProvider(
       {
-        id: 'unknown-relay',
-        name: 'Unknown Relay',
+        id: "unknown-relay",
+        name: "Unknown Relay",
         runtimes: {
           codex: {
-            baseUrl: 'https://unknown.example/v1',
-            models: [{ id: 'custom/my-model', name: 'My Model' }],
+            baseUrl: "https://unknown.example/v1",
+            models: [{ id: "custom/my-model", name: "My Model" }],
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     // custom/my-model → no registry match → CUSTOM_EFFORTS for codex
     expect(p.models.codex?.[0]).toMatchObject({
-      id: 'custom/my-model',
-      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'medium',
+      id: "custom/my-model",
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "medium",
     });
   });
 
   it.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
     "inherits equivalent Registry effort metadata across matching entries for %s",
     (modelId) => {
-      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+      const registry = structuredClone(LEGACY_REGISTRY);
       if (!registry) throw new Error("missing bundled model registry");
       const baseEntry = registry.models.find(
         (entry) => entry.id === `openai/${modelId}`,
@@ -477,7 +492,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
   it.each(["xd/gpt-5.6-sol", "chatgpt/gpt-5.6-sol"])(
     "inherits equivalent Registry effort metadata after stripping the prefix from %s",
     (modelId) => {
-      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+      const registry = structuredClone(LEGACY_REGISTRY);
       if (!registry) throw new Error("missing bundled model registry");
       const baseEntry = registry.models.find(
         (entry) => entry.id === "openai/gpt-5.6-sol",
@@ -514,7 +529,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
   );
 
   it("rejects conflicting Registry effort metadata after prefix stripping", () => {
-    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+    const registry = structuredClone(LEGACY_REGISTRY);
     if (!registry) throw new Error("missing bundled model registry");
     const baseEntry = registry.models.find(
       (entry) => entry.id === "openai/gpt-5.6-sol",
@@ -553,8 +568,8 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     });
   });
 
-    it('falls back safely for conflicting matches, missing target routes and invalid defaults', () => {
-    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+  it("falls back safely for conflicting matches, missing target routes and invalid defaults", () => {
+    const registry = structuredClone(LEGACY_REGISTRY);
     if (!registry) throw new Error("missing bundled model registry");
     const baseEntry = registry.models.find(
       (entry) => entry.id === "openai/gpt-5.6-sol",
@@ -624,7 +639,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     expect(noTargetRoute.models.codex?.[0]).toMatchObject({
       efforts: ["low", "medium", "high", "xhigh", "max"],
@@ -852,21 +867,21 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     expect((p.models.pi ?? [])[0]?.defaultEffort).toBeNull();
     expect((p.models.pi ?? [])[0]?.group).toBe("custom:localollama");
     expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
-    expect(p.routing.pi?.wireProtocol).toBe('openai-chat');
+    expect(p.routing.pi?.wireProtocol).toBe("openai-chat");
   });
 
-  it('projects image generation independently from image input', () => {
+  it("projects image generation independently from image input", () => {
     const p = buildUserProvider({
-      id: 'images',
-      name: 'Images',
+      id: "images",
+      name: "Images",
       runtimes: {
         codex: {
-          baseUrl: 'https://images.example/v1',
-          wireProtocol: 'openai-responses',
+          baseUrl: "https://images.example/v1",
+          wireProtocol: "openai-responses",
           supportsImageGeneration: true,
           models: [
-            { id: 'generate', name: 'Generate' },
-            { id: 'input', name: 'Input', supportsImageInput: true },
+            { id: "generate", name: "Generate" },
+            { id: "input", name: "Input", supportsImageInput: true },
           ],
         },
       },
@@ -898,12 +913,16 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
         "claude-code": {
           baseUrl: "http://127.0.0.1:11434",
           wireProtocol: "anthropic-messages",
-          models: [{ id: "qwen3.8:27b-mlx", name: "Qwen3.8", reasoning: false }],
+          models: [
+            { id: "qwen3.8:27b-mlx", name: "Qwen3.8", reasoning: false },
+          ],
         },
         codex: {
           baseUrl: "http://127.0.0.1:11434/v1",
           wireProtocol: "openai-responses",
-          models: [{ id: "qwen3.8:27b-mlx", name: "Qwen3.8", reasoning: false }],
+          models: [
+            { id: "qwen3.8:27b-mlx", name: "Qwen3.8", reasoning: false },
+          ],
         },
       },
     });
@@ -953,7 +972,7 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     expect(p.models.pi?.[0]).toMatchObject({
       efforts: [],
@@ -961,62 +980,66 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     });
   });
 
-  it('strips xd/ prefix to match registry effort metadata for claude-code', () => {
+  it("strips xd/ prefix to match registry effort metadata for claude-code", () => {
     const p = buildUserProvider(
       {
-        id: 'my-provider',
-        name: 'My Provider',
+        id: "my-provider",
+        name: "My Provider",
         runtimes: {
-          'claude-code': {
-            baseUrl: 'https://my-provider.example/v1',
-            models: [{ id: 'xd/codex/gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          "claude-code": {
+            baseUrl: "https://my-provider.example/v1",
+            models: [{ id: "xd/codex/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     // xd/codex/gpt-5.6-sol → strips xd/ → codex/gpt-5.6-sol → matches route for claude-code
     // without prefix-stripping, the model ID wouldn't match any registry entry
     // and efforts would fall back to CUSTOM_EFFORTS (no 'xhigh' from registry).
-    const model = p.models['claude-code']?.[0];
+    const model = p.models["claude-code"]?.[0];
     expect(model?.efforts?.length).toBeGreaterThan(0);
-    expect(model?.efforts).toContain('xhigh');
+    expect(model?.efforts).toContain("xhigh");
   });
 
-  it('strips xd/ prefix to match registry effort metadata for codex', () => {
+  it("strips xd/ prefix to match registry effort metadata for codex", () => {
     const p = buildUserProvider(
       {
-        id: 'xd-relay',
-        name: 'XD Relay',
+        id: "xd-relay",
+        name: "XD Relay",
         runtimes: {
           codex: {
-            baseUrl: 'https://xd-relay.example/v1',
-            models: [{ id: 'xd/gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+            baseUrl: "https://xd-relay.example/v1",
+            models: [{ id: "xd/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
           },
         },
       },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+      { modelRegistry: LEGACY_REGISTRY },
     );
     const model = p.models.codex?.[0];
     expect(model?.efforts?.length).toBeGreaterThan(0);
-    expect(model?.efforts).toContain('xhigh');
+    expect(model?.efforts).toContain("xhigh");
   });
 
-  it('synthetic registry: prefix stripping is required for openai/xd/chatgpt/ prefixes', () => {
+  it("synthetic registry: prefix stripping is required for openai/xd/chatgpt/ prefixes", () => {
     // Synthetic registry where entry id = 'synthetic-gpt' with 'ultra' effort.
     // Custom model id = 'openai/synthetic-gpt' can only match via prefix stripping.
     // If strip-prefix code is removed, efforts would remain empty.
     const syntheticRegistry: ModelRegistry = {
-      updatedAt: '2026-01-01T00:00:00Z',
+      updatedAt: "2026-01-01T00:00:00Z",
       schemaVersion: 2,
       models: [
         {
-          id: 'synthetic-gpt',
-          name: 'Synthetic GPT',
-          efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-          defaultEffort: 'high',
+          id: "synthetic-gpt",
+          name: "Synthetic GPT",
+          efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          defaultEffort: "high",
           routes: [
-            { providerId: 'test-provider', modelId: 'synthetic-gpt', agents: ['claude-code', 'codex'] },
+            {
+              providerId: "test-provider",
+              modelId: "synthetic-gpt",
+              agents: ["claude-code", "codex"],
+            },
           ],
         },
       ],
@@ -1024,41 +1047,86 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
 
     // openai/ prefix: should strip and match synthetic-gpt
     const pOpenai = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { 'claude-code': { baseUrl: 'https://x/v1', models: [{ id: 'openai/synthetic-gpt', name: 'G' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://x/v1",
+            models: [{ id: "openai/synthetic-gpt", name: "G" }],
+          },
+        },
+      },
       { modelRegistry: syntheticRegistry },
     );
-    expect(pOpenai.models['claude-code']?.[0]?.efforts).toContain('ultra');
+    expect(pOpenai.models["claude-code"]?.[0]?.efforts).toContain("ultra");
 
     // xd/ prefix: should strip and match
     const pXd = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { codex: { baseUrl: 'https://x/v1', models: [{ id: 'xd/synthetic-gpt', name: 'G' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          codex: {
+            baseUrl: "https://x/v1",
+            models: [{ id: "xd/synthetic-gpt", name: "G" }],
+          },
+        },
+      },
       { modelRegistry: syntheticRegistry },
     );
-    expect(pXd.models.codex?.[0]?.efforts).toContain('ultra');
+    expect(pXd.models.codex?.[0]?.efforts).toContain("ultra");
 
     // chatgpt/ prefix: should strip and match
     const pChatgpt = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { 'claude-code': { baseUrl: 'https://x/v1', models: [{ id: 'chatgpt/synthetic-gpt', name: 'G' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://x/v1",
+            models: [{ id: "chatgpt/synthetic-gpt", name: "G" }],
+          },
+        },
+      },
       { modelRegistry: syntheticRegistry },
     );
-    expect(pChatgpt.models['claude-code']?.[0]?.efforts).toContain('ultra');
+    expect(pChatgpt.models["claude-code"]?.[0]?.efforts).toContain("ultra");
 
     // unknown prefix: should NOT match registry, gets default CUSTOM_EFFORTS (no 'ultra')
     const pUnknown = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { 'claude-code': { baseUrl: 'https://x/v1', models: [{ id: 'unknown/synthetic-gpt', name: 'G' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://x/v1",
+            models: [{ id: "unknown/synthetic-gpt", name: "G" }],
+          },
+        },
+      },
       { modelRegistry: syntheticRegistry },
     );
-    expect(pUnknown.models['claude-code']?.[0]?.efforts).not.toContain('ultra');
+    expect(pUnknown.models["claude-code"]?.[0]?.efforts).not.toContain("ultra");
 
     // no prefix: should match directly
     const pDirect = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { 'claude-code': { baseUrl: 'https://x/v1', models: [{ id: 'synthetic-gpt', name: 'G' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://x/v1",
+            models: [{ id: "synthetic-gpt", name: "G" }],
+          },
+        },
+      },
       { modelRegistry: syntheticRegistry },
     );
-    expect(pDirect.models['claude-code']?.[0]?.efforts).toContain('ultra');
+    expect(pDirect.models["claude-code"]?.[0]?.efforts).toContain("ultra");
   });
 
-  it('Case A: exact match takes priority over prefix-stripped match (no ambiguity)', () => {
+  it("Case A: exact match takes priority over prefix-stripped match (no ambiguity)", () => {
     // Registry has two entries:
     //   A: id='openai/foo', route.modelId='openai/foo', efforts=['ultra']
     //   B: id='other', route.modelId='foo', efforts=['low']
@@ -1066,84 +1134,120 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     // Stage 1 exact: matches A (entry.id='openai/foo') → unique → use A's efforts
     // Without two-stage: both A and B match → ambiguous → fallback
     const reg: ModelRegistry = {
-      updatedAt: '2026-01-01T00:00:00Z',
+      updatedAt: "2026-01-01T00:00:00Z",
       schemaVersion: 2,
       models: [
         {
-          id: 'openai/foo', name: 'OpenAI Foo',
-          efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-          defaultEffort: 'high',
-          routes: [{ providerId: 'openai', modelId: 'openai/foo', agents: ['codex'] }],
+          id: "openai/foo",
+          name: "OpenAI Foo",
+          efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          defaultEffort: "high",
+          routes: [
+            { providerId: "openai", modelId: "openai/foo", agents: ["codex"] },
+          ],
         },
         {
-          id: 'other', name: 'Other Foo',
-          efforts: ['low', 'medium', 'high'],
-          defaultEffort: 'low',
-          routes: [{ providerId: 'other', modelId: 'foo', agents: ['codex'] }],
+          id: "other",
+          name: "Other Foo",
+          efforts: ["low", "medium", "high"],
+          defaultEffort: "low",
+          routes: [{ providerId: "other", modelId: "foo", agents: ["codex"] }],
         },
       ],
     };
     const p = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { codex: { baseUrl: 'https://x/v1', models: [{ id: 'openai/foo', name: 'F' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          codex: {
+            baseUrl: "https://x/v1",
+            models: [{ id: "openai/foo", name: "F" }],
+          },
+        },
+      },
       { modelRegistry: reg },
     );
     // Must select entry A (exact match), not ambiguous fallback
-    expect(p.models.codex?.[0]?.efforts).toContain('ultra');
-    expect(p.models.codex?.[0]?.defaultEffort).toBe('high');
+    expect(p.models.codex?.[0]?.efforts).toContain("ultra");
+    expect(p.models.codex?.[0]?.defaultEffort).toBe("high");
   });
 
-  it('Case B: no exact match → prefix fallback finds unique entry', () => {
+  it("Case B: no exact match → prefix fallback finds unique entry", () => {
     // No entry with id='openai/bar' or route.modelId='openai/bar'
     // But route.modelId='bar' exists → strip openai/ to find it
     const reg: ModelRegistry = {
-      updatedAt: '2026-01-01T00:00:00Z',
+      updatedAt: "2026-01-01T00:00:00Z",
       schemaVersion: 2,
       models: [
         {
-          id: 'registry-bar', name: 'Registry Bar',
-          efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-          defaultEffort: 'max',
-          routes: [{ providerId: 'test', modelId: 'bar', agents: ['claude-code'] }],
+          id: "registry-bar",
+          name: "Registry Bar",
+          efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          defaultEffort: "max",
+          routes: [
+            { providerId: "test", modelId: "bar", agents: ["claude-code"] },
+          ],
         },
       ],
     };
     const p = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { 'claude-code': { baseUrl: 'https://x/v1', models: [{ id: 'openai/bar', name: 'B' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          "claude-code": {
+            baseUrl: "https://x/v1",
+            models: [{ id: "openai/bar", name: "B" }],
+          },
+        },
+      },
       { modelRegistry: reg },
     );
     // Stage 1: no exact match for 'openai/bar'
     // Stage 2: strip openai/ → 'bar' → matches route.modelId → unique
-    expect(p.models['claude-code']?.[0]?.efforts).toContain('ultra');
-    expect(p.models['claude-code']?.[0]?.defaultEffort).toBe('max');
+    expect(p.models["claude-code"]?.[0]?.efforts).toContain("ultra");
+    expect(p.models["claude-code"]?.[0]?.defaultEffort).toBe("max");
   });
 
-  it('Case C: no exact match → prefix fallback yields ambiguity → CUSTOM_EFFORTS', () => {
+  it("Case C: no exact match → prefix fallback yields ambiguity → CUSTOM_EFFORTS", () => {
     // Two entries both have route.modelId='baz' after stripping openai/
     const reg: ModelRegistry = {
-      updatedAt: '2026-01-01T00:00:00Z',
+      updatedAt: "2026-01-01T00:00:00Z",
       schemaVersion: 2,
       models: [
         {
-          id: 'entry-1', name: 'E1',
-          efforts: ['low', 'ultra'],
-          routes: [{ providerId: 'p1', modelId: 'baz', agents: ['codex'] }],
+          id: "entry-1",
+          name: "E1",
+          efforts: ["low", "ultra"],
+          routes: [{ providerId: "p1", modelId: "baz", agents: ["codex"] }],
         },
         {
-          id: 'entry-2', name: 'E2',
-          efforts: ['low', 'high'],
-          routes: [{ providerId: 'p2', modelId: 'baz', agents: ['codex'] }],
+          id: "entry-2",
+          name: "E2",
+          efforts: ["low", "high"],
+          routes: [{ providerId: "p2", modelId: "baz", agents: ["codex"] }],
         },
       ],
     };
     const p = buildUserProvider(
-      { id: 'relay', name: 'R', runtimes: { codex: { baseUrl: 'https://x/v1', models: [{ id: 'openai/baz', name: 'B' }] } } },
+      {
+        id: "relay",
+        name: "R",
+        runtimes: {
+          codex: {
+            baseUrl: "https://x/v1",
+            models: [{ id: "openai/baz", name: "B" }],
+          },
+        },
+      },
       { modelRegistry: reg },
     );
     // Ambiguous → falls back to CUSTOM_EFFORTS (no 'ultra')
-    expect(p.models.codex?.[0]?.efforts).not.toContain('ultra');
+    expect(p.models.codex?.[0]?.efforts).not.toContain("ultra");
   });
 
-  it('exports only the explicitly supported effort levels for a Pi reasoning model', () => {
+  it("exports only the explicitly supported effort levels for a Pi reasoning model", () => {
     const p = buildUserProvider({
       id: "reasoning-pi",
       name: "Reasoning Pi",
@@ -1223,36 +1327,132 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
   });
 });
 
-
-describe('custom model defaults with partial registry metadata', () => {
+describe("custom model defaults with partial registry metadata", () => {
   it.each([
-    [undefined, 'medium'],
+    [undefined, "medium"],
     [null, null],
-    ['max', 'high'],
-  ] as const)('keeps the route usable with declared default %s', (declared, expected) => {
-    const modelRegistry: ModelRegistry = {
-      schemaVersion: 2,
-      updatedAt: '2026-09-05T00:00:00Z',
-      models: [{
-        id: 'sparse-model', name: 'Sparse model',
-        efforts: ['low', 'medium', 'high'],
-        routes: [{ providerId: 'relay', modelId: 'sparse-model', agents: ['codex'] }],
-      }],
+    ["max", "high"],
+  ] as const)(
+    "keeps the route usable with declared default %s",
+    (declared, expected) => {
+      const modelRegistry: ModelRegistry = {
+        schemaVersion: 2,
+        updatedAt: "2026-09-05T00:00:00Z",
+        models: [
+          {
+            id: "sparse-model",
+            name: "Sparse model",
+            efforts: ["low", "medium", "high"],
+            routes: [
+              {
+                providerId: "relay",
+                modelId: "sparse-model",
+                agents: ["codex"],
+              },
+            ],
+          },
+        ],
+      };
+      if (declared === null) {
+        // @ts-expect-error Exercise malformed registry metadata outside the wire contract.
+        modelRegistry.models[0].defaultEffort = declared;
+      } else if (declared !== undefined) {
+        modelRegistry.models[0].defaultEffort = declared;
+      }
+      const provider = buildUserProvider(
+        {
+          id: "relay",
+          name: "Custom relay",
+          runtimes: {
+            codex: {
+              baseUrl: "https://relay.example/v1",
+              models: [{ id: "sparse-model", name: "My model" }],
+            },
+          },
+        },
+        { modelRegistry },
+      );
+      expect(provider.models.codex).toHaveLength(1);
+      expect(provider.models.codex?.[0]).toMatchObject({
+        id: "sparse-model",
+        name: "My model",
+        efforts: ["low", "medium", "high"],
+        defaultEffort: expected,
+      });
+      expect(provider.routing.codex?.upstream).toBe("https://relay.example/v1");
+    },
+  );
+});
+
+describe("live preset defaults and discovery provenance", () => {
+  it("follows changed preset defaults, lets discovery/user values win and detaches on endpoint edits", () => {
+    const config: CustomProviderConfig = {
+      id: "my-connection",
+      name: "My connection",
+      runtimes: {
+        pi: {
+          catalogPresetId: "supplier",
+          baseUrl: "https://supplier.example/v1",
+          wireProtocol: "openai-chat",
+          models: [{ id: "model", name: "Model", discoveredMetadata: {} }],
+        },
+      },
     };
-    if (declared === null) {
-      // @ts-expect-error Exercise malformed registry metadata outside the wire contract.
-      modelRegistry.models[0].defaultEffort = declared;
-    } else if (declared !== undefined) {
-      modelRegistry.models[0].defaultEffort = declared;
-    }
-    const provider = buildUserProvider({
-      id: 'relay', name: 'Custom relay',
-      runtimes: { codex: { baseUrl: 'https://relay.example/v1', models: [{ id: 'sparse-model', name: 'My model' }] } },
-    }, { modelRegistry });
-    expect(provider.models.codex).toHaveLength(1);
-    expect(provider.models.codex?.[0]).toMatchObject({
-      id: 'sparse-model', name: 'My model', efforts: ['low', 'medium', 'high'], defaultEffort: expected,
+    const presets = [
+      {
+        id: "supplier",
+        name: "Supplier",
+        runtimes: {
+          pi: {
+            baseUrl: "https://supplier.example/v1",
+            wireProtocol: "openai-chat" as const,
+            models: [
+              {
+                id: "model",
+                name: "Current default",
+                contextWindow: 1000,
+                supportsImageInput: true,
+              },
+            ],
+          },
+        },
+      },
+    ];
+    const current = () =>
+      buildUserProvider(config, {
+        presets,
+        modelRegistry: {
+          schemaVersion: 4,
+          updatedAt: "2026-09-08T07:00:00.000Z",
+          models: [],
+        },
+      }).models.pi![0];
+    expect(current()).toMatchObject({
+      contextWindow: 1000,
+      name: "Current default",
+      supportsImageInput: true,
+      contextWindowVerified: true,
     });
-    expect(provider.routing.codex?.upstream).toBe('https://relay.example/v1');
+    expect(current().contextWindowExplicit).toBeUndefined();
+    presets[0].runtimes.pi.models[0].contextWindow = 2000;
+    expect(current().contextWindow).toBe(2000);
+    config.runtimes.pi!.models[0].discoveredMetadata = {
+      contextWindow: 3000,
+      supportsImageInput: false,
+    };
+    expect(current()).toMatchObject({
+      contextWindow: 3000,
+      supportsImageInput: false,
+    });
+    config.runtimes.pi!.models[0].contextWindow = 4000;
+    expect(current()).toMatchObject({
+      contextWindow: 4000,
+      contextWindowExplicit: true,
+    });
+    delete config.runtimes.pi!.models[0].contextWindow;
+    config.runtimes.pi!.models[0].discoveredMetadata = {};
+    config.runtimes.pi!.baseUrl = "https://different.example/v1";
+    expect(current().contextWindow).toBe(DEFAULT_CUSTOM_CONTEXT_WINDOW);
+    expect(current().supportsImageInput).toBeUndefined();
   });
 });

@@ -1,3 +1,14 @@
+import {
+  applyExistingModelLocalPatch,
+  applyLocalModelCatalogOverrides,
+} from './model-plane/localCatalogOverrides.js';
+import {
+  resolveModelMetadata,
+  catalogModelMetadata,
+  applyModelMetadata,
+  pickModelMetadata,
+  findBaseModel,
+} from '@cindy/model-providers';
 /**
  * active-catalog —— 进程级「当前生效目录」单例(纯状态 holder,零 Electron 依赖)。
  *
@@ -316,7 +327,8 @@ function resolveXaiAccountCapabilities(
     : entry.efforts !== undefined
       ? canonicalEffortOrder(entry.efforts)
       : canonicalEffortOrder(baselineEfforts);
-  const adaptedRegistryDefault = clampEffortToSupported(registryDefault, efforts) as Effort | null | undefined;
+  const adaptedRegistryDefault = clampEffortToSupported(registryDefault, efforts) as
+    Effort | null | undefined;
   const defaultEffort = isGrok46
     ? pickXaiDefaultEffort(
         efforts,
@@ -336,6 +348,7 @@ function preserveNonGrok46DiscoveryEfforts(
   models: readonly CatalogModel[],
   discovered: readonly XaiDiscoveredModel[],
 ): CatalogModel[] {
+  if ((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion === 4) return [...models];
   const byId = new Map(discovered.map((entry) => [entry.id, entry]));
   return models.map((model) => {
     const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
@@ -664,9 +677,8 @@ function modelRegistryMetaFields(
   const { entry } = matched;
   const perAgent = registryAgent ? entry.perAgent?.[registryAgent] : undefined;
   const efforts = perAgent?.efforts ?? entry.efforts;
-  const defaultEffort = efforts?.length === 0
-    ? null
-    : clampEffortToSupported(modelDefaultEffort(entry), efforts);
+  const defaultEffort =
+    efforts?.length === 0 ? null : clampEffortToSupported(modelDefaultEffort(entry), efforts);
   return {
     name: entry.name,
     ...(entry.group !== undefined ? { group: entry.group } : {}),
@@ -774,6 +786,22 @@ function assembleRoot(
 ): CatalogModel[] {
   const rootPlan = plan.roots.get(rootPlanKey(providerId, agent));
   let out = applyRootRegistryPlan(models, rootPlan);
+  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  if (registry?.schemaVersion === 4) {
+    const live = new Map(models.map((model) => [model.id, model]));
+    out = out.map((model) => {
+      const upstream = live.get(model.id);
+      const metadata =
+        upstream?.discoveredMetadata ?? (upstream ? catalogModelMetadata(upstream) : undefined);
+      return {
+        ...applyModelMetadata(
+          model,
+          resolveModelMetadata(registry, providerId, model.id, metadata, undefined, agent),
+        ),
+        ...(metadata ? { discoveredMetadata: metadata } : {}),
+      };
+    });
+  }
   out = applyLocalOverridesToRoot(providerId, agent, out, localOverrides, plan.warnings);
   if (rootPlan && rootPlan.retired.size > 0) {
     out = out.map((m) =>
@@ -788,6 +816,29 @@ function assembleRoot(
 }
 
 /** Registry / local override 只能补账号已返回的条目，不能重新实体化账号没有的成员。 */
+function applyLayeredConsumer(
+  model: CatalogModel,
+  providerId: string,
+  agent: RootAgentKind,
+  plan: ModelPlaneRegistryPlan,
+): CatalogModel {
+  const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
+  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  return registry?.schemaVersion === 4
+    ? applyModelMetadata(
+        overlaid,
+        resolveModelMetadata(
+          registry,
+          providerId,
+          model.id,
+          model.discoveredMetadata,
+          undefined,
+          agent,
+        ),
+      )
+    : overlaid;
+}
+
 function assembleAuthoritativeRoot(
   providerId: string,
   agent: RootAgentKind,
@@ -834,6 +885,10 @@ function materializeXaiAccountModels(
         : registry?.contextWindow !== undefined || catalogModel?.contextWindowVerified === true;
     return {
       ...catalogModel,
+      discoveredMetadata: {
+        ...catalogModelMetadata(entry),
+        ...(entry.efforts ? { efforts: canonicalEffortOrder(entry.efforts) } : {}),
+      },
       id: entry.id,
       name: entry.name ?? registry?.name ?? catalogModel?.name ?? entry.id.slice('xai/'.length),
       ...(entry.description !== undefined
@@ -1064,7 +1119,7 @@ function computeMerged(): Catalog {
           'openai',
           'claude-code',
           model.id,
-          applyRegistryConsumerOverlay(model, 'openai', 'claude-code', model.id, plan),
+          applyLayeredConsumer(model, 'openai', 'claude-code', plan),
           localOverrides,
           plan.warnings,
         );
@@ -1122,7 +1177,7 @@ function computeMerged(): Catalog {
             'anthropic',
             'codex',
             model.id,
-            applyRegistryConsumerOverlay(model, 'anthropic', 'codex', model.id, plan),
+            applyLayeredConsumer(model, 'anthropic', 'codex', plan),
             localOverrides,
             plan.warnings,
           ),
@@ -1228,9 +1283,16 @@ function computeMerged(): Catalog {
         // Resolve without an agent: each harness adapts the same model-level intent.
         const registryEntry = findModelRegistryRoute(b.modelRegistry, 'xd', gm.id)?.entry;
         const registryDefault = registryEntry ? modelDefaultEffort(registryEntry) : undefined;
-        const intent = registryDefault !== undefined ? registryDefault : defaultEffortForCapabilities(efforts);
-        const defaultEffort = efforts.length === 0 ? null
-          : (clampEffortToSupported(intent, efforts) ?? null) as Effort | null;
+        const intent =
+          b.modelRegistry?.schemaVersion === 4
+            ? (ov.defaultEffort ?? gm.defaultEffort ?? defaultEffortForCapabilities(efforts))
+            : registryDefault !== undefined
+              ? registryDefault
+              : defaultEffortForCapabilities(efforts);
+        const defaultEffort =
+          efforts.length === 0
+            ? null
+            : ((clampEffortToSupported(intent, efforts) ?? null) as Effort | null);
         // Canonical Registry API determines native versus compatibility defaults. Explicit
         // per-harness policy remains an override; user visibility preferences are applied later.
         const nativeApi = nativeApiForRoute('xd', gm.id);
@@ -1250,6 +1312,7 @@ function computeMerged(): Catalog {
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
           id: gm.id,
+          discoveredMetadata: { ...pickModelMetadata(gm), ...pickModelMetadata(ov) },
           ...(nativeApi !== undefined ? { nativeApi } : {}),
           ...(gm.availability ? { availability: gm.availability } : {}),
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
@@ -1296,7 +1359,8 @@ function computeMerged(): Catalog {
     );
     for (const agent of agentKeys) {
       models[agent] = models[agent]!.map((model) =>
-        (!model.mode || model.mode === 'chat' || model.mode === 'responses') && !defaultGatewayModels.has(model.id)
+        (!model.mode || model.mode === 'chat' || model.mode === 'responses') &&
+        !defaultGatewayModels.has(model.id)
           ? { ...model, defaultEnabled: false }
           : model,
       );
@@ -1328,31 +1392,49 @@ function computeMerged(): Catalog {
           const nativeApi = nativeApiForRoute(provider.id, model.id);
           // Pi's independent catalog supplies capabilities, not a separate default.
           // Membership remains native; a Registry match only contributes model intent.
-          const entry = agent === 'pi' && provider.source !== 'user' && provider.id !== 'xd'
-            ? findModelRegistryRoute(b.modelRegistry, provider.id,
-                provider.id === 'xai' && !model.id.startsWith('xai/') ? `xai/${model.id}` : model.id)?.entry
-            : undefined;
-          const intent = entry ? modelDefaultEffort(entry) : undefined;
-          const defaultEffort = intent !== undefined
-            ? model.efforts.length === 0 ? null
-              : clampEffortToSupported(intent, model.efforts) as Effort | null
-            : model.defaultEffort;
+          const entry =
+            agent === 'pi' && provider.source !== 'user' && provider.id !== 'xd'
+              ? findModelRegistryRoute(
+                  b.modelRegistry,
+                  provider.id,
+                  provider.id === 'xai' && !model.id.startsWith('xai/')
+                    ? `xai/${model.id}`
+                    : model.id,
+                )?.entry
+              : undefined;
+          const intent =
+            b.modelRegistry?.schemaVersion !== 4 && entry ? modelDefaultEffort(entry) : undefined;
+          const defaultEffort =
+            intent !== undefined
+              ? model.efforts.length === 0
+                ? null
+                : (clampEffortToSupported(intent, model.efforts) as Effort | null)
+              : model.defaultEffort;
           // Product working defaults are distinct from the provider's advertised capacity.
           // Apply to each built-in GPT route, including subscription and discount aliases.
           // Never enlarge smaller models or overwrite BYOM / explicit preference overrides.
-          const conservativeGptDefault = provider.source !== 'user' &&
+          const conservativeGptDefault =
+            provider.source !== 'user' &&
             ['openai', 'xd'].includes(provider.id) &&
             /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(model.id) &&
             model.contextWindow > 272_000 &&
-            !((agent === 'codex' || agent === 'claude-code') &&
-              hasLocalContextWindowOverride(localOverrides, provider.id,
-                provider.id === 'openai' ? model.id.replace(/^chatgpt\//, '') : model.id, agent));
+            !(
+              (agent === 'codex' || agent === 'claude-code') &&
+              hasLocalContextWindowOverride(
+                localOverrides,
+                provider.id,
+                provider.id === 'openai' ? model.id.replace(/^chatgpt\//, '') : model.id,
+                agent,
+              )
+            );
           return {
             ...model,
-            ...(conservativeGptDefault ? {
-              contextWindow: 272_000,
-              contextWindowMax: model.contextWindowMax ?? model.contextWindow,
-            } : {}),
+            ...(conservativeGptDefault
+              ? {
+                  contextWindow: 272_000,
+                  contextWindowMax: model.contextWindowMax ?? model.contextWindow,
+                }
+              : {}),
             defaultEffort,
             ...(nativeApi !== undefined ? { nativeApi } : {}),
           };
@@ -1373,7 +1455,8 @@ function computeMerged(): Catalog {
           return [
             agent,
             models?.map((model) =>
-              (!model.mode || model.mode === 'chat' || model.mode === 'responses') && !selected.has(model.id)
+              (!model.mode || model.mode === 'chat' || model.mode === 'responses') &&
+              !selected.has(model.id)
                 ? { ...model, defaultEnabled: false }
                 : model,
             ),
@@ -1391,8 +1474,94 @@ function computeMerged(): Catalog {
     providers = [...projectedProviders];
   }
 
-  if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回
-  return { ...b, providers }; // spread 保留 presets 等目录顶层字段
+  if (providers === b.providers && !localOverrides.localModels) return b; // 无 augment、无 custom → 原样返回
+  providers = providers.map((provider) => ({
+    ...provider,
+    models: Object.fromEntries(
+      Object.entries(provider.models).map(([agent, models]) => [
+        agent,
+        models?.map((model) => {
+          let next = model;
+          if (
+            b.modelRegistry?.schemaVersion === 4 &&
+            provider.source !== 'user' &&
+            (provider.id === 'xd' || agent === 'pi')
+          ) {
+            next = applyModelMetadata(
+              model,
+              resolveModelMetadata(
+                b.modelRegistry,
+                provider.id,
+                model.id,
+                model.discoveredMetadata ?? catalogModelMetadata(model),
+                undefined,
+                agent,
+              ),
+            );
+          }
+          if (
+            provider.source !== 'user' &&
+            ['openai', 'xd'].includes(provider.id) &&
+            /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(next.id) &&
+            next.contextWindow > 272_000 &&
+            !(
+              (agent === 'codex' || agent === 'claude-code') &&
+              hasLocalContextWindowOverride(
+                localOverrides,
+                provider.id,
+                next.id.replace(/^chatgpt\//, ''),
+                agent,
+              )
+            )
+          ) {
+            next = {
+              ...next,
+              contextWindowMax: Math.max(next.contextWindowMax ?? 0, next.contextWindow),
+              contextWindow: 272_000,
+            };
+          }
+          const identity =
+            findModelRegistryRoute(
+              b.modelRegistry,
+              provider.id,
+              model.id,
+              agent === 'pi' ? undefined : (agent as RootAgentKind),
+            )?.entry.modelRef ?? findBaseModel(b.modelRegistry, model.id)?.id;
+          const publicPatch = identity ? localOverrides.baseModels?.[identity] : undefined;
+          if (publicPatch) next = applyModelMetadata(next, publicPatch);
+          return applyExistingModelLocalPatch(
+            provider.id,
+            agent as AgentKind,
+            next,
+            localOverrides,
+          );
+        }),
+      ]),
+    ),
+  }));
+  const localModels = b.modelRegistry?.localModels;
+  const userNamedLocalModels = localModels
+    ? {
+        ...localModels,
+        models: localModels.models.map((model) => {
+          const name = model.modelRef
+            ? localOverrides.baseModels?.[model.modelRef]?.name
+            : undefined;
+          return name ? { ...model, name } : model;
+        }),
+      }
+    : undefined;
+  const modelRegistry = b.modelRegistry
+    ? {
+        ...b.modelRegistry,
+        localModels: applyLocalModelCatalogOverrides(
+          userNamedLocalModels,
+          localOverrides.localModels,
+          b.modelRegistry.baseModels,
+        ),
+      }
+    : undefined;
+  return { ...b, modelRegistry, providers }; // spread 保留 presets 等目录顶层字段
 }
 
 /**
@@ -1457,7 +1626,7 @@ function installActiveCatalog(
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: projectionRegistry }),
+      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets }),
     );
   }
   markChanged();
@@ -1542,7 +1711,10 @@ export function commitModelPlaneFromCatalog(
   }
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),
+      buildUserProvider(config, {
+        modelRegistry: trustedCustomProviderRegistry,
+        presets: (base ?? BUNDLED_CATALOG).presets,
+      }),
     );
   }
   markChanged();
@@ -1584,7 +1756,10 @@ export function setCustomProviders(providers: Provider[]): void {
 export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void {
   customConfigs = [...configs];
   custom = customConfigs.map((config) =>
-    buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),
+    buildUserProvider(config, {
+      modelRegistry: trustedCustomProviderRegistry,
+      presets: (base ?? BUNDLED_CATALOG).presets,
+    }),
   );
   markChanged();
 }

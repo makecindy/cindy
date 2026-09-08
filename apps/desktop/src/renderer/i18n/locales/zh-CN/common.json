@@ -2008,8 +2008,8 @@
         "hostProfileApple": "Apple 芯片 · 约 {{memory}} GB 统一内存",
         "hostProfileGeneric": "约 {{memory}} GB 内存",
         "hostProfileUnknown": "还不能确定这台电脑的内存",
-        "bestForYou": "最适合你",
-        "alsoCoding": "也适合编程",
+        "bestForYou": "能力推荐",
+        "alsoCoding": "速度备选",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2026,41 +2026,12 @@
         "noSearchResults": "没有匹配的模型",
         "alreadyInstalled": "已在本机",
         "searchResults": "搜索结果",
-        "moreModels": "更多常用模型",
-        "memoryWarning": "这台电脑内存不足（需要 {{need}} GB，当前约 {{have}} GB）",
+        "moreModels": "其他候选模型",
+        "memoryWarning": "低于估算内存门槛（{{need}} GB，本机约 {{have}} GB）",
         "manualDownload": "手动下载",
         "manualDownloadPlaceholder": "Ollama 库名或 Hugging Face 链接",
         "invalidLibraryName": "请输入 Ollama 库名，或粘贴 huggingface.co 上的模型页链接",
         "advancedExactName": "高级：精确库名",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "当前最强可本机跑的稠密模型，适合编程和长任务。"
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI 开源 20B，16GB 级机器上的对话和推理首选。"
-          },
-          "gemma4-e2b": {
-            "blurb": "Gemma 4 最小杯，轻量机器也能跑，带视觉。"
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 小杯，轻量日常，带视觉。"
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 中杯，日常对话和多模态更稳。"
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 大杯，对话和多模态更强，也更吃内存。"
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 的 MoE 中大杯，激活参数更少，适合中高配。"
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 中杯 MoE，本机编程和 Agent 备选。"
-          },
-          "glm-47-flash": {
-            "blurb": "智谱新一代编程模型，30B MoE，适合写代码和 Agent。"
-          }
-        },
         "onboardingTitle": "先安装 Ollama 运行环境",
         "onboardingBody": "安装 Ollama 后，即可在 Cindy 中下载和使用本机模型，无需打开 Ollama App。Ollama 是免费开源的第三方运行环境。",
         "installInCindy": "在 Cindy 里安装",
@@ -2129,8 +2100,8 @@
         "cancelDownload": "删除未完成下载",
         "notRecommended": "这台电脑未达到 Qwen3.8 27B 所需的 32 GB 内存门槛。你仍可输入精确库名自行下载。",
         "sizeHint": "约 {{size}} · 需要 {{memory}} GB 统一内存",
-        "sizeHintApple": "约 {{size}} · 需要 {{memory}} GB 统一内存",
-        "sizeHintGeneric": "约 {{size}} · 需要 {{memory}} GB 内存",
+        "sizeHintApple": "下载 {{size}} · 估算需要 {{memory}} GB 统一内存",
+        "sizeHintGeneric": "下载 {{size}} · 估算需要 {{memory}} GB 内存",
         "deleteFromCindy": "从 Cindy 移除",
         "deleteConfirmTitle": "从 Cindy 移除 Ollama？",
         "deleteConfirmBody": "只会移除 Cindy 中的连接。Ollama 里已下载的模型仍在磁盘上，服务也不会停止。",
@@ -2139,7 +2110,8 @@
         "deleteModelConfirmBody": "会从这台电脑删除已下载的模型文件，Cindy 里也会一并移除。需要时可以重新下载。",
         "deleteModelConfirm": "删除",
         "deleteModelDone": "已删除 {{name}}",
-        "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试"
+        "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试",
+        "noRecommendation": "这台电脑暂时没有证据充分且内存适配的推荐，可在下方手动选择候选模型。"
       },
       "xdSignin": {
         "badge": "推荐",

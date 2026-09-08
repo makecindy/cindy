@@ -355,6 +355,8 @@ describe('CustomProviderDialog preset locale ownership', () => {
 
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models[0]).toEqual({
+      discoveredMetadata: {},
+      nameExplicit: false,
       id: 'local-model',
       name: 'Local Model',
       route: {

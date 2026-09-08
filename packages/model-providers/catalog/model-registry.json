@@ -1,45 +1,22 @@
 {
-  "schemaVersion": 3,
-  "updatedAt": "2026-09-05T13:36:11.674Z",
+  "schemaVersion": 4,
+  "updatedAt": "2026-09-08T07:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
       "name": "GPT-5.6-Sol",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 18,
-      "supportsFastMode": true,
       "perAgent": {
         "codex": {
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-sol",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -103,35 +80,29 @@
                 "verifiedAt": "2026-08-28"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "description": "GPT-5.6-Sol for coding tasks",
+            "group": "gpt",
+            "contextWindow": 272000,
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-sol"
     },
     {
       "id": "openai/gpt-5.6-sol[1m]",
       "name": "GPT-5.6-Sol (1M · Higher usage)",
       "status": "active",
-      "group": "gpt",
-      "description": "Explicit 1M context opt-in; inputs above 272K use higher long-context rates for the entire request",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 18,
-      "supportsFastMode": true,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-sol",
-          "agents": [
-            "claude-code"
-          ],
+          "agents": ["claude-code"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -195,95 +166,66 @@
                 "verifiedAt": "2026-08-28"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "name": "GPT-5.6-Sol (1M · Higher usage)",
+            "description": "Explicit 1M context opt-in; inputs above 272K use higher long-context rates for the entire request",
+            "group": "gpt",
+            "contextWindow": 1000000,
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-sol"
     },
     {
       "id": "xd/gpt-5.6-sol",
       "name": "GPT-5.6-Sol",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 18,
-      "supportsFastMode": true,
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-sol",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.6-Sol for coding tasks",
+            "group": "gpt",
+            "contextWindow": 1050000,
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-sol"
     },
     {
       "id": "openai/gpt-5.6-terra",
       "name": "GPT-5.6-Terra",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 19,
-      "supportsFastMode": true,
       "perAgent": {
         "codex": {
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-terra",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -347,81 +289,56 @@
                 "verifiedAt": "2026-08-07"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "group": "gpt",
+            "contextWindow": 272000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-terra"
     },
     {
       "id": "xd/gpt-5.6-terra",
       "name": "GPT-5.6-Terra",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 19,
-      "supportsFastMode": true,
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-terra",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "group": "gpt",
+            "contextWindow": 1050000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-terra"
     },
     {
       "id": "openai/gpt-5.6-luna",
       "name": "GPT-5.6-Luna",
       "status": "active",
-      "group": "gpt",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 17,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-luna",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -485,26 +402,23 @@
                 "verifiedAt": "2026-08-07"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "group": "gpt",
+            "contextWindow": 272000,
+            "maxOutputTokens": 128000,
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium"
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-luna"
     },
     {
       "id": "xd/gpt-5.6-luna",
       "name": "GPT-5.6-Luna",
       "status": "active",
-      "group": "gpt",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 17,
       "perAgent": {
         "codex": {
@@ -515,31 +429,24 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-luna",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "group": "gpt",
+            "contextWindow": 1050000,
+            "maxOutputTokens": 128000,
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium"
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-luna"
     },
     {
       "id": "openai/gpt-5.5",
       "name": "GPT-5.5",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI Codex (GPT-5.5) for coding tasks",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 20,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "codex": {
@@ -550,10 +457,7 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -583,28 +487,23 @@
                 "verifiedAt": "2026-08-01"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "description": "OpenAI Codex (GPT-5.5) for coding tasks",
+            "group": "gpt",
+            "contextWindow": 272000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.5"
     },
     {
       "id": "xd/gpt-5.5",
       "name": "GPT-5.5",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.5 for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 20,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
@@ -618,30 +517,23 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.5 for coding tasks",
+            "group": "gpt",
+            "contextWindow": 1050000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.5"
     },
     {
       "id": "openai/gpt-5.4",
       "name": "GPT-5.4",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI Codex (GPT-5.4) for coding tasks",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
       "sortOrder": 21,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "codex": {
@@ -652,10 +544,7 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.4",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -685,28 +574,23 @@
                 "verifiedAt": "2026-08-01"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "description": "OpenAI Codex (GPT-5.4) for coding tasks",
+            "group": "gpt",
+            "contextWindow": 272000,
+            "supportsFastMode": true
+          }
         }
       ],
       "nativeApi": "openai-responses",
-      "defaultEffort": "medium"
+      "modelRef": "openai/gpt-5.4"
     },
     {
       "id": "xd/gpt-5.4",
       "name": "GPT-5.4",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.4 for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
       "sortOrder": 21,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
@@ -720,31 +604,23 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.4",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.4 for coding tasks",
+            "group": "gpt",
+            "contextWindow": 1050000,
+            "supportsFastMode": true
+          }
         }
       ],
       "nativeApi": "openai-responses",
-      "defaultEffort": "medium"
+      "modelRef": "openai/gpt-5.4"
     },
     {
       "id": "openai/gpt-5.4-mini",
       "name": "GPT-5.4-Mini",
       "status": "active",
-      "group": "gpt",
-      "description": "Faster, lighter Codex variant — speed-optimized for quick edits",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
       "sortOrder": 22,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
@@ -758,10 +634,7 @@
         {
           "providerId": "openai",
           "modelId": "gpt-5.4-mini",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -776,28 +649,23 @@
                 "verifiedAt": "2026-08-01"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "description": "Faster, lighter Codex variant — speed-optimized for quick edits",
+            "group": "gpt",
+            "contextWindow": 272000,
+            "supportsFastMode": true
+          }
         }
       ],
       "nativeApi": "openai-responses",
-      "defaultEffort": "medium"
+      "modelRef": "openai/gpt-5.4-mini"
     },
     {
       "id": "xd/gpt-5.4-mini",
       "name": "GPT-5.4-Mini",
       "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.4-Mini for coding tasks",
-      "contextWindow": 400000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
       "sortOrder": 22,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
@@ -811,117 +679,80 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-mini",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.4-Mini for coding tasks",
+            "group": "gpt",
+            "contextWindow": 400000,
+            "supportsFastMode": true
+          }
         }
       ],
       "nativeApi": "openai-responses",
-      "defaultEffort": "medium"
+      "modelRef": "openai/gpt-5.4-mini"
     },
     {
       "id": "openai/gpt-5.4-pro",
       "name": "GPT-5.4 Pro",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI GPT-5.4 Pro for demanding reasoning tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
       "sortOrder": 23,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.4-pro",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.4-pro"
     },
     {
       "id": "openai/gpt-5.5-pro",
       "name": "GPT-5.5 Pro",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI GPT-5.5 Pro for precise, high-quality reasoning",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
       "sortOrder": 24,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.5-pro",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.5-pro"
     },
     {
       "id": "openai/gpt-5.6-cyber",
       "name": "GPT-5.6 Cyber",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI cyber security reasoning model; access requires approval",
-      "contextWindow": 400000,
-      "maxOutputTokens": 128000,
       "sortOrder": 25,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.6-cyber",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-cyber"
     },
     {
       "id": "openai/gpt-6-astra",
       "name": "GPT-6 Astra",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI GPT-6 Astra for complex reasoning, coding, computer use, research, and document creation",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "perAgent": {
         "codex": {
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-6-astra",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -953,66 +784,39 @@
                 "verifiedAt": "2026-09-05"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": true
+          }
         }
       ],
-      "supportsFastMode": true,
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6-astra"
     },
     {
       "id": "anthropic/claude-fable-5-1",
       "name": "Fable 5.1",
       "status": "active",
-      "group": "anthropic",
-      "description": "Claude Fable 5.1 for long-running agentic coding and research",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-fable-5-1",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-fable-5-1"
     },
     {
       "id": "anthropic/claude-fable-5",
       "name": "Fable 5",
       "status": "active",
-      "group": "anthropic",
-      "description": "Most capable, supports xhigh effort",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 1,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-fable-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1029,41 +833,32 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-fable-5",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-fable-5"
     },
     {
       "id": "anthropic/claude-mythos-5",
       "name": "Mythos 5",
       "status": "active",
-      "group": "anthropic",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-mythos-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1083,34 +878,19 @@
           ]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-mythos-5"
     },
     {
       "id": "anthropic/claude-opus-5",
       "name": "Opus 5",
       "status": "active",
-      "group": "anthropic",
-      "description": "Latest Opus for ambitious work",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 0,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1142,44 +922,33 @@
                 "verifiedAt": "2026-08-02"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-opus-5",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-5"
     },
     {
       "id": "anthropic/claude-opus-4-8",
       "name": "Opus 4.8",
       "status": "active",
-      "group": "anthropic",
-      "description": "Most capable, supports xhigh effort",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 2,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-8",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1211,45 +980,34 @@
                 "verifiedAt": "2026-08-02"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-8",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-8"
     },
     {
       "id": "anthropic/claude-opus-4-7",
       "name": "Opus 4.7",
       "status": "active",
-      "group": "anthropic",
-      "description": "Most capable, supports xhigh effort",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 3,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-7",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1266,44 +1024,34 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-7",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-7"
     },
     {
       "id": "anthropic/claude-opus-4-6",
       "name": "Opus 4.6",
       "status": "active",
-      "group": "anthropic",
-      "description": "Most capable for ambitious work",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 4,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-6",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1320,43 +1068,34 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-6",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-6"
     },
     {
       "id": "anthropic/claude-opus-4-5",
       "name": "Opus 4.5",
       "status": "active",
-      "group": "anthropic",
-      "description": "Earlier Opus generation",
-      "contextWindow": 200000,
-      "maxOutputTokens": 64000,
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 5,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-opus-4-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1373,44 +1112,33 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-5",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-5"
     },
     {
       "id": "anthropic/claude-sonnet-5",
       "name": "Sonnet 5",
       "status": "active",
-      "group": "anthropic",
-      "description": "Latest Sonnet — fast and highly capable",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 6,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-sonnet-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1427,44 +1155,34 @@
                 "verifiedAt": "2026-08-12"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-5",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-5"
     },
     {
       "id": "anthropic/claude-sonnet-4-6",
       "name": "Sonnet 4.6",
       "status": "active",
-      "group": "anthropic",
-      "description": "Most efficient for everyday tasks",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 7,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-sonnet-4-6",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1481,38 +1199,34 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-6",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-4-6"
     },
     {
       "id": "anthropic/claude-sonnet-4-5",
       "name": "Sonnet 4.5",
       "status": "active",
-      "group": "anthropic",
-      "description": "Earlier Sonnet generation",
-      "contextWindow": 200000,
-      "maxOutputTokens": 64000,
-      "efforts": [],
       "sortOrder": 8,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-sonnet-4-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1529,38 +1243,34 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-5",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-4-5"
     },
     {
       "id": "anthropic/claude-haiku-4-5",
       "name": "Haiku 4.5",
       "status": "active",
-      "group": "anthropic",
-      "description": "Fastest for quick answers",
-      "contextWindow": 200000,
-      "maxOutputTokens": 64000,
-      "efforts": [],
       "sortOrder": 9,
-      "supportsFastMode": false,
       "defaultEnabled": true,
       "routes": [
         {
           "providerId": "anthropic",
           "modelId": "claude-haiku-4-5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1577,41 +1287,33 @@
                 "verifiedAt": "2026-07-31"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "claude-haiku-4-5",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-haiku-4-5"
     },
     {
       "id": "xai/grok-4.6",
       "name": "Grok 4.6",
       "status": "active",
-      "group": "grok",
-      "description": "xAI Grok 4.6 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 500000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 48,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.6",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1644,30 +1346,19 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.6"
     },
     {
       "id": "xai/grok-4.5",
       "name": "Grok 4.5",
       "status": "active",
-      "group": "grok",
-      "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 500000,
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 49,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1700,39 +1391,24 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.5"
     },
     {
       "id": "xai/grok-4.3",
       "name": "Grok 4.3",
       "status": "active",
-      "group": "grok",
-      "description": "xAI Grok 4.3 通用旗舰,1M 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 1000000,
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 51,
       "perAgent": {
         "codex": {
-          "efforts": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "efforts": ["low", "medium", "high"]
         }
       },
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1765,26 +1441,20 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.3"
     },
     {
       "id": "xai/grok-build-0.1",
       "name": "Grok Build 0.1",
       "status": "active",
-      "group": "grok",
-      "description": "xAI agentic coding model,256k 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 256000,
-      "efforts": [],
       "sortOrder": 50,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-build-0.1",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1817,32 +1487,20 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-build-0.1"
     },
     {
       "id": "xai/grok-4.20-multi-agent-0309",
       "name": "Grok 4.20 Multi-Agent",
       "status": "active",
-      "group": "grok",
-      "description": "xAI Grok 4.20 multi-agent model,1M 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 1000000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 52,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20-multi-agent-0309",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1875,26 +1533,20 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.20-multi-agent-0309"
     },
     {
       "id": "xai/grok-4.20-0309-reasoning",
       "name": "Grok 4.20 Reasoning",
       "status": "active",
-      "group": "grok",
-      "description": "xAI Grok 4.20 reasoning model,1M 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 1000000,
-      "efforts": [],
       "sortOrder": 53,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20-0309-reasoning",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1927,26 +1579,20 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.20-0309-reasoning"
     },
     {
       "id": "xai/grok-4.20-0309-non-reasoning",
       "name": "Grok 4.20 Non-Reasoning",
       "status": "active",
-      "group": "grok",
-      "description": "xAI Grok 4.20 non-reasoning model,1M 上下文(SuperGrok 订阅直连)",
-      "contextWindow": 1000000,
-      "efforts": [],
       "sortOrder": 54,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20-0309-non-reasoning",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -1979,32 +1625,20 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.20-0309-non-reasoning"
     },
     {
       "id": "xai/grok-4.20",
       "name": "Grok 4.20 Legacy Alias",
       "status": "deprecated",
-      "group": "grok",
-      "description": "旧版兼容 alias;新会话请使用明确的 Grok 4.20 model ID",
-      "contextWindow": 1000000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 98,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.20",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2037,26 +1671,20 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.20"
     },
     {
       "id": "xai/grok-code-fast",
       "name": "Grok Code Fast (Deprecated)",
       "status": "deprecated",
-      "group": "grok",
-      "description": "旧版兼容 alias;新会话请使用 grok-build-0.1",
-      "contextWindow": 256000,
-      "efforts": [],
       "sortOrder": 99,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xai",
           "modelId": "xai/grok-code-fast",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2089,131 +1717,88 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-code-fast"
     },
     {
       "id": "xd/codex-gpt-5.6-luna",
       "name": "GPT-5.6-Luna",
-      "group": "gpt-budget",
       "sortOrder": 7,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.6-luna",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "group": "gpt-budget"
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-luna"
     },
     {
       "id": "xd/codex-gpt-5.6-sol",
       "name": "GPT-5.6-Sol",
-      "group": "gpt-budget",
-      "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 372000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 8,
-      "supportsFastMode": true,
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.6-sol",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.6-Sol for coding tasks",
+            "group": "gpt-budget",
+            "contextWindow": 372000,
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-sol"
     },
     {
       "id": "xd/codex-gpt-5.6-terra",
       "name": "GPT-5.6-Terra",
-      "group": "gpt-budget",
-      "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 372000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 9,
-      "supportsFastMode": true,
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
         },
         "codex": {
           "contextWindow": 272000,
-          "efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra"
-          ]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.6-terra",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "group": "gpt-budget",
+            "contextWindow": 372000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.6-terra"
     },
     {
       "id": "xd/codex-gpt-5.5",
       "name": "GPT-5.5",
-      "group": "gpt-budget",
-      "description": "GPT-5.5 for coding tasks",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 10,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
@@ -2224,30 +1809,22 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.5 for coding tasks",
+            "group": "gpt-budget",
+            "contextWindow": 272000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.5"
     },
     {
       "id": "xd/codex-gpt-5.4",
       "name": "GPT-5.4",
-      "group": "gpt-budget",
-      "description": "GPT-5.4 for coding tasks",
-      "contextWindow": 272000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 11,
-      "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
@@ -2258,37 +1835,28 @@
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.4",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "description": "GPT-5.4 for coding tasks",
+            "group": "gpt-budget",
+            "contextWindow": 272000,
+            "supportsFastMode": true
+          }
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.4"
     },
     {
       "id": "google/gemini-3.7-flash",
       "name": "Gemini 3.7 Flash",
       "status": "active",
-      "group": "google",
-      "description": "Google Gemini 3.7 Flash — agentic workflows and multimodal reasoning",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 28,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.7-flash",
-          "agents": [
-            "claude-code"
-          ],
+          "agents": ["claude-code"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2319,35 +1887,25 @@
                 "verifiedAt": "2026-08-13"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.7-flash"
     },
     {
       "id": "google/gemini-3.6-flash",
       "name": "Gemini 3.6 Flash",
       "status": "active",
-      "group": "google",
-      "description": "Google Gemini 3.6 Flash — frontier intelligence optimized for speed and cost",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
-      "efforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 29,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.6-flash",
-          "agents": [
-            "claude-code"
-          ],
+          "agents": ["claude-code"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2378,487 +1936,335 @@
                 "verifiedAt": "2026-08-13"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.6-flash"
     },
     {
       "id": "google/gemini-3.5-flash",
       "name": "Gemini 3.5 Flash",
-      "group": "google",
-      "description": "Google Gemini 3.5 Flash — upgraded Flash with stronger reasoning",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
-      "efforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 30,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.5-flash",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.5-flash"
     },
     {
       "id": "google/gemini-3.1-pro-preview",
       "name": "Gemini 3.1 Pro",
-      "group": "google",
-      "description": "Google Gemini 3.1 Pro Preview — deepest reasoning, multimodal",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 31,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.1-pro-preview",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.1-pro-preview"
     },
     {
       "id": "google/gemini-3-flash-preview",
       "name": "Gemini 3 Flash",
-      "group": "google",
-      "description": "Google Gemini 3 Flash Preview — fast multimodal reasoning",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
-      "efforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 32,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3-flash-preview",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3-flash-preview"
     },
     {
       "id": "google/gemini-3.5-flash-lite",
       "name": "Gemini 3.5 Flash-Lite",
       "status": "active",
-      "group": "google",
-      "description": "Google Gemini 3.5 Flash-Lite — cost-efficient multimodal model for high-volume workloads",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
-      "efforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 33,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.5-flash-lite",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.5-flash-lite"
     },
     {
       "id": "google/gemini-3.1-flash-lite",
       "name": "Gemini 3.1 Flash-Lite",
       "status": "active",
-      "group": "google",
-      "description": "Google Gemini 3.1 Flash-Lite — efficient multimodal model for large-scale tasks",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
       "sortOrder": 34,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "gemini-3.1-flash-lite",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "google-generative-ai"
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.1-flash-lite"
     },
     {
       "id": "bytedance-seed/seed-2.1-pro",
       "name": "Seed 2.1 Pro",
-      "group": "china",
-      "contextWindow": 256000,
-      "maxOutputTokens": 256000,
-      "efforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
-      "supportsFastMode": false,
       "perAgent": {
         "claude-code": {
-          "efforts": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "efforts": ["low", "medium", "high"]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "bytedance-seed/seed-2.1-pro",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "bytedance-seed/seed-2.1-pro"
     },
     {
       "id": "qwen/qwen3.8-max",
       "name": "Qwen 3.8 Max",
-      "group": "china",
-      "contextWindow": 983616,
-      "maxOutputTokens": 131072,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.8-max",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.8-max"
     },
     {
       "id": "qwen/qwen3.8-max-preview",
       "name": "Qwen 3.8 Max Preview",
       "status": "retired",
-      "group": "china",
-      "contextWindow": 983616,
-      "efforts": [
-        "low",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "high",
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.8-max-preview",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.8-max-preview"
     },
     {
       "id": "qwen/qwen3.7-max",
       "name": "Qwen 3.7 Max",
-      "group": "china",
-      "description": "Qwen 3.7 Max agentic coding model; thinking is provider-managed",
-      "contextWindow": 992000,
-      "maxOutputTokens": 65536,
-      "efforts": [],
       "sortOrder": 40,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.7-max",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.7-max"
     },
     {
       "id": "moonshotai/kimi-k2.7-code",
       "name": "Kimi K2.7 Code",
       "status": "active",
-      "group": "china",
-      "description": "Moonshot Kimi K2.7 Code agentic coding model",
-      "contextWindow": 262144,
-      "efforts": [],
       "sortOrder": 107,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "moonshot-kimi-cn",
           "modelId": "kimi-k2.7-code",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "moonshot-kimi-global",
           "modelId": "kimi-k2.7-code",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "moonshotai/kimi-k2.7-code"
     },
     {
       "id": "moonshotai/kimi-k2.7-code-highspeed",
       "name": "Kimi K2.7 Code Highspeed",
       "status": "active",
-      "group": "china",
-      "description": "Moonshot Kimi K2.7 Code high-speed API variant",
-      "contextWindow": 262144,
-      "efforts": [],
       "sortOrder": 108,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "moonshot-kimi-cn",
           "modelId": "kimi-k2.7-code-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "moonshot-kimi-global",
           "modelId": "kimi-k2.7-code-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "moonshotai/kimi-k2.7-code-highspeed"
     },
     {
       "id": "moonshotai/kimi-k2.6",
       "name": "Kimi K2.6",
-      "group": "china",
-      "description": "Moonshot Kimi K2.6 agentic coding model; thinking is provider-managed",
-      "contextWindow": 262144,
-      "efforts": [],
       "sortOrder": 106,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "moonshotai/kimi-k2.6",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "moonshotai/kimi-k2.6"
     },
     {
       "id": "z-ai/glm-5.1",
       "name": "GLM-5.1",
-      "group": "china",
-      "description": "Zhipu GLM-5.1 agentic coding model; thinking is provider-managed",
-      "contextWindow": 200000,
-      "maxOutputTokens": 131072,
-      "efforts": [],
       "sortOrder": 42,
-      "supportsFastMode": false,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.1",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.1"
     },
     {
       "id": "z-ai/glm-5.2",
       "name": "GLM-5.2",
-      "group": "china",
-      "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 131072,
-      "efforts": [
-        "minimal",
-        "high",
-        "max"
-      ],
-      "defaultEffort": "high",
       "sortOrder": 43,
-      "supportsFastMode": false,
       "perAgent": {
         "claude-code": {
-          "efforts": [
-            "high",
-            "max"
-          ]
+          "efforts": ["high", "max"]
         }
       },
       "routes": [
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.2",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.2"
     },
     {
       "id": "z-ai/glm-5.3",
       "name": "GLM-5.3",
       "status": "active",
-      "group": "china",
-      "description": "Zhipu GLM-5.3 agentic coding model; 1M context",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 131072,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ],
-      "defaultEffort": "high",
       "sortOrder": 44,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.3"
     },
     {
       "id": "z-ai/glm-5.3-flash",
       "name": "GLM-5.3-Flash",
       "status": "active",
-      "group": "china",
-      "description": "Zhipu GLM-5.3-Flash native multimodal coding model; 1M context",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 131072,
       "routes": [
         {
           "providerId": "zhipu-glm-cn",
           "modelId": "glm-5.3-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "zhipu-glm-global",
           "modelId": "glm-5.3-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.3-flash"
     },
     {
       "id": "xd/z-ai-glm-5.3-flash",
       "name": "GLM-5.3-Flash",
       "status": "active",
-      "group": "china",
-      "description": "Zhipu GLM-5.3-Flash native multimodal coding model; 1M context",
-      "contextWindow": 1000000,
-      "maxOutputTokens": 131072,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "z-ai/glm-5.3-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
       "nativeApi": "openai-completions",
-      "defaultEffort": "medium"
+      "modelRef": "xd/z-ai-glm-5.3-flash"
     },
     {
       "id": "deepseek/deepseek-v4-pro",
       "name": "DeepSeek V4 Pro",
-      "group": "china",
-      "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
-      "contextWindow": 1048576,
-      "maxOutputTokens": 384000,
-      "efforts": [
-        "high",
-        "max"
-      ],
-      "defaultEffort": "high",
       "sortOrder": 45,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-pro",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2873,15 +2279,15 @@
                 "verifiedAt": "2026-08-16"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "deepseek",
           "modelId": "deepseek-v4-pro",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2910,34 +2316,24 @@
                 "verifiedAt": "2026-08-16"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "deepseek/deepseek-v4-pro"
     },
     {
       "id": "deepseek/deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
-      "group": "china",
-      "description": "DeepSeek V4 Flash efficiency-optimized MoE; supports low/high/max effort",
-      "contextWindow": 1048576,
-      "maxOutputTokens": 384000,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ],
-      "defaultEffort": "high",
       "sortOrder": 46,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2952,15 +2348,15 @@
                 "verifiedAt": "2026-08-16"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "deepseek",
           "modelId": "deepseek-v4-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -2989,35 +2385,26 @@
                 "verifiedAt": "2026-08-16"
               }
             }
-          ]
+          ],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "deepseek/deepseek-v4-flash"
     },
     {
       "id": "openai/gpt-5.4-nano",
       "name": "GPT-5.4-Nano",
       "status": "active",
-      "group": "gpt",
-      "description": "OpenAI GPT-5.4 nano for simple, high-volume tasks",
-      "contextWindow": 400000,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
       "sortOrder": 101,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "openai",
           "modelId": "gpt-5.4-nano",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePrices": [
             {
               "currency": "USD",
@@ -3037,539 +2424,384 @@
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-nano",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
       "nativeApi": "openai-responses",
-      "defaultEffort": "medium"
+      "modelRef": "openai/gpt-5.4-nano"
     },
     {
       "id": "xd/codex-gpt-5.4-mini",
       "name": "GPT-5.4-Mini",
-      "group": "gpt-budget",
-      "contextWindow": 272000,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "sortOrder": 103,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.4-mini",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "group": "gpt-budget",
+            "contextWindow": 272000
+          }
         }
       ],
-      "maxOutputTokens": 128000,
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.4-mini"
     },
     {
       "id": "minimax/minimax-m3",
       "name": "MiniMax M3",
       "status": "active",
-      "group": "china",
-      "contextWindow": 1000000,
       "sortOrder": 114,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m3"
     },
     {
       "id": "minimax/minimax-m2.7",
       "name": "MiniMax M2.7",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 111,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.7",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.7",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2.7"
     },
     {
       "id": "minimax/minimax-m2.7-highspeed",
       "name": "MiniMax M2.7 Highspeed",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 112,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.7-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.7-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2.7-highspeed"
     },
     {
       "id": "minimax/minimax-m2.5",
       "name": "MiniMax M2.5",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 116,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.5",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2.5"
     },
     {
       "id": "minimax/minimax-m2.5-highspeed",
       "name": "MiniMax M2.5 Highspeed",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 117,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.5-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.5-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2.5-highspeed"
     },
     {
       "id": "minimax/minimax-m2.1",
       "name": "MiniMax M2.1",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 118,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.1",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.1",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2.1"
     },
     {
       "id": "minimax/minimax-m2.1-highspeed",
       "name": "MiniMax M2.1 Highspeed",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 119,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2.1-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2.1-highspeed",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2.1-highspeed"
     },
     {
       "id": "minimax/minimax-m2",
       "name": "MiniMax M2",
       "status": "active",
-      "group": "china",
-      "contextWindow": 204800,
       "sortOrder": 120,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "minimax-cn",
           "modelId": "MiniMax-M2",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "minimax-global",
           "modelId": "MiniMax-M2",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "anthropic-messages"
+      "nativeApi": "anthropic-messages",
+      "modelRef": "minimax/minimax-m2"
     },
     {
       "id": "moonshotai/kimi-k3",
       "name": "Kimi K3",
-      "group": "china",
-      "contextWindow": 1048576,
-      "maxOutputTokens": 1048576,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ],
-      "defaultEffort": "high",
       "sortOrder": 41,
-      "supportsFastMode": false,
       "routes": [
         {
           "providerId": "moonshot-kimi-cn",
           "modelId": "kimi-k3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "moonshot-kimi-global",
           "modelId": "kimi-k3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "moonshotai/kimi-k3"
     },
     {
       "id": "qwen/qwen3.6-plus",
       "name": "Qwen 3.6 Plus",
-      "group": "china",
-      "description": "Qwen 3.6 Plus with provider-managed thinking",
-      "contextWindow": 1048576,
-      "maxOutputTokens": 65536,
-      "efforts": [],
       "sortOrder": 105,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.6-plus",
-          "agents": [
-            "claude-code"
-          ]
+          "agents": ["claude-code"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.6-plus"
     },
     {
       "id": "qwen/qwen3.6-plus-api",
       "name": "Qwen 3.6 Plus API",
       "status": "active",
-      "group": "china",
-      "contextWindow": 991808,
-      "maxOutputTokens": 65536,
       "sortOrder": 113,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.6-plus",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.6-plus",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.6-plus-api"
     },
     {
       "id": "qwen/qwen3.7-flash",
       "name": "Qwen 3.7 Flash",
       "status": "active",
-      "group": "china",
-      "description": "Alibaba Qwen 3.7 Flash text model with provider-managed thinking",
-      "contextWindow": 991808,
-      "maxOutputTokens": 65536,
-      "efforts": [],
       "sortOrder": 115,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.7-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.7-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.7-flash"
     },
     {
       "id": "qwen/qwen3.8-flash",
       "name": "Qwen 3.8 Flash",
       "status": "active",
-      "group": "china",
-      "description": "Alibaba Qwen 3.8 Flash multimodal model with provider-managed thinking",
-      "contextWindow": 991808,
-      "maxOutputTokens": 131072,
-      "efforts": [],
       "sortOrder": 121,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.8-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.8-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.8-flash"
     },
     {
       "id": "qwen/qwen3.7-plus",
       "name": "Qwen 3.7 Plus",
       "status": "active",
-      "group": "china",
-      "description": "Alibaba Qwen 3.7 Plus text model with provider-managed thinking",
-      "contextWindow": 991808,
-      "maxOutputTokens": 65536,
-      "efforts": [],
       "sortOrder": 109,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.7-plus",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.7-plus",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.7-plus"
     },
     {
       "id": "qwen/qwen3.6-flash",
       "name": "Qwen 3.6 Flash",
       "status": "active",
-      "group": "china",
-      "description": "Alibaba Qwen 3.6 Flash text model with provider-managed thinking",
-      "contextWindow": 991808,
-      "maxOutputTokens": 65536,
-      "efforts": [],
       "sortOrder": 110,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "aliyun-model-studio-cn",
           "modelId": "qwen3.6-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         },
         {
           "providerId": "aliyun-model-studio-global",
           "modelId": "qwen3.6-flash",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.6-flash"
     },
     {
       "id": "xd/codex-gpt-5.5-auto",
       "name": "GPT-5.5-Auto",
-      "group": "gpt-budget",
       "sortOrder": 12,
       "defaultEnabled": false,
       "routes": [
         {
           "providerId": "xd",
           "modelId": "codex/gpt-5.5:auto",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "maxOutputTokens": 128000,
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.5-auto"
     },
     {
       "id": "qwen/qwen3.8-27b",
       "name": "Qwen3.8 27B",
-      "contextWindow": 991808,
-      "maxOutputTokens": 131072,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "xd",
           "modelId": "qwen/qwen3.8-27b",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen3.8-27b"
     },
     {
       "id": "tencent/hy3",
       "name": "Hy3",
-      "contextWindow": 262144,
-      "maxOutputTokens": 128000,
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "xd",
           "modelId": "tencent/hy3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "tencent/hy3"
     },
     {
       "id": "meta/muse-spark-1.2",
@@ -3579,79 +2811,61 @@
         {
           "providerId": "xd",
           "modelId": "meta/muse-spark-1.2",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
-      ]
+      ],
+      "modelRef": "meta/muse-spark-1.2"
     },
     {
       "id": "xd/moonshotai-kimi-k3",
       "name": "Kimi K3",
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "xd",
           "modelId": "moonshot/kimi-k3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         },
         {
           "providerId": "xd",
           "modelId": "moonshotai/kimi-k3",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          }
         }
       ],
       "nativeApi": "openai-completions",
-      "group": "china",
-      "contextWindow": 1048576,
-      "maxOutputTokens": 1048576,
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
       "sortOrder": 41,
-      "supportsFastMode": false
+      "modelRef": "xd/moonshotai-kimi-k3"
     },
     {
       "id": "xd/deepseek-deepseek-v4-flash-vision-exp",
       "name": "DeepSeek V4 Flash Vision Exp",
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-flash-vision-exp",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "xd/deepseek-deepseek-v4-flash-vision-exp"
     },
     {
       "id": "xd/tencent-hy4-preview",
       "name": "Hy4 preview",
-      "defaultEffort": "medium",
       "routes": [
         {
           "providerId": "xd",
           "modelId": "tencent/hy4-preview",
-          "agents": [
-            "claude-code",
-            "codex"
-          ]
+          "agents": ["claude-code", "codex"]
         }
       ],
-      "nativeApi": "openai-completions"
+      "nativeApi": "openai-completions",
+      "modelRef": "xd/tencent-hy4-preview"
     }
   ],
   "nativeApiRules": [
@@ -3774,6 +2988,1170 @@
       "providerId": "xai",
       "modelIdPrefix": "xai/grok-",
       "nativeApi": "openai-responses"
+    }
+  ],
+  "localModels": {
+    "version": 1,
+    "featuredIds": ["qwen38-27b"],
+    "models": [
+      {
+        "id": "qwen38-27b",
+        "name": "Qwen3.8 27B",
+        "aliases": [
+          "qwen",
+          "qwen3.8",
+          "qwen3",
+          "tongyi",
+          "qwq",
+          "通义",
+          "通義",
+          "千问",
+          "千問"
+        ],
+        "variants": [
+          {
+            "libraryName": "qwen3.8:27b-mxfp8",
+            "sizeBytes": 31655335990,
+            "minUnifiedMemoryGb": 64,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.8:27b-mlx",
+            "sizeBytes": 18174721596,
+            "minUnifiedMemoryGb": 32,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.8:27b",
+            "sizeBytes": 17741871939,
+            "minUnifiedMemoryGb": 32,
+            "appleSiliconOnly": false
+          }
+        ],
+        "runtimeProfile": "qwen-xhigh",
+        "descriptions": {
+          "en": "Capability pick based on independent benchmarks; local quantization can affect results.",
+          "zh-CN": "依据独立跑分保留的能力推荐，本地量化效果仍可能有差异。",
+          "zh-TW": "依據獨立跑分保留的能力推薦，本機量化效果仍可能有差異。",
+          "ja": "独立評価に基づく能力重視の推奨。ローカルの量子化で結果は変わり得ます。",
+          "ko": "독립 벤치마크에 따른 성능 추천입니다. 로컬 양자화에 따라 결과가 달라질 수 있습니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
+            "verifiedAt": "2026-09-05",
+            "status": "measured"
+          }
+        ],
+        "modelRef": "qwen/qwen3.8-27b"
+      },
+      {
+        "id": "qwen35-4b",
+        "name": "Qwen3.5 4B",
+        "aliases": ["qwen", "qwen3.5", "通义", "通義", "千问", "千問"],
+        "variants": [
+          {
+            "libraryName": "qwen3.5:4b-mlx",
+            "sizeBytes": 3973304734,
+            "minUnifiedMemoryGb": 8,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.5:4b-q4_K_M",
+            "sizeBytes": 3389983260,
+            "minUnifiedMemoryGb": 8
+          }
+        ],
+        "descriptions": {
+          "en": "Low-memory candidate; comparable speed and memory tests are pending.",
+          "zh-CN": "低内存候选，待补齐同条件速度与内存实测。",
+          "zh-TW": "低記憶體候選，待補齊相同條件的速度與記憶體實測。",
+          "ja": "省メモリ候補。同条件での速度とメモリの実測待ち。",
+          "ko": "저메모리 후보. 동일 조건의 속도와 메모리 실측이 필요합니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/qwen3-5-4b",
+            "verifiedAt": "2026-09-05",
+            "status": "estimated"
+          }
+        ],
+        "modelRef": "qwen/qwen3.5-4b"
+      },
+      {
+        "id": "qwen35-9b",
+        "name": "Qwen3.5 9B",
+        "aliases": ["qwen", "qwen3.5", "通义", "通義", "千问", "千問"],
+        "variants": [
+          {
+            "libraryName": "qwen3.5:9b-mlx",
+            "sizeBytes": 8903014479,
+            "minUnifiedMemoryGb": 16,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.5:9b-q4_K_M",
+            "sizeBytes": 6594474236,
+            "minUnifiedMemoryGb": 16
+          }
+        ],
+        "descriptions": {
+          "en": "Low-memory candidate to compare with Gemma 4 12B.",
+          "zh-CN": "低内存候选，待与 Gemma 4 12B 比较。",
+          "zh-TW": "低記憶體候選，待與 Gemma 4 12B 比較。",
+          "ja": "省メモリ候補。Gemma 4 12B との比較待ち。",
+          "ko": "저메모리 후보. Gemma 4 12B와 비교가 필요합니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/qwen3-5-9b",
+            "verifiedAt": "2026-09-05",
+            "status": "estimated"
+          }
+        ],
+        "modelRef": "qwen/qwen3.5-9b"
+      },
+      {
+        "id": "gemma4-12b",
+        "name": "Gemma 4 12B",
+        "aliases": ["gemma", "gemma4", "google", "宝石", "寶石"],
+        "variants": [
+          {
+            "libraryName": "gemma4:12b-mlx",
+            "sizeBytes": 7714091072,
+            "minUnifiedMemoryGb": 16,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "gemma4:12b-it-q4_K_M",
+            "sizeBytes": 7556507848,
+            "minUnifiedMemoryGb": 16
+          }
+        ],
+        "descriptions": {
+          "en": "Low-memory candidate to compare with Qwen3.5 9B.",
+          "zh-CN": "低内存候选，待与 Qwen3.5 9B 比较。",
+          "zh-TW": "低記憶體候選，待與 Qwen3.5 9B 比較。",
+          "ja": "省メモリ候補。Qwen3.5 9B との比較待ち。",
+          "ko": "저메모리 후보. Qwen3.5 9B와 비교가 필요합니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/gemma-4-12b",
+            "verifiedAt": "2026-09-05",
+            "status": "estimated"
+          }
+        ],
+        "modelRef": "google/gemma-4-12b"
+      },
+      {
+        "id": "qwen36-35b",
+        "name": "Qwen3.6 35B A3B",
+        "aliases": ["qwen", "qwen3.6", "通义", "通義", "moe"],
+        "variants": [
+          {
+            "libraryName": "qwen3.6:35b-mlx",
+            "sizeBytes": 23598465441,
+            "minUnifiedMemoryGb": 32,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.6:35b-a3b-q4_K_M",
+            "sizeBytes": 23938333115,
+            "minUnifiedMemoryGb": 32
+          }
+        ],
+        "descriptions": {
+          "en": "Speed candidate; a comparison with Nemotron is pending.",
+          "zh-CN": "速度候选，待与 Nemotron 做同条件比较。",
+          "zh-TW": "速度候選，待與 Nemotron 做相同條件比較。",
+          "ja": "速度重視の候補。Nemotron との同条件比較待ち。",
+          "ko": "속도 후보. Nemotron과 동일 조건 비교가 필요합니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/qwen3-6-35b-a3b",
+            "verifiedAt": "2026-09-05",
+            "status": "estimated"
+          }
+        ],
+        "modelRef": "qwen/qwen36-35b"
+      },
+      {
+        "id": "nemotron35-30b",
+        "name": "Nemotron 3.5 Lightning 30B",
+        "aliases": ["nemotron", "nvidia", "lightning", "moe"],
+        "variants": [
+          {
+            "libraryName": "nemotron-3.5-lightning:30b-mlx",
+            "sizeBytes": 22666641292,
+            "minUnifiedMemoryGb": 48,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "nemotron-3.5-lightning:30b",
+            "sizeBytes": 25430749137,
+            "minUnifiedMemoryGb": 48
+          }
+        ],
+        "descriptions": {
+          "en": "Speed candidate; a comparison with Qwen3.6 is pending.",
+          "zh-CN": "速度候选，待与 Qwen3.6 做同条件比较。",
+          "zh-TW": "速度候選，待與 Qwen3.6 做相同條件比較。",
+          "ja": "速度重視の候補。Qwen3.6 との同条件比較待ち。",
+          "ko": "속도 후보. Qwen3.6과 동일 조건 비교가 필요합니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/nemotron-3-5-lightning",
+            "verifiedAt": "2026-09-05",
+            "status": "estimated"
+          }
+        ],
+        "modelRef": "nvidia/nemotron-3.5-lightning"
+      },
+      {
+        "id": "qwen38-flash-next",
+        "name": "Qwen3.8 Flash-Next",
+        "aliases": ["qwen", "flash-next", "通义", "通義", "moe"],
+        "variants": [
+          {
+            "libraryName": "qwen3.8-flash-next:125b-mlx",
+            "sizeBytes": 104852025885,
+            "minUnifiedMemoryGb": 192,
+            "appleSiliconOnly": true
+          }
+        ],
+        "descriptions": {
+          "en": "High-memory candidate; local peak memory and performance still need validation.",
+          "zh-CN": "大内存候选，仍需验证本机峰值内存与性能。",
+          "zh-TW": "大記憶體候選，仍需驗證本機峰值記憶體與效能。",
+          "ja": "大容量メモリ向け候補。本機でのピークメモリと性能は未検証。",
+          "ko": "대용량 메모리 후보. 로컬 최대 메모리와 성능 검증이 필요합니다."
+        },
+        "evidence": [
+          {
+            "url": "https://artificialanalysis.ai/models/qwen3-8-flash-next",
+            "verifiedAt": "2026-09-05",
+            "status": "estimated"
+          }
+        ],
+        "modelRef": "qwen/qwen3.8-flash-next"
+      }
+    ]
+  },
+  "baseModels": [
+    {
+      "id": "openai/gpt-5.6-sol",
+      "aliases": [
+        "gpt-5.6-sol",
+        "openai/gpt-5.6-sol[1m]",
+        "xd/gpt-5.6-sol",
+        "xd/codex-gpt-5.6-sol",
+        "codex/gpt-5.6-sol"
+      ],
+      "defaults": {
+        "maxOutputTokens": 128000,
+        "defaultEffort": "medium",
+        "name": "GPT-5.6-Sol"
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-terra",
+      "aliases": [
+        "gpt-5.6-terra",
+        "xd/gpt-5.6-terra",
+        "xd/codex-gpt-5.6-terra",
+        "codex/gpt-5.6-terra"
+      ],
+      "defaults": {
+        "name": "GPT-5.6-Terra",
+        "description": "GPT-5.6-Terra for coding tasks",
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-luna",
+      "aliases": [
+        "gpt-5.6-luna",
+        "xd/gpt-5.6-luna",
+        "xd/codex-gpt-5.6-luna",
+        "codex/gpt-5.6-luna"
+      ],
+      "defaults": {
+        "name": "GPT-5.6-Luna"
+      }
+    },
+    {
+      "id": "openai/gpt-5.5",
+      "aliases": ["gpt-5.5", "xd/gpt-5.5", "xd/codex-gpt-5.5", "codex/gpt-5.5"],
+      "defaults": {
+        "name": "GPT-5.5",
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-5.4",
+      "aliases": ["gpt-5.4", "xd/gpt-5.4", "xd/codex-gpt-5.4", "codex/gpt-5.4"],
+      "defaults": {
+        "name": "GPT-5.4",
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-mini",
+      "aliases": [
+        "gpt-5.4-mini",
+        "xd/gpt-5.4-mini",
+        "xd/codex-gpt-5.4-mini",
+        "codex/gpt-5.4-mini"
+      ],
+      "defaults": {
+        "name": "GPT-5.4-Mini",
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-pro",
+      "aliases": ["gpt-5.4-pro"],
+      "defaults": {
+        "name": "GPT-5.4 Pro",
+        "description": "OpenAI GPT-5.4 Pro for demanding reasoning tasks",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000
+      }
+    },
+    {
+      "id": "openai/gpt-5.5-pro",
+      "aliases": ["gpt-5.5-pro"],
+      "defaults": {
+        "name": "GPT-5.5 Pro",
+        "description": "OpenAI GPT-5.5 Pro for precise, high-quality reasoning",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-cyber",
+      "aliases": ["gpt-5.6-cyber"],
+      "defaults": {
+        "name": "GPT-5.6 Cyber",
+        "description": "OpenAI cyber security reasoning model; access requires approval",
+        "group": "gpt",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000
+      }
+    },
+    {
+      "id": "openai/gpt-6-astra",
+      "aliases": ["gpt-6-astra"],
+      "defaults": {
+        "name": "GPT-6 Astra",
+        "description": "OpenAI GPT-6 Astra for complex reasoning, coding, computer use, research, and document creation",
+        "group": "gpt",
+        "contextWindow": 272000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5-1",
+      "aliases": ["claude-fable-5-1"],
+      "defaults": {
+        "name": "Fable 5.1",
+        "description": "Claude Fable 5.1 for long-running agentic coding and research",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5",
+      "aliases": ["claude-fable-5"],
+      "defaults": {
+        "name": "Fable 5",
+        "description": "Most capable, supports xhigh effort",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-mythos-5",
+      "aliases": ["claude-mythos-5"],
+      "defaults": {
+        "name": "Mythos 5",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5",
+      "aliases": ["claude-opus-5"],
+      "defaults": {
+        "name": "Opus 5",
+        "description": "Latest Opus for ambitious work",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4-8",
+      "aliases": ["claude-opus-4-8"],
+      "defaults": {
+        "name": "Opus 4.8",
+        "description": "Most capable, supports xhigh effort",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4-7",
+      "aliases": ["claude-opus-4-7"],
+      "defaults": {
+        "name": "Opus 4.7",
+        "description": "Most capable, supports xhigh effort",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4-6",
+      "aliases": ["claude-opus-4-6"],
+      "defaults": {
+        "name": "Opus 4.6",
+        "description": "Most capable for ambitious work",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4-5",
+      "aliases": ["claude-opus-4-5"],
+      "defaults": {
+        "name": "Opus 4.5",
+        "description": "Earlier Opus generation",
+        "group": "anthropic",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "efforts": ["low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5",
+      "aliases": ["claude-sonnet-5"],
+      "defaults": {
+        "name": "Sonnet 5",
+        "description": "Latest Sonnet — fast and highly capable",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-6",
+      "aliases": ["claude-sonnet-4-6"],
+      "defaults": {
+        "name": "Sonnet 4.6",
+        "description": "Most efficient for everyday tasks",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-5",
+      "aliases": ["claude-sonnet-4-5"],
+      "defaults": {
+        "name": "Sonnet 4.5",
+        "description": "Earlier Sonnet generation",
+        "group": "anthropic",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "efforts": []
+      }
+    },
+    {
+      "id": "anthropic/claude-haiku-4-5",
+      "aliases": ["claude-haiku-4-5"],
+      "defaults": {
+        "name": "Haiku 4.5",
+        "description": "Fastest for quick answers",
+        "group": "anthropic",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "efforts": []
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.6",
+        "description": "xAI Grok 4.6 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 500000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xai/grok-4.5",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.5",
+        "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 500000,
+        "efforts": ["low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xai/grok-4.3",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.3",
+        "description": "xAI Grok 4.3 通用旗舰,1M 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 1000000,
+        "efforts": ["low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xai/grok-build-0.1",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok Build 0.1",
+        "description": "xAI agentic coding model,256k 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 256000,
+        "efforts": []
+      }
+    },
+    {
+      "id": "xai/grok-4.20-multi-agent-0309",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.20 Multi-Agent",
+        "description": "xAI Grok 4.20 multi-agent model,1M 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 1000000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xai/grok-4.20-0309-reasoning",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.20 Reasoning",
+        "description": "xAI Grok 4.20 reasoning model,1M 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 1000000,
+        "efforts": []
+      }
+    },
+    {
+      "id": "xai/grok-4.20-0309-non-reasoning",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.20 Non-Reasoning",
+        "description": "xAI Grok 4.20 non-reasoning model,1M 上下文(SuperGrok 订阅直连)",
+        "group": "grok",
+        "contextWindow": 1000000,
+        "efforts": []
+      }
+    },
+    {
+      "id": "xai/grok-4.20",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.20 Legacy Alias",
+        "description": "旧版兼容 alias;新会话请使用明确的 Grok 4.20 model ID",
+        "group": "grok",
+        "contextWindow": 1000000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xai/grok-code-fast",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok Code Fast (Deprecated)",
+        "description": "旧版兼容 alias;新会话请使用 grok-build-0.1",
+        "group": "grok",
+        "contextWindow": 256000,
+        "efforts": []
+      }
+    },
+    {
+      "id": "google/gemini-3.7-flash",
+      "aliases": ["gemini-3.7-flash"],
+      "defaults": {
+        "name": "Gemini 3.7 Flash",
+        "description": "Google Gemini 3.7 Flash — agentic workflows and multimodal reasoning",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "efforts": ["low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-3.6-flash",
+      "aliases": ["gemini-3.6-flash"],
+      "defaults": {
+        "name": "Gemini 3.6 Flash",
+        "description": "Google Gemini 3.6 Flash — frontier intelligence optimized for speed and cost",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "efforts": ["minimal", "low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-3.5-flash",
+      "aliases": ["gemini-3.5-flash"],
+      "defaults": {
+        "name": "Gemini 3.5 Flash",
+        "description": "Google Gemini 3.5 Flash — upgraded Flash with stronger reasoning",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "efforts": ["minimal", "low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-3.1-pro-preview",
+      "aliases": ["gemini-3.1-pro-preview"],
+      "defaults": {
+        "name": "Gemini 3.1 Pro",
+        "description": "Google Gemini 3.1 Pro Preview — deepest reasoning, multimodal",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "efforts": ["low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-3-flash-preview",
+      "aliases": ["gemini-3-flash-preview"],
+      "defaults": {
+        "name": "Gemini 3 Flash",
+        "description": "Google Gemini 3 Flash Preview — fast multimodal reasoning",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "efforts": ["minimal", "low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-3.5-flash-lite",
+      "aliases": ["gemini-3.5-flash-lite"],
+      "defaults": {
+        "name": "Gemini 3.5 Flash-Lite",
+        "description": "Google Gemini 3.5 Flash-Lite — cost-efficient multimodal model for high-volume workloads",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "efforts": ["minimal", "low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite",
+      "aliases": ["gemini-3.1-flash-lite"],
+      "defaults": {
+        "name": "Gemini 3.1 Flash-Lite",
+        "description": "Google Gemini 3.1 Flash-Lite — efficient multimodal model for large-scale tasks",
+        "group": "google",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536
+      }
+    },
+    {
+      "id": "bytedance-seed/seed-2.1-pro",
+      "aliases": [],
+      "defaults": {
+        "name": "Seed 2.1 Pro",
+        "group": "china",
+        "contextWindow": 256000,
+        "maxOutputTokens": 256000,
+        "efforts": ["minimal", "low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "qwen/qwen3.8-max",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen 3.8 Max",
+        "group": "china",
+        "contextWindow": 983616,
+        "maxOutputTokens": 131072,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "qwen/qwen3.8-max-preview",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen 3.8 Max Preview",
+        "group": "china",
+        "contextWindow": 983616,
+        "efforts": ["low", "high", "xhigh"],
+        "defaultEffort": "high"
+      }
+    },
+    {
+      "id": "qwen/qwen3.7-max",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen 3.7 Max",
+        "description": "Qwen 3.7 Max agentic coding model; thinking is provider-managed",
+        "group": "china",
+        "contextWindow": 992000,
+        "maxOutputTokens": 65536,
+        "efforts": []
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.7-code",
+      "aliases": ["kimi-k2.7-code"],
+      "defaults": {
+        "name": "Kimi K2.7 Code",
+        "description": "Moonshot Kimi K2.7 Code agentic coding model",
+        "group": "china",
+        "contextWindow": 262144,
+        "efforts": []
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.7-code-highspeed",
+      "aliases": ["kimi-k2.7-code-highspeed"],
+      "defaults": {
+        "name": "Kimi K2.7 Code Highspeed",
+        "description": "Moonshot Kimi K2.7 Code high-speed API variant",
+        "group": "china",
+        "contextWindow": 262144,
+        "efforts": []
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.6",
+      "aliases": [],
+      "defaults": {
+        "name": "Kimi K2.6",
+        "description": "Moonshot Kimi K2.6 agentic coding model; thinking is provider-managed",
+        "group": "china",
+        "contextWindow": 262144,
+        "efforts": []
+      }
+    },
+    {
+      "id": "z-ai/glm-5.1",
+      "aliases": [],
+      "defaults": {
+        "name": "GLM-5.1",
+        "description": "Zhipu GLM-5.1 agentic coding model; thinking is provider-managed",
+        "group": "china",
+        "contextWindow": 200000,
+        "maxOutputTokens": 131072,
+        "efforts": []
+      }
+    },
+    {
+      "id": "z-ai/glm-5.2",
+      "aliases": [],
+      "defaults": {
+        "name": "GLM-5.2",
+        "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": ["minimal", "high", "max"],
+        "defaultEffort": "high"
+      }
+    },
+    {
+      "id": "z-ai/glm-5.3",
+      "aliases": [],
+      "defaults": {
+        "name": "GLM-5.3",
+        "description": "Zhipu GLM-5.3 agentic coding model; 1M context",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": ["low", "high", "max"],
+        "defaultEffort": "high"
+      }
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "aliases": ["glm-5.3-flash"],
+      "defaults": {
+        "name": "GLM-5.3-Flash",
+        "description": "Zhipu GLM-5.3-Flash native multimodal coding model; 1M context",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072
+      }
+    },
+    {
+      "id": "xd/z-ai-glm-5.3-flash",
+      "aliases": [],
+      "defaults": {
+        "name": "GLM-5.3-Flash",
+        "description": "Zhipu GLM-5.3-Flash native multimodal coding model; 1M context",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "aliases": ["deepseek-v4-pro"],
+      "defaults": {
+        "name": "DeepSeek V4 Pro",
+        "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
+        "group": "china",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 384000,
+        "efforts": ["high", "max"],
+        "defaultEffort": "high"
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash",
+      "aliases": ["deepseek-v4-flash"],
+      "defaults": {
+        "name": "DeepSeek V4 Flash",
+        "description": "DeepSeek V4 Flash efficiency-optimized MoE; supports low/high/max effort",
+        "group": "china",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 384000,
+        "efforts": ["low", "high", "max"],
+        "defaultEffort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-nano",
+      "aliases": ["gpt-5.4-nano"],
+      "defaults": {
+        "name": "GPT-5.4-Nano",
+        "description": "OpenAI GPT-5.4 nano for simple, high-volume tasks",
+        "group": "gpt",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "minimax/minimax-m3",
+      "aliases": ["MiniMax-M3"],
+      "defaults": {
+        "name": "MiniMax M3",
+        "group": "china",
+        "contextWindow": 1000000
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.7",
+      "aliases": ["MiniMax-M2.7"],
+      "defaults": {
+        "name": "MiniMax M2.7",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.7-highspeed",
+      "aliases": ["MiniMax-M2.7-highspeed"],
+      "defaults": {
+        "name": "MiniMax M2.7 Highspeed",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.5",
+      "aliases": ["MiniMax-M2.5"],
+      "defaults": {
+        "name": "MiniMax M2.5",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.5-highspeed",
+      "aliases": ["MiniMax-M2.5-highspeed"],
+      "defaults": {
+        "name": "MiniMax M2.5 Highspeed",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.1",
+      "aliases": ["MiniMax-M2.1"],
+      "defaults": {
+        "name": "MiniMax M2.1",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.1-highspeed",
+      "aliases": ["MiniMax-M2.1-highspeed"],
+      "defaults": {
+        "name": "MiniMax M2.1 Highspeed",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "minimax/minimax-m2",
+      "aliases": ["MiniMax-M2"],
+      "defaults": {
+        "name": "MiniMax M2",
+        "group": "china",
+        "contextWindow": 204800
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "aliases": ["kimi-k3"],
+      "defaults": {
+        "name": "Kimi K3",
+        "group": "china",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 1048576,
+        "efforts": ["low", "high", "max"],
+        "defaultEffort": "high"
+      }
+    },
+    {
+      "id": "qwen/qwen3.6-plus",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen 3.6 Plus",
+        "description": "Qwen 3.6 Plus with provider-managed thinking",
+        "group": "china",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": []
+      }
+    },
+    {
+      "id": "qwen/qwen3.6-plus-api",
+      "aliases": ["qwen3.6-plus"],
+      "defaults": {
+        "name": "Qwen 3.6 Plus API",
+        "group": "china",
+        "contextWindow": 991808,
+        "maxOutputTokens": 65536
+      }
+    },
+    {
+      "id": "qwen/qwen3.7-flash",
+      "aliases": ["qwen3.7-flash"],
+      "defaults": {
+        "name": "Qwen 3.7 Flash",
+        "description": "Alibaba Qwen 3.7 Flash text model with provider-managed thinking",
+        "group": "china",
+        "contextWindow": 991808,
+        "maxOutputTokens": 65536,
+        "efforts": []
+      }
+    },
+    {
+      "id": "qwen/qwen3.8-flash",
+      "aliases": ["qwen3.8-flash"],
+      "defaults": {
+        "name": "Qwen 3.8 Flash",
+        "description": "Alibaba Qwen 3.8 Flash multimodal model with provider-managed thinking",
+        "group": "china",
+        "contextWindow": 991808,
+        "maxOutputTokens": 131072,
+        "efforts": []
+      }
+    },
+    {
+      "id": "qwen/qwen3.7-plus",
+      "aliases": ["qwen3.7-plus"],
+      "defaults": {
+        "name": "Qwen 3.7 Plus",
+        "description": "Alibaba Qwen 3.7 Plus text model with provider-managed thinking",
+        "group": "china",
+        "contextWindow": 991808,
+        "maxOutputTokens": 65536,
+        "efforts": []
+      }
+    },
+    {
+      "id": "qwen/qwen3.6-flash",
+      "aliases": ["qwen3.6-flash"],
+      "defaults": {
+        "name": "Qwen 3.6 Flash",
+        "description": "Alibaba Qwen 3.6 Flash text model with provider-managed thinking",
+        "group": "china",
+        "contextWindow": 991808,
+        "maxOutputTokens": 65536,
+        "efforts": []
+      }
+    },
+    {
+      "id": "openai/gpt-5.5-auto",
+      "aliases": ["xd/codex-gpt-5.5-auto", "codex/gpt-5.5:auto"],
+      "defaults": {
+        "name": "GPT-5.5-Auto",
+        "group": "gpt-budget",
+        "maxOutputTokens": 128000
+      }
+    },
+    {
+      "id": "qwen/qwen3.8-27b",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen3.8 27B",
+        "contextWindow": 991808,
+        "maxOutputTokens": 131072,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "tencent/hy3",
+      "aliases": [],
+      "defaults": {
+        "name": "Hy3",
+        "contextWindow": 262144,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "meta/muse-spark-1.2",
+      "aliases": [],
+      "defaults": {
+        "name": "Muse Spark 1.2"
+      }
+    },
+    {
+      "id": "xd/moonshotai-kimi-k3",
+      "aliases": ["moonshot/kimi-k3"],
+      "defaults": {
+        "name": "Kimi K3",
+        "group": "china",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 1048576,
+        "efforts": ["low", "medium", "high", "max"],
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xd/deepseek-deepseek-v4-flash-vision-exp",
+      "aliases": ["deepseek/deepseek-v4-flash-vision-exp"],
+      "defaults": {
+        "name": "DeepSeek V4 Flash Vision Exp",
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "xd/tencent-hy4-preview",
+      "aliases": ["tencent/hy4-preview"],
+      "defaults": {
+        "name": "Hy4 preview",
+        "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "qwen/qwen3.5-4b",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen3.5 4B"
+      }
+    },
+    {
+      "id": "qwen/qwen3.5-9b",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen3.5 9B"
+      }
+    },
+    {
+      "id": "google/gemma-4-12b",
+      "aliases": [],
+      "defaults": {
+        "name": "Gemma 4 12B"
+      }
+    },
+    {
+      "id": "qwen/qwen36-35b",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen3.6 35B A3B"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning",
+      "aliases": [],
+      "defaults": {
+        "name": "Nemotron 3.5 Lightning 30B"
+      }
+    },
+    {
+      "id": "qwen/qwen3.8-flash-next",
+      "aliases": [],
+      "defaults": {
+        "name": "Qwen3.8 Flash-Next"
+      }
     }
   ]
 }

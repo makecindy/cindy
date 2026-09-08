@@ -53,15 +53,10 @@ function IconAction({
   );
 }
 
-function PullMeter({
-  pull,
-}: {
-  pull: LocalModelPullProgress;
-}) {
+function PullMeter({ pull }: { pull: LocalModelPullProgress }) {
   const { t } = useTranslation();
   const pullPhase = (pull.phase ?? 'starting') as LocalModelPullPhase;
-  const errorKind =
-    pull.phase === 'error' ? classifyOllamaPullError(pull.error, pull.name) : null;
+  const errorKind = pull.phase === 'error' ? classifyOllamaPullError(pull.error, pull.name) : null;
   return (
     <DownloadMeter
       progress={{
@@ -117,7 +112,7 @@ function PullActions({
 }
 
 export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [status, setStatus] = useState<LocalRuntimeStatus | null>(null);
   const [models, setModels] = useState<LocalInstalledModel[]>([]);
   const [catalog, setCatalog] = useState<CuratedOllamaModel[]>([]);
@@ -171,6 +166,9 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => {
     void refresh().catch(() => undefined);
+    const offCatalog = window.electronAPI.maker.onProvidersChanged(() => {
+      void refresh().catch(() => undefined);
+    });
     const offStatus = window.electronAPI.maker.onLocalModelStatus((next) => {
       setStatus(next as LocalRuntimeStatus);
     });
@@ -178,6 +176,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
       upsertPull(next as LocalModelPullProgress);
     });
     return () => {
+      offCatalog();
       offStatus();
       offPull();
     };
@@ -328,7 +327,11 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
               )}
             </div>
             <span className="text-12 leading-snug" style={{ color: 'var(--text-secondary)' }}>
-              {t(`settings.providers.local.models.${entry.id}.blurb`)}
+              {entry.descriptions?.[
+                (i18n.resolvedLanguage ?? i18n.language) as keyof NonNullable<
+                  typeof entry.descriptions
+                >
+              ] ?? ''}
             </span>
             <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
               {t(
@@ -435,7 +438,11 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
                   : t('settings.providers.local.hostProfileUnknown')}
               </span>
               <span className="text-12 leading-snug" style={{ color: 'var(--text-secondary)' }}>
-                {t(`settings.providers.local.recommendReason.${recommendReason}`)}
+                {t(
+                  featured.length > 0
+                    ? `settings.providers.local.recommendReason.${recommendReason}`
+                    : 'settings.providers.local.noRecommendation',
+                )}
               </span>
             </>
           )}
@@ -453,7 +460,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
             color: 'var(--settings-section-title)',
           }}
         />
-        {visibleCatalog.length === 0 && (
+        {searching && visibleCatalog.length === 0 && (
           <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
             {t('settings.providers.local.noSearchResults')}
           </span>
@@ -513,7 +520,10 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
           }}
         >
           <div className="flex items-start justify-between gap-3">
-            <span className="min-w-0 truncate text-14 font-medium" style={{ color: 'var(--settings-section-title)' }}>
+            <span
+              className="min-w-0 truncate text-14 font-medium"
+              style={{ color: 'var(--settings-section-title)' }}
+            >
               {t('settings.providers.local.pullingTitle', { name: customPull.name })}
             </span>
             <PullActions

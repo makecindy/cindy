@@ -89,7 +89,12 @@ function withNativeMetadataAndDefaults(
   const defaults: Record<string, readonly string[]> = {
     xai: ['grok-4.6'],
     anthropic: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
-    openai: ['chatgpt/gpt-6-astra', 'chatgpt/gpt-5.6-sol', 'chatgpt/gpt-5.6-terra', 'chatgpt/gpt-5.6-luna'],
+    openai: [
+      'chatgpt/gpt-6-astra',
+      'chatgpt/gpt-5.6-sol',
+      'chatgpt/gpt-5.6-terra',
+      'chatgpt/gpt-5.6-luna',
+    ],
   };
   return models.map((model) => {
     const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
@@ -115,10 +120,12 @@ afterEach(() => {
 });
 
 describe('registry presence 实体化', () => {
-  it('uses one model default across Codex, Claude and native Pi, including catalog refresh', () => {
+  it('inherits defaults per harness and refreshes public defaults for Pi', () => {
     for (const effort of ['medium', 'high'] as const) {
       const catalog = structuredClone(BUNDLED_CATALOG);
-      const terra = catalog.modelRegistry!.models.find((entry) => entry.id === 'openai/gpt-5.6-terra')!;
+      const terra = catalog.modelRegistry!.models.find(
+        (entry) => entry.id === 'openai/gpt-5.6-terra',
+      )!;
       terra.defaultEffort = effort;
       terra.perAgent = {
         ...terra.perAgent,
@@ -128,7 +135,9 @@ describe('registry presence 实体化', () => {
       setActiveCatalog(catalog);
       for (const agent of ['codex', 'claude-code', 'pi'] as const) {
         const id = agent === 'codex' ? 'gpt-5.6-terra' : 'chatgpt/gpt-5.6-terra';
-        expect(models('openai', agent).find((m) => m.id === id)?.defaultEffort).toBe(effort);
+        expect(models('openai', agent).find((m) => m.id === id)?.defaultEffort).toBe(
+          agent === 'codex' ? 'xhigh' : agent === 'claude-code' ? 'low' : effort,
+        );
       }
     }
   });
@@ -344,7 +353,9 @@ describe('registry presence 实体化', () => {
       }),
     );
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6[1m]')).toBeUndefined();
-    expect(models('openai', 'claude-code').find(m => m.id === 'chatgpt/gpt-6[1m]')?.contextWindow).toBe(900_000);
+    expect(
+      models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6[1m]')?.contextWindow,
+    ).toBe(900_000);
     expect(getModelPlaneWarnings()).toEqual([]);
   });
 

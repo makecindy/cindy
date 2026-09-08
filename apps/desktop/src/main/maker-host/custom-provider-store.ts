@@ -1,3 +1,8 @@
+import {
+  mergeDiscoveredRuntimeModels,
+  validModelMetadata,
+  type DiscoveredModel,
+} from '@cindy/model-providers';
 /**
  * custom-provider-store —— 用户自定义供应商**非凭证配置**的 localDb CRUD。
  *
@@ -86,7 +91,10 @@ function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
 
 function isReasoningEffortForAgent(agent: string, value: unknown): boolean {
   if (agent === 'pi') return isPiReasoningEffort(value);
-  return typeof value === 'string' && (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value)
+  );
 }
 
 function isPiModelApi(value: unknown): value is PiModelApi {
@@ -227,6 +235,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (typeof mm.name !== 'string' || mm.name.trim().length === 0) {
       return invalid(`runtime '${agent}' model.name required`);
     }
+    if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
+      return invalid(`runtime '${agent}' discoveredMetadata invalid`);
     if (
       mm.contextWindow !== undefined &&
       (typeof mm.contextWindow !== 'number' ||
@@ -350,6 +360,11 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
   }
+  if (
+    r.catalogPresetId !== undefined &&
+    (typeof r.catalogPresetId !== 'string' || !/^[a-z0-9-]+$/.test(r.catalogPresetId))
+  )
+    return invalid(`runtime '${agent}' catalogPresetId invalid`);
   if (
     r.piCatalogProviderId !== undefined &&
     (agent !== 'pi' ||
@@ -534,6 +549,8 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
+      ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
+      ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.route
         ? {
@@ -546,7 +563,9 @@ function normalizeRuntime(
         : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+      ...(typeof m.supportsImageInput === 'boolean'
+        ? { supportsImageInput: m.supportsImageInput }
+        : {}),
       ...(m.reasoning === true && m.reasoningEfforts?.length
         ? {
             reasoning: true,
@@ -565,7 +584,11 @@ function normalizeRuntime(
       seen.add(m.id);
       return true;
     });
-  const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
+  const out: CustomProviderRuntimeConfig = {
+    baseUrl: rt.baseUrl.trim(),
+    models,
+    ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
+  };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
   if (agent === 'codex' && rt.supportsImageGeneration === true) {
     out.supportsImageGeneration = true;
@@ -659,35 +682,17 @@ function invalidateEditedPiCatalogMarker(
 export function mergeDiscoveredModelsIntoConfig(
   config: CustomProviderConfig,
   agent: AgentKind,
-  discovered: { id: string; name: string; contextWindow?: number }[],
+  discovered: DiscoveredModel[],
 ): CustomProviderConfig | null {
   const rt = config.runtimes[agent];
   if (!rt) return null;
-  const existing = new Set(rt.models.map((m) => m.id));
-  const fresh = discovered.filter((m) => m.id && m.name && !existing.has(m.id));
-  if (fresh.length === 0) return null;
-  return {
-    ...config,
-    runtimes: {
-      ...config.runtimes,
-      [agent]: {
-        ...rt,
-        models: [
-          ...rt.models,
-          // 端点声明了上下文长度就随发现落盘,缺省则回落保守默认(#386)。
-          ...fresh.map((m) => ({
-            id: m.id,
-            name: m.name,
-            ...(typeof m.contextWindow === 'number' &&
-            Number.isFinite(m.contextWindow) &&
-            m.contextWindow > 0
-              ? { contextWindow: Math.floor(m.contextWindow) }
-              : {}),
-          })),
-        ],
-      },
-    },
-  };
+  const models = mergeDiscoveredRuntimeModels(rt.models, discovered);
+  return JSON.stringify(models) === JSON.stringify(rt.models)
+    ? null
+    : {
+        ...config,
+        runtimes: { ...config.runtimes, [agent]: { ...rt, models } },
+      };
 }
 
 /** 安全解析 auth 列 JSON（坏数据 / 结构不完整兜底为 undefined = API key 历史形态）。 */
@@ -742,19 +747,28 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               name: String(m.name ?? ''),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),
+              ...(validModelMetadata(m.discoveredMetadata)
+                ? { discoveredMetadata: m.discoveredMetadata }
+                : {}),
+              ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
               ...(typeof m.contextWindow === 'number' &&
               Number.isFinite(m.contextWindow) &&
               m.contextWindow > 0
                 ? { contextWindow: m.contextWindow }
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(typeof m.supportsImageInput === 'boolean'
+                ? { supportsImageInput: m.supportsImageInput }
+                : {}),
               ...parseStoredReasoningCapability(agent, m),
               ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
             };
           })
       : [];
     const entry: CustomProviderRuntimeConfig = {
+      ...(typeof r.catalogPresetId === 'string' && /^[a-z0-9-]+$/.test(r.catalogPresetId)
+        ? { catalogPresetId: r.catalogPresetId }
+        : {}),
       baseUrl,
       models,
     };

@@ -2517,8 +2517,8 @@ export function ProvidersSection() {
           toast.error(t('settings.providers.models.refreshFailed'));
           return;
         }
+        await updateCustomProvider(config, {});
         if (added > 0) {
-          await updateCustomProvider(config, {});
           toast.success(t('settings.providers.models.refreshAdded', { count: added }));
         } else {
           toast.success(t('settings.providers.models.refreshNoNew'));

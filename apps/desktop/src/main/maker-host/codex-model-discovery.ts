@@ -1,3 +1,4 @@
+import { pickModelMetadata } from '@cindy/model-providers';
 /**
  * codex-model-discovery —— 从 codex 的 `models_cache.json` 派生出规范化的 Codex 模型快照。
  * active-catalog 再把同一份快照投影到 Codex 与 Claude bridge,避免两边名称、排序各维护一套。
@@ -126,10 +127,21 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
         : efforts.length > 0
           ? (efforts[efforts.length - 1] as CatalogModel['defaultEffort'])
           : null;
-    const priority = typeof m.priority === 'number' && Number.isFinite(m.priority) ? m.priority : 50;
+    const priority =
+      typeof m.priority === 'number' && Number.isFinite(m.priority) ? m.priority : 50;
 
     const model: CatalogModel = {
       id: slug,
+      discoveredMetadata: pickModelMetadata({
+        name: str(m.display_name),
+        description: str(m.description),
+        contextWindow: m.context_window,
+        efforts: Array.isArray(m.supported_reasoning_levels) ? efforts : undefined,
+        defaultEffort: m.default_reasoning_level,
+        supportsFastMode: Array.isArray(m.service_tiers)
+          ? hasPriorityTier(m.service_tiers)
+          : undefined,
+      }),
       name: displayName,
       group: 'gpt',
       // 以静态模型的已知 priority/order 为锚点插值；active-catalog 对新增项做稳定排序。
@@ -195,6 +207,16 @@ export function mapCodexAppServerModelsToCatalog(
     const supportsFastMode = tiers.some((tier) => tier === 'priority' || tier === 'fast');
     const model: CatalogModel = {
       id: slug,
+      discoveredMetadata: pickModelMetadata({
+        name: str(raw.displayName),
+        description: str(raw.description),
+        efforts: Array.isArray(raw.supportedReasoningEfforts) ? efforts : undefined,
+        defaultEffort: requestedDefault,
+        supportsFastMode:
+          Array.isArray(raw.serviceTiers) || Array.isArray(raw.additionalSpeedTiers)
+            ? supportsFastMode
+            : undefined,
+      }),
       name: str(raw.displayName) ?? slug,
       group: 'gpt',
       // app-server 已按官方 picker 顺序返回；给每项稳定的小数锚点保住该顺序。

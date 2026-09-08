@@ -4,12 +4,11 @@ import path from 'node:path';
 import { createLogger } from '../logger.js';
 import {
   canonicalOllamaModelRef,
-  isCuratedQwen38Tag,
+  findCuratedOllamaModel,
   isOllamaModelName,
   normalizeOllamaPullName,
   ollamaModelRefsEqual,
   recommendForHost,
-  recommendQwen38,
   resolveManagedOllamaAgents,
   resolveOllamaModelLists,
   type CuratedOllamaModel,
@@ -138,6 +137,7 @@ export interface LocalModelService {
 }
 
 export interface LocalModelServiceDeps {
+  getLocalCatalog?: () => unknown;
   platform?: NodeJS.Platform;
   arch?: string;
   totalmem?: () => number;
@@ -216,10 +216,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   const pausedPullStore =
     deps.pausedPullStore ??
     createPausedPullStore(
-      path.join(
-        deps.userDataDir ?? os.tmpdir(),
-        'local-model-paused-pull.json',
-      ),
+      path.join(deps.userDataDir ?? os.tmpdir(), 'local-model-paused-pull.json'),
     );
   const actives = new Map<string, ActivePull>();
   const pausedByName = new Map<string, LocalModelPullProgress>();
@@ -249,10 +246,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     }
   }
 
-  function tagsIncludeModel(
-    tags: readonly { name: string }[],
-    name: string,
-  ): boolean {
+  function tagsIncludeModel(tags: readonly { name: string }[], name: string): boolean {
     return tags.some((tag) => ollamaModelRefsEqual(tag.name, name));
   }
 
@@ -355,7 +349,10 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     return [...pausedByName.values()];
   }
 
-  async function rememberPaused(progress: LocalModelPullProgress, digests: readonly string[]): Promise<void> {
+  async function rememberPaused(
+    progress: LocalModelPullProgress,
+    digests: readonly string[],
+  ): Promise<void> {
     const next: LocalModelPullProgress = {
       ...progress,
       phase: 'paused',
@@ -387,10 +384,13 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     return record;
   }
 
-  function visiblePulls(extraPaused: readonly LocalModelPullProgress[] = []): LocalModelPullProgress[] {
+  function visiblePulls(
+    extraPaused: readonly LocalModelPullProgress[] = [],
+  ): LocalModelPullProgress[] {
     const byName = new Map<string, LocalModelPullProgress>();
     for (const item of extraPaused) byName.set(canonicalOllamaModelRef(item.name), item);
-    for (const op of actives.values()) byName.set(canonicalOllamaModelRef(op.name), op.lastProgress);
+    for (const op of actives.values())
+      byName.set(canonicalOllamaModelRef(op.name), op.lastProgress);
     return [...byName.values()];
   }
 
@@ -433,20 +433,8 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       arch: deps.arch ?? process.arch,
       totalmemBytes: (deps.totalmem ?? os.totalmem)(),
     };
-    return (
-      recommendQwen38(input) ??
-      (() => {
-        const primary = recommendForHost(input).primary;
-        return {
-          id: primary.libraryName,
-          name: primary.name,
-          libraryName: primary.libraryName,
-          sizeBytes: primary.sizeBytes,
-          minUnifiedMemoryGb: primary.minUnifiedMemoryGb,
-          appleSiliconOnly: primary.appleSiliconOnly,
-        };
-      })()
-    );
+    const primary = recommendForHost(input, deps.getLocalCatalog?.()).primary;
+    return primary ? { ...primary, id: primary.libraryName } : null;
   }
 
   async function cindyModelIds(): Promise<Set<string>> {
@@ -457,11 +445,14 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   }
 
   function listsForHost() {
-    return resolveOllamaModelLists({
-      platform,
-      arch: deps.arch ?? process.arch,
-      totalmemBytes: (deps.totalmem ?? os.totalmem)(),
-    });
+    return resolveOllamaModelLists(
+      {
+        platform,
+        arch: deps.arch ?? process.arch,
+        totalmemBytes: (deps.totalmem ?? os.totalmem)(),
+      },
+      deps.getLocalCatalog?.(),
+    );
   }
 
   async function list(opts?: {
@@ -886,9 +877,12 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     } catch {
       /* show is best-effort */
     }
-    const model = isCuratedQwen38Tag(name)
-      ? toQwenRuntimeModel(name, contextLength)
-      : toPlainRuntimeModel(name, contextLength);
+    const curated = findCuratedOllamaModel(name, deps.getLocalCatalog?.());
+    const model =
+      curated?.runtimeProfile === 'qwen-xhigh'
+        ? toQwenRuntimeModel(name, contextLength)
+        : toPlainRuntimeModel(name, contextLength);
+    if (curated) model.name = curated.name;
     return {
       model,
       agents: resolveManagedOllamaAgents({

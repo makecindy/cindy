@@ -9,7 +9,10 @@ import { describe, it, expect } from 'vitest';
 
 import { buildUserProvider, type CustomProviderConfig } from '@cindy/model-providers';
 
-import { mergeDiscoveredModelsIntoConfig, validateCustomProviderConfig } from '../custom-provider-store.js';
+import {
+  mergeDiscoveredModelsIntoConfig,
+  validateCustomProviderConfig,
+} from '../custom-provider-store.js';
 import { parseModelsListResponse } from '../generic-oauth.js';
 import { createProviderService } from '../provider-service.js';
 
@@ -32,7 +35,10 @@ const BASE: CustomProviderConfig = {
   name: 'Acme Sub',
   auth: { method: 'oauth', oauth: OAUTH },
   runtimes: {
-    'claude-code': { baseUrl: 'https://api.acme.example/anthropic', models: [{ id: 'm1', name: 'M1' }] },
+    'claude-code': {
+      baseUrl: 'https://api.acme.example/anthropic',
+      models: [{ id: 'm1', name: 'M1' }],
+    },
   },
 };
 
@@ -62,13 +68,16 @@ describe('validateCustomProviderConfig auth 段', () => {
         auth: { method: 'oauth', oauth: DEVICE_OAUTH },
       }).ok,
     ).toBe(true);
-    expect(bad({ ...DEVICE_OAUTH, deviceAuthorizationUrl: 'http://auth.acme.example/device' }).ok)
-      .toBe(false);
+    expect(
+      bad({ ...DEVICE_OAUTH, deviceAuthorizationUrl: 'http://auth.acme.example/device' }).ok,
+    ).toBe(false);
     expect(bad({ ...DEVICE_OAUTH, redirectPort: 9123 }).ok).toBe(false);
   });
 
   it('apiKey method 不允许携带 oauth 描述符；非法 method 拒绝', () => {
-    expect(validateCustomProviderConfig({ ...BASE, auth: { method: 'apiKey', oauth: OAUTH } }).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig({ ...BASE, auth: { method: 'apiKey', oauth: OAUTH } }).ok,
+    ).toBe(false);
     expect(validateCustomProviderConfig({ ...BASE, auth: { method: 'weird' } }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...BASE, auth: { method: 'apiKey' } }).ok).toBe(true);
   });
@@ -133,8 +142,9 @@ describe('validateCustomProviderConfig auth 段', () => {
   it('拒绝与 OAuth flow 不兼容的字段和带 userinfo 的上游地址', () => {
     const bad = (oauth: object) =>
       validateCustomProviderConfig({ ...BASE, auth: { method: 'oauth', oauth } });
-    expect(bad({ ...OAUTH, deviceAuthorizationUrl: DEVICE_OAUTH.deviceAuthorizationUrl }).ok)
-      .toBe(false);
+    expect(bad({ ...OAUTH, deviceAuthorizationUrl: DEVICE_OAUTH.deviceAuthorizationUrl }).ok).toBe(
+      false,
+    );
     expect(bad({ ...DEVICE_OAUTH, authorizeUrl: OAUTH.authorizeUrl }).ok).toBe(false);
     expect(
       validateCustomProviderConfig({
@@ -158,21 +168,30 @@ describe('validateCustomProviderConfig auth 段', () => {
   });
 });
 
-describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-only 合并）', () => {
-  it('只追加新 id，已有条目 first-wins；无新增返回 null；runtime 未配置返回 null', () => {
+describe('mergeDiscoveredModelsIntoConfig（发现资料刷新并保留用户字段）', () => {
+  it('刷新发现资料并保留旧名称；无变化返回 null；runtime 未配置返回 null', () => {
     const merged = mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [
       { id: 'm1', name: 'OVERRIDE-IGNORED' },
       { id: 'm2', name: 'M2' },
       { id: '', name: 'bad' },
     ]);
     expect(merged?.runtimes['claude-code']?.models).toEqual([
-      { id: 'm1', name: 'M1' },
-      { id: 'm2', name: 'M2' },
+      {
+        id: 'm1',
+        name: 'M1',
+        nameExplicit: true,
+        discoveredMetadata: { name: 'OVERRIDE-IGNORED' },
+      },
+      { id: 'm2', name: 'M2', discoveredMetadata: { name: 'M2' } },
     ]);
     // 原配置不被就地修改（纯函数）。
     expect(BASE.runtimes['claude-code']?.models).toEqual([{ id: 'm1', name: 'M1' }]);
 
-    expect(mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [{ id: 'm1', name: 'M1' }])).toBeNull();
+    expect(
+      mergeDiscoveredModelsIntoConfig(merged!, 'claude-code', [
+        { id: 'm1', name: 'OVERRIDE-IGNORED' },
+      ]),
+    ).toBeNull();
     expect(mergeDiscoveredModelsIntoConfig(BASE, 'codex', [{ id: 'x', name: 'X' }])).toBeNull();
   });
 
@@ -183,8 +202,8 @@ describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-o
     ]);
     expect(merged?.runtimes['claude-code']?.models).toEqual([
       { id: 'm1', name: 'M1' },
-      { id: 'big', name: 'Big', contextWindow: 1_000_000 },
-      { id: 'bogus', name: 'Bogus' },
+      { id: 'big', name: 'Big', discoveredMetadata: { name: 'Big', contextWindow: 1_000_000 } },
+      { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' } },
     ]);
   });
 });
@@ -211,19 +230,36 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
         ],
       }),
     ).toEqual([
-      { id: 'a', name: 'a', contextWindow: 1_048_576 },
-      { id: 'b', name: 'B', contextWindow: 262144 },
-      { id: 'c', name: 'c', contextWindow: 131072 },
-      { id: 'f', name: 'f', contextWindow: 200_000 },
-      { id: 'd', name: 'd' },
-      { id: 'e', name: 'e' },
-      { id: 'g', name: 'g' },
-      { id: 'h', name: 'h' },
+      {
+        id: 'a',
+        name: 'a',
+        contextWindow: 1_048_576,
+        discoveredMetadata: { contextWindow: 1_048_576 },
+      },
+      {
+        id: 'b',
+        name: 'B',
+        contextWindow: 262144,
+        discoveredMetadata: { name: 'B', contextWindow: 262144 },
+      },
+      { id: 'c', name: 'c', contextWindow: 131072, discoveredMetadata: { contextWindow: 131072 } },
+      {
+        id: 'f',
+        name: 'f',
+        contextWindow: 200_000,
+        discoveredMetadata: { contextWindow: 200_000 },
+      },
+      { id: 'd', name: 'd', discoveredMetadata: {} },
+      { id: 'e', name: 'e', discoveredMetadata: {} },
+      { id: 'g', name: 'g', discoveredMetadata: {} },
+      { id: 'h', name: 'h', discoveredMetadata: {} },
     ]);
   });
 
   it('字符串数组形状不携带 contextWindow', () => {
-    expect(parseModelsListResponse({ models: ['m1'] })).toEqual([{ id: 'm1', name: 'm1' }]);
+    expect(parseModelsListResponse({ models: ['m1'] })).toEqual([
+      { id: 'm1', name: 'm1', discoveredMetadata: {} },
+    ]);
   });
 });
 
@@ -238,7 +274,12 @@ describe('provider-service 连接态', () => {
     };
     const svc = createProviderService({
       getCatalog: () => catalog,
-      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      connection: {
+        xd: () => false,
+        anthropic: () => false,
+        openai: () => false,
+        xai: () => false,
+      },
       genericOAuthConnected: (id) => id === 'acme-sub',
       customApiKeyConnected: (provider) => provider.id === 'plain',
     });
@@ -248,7 +289,12 @@ describe('provider-service 连接态', () => {
 
     const svcLoggedOut = createProviderService({
       getCatalog: () => catalog,
-      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      connection: {
+        xd: () => false,
+        anthropic: () => false,
+        openai: () => false,
+        xai: () => false,
+      },
       genericOAuthConnected: () => false,
     });
     const views2 = await svcLoggedOut.listProviders();

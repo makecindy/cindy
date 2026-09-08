@@ -1627,9 +1627,7 @@ interface ElectronAPI {
     reload: (id: string) => Promise<{ state: string }>;
     /** Library(持久作品库)设置面:概览/选位置/绑定/迁移/回默认/解绑/删除。 */
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
-    libraryPickLocation: (
-      id: string,
-    ) => Promise<{
+    libraryPickLocation: (id: string) => Promise<{
       ok: boolean;
       cancelled?: boolean;
       candidate?: string;
@@ -5139,7 +5137,7 @@ interface ElectronAPI {
       savedProviderId?: string;
     }) => Promise<{
       ok: boolean;
-      models?: { id: string; name: string; contextWindow?: number }[];
+      models?: import('@cindy/model-providers').DiscoveredModel[];
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

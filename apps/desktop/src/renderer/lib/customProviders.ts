@@ -1,3 +1,4 @@
+import { mergeDiscoveredRuntimeModels, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
@@ -90,13 +91,14 @@ export function setCustomProviderModelPiApi(
     const next = { ...model };
     if (piApi) next.piApi = piApi;
     else delete next.piApi;
-    const selectedWireProtocol = piApi === 'anthropic-messages'
-      ? 'anthropic-messages'
-      : piApi === 'openai-completions'
-        ? 'openai-chat'
-        : piApi === 'openai-responses'
-          ? 'openai-responses'
-          : undefined;
+    const selectedWireProtocol =
+      piApi === 'anthropic-messages'
+        ? 'anthropic-messages'
+        : piApi === 'openai-completions'
+          ? 'openai-chat'
+          : piApi === 'openai-responses'
+            ? 'openai-responses'
+            : undefined;
     // "Inherit default" means inheriting both protocol and endpoint. For an explicit override,
     // retain a model endpoint only when it already speaks that protocol; otherwise the provider
     // endpoint is the only safe pair (also repairs legacy protocol/route mismatches on save).
@@ -136,7 +138,7 @@ export function setCustomProviderModelReasoning(
     if (index !== targetIndex) return model;
     if (!reasoning) {
       const rest = { ...model };
-      delete rest.reasoning;
+      rest.reasoning = false;
       delete rest.reasoningEfforts;
       delete rest.reasoningDefaultEffort;
       return rest;
@@ -188,6 +190,9 @@ export function customProviderModelConfigFromCatalogModel(
     | 'name'
     | 'contextWindow'
     | 'contextWindowExplicit'
+    | 'userModelConfig'
+    | 'discoveredMetadata'
+    | 'nameExplicit'
     | 'defaultEnabled'
     | 'supportsImageInput'
     | 'piApi'
@@ -196,6 +201,7 @@ export function customProviderModelConfigFromCatalogModel(
     Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
 ): ProviderRuntimeModelConfig {
+  if (model.userModelConfig) return structuredClone(model.userModelConfig);
   const reasoningEfforts =
     agent === 'pi'
       ? (model.efforts ?? []).filter((effort): effort is PiReasoningEffort =>
@@ -205,10 +211,14 @@ export function customProviderModelConfigFromCatalogModel(
   return {
     id: model.id,
     name: model.name,
+    discoveredMetadata: model.discoveredMetadata,
+    nameExplicit: model.nameExplicit,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
     ...(model.contextWindowExplicit === true ||
-    model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
+    (model.contextWindowExplicit === undefined &&
+      !model.discoveredMetadata &&
+      model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW)
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
@@ -230,6 +240,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
     const models = p.models[agent] ?? [];
     runtimes[agent] = {
       baseUrl: routing?.upstream ?? '',
+      ...(models[0]?.catalogPresetId ? { catalogPresetId: models[0].catalogPresetId } : {}),
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
       ...(agent === 'codex' && routing?.supportsImageGeneration === true
@@ -259,27 +270,14 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
 /** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。端点声明的 contextWindow 随发现带入(#386)。 */
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
-  discovered: readonly Pick<ProviderRuntimeModelConfig, 'id' | 'name' | 'contextWindow'>[],
+  discovered: readonly DiscoveredModel[],
 ): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
-  const known = new Set(existing.map((m) => m.id));
-  const models = [...existing];
-  const addedIds: string[] = [];
-  for (const model of discovered) {
-    if (!model.id || !model.name || known.has(model.id)) continue;
-    models.push({
-      id: model.id,
-      name: model.name,
-      ...(typeof model.contextWindow === 'number' &&
-      Number.isFinite(model.contextWindow) &&
-      model.contextWindow > 0
-        ? { contextWindow: Math.floor(model.contextWindow) }
-        : {}),
-      defaultEnabled: false,
-    });
-    known.add(model.id);
-    addedIds.push(model.id);
-  }
-  return { models, addedIds };
+  const models = mergeDiscoveredRuntimeModels(existing, discovered, true);
+  const known = new Set(existing.map((model) => model.id));
+  return {
+    models,
+    addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
+  };
 }
 
 /**
