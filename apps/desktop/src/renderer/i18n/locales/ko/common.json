@@ -7650,7 +7650,7 @@
         "reconnect": "다시 연결",
         "manage": "제공자 관리",
         "railLabel": "소스",
-        "connect": "모델 추가",
+        "connect": "모델 설정",
         "connectCta": "소스 연결 →",
         "viaSource": "소스: {{source}}",
         "emptyTitle": "사용 가능한 소스 없음",
@@ -9027,8 +9027,6 @@
       "runningTool": "{{tool}} 실행 중…"
     },
     "remoteSession": {
-      "syncing": "동기화 중…",
-      "recovered": "복구됨",
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
       "degraded": "제어 대상 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",

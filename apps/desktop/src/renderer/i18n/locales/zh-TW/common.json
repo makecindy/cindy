@@ -7649,7 +7649,7 @@
         "reconnect": "重新連線",
         "manage": "管理來源",
         "railLabel": "來源",
-        "connect": "新增模型",
+        "connect": "設定模型",
         "connectCta": "連線來源 →",
         "viaSource": "來源：{{source}}",
         "emptyTitle": "暫無可用來源",
@@ -9027,8 +9027,6 @@
       "runningTool": "{{tool}} 執行中…"
     },
     "remoteSession": {
-      "syncing": "正在同步…",
-      "recovered": "已恢復",
       "reconnecting": "與被控裝置的連線中斷，正在重連…",
       "hostOffline": "被控裝置已離線，暫時無法同步",
       "degraded": "與被控裝置的連線不穩定，正在自動重試…",

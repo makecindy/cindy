@@ -1,3 +1,4 @@
+import { CongestionSendBudget } from './congestionSendBudget.js';
 import {
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
@@ -623,6 +624,7 @@ export class DeviceLinkClient {
    * 但不清本计数:立即重连可以,但若再被踢,冷却按更深一档生效。
    */
   private congestionCloseStreak = 0;
+  private readonly congestionSendBudget = new CongestionSendBudget();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
   private congestionStableTimer: ReturnType<typeof setTimeout> | null = null;
@@ -888,6 +890,7 @@ export class DeviceLinkClient {
     this.handshakeTimeoutStreak = 0;
     this.failAllPending(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
     this.clearPeerTransport();
+    this.congestionSendBudget.reset();
     this.pendingInboundLinkOffers.clear();
     this.staleLinkNotifiedAt.clear();
     this.resetLegacyInboundQueue();
@@ -922,6 +925,13 @@ export class DeviceLinkClient {
   isLinkReady(dst: string): boolean {
     const peer = this.peerTransport.get(dst);
     return !!peer && this.isPeerSendReady(peer) && peer.receiveReady;
+  }
+
+  /** Mirror admission only: listing-only/legacy peers need no bidirectional link. */
+  canSendPush(dst: string): boolean {
+    if (this.status !== 'online') return false;
+    const peer = this.peerTransport.get(dst);
+    return !peer || !peer.reliable || this.isPeerSendReady(peer);
   }
 
   /**
@@ -2700,7 +2710,10 @@ export class DeviceLinkClient {
     // 真会发送时仍在驱逐/腾位之前预检(旧 P1:先驱逐再拒会清空镜像历史)。
     const additionalFrames = Math.max(1, frames.length);
     const willSendNow = this.isPeerSendReady(peer)
-      && !this.shouldHoldRecoverySend(peer, additionalFrames);
+      && !this.shouldHoldRecoverySend(peer, additionalFrames)
+      && (this.congestionCloseStreak === 0 || this.congestionSendBudget.canTake(
+        env.dst, additionalFrames, this.getReadyReliablePeers(env.dst), this.monotonicNow(),
+      ));
     if (willSendNow) {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     }
@@ -2778,9 +2791,15 @@ export class DeviceLinkClient {
       pending.seq,
       this.getTransportBaseSeq(peer),
     );
-    this.assertWebSocketCapacity(this.measureReliableFrames(frames));
+    const congestionBudget = this.congestionCloseStreak > 0 ? this.congestionSendBudget : null;
+    if (congestionBudget) {
+      if (!congestionBudget.take(
+        pending.envelope.dst!, frames.length, this.getReadyReliablePeers(pending.envelope.dst!), this.monotonicNow(),
+      )) return 0;
+    }
     let sent = 0;
     try {
+      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
       for (const frame of frames) {
         // pending 可在 link down 时入队，并在后续 link generation 才首次上网；
         // 路由错误必须归属每次真实物理发送，而不是逻辑消息的入队代次。
@@ -2795,6 +2814,7 @@ export class DeviceLinkClient {
         err,
       );
     } finally {
+      congestionBudget?.refund(pending.envelope.dst!, frames.length - sent);
       if (sent > 0) {
         pending.sent = true;
         pending.attempts++;
@@ -2802,6 +2822,14 @@ export class DeviceLinkClient {
       }
     }
     return sent;
+  }
+
+  private getReadyReliablePeers(target: string): string[] {
+    return [...this.peerTransport.entries()]
+      // Include the initial target before enqueue; unacknowledged data still needs retries.
+      .filter(([id, peer]) => peer.reliable && this.isPeerSendReady(peer)
+        && (id === target || peer.pending.size > 0))
+      .map(([id]) => id);
   }
 
   private measureReliableFrames(frames: readonly Envelope[]): number {
@@ -3587,7 +3615,9 @@ export class DeviceLinkClient {
     if (peer.retryTimer) return;
     peer.retryTimer = setInterval(
       () => this.retryPending(dst, { ignoreInterval: false }),
-      this.timing.transportRetryIntervalMs,
+      this.congestionCloseStreak > 0
+        ? Math.min(250, this.timing.transportRetryIntervalMs)
+        : this.timing.transportRetryIntervalMs,
     );
   }
 
@@ -3684,7 +3714,8 @@ export class DeviceLinkClient {
         this.log.debug(`reliable transport retry failed for ${dst.slice(0, 8)}`, err);
         break;
       }
-      framesSpent += Math.max(1, sentFrames);
+      if (sentFrames === 0) break; // Paced locally: no attempt/ACK failure has occurred.
+      framesSpent += sentFrames;
       // 首趟恢复 replay(ignoreInterval)要把已在途的探针也记进预算,
       // 否则 sent===true 的重放不占额度,新入队帧还能再灌一整批。
       // 后续定时重发只给新帧记账,同一批探针可继续重传。

@@ -76,11 +76,17 @@ let activeOwnerMigrationPending = false;
 let activeOwnerMode: 'signed-out' | 'local' | 'cloud' = 'signed-out';
 let mayInitializeDefaults = false;
 interface InitializationState {
+  /** Persisted before migration/override writes; scopes records completion independently. */
+  eligibleForDefaults: boolean;
   defaults: VisibilityMap;
   scopes: string[];
   followCatalogKeys: string[];
 }
 let initialization: InitializationState | null = null;
+
+function emptyInitialization(eligibleForDefaults = false): InitializationState {
+  return { eligibleForDefaults, defaults: {}, scopes: [], followCatalogKeys: [] };
+}
 
 function initializationKey(ownerId: string): string {
   return `${INITIALIZATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
@@ -92,9 +98,10 @@ function readInitialization(ownerId: string): InitializationState | null {
     const parsed = JSON.parse(raw);
     const strings = (value: unknown): string[] => Array.isArray(value)
       ? value.filter((item): item is string => typeof item === 'string') : [];
-    return { defaults: sanitize(parsed?.defaults), scopes: strings(parsed?.scopes), followCatalogKeys: strings(parsed?.followCatalogKeys) };
+    return { eligibleForDefaults: parsed?.eligibleForDefaults === true,
+      defaults: sanitize(parsed?.defaults), scopes: strings(parsed?.scopes), followCatalogKeys: strings(parsed?.followCatalogKeys) };
   } catch {
-    return { defaults: {}, scopes: [], followCatalogKeys: [] };
+    return emptyInitialization();
   }
 }
 function saveInitialization(next: InitializationState): boolean {
@@ -102,6 +109,7 @@ function saveInitialization(next: InitializationState): boolean {
   try {
     window.localStorage.setItem(initializationKey(activeOwnerId), JSON.stringify(next));
     initialization = next;
+    mayInitializeDefaults = next.eligibleForDefaults;
     return true;
   } catch (error) {
     log.warn('model visibility initialization write failed', error);
@@ -165,6 +173,21 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
     ) {
       return BLOCKED_MIGRATION;
     }
+    // Preserve first-run eligibility before writing any migration artifacts or allowing
+    // manual overrides. An empty scopes list is pending; each nonempty catalog records
+    // its own completion later. Failed persistence leaves migration retryable.
+    const stored = readInitialization(ownerId);
+    if (stored) {
+      initialization = stored;
+      mayInitializeDefaults = stored.eligibleForDefaults;
+    }
+    if (claim.claimedByOtherOwner !== true && claim.claimed === true
+      && window.localStorage.getItem(LEGACY_STORAGE_KEY) !== null) mayInitializeDefaults = false;
+    if ((!stored && mayInitializeDefaults) || (stored?.eligibleForDefaults && !mayInitializeDefaults)) {
+      if (!saveInitialization(stored
+        ? { ...stored, eligibleForDefaults: false }
+        : emptyInitialization(true))) return BLOCKED_MIGRATION;
+    }
     if (claim.claimedByOtherOwner === true) {
       // 旧快照永久属于另一账号；写入本 owner 的完成标记，后续无需依赖全局 marker 继续读写。
       window.localStorage.setItem(migrationCompleteKey, '1');
@@ -185,7 +208,6 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
     }
 
     const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (legacyRaw !== null) mayInitializeDefaults = false;
     const legacy = readStoredMap(legacyRaw);
     const scoped = readStoredMap(window.localStorage.getItem(scopedKey));
     // 非独占期间可能已经有新设置；完成迁移时由新设置覆盖同槽旧值，其余历史值仍被保留。
@@ -249,7 +271,8 @@ function mirrorToMain(map: VisibilityMap): void {
   clearTimeout(mirrorRetryTimer);
   const ownerId = activeOwnerId;
   const generation = activeOwnerGeneration;
-  const pending = !!ownerId && (activeOwnerMigrationPending || (mayInitializeDefaults && !initialization));
+  const pending = !!ownerId && (activeOwnerMigrationPending
+    || (mayInitializeDefaults && !initialization?.scopes.length));
   const policy = ownerId ? { fallback: false as const,
     followCatalogKeys: initialization?.followCatalogKeys ?? [], ...(pending ? { pending: true as const } : {}) } : undefined;
   const snapshot = effectiveMap(map);
@@ -307,7 +330,6 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
-  if (context.providerId !== '*' && initialization?.scopes.length) mayInitializeDefaults = false;
   version += 1;
   // 每次开关变更后把最新快照重推 main,保持 IM /model 与应用内可见性一致。
   mirrorToMain(map);
@@ -348,11 +370,11 @@ export function setModelVisibilityOwner(
   if (ownerId && mode !== 'signed-out') {
     try {
       initialization = readInitialization(ownerId);
-      mayInitializeDefaults = initialization === null
+      mayInitializeDefaults = initialization?.eligibleForDefaults ?? (initialization === null
         && window.localStorage.getItem(ownerStorageKey(ownerId)) === null
         && window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === null
         && window.localStorage.getItem(`${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`) === null
-        && !hasAnyProviderModelOverride() && !hasProviderModelHistory() && !hasAnyModelEngineOverride() && listModelFavorites().length === 0;
+        && !hasAnyProviderModelOverride() && !hasProviderModelHistory() && !hasAnyModelEngineOverride() && listModelFavorites().length === 0);
     } catch { /* Storage unavailable: never infer permission to initialize an existing profile. */ }
 
     const migration = migrateLegacyVisibility(ownerId, ownerGeneration);
@@ -380,8 +402,8 @@ export function migrateModelVisibilityDefaults(
   try {
     const stored = readInitialization(ownerId);
     // Re-read other windows' completed scopes and overrides before adding anything.
-    const state = stored ?? initialization ?? { defaults: {}, scopes: [], followCatalogKeys: [] };
-    const next: InitializationState = { defaults: { ...state.defaults }, scopes: [...state.scopes], followCatalogKeys: [...state.followCatalogKeys] };
+    const state = stored ?? initialization ?? emptyInitialization();
+    const next: InitializationState = { ...state, defaults: { ...state.defaults }, scopes: [...state.scopes], followCatalogKeys: [...state.followCatalogKeys] };
     const map = readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
     const aliases = { ...map };
     for (const provider of providers) {
@@ -389,7 +411,7 @@ export function migrateModelVisibilityDefaults(
         const models = provider.models[agent] ?? [];
         if (!models.length) continue;
         const scope = JSON.stringify([provider.id, agent]);
-        const initializeScope = mayInitializeDefaults && !next.scopes.includes(scope);
+        const initializeScope = state.eligibleForDefaults && !next.scopes.includes(scope);
         for (const model of models) {
           const key = keyOf(agent, provider.id, model.id);
           if (initializeScope) next.defaults[key] = model.defaultEnabled !== false;
@@ -436,7 +458,9 @@ export function isModelEnabled(
   const override = load()[key];
   if (override !== undefined) return override;
   if (initialization?.followCatalogKeys.includes(key)) return isModelVisible(undefined, model.defaultEnabled);
-  if (initialization) return initialization.defaults[key] ?? false;
+  if (initialization && (!mayInitializeDefaults || initialization.scopes.length > 0)) {
+    return initialization.defaults[key] ?? false;
+  }
   return !activeOwnerId || (mayInitializeDefaults && !activeOwnerMigrationPending)
     ? isModelVisible(undefined, model.defaultEnabled) : false;
 }
@@ -547,7 +571,7 @@ export function resetModelVisibilities(
   if (targets.length === 0) return true;
   let state: InitializationState;
   try {
-    state = readInitialization(activeOwnerId!) ?? initialization ?? { defaults: {}, scopes: [], followCatalogKeys: [] };
+    state = readInitialization(activeOwnerId!) ?? initialization ?? emptyInitialization();
   } catch (error) {
     log.warn('model visibility reset read failed', error);
     return false;

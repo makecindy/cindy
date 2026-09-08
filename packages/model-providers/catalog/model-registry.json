@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3,
-  "updatedAt": "2026-09-05T13:36:11.674Z",
+  "updatedAt": "2026-09-07T08:34:10.338Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -8,7 +8,7 @@
       "status": "active",
       "group": "gpt",
       "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": [
         "low",
@@ -29,7 +29,11 @@
             "xhigh",
             "max",
             "ultra"
-          ]
+          ],
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -111,7 +115,7 @@
     {
       "id": "openai/gpt-5.6-sol[1m]",
       "name": "GPT-5.6-Sol (1M · Higher usage)",
-      "status": "active",
+      "status": "deprecated",
       "group": "gpt",
       "description": "Explicit 1M context opt-in; inputs above 272K use higher long-context rates for the entire request",
       "contextWindow": 1000000,
@@ -198,7 +202,8 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "defaultEnabled": false
     },
     {
       "id": "xd/gpt-5.6-sol",
@@ -252,7 +257,7 @@
       "status": "active",
       "group": "gpt",
       "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": [
         "low",
@@ -273,7 +278,11 @@
             "xhigh",
             "max",
             "ultra"
-          ]
+          ],
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -403,7 +412,7 @@
       "name": "GPT-5.6-Luna",
       "status": "active",
       "group": "gpt",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": [
         "low",
@@ -488,7 +497,15 @@
           ]
         }
       ],
-      "nativeApi": "openai-responses"
+      "nativeApi": "openai-responses",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
+        }
+      }
     },
     {
       "id": "xd/gpt-5.6-luna",
@@ -892,7 +909,7 @@
       "status": "active",
       "group": "gpt",
       "description": "OpenAI GPT-6 Astra for complex reasoning, coding, computer use, research, and document creation",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": [
         "low",
@@ -911,7 +928,11 @@
             "xhigh",
             "max",
             "ultra"
-          ]
+          ],
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -936,7 +957,8 @@
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
                 "verifiedAt": "2026-09-05"
-              }
+              },
+              "effectiveUntil": "2026-09-07"
             },
             {
               "currency": "USD",
@@ -951,7 +973,68 @@
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
                 "verifiedAt": "2026-09-05"
+              },
+              "effectiveUntil": "2026-09-07"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 10,
+              "outputPerMtok": 50,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 75,
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
+              },
+              "minInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 40,
+              "outputPerMtok": 150,
+              "cacheReadPerMtok": 4,
+              "cacheWritePerMtok": 50,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
+              },
+              "minInputTokens": 272001
             }
           ]
         }
@@ -2841,10 +2924,11 @@
       "id": "deepseek/deepseek-v4-pro",
       "name": "DeepSeek V4 Pro",
       "group": "china",
-      "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
+      "description": "DeepSeek V4 Pro reasoning model",
       "contextWindow": 1048576,
       "maxOutputTokens": 384000,
       "efforts": [
+        "low",
         "high",
         "max"
       ],

@@ -1,0 +1,93 @@
+/* DESIGN §14.4 / usage-history-charts.md: bounded, owner-approved chart response. */
+.usage-history-charts {
+  --usage-heatmap-accent: var(--usage-heatmap-high);
+  --usage-mark-ease: cubic-bezier(0.2, 0.8, 0.25, 1.18);
+}
+
+.usage-history-charts .usage-chart-target {
+  --usage-mark-grow: 0px;
+}
+
+/* Only non-hit-testing children resize. The data's color, bar height and baseline
+   never change; width/height keeps every corner exactly 2px without scale distortion. */
+.usage-history-charts .usage-chart-target .usage-chart-mark {
+  pointer-events: none;
+}
+
+.usage-history-charts .usage-chart-mark {
+  transition-property: width, height, opacity;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease-out);
+}
+
+.usage-history-charts .usage-chart-target:is(:focus-visible, [aria-pressed='true']) {
+  --usage-mark-grow: 2px;
+  z-index: 1;
+}
+
+.usage-history-charts
+  .usage-chart-target:is(:focus-visible, [aria-pressed='true'])
+  .usage-chart-mark {
+  transition-duration: var(--motion-base);
+  transition-timing-function: var(--usage-mark-ease);
+}
+
+@media (hover: hover) {
+  .usage-history-charts .usage-chart-target:enabled:hover {
+    --usage-mark-grow: 2px;
+    z-index: 1;
+  }
+  .usage-history-charts .usage-chart-target:enabled:hover .usage-chart-mark {
+    transition-duration: var(--motion-base);
+    transition-timing-function: var(--usage-mark-ease);
+  }
+}
+
+/* A thin, theme-aware outline follows the enlarged selected heatmap cell.
+   The 1px gap fits the dense grid; it does not recolor the data layer. */
+.usage-history-charts .usage-heatmap-target[aria-pressed='true'] .usage-chart-indicator {
+  inset: calc(var(--usage-mark-grow) * -0.5);
+  outline: 1px solid var(--text-primary);
+  outline-offset: 1px;
+}
+
+/* Categorical bars emphasize an in-window date or the recent-week range.
+   Heatmap intensity is never attenuated. Without a highlighted date in the
+   30-day plot, all bars retain normal opacity. */
+.usage-history-charts
+  .usage-token-plot:has(.usage-chart-target[data-highlighted='true'])
+  .usage-chart-target:not([data-highlighted='true']):not(:focus-visible)
+  .usage-chart-mark {
+  opacity: 0.6;
+}
+
+@media (hover: hover) {
+  .usage-history-charts
+    .usage-token-plot:has(.usage-chart-target[data-highlighted='true'])
+    .usage-chart-target:enabled:hover
+    .usage-chart-mark {
+    opacity: 1;
+  }
+}
+
+/* Keyboard focus remains independently visible and overrides the neutral heatmap outline. */
+.usage-history-charts .usage-chart-target:focus-visible .usage-chart-indicator {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-history-charts .usage-chart-mark {
+    transition: none;
+  }
+}
+
+/* The settings chart has larger annotations; the shared home heatmap keeps its
+   compact typography. Both month text and its row follow the UI font setting. */
+.usage-history-charts .usage-heatmap-months {
+  height: calc(var(--text-11) * 1.4);
+}
+
+.usage-history-charts .usage-heatmap-month-label {
+  font-size: var(--text-11);
+}

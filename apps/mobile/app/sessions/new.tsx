@@ -6813,6 +6813,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   inputVoiceHidden: {
     color: 'transparent',
+    // Android Fabric can treat transparent text as an unset color and draw it black.
+    // Keep layout/presses; iOS needs nonzero view opacity for native hit testing.
+    ...(Platform.OS === 'android' ? { opacity: 0 } : {}),
   },
   sendButton: {
     alignItems: 'center',

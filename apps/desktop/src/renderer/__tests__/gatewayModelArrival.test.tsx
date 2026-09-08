@@ -112,7 +112,7 @@ it('lists downloaded Gateway models in settings without enabling them until the 
   setActiveCatalogChangedListener(changed);
   act(() => download([existing, raw('new-labs/future-9', 'Future Model 9')]));
   expect(changed).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: /settings.providers.models.hiddenGroup/ }));
+  // Settings now keeps disabled visibility rows expanded, while picker filtering stays off.
   expect(screen.getByText('Future Model 9')).toBeTruthy();
   expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe(
     'false',

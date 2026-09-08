@@ -135,10 +135,12 @@ describe('removeWorktreeForSession', () => {
       }
       return { stdout: '', stderr: '' };
     });
-    crossProcessLockMock.mockReset().mockImplementation(
-      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
-        task({ held: true }),
-    );
+    crossProcessLockMock
+      .mockReset()
+      .mockImplementation(
+        (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+          task({ held: true }),
+      );
     isWorktreeDirtyMock.mockReset().mockResolvedValue(false);
     autoStashMock.mockReset().mockResolvedValue(true);
     restoreAutoStashMock.mockReset().mockResolvedValue(true);
@@ -829,11 +831,11 @@ describe('removeWorktreeForSession', () => {
   });
 
   it('discard pre-created: recovery waits for an in-flight create before deciding the record is absent', async () => {
-    let releaseGitVersion!: () => void;
+    let releaseGitProbe!: () => void;
     gitExecMock.mockImplementationOnce(
       () =>
         new Promise<{ stdout: string; stderr: string }>((resolve) => {
-          releaseGitVersion = () =>
+          releaseGitProbe = () =>
             resolve({
               stdout: 'git version 2.50.0\n',
               stderr: '',
@@ -849,7 +851,10 @@ describe('removeWorktreeForSession', () => {
       recoveryKey,
     });
     await vi.waitFor(() => {
-      expect(gitExecMock).toHaveBeenCalledWith(['--version']);
+      expect(gitExecMock).toHaveBeenCalledWith(
+        ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
+        BASE_REPO,
+      );
     });
 
     let discardSettled = false;
@@ -861,7 +866,7 @@ describe('removeWorktreeForSession', () => {
     await Promise.resolve();
     expect(discardSettled).toBe(false);
 
-    releaseGitVersion();
+    releaseGitProbe();
     await expect(create).resolves.toMatchObject({ ok: false });
     await expect(discard).resolves.toEqual({ status: 'absent' });
   });
@@ -1104,9 +1109,7 @@ describe('removeWorktreeForSession', () => {
 
     // 目录已删、store.del 已执行; 拿不到锁时不得做无锁 --unset-all, 而是落盘待下次启动补清
     expect(
-      gitExecMock.mock.calls.some(
-        ([args]) => Array.isArray(args) && args.includes('--unset-all'),
-      ),
+      gitExecMock.mock.calls.some(([args]) => Array.isArray(args) && args.includes('--unset-all')),
     ).toBe(false);
     expect(pendingSafeDirectoryCleanups).toContain(meta.path);
   });
@@ -1147,9 +1150,7 @@ describe('removeWorktreeForSession', () => {
 
     // 复用路径: 不 --unset-all(条目归新 worktree), 只从待办移除
     expect(
-      gitExecMock.mock.calls.some(
-        ([args]) => Array.isArray(args) && args.includes(reusedPath),
-      ),
+      gitExecMock.mock.calls.some(([args]) => Array.isArray(args) && args.includes(reusedPath)),
     ).toBe(false);
     // 孤儿路径: 正常清理并出队
     expect(gitExecMock).toHaveBeenCalledWith([

@@ -62,6 +62,8 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
+- 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
+  `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
   或参与设计系统迁移 PR 前，必须先读治理合同
   `docs/design-rules/design-governance.md`：真相源边界、兼容红线、两级证据合同与

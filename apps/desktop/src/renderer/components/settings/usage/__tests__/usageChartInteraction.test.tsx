@@ -28,8 +28,13 @@ describe('Usage data marks retain geometry when clickable', () => {
     expect(today.style.width).toBe('12px');
     expect(today.style.height).toBe('12px');
     expect(today.classList.contains('rounded-full')).toBe(false);
-    expect(today.firstElementChild?.className).toBe('rounded-[2px]');
-    expect((today.firstElementChild as HTMLElement).style.outline).toContain('2px');
+    // Merged implementation (PR #4076): the visual mark keeps the registered 2px
+    // shape under the usage-chart-mark member class, and focus/selection indication
+    // lives on the separate usage-chart-indicator layer (usageCharts.css), not an
+    // inline outline on the data mark.
+    expect(today.firstElementChild?.className).toContain('rounded-[2px]');
+    expect(today.firstElementChild?.getAttribute('data-usage-mark')).toBe('usage-heatmap-day');
+    expect(today.querySelector('.usage-chart-indicator')).toBeTruthy();
     fireEvent.click(today);
     expect(onDayClick).toHaveBeenCalledWith('2026-09-07');
     expect(container.querySelectorAll('button').length).toBeGreaterThanOrEqual(140);

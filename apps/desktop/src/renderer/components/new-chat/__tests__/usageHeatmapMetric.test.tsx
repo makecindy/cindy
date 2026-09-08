@@ -27,13 +27,13 @@ const days = [
 ];
 
 function cellStyles(container: HTMLElement): string[] {
-  return [...container.querySelectorAll<HTMLElement>('div[title]')].map(
+  return [...container.querySelectorAll<HTMLElement>('[data-usage-mark="usage-heatmap-day"]')].map(
     (cell) => cell.style.backgroundColor,
   );
 }
 
 function cellTitles(container: HTMLElement): string[] {
-  return [...container.querySelectorAll<HTMLElement>('div[title]')]
+  return [...container.querySelectorAll<HTMLElement>('[data-usage-mark="usage-heatmap-day"]')]
     .map((cell) => cell.title)
     .filter(Boolean);
 }
@@ -191,7 +191,7 @@ describe('UsageHeatmap metric', () => {
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
 
-  it('可点击日期格保持 12px 方格，不因点击行为撑大周网格', () => {
+  it('可点击日期格保持 12px 密度，等价日期入口由用量历史提供', () => {
     const { getByRole } = render(
       <UsageHeatmap
         days={days}
@@ -204,10 +204,11 @@ describe('UsageHeatmap metric', () => {
 
     const button = getByRole('button', { name: /Aug 21, 2026/ });
     const visual = button.firstElementChild as HTMLElement;
+    expect(button.title).toContain('2026-08-21');
     expect(button.style.width).toBe('12px');
     expect(button.style.height).toBe('12px');
-    expect(visual.style.width).toBe('12px');
-    expect(visual.style.height).toBe('12px');
+    expect(visual.style.width).toBe('calc(12px + var(--usage-mark-grow, 0px))');
+    expect(visual.style.height).toBe('calc(12px + var(--usage-mark-grow, 0px))');
   });
 
   it('今天的日期格不是未来占位，并且可以点击', () => {
@@ -235,7 +236,7 @@ describe('UsageHeatmap metric', () => {
     expect(container.querySelector('div[title^="2026-08-21"]')).toBeTruthy();
   });
 
-  it('可点击数据方格使用登记的 2px 圆角，不变成圆点', () => {
+  it('点击与非点击日期格共享登记形状，不把可见表面改为 pill', () => {
     const onDayClick = vi.fn();
     const { getByRole } = render(
       <UsageHeatmap
@@ -278,9 +279,12 @@ describe('UsageHeatmap metric', () => {
       />,
     );
 
-    const selectedCell = getByRole('button', { name: /Aug 21, 2026/ })
-      .firstElementChild as HTMLElement;
-    expect(selectedCell.style.outline).toBe('2px solid var(--focus-ring-soft)');
+    const button = getByRole('button', { name: /Aug 21, 2026/ });
+    const selectedCell = button.firstElementChild as HTMLElement;
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(selectedCell.style.outline).toBe('');
     expect(selectedCell.style.boxShadow).toBe('');
+    expect(button.lastElementChild?.className).toContain('usage-chart-indicator');
+    expect(button.lastElementChild?.getAttribute('aria-hidden')).toBe('true');
   });
 });

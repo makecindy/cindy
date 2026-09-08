@@ -493,6 +493,98 @@ describe('compact model defaults upgrade', () => {
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
   });
 
+  it.each([false, true])('retains first-run eligibility across a restart before any nonempty catalog (empty snapshot: %s)', async (emptySnapshot) => {
+    const prefs = await loadModuleForOwner();
+    if (emptySnapshot) prefs.migrateModelVisibilityDefaults('owner-a', 1, []);
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, {},
+      expect.objectContaining({ pending: true }));
+
+    vi.resetModules();
+    const restarted = await upgrade();
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(true);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(false);
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, expect.anything(),
+      expect.not.objectContaining({ pending: true }));
+  });
+
+  it.each(['pending', 'catalog'] as const)('recovers a failed %s initialization write after restart', async (stage) => {
+    const prefs = stage === 'catalog' ? await loadModuleForOwner() : null;
+    const original = memStorage.setItem.bind(memStorage);
+    const spy = vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === markerKey) throw new Error('storage full');
+      original(key, value);
+    });
+    try {
+      if (prefs) {
+        prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+        // A user action during the failed baseline write still wins on recovery.
+        expect(prefs.setModelVisibility('pi', 'xd', 'gemini', false)).toBe(true);
+      } else {
+        await upgrade();
+        expect(memStorage.getItem(scopedKey)).toBeNull();
+        expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBeNull();
+      }
+    } finally { spy.mockRestore(); }
+
+    vi.resetModules();
+    const restarted = await upgrade();
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'fable-5-1', defaultEnabled: true })).toBe(true);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(stage === 'pending');
+  });
+
+  it.each([false, true])('keeps delayed provider/agent initialization independent of manual switches (restart: %s)', async (restart) => {
+    const partial = { ...provider, models: { pi: provider.models.pi, 'claude-code': [], codex: [] } };
+    let prefs = await upgrade('owner-a', 1, partial);
+    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    prefs.setModelVisibility('codex', 'xd', 'late-off', false);
+    if (restart) {
+      vi.resetModules();
+      prefs = await upgrade('owner-a', 1, partial);
+    }
+    const lateModels = ['late-on', 'late-off', 'late-default-off'].map((id) => ({
+      ...provider.models.pi![0]!, id, defaultEnabled: id !== 'late-default-off',
+    }));
+    const catalogs = ['xd', 'other-provider'].map((id) => ({
+      ...provider, id,
+      models: { pi: [...provider.models.pi!, { ...lateModels[0]!, id: 'pi-added' }],
+        'claude-code': lateModels, codex: lateModels },
+    }));
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, catalogs);
+    for (const providerId of ['xd', 'other-provider']) {
+      for (const agent of ['claude-code', 'codex'] as const) {
+        expect(prefs.isModelEnabled(agent, providerId, lateModels[0]!)).toBe(true);
+        expect(prefs.isModelEnabled(agent, providerId, lateModels[1]!)).toBe(providerId !== 'xd' || agent !== 'codex');
+        expect(prefs.isModelEnabled(agent, providerId, lateModels[2]!)).toBe(false);
+      }
+    }
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'pi-added', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'other-provider', { id: 'pi-added', defaultEnabled: true })).toBe(true);
+  });
+
+  it('does not grant fresh defaults to old initialization records without eligibility', async () => {
+    memStorage.setItem(markerKey, JSON.stringify({
+      defaults: { 'pi:xd:gemini': true }, scopes: [JSON.stringify(['xd', 'pi'])], followCatalogKeys: [],
+    }));
+    const prefs = await upgrade();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('codex', 'xd', { id: 'fable-5', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'brand-new', defaultEnabled: true })).toBe(false);
+  });
+
+  it('revokes pending eligibility when deferred ownership reveals a legacy profile after restart', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'pi:xd:gemini': false }));
+    setOwnerClaim('owner-a', 1, false, false);
+    const prefs = await upgrade();
+    prefs.setModelVisibility('pi', 'xd', 'fable-5', true);
+    vi.resetModules();
+    setOwnerClaim('owner-a', 1);
+    const restarted = await upgrade();
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(true);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'fable-5-1', defaultEnabled: true })).toBe(false);
+  });
+
   it('freezes a new profile initial defaults and keeps later additions off across restart', async () => {
     const prefs = await upgrade();
     const changed = {
@@ -583,7 +675,8 @@ describe('compact model defaults upgrade', () => {
     setOwnerClaim('owner-a', 1, true, false);
     const prefs = await upgrade();
     prefs.setModelVisibility('pi', 'xd', 'fable-5-1', false);
-    expect(memStorage.getItem(markerKey)).toBeNull();
+    if (hasLegacy) expect(memStorage.getItem(markerKey)).toBeNull();
+    else expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
     setOwnerClaim('owner-a', 1);
     prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(!hasLegacy);
@@ -591,13 +684,14 @@ describe('compact model defaults upgrade', () => {
   });
 
   it('retries a baseline write failure without overwriting a newer explicit off switch', async () => {
+    const prefs = await loadModuleForOwner();
     const original = memStorage.setItem.bind(memStorage);
     const spy = vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
       if (key === markerKey) throw new Error('storage full');
       original(key, value);
     });
-    const prefs = await upgrade();
-    expect(memStorage.getItem(markerKey)).toBeNull();
+    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
     spy.mockRestore();
     prefs.setModelVisibility('pi', 'xd', 'gemini', false);
     prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);

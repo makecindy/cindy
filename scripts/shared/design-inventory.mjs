@@ -1238,11 +1238,21 @@ const PROTECTED_TAGS = {
   'desktop.shell.main-layout': [
     'DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）',
     '外部主题导入保护 token',
+    'DESIGN.md §5 登记成员 workflow-status-cell（background-tasks 面板详情）',
   ],
-  'desktop.window.sidebar': ['DESIGN.md §15 CINDY 皮肤族'],
+  'desktop.window.sidebar': [
+    'DESIGN.md §15 CINDY 皮肤族',
+    'DESIGN.md §5 登记成员 workflow-status-cell（background-tasks 面板详情）',
+  ],
   'desktop.chat.session': [
     'DESIGN.md §10 语义豁免色族消费者（status / diff / 消息卡）',
-    'DESIGN.md §5 2px status micro-cells',
+    'DESIGN.md §5 登记成员 workflow-status-cell / system-category-square',
+  ],
+  'desktop.chat.orca-workflow': [
+    'DESIGN.md §5 登记成员 workflow-status-cell / system-category-square（复用 desktop.chat.session 会话视图）',
+  ],
+  'desktop.bots': [
+    'DESIGN.md §5 登记成员 workflow-status-cell / system-category-square（复用 desktop.chat.session 会话视图）',
   ],
   'desktop.chat.new-draft': ['DESIGN.md §15.15 创建页内容位'],
   'desktop.overlay.permission-prompt': [
@@ -1252,6 +1262,7 @@ const PROTECTED_TAGS = {
   'desktop.settings': [
     'DESIGN.md §10 语义豁免色族消费者',
     '外部主题导入保护 token（资源用量类别色在独立窗）',
+    'DESIGN.md §5 登记成员 usage-heatmap-day / usage-token-bar',
   ],
   'desktop.window.resource-usage': ['外部主题导入保护 token（进程类别色）'],
 };
