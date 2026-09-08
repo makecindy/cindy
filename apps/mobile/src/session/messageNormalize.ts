@@ -151,6 +151,7 @@ export interface NormalizedAttachment {
   uri?: string;
   path?: string;
   mimeType?: string;
+  sha256?: string;
   previewable: boolean;
 }
 
@@ -603,6 +604,7 @@ function readImageAttachments(value: unknown): NormalizedAttachment[] {
     const base64 = readString(record.base64);
     const mimeType = readString(record.mimeType) ?? readString(record.type) ?? 'image/png';
     const name = readString(record.originalName) ?? readString(record.name) ?? `image-${index + 1}`;
+    const sha256 = readString(record.sha256);
     const uri = url ?? (base64 ? `data:${mimeType};base64,${base64}` : undefined);
     if (!uri) return [];
     return [{
@@ -610,6 +612,7 @@ function readImageAttachments(value: unknown): NormalizedAttachment[] {
       name,
       uri,
       mimeType,
+      ...(sha256 ? { sha256 } : {}),
       previewable: isPreviewableUri(uri),
     }];
   });

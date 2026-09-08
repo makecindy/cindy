@@ -158,8 +158,10 @@ import {
 } from '@/session/messageGallery';
 import {
   applySentAttachmentThumbOverlay,
+  getSentAttachmentThumbUri,
   useSentAttachmentThumbsVersion,
 } from '@/session/sentAttachmentThumbStore';
+import type { GetSentMessageImagePreview, SentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 import {
   buildMobileMessageCopyText,
   copyMessageText,
@@ -617,6 +619,7 @@ interface MessageActions {
   shareSelectionBusy?: boolean;
   /** 待发送气泡(pending_send 项)的展开态与队列操作回调。 */
   pendingSend?: PendingSendBubbleActions;
+  getSentImagePreview?: GetSentMessageImagePreview;
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
@@ -659,6 +662,7 @@ export function MessageRenderer({
   shareSelectionBusy,
   onQuoteSelection,
   pendingSend,
+  getSentImagePreview,
   onReadTextFilePreview,
   onReleaseRemoteMedia,
   onResolveRemoteMedia,
@@ -1542,6 +1546,7 @@ export function MessageRenderer({
     // 待发送气泡(pending_send 项)的展开态与队列操作:漏了这一项 actions.pendingSend 就是
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
     pendingSend,
+    getSentImagePreview,
     shareSelectionActive,
     shareSelectionBusy,
     busyClientId,
@@ -1575,6 +1580,7 @@ export function MessageRenderer({
     handleMessageActionSheetOpenChange,
     onResolveRemoteMedia,
     pendingSend,
+    getSentImagePreview,
     shareSelectionActive,
     shareSelectionBusy,
     viewportLayout.contentWidth,
@@ -2670,10 +2676,12 @@ const RenderItemView = memo(function RenderItemView({
             actions={actions.pendingSend}
             item={item}
             screenWidth={actions.screenWidth}
-            renderImage={(uri) => uri ? (
-              <PendingAttachmentImage key={uri}
+            renderImage={(uri, sourceUri, onError) => uri ? (
+              <PendingAttachmentImage key={sourceUri ?? uri}
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })}
                 uri={uri}
+                sourceUri={sourceUri ?? uri}
+                onError={onError}
               />
             ) : (
               <View style={[styles.attachmentImagePending, {
@@ -3217,6 +3225,8 @@ function MessageBubble({
     <AttachmentStrip
       align={isUser ? 'right' : 'left'}
       attachments={item.message.attachments}
+      clientId={item.message.source.clientId ?? item.message.source.id}
+      getImagePreview={actions.getSentImagePreview}
       layout={contentLayout}
       onOpen={actions.onOpenPayload}
       onResolveRemoteMedia={actions.onResolveRemoteMedia}
@@ -5721,12 +5731,16 @@ function MarkdownSessionLinkSpan({
 
 function AttachmentStrip({
   attachments,
+  clientId,
+  getImagePreview,
   align,
   layout,
   onOpen,
   onResolveRemoteMedia,
 }: {
   attachments: readonly NormalizedAttachment[];
+  clientId?: string;
+  getImagePreview?: GetSentMessageImagePreview;
   align: 'left' | 'right';
   layout: MessageContentLayout;
   onOpen?: (payload: MessagePayload) => void;
@@ -5744,13 +5758,14 @@ function AttachmentStrip({
       {/* 图片附件对齐桌面版:逐张竖排(不换行拼贴),各自按原始宽高比 contain。
           overlay:本机上传的图在被控端物化改写前 url 仍是 cindy-oss-attach://,本地
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
-      {imageAttachments.map(applySentAttachmentThumbOverlay).map((item, index) => (
+      {imageAttachments.map((item, index) => (
         <MediaPreview
           key={`${item.kind}:${item.uri ?? item.name}:${index}`}
           label={item.name}
           layout={layout}
           media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
-          onOpen={onOpen ? () => onOpen(buildAttachmentPayload(item)) : undefined}
+          localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
+          onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
           variant="attachment"
         />
@@ -5835,11 +5850,21 @@ const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
 
 // 相册候选仍可能是 ph://，必须由 expo-image 加载；只复用正式附件的布局，
 // 不把本地相册地址声明为 RN Image / 远端查看器可直接预览的媒体。
-function PendingAttachmentImage({ layout, uri }: { layout: MessageContentLayout; uri: string }) {
+function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize }: {
+  layout: MessageContentLayout; uri: string; sourceUri?: string; onError?: () => void;
+  onSize?: (size: AttachmentImageIntrinsicSize) => void;
+}) {
   const styles = useThemedStyles(makeStyles);
   const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
-    () => attachmentIntrinsicSizeCache.get(uri) ?? null,
+    () => attachmentIntrinsicSizeCache.get(sourceUri) ?? attachmentIntrinsicSizeCache.get(uri) ?? null,
   );
+  // The upload copy and materialized reference describe the same pixels. Carry their measured frame.
+  useLayoutEffect(() => {
+    if (!intrinsicSize) return;
+    if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) attachmentIntrinsicSizeCache.clear();
+    attachmentIntrinsicSizeCache.set(sourceUri, intrinsicSize);
+    attachmentIntrinsicSizeCache.set(uri, intrinsicSize);
+  }, [intrinsicSize, sourceUri, uri]);
   const displaySize = attachmentImageDisplaySize(
     intrinsicSize, layout.attachmentImageMaxWidth, layout.attachmentImageMaxHeight,
   );
@@ -5849,13 +5874,16 @@ function PendingAttachmentImage({ layout, uri }: { layout: MessageContentLayout;
         source={{ uri }}
         recyclingKey={uri}
         contentFit="contain"
+        onError={onError}
         onLoad={({ source: { width, height } }) => {
           if (!(width > 0 && height > 0)) return;
           if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) {
             attachmentIntrinsicSizeCache.clear();
           }
           attachmentIntrinsicSizeCache.set(uri, { width, height });
+          attachmentIntrinsicSizeCache.set(sourceUri, { width, height });
           setIntrinsicSize({ width, height });
+          onSize?.({ width, height });
         }}
         style={[styles.attachmentImage, displaySize]}
       />
@@ -5883,6 +5911,7 @@ function MediaPreview({
   onResolveRemoteMedia,
   variant = 'card',
   presentationOnly = false,
+  localPreview,
 }: {
   layout: MessageContentLayout;
   media: NormalizedToolMedia;
@@ -5891,16 +5920,25 @@ function MediaPreview({
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
+  localPreview?: SentMessageImagePreview;
 }) {
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
-  const autoResolve = shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
+  const durableUri = media.kind === 'image' && variant === 'attachment'
+    ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? media.url)
+    : null;
+  const localCandidate = localPreview?.uri ?? durableUri;
+  const [failedLocalUris, setFailedLocalUris] = useRecyclingState<readonly string[]>([]);
+  // Keep the sent source when a durable copy appears later; switch only after an actual load error.
+  const localUri = [localCandidate, durableUri].find((uri) => uri && !failedLocalUris.includes(uri)) ?? null;
+  const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
   const [resolveState, setResolveState] = useRecyclingState<MediaThumbnailResolveState>({ status: 'idle' });
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
   const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
-    () => attachmentIntrinsicSizeCache.get(media.url) ?? null,
+    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? media.url)
+      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? media.url) ?? null,
   );
   // Image 加载失败(典型:presign 过期)只强制重取一次,防 onError↔重取死循环。
   const imageRetryUsedRef = useRef(false);
@@ -5952,7 +5990,7 @@ function MediaPreview({
   // attachment 变体:异步量原图宽高并写入模块级缓存;失败置 -1 走 max 框回落帧,
   // 图仍照常渲染(不作为出图门控,见下)。已有尺寸(含缓存命中)不重复测量。
   useEffect(() => {
-    if (variant !== 'attachment' || !thumbUri || intrinsicSize) return;
+    if (variant !== 'attachment' || localUri || !thumbUri || intrinsicSize) return;
     let cancelled = false;
     Image.getSize(
       thumbUri,
@@ -5970,11 +6008,22 @@ function MediaPreview({
     return () => {
       cancelled = true;
     };
-  }, [variant, thumbUri, intrinsicSize, media.url]);
+  }, [variant, localUri, thumbUri, intrinsicSize, media.url]);
 
-  if (variant === 'attachment'
-    && (phase.kind === 'direct' || phase.kind === 'resolving' || phase.kind === 'resolved'
-      || (phase.kind === 'fallback' && (phase.reason === 'error' || phase.reason === 'unsupported-mime')))) {
+  if (localUri) {
+    return (
+      <MessageContentOpenButton presentationOnly={presentationOnly}
+        accessibilityLabel={`${preview.actionLabel} ${preview.title}`} onPress={onOpen}
+        style={styles.attachmentImageWrap} testID="message.mediaPreviewButton">
+        <PendingAttachmentImage key={localPreview?.uri ?? localUri} layout={layout}
+          uri={localUri} sourceUri={localPreview?.uri ?? localUri}
+          onSize={setIntrinsicSize}
+          onError={() => setFailedLocalUris((failed) => failed.includes(localUri) ? failed : [...failed, localUri])} />
+      </MessageContentOpenButton>
+    );
+  }
+
+  if (variant === 'attachment' && media.kind === 'image') {
     const displaySize = attachmentImageDisplaySize(
       intrinsicSize,
       layout.attachmentImageMaxWidth,

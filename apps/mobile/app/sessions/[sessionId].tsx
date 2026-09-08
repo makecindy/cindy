@@ -369,6 +369,11 @@ import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUploa
 import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
 import {
+  getSentMessageImagePreview,
+  rememberSentMessageImagePreviews,
+  type SentMessageImagePreviews,
+} from '@/session/sentMessageImagePreviews';
+import {
   buildOutboxItem,
   createOutboxClientId,
   isSafelyUnsentOutboxEnqueueError,
@@ -1450,31 +1455,24 @@ export default function SessionScreen() {
   }, [sessionId]);
   const settlingAddedAtRef = useRef<Map<string, number>>(new Map());
   /**
-   * 「附件 ossRef → 发送时刻的本地预览 file://」。
+   * 按任务、消息和图片顺序保存发送预览，跨桌面端媒体地址物化继续使用。
    *
    * 排队气泡里的图不能等 sentAttachmentThumbStore 那条链(上传落定 → 拷进自有目录 →
    * AsyncStorage hydrate)——期间查询一律返回 null,气泡只能画空占位格。发送时手边就有
    * 预览,记下来直接用;store 仍是重开会话 / 预览失效后的后备。
-   * 上限防无界:窗口本来就短(消息回流即不再需要),留 64 条覆盖极端连发。
+   * 最多保留 64 条消息的预览；正式内容还会核对图片指纹，防止同名替换误用旧图。
    */
-  const sentPreviewByOssRefRef = useRef<Map<string, string>>(new Map());
+  const sentImagePreviewsRef = useRef<SentMessageImagePreviews>(new Map());
   const rememberSentAttachmentPreviews = useCallback((
+    clientId: string,
     attachments: readonly RemoteSerializedAttachment[],
     previewOf: (attachment: RemoteSerializedAttachment) => string | null | undefined,
   ) => {
-    const map = sentPreviewByOssRefRef.current;
-    for (const attachment of attachments) {
-      const ossRef = attachment.url ?? attachment.path;
-      const preview = previewOf(attachment);
-      if (!ossRef || !preview) continue;
-      map.set(ossRef, preview);
-    }
-    while (map.size > 64) {
-      const oldest = map.keys().next();
-      if (oldest.done) break;
-      map.delete(oldest.value);
-    }
-  }, []);
+    rememberSentMessageImagePreviews(sentImagePreviewsRef.current, sessionId, clientId, attachments, previewOf);
+  }, [sessionId]);
+  const getSentImagePreview = useCallback((clientId: string, imageIndex: number, name: string, attachmentId?: string, sha256?: string, sourceRef?: string) => (
+    getSentMessageImagePreview(sentImagePreviewsRef.current, sessionId, clientId, imageIndex, name, attachmentId, sha256, sourceRef)
+  ), [sessionId]);
   // 「乐观气泡已上屏、enqueue RPC 尚未落定」的 clientId:这段窗口消息是否真的发出
   // 还没有答案(弱网可达数秒,且失败会回滚摘除气泡),徽标必须是转圈而不是「排入
   // 队尾」——后者是已确认入队的语义。成功 / 回滚 / 转失败任一落定即移除。
@@ -5358,6 +5356,7 @@ export default function SessionScreen() {
     updateOutbox((items) => items.filter((entry) => entry.clientId !== item.clientId));
     // outbox 条目的槽位预览接着给排队气泡用:交接后图不能因为换了数据源就消失。
     rememberSentAttachmentPreviews(
+      item.clientId,
       outboxItemAttachments(item),
       (attachment) => {
         const slotIndex = item.attachmentSlots.findIndex((slot) => slot?.id === attachment.id);
@@ -5583,11 +5582,12 @@ export default function SessionScreen() {
         editingClientId: queueEditing?.clientId ?? null,
         steeringClientIds: new Set(inputProjection.steeringQueueClientIds),
         presentationByClientId,
-        previewByOssRef: sentPreviewByOssRefRef.current,
+        getImagePreview: getSentImagePreview,
       });
     },
     [
       i18nInstance.language,
+      getSentImagePreview,
       inputProjection,
       outboxDisplayItems,
       queueBusy,
@@ -6160,6 +6160,8 @@ export default function SessionScreen() {
               const projectionEpochAtRequestStart =
                 remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
               const projection = await maker.input.updateContent(sessionId, editingQueueItem.clientId, updated);
+              rememberSentAttachmentPreviews(editingQueueItem.clientId, sendAttachments,
+                (attachment) => attachmentPreviews[attachment.id]);
               applyProjectionIfCurrent(projection, projectionEpochAtRequestStart);
             } catch (err) {
               if (
@@ -6348,6 +6350,7 @@ export default function SessionScreen() {
       });
       // 排队气泡的图立刻可见(先记预览,再让 projection 变化触发重算)。
       rememberSentAttachmentPreviews(
+        queued.clientId,
         sendAttachments,
         (attachment) => attachmentPreviews[attachment.id],
       );
@@ -9123,6 +9126,7 @@ export default function SessionScreen() {
                     items={messageListItems}
                     itemsStructureKey={messageListStructureKey}
                     pendingSend={pendingSendActions}
+                    getSentImagePreview={getSentImagePreview}
                     loadingEarlier={loadingEarlier}
                     loadEarlierProgressKey={oldestLoadedMessageCursor}
                     onCopyMessageLink={copyMessageLink}
