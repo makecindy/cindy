@@ -3421,6 +3421,8 @@ function ProjectRow({
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
+  const deviceName = kind === 'project' ? project.deviceName.trim() : '';
+  const displayTitle = deviceName ? `${project.title} - ${deviceName}` : project.title;
   const reorderable = kind === 'project' && !!onDragStart && !!onDragMove && !!onDragEnd;
   const dragGesture = useMemo(() => {
     if (!onDragStart || !onDragMove || !onDragEnd || kind !== 'project') return null;
@@ -3434,7 +3436,7 @@ function ProjectRow({
           absoluteY: event.absoluteY,
           count: project.sessionCount,
           key: project.key,
-          title: project.title,
+          title: displayTitle,
         });
       })
       .onUpdate((event) => {
@@ -3443,13 +3445,13 @@ function ProjectRow({
       .onFinalize(() => {
         runOnJS(finish)();
       });
-  }, [kind, onDragEnd, onDragMove, onDragStart, project.key, project.sessionCount, project.title]);
+  }, [displayTitle, kind, onDragEnd, onDragMove, onDragStart, project.key, project.sessionCount]);
   const header = (
     <Pressable
       accessibilityHint={reorderable ? t('devices.list.menu.projectOrderManualTip') : undefined}
       accessibilityLabel={kind === 'dialogue'
         ? t('devices.list.a11y.dialogue')
-        : t('devices.list.a11y.project', { title: project.title })}
+        : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
       onLayout={(event) => {
@@ -3481,7 +3483,14 @@ function ProjectRow({
       ) : (
         <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
       )}
-      <Text style={styles.projectTitle} numberOfLines={1}>{project.title}</Text>
+      <View style={styles.projectLabel}>
+        <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
+        {deviceName ? (
+          <Text style={styles.projectDeviceName} numberOfLines={1} ellipsizeMode="middle">
+            {` - ${deviceName}`}
+          </Text>
+        ) : null}
+      </View>
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
     </Pressable>
   );
@@ -4650,6 +4659,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingRight: spacing.lg,
     paddingVertical: spacing.sm,
   },
+  projectLabel: {
+    alignItems: 'baseline',
+    flex: 1,
+    flexDirection: 'row',
+    minWidth: 0,
+  },
   projectTitle: {
     color: colors.textPrimary,
     flex: 1,
@@ -4657,6 +4672,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.listTitle,
     minWidth: 0,
+  },
+  projectFolderTitle: {
+    flex: 0,
+    flexShrink: 1,
+  },
+  projectDeviceName: {
+    color: colors.textTertiary,
+    flexShrink: 0,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
+    lineHeight: lineHeight.listTitle,
+    // Reserve room for both names; long folders must not push the device away.
+    maxWidth: '50%',
   },
   projectCount: {
     color: colors.textTertiary,
