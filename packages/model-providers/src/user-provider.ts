@@ -3,6 +3,7 @@ import {
   resolveModelMetadata,
   applyModelMetadata,
   pickModelMetadata,
+  runtimeUserModelMetadata,
   type ModelMetadata,
 } from "./modelMetadataLayers.js";
 /**
@@ -336,21 +337,7 @@ function toCatalogModel(
     ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
     ...(supportsFastMode ? { supportsFastMode: true } : {}),
   };
-  const user = {
-    ...(!m.discoveredMetadata || m.nameExplicit ? { name: m.name } : {}),
-    ...(m.contextWindow !== undefined
-      ? { contextWindow: m.contextWindow }
-      : {}),
-    ...(m.supportsImageInput !== undefined
-      ? { supportsImageInput: m.supportsImageInput }
-      : {}),
-    ...(m.reasoning !== undefined
-      ? { efforts: m.reasoning ? (m.reasoningEfforts ?? []) : [] }
-      : {}),
-    ...(m.reasoningDefaultEffort !== undefined
-      ? { defaultEffort: m.reasoningDefaultEffort }
-      : {}),
-  };
+  const user = runtimeUserModelMetadata(m);
   const resolved =
     modelRegistry?.schemaVersion === 4 ||
     m.discoveredMetadata ||

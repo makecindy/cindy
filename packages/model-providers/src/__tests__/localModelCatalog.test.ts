@@ -30,6 +30,28 @@ const catalog = {
   ],
 };
 describe("Registry V4 local model contract", () => {
+  it.each([200, 201, 256, 257])(
+    "matches public ID and local reference limits at %i characters",
+    (length) => {
+      const modelRef = "m".repeat(length);
+      const localModels = {
+        ...catalog,
+        models: [{ ...catalog.models[0], modelRef }],
+      };
+      const registry = {
+        schemaVersion: 4,
+        updatedAt: "2026-09-08T00:00:00.000Z",
+        baseModels: [{ id: modelRef, aliases: [], defaults: {} }],
+        models: [],
+        localModels,
+      };
+      expect(parseLocalModelCatalog(localModels) !== null).toBe(length <= 256);
+      expect(parseModelRegistry(registry).ok).toBe(length <= 256);
+      expect(parseModelRegistry({ ...registry, baseModels: [] }).ok).toBe(
+        false,
+      );
+    },
+  );
   it("accepts curated metadata only in V4 and permits explicit empty withdrawal", () => {
     expect(parseLocalModelCatalog(catalog)).toEqual(catalog);
     for (const localModels of [

@@ -40,6 +40,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
+  runtimeUserModelMetadata,
   clampEffortToSupported,
   modelDefaultEffort,
   defaultEffortForCapabilities,
@@ -1571,7 +1572,14 @@ function computeMerged(): Catalog {
               agent === 'pi' ? undefined : (agent as RootAgentKind),
             )?.entry.modelRef ?? findBaseModel(b.modelRegistry, model.id)?.id;
           const publicPatch = identity ? localOverrides.baseModels?.[identity] : undefined;
-          if (publicPatch) next = applyModelMetadata(next, publicPatch);
+          if (publicPatch) {
+            next = applyModelMetadata(next, {
+              ...publicPatch,
+              ...(provider.source === 'user' && model.userModelConfig
+                ? runtimeUserModelMetadata(model.userModelConfig)
+                : {}),
+            });
+          }
           return applyExistingModelLocalPatch(
             provider.id,
             agent as AgentKind,

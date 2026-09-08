@@ -180,6 +180,8 @@ describe('metadata layers through the active catalog', () => {
               nameExplicit: true,
               contextWindow: 6000,
               supportsImageInput: false,
+              reasoning: true,
+              reasoningEfforts: ['high' as const],
               discoveredMetadata: { name: 'Supplier', contextWindow: 3000 },
             },
           ],
@@ -191,6 +193,55 @@ describe('metadata layers through the active catalog', () => {
       name: 'My model',
       contextWindow: 6000,
       supportsImageInput: false,
+    });
+    setLocalCatalogOverrides(
+      sanitizeModelCatalogOverrides({
+        version: 1,
+        baseModels: {
+          'maker/model': {
+            name: 'Shared rename',
+            contextWindow: 9000,
+            supportsImageInput: true,
+            maxOutputTokens: 80,
+            efforts: ['low'],
+          },
+        },
+      }).overrides,
+    );
+    expect(model('relay', 'pi')).toMatchObject({
+      name: 'My model',
+      contextWindow: 6000,
+      supportsImageInput: false,
+      maxOutput: 80,
+      efforts: ['high'],
+      defaultEffort: 'high',
+    });
+    // Clearing specific user choices makes the shared patch visible again.
+    setCustomProviders([
+      buildUserProvider(
+        {
+          ...config,
+          runtimes: {
+            pi: {
+              ...config.runtimes.pi,
+              models: [
+                {
+                  id: 'model',
+                  name: 'Supplier',
+                  discoveredMetadata: { name: 'Supplier' },
+                },
+              ],
+            },
+          },
+        },
+        { modelRegistry: r },
+      ),
+    ]);
+    expect(model('relay', 'pi')).toMatchObject({
+      name: 'Shared rename',
+      contextWindow: 9000,
+      supportsImageInput: true,
+      maxOutput: 80,
     });
     const unknown = buildUserProvider(
       {

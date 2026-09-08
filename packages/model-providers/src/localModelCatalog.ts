@@ -83,7 +83,7 @@ export function parseLocalModelCatalog(v: unknown): LocalModelCatalog | null {
         "evidence",
       ]) ||
       !id(m.id) ||
-      (m.modelRef !== undefined && !string(m.modelRef, 200)) ||
+      (m.modelRef !== undefined && !string(m.modelRef, 256)) ||
       ids.has(m.id) ||
       !string(m.name, 80) ||
       !Array.isArray(m.aliases) ||

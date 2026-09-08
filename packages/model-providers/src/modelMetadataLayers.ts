@@ -353,3 +353,24 @@ export function mergeDiscoveredRuntimeModels(
   }
   return models;
 }
+
+/** Explicit runtime user fields, shared by initial construction and local public overlays. */
+export function runtimeUserModelMetadata(
+  m: import("./types.js").ProviderRuntimeModelConfig,
+): ModelMetadata {
+  return pickModelMetadata({
+    ...(!m.discoveredMetadata || m.nameExplicit ? { name: m.name } : {}),
+    ...(m.contextWindow !== undefined
+      ? { contextWindow: m.contextWindow }
+      : {}),
+    ...(m.supportsImageInput !== undefined
+      ? { supportsImageInput: m.supportsImageInput }
+      : {}),
+    ...(m.reasoning !== undefined
+      ? { efforts: m.reasoning ? (m.reasoningEfforts ?? []) : [] }
+      : {}),
+    ...(m.reasoningDefaultEffort !== undefined
+      ? { defaultEffort: m.reasoningDefaultEffort }
+      : {}),
+  });
+}

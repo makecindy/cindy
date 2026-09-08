@@ -286,3 +286,5 @@ export {
 
 export { mergeDiscoveredRuntimeModels } from "./modelMetadataLayers.js";
 export type { DiscoveredModel } from "./modelMetadataLayers.js";
+
+export { runtimeUserModelMetadata } from "./modelMetadataLayers.js";

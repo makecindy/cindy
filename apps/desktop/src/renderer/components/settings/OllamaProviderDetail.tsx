@@ -331,7 +331,9 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
                 (i18n.resolvedLanguage ?? i18n.language) as keyof NonNullable<
                   typeof entry.descriptions
                 >
-              ] ?? ''}
+              ] ??
+                entry.descriptions?.en ??
+                ''}
             </span>
             <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
               {t(
