@@ -3411,6 +3411,8 @@ interface ElectronAPI {
     }>;
     listCategories: (params?: {
       scope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
+      /** Defaults to true for publish/edit pickers; browse filters pass false. */
+      includeEmpty?: boolean;
     }) => Promise<{
       success: boolean;
       categories?: import('../shared/skillhubCategory').MarketCategory[];

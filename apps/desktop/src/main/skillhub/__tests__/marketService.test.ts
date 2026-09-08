@@ -379,6 +379,45 @@ describe('SkillhubMarketService', () => {
       opts: undefined,
     }]);
   });
+
+  it.each(['market', 'team'] as const)('delegates %s browse filtering to the server without dropping legacy tags', async (scope) => {
+    const { fetch, calls } = makeFetch([[
+      { slug: 'empty', name: 'Empty', skillCount: 0, mySkillCount: 2,
+        children: [{ slug: 'used', name: 'Used', skillCount: 3, mySkillCount: 1 }] },
+      { slug: 'missing-count', name: 'Missing' },
+    ]]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.listCategories(scope, false)).resolves.toEqual({
+      success: true,
+      categories: [
+        { slug: 'empty', name: 'Empty', count: 0, myCount: 2 },
+        { slug: 'used', name: 'Used', count: 3, myCount: 1 },
+        { slug: 'missing-count', name: 'Missing', count: 0, myCount: 0 },
+      ],
+      totalCount: 3,
+      myTotalCount: 3,
+    });
+    expect(calls[0]?.path).toBe(`/api/skills-hub/categories?scope=${scope}&includeEmpty=false`);
+  });
+
+  it.each(['market', 'team'] as const)('preserves the filtered category result from updated %s servers', async (scope) => {
+    const { fetch } = makeFetch([[{ slug: 'used', name: 'Used', skillCount: 3 }], []]);
+    const service = new SkillhubMarketService({ fetch });
+    await expect(service.listCategories(scope, false)).resolves.toMatchObject({
+      categories: [{ slug: 'used', count: 3 }],
+    });
+    await expect(service.listCategories(scope, false)).resolves.toMatchObject({ categories: [] });
+  });
+
+  it('keeps unused tags selectable in explicit full-list mode', async () => {
+    const { fetch, calls } = makeFetch([[{ slug: 'empty', name: 'Empty', skillCount: 0 }]]);
+    const service = new SkillhubMarketService({ fetch });
+    await expect(service.listCategories('market', true)).resolves.toMatchObject({
+      categories: [{ slug: 'empty', count: 0 }],
+    });
+    expect(calls[0]?.path).toBe('/api/skills-hub/categories?scope=market');
+  });
 });
 
 describe('skillhub market helpers', () => {
