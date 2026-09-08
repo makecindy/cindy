@@ -122,6 +122,7 @@ describe("model registry data consistency", () => {
     // These existing Server prices also value historical/explicit long-window
     // usage. Their public API bands must not enlarge today's subscription window.
     const subscriptionApiReferences = new Set([
+      "openai/gpt-6-astra",
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-terra",
       "openai/gpt-5.6-luna",

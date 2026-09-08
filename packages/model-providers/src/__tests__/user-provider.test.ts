@@ -1434,6 +1434,9 @@ describe("live preset defaults and discovery provenance", () => {
       contextWindowVerified: true,
     });
     expect(current().contextWindowExplicit).toBeUndefined();
+    config.runtimes.pi!.baseUrl += "/".repeat(100_000);
+    presets[0].runtimes.pi.baseUrl += "/";
+    expect(current().contextWindow).toBe(1000);
     presets[0].runtimes.pi.models[0].contextWindow = 2000;
     expect(current().contextWindow).toBe(2000);
     config.runtimes.pi!.models[0].discoveredMetadata = {

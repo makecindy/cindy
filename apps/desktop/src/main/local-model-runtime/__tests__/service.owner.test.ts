@@ -47,6 +47,23 @@ function readyFetch(models: string[] = ['gpt-oss:20b']) {
 }
 
 describe('owner change during pull', () => {
+  it.each(['qwen3.8:27b', 'qwen3.8:27b-mxfp8', 'qwen3.8:27b-mlx'])(
+    'retains client Qwen capabilities after curation withdrawal: %s',
+    async (name) => {
+      const service = createLocalModelService({
+        fetchImpl: readyFetch([name]),
+        getLocalCatalog: () => ({ version: 1, models: [], featuredIds: [] }),
+      });
+      await service.setModelInPicker(name, true);
+      expect(vi.mocked(upsertManagedOllamaModel).mock.calls.at(-1)?.[0]).toMatchObject({
+        reasoning: true,
+        reasoningEfforts: ['xhigh'],
+        reasoningDefaultEffort: 'xhigh',
+        supportsImageInput: true,
+        thinkingToggle: true,
+      });
+    },
+  );
   beforeEach(() => {
     vi.mocked(upsertManagedOllamaModel).mockClear();
     vi.mocked(upsertManagedOllamaModels).mockClear();
@@ -82,16 +99,16 @@ describe('owner change during pull', () => {
     });
 
     await service.list({ owner: { dataOwnerId: 'bob', generation: 2 } });
-    const importedByBob = vi.mocked(upsertManagedOllamaModels).mock.calls.flatMap(
-      ([entries]) => entries.map((entry) => entry.model.id),
-    );
+    const importedByBob = vi
+      .mocked(upsertManagedOllamaModels)
+      .mock.calls.flatMap(([entries]) => entries.map((entry) => entry.model.id));
     expect(importedByBob).not.toContain('gpt-oss:20b');
 
     vi.mocked(upsertManagedOllamaModels).mockClear();
     await service.list({ owner: { dataOwnerId: 'alice', generation: 1 } });
-    const importedByAlice = vi.mocked(upsertManagedOllamaModels).mock.calls.flatMap(
-      ([entries]) => entries.map((entry) => entry.model.id),
-    );
+    const importedByAlice = vi
+      .mocked(upsertManagedOllamaModels)
+      .mock.calls.flatMap(([entries]) => entries.map((entry) => entry.model.id));
     expect(importedByAlice).toContain('gpt-oss:20b');
   });
 

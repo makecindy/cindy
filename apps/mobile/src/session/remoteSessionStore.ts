@@ -3307,8 +3307,8 @@ export const remoteSessionStore = {
     sessionId: string,
     list: readonly RemoteMessage[],
     options: SetLatestMessageWindowOptions = {},
-  ): void {
-    if (!messageWriteAllowed(sessionId, options.authority)) return;
+  ): boolean {
+    if (!messageWriteAllowed(sessionId, options.authority)) return false;
     const textFlushed = flushPendingTextDelta(sessionId);
     const latestWindow = normalizeWindowForRetention(sessionId, normalizeMessages(list));
     const projectionSettled = settleInputProjectionFromMessages(sessionId, latestWindow);
@@ -3321,7 +3321,7 @@ export const remoteSessionStore = {
       // while the persistence push is still in flight.
       if (hasLiveAssistantMessage(sessionId)) {
         if (textFlushed || projectionSettled) emit();
-        return;
+        return false;
       }
       const preserved = existing.filter((item) => messageKey(item).startsWith('mobile-system-'));
       const next = preserved.length > 0 ? preserved : [];
@@ -3336,7 +3336,7 @@ export const remoteSessionStore = {
       } else if (textFlushed || projectionSettled) {
         emit();
       }
-      return;
+      return true;
     }
 
     const latestOldestCreatedAt = latestWindow[0].createdAt;
@@ -3348,7 +3348,7 @@ export const remoteSessionStore = {
       // retained newer rows, then trusting live pushes, would certify the gap.
       // Rewind/clear invalidates coverage explicitly, so it does not use this path.
       if (textFlushed || projectionSettled) emit();
-      return;
+      return false;
     }
     // A triggering user row must be inserted before its live assistant reply is
     // tied to the same host timestamp. Other authoritative tail rows keep the
@@ -3498,7 +3498,7 @@ export const remoteSessionStore = {
         );
       if (liveRowsReanchoredBeforeMerge || liveRowsReanchoredAfterMerge) bumpMessageVersion(sessionId);
       if (textFlushed || liveRowsReanchoredBeforeMerge || liveRowsReanchoredAfterMerge) emit();
-      return;
+      return true;
     }
     messages.set(sessionId, next);
     if (reanchorAfterMerge) {
@@ -3516,6 +3516,7 @@ export const remoteSessionStore = {
     applyMessageWriteRetention(sessionId);
     bumpMessageVersion(sessionId);
     emit();
+    return true;
   },
 
   markSessionMessagesSynced(sessionId: string, session: Pick<RemoteSession, '_count' | 'updatedAt'>): void {

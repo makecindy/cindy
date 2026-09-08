@@ -444,6 +444,7 @@ interface RowModel {
   description?: string;
   contextWindow: number;
   efforts: readonly Effort[];
+  displayEfforts?: readonly Effort[];
   defaultEffort: Effort | null;
   effortDisplayNames?: Partial<Record<string, string>>;
   supportsFastMode?: boolean;
@@ -2042,7 +2043,7 @@ function ModelSelectorContentView({
   const editThinkingToggle =
     canConfigure && currentAgentKind === 'pi' && editingModel?.thinkingToggle === true;
   const editHasEfforts =
-    canConfigure && (editingModel?.efforts.length ?? 0) > 0 && !editThinkingToggle;
+    canConfigure && ((editingModel?.displayEfforts ?? editingModel?.efforts)?.length ?? 0) > 0 && !editThinkingToggle;
 
   // 配置列当前 effort 值(选中 → live;否则记忆/默认)。
   const editEffortValue: Effort | null = editingModel
@@ -2212,20 +2213,22 @@ function ModelSelectorContentView({
               {t('newChat.modelSelector.effortLabel')}
             </span>
           </div>
-          {editingModel.efforts.map((e) => {
+          {(editingModel.displayEfforts ?? editingModel.efforts).map((e) => {
+            const available = editingModel.efforts.includes(e);
             const selected = editEffortValue === e;
             return (
               <button
                 type="button"
                 key={e}
-                onClick={() => handleEditEffort(e)}
+                disabled={!available}
+                onClick={() => available && handleEditEffort(e)}
                 role="option"
                 aria-selected={selected}
                 className={cn(
                   // 行内边距/圆角/hover 与选中底统一到 --model-item-hover(见 §Select 菜单行规约),
                   // 与一级模型行、权限、+ 菜单一致;px-3 对齐其它菜单行的横向内边距。
                   'flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left transition-colors duration-100',
-                  'hover:bg-[var(--model-item-hover)]',
+                  available ? 'hover:bg-[var(--model-item-hover)]' : 'cursor-not-allowed opacity-45',
                   selected && 'bg-[var(--model-item-hover)]',
                 )}
               >

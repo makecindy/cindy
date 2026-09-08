@@ -598,15 +598,17 @@ export function applyLocalModelCatalogOverrides(
   )
     models = models.filter((model) => !override.removedIds!.includes(model.id));
   if (isPlainObject(override.patches))
-    models = models.map((model) => {
+    for (const [index, model] of models.entries()) {
       const patch = override.patches?.[model.id];
-      if (!isPlainObject(patch)) return model;
+      if (!isPlainObject(patch)) continue;
       const next = { ...model, ...patch, id: model.id };
-      return validRef(next) &&
-        parseLocalModelCatalog({ version: 1, models: [next], featuredIds: [] })
-        ? next
-        : model;
-    });
+      const candidate = models.map((current, i) => (i === index ? next : current));
+      if (
+        validRef(next) &&
+        parseLocalModelCatalog({ version: 1, models: candidate, featuredIds: [] })
+      )
+        models = candidate;
+    }
   if (Array.isArray(override.additions))
     for (const model of override.additions) {
       if (
@@ -614,7 +616,9 @@ export function applyLocalModelCatalogOverrides(
         !parseLocalModelCatalog({ version: 1, models: [model], featuredIds: [] })
       )
         continue;
-      models = [...models.filter((m) => m.id !== model.id), model];
+      const candidate = [...models.filter((m) => m.id !== model.id), model];
+      if (parseLocalModelCatalog({ version: 1, models: candidate, featuredIds: [] }))
+        models = candidate;
     }
   const ids = new Set(models.map((model) => model.id));
   const featuredIds =
@@ -622,5 +626,11 @@ export function applyLocalModelCatalogOverrides(
     override.featuredIds.every((id) => typeof id === 'string' && ids.has(id))
       ? override.featuredIds
       : base.featuredIds.filter((id) => ids.has(id));
-  return parseLocalModelCatalog({ version: 1, models, featuredIds }) ?? base;
+  return (
+    parseLocalModelCatalog({ version: 1, models, featuredIds }) ?? {
+      version: 1,
+      models,
+      featuredIds: base.featuredIds.filter((id) => ids.has(id)),
+    }
+  );
 }

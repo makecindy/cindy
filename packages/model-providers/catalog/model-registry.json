@@ -1,6 +1,6 @@
 {
   "schemaVersion": 4,
-  "updatedAt": "2026-09-08T07:00:00.000Z",
+  "updatedAt": "2026-09-08T07:58:08.918Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -9,7 +9,11 @@
       "sortOrder": 18,
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -84,7 +88,7 @@
           "defaults": {
             "description": "GPT-5.6-Sol for coding tasks",
             "group": "gpt",
-            "contextWindow": 272000,
+            "contextWindow": 1050000,
             "efforts": ["low", "medium", "high", "xhigh", "max"],
             "supportsFastMode": true
           }
@@ -96,7 +100,7 @@
     {
       "id": "openai/gpt-5.6-sol[1m]",
       "name": "GPT-5.6-Sol (1M · Higher usage)",
-      "status": "active",
+      "status": "deprecated",
       "sortOrder": 18,
       "routes": [
         {
@@ -178,7 +182,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.6-sol"
+      "modelRef": "openai/gpt-5.6-sol",
+      "defaultEnabled": false
     },
     {
       "id": "xd/gpt-5.6-sol",
@@ -218,7 +223,11 @@
       "sortOrder": 19,
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -292,7 +301,7 @@
           ],
           "defaults": {
             "group": "gpt",
-            "contextWindow": 272000,
+            "contextWindow": 1050000,
             "supportsFastMode": true
           }
         }
@@ -405,7 +414,7 @@
           ],
           "defaults": {
             "group": "gpt",
-            "contextWindow": 272000,
+            "contextWindow": 1050000,
             "maxOutputTokens": 128000,
             "efforts": ["low", "medium", "high", "xhigh", "max"],
             "defaultEffort": "medium"
@@ -413,7 +422,15 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.6-luna"
+      "modelRef": "openai/gpt-5.6-luna",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
+        }
+      }
     },
     {
       "id": "xd/gpt-5.6-luna",
@@ -745,7 +762,11 @@
       "status": "active",
       "perAgent": {
         "codex": {
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -767,7 +788,8 @@
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
                 "verifiedAt": "2026-09-05"
-              }
+              },
+              "effectiveUntil": "2026-09-07"
             },
             {
               "currency": "USD",
@@ -782,7 +804,68 @@
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
                 "verifiedAt": "2026-09-05"
+              },
+              "effectiveUntil": "2026-09-07"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 10,
+              "outputPerMtok": 50,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 12.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 75,
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
+              },
+              "minInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 40,
+              "outputPerMtok": 150,
+              "cacheReadPerMtok": 4,
+              "cacheWritePerMtok": 50,
+              "effectiveFrom": "2026-09-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+                "verifiedAt": "2026-09-07"
+              },
+              "minInputTokens": 272001
             }
           ],
           "defaults": {
@@ -3359,7 +3442,7 @@
         "name": "GPT-6 Astra",
         "description": "OpenAI GPT-6 Astra for complex reasoning, coding, computer use, research, and document creation",
         "group": "gpt",
-        "contextWindow": 272000,
+        "contextWindow": 1050000,
         "maxOutputTokens": 128000,
         "efforts": ["low", "medium", "high", "xhigh", "max"],
         "defaultEffort": "medium"
@@ -3857,11 +3940,11 @@
       "aliases": ["deepseek-v4-pro"],
       "defaults": {
         "name": "DeepSeek V4 Pro",
-        "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
+        "description": "DeepSeek V4 Pro reasoning model",
         "group": "china",
         "contextWindow": 1048576,
         "maxOutputTokens": 384000,
-        "efforts": ["high", "max"],
+        "efforts": ["low", "high", "max"],
         "defaultEffort": "high"
       }
     },

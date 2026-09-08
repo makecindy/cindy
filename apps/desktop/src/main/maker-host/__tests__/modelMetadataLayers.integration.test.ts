@@ -1,4 +1,40 @@
 import { afterEach, describe, expect, it } from 'vitest';
+
+it('isolates excess additions and duplicate tags without discarding valid local overrides', () => {
+  const model = (n: number) => ({
+    id: 'local-' + n,
+    name: 'Local ' + n,
+    aliases: [],
+    variants: [
+      { libraryName: 'local-' + n + ':latest', sizeBytes: 2 ** 30, minUnifiedMemoryGb: 4 },
+    ],
+  });
+  const base = { version: 1 as const, models: [model(0), model(1)], featuredIds: ['local-0'] };
+  const result = applyLocalModelCatalogOverrides(base, {
+    removedIds: ['local-1'],
+    patches: { 'local-0': { name: 'Kept patch' } },
+    additions: [
+      { ...model(99), variants: model(0).variants },
+      ...Array.from({ length: 33 }, (_, n) => model(n + 2)),
+      { ...model(2), name: 'Replacement at capacity' },
+    ],
+    featuredIds: [],
+  })!;
+  expect(result.models).toHaveLength(32);
+  expect(result.models.find((m) => m.id === 'local-0')?.name).toBe('Kept patch');
+  expect(result.models.find((m) => m.id === 'local-2')?.name).toBe('Replacement at capacity');
+  expect(result.models.some((m) => m.id === 'local-1' || m.id === 'local-99')).toBe(false);
+  expect(result.featuredIds).toEqual([]);
+  const invalidFeatured = applyLocalModelCatalogOverrides(result, {
+    patches: { 'local-0': { variants: model(2).variants }, 'local-3': { name: 'Still valid' } },
+    featuredIds: ['local-0', 'local-0'],
+  })!;
+  expect(invalidFeatured.models.find((m) => m.id === 'local-0')?.variants).toEqual(
+    model(0).variants,
+  );
+  expect(invalidFeatured.models.find((m) => m.id === 'local-3')?.name).toBe('Still valid');
+});
+
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
@@ -14,6 +50,7 @@ import {
 } from '../active-catalog.js';
 import {
   EMPTY_MODEL_CATALOG_OVERRIDES,
+  applyLocalModelCatalogOverrides,
   sanitizeModelCatalogOverrides,
 } from '../model-plane/localCatalogOverrides.js';
 

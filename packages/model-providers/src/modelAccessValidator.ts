@@ -377,6 +377,7 @@ function overrideError(
   allowedFields?: readonly string[],
   allowNullDefaultEffort = false,
   baseDefaultEffort?: ModelEffort | null,
+  validateDependencies = true,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = allowedFields
@@ -405,6 +406,7 @@ function overrideError(
       ? (value.efforts as ModelEffort[])
       : baseEfforts;
   if (
+    validateDependencies &&
     isModelEffort(value.defaultEffort) &&
     effectiveEfforts !== undefined &&
     !effectiveEfforts.includes(value.defaultEffort)
@@ -412,6 +414,7 @@ function overrideError(
     return `${path}.defaultEffort must be included in ${path}.efforts or the base efforts`;
   }
   if (
+    validateDependencies &&
     value.defaultEffort === undefined &&
     isModelEffort(baseDefaultEffort) &&
     effectiveEfforts !== undefined &&
@@ -1042,6 +1045,7 @@ function registryEntryError(
   value: unknown,
   path: string,
   schemaVersion: ModelRegistry["schemaVersion"],
+  validateDependencies = true,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = unknownFieldError(
@@ -1106,6 +1110,7 @@ function registryEntryError(
       ? (value.efforts as ModelEffort[])
       : undefined;
   if (
+    validateDependencies &&
     value.defaultEffort !== undefined &&
     efforts !== undefined &&
     !efforts.includes(value.defaultEffort as ModelEffort)
@@ -1158,6 +1163,7 @@ function registryEntryError(
         MODEL_AGENT_OVERRIDE_FIELDS,
         false,
         isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
+        validateDependencies,
       );
       if (error) return error;
     }
@@ -1295,10 +1301,12 @@ export function parseModelRegistry(
       }
       modelIds.add(model.id);
     }
+    // V4 dependencies are checked below after public, route and force layers are applied.
     const error = registryEntryError(
       model,
       `modelRegistry.models[${index}]`,
       value.schemaVersion,
+      value.schemaVersion < 4,
     );
     if (error) return fail(error);
     const typed = model as ModelRegistryEntry;

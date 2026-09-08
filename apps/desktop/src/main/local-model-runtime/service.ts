@@ -5,6 +5,7 @@ import { createLogger } from '../logger.js';
 import {
   canonicalOllamaModelRef,
   findCuratedOllamaModel,
+  isCuratedQwen38Tag,
   isOllamaModelName,
   normalizeOllamaPullName,
   ollamaModelRefsEqual,
@@ -878,10 +879,9 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       /* show is best-effort */
     }
     const curated = findCuratedOllamaModel(name, deps.getLocalCatalog?.());
-    const model =
-      curated?.runtimeProfile === 'qwen-xhigh'
-        ? toQwenRuntimeModel(name, contextLength)
-        : toPlainRuntimeModel(name, contextLength);
+    const model = isCuratedQwen38Tag(name)
+      ? toQwenRuntimeModel(name, contextLength)
+      : toPlainRuntimeModel(name, contextLength);
     if (curated) model.name = curated.name;
     return {
       model,

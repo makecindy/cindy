@@ -59,6 +59,12 @@ export function storedCustomProviderId(providerId: string): string {
     : providerId;
 }
 
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
 function isOfficialXaiApiUpstream(upstream: string | undefined): boolean {
   try {
     const url = new URL(upstream ?? "");
@@ -462,8 +468,8 @@ export function buildUserProvider(
     const presetRuntime = preset?.runtimes[agent];
     const followsPreset =
       presetRuntime &&
-      rt.baseUrl.replace(/\/+$/, "") ===
-        presetRuntime.baseUrl.replace(/\/+$/, "") &&
+      withoutTrailingSlashes(rt.baseUrl) ===
+        withoutTrailingSlashes(presetRuntime.baseUrl) &&
       (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
         (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&
       (rt.requestPath ?? "") === (presetRuntime.requestPath ?? "");

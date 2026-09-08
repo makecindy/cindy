@@ -48,8 +48,12 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
   return Object.entries(value).every(([key, v]) => {
     if (!(MODEL_METADATA_FIELDS as readonly string[]).includes(key))
       return false;
-    if (["name", "description", "group"].includes(key))
-      return typeof v === "string" && v.trim().length > 0 && v.length <= 2000;
+    if (["name", "description", "group"].includes(key)) {
+      const maxLength = key === "name" ? 256 : key === "group" ? 128 : 2000;
+      return (
+        typeof v === "string" && v.trim().length > 0 && v.length <= maxLength
+      );
+    }
     if (["contextWindow", "maxOutputTokens"].includes(key))
       return typeof v === "number" && Number.isSafeInteger(v) && v > 0;
     if (key === "efforts")
