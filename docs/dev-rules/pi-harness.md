@@ -91,6 +91,10 @@ provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建
 只继承上述约定文件，不整目录复制 settings、auth、extensions，也不复制会替换 Pi 默认
 系统提示词的 `SYSTEM.md`。远端沿用文件读取通道的 4 MiB 上限，触及上限明确报错，不能
 静默截断。文件不存在允许正常启动，读取／写入失败须报错，不能假称约定已加载。
+远端探测使用系统 `stat`（GNU／BSD，固定 C locale）区分明确缺失与权限／探测失败，
+不能用 shell `-f`／`-e` 的 false 推断文件不存在，也不能依赖首次启动尚未安装的 Node。
+内建 Pi 子代理从父任务 `configHome` 复制选中的约定快照到自己的持久运行目录；
+不重读用户原文件，父任务卸载后子代理仍保留同一份约定。
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 

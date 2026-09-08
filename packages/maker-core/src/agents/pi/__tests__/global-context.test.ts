@@ -55,5 +55,9 @@ describe('Pi global context snapshot', () => {
     await expect(readPiGlobalContext('$HOME/.pi/agent', remote)).rejects.toThrow('remote read limit');
     vi.mocked(remote.readFile).mockRejectedValue(new Error('SSH unavailable'));
     await expect(readPiGlobalContext('$HOME/.pi/agent', remote)).rejects.toThrow('SSH unavailable');
+    vi.mocked(remote.readFile).mockClear();
+    vi.mocked(remote.stat).mockRejectedValue(new Error('remote stat failed (exit 1): EACCES'));
+    await expect(readPiGlobalContext('$HOME/.pi/agent', remote)).rejects.toThrow('EACCES');
+    expect(remote.readFile).not.toHaveBeenCalled();
   });
 });

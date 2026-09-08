@@ -175,26 +175,49 @@ export function createRemotePiFileOps(remoteHost: RemoteHost): PiRemoteFileOps {
     },
 
     async stat(file: string): Promise<{ isFile: boolean } | null> {
+      // Shell -f/-e cannot distinguish ENOENT from an unsearchable parent.
+      // Bootstrap can reach this before bundled Node is installed. Use the
+      // platform stat utility (GNU/Linux or BSD/macOS), with C-locale errno
+      // suffixes, and only treat an explicit ENOENT diagnostic as missing.
       // 轮 43 P1(codex-connector):eval 换 H=$(printf) + 参数替换, 无注入风险。
       const script = `
 P=${shellQuote(file)}
 case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\\$HOME}" != "$P" ] && P="\${H}\${P#\\\$HOME}";; esac
-if [ -f "$P" ]; then
-  printf 'FILE\\n'
-elif [ -e "$P" ]; then
-  printf 'DIR\\n'
+if stat -c '%F' / >/dev/null 2>&1; then
+  RESULT=$(LC_ALL=C stat -L -c '%F' -- "$P" 2>&1)
 else
-  printf 'MISSING\\n'
+  RESULT=$(LC_ALL=C stat -L -f '%HT' -- "$P" 2>&1)
+fi
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  case "$RESULT" in
+    *': No such file or directory') printf 'MISSING\\n' ;;
+    *': Permission denied') printf 'EACCES' >&2; exit 1 ;;
+    *) exit 1 ;;
+  esac
+else
+  case "$RESULT" in
+    'regular file'|'regular empty file'|'Regular File') printf 'FILE\\n' ;;
+    # BSD stat -L falls back to lstat only when the link target is missing.
+    'Symbolic Link') printf 'MISSING\\n' ;;
+    *) printf 'DIR\\n' ;;
+  esac
 fi
 `;
       const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
         timeoutMs: 10_000,
         label: 'pi-remote-stat',
       });
-      const kind = result.stdout.trim().split(/\r?\n/).pop() ?? 'MISSING';
+      if (result.exitCode !== 0) {
+        const code = result.stderr.trim();
+        const reason = /^E[A-Z0-9]+$/.test(code) ? `: ${code}` : '';
+        throw new Error(`remote stat failed (exit ${result.exitCode})${reason}`);
+      }
+      const kind = result.stdout.trim();
       if (kind === 'FILE') return { isFile: true };
       if (kind === 'DIR') return { isFile: false };
-      return null;
+      if (kind === 'MISSING') return null;
+      throw new Error('remote stat returned an invalid response');
     },
 
     async readFile(file: string, maxBytes = 1_048_576): Promise<string> {
