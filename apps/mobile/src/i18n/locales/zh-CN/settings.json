@@ -1,24 +1,26 @@
 {
   "localLogs": {
-    "reset": "恢复默认记录设置",
     "upload": "上传日志",
-    "uploadHint": "发送诊断记录及应用、系统版本供排障使用。不含正文、凭证或账号标识。",
-    "copyCode": "复制上传编号",
+    "uploadHint": "仅发送筛选后的运行记录及应用、系统版本。详细 Debug 日志请使用导出。",
     "uploadResult": {
       "unavailable": "当前版本未配置日志上传。",
       "consentRequired": "上传日志前需同意隐私政策。",
       "empty": "暂无近期日志，请先开启记录并复现问题。",
       "failed": "上传失败，日志仍保留在手机上。"
     },
-    "title": "诊断日志",
-    "record": "本地记录",
-    "hint": "在手机上保留最近 7 天最多 500 条连接与性能记录。不含正文或凭证，不会自动上传。",
-    "export": "导出日志",
+    "title": "Debug 日志",
+    "record": "记录 Debug 日志",
+    "hint": "记录手机上的连接、恢复、滚动、键盘与性能细节。默认关闭，最多保留 7 天、8 MB，不会自动上传。",
+    "export": "导出 Debug 日志",
     "clear": "清空日志",
     "busy": "处理中…",
     "failed": "无法保存或分享日志，请重试。",
     "clearHint": "删除已保存的诊断日志？",
-    "cancel": "取消"
+    "cancel": "取消",
+    "exportHint": "分享详细本地日志供排障使用；不包含对话正文或凭证。",
+    "options": "日志选项",
+    "uploadCopied": "上传成功，编号 {{code}} 已复制。",
+    "uploadSucceeded": "上传成功，编号 {{code}}。"
   },
   "title": "设置",
   "language": {
