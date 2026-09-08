@@ -96,13 +96,13 @@ import {
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
+import { getBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
   resolveAgentIslandVisibleSessionFromRouteTarget,
-  resolveAgentIslandVisibleBotSessionIdFromPath,
+  resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
 
@@ -423,23 +423,22 @@ export function MainLayout() {
     }
   }, [sidebarPeek.peekState, isRailMode, handleRailModeChange]);
 
-  const botProfiles = useBotProfiles();
-  const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname) ?? resolveAgentIslandVisibleBotSessionIdFromPath(location.pathname, botProfiles);
-  const splitVisibleSessionIds = useMemo(() => {
-    const splitSessionIds = getSplitSessionIds(splitGroup.root);
-    return routeSessionId && splitSessionIds.length >= 2
-      ? [...new Set([routeSessionId, ...splitSessionIds])]
-      : [];
-  }, [routeSessionId, splitGroup.root]);
+  const visibleSessions = useMemo(
+    () => resolveAgentIslandVisibleSessionsFromPath(
+      location.pathname,
+      getSplitSessionIds(splitGroup.root),
+    ),
+    [location.pathname, splitGroup.root],
+  );
 
   const syncAgentIslandVisibleSession = useCallback(() => {
     if (!isAgentIslandSupported()) return;
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
-      splitVisibleSessionIds.length >= 2 ? splitVisibleSessionIds : routeSessionId,
+      visibleSessions,
     );
-  }, [location.pathname, routeSessionId, splitVisibleSessionIds]);
+  }, [location.pathname, visibleSessions]);
 
   useEffect(() => {
     syncAgentIslandVisibleSession();

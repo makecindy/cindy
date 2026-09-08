@@ -1,5 +1,4 @@
 import { matchPath } from 'react-router-dom';
-import type { BotProfile } from '@/features/bots/botStore';
 
 const NON_SESSION_CC_AGENT_SEGMENTS = new Set([
   'boot',
@@ -21,12 +20,23 @@ export function resolveAgentIslandVisibleSessionIdFromPath(
   return sessionId;
 }
 
-export function resolveAgentIslandVisibleBotSessionIdFromPath(pathname: string, botProfiles: readonly BotProfile[]): string | null {
-  const m = matchPath('/bots/:botId/session/:sessionId', pathname) ??
+export function resolveAgentIslandVisibleBotSessionIdFromPath(pathname: string): string | null {
+  const sessionMatch = matchPath('/bots/:botId/session/:sessionId', pathname) ??
     matchPath('/bots/:botId/history/:sessionId', pathname);
-  if (m?.params.sessionId) return m.params.sessionId;
-  const b = matchPath('/bots/:botId', pathname);
-  return botProfiles.find(p => p.id === b?.params.botId)?.sessions.find(x => x.role === 'canonical')?.id ?? null;
+  // The short bot route renders settings, invitations or a redirect spinner, not a chat.
+  return sessionMatch?.params.sessionId ?? null;
+}
+
+export function resolveAgentIslandVisibleSessionsFromPath(
+  pathname: string,
+  splitSessionIds: readonly string[],
+): string | string[] | null {
+  const sessionId = resolveAgentIslandVisibleSessionIdFromPath(pathname);
+  // SplitGroup stays in the store after leaving cc-agent, but is no longer mounted.
+  if (sessionId && splitSessionIds.length >= 2) {
+    return [...new Set([sessionId, ...splitSessionIds])];
+  }
+  return sessionId ?? resolveAgentIslandVisibleBotSessionIdFromPath(pathname);
 }
 
 /**
