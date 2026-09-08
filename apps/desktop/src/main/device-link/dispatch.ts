@@ -389,26 +389,40 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
 /**
  * routing 投影:剥掉每个 agent 路由的执行细节(upstream / authStrategy / headerDelete /
  * headerOverride / modelIdRewrite / adapter,含自定义供应商 endpoint),只保留非敏感的
- * `wireProtocol:'openai-chat'` 展示标记与 `disabled:true` 可用性门控。后者必须跨端保留，
+ * `wireProtocol` 协议标记与 `disabled:true` 可用性门控。后者必须跨端保留，
  * 否则控制端用共享 registry 重算来源时会把被控端禁用的 runtime 重新当成可选。
  *
  * 历史上这里曾保留 `routing.supportsFastMode` 给控制端做 Fast 显隐;现 Fast 能力已收归
  * per-(provider, agent) 的 `models[agent].supportsFastMode`(唯一真相),控制端直接从隧道带来的
  * `models` 现查(见 ModelSelector），不再读 routing；routing 只承载上述两项跨端展示/可用性字段。
  */
+type DisplayWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+
 function projectRoutingForDisplay(
   routing: unknown,
-): Record<string, { wireProtocol?: 'openai-chat'; disabled?: true }> | undefined {
+): Record<string, { wireProtocol?: DisplayWireProtocol; disabled?: true }> | undefined {
   if (!routing || typeof routing !== 'object' || Array.isArray(routing)) return undefined;
-  const out: Record<string, { wireProtocol?: 'openai-chat'; disabled?: true }> = {};
+  const out: Record<string, { wireProtocol?: DisplayWireProtocol; disabled?: true }> = {};
   for (const [agent, value] of Object.entries(routing as Record<string, unknown>)) {
     const route = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
       : null;
-    // 只暴露控制端需要的「Cindy 桥接」标记与禁用门控。原生协议/启用态缺省不回传；
-    // endpoint、鉴权、headers、adapter 等执行字段仍全部留在被控端。
+    // Preserve the protocol evidence before stripping execution details. Otherwise the
+    // controller sees native Pi metadata but an unknown Codex/Claude route and prefers Pi.
+    const wireProtocol: DisplayWireProtocol | undefined =
+      route?.wireProtocol === 'openai-chat' ||
+      route?.wireProtocol === 'openai-responses' ||
+      route?.wireProtocol === 'anthropic-messages'
+        ? route.wireProtocol
+        : route?.authStrategy && route.wireProtocol === undefined
+          ? agent === 'codex'
+            ? 'openai-responses'
+            : agent === 'claude-code'
+              ? 'anthropic-messages'
+              : undefined
+          : undefined;
     out[agent] = {
-      ...(route?.wireProtocol === 'openai-chat' ? { wireProtocol: 'openai-chat' as const } : {}),
+      ...(wireProtocol ? { wireProtocol } : {}),
       ...(route?.disabled === true ? { disabled: true as const } : {}),
     };
   }

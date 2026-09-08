@@ -7649,7 +7649,7 @@
         "reconnect": "重新連線",
         "manage": "管理來源",
         "railLabel": "來源",
-        "connect": "新增模型",
+        "connect": "設定模型",
         "connectCta": "連線來源 →",
         "viaSource": "來源：{{source}}",
         "emptyTitle": "暫無可用來源",

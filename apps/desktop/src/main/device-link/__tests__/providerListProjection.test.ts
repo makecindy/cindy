@@ -15,7 +15,7 @@
  * 只 mock electron(app)+ logger,与同目录 dispatchSendSafety.test 同范式。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
+import { connectedProvidersForAgent, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 vi.mock('electron', () => ({
@@ -96,6 +96,23 @@ function xdProviderWithFullRouting() {
 }
 
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  it('keeps the remote native Codex preference after stripping OAuth execution details', () => {
+    const model = {
+      id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 400000,
+      efforts: [], defaultEffort: null, nativeApi: 'openai-responses',
+    };
+    const provider = {
+      id: 'openai', name: 'OpenAI', connected: true, agents: ['codex', 'pi'],
+      routing: { codex: { authStrategy: 'oauth-passthrough', upstream: 'https://example.invalid' }, pi: {} },
+      models: { codex: [model], pi: [{ ...model, piApi: 'openai-responses' }] },
+    } as unknown as ProviderView;
+    expect(pickRecommendedAgent(provider, model.id, ['codex', 'pi'])).toBe('codex');
+    const projected = project({ providers: [provider] }).providers[0] as unknown as ProviderView;
+    expect(pickRecommendedAgent(projected, model.id, ['codex', 'pi'])).toBe('codex');
+    expect(JSON.stringify(projected)).not.toContain('authStrategy');
+    expect(JSON.stringify(projected)).not.toContain('example.invalid');
+  });
+
   it('preserves live availability and native model metadata without exposing execution credentials', () => {
     const provider = {
       ...xdProviderWithFullRouting(),
@@ -127,15 +144,15 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     ]) {
       expect(cc).not.toHaveProperty(secret);
     }
-    // claude-code 路由投影后是空对象(连残留的 supportsFastMode 也被剥掉)。
-    expect(cc).toEqual({});
+    // 保留协议证据；执行字段和残留的 supportsFastMode 都被剥掉。
+    expect(cc).toEqual({ wireProtocol: 'anthropic-messages' });
   });
 
   it('残留的 supportsFastMode 也被剥掉（routing 不再承载 Fast 信息）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const routing = providers[0].routing as Record<string, Record<string, unknown>>;
     expect(routing['claude-code']).not.toHaveProperty('supportsFastMode');
-    expect(routing.codex).toEqual({});
+    expect(routing.codex).toEqual({ wireProtocol: 'openai-responses' });
   });
 
   it('只保留 openai-chat 兼容展示标记，仍不泄漏执行细节', () => {
@@ -158,8 +175,8 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     const { providers } = project({ providers: [provider] });
     const routing = providers[0].routing as Record<string, Record<string, unknown>>;
 
-    expect(routing.codex).toEqual({ disabled: true });
-    expect(routing['claude-code']).toEqual({});
+    expect(routing.codex).toEqual({ wireProtocol: 'openai-responses', disabled: true });
+    expect(routing['claude-code']).toEqual({ wireProtocol: 'anthropic-messages' });
     expect(connectedProvidersForAgent(providers as unknown as ProviderView[], 'codex')).toEqual([]);
     expect(
       connectedProvidersForAgent(providers as unknown as ProviderView[], 'claude-code'),
@@ -260,7 +277,7 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     const { providers } = project({ providers: [renamed] });
 
     expect(providers[0].logoKind).toBe('moonshot');
-    expect(providers[0].routing).toEqual({ 'claude-code': {} });
+    expect(providers[0].routing).toEqual({ 'claude-code': { wireProtocol: 'anthropic-messages' } });
     expect(JSON.stringify(providers[0])).not.toContain('api.moonshot.cn');
     expect(JSON.stringify(providers[0])).not.toContain('secret');
   });
