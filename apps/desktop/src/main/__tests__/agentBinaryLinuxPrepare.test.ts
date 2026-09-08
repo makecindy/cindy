@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // getBase() 按 kind 缓存 provisioner 实例:全部测试共享同一个 cdndProvisioner,
 // 每测试重配它的行为(而不是 mockReturnValueOnce 换实例——缓存会让新实例永远不被使用)。
@@ -11,6 +11,8 @@ const {
   findCachedLinuxRuntimeFallbackBinary,
   findUsableLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
+  readClaudeCodeRuntimeSettings,
+  resolveSystemClaudeCode,
   probeBinaryVersion,
   consumeStartupBinaryUpdateMarker,
 } = vi.hoisted(() => {
@@ -28,6 +30,13 @@ const {
     findCachedLinuxRuntimeFallbackBinary: vi.fn((): string | null => null),
     findUsableLinuxRuntimeFallbackBinary: vi.fn(async (): Promise<string | null> => null),
     prepareLinuxRuntimeFallback: vi.fn(),
+    readClaudeCodeRuntimeSettings: vi.fn(
+      (): { source: 'managed' | 'system'; customPath: string | null } => ({
+        source: 'managed',
+        customPath: null,
+      }),
+    ),
+    resolveSystemClaudeCode: vi.fn(),
     probeBinaryVersion: vi.fn(),
     consumeStartupBinaryUpdateMarker: vi.fn(() => true),
   };
@@ -46,6 +55,11 @@ vi.mock('../agent-binaries/linux-runtime-fallback.js', () => ({
   findUsableLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
 }));
+vi.mock('../agent-binaries/system-claude-code.js', () => ({
+  CLAUDE_CODE_MINIMUM_VERSION: '2.1.219',
+  resolveSystemClaudeCode,
+}));
+vi.mock('../claude-code-runtime-settings-store.js', () => ({ readClaudeCodeRuntimeSettings }));
 // CDN manifest 缺省不可用(无缓存、拉取也拿不到)。CDN 命中用例单独 stub。
 vi.mock('../manifestService.js', () => ({
   getPlatformKey: () => 'linux-x64',
@@ -56,13 +70,18 @@ vi.mock('../updateProgressNormalizer.js', () => ({
   ProgressNormalizer: class {
     handle(): void {}
     flush(): void {}
-    getCurrent(): number { return 0; }
+    getCurrent(): number {
+      return 0;
+    }
   },
 }));
 
 const originalPlatform = process.platform;
 let binaries: typeof import('../agent-binaries/index');
-let manifestService: { getCachedManifest: ReturnType<typeof vi.fn>; fetchManifest: ReturnType<typeof vi.fn> };
+let manifestService: {
+  getCachedManifest: ReturnType<typeof vi.fn>;
+  fetchManifest: ReturnType<typeof vi.fn>;
+};
 
 beforeAll(async () => {
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
@@ -81,7 +100,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   appMock.isPackaged = true;
   // 默认:CDN 链失败(asset_missing)→ 回落 fallback;fallback 命中私有安装。
-  cdndProvisioner.prepare.mockReset().mockResolvedValue({ ready: false, binaryPath: '', error: 'asset_missing' });
+  cdndProvisioner.prepare
+    .mockReset()
+    .mockResolvedValue({ ready: false, binaryPath: '', error: 'asset_missing' });
   cdndProvisioner.peekNeedsDownload.mockReset().mockResolvedValue(true);
   // manifestService 是 reloadBinaries 刚重建的 mock(工厂默认实现仍在):
   // getCachedManifest → null / fetchManifest → Promise<null>。用例里覆盖时用
@@ -90,6 +111,7 @@ beforeEach(async () => {
   manifestService.fetchManifest.mockResolvedValue(null);
   findDevBinary.mockReset().mockReturnValue(null);
   findCachedLinuxRuntimeFallbackBinary.mockReturnValue(null);
+  readClaudeCodeRuntimeSettings.mockReturnValue({ source: 'managed', customPath: null });
   findUsableLinuxRuntimeFallbackBinary.mockReset().mockResolvedValue(null);
   consumeStartupBinaryUpdateMarker.mockReturnValue(true);
   probeBinaryVersion.mockReset().mockResolvedValue('1.0.0');
@@ -251,11 +273,13 @@ describe('packaged Linux agent binary prepare', () => {
       ready: true,
       path: '/usr/local/bin/claude',
       downloaded: false,
+      runtimeSource: 'system',
     });
     // CDN 链先试(manifest 无段 → asset_missing),失败后静默落到 fallback。
     expect(cdndProvisioner.prepare).toHaveBeenCalled();
     expect(prepareLinuxRuntimeFallback).toHaveBeenCalledWith('claude-code', {
       signal: undefined,
+      allowSystemBinary: true,
       onProgress: expect.any(Function),
     });
   });
@@ -268,15 +292,44 @@ describe('packaged Linux agent binary prepare', () => {
       ready: true,
       path: '/tmp/xdt-userdata/agent-runtime/claude-code/bin/claude',
       downloaded: true,
+      runtimeSource: 'managed',
     });
     await binaries.prepare('codex', { signal: controller.signal });
     expect(prepareLinuxRuntimeFallback).toHaveBeenNthCalledWith(1, 'claude-code', {
       signal: undefined,
+      allowSystemBinary: true,
       onProgress: expect.any(Function),
     });
     expect(prepareLinuxRuntimeFallback).toHaveBeenNthCalledWith(2, 'codex', {
       signal: controller.signal,
+      allowSystemBinary: true,
       onProgress: expect.any(Function),
+    });
+  });
+
+  it('does not reselect an unvalidated PATH binary after a configured system runtime fails', async () => {
+    readClaudeCodeRuntimeSettings.mockReturnValue({ source: 'system', customPath: '/opt/claude' });
+    resolveSystemClaudeCode.mockResolvedValue({
+      ok: false,
+      binaryPath: '/opt/claude',
+      version: null,
+      minimumVersion: '2.1.219',
+      reason: 'too_old',
+    });
+
+    const result = await binaries.prepare('claude-code');
+
+    expect(result).toMatchObject({ ready: true, runtimeSource: 'managed' });
+    expect(prepareLinuxRuntimeFallback).toHaveBeenCalledWith('claude-code', {
+      signal: undefined,
+      allowSystemBinary: false,
+      onProgress: expect.any(Function),
+    });
+    expect(binaries.getClaudeCodeRuntimeDecision()).toMatchObject({
+      requestedSource: 'system',
+      requestedPath: path.resolve('/opt/claude'),
+      activeSource: 'managed',
+      fallbackReason: 'too_old',
     });
   });
 
