@@ -3368,9 +3368,26 @@ function createCodexProxyHandle(
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter),
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter).map(
+      (transform): RequestTransform => {
+        // Namespaced Responses use a frozen Provider route. Preserve its native
+        // fields and model; only repair known tool ID mismatches on this path.
+        if (transform === normalizeResponsesToolItemIds) return transform;
+        const scoped: RequestTransform = (body, ctx) =>
+          isCodexCustomProviderNamespacePath(ctx.url) ? null : transform(body, ctx);
+        // Keep adapter rejection and request-state cleanup on ordinary routes.
+        scoped.errorMode = transform.errorMode;
+        scoped.onRequestSettled = transform.onRequestSettled;
+        return scoped;
+      },
+    ),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
-    bypassRequestTransforms: (_body, ctx) => isCodexCustomProviderNamespacePath(ctx.url),
+    bypassRequestTransforms: (_body, ctx) => {
+      const path = parseCodexCustomProviderPath(ctx.url);
+      // Image payloads (including JSON) retain their byte-for-byte bypass.
+      return path.kind !== 'not-custom-provider-route'
+        && !(path.kind === 'route' && path.pathKind === 'responses');
+    },
     transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
       contentType: ctx.responseHeaders['content-type'] ?? '',
       contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',

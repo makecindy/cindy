@@ -2711,7 +2711,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          expect.any(Function), mockState.stripNonAnthropicFields,
+          expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -2736,6 +2736,10 @@ describe('codex proxy host', () => {
     );
     expect(requestScopedTransforms).toHaveLength(1);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
+    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-1);
+    const body = { model: 'gpt-5', input: [] };
+    strip(body, { url: '/responses' });
+    expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
@@ -7484,6 +7488,80 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     }
   });
 
+  it('repairs namespaced Responses history over HTTP without rewriting native fields or image JSON', async () => {
+    const received: Array<{ path: string; body: string }> = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({ path: req.url ?? '', body: Buffer.concat(chunks).toString('utf8') });
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const host = await freshCodexProxyHost();
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>(
+      '@cindy/anthropic-compat-proxy',
+    );
+    mockState.createAnthropicCompatProxy.mockImplementationOnce(actualProxy.createAnthropicCompatProxy);
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'native-tool-id-provider', name: 'Native tools',
+      runtimes: { codex: {
+        baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+        wireProtocol: 'openai-responses', supportsImageGeneration: true,
+        models: [{ id: 'codex/native-model', name: 'Native model' }],
+      } },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'fake-native-key');
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    try {
+      await host.ensureCodexProxyReady();
+      const endpoint = host.getCodexProxyEndpoint();
+      const body = {
+        model: 'codex/native-model', max_tokens: 123, vendor_field: { retain: true },
+        tools: [{ type: 'custom', name: 'exec', format: { type: 'text' } }],
+        input: [
+          { type: 'custom_tool_call', id: 'fc_legacy', call_id: 'call_same', name: 'exec', input: '你好' },
+          { type: 'custom_tool_call_output', id: 'fco_legacy', call_id: 'call_same', output: 'result' },
+          { type: 'item_reference', id: 'fc_server_owned' },
+          { type: 'compaction', encrypted_content: 'opaque' },
+        ],
+      };
+      const repaired = { ...body, input: body.input.map((item, index) => index < 2
+        ? { ...item, id: index === 0 ? 'ctc_legacy' : 'ctco_legacy' } : item) };
+      const post = async (path: string, raw: string) => {
+        const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/${path}`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+      };
+      await post('responses?native=true', JSON.stringify(body));
+      expect(received[0]?.path).toBe('/v1/responses?native=true');
+      expect(JSON.parse(received[0]!.body)).toEqual(repaired);
+      const unchanged = JSON.stringify(repaired, null, 2);
+      await post('responses', unchanged);
+      expect(received[1]?.body).toBe(unchanged);
+      // Even an image JSON body containing tool-shaped input remains byte-identical.
+      const imageBody = JSON.stringify({ ...body, model: 'gpt-image-2', prompt: 'draw' }, null, 2);
+      await post('images/generations', imageBody);
+      expect(received[2]?.body).toBe(imageBody);
+    } finally {
+      await host.disposeCodexProxy();
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
   it('owns every private custom Provider prefix before opaque body transforms', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -7508,7 +7586,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
           url: '/_cindy/custom-provider/0123456789abcdefabcd/responses',
         },
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       options.routeOpaqueRequestBody({
         url: '/_cindy/custom-provider%2F0123456789abcdefabcd%2Fimages%2Fedits',
