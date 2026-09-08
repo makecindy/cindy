@@ -4982,6 +4982,21 @@ describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)',
 describe('任务消息内存治理', () => {
   beforeEach(() => remoteSessionStore.clear());
 
+  it('补读结果区分已接受的相同窗口与失效代际或过旧窗口', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const first = remoteSessionStore.enterSessionMessageDetail('s1');
+    const latest = [messageAt('latest', 's1', '2026-09-08T00:00:00.000Z')];
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('old', 's1', '2026-09-07T00:00:00.000Z'),
+    ], { authority: first })).toBe(false);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', first);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['latest']);
+  });
+
   const manyMessages = (sessionId: string, count: number): RemoteMessage[] =>
     Array.from({ length: count }, (_, index) => messageAt(
       `${sessionId}-m-${index}`,

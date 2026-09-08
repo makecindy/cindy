@@ -266,8 +266,9 @@ describe('session runtime control wiring', () => {
       'async function syncLibraryReadonlyExtraDir(',
       'let agentInputCoordinatorHolder',
     );
-    expect(syncLibrary).toContain('listVisibleActiveSessionIds()');
-    expect(syncLibrary).toContain('targets.add(focused)');
+    expect(syncLibrary).toContain('listVisibleActiveSessionDirectoryGrants()');
+    expect(syncLibrary).toContain('libraryExtraDirSyncTargets(');
+    expect(syncLibrary).toContain('listActiveSessions()');
     expect(syncLibrary).toContain('sessionIsRemote(sessionId)');
     expect(syncLibrary).toContain('!remote && grantRoot && sessionId === focused ? grantRoot : null');
     expect(syncLibrary).toContain("return 'superseded'");
@@ -275,6 +276,7 @@ describe('session runtime control wiring', () => {
     expect(syncLibrary).toContain("throw new Error('library extraDirs not granted to focused session')");
     expect(syncLibrary).toContain('if (!remote && nextRoot && sessionId === focused) throw error');
     expect(syncLibrary).toContain('libraryExtraDirSyncChain.then(run, run)');
+    expect(syncLibrary).toContain('applied?.some(isLibraryExtraDirSlot)');
     expect(syncLibrary).toMatch(
       /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\) return 'superseded'/,
     );

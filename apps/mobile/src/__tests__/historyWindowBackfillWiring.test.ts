@@ -125,7 +125,8 @@ describe('live stream interruption wiring', () => {
     );
     // 传的是 markHeldRemoteTopicsSubscribed 的返回值(仍被持有的那些),不是原始 toSend ——
     // 中途被释放的 topic 不算订阅生效。
-    expect(sendSubscribe).toMatch(/noteSessionLiveStreamsAcked\(\s*markHeldRemoteTopicsSubscribed\(/);
+    expect(sendSubscribe).toMatch(/const held = markHeldRemoteTopicsSubscribed\(remoteSubscribedTopicsRef\.current, registryRef\.current, deviceId, toSend\);\s*noteSessionLiveStreamsAcked\(held\);/);
+    expect(sendSubscribe).toContain("if (held.length > 0) record?.('subscription', 'applied', held.length)");
     // scope 在 ensureOnline 等待期间变化时，已释放 topic 不能迟到发到主机；仍被其它 owner
     // 持有的 topic 必须重新评估，不能和已释放 topic 一起饿死。
     expect(sendSubscribe).toContain('.filter((topic) => registryRef.current.hasTopic(deviceId, topic))');
