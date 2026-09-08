@@ -45,6 +45,7 @@ let ownerClaim: {
   claimed: boolean;
   claimedByOtherOwner?: boolean;
   canInitialize: boolean;
+  profileOrigin?: 'new' | 'existing' | 'pending';
 };
 
 function setOwnerClaim(
@@ -62,6 +63,7 @@ function setOwnerClaim(
     claimed,
     claimedByOtherOwner,
     canInitialize,
+    profileOrigin: 'new',
   };
 }
 
@@ -660,6 +662,35 @@ describe('compact model defaults upgrade', () => {
     memStorage.setItem(scopedKey, '{}');
     const prefs = await upgrade();
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
+  });
+
+  it.each(['existing', undefined] as const)('does not infer a new profile from empty model storage (origin: %s)', async (origin) => {
+    ownerClaim.profileOrigin = origin;
+    const prefs = await upgrade();
+    for (const agent of provider.agents) {
+      for (const model of provider.models[agent]!) {
+        expect(prefs.isModelEnabled(agent, 'xd', { ...model, defaultEnabled: true })).toBe(false);
+      }
+    }
+    expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: false, defaults: {} });
+    await prefs.setModelVisibility('pi', 'xd', 'gemini', true);
+    vi.resetModules();
+    const restarted = await upgrade();
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'gemini' })).toBe(true);
+    expect(restarted.isModelEnabled('pi', 'xd', { id: 'fable-5' })).toBe(false);
+  });
+
+  it('waits for Main profile creation before writing migration artifacts or consuming defaults', async () => {
+    ownerClaim.profileOrigin = 'pending';
+    const prefs = await upgrade();
+    expect(memStorage.getItem(scopedKey)).toBeNull();
+    expect(memStorage.getItem(markerKey)).toBeNull();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini' })).toBe(false);
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, {}, expect.objectContaining({ pending: true }));
+    ownerClaim.profileOrigin = 'new';
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini' })).toBe(true);
+    expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true });
   });
 
   it.each([false, true])('retains first-run eligibility across a restart before any nonempty catalog (empty snapshot: %s)', async (emptySnapshot) => {

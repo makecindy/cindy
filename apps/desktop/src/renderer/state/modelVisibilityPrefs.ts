@@ -121,7 +121,17 @@ function saveInitialization(next: InitializationState): boolean {
 function readOwnerState(ownerId: string): void {
   const nextInitialization = readInitialization(ownerId);
   const raw = window.localStorage.getItem(ownerStorageKey(ownerId));
-  const eligible = nextInitialization?.eligibleForDefaults ?? (raw === null
+  let newProfile = false;
+  if (!nextInitialization) {
+    const claim = window.electronAPI?.maker?.claimLegacyModelVisibilityOwner?.();
+    if (claim?.dataOwnerId === ownerId && claim.ownerGeneration === activeOwnerGeneration) {
+      // Auth can precede DB creation. Do not consume eligibility by writing migration
+      // artifacts until Main has classified this profile. Old Main versions fail closed.
+      if (claim.profileOrigin === 'pending') throw new Error('Model defaults profile is not ready');
+      newProfile = claim.profileOrigin === 'new';
+    }
+  }
+  const eligible = nextInitialization?.eligibleForDefaults ?? (newProfile && raw === null
     && window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === null
     && window.localStorage.getItem(`${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`) === null
     && !hasAnyProviderModelOverride() && !hasProviderModelHistory()

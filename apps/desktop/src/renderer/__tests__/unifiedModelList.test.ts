@@ -50,6 +50,7 @@ beforeEach(() => {
           claimed: true,
           claimedByOtherOwner: false,
           canInitialize: true,
+          profileOrigin: 'new',
         }),
         syncModelVisibility: async () => undefined,
       },

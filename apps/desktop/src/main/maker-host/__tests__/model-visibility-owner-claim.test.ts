@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ownerDatabasePath, prepareModelDefaultsProfile } from '../../localDb/modelDefaultsProfile.js';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -77,6 +78,7 @@ describe('model visibility legacy Renderer owner claim', () => {
       dataOwnerId: 'owner-a',
       ownerGeneration: 1,
       canWriteOwnerScoped: true,
+      profileOrigin: 'pending',
       claimed: true,
       claimedByOtherOwner: false,
       canInitialize: true,
@@ -92,6 +94,7 @@ describe('model visibility legacy Renderer owner claim', () => {
       dataOwnerId: 'owner-b',
       ownerGeneration: 2,
       canWriteOwnerScoped: true,
+      profileOrigin: 'pending',
       claimed: false,
       claimedByOtherOwner: true,
       canInitialize: false,
@@ -169,5 +172,22 @@ describe('model visibility legacy Renderer owner claim', () => {
       canInitialize: false,
     });
     expect(fs.readFileSync(path.join(harness.root, markerName), 'utf-8')).toBe('{broken');
+  });
+
+  it('projects creator-owned provenance and never grants defaults to an old database', () => {
+    const dbPath = ownerDatabasePath(harness.root, 'owner-a');
+    fs.writeFileSync(dbPath, 'existing profile');
+    expect(claimLegacyModelVisibilityOwner().profileOrigin).toBe('existing');
+
+    harness.ownerId = 'owner-b';
+    harness.ownerGeneration = 2;
+    expect(claimLegacyModelVisibilityOwner().profileOrigin).toBe('pending');
+    const freshDbPath = ownerDatabasePath(harness.root, 'owner-b');
+    prepareModelDefaultsProfile(freshDbPath);
+    fs.writeFileSync(freshDbPath, 'new profile created after marker');
+    expect(claimLegacyModelVisibilityOwner()).toMatchObject({ dataOwnerId: 'owner-b', profileOrigin: 'new' });
+
+    harness.ownerId = 'owner-a';
+    expect(claimLegacyModelVisibilityOwner().profileOrigin).toBe('existing');
   });
 });

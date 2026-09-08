@@ -60,7 +60,7 @@ it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
 it('lists downloaded Gateway models in settings without enabling them until the user chooses them', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
     claimLegacyModelVisibilityOwner: () => ({ dataOwnerId: 'arrival-test', ownerGeneration: 1,
-      canWriteOwnerScoped: true, claimed: true, canInitialize: true }),
+      canWriteOwnerScoped: true, claimed: true, canInitialize: true, profileOrigin: 'new' }),
     syncModelVisibility: vi.fn(async () => undefined),
   } } });
   __resetForTest();
