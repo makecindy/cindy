@@ -471,6 +471,17 @@ describe('Maker local Pi package generation fence', () => {
 });
 
 describe('Maker session creation singleflight', () => {
+  it('reports the effective runtime cwd when recovering an existing task elsewhere', async () => {
+    const storage = createStorage();
+    await storage.create({ id: 'recovered-cwd', agentKind: 'codex', workDir: '/original', title: 'Existing task', model: 'test-model' });
+    const startSession = vi.fn(async () => createHandle({ id: 'recovered-native' }));
+    const maker = new Maker({ agents: { codex: createAgent(startSession) }, storage, logger: createLogger() });
+    const session = await maker.createSession({ id: 'recovered-cwd', agentKind: 'codex', workingDir: '/conversation', model: 'test-model' });
+    expect(startSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/conversation' }));
+    expect(session.workDir).toBe('/conversation');
+    expect((await storage.get('recovered-cwd'))?.workDir).toBe('/original');
+  });
+
   it('binds each rebuilt business session to a fresh runtime instance id', async () => {
     const seenInstanceIds: string[] = [];
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
@@ -524,13 +535,18 @@ describe('Maker session creation singleflight', () => {
       resumeSessionId: 'thread-1',
     };
 
-    const first = maker.createSession(options);
-    const second = maker.createSession({ ...options });
+    const preferences = { userPrompt: 'Original caller prompt', makerMemoryEnabled: true };
+    const first = maker.createSession({ ...options, hostStartupPreferences: preferences });
+    const second = maker.createSession({ ...options, hostStartupPreferences: { makerMemoryEnabled: false } });
 
     expect(startSession).toHaveBeenCalledTimes(1);
     resolveStart(createHandle({ id: 'thread-1' }));
     const [firstSession, secondSession] = await Promise.all([first, second]);
 
+    expect(firstSession.hostStartupPreferences).toEqual(preferences);
+    preferences.makerMemoryEnabled = false;
+    const existingSession = await maker.createSession(options);
+    expect(existingSession.hostStartupPreferences).toMatchObject({ userPrompt: 'Original caller prompt', makerMemoryEnabled: true });
     expect(secondSession).toBe(firstSession);
     expect(maker.listActiveSessions()).toEqual([firstSession]);
     expect(created).toHaveBeenCalledTimes(1);
