@@ -1056,7 +1056,7 @@ function registryEntryError(
         ? [
             ...MODEL_REGISTRY_ENTRY_V2_FIELDS,
             "nativeApi",
-            ...(schemaVersion >= 4 ? ["modelRef"] : []),
+            ...(schemaVersion >= 4 ? ["modelRef", "supportsImageInput"] : []),
           ]
         : MODEL_REGISTRY_ENTRY_V2_FIELDS,
     path,
@@ -1120,6 +1120,12 @@ function registryEntryError(
   }
   error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
   if (error) return error;
+  if (
+    value.supportsImageInput !== undefined &&
+    typeof value.supportsImageInput !== "boolean"
+  ) {
+    return `${path}.supportsImageInput must be a boolean when present`;
+  }
   for (const key of ["supportsFastMode", "defaultEnabled"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") {
       return `${path}.${key} must be a boolean when present`;

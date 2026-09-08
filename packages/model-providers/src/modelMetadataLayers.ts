@@ -249,6 +249,7 @@ export function expandedRegistryEntries(
         ...(defaultEffort != null ? { defaultEffort } : {}),
       };
       if (defaultEffort === null || runtimeClear) delete expanded.defaultEffort;
+      delete expanded.supportsImageInput;
       const key = JSON.stringify(
         { ...expanded, routes: undefined },
         (_key, value) =>

@@ -343,7 +343,11 @@ it("keeps local packaging names outside supplier public identity fallback", () =
         modelRef: "vendor/model",
         aliases: [],
         variants: [
-          { libraryName: "model:local", sizeBytes: 1024 ** 3, minUnifiedMemoryGb: 4 },
+          {
+            libraryName: "model:local",
+            sizeBytes: 1024 ** 3,
+            minUnifiedMemoryGb: 4,
+          },
         ],
       },
     ],
@@ -359,3 +363,60 @@ it("keeps local packaging names outside supplier public identity fallback", () =
   r.baseModels![0].aliases.push("model:local");
   expect(resolveModelMetadata(r, "unknown", "model:local").name).toBe("Model");
 });
+
+it.each([true, false])(
+  "accepts V4 entry image capability %s and strips it from legacy entries",
+  (image) => {
+    const r = structuredClone(registry);
+    r.models[0].supportsImageInput = image;
+    expect(parseModelRegistry(r).ok).toBe(true);
+    expect(
+      resolveModelMetadata(r, "supplier", "model").supportsImageInput,
+    ).toBe(image);
+    expect(
+      resolveModelMetadata(r, "supplier", "model", {
+        supportsImageInput: !image,
+      }).supportsImageInput,
+    ).toBe(!image);
+    r.models[0].routes[0].forceOverrides!.supportsImageInput = image;
+    expect(
+      resolveModelMetadata(r, "supplier", "model", {
+        supportsImageInput: !image,
+      }).supportsImageInput,
+    ).toBe(image);
+    const expanded = expandedRegistryEntries(r);
+    expect(expanded[0]).not.toHaveProperty("supportsImageInput");
+    const invalid = structuredClone(r) as unknown as {
+      models: Record<string, unknown>[];
+    };
+    invalid.models[0].supportsImageInput = "true";
+    expect(parseModelRegistry(invalid).ok).toBe(false);
+    for (const schemaVersion of [1, 2, 3] as const) {
+      const legacy = {
+        schemaVersion,
+        updatedAt: r.updatedAt,
+        models: expanded.map((entry) => {
+          const { modelRef, ...rest } = entry;
+          return {
+            ...rest,
+            routes: entry.routes.map((route) => ({
+              providerId: route.providerId,
+              modelId: route.modelId,
+              agents: route.agents,
+            })),
+          };
+        }),
+      };
+      expect(parseModelRegistry(legacy).ok).toBe(true);
+      expect(
+        parseModelRegistry({
+          ...legacy,
+          models: legacy.models.map((entry) => ({
+            ...entry,
+            supportsImageInput: image,
+          })),
+        }).ok,
+      ).toBe(false);
+    }
+  },
+);

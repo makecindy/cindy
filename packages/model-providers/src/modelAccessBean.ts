@@ -153,6 +153,8 @@ export interface ModelRegistryEntry extends Omit<
   ModelRegistryEntryBase,
   "defaultEffort" | "perAgent"
 > {
+  /** V4 entry-level image capability default. */
+  supportsImageInput?: boolean;
   /** V4 only: null explicitly clears an inherited default. */
   defaultEffort?: ModelEffort | null;
   perAgent?: Partial<Record<ModelAgent, ModelRegistryAgentOverride>>;
