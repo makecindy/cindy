@@ -64,7 +64,7 @@ describe('pi session tree adapter', () => {
     } });
     const history = activePiHistoryFromTree(data, normalizePiSessionTree(data));
     expect(history.find(m => m.role === 'tool_use')?.content).toEqual({
-      toolUseId: 'call-1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'demo', tool: 'show' },
+      toolUseId: 'call-1', toolName: 'mcp:cindy:ghost_call', input: { ghost_id: 'demo', tool: 'show' },
     });
   });
   it('normalizes branches and derives the active root-to-leaf path', () => {

@@ -32,13 +32,13 @@ describe('message normalize shared model', () => {
       toolName: 'cindy_mcp_call_tool', input: { server: 'cindy', tool: 'ghost_call', args: input },
     } });
     const tool = parseMessageToolUse(raw);
-    expect(tool).toEqual({ toolUseId: 'call-pi', toolName: 'mcp__cindy__ghost_call', input });
+    expect(tool).toEqual({ toolUseId: 'call-pi', toolName: 'mcp:cindy:ghost_call', input });
     expect(tool.input).toBe(input);
     expect(parseMessageToolUse({ ...raw, content: tool })).toEqual(tool);
     expect((raw.content as { toolName: string }).toolName).toBe('cindy_mcp_call_tool');
     expect(parseMessageToolUse({ role: 'tool_use', content: {
       toolName: 'cindy_mcp_call_tool', input: { server: 'custom', tool: 'status' },
-    } })).toMatchObject({ toolName: 'mcp__custom__status', input: {} });
+    } })).toMatchObject({ toolName: 'mcp:custom:status', input: {} });
   });
 
   it.each([null, [], {}, { server: 'cindy' }, { server: 'cindy', tool: 'ghost_call', args: [] }])(

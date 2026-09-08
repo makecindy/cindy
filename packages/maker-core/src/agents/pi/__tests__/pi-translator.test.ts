@@ -53,7 +53,7 @@ describe('pi translator', () => {
       toolName: 'cindy_mcp_call_tool', result: { content: [{ type: 'text', text: fullText }] },
     }), queue, ctx);
     expect(events.find(e => e.type === 'tool_use')?.data).toEqual({
-      toolUseId: 'card-1', toolName: 'mcp__cindy__ghost_call', input,
+      toolUseId: 'card-1', toolName: 'mcp:cindy:ghost_call', input,
     });
     expect(events.find(e => e.type === 'tool_result_full')?.data).toMatchObject({
       toolUseId: 'card-1', fullText,

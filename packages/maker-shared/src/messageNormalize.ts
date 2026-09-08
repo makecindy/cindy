@@ -79,7 +79,8 @@ export function parseMessageToolUse(message: MessageNormalizeSourceMessageLike):
     const tool = readNonEmptyString(gateway?.tool);
     const args = gateway?.args;
     if (server && tool && (args === undefined || readRecord(args))) {
-      toolName = `mcp__${server}__${tool}`;
+      // Reuse the Codex display format: valid server IDs can contain "__".
+      toolName = `mcp:${server}:${tool}`;
       input = args ?? {};
     }
   }
