@@ -7991,6 +7991,18 @@
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
     },
+    "mediaDownload": {
+      "title": "생성된 미디어를 다운로드할까요?",
+      "description": "미디어가 생성되었습니다. 아래 주소에서 다운로드해야 합니다.",
+      "scope": "이번 다운로드만 허용합니다.",
+      "source": "이 주소는 Cindy가 확인한 다운로드 출처에 포함되어 있지 않아 확인이 필요합니다.",
+      "http": "이 주소는 암호화되지 않은 HTTP를 사용합니다. 네트워크의 다른 사람이 다운로드 내용을 읽거나 변경할 수 있습니다.",
+      "port": "이 주소는 기본 네트워크 포트가 아닌 포트를 사용합니다. 해당 포트에 대한 접근을 확인해 주세요.",
+      "credentials": "이 다운로드 주소에는 로그인 정보가 포함되어 있습니다. 허용하면 해당 정보는 이 주소에만 전송됩니다.",
+      "network": "이 주소는 이 기기, 로컬 네트워크 또는 예약된 네트워크를 가리킵니다. 접근하면 기기의 내부 서비스에 연결될 수 있습니다.",
+      "allow": "이번 다운로드 허용",
+      "defer": "나중에 다운로드"
+    },
     "permissionPrompt": {
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
@@ -8471,7 +8483,10 @@
       "copyContent": "내용 복사",
       "openInExplorer": "파일 관리자에서 열기",
       "close": "닫기",
-      "editIndex": "편집 {{index}}/{{total}}"
+      "editIndex": "편집 {{index}}/{{total}}",
+      "omittedDiffSegments": "미리보기에서 추가 diff 세그먼트 {{count}}개를 생략했습니다",
+      "diffPreviewTruncated": "미리보기에서 일부 diff 줄을 숨겼습니다",
+      "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
     },
     "textLightbox": {
       "unreadable": "이 파일을 읽을 수 없습니다",

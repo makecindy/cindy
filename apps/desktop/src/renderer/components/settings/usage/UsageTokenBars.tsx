@@ -151,11 +151,8 @@ export function UsageTokenBars({
             style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
           />
         ))}
-        <div className="absolute inset-0 overflow-x-auto">
-          <div
-            className="flex h-full items-end gap-[3px]"
-            style={{ minWidth: bars.list.length * 24 + Math.max(0, bars.list.length - 1) * 3 }}
-          >
+        <div className="absolute inset-0">
+          <div className="flex h-full items-end gap-[3px]">
             {bars.list.map((b) => {
               const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
               const visualHeight =
@@ -184,17 +181,16 @@ export function UsageTokenBars({
                   onClick={() => onDayClick?.(b.day)}
                   disabled={!onDayClick}
                   // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                  className="flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                  className="flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-[2px] border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
                   style={{
                     height: hitHeight,
-                    minWidth: 24,
                     outline: selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
                     outlineOffset: selectedDay === b.day ? '1px' : undefined,
                   }}
                 >
                   <span
                     aria-hidden="true"
-                    className="flex w-full flex-col overflow-hidden rounded-full"
+                    className="flex w-full flex-col overflow-hidden rounded-[2px]"
                     style={{
                       height: visualHeight,
                       backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,

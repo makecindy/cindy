@@ -12,6 +12,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileSymlinkFixture } from './fileSymlinkFixture';
+
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 let tmpUserData = '';
 let scratchRoot = '';
@@ -50,15 +53,11 @@ function scratchDir(label: string): string {
   return fs.mkdtempSync(path.join(scratchRoot, `${label}-`));
 }
 
-function seedDest(dest: string, contents: Buffer | 'dir' | { symlink: string }) {
+function seedDest(dest: string, contents: Buffer | 'dir') {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
   if (contents === 'dir') {
     fs.mkdirSync(dest);
-    return;
-  }
-  if (typeof contents === 'object' && 'symlink' in contents) {
-    fs.symlinkSync(contents.symlink, dest);
     return;
   }
   fs.writeFileSync(dest, contents);
@@ -154,11 +153,16 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     const outsideDir = scratchDir(`outside-${mode}`);
     const outside = path.join(outsideDir, 'payload.bin');
     fs.writeFileSync(outside, sample.buffer);
-    seedDest(sample.dest, { symlink: outside });
-    const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
-    await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow(/symlink/);
-    expect(fs.lstatSync(sample.dest).isSymbolicLink()).toBe(true);
-    expect(fs.readFileSync(outside)).toEqual(sample.buffer);
+    fs.mkdirSync(sample.shard, { recursive: true });
+    const link = fileSymlinkFixture(outside, sample.dest);
+    try {
+      const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
+      await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow(/symlink/);
+      link.expectIntact();
+      expect(fs.readFileSync(outside)).toEqual(sample.buffer);
+    } finally {
+      link.restore();
+    }
   });
 
   it.each(['link', 'rename'] as const)('%s 分支:目录不当成去重成功', async (mode) => {
@@ -176,19 +180,22 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     const outside = path.join(outsideDir, 'not-the-blob.bin');
     fs.writeFileSync(outside, Buffer.from('not-the-blob'));
     const originalOpen = fsp.open.bind(fsp);
+    let link: ReturnType<typeof fileSymlinkFixture> | undefined;
     const spy = vi.spyOn(fsp, 'open').mockImplementation(async (target, flags, perm) => {
-      if (path.resolve(String(target)) === path.resolve(sample.dest)) {
+      if (!link && path.resolve(String(target)) === path.resolve(sample.dest)) {
         fs.rmSync(sample.dest, { force: true });
-        fs.symlinkSync(outside, sample.dest);
+        link = fileSymlinkFixture(outside, sample.dest);
       }
       return originalOpen(target, flags, perm);
     });
     try {
       const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
       await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow();
-      expect(fs.lstatSync(sample.dest).isSymbolicLink()).toBe(true);
+      expect(link).toBeDefined();
+      link!.expectIntact();
       expect(fs.readFileSync(outside).toString()).toBe('not-the-blob');
     } finally {
+      link?.restore();
       spy.mockRestore();
     }
   });
@@ -198,7 +205,7 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     const outsideDir = scratchDir('bucket-outside');
     fs.mkdirSync(sample.shard, { recursive: true });
     fs.rmSync(sample.shard, { recursive: true, force: true });
-    fs.symlinkSync(outsideDir, sample.shard);
+    fs.symlinkSync(outsideDir, sample.shard, directoryLinkType);
     await expect(
       blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' }),
     ).rejects.toThrow(/symlink|out of bounds/);
@@ -211,12 +218,67 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     const target = path.join(tmpUserData, 'cindy-media', ...(kind === 'blobs' ? ['blobs'] : []));
     const outside = scratchDir(`anc-${kind}`);
     fs.rmSync(target, { recursive: true, force: true });
-    fs.symlinkSync(outside, target);
-    await expect(blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' })).rejects.toThrow(/symlink|out of bounds/);
-    expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
-    expect(fs.readdirSync(outside)).toEqual([]);
-    fs.rmSync(target, { recursive: true, force: true });
-    fs.mkdirSync(path.join(tmpUserData, 'cindy-media', 'blobs'), { recursive: true });
+    try {
+      fs.symlinkSync(outside, target, directoryLinkType);
+      await expect(blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' })).rejects.toThrow(/symlink|out of bounds/);
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+      expect(fs.readdirSync(outside)).toEqual([]);
+    } finally {
+      fs.rmSync(target, { recursive: true, force: true });
+      fs.mkdirSync(path.join(tmpUserData, 'cindy-media', 'blobs'), { recursive: true });
+    }
+  });
+
+  // Always exercise the rejection guards, including hosts without file-link privileges.
+  it.each(['link', 'rename'] as const)('%s 分支:注入 symlink 元数据仍拒绝,不读取或改写目标', async (mode) => {
+    const sample = hashedPng(`injected-symlink-${mode}`);
+    seedDest(sample.dest, sample.buffer);
+    const originalLstat = fsp.lstat.bind(fsp);
+    vi.spyOn(fsp, 'lstat').mockImplementation(async (target, opts) => {
+      const st = await originalLstat(target, opts);
+      return path.resolve(String(target)) === path.resolve(sample.dest)
+        ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isSymbolicLink: () => true })
+        : st;
+    });
+    const open = vi.spyOn(fsp, 'open');
+    const rename = vi.spyOn(fsp, 'rename');
+    const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
+    await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow(/symlink/);
+    expect(open).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expect(fs.readFileSync(sample.dest)).toEqual(sample.buffer);
+    expect(fs.readdirSync(sample.shard).some((name) => name.startsWith('.tmp-'))).toBe(false);
+  });
+
+  it.each(['link', 'rename'] as const)('%s 分支:注入读取后 symlink 替换仍拒绝并关闭句柄', async (mode) => {
+    const sample = hashedPng(`injected-swap-${mode}`);
+    seedDest(sample.dest, sample.buffer);
+    const originalLstat = fsp.lstat.bind(fsp);
+    const originalOpen = fsp.open.bind(fsp);
+    let opened = false;
+    const handles: Awaited<ReturnType<typeof fsp.open>>[] = [];
+    vi.spyOn(fsp, 'lstat').mockImplementation(async (target, opts) => {
+      const st = await originalLstat(target, opts);
+      return opened && path.resolve(String(target)) === path.resolve(sample.dest)
+        ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isSymbolicLink: () => true })
+        : st;
+    });
+    vi.spyOn(fsp, 'open').mockImplementation(async (target, flags, perm) => {
+      const handle = await originalOpen(target, flags, perm);
+      if (path.resolve(String(target)) === path.resolve(sample.dest)) {
+        opened = true;
+        handles.push(handle);
+      }
+      return handle;
+    });
+    const rename = vi.spyOn(fsp, 'rename');
+    const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
+    await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow(/symlink|replaced/);
+    expect(handles).toHaveLength(1);
+    expect(handles[0].fd).toBe(-1);
+    expect(rename).not.toHaveBeenCalled();
+    expect(fs.readFileSync(sample.dest)).toEqual(sample.buffer);
+    expect(fs.readdirSync(sample.shard).some((name) => name.startsWith('.tmp-'))).toBe(false);
   });
 
   it('hash 后 size 变化视为替换,不得去重成功', async () => {

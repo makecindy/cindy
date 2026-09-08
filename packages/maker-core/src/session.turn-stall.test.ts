@@ -12,7 +12,7 @@ import {
   STALL_ABORT_RECOVERY_GRACE_MS,
   Session,
 } from './session.js';
-import type { AgentEvent, SendOrigin } from './types/events.js';
+import type { AgentEvent, InteractionDecision, SendOrigin } from './types/events.js';
 import type { AgentSessionHandle, BackgroundTaskSnapshot } from './agents/base-agent.js';
 
 type LoggedError = { msg: string; meta?: Record<string, unknown> };
@@ -217,6 +217,25 @@ describe('Session turn stall watchdog', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('Host 下载审批等待时挂起看门狗，结束后恢复', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      await session.send('generate');
+      let answer!: (decision: InteractionDecision) => void;
+      const pending = session.runHostInteraction({
+        kind: 'permission', requestId: 'download-1', toolName: 'cindy.media.download', input: {},
+      }, () => new Promise((resolve) => { answer = resolve; }));
+      await vi.advanceTimersByTimeAsync(STALL_MS * 3);
+      expect(stub.abort).not.toHaveBeenCalled();
+      answer({ kind: 'permission', behavior: 'allow' });
+      await pending;
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
   });
 
   it('有后台任务在跑时不计时(后台 Bash / subagent 期间安静是正常的)', async () => {

@@ -1,6 +1,7 @@
 import type {
   AnimationEvent as ReactAnimationEvent,
   ComponentPropsWithoutRef,
+  CSSProperties,
 } from 'react';
 import { useCallback } from 'react';
 import type { Element } from 'hast';
@@ -34,6 +35,15 @@ function removeStreamWordClass(className?: string): string | undefined {
     .filter((name) => name && name !== 'stream-word')
     .join(' ');
   return next || undefined;
+}
+
+function withoutWordFadeDelay(style: CSSProperties | undefined, key?: string): CSSProperties | undefined {
+  if (!key || !style) return style;
+  // The ref owns the absolute timeline on this DOM node. Reapplying a relative
+  // delay on every parse both seeks an in-flight animation and invalidates the
+  // style of every historical word. Only a remount needs to restore its delay.
+  const { ['--wf-delay']: _delay, ...rest } = style as CSSProperties & { '--wf-delay'?: string };
+  return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
 /**
@@ -79,6 +89,7 @@ export function StreamFadeSpan({
       ref={attachSpan}
       {...props}
       className={settled ? removeStreamWordClass(props.className) : props.className}
+      style={withoutWordFadeDelay(props.style, wordFadeKey)}
       data-wf-key={wordFadeKey}
       onAnimationEnd={handleAnimationEnd}
     >
@@ -127,6 +138,7 @@ export function StreamFadeListItem({
       ref={attachListItem}
       {...markerProps}
       data-stream-marker={settled ? undefined : markerProps['data-stream-marker']}
+      style={withoutWordFadeDelay(props.style, wordFadeKey)}
       data-wf-key={wordFadeKey}
       onAnimationEnd={handleAnimationEnd}
     >

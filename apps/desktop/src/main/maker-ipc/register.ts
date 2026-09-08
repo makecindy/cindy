@@ -3938,6 +3938,8 @@ export function installDesktopInteractionListener(session: {
         agentIslandInteractionEpoch,
       );
     });
+  }, (requestId, decision) => {
+    resolvePendingInteraction(requestId, decision);
   });
 }
 

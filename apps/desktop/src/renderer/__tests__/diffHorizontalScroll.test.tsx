@@ -20,11 +20,12 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DiffView } from '@/components/chat/DiffView';
 import { MarkdownDiffBlock } from '@/components/chat/MarkdownDiffBlock';
+import { computeDiffDetails } from '@/lib/agent-actions/diffStats';
 
 const globalsSrc = readFileSync(
   resolve(__dirname, '..', 'styles', 'globals.css'),
@@ -101,5 +102,91 @@ describe('globals.css 里的 .diff-hscroll 规则', () => {
     expect(globalsSrc).toMatch(
       /\.is-scrolling::-webkit-scrollbar-thumb\s*\{\s*background-color:\s*var\(--msg-scrollbar\);\s*\}/,
     );
+  });
+});
+
+describe('DiffView 虚拟化分支', () => {
+  it('在大段差异中只挂载有限行，并随滚动更新可见索引', async () => {
+    const oldString = Array.from({ length: 240 }, (_, index) => `old-${index}`).join('\n');
+    const newString = Array.from({ length: 240 }, (_, index) => `new-${index}`).join('\n');
+    const analysis = computeDiffDetails(oldString, newString);
+    const clientHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'clientHeight',
+    );
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'offsetHeight',
+    );
+    const rectDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'getBoundingClientRect',
+    );
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: function (this: HTMLElement) {
+        const height = this.classList.contains('diff-hscroll') ? 400 : 20;
+        return {
+          bottom: height,
+          height,
+          left: 0,
+          right: 800,
+          top: 0,
+          width: 800,
+          x: 0,
+          y: 0,
+        };
+      },
+    });
+    try {
+      const { container } = render(
+        <DiffView oldString={oldString} newString={newString} analysis={analysis} />,
+      );
+      const scroller = container.querySelector<HTMLElement>('[data-diff-virtualized="true"]');
+      expect(scroller).toBeTruthy();
+      const pre = scroller?.querySelector('pre');
+      expect(pre?.style.height).toBeTruthy();
+      expect(Number.parseFloat(pre?.style.height ?? '0')).toBeGreaterThan(200 * 20);
+
+      const initialIndexes = Array.from(
+        scroller?.querySelectorAll<HTMLElement>('[data-index]') ?? [],
+        (element) => element.dataset.index,
+      );
+      expect(initialIndexes.length).toBeGreaterThan(0);
+      expect(initialIndexes.length).toBeLessThan(analysis.rows.length);
+
+      Object.defineProperty(scroller, 'scrollTop', {
+        configurable: true,
+        value: 2_000,
+        writable: true,
+      });
+      await act(async () => {
+        fireEvent.scroll(scroller!);
+      });
+      const afterScrollIndexes = Array.from(
+        scroller?.querySelectorAll<HTMLElement>('[data-index]') ?? [],
+        (element) => element.dataset.index,
+      );
+      expect(afterScrollIndexes.length).toBeGreaterThan(0);
+      expect(afterScrollIndexes).not.toEqual(initialIndexes);
+    } finally {
+      if (clientHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeightDescriptor);
+      }
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDescriptor);
+      }
+      if (rectDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', rectDescriptor);
+      }
+    }
   });
 });

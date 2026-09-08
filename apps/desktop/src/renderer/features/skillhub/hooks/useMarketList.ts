@@ -699,7 +699,7 @@ export function useCategoryList(scope: SkillhubCatalogScope = 'market'): Categor
       new Map<SkillhubCatalogScope, Promise<CategoryListState>>();
     if (!inflightCategories.has(owner)) inflightCategories.set(owner, ownerInflight);
     const existing = ownerInflight.get(scope);
-    const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope })
+    const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope, includeEmpty: false })
       .then((res) => (res.success
         ? { categories: res.categories ?? [], totalCount: res.totalCount ?? 0, myTotalCount: res.myTotalCount ?? 0 }
         : EMPTY_CATEGORY_STATE))

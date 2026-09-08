@@ -1386,8 +1386,8 @@ export function MessageRenderer({
     () => mobileMessageListKeysSignature(itemKeys),
     [itemKeys],
   );
-  // Keep main's rendered-row progress signal for near-start auto paging. The host cursor remains
-  // the stronger transaction commit signal because local synthetic rows can sit before host data.
+  // Use host-cursor progress for both paging and transaction settlement. A history page may
+  // expand a folded group or sit after a local synthetic row without changing the first item.
   const firstItemKey = itemKeys[0] ?? null;
   const historyProgressKey = loadEarlierProgressKey ?? firstItemKey;
   // A successful history page changes the oldest host cursor. Restore the captured visible row
@@ -1891,7 +1891,7 @@ export function MessageRenderer({
     const continueAfterRegroup = userScrolledForOlder
       && regroupedHistoryContinuationRef.current;
     if (!userScrolledForOlder && !initialAutoFillAllowed && !continueAfterRegroup) return;
-    if (firstItemKey !== null && lastAutoLoadEarlierKeyRef.current === firstItemKey) return;
+    if (historyProgressKey !== null && lastAutoLoadEarlierKeyRef.current === historyProgressKey) return;
     if (continueAfterRegroup) {
       if (!loadEarlierAction.visible) {
         regroupedHistoryContinuationRef.current = false;
@@ -1900,9 +1900,9 @@ export function MessageRenderer({
       // A merged page did make host-cursor progress but added no visible top-level history. Do not
       // reapply the near-start gate after app-owned anchor restoration moved the viewport; main
       // immediately continues from the changed first rendered row in the same situation.
-      if (loadEarlierAction.disabled || firstItemKey === null) return;
+      if (loadEarlierAction.disabled || historyProgressKey === null) return;
       regroupedHistoryContinuationRef.current = false;
-      lastAutoLoadEarlierKeyRef.current = firstItemKey;
+      lastAutoLoadEarlierKeyRef.current = historyProgressKey;
       requestLoadEarlier();
       return;
     }
@@ -1961,18 +1961,18 @@ export function MessageRenderer({
       actionVisible: loadEarlierAction.visible,
       atEnd: listState.isAtEnd,
       atStart: listState.isAtStart || nativeAtStart,
-      firstItemKey,
+      progressKey: historyProgressKey,
       initialAutoFillAllowed,
-      lastAttemptedFirstItemKey: lastAutoLoadEarlierKeyRef.current,
+      lastAttemptedProgressKey: lastAutoLoadEarlierKeyRef.current,
       nearStart: listState.isNearStart || nativeNearStart,
       userScrolledForOlder,
     });
     if (!eligible) return;
-    lastAutoLoadEarlierKeyRef.current = firstItemKey;
+    lastAutoLoadEarlierKeyRef.current = historyProgressKey;
     if (initialAutoFillAllowed) initialHistoryAutofillRemainingRef.current -= 1;
     requestLoadEarlier();
   }, [
-    firstItemKey,
+    historyProgressKey,
     loadEarlierAction.disabled,
     loadEarlierAction.visible,
     listRevealed,

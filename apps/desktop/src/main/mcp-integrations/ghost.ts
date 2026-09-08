@@ -97,6 +97,7 @@ import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
+import type { MediaDownloadContext } from '../cindy-media/mediaDownload.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
@@ -190,6 +191,7 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
+  createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
   /**
@@ -1355,8 +1357,17 @@ export function getCindyGhostsMcpDeps(
   });
   return {
     callMedia: async (request) => {
-      const result = await callCindyMedia(request);
-      const sessionId = resolveSessionContext()?.sessionId;
+      const sessionContext = resolveSessionContext();
+      const sessionId = sessionContext?.sessionId;
+      const downloadContext = (request.action === 'request' || request.action === 'poll') && sessionId && sessionContext?.sessionInstanceId
+        ? hostDeps.createMediaDownloadContext?.(sessionId, sessionContext.sessionInstanceId)
+        : undefined;
+      let result: Record<string, unknown>;
+      try {
+        result = await callCindyMedia(request, downloadContext);
+      } finally {
+        downloadContext?.dispose?.();
+      }
       if (request.action === 'resolve_local_path' && result.ok !== false) {
         const localPath = typeof result.local_path === 'string' ? result.local_path : '';
         const mimeType = typeof result.mime_type === 'string' ? result.mime_type : '';

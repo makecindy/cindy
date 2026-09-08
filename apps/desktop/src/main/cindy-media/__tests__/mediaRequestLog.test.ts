@@ -13,6 +13,14 @@ describe('media request log redaction', () => {
     );
   });
 
+  it.each(['sig', 'OSSAccessKeyId'])('隐藏媒体签名参数 %s，同时保留普通参数', (key) => {
+    const shown = new URL(mediaRequestUrlForLog(
+      `https://example.test/media?operation=read&${key}=test-credential`,
+    ));
+    expect(shown.searchParams.get(key)).toBe('[REDACTED]');
+    expect(shown.searchParams.get('operation')).toBe('read');
+  });
+
   it('保留参数结构并收敛凭证和媒体正文', () => {
     expect(
       mediaRequestParamsForLog({

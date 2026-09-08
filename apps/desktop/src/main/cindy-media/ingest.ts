@@ -39,8 +39,7 @@ export interface IngestRef {
   label?: string;
 }
 
-export interface IngestMediaParams {
-  buffer: Uint8Array;
+export type IngestMediaParams = blobStore.BlobSource & {
   /** 真实 mime(由主机侧判定,不信调用方之外的自报);白名单外直接拒。 */
   mimeType: string;
   /** 性质=可再生缓存(吃 cache 上限可清);附件/作品传 false(默认)。 */
@@ -96,10 +95,7 @@ export async function ingestMedia(
   }
   params.assertStillValid?.();
   // writeBlob 只在最终实际内容 hash 正确时返回;损坏/symlink/目录不会被当成去重。
-  const written = await blobStore.writeBlob({
-    buffer: params.buffer,
-    mimeType: params.mimeType,
-  });
+  const written = await blobStore.writeBlob(params);
   params.assertStillValid?.();
   await ledger.recordBlob(
     {
