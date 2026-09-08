@@ -233,14 +233,23 @@ describe('pending_send 渲染接线', () => {
     ).replace(/\r\n/g, '\n');
     expect(bubbleSource).toContain('<SentInlineAtomBody');
     expect(bubbleSource).toContain('interactiveAtoms={false}');
-    expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
-    // 徽标与正文必须属于同一个 Pressable，点击用户直觉中的左侧状态图标也能展开条目。
-    const bubblePressableStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
-    const bubblePressableEnd = bubbleSource.indexOf('\n        </Pressable>', bubblePressableStart);
-    const bubblePressable = bubbleSource.slice(bubblePressableStart, bubblePressableEnd);
-    expect(bubblePressableStart).toBeGreaterThan(-1);
-    expect(bubbleSource.indexOf('testID={`pendingSend.badge.${item.phase}`}')).toBeLessThan(bubblePressableStart);
-    expect(bubblePressable).toContain('hitSlop={{ left: iconSize.xl + spacing.sm }}');
+    expect(bubbleSource).toContain('maxVisibleLines={collapsedLines}');
+    expect(bubbleSource).toContain('LONG_USER_MESSAGE_COLLAPSED_LINES');
+    // 队列操作仅由状态徽标承接，Markdown 横向滚动不嵌套在 Pressable 中。
+    const badgeStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
+    const badgeEnd = bubbleSource.indexOf('\n        </Pressable>', badgeStart);
+    expect(badgeStart).toBeGreaterThan(-1);
+    const badge = bubbleSource.slice(badgeStart, badgeEnd);
+    expect(badge).toContain('testID={`pendingSend.badge.${item.phase}`}');
+    expect(badge).toContain('actions.onSelect(selected ? null : item.clientId)');
+    expect(badge).not.toContain('renderText(');
+    expect(badge).toContain('badgePosition');
+    expect(bubbleSource).toContain('event.nativeEvent.layout.x - 28 - spacing.sm');
+    expect(bubbleSource).toContain('onLayout={hasAttachments ? undefined : measureBadgeAnchor}');
+    expect(bubbleSource.indexOf('testID={`pendingSend.bubble.${item.clientId}`}')).toBeGreaterThan(badgeEnd);
+    expect(bubbleSource).toContain('const collapseLatched = collapseLatchBody === displayBody;');
+    expect(bubbleSource).toContain('if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);');
+    expect(bubbleSource).toContain('(measureBody && collapseLatched) || collapseResolved');
     const actionPillStart = bubbleSource.indexOf('  actionPill: {');
     const actionPillEnd = bubbleSource.indexOf('\n  },', actionPillStart);
     const actionPillStyle = bubbleSource.slice(actionPillStart, actionPillEnd);
