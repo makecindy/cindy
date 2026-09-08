@@ -1422,7 +1422,11 @@ export function ScheduleFormDialog({
                       onChangeProviderId={(v) => setField('providerId', v)}
                       onNavigateToProviders={() => navigate('/settings?tab=providers')}
                       fastMode={form.fastMode}
-                      onChangeFast={(v) => setField('fastMode', v)}
+                      onChangeFast={(v) => {
+                        setField('fastMode', v);
+                        // Fast-only edits also make legacy model selections explicit.
+                        if (form.model.trim()) setField('modelAgentKind', form.agentKind);
+                      }}
                     />
                   </div>
                   <button
