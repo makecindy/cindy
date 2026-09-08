@@ -2581,6 +2581,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('keeps Bot tools and memory independent of global memory while honoring task permissions', async () => {
     const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.resolvePiGlobalContextHome = vi.fn(() => { throw new Error('Bot must not read user context'); });
     deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
     deps.runtimeConfig.memoryEnabled = false;
     const handle = await new PiAgent(deps).startSession({
@@ -2617,6 +2618,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
       ]));
       expect(captured.args).toContain('--no-context-files');
+      expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
       const promptIndex = captured.args.indexOf('--append-system-prompt');
       expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
       expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');

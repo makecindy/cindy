@@ -621,6 +621,8 @@ export interface AgentDeps {
    * 其它 agent 不消费此字段。
    */
   resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
+  /** Native user context root, separate from Cindy's models/auth runtime home. */
+  resolvePiGlobalContextHome?: (remoteHostId?: string | null) => string | undefined;
 
   /**
    * Pi-only: advisory metadata for Cindy UI/command projection. This resolver

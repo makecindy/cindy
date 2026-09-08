@@ -1851,6 +1851,13 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
+    resolvePiGlobalContextHome: (remoteHostId) => {
+      if (remoteHostId) return '$HOME/.pi/agent';
+      const override = process.env.PI_CODING_AGENT_DIR;
+      return override
+        ? path.resolve(override.replace(/^~(?=$|[\\/])/, () => os.homedir()))
+        : path.join(os.homedir(), '.pi', 'agent');
+    },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
     resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
     mutatePiManagedPackage: (request) => mutateAuthorizedPiManagedPackage(

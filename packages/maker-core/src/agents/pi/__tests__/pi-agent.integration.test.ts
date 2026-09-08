@@ -431,6 +431,59 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
+    'loads global %s with native precedence and keeps the prompt stable across turns',
+    { timeout: 60_000 },
+    async (winner) => {
+      const root = mkdtempSync(path.join(tmpdir(), 'pi-global-int-'));
+      const userHome = path.join(root, 'native-user');
+      const workingDir = path.join(root, 'workspace');
+      mkdirSync(userHome);
+      mkdirSync(workingDir);
+      const candidates = ['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'];
+      for (const name of candidates.slice(0, candidates.indexOf(winner) + 1)) {
+        writeFileSync(path.join(userHome, name), `GLOBAL_CANARY_${name}`);
+      }
+      writeFileSync(path.join(userHome, 'SYSTEM.md'), 'MUST_NOT_REPLACE_PI_SYSTEM');
+      writeFileSync(path.join(workingDir, 'AGENTS.md'), 'PROJECT_CONTEXT_CANARY');
+      const agent = new PiAgent({ ...buildDeps(), resolvePiGlobalContextHome: () => userHome });
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await agent.startSession({ sessionId: `global-${winner}`, workingDir, model: 'pi-test-model' });
+        const systems: unknown[] = [];
+        for (let turn = 0; turn < 2; turn++) {
+          const requestStart = seenRequests.length;
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: `ping ${turn}` });
+          await done;
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+          const request = seenRequests.slice(requestStart).find((entry) => entry.url.includes('/messages'))!;
+          expect(request, JSON.stringify(events)).toBeDefined();
+          const system = JSON.parse(request.body).system;
+          const text = JSON.stringify(system);
+          expect(text).toContain(`GLOBAL_CANARY_${winner}`);
+          for (const loser of candidates.filter((name) => name !== winner)) {
+            expect(text).not.toContain(`GLOBAL_CANARY_${loser}`);
+          }
+          expect(text).toContain('PROJECT_CONTEXT_CANARY');
+          expect(text).not.toContain('MUST_NOT_REPLACE_PI_SYSTEM');
+          systems.push(system);
+          writeFileSync(path.join(userHome, winner), 'CHANGED_AFTER_START');
+        }
+        expect(systems[1]).toEqual(systems[0]);
+      } finally {
+        await handle?.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it(
     'startSession → send → streams text and settles → usage/cost tracked → close',
     { timeout: 60_000 },

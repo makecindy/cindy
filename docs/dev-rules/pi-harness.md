@@ -77,6 +77,21 @@ provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建
 未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
 
 
+### 全局约定入口
+
+普通 Pi 任务从执行设备用户的 `~/.pi/agent` 继承约定，按 Pi 原生顺序选择首个文件：
+`AGENTS.override.md` → `AGENTS.md` → `AGENTS.MD` → `CLAUDE.md` → `CLAUDE.MD`。
+本机尊重启动 Cindy 时的 `PI_CODING_AGENT_DIR`
+覆写（支持 `~`）。SSH 使用远端 `$HOME/.pi/agent`，不读取控制端个人文件；手机／设备互联
+控制本机任务复用桌面链路。Bot 保持 `--no-context-files`，不读取或复制这些全局约定。
+
+每次启动读取软链目标并复制内容到独立 `configHome`，不建立指向用户文件的可写链接。
+用户更新约定后，新启动的任务读取新版；运行中的任务保留启动快照。SSH 的配置目录身份
+包含约定内容哈希，内容不变可以 attach，变化或删除不能覆盖仍存活的旧运行时快照。
+只继承上述约定文件，不整目录复制 settings、auth、extensions，也不复制会替换 Pi 默认
+系统提示词的 `SYSTEM.md`。远端沿用文件读取通道的 4 MiB 上限，触及上限明确报错，不能
+静默截断。文件不存在允许正常启动，读取／写入失败须报错，不能假称约定已加载。
+
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 
 - PI 是 Cindy 未来的基座 harness。

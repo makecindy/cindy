@@ -26,6 +26,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
+import { readPiGlobalContext } from './global-context.js';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -2477,6 +2478,15 @@ export class PiAgent extends BaseAgent {
     // 远端再叠 models.json+settings.json hash:startSession 在 pi/ensure 之前就会写
     // 这两份快照。若只按 sessionId 分目录, 另一实例改路由或 retry 策略会先覆盖
     // 仍在跑的旧 Pi / 子代理热读快照。
+    // Bot contexts remain profile-only. SSH tasks use the remote user's rules,
+    // never the controlling desktop's personal instructions.
+    const globalContextFiles = opts.botRuntimeProfile ? [] : await readPiGlobalContext(
+      this.deps.resolvePiGlobalContextHome?.(opts.remoteHostId),
+      fileOps,
+    );
+    const globalContextHash = globalContextFiles.length > 0
+      ? createHash('sha256').update(JSON.stringify(globalContextFiles)).digest('hex').slice(0, 16)
+      : '';
     let configHome = remote
       ? joinRemotePosixPath(agentHome, 'run-tmp', stableSessionPathSegment(opts.sessionId))
       : joinRemotePosixPath(agentHome, 'run-tmp', randomBytes(8).toString('hex'));
@@ -2518,7 +2528,7 @@ export class PiAgent extends BaseAgent {
       configHome = joinRemotePosixPath(
         agentHome,
         'run-tmp',
-        `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}`,
+        `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}${globalContextHash ? `-${globalContextHash}` : ''}`,
       );
     }
     const { gatewayImageInputByModel, gatewayApiByModel, modelsJsonHash } = await this.writeModelsJson(
@@ -4388,6 +4398,9 @@ export class PiAgent extends BaseAgent {
     };
     let durableSpawnEnv: NodeJS.ProcessEnv = {};
     try {
+      for (const file of globalContextFiles) {
+        await writeFile(joinRemotePosixPath(configHome, file.name), file.content);
+      }
       // 远端不 stage 本地 rg(本机二进制远端无意义)—— 远端走 PATH 上的 rg(远端 POSIX
       // 系统常见),与 CC/Codex 远端一致(不注入受管工具路径)。
       const managedRipgrepPath = remote

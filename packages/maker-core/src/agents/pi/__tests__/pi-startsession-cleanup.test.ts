@@ -2326,6 +2326,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   // (PI_CODING_AGENT_DIR = agentHome/run-tmp/<hex>)承载 models.json,close/退出时清理。
   it('isolates each session config home under run-tmp and keeps concurrent sessions independent', async () => {
     const { existsSync } = await import('node:fs');
+    const nativeHome = path.join(agentHome, 'native-user-home');
+    mkdirSync(nativeHome);
+    writeFileSync(path.join(nativeHome, 'AGENTS.md'), 'global rules v1');
     const skillOne = path.join(cwd, '.pi', 'skills', 'one');
     const skillTwo = path.join(cwd, '.agents', 'skills', 'two');
     for (const skillPath of [skillOne, skillTwo]) {
@@ -2333,6 +2336,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       writeFileSync(path.join(skillPath, 'SKILL.md'), '# isolated\n');
     }
     const agent = new PiAgent(buildDeps({
+      resolvePiGlobalContextHome: () => nativeHome,
       resolvePiProjectTrustInput: async ({ sessionId, workingDir }) => approvedInput(
         workingDir,
         `rev-${sessionId}`,
@@ -2360,6 +2364,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(home2.startsWith(runTmp)).toBe(true);
     expect(existsSync(path.join(home1, 'models.json'))).toBe(true);
     expect(existsSync(path.join(home2, 'models.json'))).toBe(true);
+    expect(readFileSync(path.join(home1, 'AGENTS.md'), 'utf8')).toBe('global rules v1');
+    expect(readFileSync(path.join(home2, 'AGENTS.md'), 'utf8')).toBe('global rules v1');
+    writeFileSync(path.join(nativeHome, 'AGENTS.md'), 'global rules v2');
+    expect(readFileSync(path.join(home1, 'AGENTS.md'), 'utf8')).toBe('global rules v1');
+    const h3 = await agent.startSession({ sessionId: 's3', workingDir: cwd, model: 'm' });
+    const home3 = knobs.spawnedEnvs[indexForSession('s3')].PI_CODING_AGENT_DIR!;
+    expect(readFileSync(path.join(home3, 'AGENTS.md'), 'utf8')).toBe('global rules v2');
+    writeFileSync(path.join(home3, 'AGENTS.md'), 'runtime edit');
+    expect(readFileSync(path.join(nativeHome, 'AGENTS.md'), 'utf8')).toBe('global rules v2');
+    await h3.close();
     expect(repeatedArgValues(knobs.spawnedArgs[s1Index]!, '--skill')).toEqual([
       stagedSkillPath(home1, 0, skillOne),
     ]);
