@@ -51,6 +51,14 @@ describe('sidebar Markdown preview', () => {
     ],
     ['尚未写完 **结果', '尚未写完 **结果'],
     ['<script>alert(1)</script>\n\n正文', '正文'],
+    ['<img src="https://example.com/image.png" alt="效果图">', '效果图'],
+    [
+      '完成 <img src="cindy-media://blobs/image" alt="Light &amp; Dark"> 通过',
+      '完成 Light & Dark 通过',
+    ],
+    ['<img src="javascript:alert(1)" alt="不支持的图片">', null],
+    ['<img src="https://example.com/image.png">', null],
+    ['<script><img src="https://example.com/image.png" alt="隐藏内容"></script>', null],
     ['---', null],
   ])('extracts readable content from %s', (text, expected) => {
     expect(finalizePlainPreview(text, 'assistant')).toBe(expected);

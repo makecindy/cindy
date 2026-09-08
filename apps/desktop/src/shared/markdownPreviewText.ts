@@ -1,5 +1,7 @@
 import { Lexer, type Token, type Tokens } from 'marked';
 
+import { htmlImgToImageNode } from './htmlImage';
+
 /** Extract display text without generating HTML or counting link destinations. */
 export function markdownPreviewText(markdown: string): string {
   return previewTokens(Lexer.lex(markdown, { gfm: true }))
@@ -14,9 +16,10 @@ function previewTokens(tokens: Token[]): string {
         case 'space':
         case 'br':
         case 'hr':
-        case 'html':
         case 'def':
           return ' ';
+        case 'html':
+          return `${htmlImgToImageNode({ type: 'html', value: token.text })?.alt ?? ''} `;
         case 'list':
           return `${token.items.map((item: Tokens.ListItem) => previewTokens(item.tokens)).join(' ')} `;
         case 'table':
