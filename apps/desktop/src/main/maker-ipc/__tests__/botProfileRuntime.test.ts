@@ -43,9 +43,13 @@ describe('Bot Profile runtime prompt', () => {
   });
 
   it('keeps the active profile marker separate from SOUL', () => {
-    expect(buildBotProfileContextPrompt('Kitchen helper')).toBe(
-      'Active Cindy Bot profile: Kitchen helper.',
-    );
+    const context = buildBotProfileContextPrompt('Kitchen helper');
+    expect(context).toMatch(/^Active Cindy Bot profile: Kitchen helper\./);
+    expect(context).toContain('current SOUL and user profile');
+    expect(context).toContain('execution engines, not your personal identity');
+    expect(context).toContain('context compaction, restarts, and model changes');
+    expect(context).toContain('teammate’s model settings in Cindy');
+    expect(context).toContain('Do not present terminal-only slash commands');
   });
 
   it('uses direct Bot tools and avoids whole-surface discovery loops', () => {

@@ -545,7 +545,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
 
   if (isHeartbeat) {
     base.useWorktree = false;
-    if (form.modelAgentKind) base.fastMode = form.fastMode;
+    // Keep the key when following so an update clears a previously saved Fast override.
+    base.fastMode = form.modelAgentKind ? form.fastMode : undefined;
     base.model = form.model.trim() || undefined;
     base.providerId = form.providerId.trim() || undefined;
     base.effort = form.effort && isEffortValue(form.effort) ? form.effort : undefined;

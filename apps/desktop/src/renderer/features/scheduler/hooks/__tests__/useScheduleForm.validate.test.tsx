@@ -2,6 +2,8 @@
 
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import type { Schedule } from '@cindy/maker-scheduler';
+import type { Session } from '@/lib/ccAgent.types';
 
 import { useScheduleForm } from '../useScheduleForm';
 
@@ -57,5 +59,48 @@ describe('saved automation model selection', () => {
     act(() => result.current.selectModelConfiguration(null));
     expect(result.current.toInput()).toMatchObject({ modelAgentKind: undefined, model: undefined, effort: undefined, providerId: undefined });
     expect(result.current.form.fastMode).toBe(false);
+    expect(result.current.toInput()).toHaveProperty('fastMode', undefined);
+  });
+
+  it('restores the bound Harness after an explicit override and fresh/persistent round trip', () => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    act(() => result.current.selectBoundSession({ id: 'bound-codex', agentKind: 'codex' } as Session));
+    act(() => result.current.setRunMode('persistent'));
+    act(() => result.current.selectModelConfiguration({
+      agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: true,
+    }));
+    act(() => result.current.setRunMode('fresh'));
+    act(() => result.current.setRunMode('persistent'));
+    act(() => result.current.selectModelConfiguration(null));
+    expect(result.current.toInput()).toMatchObject({
+      targetSessionId: 'bound-codex', persistentSession: true, agentKind: 'codex',
+      modelAgentKind: undefined, model: undefined, effort: undefined, providerId: undefined,
+    });
+    expect(result.current.form.fastMode).toBe(false);
+  });
+
+  it('uses the current bound reference when reopening a saved override', () => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    const saved = { ...result.current.toInput(), id: 'schedule', targetSessionId: 'bound-codex',
+      agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model' } as Schedule;
+    act(() => result.current.reset(saved));
+    act(() => result.current.selectModelConfiguration(null, 'codex'));
+    expect(result.current.toInput()).toMatchObject({ agentKind: 'codex', modelAgentKind: undefined });
+    act(() => result.current.selectModelConfiguration({
+      agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: false,
+    }));
+    act(() => result.current.selectModelConfiguration(null));
+    expect(result.current.toInput()).toMatchObject({ agentKind: 'codex', modelAgentKind: undefined });
+  });
+
+  it('does not restore a previous target Harness after selecting another bound task', () => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    act(() => result.current.selectBoundSession({ id: 'old', agentKind: 'codex' } as Session));
+    act(() => result.current.selectBoundSession({ id: 'new', agentKind: 'cc' } as Session));
+    act(() => result.current.selectModelConfiguration({
+      agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: false,
+    }));
+    act(() => result.current.selectModelConfiguration(null));
+    expect(result.current.toInput()).toMatchObject({ targetSessionId: 'new', agentKind: 'claude-code' });
   });
 });

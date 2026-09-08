@@ -229,6 +229,58 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     }
   });
 
+  // Always exercise the rejection guards, including hosts without file-link privileges.
+  it.each(['link', 'rename'] as const)('%s 分支:注入 symlink 元数据仍拒绝,不读取或改写目标', async (mode) => {
+    const sample = hashedPng(`injected-symlink-${mode}`);
+    seedDest(sample.dest, sample.buffer);
+    const originalLstat = fsp.lstat.bind(fsp);
+    vi.spyOn(fsp, 'lstat').mockImplementation(async (target, opts) => {
+      const st = await originalLstat(target, opts);
+      return path.resolve(String(target)) === path.resolve(sample.dest)
+        ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isSymbolicLink: () => true })
+        : st;
+    });
+    const open = vi.spyOn(fsp, 'open');
+    const rename = vi.spyOn(fsp, 'rename');
+    const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
+    await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow(/symlink/);
+    expect(open).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expect(fs.readFileSync(sample.dest)).toEqual(sample.buffer);
+    expect(fs.readdirSync(sample.shard).some((name) => name.startsWith('.tmp-'))).toBe(false);
+  });
+
+  it.each(['link', 'rename'] as const)('%s 分支:注入读取后 symlink 替换仍拒绝并关闭句柄', async (mode) => {
+    const sample = hashedPng(`injected-swap-${mode}`);
+    seedDest(sample.dest, sample.buffer);
+    const originalLstat = fsp.lstat.bind(fsp);
+    const originalOpen = fsp.open.bind(fsp);
+    let opened = false;
+    const handles: Awaited<ReturnType<typeof fsp.open>>[] = [];
+    vi.spyOn(fsp, 'lstat').mockImplementation(async (target, opts) => {
+      const st = await originalLstat(target, opts);
+      return opened && path.resolve(String(target)) === path.resolve(sample.dest)
+        ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isSymbolicLink: () => true })
+        : st;
+    });
+    vi.spyOn(fsp, 'open').mockImplementation(async (target, flags, perm) => {
+      const handle = await originalOpen(target, flags, perm);
+      if (path.resolve(String(target)) === path.resolve(sample.dest)) {
+        opened = true;
+        handles.push(handle);
+      }
+      return handle;
+    });
+    const rename = vi.spyOn(fsp, 'rename');
+    const run = () => blobStore.writeBlob({ buffer: sample.buffer, mimeType: 'image/png' });
+    await expect(mode === 'rename' ? withUnsupportedLink(run) : run()).rejects.toThrow(/symlink|replaced/);
+    expect(handles).toHaveLength(1);
+    expect(handles[0].fd).toBe(-1);
+    expect(rename).not.toHaveBeenCalled();
+    expect(fs.readFileSync(sample.dest)).toEqual(sample.buffer);
+    expect(fs.readdirSync(sample.shard).some((name) => name.startsWith('.tmp-'))).toBe(false);
+  });
+
   it('hash 后 size 变化视为替换,不得去重成功', async () => {
     const sample = hashedPng('size-drift');
     seedDest(sample.dest, sample.buffer);

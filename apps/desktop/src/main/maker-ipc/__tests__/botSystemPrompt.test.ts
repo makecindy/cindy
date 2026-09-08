@@ -98,7 +98,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('stop_session_task');
     expect(all).toContain('send_to_agent');
     expect(all).toContain('不启动任务');
-    expect(all).toContain('需要独立交付物或验证时必须用 `start_session_task`');
+    expect(all).toContain('编码实施和中大型工作必须用 `start_session_task`');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).not.toContain('collaborate_with_bot');
     expect(all).not.toContain('action=notify');

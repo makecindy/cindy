@@ -1939,7 +1939,7 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
-  it('retains a completion click during renderer reload and collapses after the target is shown', async () => {
+  it('collapses a completion before opening a loading window and retains its navigation', async () => {
     const { AgentIslandService } = await import('../service.js');
     const send = vi.fn();
     const mainWindow = {
@@ -1967,7 +1967,11 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
     const focusSession = (service as unknown as { focusSession(id: string): void }).focusSession.bind(service);
 
+    vi.mocked(mainWindow.show).mockImplementation(() => {
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
+    });
     focusSession('completed-session');
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
 
     // A loading renderer has no notification listener. The existing deep-link
     // pull-on-mount path must retain the click instead of sending it into the gap.

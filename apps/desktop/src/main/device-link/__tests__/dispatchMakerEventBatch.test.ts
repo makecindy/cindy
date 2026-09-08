@@ -136,6 +136,45 @@ afterEach(() => {
 });
 
 describe('[1] 能力协商', () => {
+  it('coalesces task patches even for legacy list subscribers and cancels offline peers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    subscriptions.subscribe('mobile', ['sessions'], 'mobile');
+    for (let i = 0; i < 2026; i++) {
+      __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: String(i) } });
+    }
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { extraDirs: [] } });
+    handleControllerOffline('mobile');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([{ dst: 'legacy', channel: 'local-db:sessions:patched',
+      payload: { sessionId: 's1', patch: { title: '2025', extraDirs: [] } }, ownerStamp: undefined }]);
+  });
+
+  it('keeps engine switch and deletion barriers before subsequent events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: 'new' } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { agentKind: 'codex' } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { type: 'text', data: { text: 'new engine' } } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { status: 'deleted' } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent.map((item) => item.channel)).toEqual(['local-db:sessions:patched', 'maker:event', 'local-db:sessions:patched']);
+    expect(h.sent[0].payload).toEqual({ sessionId: 's1', patch: { title: 'new', agentKind: 'codex' } });
+  });
+
+  it('drops queued global metadata when legacy subscription narrows to one task', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('peer', ['*'], 'peer');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'other', patch: { title: 'private' } });
+    subscriptions.subscribe('peer', ['session:s1'], 'peer');
+    subscriptions.unsubscribe('peer', ['*']);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent).toEqual([]);
+  });
+
   it('声明能力的控制端:窗口内多条事件合并成一帧批,不再每事件一帧', () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -814,6 +853,23 @@ describe('running session recovery on slow links', () => {
     h.client.getReliableSendQueueDepth.mockReturnValue(0);
     vi.advanceTimersByTime(4_000);
     expect(h.sent).toHaveLength(0);
+  });
+
+  it('holds deltas and snapshot repair while a known peer is down, then repairs before resuming', () => {
+    const h = mkClient();
+    const canSendPush = vi.fn(() => false);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    canSendPush.mockReturnValue(true);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    __testing.forwardPush('maker:event', delta('after repair'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
   });
 
   it('repairs text-only loss without repeatedly requesting a large unchanged history page', () => {

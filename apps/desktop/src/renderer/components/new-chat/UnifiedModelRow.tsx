@@ -211,7 +211,7 @@ export function UnifiedModelRow({
     <div
       {...rowRootProps}
       className={cn(
-        'group/row flex w-full cursor-pointer flex-col rounded-[10px] px-2.5 py-2 transition-colors duration-100',
+        '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col rounded-[10px] px-2.5 py-2 transition-colors duration-100',
         'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         (selected || active) && 'bg-[var(--model-item-hover)]',
         (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',

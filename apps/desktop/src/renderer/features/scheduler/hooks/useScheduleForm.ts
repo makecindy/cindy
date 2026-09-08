@@ -258,7 +258,10 @@ export type Destination = 'local' | 'worktree' | 'thread';
 
 export interface UseScheduleFormResult {
   form: ScheduleFormState;
-  selectModelConfiguration: (selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> | null) => void;
+  selectModelConfiguration: (
+    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> | null,
+    followedAgentKind?: ScheduleFormState['agentKind'],
+  ) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
   /** 改 destination 时同步改 useWorktree / targetSessionId 三态互斥。 */
   setDestination: (d: Destination) => void;
@@ -288,6 +291,11 @@ export interface UseScheduleFormResult {
 
 export function useScheduleForm(initial: Schedule | null = null): UseScheduleFormResult {
   const [form, setForm] = useState<ScheduleFormState>(() => makeFormFromSchedule(initial));
+  // Independent of the editable model snapshot: mode changes must not overwrite
+  // the bound task's Harness with an unapplied automation override.
+  const boundAgentRef = useRef(initial?.targetSessionId
+    ? { sessionId: initial.targetSessionId, agentKind: initial.agentKind }
+    : null);
   // "记住的真实绑定"快照:三态来回切换(bound → fresh/persistent → bound)时
   // 不丢用户已选/任务已有的绑定 —— 表单切换是非破坏性的,只有保存才落库。
   // 快照含 model/effort 等关联字段:切到 fresh 后空 model 会被回填 effect 填成
@@ -304,15 +312,31 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     [],
   );
 
-  const selectModelConfiguration: UseScheduleFormResult['selectModelConfiguration'] = useCallback((selection) => {
-    setForm((form) => selection
-      ? { ...form, ...selection, modelAgentKind: selection.agentKind }
-      : { ...form, model: '', providerId: '', effort: '', fastMode: false, modelAgentKind: undefined });
+  const selectModelConfiguration: UseScheduleFormResult['selectModelConfiguration'] = useCallback((selection, followedAgentKind) => {
+    setForm((form) => {
+      if (selection) {
+        if (form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
+            boundAgentRef.current?.sessionId !== form.targetSessionId) {
+          boundAgentRef.current = { sessionId: form.targetSessionId, agentKind: form.agentKind };
+        }
+        return { ...form, ...selection, modelAgentKind: selection.agentKind };
+      }
+      const agentKind = followedAgentKind ??
+        (boundAgentRef.current?.sessionId === form.targetSessionId
+          ? boundAgentRef.current.agentKind : form.agentKind);
+      if (followedAgentKind && form.targetSessionId) {
+        boundAgentRef.current = { sessionId: form.targetSessionId, agentKind };
+      }
+      return { ...form, agentKind, model: '', providerId: '', effort: '', fastMode: false, modelAgentKind: undefined };
+    });
   }, []);
 
   const reset = useCallback((s: Schedule | null = null, overrides?: Partial<ScheduleFormState>) => {
     const next = { ...makeFormFromSchedule(s), ...overrides };
     lastBindingRef.current = captureBinding(next);
+    boundAgentRef.current = next.targetSessionId
+      ? { sessionId: next.targetSessionId, agentKind: s?.agentKind ?? next.agentKind }
+      : null;
     setForm(next);
   }, []);
 
@@ -380,6 +404,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         fastMode: false,
       };
       lastBindingRef.current = captureBinding(next);
+      boundAgentRef.current = { sessionId: session.id, agentKind: next.agentKind };
       return next;
     });
   }, []);

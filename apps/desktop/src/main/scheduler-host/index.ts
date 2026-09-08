@@ -25,6 +25,8 @@ import type { FeishuIM } from '@cindy/im';
 import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
+import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
@@ -172,16 +174,20 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // Review sessions are host-owned read-only tasks, not normal unattended
     // automation targets. Re-read their durable source for CRUD and every fire
     // so renderer filtering or a restored schedule row cannot bypass isolation.
-    validateTargetSession: async (targetSessionId) => {
+    validateTargetSession: async (targetSessionId, _operation, selection) => {
       const [row] = await deps
         .getDb()
-        .select({ source: sessions.source })
+        .select({ source: sessions.source, agentKind: sessions.agentKind,
+          status: sessions.status, remoteHostId: sessions.remoteHostId, orcaRole: sessions.orcaRole })
         .from(sessions)
         .where(eq(sessions.id, targetSessionId))
         .limit(1);
       if (isReviewSessionSource(row?.source)) {
         throw new Error('Review tasks cannot be targets of scheduled automations');
       }
+      assertScheduledHarnessSupported(row ? {
+        ...row, agentKind: dbToMakerAgentKind(row.agentKind),
+      } : null, selection.modelAgentKind);
     },
     // 卡死收口的通知出口。通知投递平时住在两个 runner 里(它们各自持 notifier),而
     // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。

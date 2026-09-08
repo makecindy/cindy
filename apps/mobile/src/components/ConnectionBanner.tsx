@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { LoaderCircle } from 'lucide-react-native';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { Text } from '@/components/AppText';
 import type { DeviceLinkConnectionIssue, DeviceLinkStatus } from '@cindy/device-link';
 import {
@@ -17,8 +19,8 @@ import {
   resolveConnectionBannerVisibility,
   resolveEffectiveConnectionError,
 } from '@/components/connectionBannerVisibility';
-import { fontWeight, useThemedStyles, type ThemeColors } from '@/theme';
-import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** 普通断线(无分类 issue)转为可见提示前的静默窗口:健康重连通常 <1s 完成,不闪 banner。 */
 const OFFLINE_BANNER_DELAY_MS = 1_200;
@@ -92,6 +94,8 @@ export function ConnectionBanner({
   recovery?: 'syncing' | 'recovered';
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const reduceMotion = useReduceMotionEnabled();
   const { t } = useTranslation();
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
@@ -103,12 +107,16 @@ export function ConnectionBanner({
   // useShowConnectionBanner 同一判定,否则会出现可见但无内容的空壳 banner)。
   const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
   const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
+  const autoRecoveringRequest = requestErrorAutoRecovering ?? isAutoRecoveringRemoteError(effectiveError);
+  const showRecoveryProgress = (!activeIssue || activeIssue.kind === 'unstable' || activeIssue.kind === 'replaced')
+    && (status === 'connecting' || deviceUnresponsive || recovery === 'syncing'
+      || (friendlyError !== null && autoRecoveringRequest));
   const showSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeIssue !== null,
     deviceUnresponsive: showUnresponsive,
     hasRequestError: friendlyError !== null,
-    requestErrorAutoRecovering: requestErrorAutoRecovering ?? isAutoRecoveringRemoteError(effectiveError),
+    requestErrorAutoRecovering: autoRecoveringRequest,
   });
   const tone = activeIssue
     ? 'off'
@@ -169,6 +177,20 @@ export function ConnectionBanner({
           loading={loading}
           onPress={onSync}
           testID="connection.syncButton"
+        />
+      ) : showRecoveryProgress ? reduceMotion === false ? (
+        <ActivityIndicator
+          accessibilityLabel={`${title} · ${copy}`}
+          color={colors.textSecondary}
+          size="small"
+          testID="connection.recoveryProgress"
+        />
+      ) : (
+        <LoaderCircle
+          accessibilityLabel={`${title} · ${copy}`}
+          color={colors.textSecondary}
+          size={iconSize.action}
+          testID="connection.recoveryProgressStatic"
         />
       ) : null}
     </View>

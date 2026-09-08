@@ -1,3 +1,4 @@
+import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 /**
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
  *
@@ -949,7 +950,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(getActiveCatalog(), {
+  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }

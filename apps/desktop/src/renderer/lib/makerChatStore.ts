@@ -6044,6 +6044,25 @@ export function handleStreamEvent(
         requestId: string;
         questions: AskUserQuestionItem[];
       };
+      // Codex done reconciles pending interactions with fresh IPC objects. Keep
+      // the same question's identity: AskUserQuestionPrompt restores selections
+      // when questions changes, which would erase locally typed, unsubmitted text.
+      // Compare fields rather than JSON object key order; changed questions must
+      // still take the normal initialization path.
+      const previousAsk = state.pendingAskUser;
+      const keepAskProgress = previousAsk?.requestId === data.requestId &&
+        previousAsk.questions.length === data.questions.length &&
+        previousAsk.questions.every((question, index) => {
+          const next = data.questions[index];
+          return question.question === next.question &&
+            question.header === next.header &&
+            question.multiSelect === next.multiSelect &&
+            (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
+            (question.options ?? []).every((option, optionIndex) =>
+              option.label === next.options?.[optionIndex]?.label &&
+              option.description === next.options?.[optionIndex]?.description,
+            );
+        });
       // F1-a: ask_user 消息的落库(+ 在飞 assistant flush)已收口 main
       // (messagePersistBroadcaster.onInteractionMessage,在 setInteractionListener 里),
       // renderer 只做 UI:finalize 在飞气泡 + 用 main 下发的 persistId 建 ask_user 气泡
@@ -6091,19 +6110,17 @@ export function handleStreamEvent(
 
       return {
         ...finalized,
-        pendingAskUser: {
+        pendingAskUser: keepAskProgress ? previousAsk : {
           requestId: data.requestId,
           questions: data.questions,
         },
         // F-AUQ-MIN-1: Every new pendingAskUser starts expanded — even if the
         // previous question in this same session was minimized. Folding never
         // carries across questions.
-        askUserViewerState: 'expanded',
-        // F-AUQ-DRAFT: Same logic — a new question batch must never inherit a
-        // stale draft, even if for some reason the previous draft happened to
-        // share the same requestId. The component additionally guards via
-        // `draft.requestId === pending.requestId` before hydrating.
-        askUserDraft: null,
+        askUserViewerState: keepAskProgress ? state.askUserViewerState : 'expanded',
+        // Only an unchanged pending request may retain its draft. A new batch
+        // or changed question content starts clean, even with the same requestId.
+        askUserDraft: keepAskProgress ? state.askUserDraft : null,
         messages: askMessages,
       };
     }

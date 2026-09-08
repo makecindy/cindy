@@ -137,10 +137,11 @@ const ANTHROPIC_PROVIDER: Provider = {
       upstream: 'https://api.anthropic.com',
       wireProtocol: 'anthropic-messages',
       authStrategy: 'provider-oauth-header',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-      },
+      // Pi 拿的是 `sk-ant-oat` 形态占位 token(pi-host),自己就按原生订阅方式发请求:
+      // `anthropic-beta` 由 Pi 按模型拼好(oauth / claude-code / server-side-fallback 等),
+      // 这里只换 authorization,不得覆盖 beta 头——覆盖会让 body 里 Pi 注入的 `fallbacks`
+      // 失去 beta 声明,官方端点 400 `fallbacks: Extra inputs are not permitted`。
+      headerOverride: { 'anthropic-version': '2023-06-01' },
       headerDelete: ['x-api-key'],
     },
   },

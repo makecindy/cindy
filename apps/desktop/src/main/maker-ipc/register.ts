@@ -1,4 +1,4 @@
-import { applyScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from './scheduledModelSelection';
+import { applyScheduledModelSelection, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from './scheduledModelSelection';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -471,8 +471,9 @@ import {
   readSessionExtraDirsFromDb,
   readSessionWritableDirsFromDb,
   readSessionWorkingDirFromDb,
-  listVisibleActiveSessionIds,
+  listVisibleActiveSessionDirectoryGrants,
 } from '../maker-host/session-storage.js';
+import { libraryExtraDirSyncTargets } from './libraryExtraDirSyncTargets.js';
 import {
   clearSessionPersistState,
   consumeLastAssistantPersistId,
@@ -2968,7 +2969,7 @@ export function applyDirectoryGrants(
       persist: (patch) => persistSessionFields(sessionId, patch),
       terminate: () => maker.closeSession(sessionId),
     });
-    log.info(label, {
+    if (result.changed || result.rejectedCount > 0) log.info(label, {
       sessionId,
       requested: requestedDirs.length,
       kept: result.dirs.length,
@@ -3026,10 +3027,11 @@ async function syncLibraryReadonlyExtraDir(
     const grantRoot = libraryExtraDirSyncRoot;
     const focused = getFocusedGhostSessionId();
     if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
-    const visible = await listVisibleActiveSessionIds();
+    const visible = await listVisibleActiveSessionDirectoryGrants();
     if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
-    const targets = new Set(visible);
-    if (focused) targets.add(focused);
+    const targets = libraryExtraDirSyncTargets(
+      visible, new Set(getMaker().listActiveSessions().map((session) => session.id)), focused,
+    );
     let granted = false;
     for (const sessionId of targets) {
       if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
@@ -3037,8 +3039,8 @@ async function syncLibraryReadonlyExtraDir(
       if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
       const nextRoot = !remote && grantRoot && sessionId === focused ? grantRoot : null;
       try {
-        await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
-        if (nextRoot) granted = true;
+        const applied = await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
+        if (nextRoot && applied?.some(isLibraryExtraDirSlot)) granted = true;
       } catch (error) {
         log.warn('library extraDirs session sync failed', {
           sessionId,
@@ -3941,6 +3943,8 @@ export function installDesktopInteractionListener(session: {
         agentIslandInteractionEpoch,
       );
     });
+  }, (requestId, decision) => {
+    resolvePendingInteraction(requestId, decision);
   });
 }
 
@@ -8010,9 +8014,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await applyScheduledModelSelection(selection, {
           getTarget: async () => {
             const row = await agentSwitchDeps.getSessionRow(sessionId);
-            return row ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status } : null;
+            return row ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status,
+              remoteHostId: row.remoteHostId, orcaRole: row.orcaRole } : null;
           },
           isBusy: () => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning(),
+          resolveSelection: async (route) => {
+            const reroute = await assertModelRouteUsable(route.agentKind, route.model, route.providerId);
+            const providers = await getDesktopProviderService().listProviders({
+              allowSideEffects: false, catalog: getActiveCatalog(),
+            });
+            return resolveScheduledModelSelection({ ...route,
+              providerId: reroute && shouldApplyExclusiveProviderRerouteLive(route.providerId)
+                ? reroute : route.providerId,
+            }, providers);
+          },
           switchHarness: (route) => performSessionAgentSwitch(agentSwitchDeps, {
             sessionId, targetAgentKind: route.agentKind, model: route.model,
             providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,

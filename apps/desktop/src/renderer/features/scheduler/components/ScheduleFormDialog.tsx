@@ -1410,7 +1410,8 @@ export function ScheduleFormDialog({
                         model: modelId, providerId, effort: (effort ?? '') as typeof form.effort,
                         fastMode: fast,
                       })}
-                      onFollowSession={() => selectModelConfiguration(null)}
+                      onFollowSession={() => selectModelConfiguration(null,
+                        boundSessionReference?.agentKind === 'cc' ? 'claude-code' : boundSessionReference?.agentKind)}
                       agentKind={form.agentKind}
                       modelValue={form.model}
                       onChangeModel={(v) => setField('model', v)}

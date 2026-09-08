@@ -154,6 +154,15 @@ describe('scheduleCreateToRow', () => {
     expect(scheduleCreateToRow(baseSchedule()).modelAgentKind).toBeNull();
     expect(schedulePatchToRow({ modelAgentKind: undefined })).toEqual({ modelAgentKind: null });
     expect(schedulePatchToRow({ name: 'renamed' })).not.toHaveProperty('modelAgentKind');
+    const followed = scheduleToCamel({ ...row, ...schedulePatchToRow({
+      modelAgentKind: undefined, model: undefined, providerId: undefined,
+      effort: undefined, fastMode: undefined,
+    }) } as ScheduleRowLike);
+    expect(followed).toMatchObject({ agentKind: 'codex', fastMode: false });
+    expect(followed.modelAgentKind).toBeUndefined();
+    expect(followed.model).toBeUndefined();
+    expect(followed.providerId).toBeUndefined();
+    expect(followed.effort).toBeUndefined();
   });
 
   it('拆 notify 为两列', () => {

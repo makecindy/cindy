@@ -30,6 +30,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
+        'newChat.modelSelector.unified.recommended': '推荐',
         'newChat.modelSelector.unified.addFavorite': '存为收藏',
         'newChat.modelSelector.unified.customize': '自定义',
         'newChat.modelSelector.unified.removeFavorite': '取消收藏',
@@ -176,11 +177,12 @@ const providersRef = vi.hoisted(() => ({
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: providersRef.providers, providerOrder: [] }),
 }));
+const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
   useDeviceProviders: () => ({
-    providers: [],
+    providers: remoteProvidersRef.providers,
     loading: false,
     error: null,
     unsupported: false,
@@ -561,6 +563,22 @@ describe('统一模型选择器面板', () => {
   });
 });
 
+describe('远程 OAuth 模型的逐行 Harness 准入', () => {
+  afterEach(() => { remoteProvidersRef.providers = []; });
+  it('当前任务是 Pi 时，远端 OpenAI 的 Codex 模型仍可选择', async () => {
+    remoteProvidersRef.providers = providersRef.providers;
+    const onCrossEngineSelect = vi.fn();
+    renderPanel({ deviceId: 'remote-oauth', vendorKey: 'pi', modelId: 'missing-pi-model',
+      currentProviderId: 'anthropic', sessionEngineFilter: { currentAgent: 'pi', onCrossEngineSelect } });
+    const row = rowFor('GPT-5.6');
+    expect(row.getAttribute('aria-disabled')).not.toBe('true');
+    await act(async () => { fireEvent.click(row); });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai', modelId: 'gpt-5.6', targetAgent: 'codex',
+    }));
+  });
+});
+
 describe('统一面板 · 会话内形态', () => {
   const onCrossEngineSelect = vi.fn();
   const sessionEngineFilter = {
@@ -573,106 +591,66 @@ describe('统一面板 · 会话内形态', () => {
     onCrossEngineSelect.mockClear();
   });
 
-  it('默认停在「同引擎」视图:只列当前引擎能跑的模型,且不显示有损警示', () => {
+  it('新任务即使已有草稿引擎和模型也不建立同 Harness 推荐分组', () => {
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    const list = screen.getByRole('listbox');
+    expect(within(list).queryByRole('group', { name: '推荐' })).toBeNull();
+    expect(list.querySelector('[data-group-provider="xd"]')).not.toBeNull();
+  });
+
+  it('收藏置顶但不选中，推荐当前值优先并移除下方空供应商组', () => {
+    const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
+    renderPanel({ actualRoute: true, sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5', selectedFavoriteUid: uid });
+    const list = screen.getByRole('listbox');
+    const groups = within(list).getAllByRole('group');
+    expect(groups[0].getAttribute('aria-label')).toBe('收藏');
+    expect(groups[1].getAttribute('aria-label')).toBe('推荐');
+    expect(within(groups[1]).getAllByRole('option')[0].textContent).toContain('GPT-5.5');
+    expect(groups[0].querySelector('[data-model-selected]')).toBeNull();
+    expect(list.querySelectorAll('[data-model-selected="true"]')).toHaveLength(1);
+    expect(list.querySelector('[data-group-provider="xd"]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cindy AI' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'GPT' } });
+    expect(within(list).getAllByText('GPT-5.5').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Anthropic' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(list).queryByText('GPT-5.5')).toBeNull();
+  });
+
+  it('默认展示全部模型，可直接选择其它引擎的模型', async () => {
     renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
-    const list = screen.getByRole('listbox');
-    // GPT-5.5 在 xd 上 cc / codex 都有 → 留在 codex 会话里是无损的。
-    expect(within(list).getByText('GPT-5.5')).toBeTruthy();
-    // Opus 5 只在 anthropic/cc 上 → 同引擎视图里不出现。
-    expect(within(list).queryByText('Opus 5')).toBeNull();
-    expect(list.querySelector('[data-cross-engine-warning]')).toBeNull();
-    // 行落在**会话引擎**上(pinnedEngine):三元组显示 Codex 而不是推荐的 Claude。
-    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
-    expect(triple?.getAttribute('title')).toContain('Codex');
-  });
-
-  /**
-   * Chris 2026-08-23:同引擎视图列出所有候选含当前引擎的模型,并钉在轨上点选。
-   * xd 的 GPT-5.5 主场在 codex,仍出现在兼容段(Opus 之后);在 Claude 轨里点它走无损直切。
-   */
-  it('同引擎视图把兼容行排在优先行后面,点下去留在当前轨', async () => {
-    renderPanel({
-      sessionEngineFilter: {
-        currentAgent: 'claude-code' as const,
-        runtimeAgent: 'claude-code' as const,
-        onCrossEngineSelect,
-      },
-      currentProviderId: 'anthropic',
-      modelId: 'claude-opus-5',
-    });
-    const list = screen.getByRole('listbox');
-    expect(within(list).getByText('Opus 5')).toBeTruthy();
-    expect(within(list).getByText('GPT-5.5')).toBeTruthy();
-    const ids = within(list)
-      .getAllByRole('option')
-      .map((row) => row.textContent);
-    expect(ids.findIndex((text) => text?.includes('Opus 5'))).toBeLessThan(
-      ids.findIndex((text) => text?.includes('GPT-5.5')),
-    );
-    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
-    expect(triple?.getAttribute('title')).toContain('Claude');
-    const sizer = document.querySelector('[data-width-sizer]');
-    const sizerGpt = Array.from(sizer?.querySelectorAll('[data-unified-anchor]') ?? []).find(
-      (node) => node.textContent?.includes('GPT-5.5'),
-    );
-    expect(sizerGpt?.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain(
-      'Codex',
-    );
+    expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(screen.getByRole('listbox')).getByText('GPT-5.5')).toBeTruthy();
+    expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
     await act(async () => {
-      fireEvent.click(rowFor('GPT-5.5'));
+      fireEvent.click(rowFor('Opus 5'));
     });
-    expect(onCrossEngineSelect).not.toHaveBeenCalled();
-    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'medium', expect.any(Boolean));
-  });
-
-  it('同引擎轨浮层不提供 Harness 切换,只展示当前轨引擎', async () => {
-    renderPanel({
-      sessionEngineFilter: {
-        currentAgent: 'claude-code' as const,
-        runtimeAgent: 'claude-code' as const,
-        onCrossEngineSelect,
-      },
-      currentProviderId: 'anthropic',
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic',
       modelId: 'claude-opus-5',
-    });
-    const flyout = await openRowFlyout('GPT-5.5');
-    expect(flyout.querySelector('[data-engine-capsule="cc"]')).toBeTruthy();
-    expect(flyout.querySelector('[data-engine-capsule="codex"]')).toBeNull();
-    await act(async () => {
-      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
-    });
-    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+      targetAgent: 'claude-code',
+    }));
   });
 
-  it('同引擎轨收藏行浮层同样不提供 Harness 切换', async () => {
-    addModelFavorite({
-      providerId: 'xd',
-      modelId: 'gpt-5.5',
-      agent: 'cc',
+  it('当前引擎没有模型时仍能从默认全部视图选模，外部换引擎后回到全部', () => {
+    const props = {
+      modelId: 'missing-model',
       effort: 'medium',
-    });
-    renderPanel({
-      sessionEngineFilter: {
-        currentAgent: 'claude-code' as const,
-        runtimeAgent: 'claude-code' as const,
-        onCrossEngineSelect,
-      },
-      currentProviderId: 'anthropic',
-      modelId: 'claude-opus-5',
-    });
-    const favoriteRow = within(screen.getAllByRole('group')[0])
-      .getByText('GPT-5.5')
-      .closest('[data-unified-anchor]') as HTMLElement;
-    const flyout = await openFlyoutForRow(favoriteRow);
-    expect(flyout.querySelector('[data-engine-capsule="cc"]')).toBeTruthy();
-    expect(flyout.querySelector('[data-engine-capsule="codex"]')).toBeNull();
-    await act(async () => {
-      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
-    });
-    expect(listModelFavorites()[0]?.agent).toBe('cc');
-    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      sessionEngineFilter: { ...sessionEngineFilter, currentAgent: 'pi' as const },
+    };
+    const { rerender } = renderPanel(props);
+    expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^仅 / })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
+    rerender(React.createElement(ModelSelectorContent, { ...props, sessionEngineFilter }));
+    expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
   });
+
 
   it('全部视图收藏行浮层仍可切 Harness', async () => {
     addModelFavorite({
@@ -704,27 +682,8 @@ describe('统一面板 · 会话内形态', () => {
     expect(listModelFavorites()[0]?.agent).toBe('codex');
   });
 
-  it('同引擎轨 leftover override 不能盖掉钉轨,点兼容行走同引擎直切', async () => {
-    setModelEngineOverride('xd', 'gpt-5.5', 'codex');
-    renderPanel({
-      sessionEngineFilter: {
-        currentAgent: 'claude-code' as const,
-        runtimeAgent: 'claude-code' as const,
-        onCrossEngineSelect,
-      },
-      currentProviderId: 'anthropic',
-      modelId: 'claude-opus-5',
-    });
-    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
-    expect(triple?.getAttribute('title')).toContain('Claude');
-    await act(async () => {
-      fireEvent.click(rowFor('GPT-5.5'));
-    });
-    expect(onCrossEngineSelect).not.toHaveBeenCalled();
-    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'medium', expect.any(Boolean));
-  });
 
-  describe('Pi 同引擎轨',
+  describe('Pi 当前模型',
     () => {
       type ProviderFixture = {
         agents: string[];
@@ -775,11 +734,12 @@ describe('统一面板 · 会话内形态', () => {
             modelId: 'claude-opus-5',
             vendorKey: 'pi',
           });
+          expect(screen.queryByRole('button', { name: /^仅 / })).toBeNull();
           const triple = rowFor('Opus 5').querySelector('[data-unified-triple]');
           expect(triple?.getAttribute('title')).toContain('Pi');
           const flyout = await openRowFlyout('Opus 5');
           expect(flyout.querySelector('[data-engine-capsule="pi"]')).toBeTruthy();
-          expect(flyout.querySelector('[data-engine-capsule="cc"]')).toBeNull();
+          expect(flyout.querySelector('[data-engine-capsule="cc"]')).toBeTruthy();
           await act(async () => {
             fireEvent.click(rowFor('Opus 5'));
           });
@@ -825,6 +785,7 @@ describe('统一面板 · 会话内形态', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
     const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
     expect(triple?.getAttribute('title')).toContain('Claude');
     await act(async () => {
@@ -836,7 +797,7 @@ describe('统一面板 · 会话内形态', () => {
 
   /**
    * Chris 2026-08-19 实测「一次打开内切 rail,面板弹开一些,感觉有点怪」:面板是 `w-max`
-   * 且 morph 宿主 stickyWidth 只进不退,默认停在**最窄**的同引擎视图,切「全部」时二次撑宽。
+   * 且 morph 宿主 stickyWidth 只进不退,停在**最窄**的同引擎视图,切「全部」时二次撑宽。
    * 定宽 sizer = 打开第一帧就渲染一份不可见的全量视图供量宽。
    */
   it('非全量视图挂一份不可见的定宽 sizer(全量视图不挂)', async () => {
@@ -845,6 +806,7 @@ describe('统一面板 · 会话内形态', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
     const sizer = container.querySelector('[data-width-sizer]');
     expect(sizer).toBeTruthy();
     // 量的是**全量视图**:同引擎视图里看不到的 Opus 5 也在 sizer 里。
@@ -3013,7 +2975,7 @@ describe('统一面板 · 新会话选中直通', () => {
     });
   });
 
-  it('收藏锚点选中态:命中时只有该收藏行打勾,锚点失效时回落模型行', () => {
+  it('收藏配置是否匹配都只在模型本体标记选中', () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     const { unmount } = render(
       React.createElement(ModelSelectorContent, {
@@ -3032,7 +2994,7 @@ describe('统一面板 · 新会话选中直通', () => {
     );
     let selected = screen.getByRole('listbox').querySelectorAll('[data-model-selected="true"]');
     expect(selected).toHaveLength(1);
-    expect(selected[0].getAttribute('data-unified-anchor')).toBe(`fav::${uid}`);
+    expect(selected[0].getAttribute('data-unified-anchor')).toBe('model::xd::gpt-5.5');
     unmount();
 
     // 锚点在当前 owner 的收藏里查无此条(删除 / 切账号)→ 不许两头落空。
@@ -3609,7 +3571,6 @@ describe('统一面板 · 付费锁定行', () => {
 });
 
 
-
 describe('统一选择器 · 旧偏好与配置变更回归', () => {
   afterEach(() => window.localStorage.removeItem('xdt:modelPickerLayout:v1'));
 
@@ -3652,7 +3613,7 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
     });
     const selected = () =>
       screen.getByRole('listbox').querySelector('[data-model-selected="true"]');
-    expect(selected()?.getAttribute('data-unified-anchor')).toBe(`fav::${uid}`);
+    expect(selected()?.getAttribute('data-unified-anchor')).toBe('model::xd::gpt-5.5');
     await act(async () => {
       updateModelFavorite(uid, { fast: true });
     });
@@ -3941,7 +3902,6 @@ describe('统一面板 · 清收藏锚点也等待回执', () => {
   });
 });
 
-
 describe('global default A contract', () => {
   it.each([false, ['pi'] as const])('hides Fast when this entry cannot dispatch it (%s)', async (fastModeConfigurable) => {
     const select = vi.fn();
@@ -3974,7 +3934,6 @@ describe('global default A contract', () => {
     expect(dismiss).toHaveBeenCalledTimes(1);
   });
 });
-
 
 describe('settings configuration without shared memory', () => {
   it('applies a non-selected model with its effort and Fast, keeping the menu open on success or failure', async () => {

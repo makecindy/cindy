@@ -4624,11 +4624,6 @@ export function CCAgentSessionView({
             issue={remoteLinkIssue}
             onResync={remoteSync.resync}
           />
-        ) : remoteConn === 'connected' ? (
-          <RemoteSessionBanner
-            status={remoteSync.contentState === 'ready' ? 'recovered' : 'syncing'}
-            onResync={remoteSync.resync}
-          />
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}
@@ -4712,8 +4707,7 @@ export function CCAgentSessionView({
                     <span>{t('ccAgent.agentStatus.thinking')}</span>
                   </div>
                 ) : null
-              ) : !pendingPlanReview ||
-                (hasControlledBanner && controlledBannerCollapsed) ? (
+              ) : !pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
                 <RunningStatusBar
                   key={sessionId}
                   status={composerStatus}
@@ -4819,7 +4813,8 @@ export function CCAgentSessionView({
                 Retry 门控与恢复路径(同步登录态 / fork 剥离),此前的简化红条
                 一律显示重试会把用户带进同样的失败循环。onRetry 忽略 retryText
                 (typed token),发隐藏续跑指令;onCancel = dismiss 持久化。 */}
-            {!readOnly && errorTailMsg &&
+            {!readOnly &&
+              errorTailMsg &&
               !errorTailBannerHidden &&
               !syntheticContinuationPending &&
               !error &&
@@ -4864,7 +4859,8 @@ export function CCAgentSessionView({
 
             {/* interrupted-turn-resume(简化版):session 双时间戳驱动的中断提示。
               历史中断行(上方 errorTailMsg 判定)优先;互斥条件与 error-tail 同款。 */}
-            {!readOnly && !errorTailMsg &&
+            {!readOnly &&
+              !errorTailMsg &&
               interruptedFromSession &&
               !syntheticContinuationPending &&
               !error &&
@@ -5025,6 +5021,7 @@ export function CCAgentSessionView({
                   />
                 ) : pendingAskUser ? (
                   <AskUserQuestionPrompt
+                    sessionId={sessionId}
                     pending={pendingAskUser}
                     onAnswer={answerUserQuestion}
                     viewerState={askUserViewerState}
@@ -5249,16 +5246,16 @@ export function CCAgentSessionView({
                 自动 clear,UI 回到正常显示。设计参考用户反馈"把这部分的体验逻辑放到
                 chatinput 底部 显示 work dir 的地方"——不再在 chat stream 插 SystemCard。 */}
               {!botChatIdentity ? (
-              <div
-                className={cn(
-                  'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                  !session?.workingDir && !worktreeCreation && 'invisible',
-                )}
-              >
+                <div
+                  className={cn(
+                    'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
+                    !session?.workingDir && !worktreeCreation && 'invisible',
+                  )}
+                >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
                   click 区域宽度与文本一致(不拉伸到整行) */}
                   {worktreeCreation?.status === 'creating' ? (
-                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
                       <Spinner size={12} className="text-[var(--workingdir-icon)]" />
                       <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
                         {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
@@ -5268,130 +5265,133 @@ export function CCAgentSessionView({
                         …
                       </span>
                     </div>
-                ) : worktreeCreation?.status === 'failed' ? (
-                  <Tip text={worktreeCreation.error} mono side="top">
+                  ) : worktreeCreation?.status === 'failed' ? (
+                    <Tip text={worktreeCreation.error} mono side="top">
                       <div className="flex min-w-0 items-center gap-1.5">
-                        <AlertCircle size={12} className="shrink-0 text-red-500 dark:text-red-400" />
+                        <AlertCircle
+                          size={12}
+                          className="shrink-0 text-red-500 dark:text-red-400"
+                        />
                         <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
                           {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
                           {' — '}
                           {worktreeCreation.error}
                         </span>
                         <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (sessionId) worktreeCreationStore.clear(sessionId);
-                        }}
-                        className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
-                        aria-label={t('common.dismiss', 'Dismiss')}
-                      >
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (sessionId) worktreeCreationStore.clear(sessionId);
+                          }}
+                          className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
+                          aria-label={t('common.dismiss', 'Dismiss')}
+                        >
                           <X size={10} className="text-red-500/70 dark:text-red-400/70" />
                         </button>
                       </div>
                     </Tip>
-                ) : (
-                  <Tip
-                    text={
-                      composerDir ? (
-                        session?.remoteHostId ? (
-                          // 远端 session: Tip 顶部加一行 "Host: <alias>" 让用户在
-                          // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
-                          // SSH alias (HostConfig.id), 不需要额外 lookup。
-                          <>
+                  ) : (
+                    <Tip
+                      text={
+                        composerDir ? (
+                          session?.remoteHostId ? (
+                            // 远端 session: Tip 顶部加一行 "Host: <alias>" 让用户在
+                            // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
+                            // SSH alias (HostConfig.id), 不需要额外 lookup。
+                            <>
                               <div>Host: {session.remoteHostId}</div>
                               <div>{composerDir}</div>
                             </>
-                        ) : (
-                          composerDir
-                        )
-                      ) : null
-                    }
-                    mono
-                    side="top"
-                  >
+                          ) : (
+                            composerDir
+                          )
+                        ) : null
+                      }
+                      mono
+                      side="top"
+                    >
                       {isRemoteWorktreeSession ? (
-                      <div className="flex min-w-0 items-center gap-1.5">
+                        <div className="flex min-w-0 items-center gap-1.5">
                           {workingDirChipContent}
                         </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-opacity active:opacity-60"
-                        onClick={handleOpenWorkingDir}
-                        aria-label={t('ccAgent.layout.openWorkingDirAria')}
-                      >
+                      ) : (
+                        <button
+                          type="button"
+                          className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-opacity active:opacity-60"
+                          onClick={handleOpenWorkingDir}
+                          aria-label={t('ccAgent.layout.openWorkingDirAria')}
+                        >
                           {workingDirChipContent}
                         </button>
-                    )}
+                      )}
                     </Tip>
-                )}
+                  )}
 
                   {/* Right: Context capacity indicator */}
                   <div className="flex shrink-0 items-center gap-3">
                     {session?.usedProjectContext && (
-                    <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
+                      <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
                         <Brain
-                        size={14}
-                        strokeWidth={1.75}
-                        className="shrink-0 -translate-y-px text-foreground/70"
-                        aria-label={t('ccAgent.layout.projectContextLoaded')}
-                      />
+                          size={14}
+                          strokeWidth={1.75}
+                          className="shrink-0 -translate-y-px text-foreground/70"
+                          aria-label={t('ccAgent.layout.projectContextLoaded')}
+                        />
                       </Tip>
-                  )}
-                    <TodaySpendChip
-                    vendorKey={normalizeDbAgentKind(displayAgentKind)}
-                    modelId={agentSwitchIntent?.model ?? session?.model ?? null}
-                    providerId={
-                      agentSwitchIntent
-                        ? agentSwitchIntent.providerId
-                        : (session?.providerId ?? null)
-                    }
-                    sessionId={sessionId}
-                    sessionInitialMoney={session?.totalMoney ?? null}
-                    sessionInitialCostUsd={session?.totalCostUsd ?? null}
-                    sessionInitialTokens={session?.totalTokenUsage ?? null}
-                    remoteHostId={session?.remoteHostId ?? null}
-                    deviceLinkDeviceId={remoteDeviceId ?? null}
-                  />
-                    <ContextCapacityRing
-                    isRunning={agentStatus.isRunning}
-                    sessionId={sessionId}
-                    providerId={session?.providerId}
-                    contextTokens={agentStatus.contextTokens}
-                    model={agentSwitchIntent?.model ?? session?.model ?? ''}
-                    vendorKey={normalizeDbAgentKind(displayAgentKind)}
-                    sdkContextWindow={agentStatus.contextWindow}
-                    verifiedContextWindow={resolveSessionContextWindow(
-                      { providers },
-                      {
-                        agentKind: normalizeDbAgentKind(displayAgentKind),
-                        model: agentSwitchIntent?.model ?? session?.model,
-                        providerId: agentSwitchIntent
-                          ? agentSwitchIntent.providerId
-                          : session?.providerId,
-                      },
                     )}
-                    deviceId={remoteDeviceId}
-                    onCompact={
-                      // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
-                      // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
-                      // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
-                      // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
-                      // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
-                      // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
-                      // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
-                      // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
-                      !readOnly &&
-                      compactChannel !== null &&
-                      !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
-                      session != null &&
-                      agentStatus.contextTokens > 0 &&
-                      !(compactChannel === 'compact-session' && agentStatus.isRunning)
-                        ? handleCompactRequest
-                        : undefined
-                    }
-                  />
+                    <TodaySpendChip
+                      vendorKey={normalizeDbAgentKind(displayAgentKind)}
+                      modelId={agentSwitchIntent?.model ?? session?.model ?? null}
+                      providerId={
+                        agentSwitchIntent
+                          ? agentSwitchIntent.providerId
+                          : (session?.providerId ?? null)
+                      }
+                      sessionId={sessionId}
+                      sessionInitialMoney={session?.totalMoney ?? null}
+                      sessionInitialCostUsd={session?.totalCostUsd ?? null}
+                      sessionInitialTokens={session?.totalTokenUsage ?? null}
+                      remoteHostId={session?.remoteHostId ?? null}
+                      deviceLinkDeviceId={remoteDeviceId ?? null}
+                    />
+                    <ContextCapacityRing
+                      isRunning={agentStatus.isRunning}
+                      sessionId={sessionId}
+                      providerId={session?.providerId}
+                      contextTokens={agentStatus.contextTokens}
+                      model={agentSwitchIntent?.model ?? session?.model ?? ''}
+                      vendorKey={normalizeDbAgentKind(displayAgentKind)}
+                      sdkContextWindow={agentStatus.contextWindow}
+                      verifiedContextWindow={resolveSessionContextWindow(
+                        { providers },
+                        {
+                          agentKind: normalizeDbAgentKind(displayAgentKind),
+                          model: agentSwitchIntent?.model ?? session?.model,
+                          providerId: agentSwitchIntent
+                            ? agentSwitchIntent.providerId
+                            : session?.providerId,
+                        },
+                      )}
+                      deviceId={remoteDeviceId}
+                      onCompact={
+                        // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
+                        // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
+                        // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
+                        // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
+                        // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
+                        // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
+                        // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
+                        // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
+                        !readOnly &&
+                        compactChannel !== null &&
+                        !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
+                        session != null &&
+                        agentStatus.contextTokens > 0 &&
+                        !(compactChannel === 'compact-session' && agentStatus.isRunning)
+                          ? handleCompactRequest
+                          : undefined
+                      }
+                    />
                   </div>
                 </div>
               ) : null}
@@ -5919,7 +5919,10 @@ function ContextCapacityRing({
   const [contextInspection, setContextInspection] = useState(0);
   const codexContext = useCodexContextWindow({
     enabled: vendorKey === 'codex' && !deviceId && Boolean(sessionId),
-    providerId, modelId: model, sessionId, reportedWindow: sdkContextWindow,
+    providerId,
+    modelId: model,
+    sessionId,
+    reportedWindow: sdkContextWindow,
     refreshKey: `${isRunning}:${contextInspection}`,
   });
   const contextWindow = resolveDisplayContextWindow({
@@ -6006,16 +6009,20 @@ function ContextCapacityRing({
         ) : vendorKey === 'codex' ? (
           // Native Codex manages compaction; this control only reads its capacity.
           <>
-            <div>{codexContext?.pendingApply
-              ? t('ccAgent.layout.contextRing.codexPendingHint')
-              : tooltipText}</div>
-            <div>{codexContext
-              ? t('settings.providers.models.advanced.codexContextValues', {
-                  total: codexContext.contextWindow.toLocaleString(),
-                  usable: codexContext.usableContextWindow.toLocaleString(),
-                  compact: codexContext.autoCompactTokenLimit.toLocaleString(),
-                })
-              : t('settings.providers.models.advanced.codexContextUnknown')}</div>
+            <div>
+              {codexContext?.pendingApply
+                ? t('ccAgent.layout.contextRing.codexPendingHint')
+                : tooltipText}
+            </div>
+            <div>
+              {codexContext
+                ? t('settings.providers.models.advanced.codexContextValues', {
+                    total: codexContext.contextWindow.toLocaleString(),
+                    usable: codexContext.usableContextWindow.toLocaleString(),
+                    compact: codexContext.autoCompactTokenLimit.toLocaleString(),
+                  })
+                : t('settings.providers.models.advanced.codexContextUnknown')}
+            </div>
             <div>{t('ccAgent.layout.contextRing.codexAutoHint')}</div>
           </>
         ) : (
@@ -6033,8 +6040,12 @@ function ContextCapacityRing({
           {ringContent}
         </button>
       ) : (
-        <div className="flex shrink-0 items-center gap-1"
-          onMouseEnter={() => { if (vendorKey === 'codex') setContextInspection(n => n + 1); }}>
+        <div
+          className="flex shrink-0 items-center gap-1"
+          onMouseEnter={() => {
+            if (vendorKey === 'codex') setContextInspection((n) => n + 1);
+          }}
+        >
           {ringContent}
         </div>
       )}

@@ -774,6 +774,21 @@ function assembleRoot(
 ): CatalogModel[] {
   const rootPlan = plan.roots.get(rootPlanKey(providerId, agent));
   let out = applyRootRegistryPlan(models, rootPlan);
+  // The subscription Registry historically stores a working default in
+  // contextWindow. Codex's separate native maximum must survive that overlay.
+  // Apply before user overrides so full local additions still win as a unit.
+  if (providerId === 'openai' && agent === 'codex') {
+    const nativeModels = new Map(models.map((model) => [model.id, model]));
+    out = out.map((model) => {
+      const native = nativeModels.get(model.id);
+      return {
+        ...model,
+        ...(native?.contextWindowMax !== undefined ? { contextWindowMax: native.contextWindowMax } : {}),
+        // A stale Registry cannot enable a speed tier absent from the account.
+        ...(native?.supportsFastMode === false ? { supportsFastMode: false } : {}),
+      };
+    });
+  }
   out = applyLocalOverridesToRoot(providerId, agent, out, localOverrides, plan.warnings);
   if (rootPlan && rootPlan.retired.size > 0) {
     out = out.map((m) =>
@@ -1064,7 +1079,12 @@ function computeMerged(): Catalog {
           'openai',
           'claude-code',
           model.id,
-          applyRegistryConsumerOverlay(model, 'openai', 'claude-code', model.id, plan),
+          {
+            ...applyRegistryConsumerOverlay(model, 'openai', 'claude-code', model.id, plan),
+            // This bridge calls the same subscription backend as the Codex root.
+            ...(model.contextWindowMax !== undefined ? { contextWindowMax: model.contextWindowMax } : {}),
+            ...(model.supportsFastMode === false ? { supportsFastMode: false } : {}),
+          },
           localOverrides,
           plan.warnings,
         );
@@ -1227,6 +1247,18 @@ function computeMerged(): Catalog {
         // and its supported efforts. Missing Registry defaults use Cindy’s medium-first policy.
         // Resolve without an agent: each harness adapts the same model-level intent.
         const registryEntry = findModelRegistryRoute(b.modelRegistry, 'xd', gm.id)?.entry;
+        // Registry describes the model; Gateway controls which tiers this route opens.
+        // Gateway's GPT discount routes use codex/<model> (or the bare GPT ID).
+        // Resolve their exact OpenAI model identity for display only. Do not inherit
+        // subscription perAgent tiers, route availability, prices or request IDs.
+        const standardId = /^(?:codex\/)?gpt-[^/]+$/.test(gm.id)
+          ? `openai/${gm.id.replace(/^codex\//, '')}` : gm.id;
+        const standardEntry = b.modelRegistry?.models.find((entry) => entry.id === standardId)
+          ?? registryEntry;
+        const displayEfforts = canonicalEffortOrder([
+          ...(standardEntry?.status === 'retired' ? [] : standardEntry?.efforts ?? []),
+          ...efforts,
+        ]);
         const registryDefault = registryEntry ? modelDefaultEffort(registryEntry) : undefined;
         const intent = registryDefault !== undefined ? registryDefault : defaultEffortForCapabilities(efforts);
         const defaultEffort = efforts.length === 0 ? null
@@ -1260,6 +1292,7 @@ function computeMerged(): Catalog {
           ...(gm.maxOutputTokens !== undefined ? { maxOutput: gm.maxOutputTokens } : {}),
           contextWindowVerified: true,
           efforts,
+          displayEfforts,
           defaultEffort,
           ...(ov.supportsFastMode !== undefined || gm.supportsFastMode !== undefined
             ? { supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode }
@@ -1593,8 +1626,26 @@ export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void 
  * 注入 codex cache 派生的规范化模型快照。由 ensureActiveCatalogLoaded 在目录加载后调用。
  * 传空数组 = 有效空快照(回到静态兜底);读取失败时调用方不应调用本 setter,以保留现值。
  */
-export function setDiscoveredCodexModels(models: CatalogModel[]): void {
-  discoveredCodex = [...models];
+export function setDiscoveredCodexModels(
+  models: CatalogModel[],
+  options: { source?: 'cache' | 'list' } = {},
+): void {
+  // model/list owns current membership, ordering and effort/speed tiers, but does
+  // not report windows or image inputs. Preserve only those metadata fields for
+  // surviving IDs. Cache/auth refresh remains a complete replacement, including [].
+  const previous = new Map(discoveredCodex.map((model) => [model.id, model]));
+  discoveredCodex = options.source === 'list' ? models.map((model) => {
+    const known = previous.get(model.id);
+    if (!known) return model;
+    return {
+      ...model,
+      ...(known.contextWindowVerified === true ? {
+        contextWindow: known.contextWindow, contextWindowVerified: true,
+      } : {}),
+      ...(known.contextWindowMax !== undefined ? { contextWindowMax: known.contextWindowMax } : {}),
+      ...(known.supportsImageInput !== undefined ? { supportsImageInput: known.supportsImageInput } : {}),
+    };
+  }) : [...models];
   markChanged();
 }
 

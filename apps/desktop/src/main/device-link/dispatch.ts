@@ -88,6 +88,8 @@ import {
 } from './broadcast-tap';
 import * as broadcastTap from './broadcast-tap';
 import { createOfflinePushQueue } from './offlinePushQueue';
+import { SessionPatchStage, type SessionPatch } from './sessionPatchStage';
+import { createPushFailureLog } from './pushFailureLog';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
@@ -102,6 +104,10 @@ import {
 } from './remote-workdir-guard';
 
 const log = createLogger('device-link-dispatch');
+const pushFailures = createPushFailureLog((summary) => log.warn('push delivery failures', summary));
+function reportPushFailure(dst: string, channel: string, error: unknown): void {
+  pushFailures.record(shortId(dst), channel, error instanceof DeviceLinkError ? error.code : 'UNKNOWN');
+}
 
 /**
  * 老版本 mobile 只认识 #527 之前已发布的 logo kind。新 mark 可由同版本客户端按
@@ -153,7 +159,7 @@ const botPushChecks = new Map<string, { tail: Promise<void>; bytes: number; coun
 function sendBotCheckedPush(
   dst: string, channel: string, payload: unknown, send: (payload: unknown) => void,
   failed: (error: unknown) => void,
-): void {
+): void | Promise<void> {
   if (!hasRemoteBotSessionLookup()) { send(payload); return; }
   let size: number;
   try { size = byteLength(JSON.stringify(payload)); } catch (error) { failed(error); return; }
@@ -174,6 +180,7 @@ function sendBotCheckedPush(
     if (queue.count === 0 && botPushChecks.get(dst) === queue) botPushChecks.delete(dst);
   });
   botPushChecks.set(dst, queue);
+  return queue.tail;
 }
 
 /** 只排队可由 session snapshot 对账、且不携带权限终态的会话域事件。 */
@@ -389,26 +396,40 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
 /**
  * routing 投影:剥掉每个 agent 路由的执行细节(upstream / authStrategy / headerDelete /
  * headerOverride / modelIdRewrite / adapter,含自定义供应商 endpoint),只保留非敏感的
- * `wireProtocol:'openai-chat'` 展示标记与 `disabled:true` 可用性门控。后者必须跨端保留，
+ * `wireProtocol` 协议标记与 `disabled:true` 可用性门控。后者必须跨端保留，
  * 否则控制端用共享 registry 重算来源时会把被控端禁用的 runtime 重新当成可选。
  *
  * 历史上这里曾保留 `routing.supportsFastMode` 给控制端做 Fast 显隐;现 Fast 能力已收归
  * per-(provider, agent) 的 `models[agent].supportsFastMode`(唯一真相),控制端直接从隧道带来的
  * `models` 现查(见 ModelSelector），不再读 routing；routing 只承载上述两项跨端展示/可用性字段。
  */
+type DisplayWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+
 function projectRoutingForDisplay(
   routing: unknown,
-): Record<string, { wireProtocol?: 'openai-chat'; disabled?: true }> | undefined {
+): Record<string, { wireProtocol?: DisplayWireProtocol; disabled?: true }> | undefined {
   if (!routing || typeof routing !== 'object' || Array.isArray(routing)) return undefined;
-  const out: Record<string, { wireProtocol?: 'openai-chat'; disabled?: true }> = {};
+  const out: Record<string, { wireProtocol?: DisplayWireProtocol; disabled?: true }> = {};
   for (const [agent, value] of Object.entries(routing as Record<string, unknown>)) {
     const route = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
       : null;
-    // 只暴露控制端需要的「Cindy 桥接」标记与禁用门控。原生协议/启用态缺省不回传；
-    // endpoint、鉴权、headers、adapter 等执行字段仍全部留在被控端。
+    // Preserve the protocol evidence before stripping execution details. Otherwise the
+    // controller sees native Pi metadata but an unknown Codex/Claude route and prefers Pi.
+    const wireProtocol: DisplayWireProtocol | undefined =
+      route?.wireProtocol === 'openai-chat' ||
+      route?.wireProtocol === 'openai-responses' ||
+      route?.wireProtocol === 'anthropic-messages'
+        ? route.wireProtocol
+        : route?.authStrategy && route.wireProtocol === undefined
+          ? agent === 'codex'
+            ? 'openai-responses'
+            : agent === 'claude-code'
+              ? 'anthropic-messages'
+              : undefined
+          : undefined;
     out[agent] = {
-      ...(route?.wireProtocol === 'openai-chat' ? { wireProtocol: 'openai-chat' as const } : {}),
+      ...(wireProtocol ? { wireProtocol } : {}),
       ...(route?.disabled === true ? { disabled: true as const } : {}),
     };
   }
@@ -965,7 +986,8 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
         stage.sessions.delete(sid);
         continue;
       }
-      if ((activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP) break;
+      if (activeClient.canSendPush?.(dst) === false
+        || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP) break;
       // Enqueue older staged deltas before the captured snapshot, then later deltas.
       // All three use the same per-peer DB authorization queue before wire delivery.
       flushMakerEventBatchesForSession(dst, sid);
@@ -1287,7 +1309,8 @@ function flushMakerEventBatchSession(
         }
         if (
           subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)
-          && (sessionSyncStages.get(dst)?.sessions.has(sessionId)
+          && (activeClient.canSendPush?.(dst) === false
+            || sessionSyncStages.get(dst)?.sessions.has(sessionId)
             || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP)
         ) {
           // Once any part is skipped, subsequent deltas no longer have a valid
@@ -1388,6 +1411,51 @@ interface SessionActivityStage {
   retryTimer: ReturnType<typeof setTimeout> | null;
 }
 const sessionActivityStages = new Map<string, SessionActivityStage>();
+const sessionPatchStages = new Map<string, SessionPatchStage>();
+
+function clearSessionPatchStage(dst: string): void {
+  sessionPatchStages.get(dst)?.dispose();
+  sessionPatchStages.delete(dst);
+}
+
+function stageSessionPatch(dst: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
+  const patch = payload as SessionPatch | null;
+  if (!patch || typeof patch.sessionId !== 'string' || !patch.sessionId
+    || !patch.patch || typeof patch.patch !== 'object' || Array.isArray(patch.patch)) return;
+  let stage = sessionPatchStages.get(dst);
+  if (stage && !makerEventBatchOwnerStampEquals(stage.ownerStamp, ownerStamp)) {
+    clearSessionPatchStage(dst);
+    stage = undefined;
+  }
+  if (!stage) {
+    const owner = broadcastTap.captureDataOwnerBroadcastScope();
+    stage = new SessionPatchStage(ownerStamp,
+      () => {
+        if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
+          || !subscriptions.getControllersForTopic('sessions').includes(dst)) {
+          clearSessionPatchStage(dst);
+          return false;
+        }
+        return !!activeClient && activeClient.getStatus() === 'online'
+          && activeClient.canSendPush?.(dst) !== false
+          && activeClient.getReliableSendQueueDepth(dst) < SESSION_ACTIVITY_WINDOW_SOFT_CAP;
+      },
+      async (item, isCurrent) => {
+        let failure: unknown;
+        await sendBotCheckedPush(dst, 'local-db:sessions:patched', item, (projected) => {
+          if (!isCurrent() || !broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
+            || !subscriptions.getControllersForTopic('sessions').includes(dst)) return;
+          if (!activeClient || activeClient.canSendPush?.(dst) === false) {
+            throw new DeviceLinkError('NOT_CONNECTED', 'peer mirror paused');
+          }
+          activeClient.sendPush(dst, 'local-db:sessions:patched', projected, ownerStamp);
+        }, (error) => { failure = error; });
+        if (failure) throw failure;
+      }, (error) => reportPushFailure(dst, 'local-db:sessions:patched', error));
+    sessionPatchStages.set(dst, stage);
+  }
+  stage.enqueue(patch);
+}
 
 function sessionActivityKey(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -1430,7 +1498,7 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
   // 收尾包会永久卡在内存里不再投递(远端列表行挂死在旧状态)。定时器成本
   // 有界:每控制端至多一个 250ms 定时器,且控制端真正离线时
   // handleControllerOffline 会清空暂存、终止重试。
-  if (activeClient.getStatus() !== 'online') {
+  if (activeClient.getStatus() !== 'online' || activeClient.canSendPush?.(dst) === false) {
     scheduleSessionActivityRetry(dst, stage);
     return;
   }
@@ -1489,7 +1557,9 @@ function clearSessionActivityStage(dst: string): void {
 }
 
 function clearAllSessionActivityStages(): void {
+  pushFailures.flush();
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
+  for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
 }
 
 /**
@@ -1618,6 +1688,21 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       stageSessionActivityPush(dst, targetPayload, ownerStamp);
       continue;
     }
+    if (channel === 'local-db:sessions:patched') {
+      const item = targetPayload as SessionPatch;
+      // Engine/lifecycle fields are barriers for following maker events. Only
+      // independent list metadata may wait; fold older metadata into a barrier.
+      if (item?.patch && Object.keys(item.patch).every((key) => key === 'title' || key === 'extraDirs')) {
+        stageSessionPatch(dst, targetPayload, ownerStamp);
+      } else {
+        const stage = sessionPatchStages.get(dst);
+        const older = makerEventBatchOwnerStampEquals(stage?.ownerStamp, ownerStamp)
+          ? stage?.take(item?.sessionId) : undefined;
+        sendPushBestEffort(dst, channel, older
+          ? { ...item, patch: { ...older.patch, ...item.patch } } : targetPayload, ownerStamp);
+      }
+      continue;
+    }
     // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
     // 「每窗口一帧」(见 stageMakerEventPush)。未声明能力的控制端照旧逐帧,
     // 因此旧控制端零感知。sessionId 取自 topic 路由所用的同一字段,取不到时
@@ -1651,7 +1736,7 @@ function sendPushBestEffort(
 ): void {
   sendBotCheckedPush(dst, channel, payload,
     (projected) => sendPushBestEffortAuthorized(dst, channel, projected, ownerStamp),
-    () => log.warn('remote Bot push authorization failed'));
+    (error) => reportPushFailure(dst, channel, error));
 }
 
 function sendPushBestEffortAuthorized(
@@ -1672,7 +1757,8 @@ function sendPushBestEffortAuthorized(
   // They must obey the same missing-prefix boundary as ordinary deltas.
   if (channel === 'maker:event' && sessionId
     && subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)
-    && (sessionSyncStages.get(dst)?.sessions.has(sessionId)
+    && (activeClient.canSendPush?.(dst) === false
+      || sessionSyncStages.get(dst)?.sessions.has(sessionId)
       || (activeClient.getReliableSendQueueDepth?.(dst) ?? 0) >= MAKER_EVENT_WINDOW_SOFT_CAP)) {
     markForRecovery();
     return;
@@ -1684,14 +1770,14 @@ function sendPushBestEffortAuthorized(
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
       markForRecovery();
-      log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
+      reportPushFailure(dst, channel, err);
       return;
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
       markForRecovery();
-      log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
+      reportPushFailure(dst, channel, err);
       return;
     }
 
@@ -1869,6 +1955,7 @@ function deactivateControllerState(
   changed = subscriptions.getControllerIds().includes(deviceId) || changed;
   clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
+  clearSessionPatchStage(deviceId);
   clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
@@ -3121,7 +3208,10 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
   } else {
     subscriptions.unsubscribe(src, topics);
     // 退订 sessions 后暂存里的活动快照不应再投递(含已排期的重试)。
-    if (topics.includes('sessions')) clearSessionActivityStage(src);
+    if (topics.includes('sessions')) {
+      clearSessionActivityStage(src);
+      clearSessionPatchStage(src);
+    }
     // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
     for (const topic of topics) {
       const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;

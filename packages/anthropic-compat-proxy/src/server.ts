@@ -35,6 +35,7 @@ import {
   type OutboundProxyTarget,
 } from './outbound-proxy.js';
 import { Socks5HttpAgent, Socks5HttpsAgent } from './socks5.js';
+import { describeUpstreamRequestFailure } from './upstream-failure.js';
 import { stripNonAnthropicFields, stripToolUseProviderSpecificFields } from './transform.js';
 import {
   collectToolUseIdsForResponseRewrite,
@@ -1786,7 +1787,9 @@ function forward(
     });
     if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'error';
     const upstreamError = err instanceof Error ? err : new Error(String(err));
-    finishClientAfterUpstreamFailure(upstreamError, `upstream unreachable: ${String(err)}`);
+    // 回环端口 ECONNREFUSED 单独措辞(本机没监听 ≠ 远端服务故障,#4100);其余逐字不变。
+    const failure = describeUpstreamRequestFailure(err, { viaOutboundProxy: Boolean(outboundProxy) });
+    finishClientAfterUpstreamFailure(upstreamError, failure.message, failure.code);
   });
 
   upstreamReq.on('timeout', () => {

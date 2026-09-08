@@ -63,9 +63,10 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { updateContent as updateMessageContent } from '@/lib/messageService';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, type AskUserQuestionItem } from '@/lib/makerChatStore';
 
 const SESSION_ID = 'ask-user-done-race';
+const getPendingInteractions = vi.fn<() => Promise<unknown[]>>(async () => []);
 
 function emptyProjection(sessionId: string) {
   return {
@@ -115,7 +116,7 @@ function installElectronBridge(): void {
         },
         send: vi.fn(async () => ({ accepted: true })),
         generateTitle: vi.fn(async () => ({ title: 't' })),
-        getPendingInteractions: vi.fn(async () => []),
+        getPendingInteractions,
         setPlanMode: vi.fn(async () => {}),
         resolveInteraction: vi.fn(async () => ({ accepted: true })),
         abortSession: vi.fn(async () => {}),
@@ -131,13 +132,16 @@ function installElectronBridge(): void {
   };
 }
 
-function emitAskUserRequest(requestId: string): void {
+function emitAskUserRequest(
+  requestId: string,
+  questions: AskUserQuestionItem[] = [{ question: '桌面版这次要采用哪种范围？', header: '词典编辑' }],
+): void {
   onInteractionRequest?.({
     sessionId: SESSION_ID,
     request: {
       kind: 'ask_user_question',
       requestId,
-      questions: [{ question: '桌面版这次要采用哪种范围？', header: '词典编辑' }],
+      questions,
     },
     persistId: `persist-${requestId}`,
   });
@@ -164,6 +168,7 @@ function pendingAskStatuses(): string[] {
 describe('ask_user 与 done 的时序', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getPendingInteractions.mockReset().mockResolvedValue([]);
     installElectronBridge();
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
@@ -186,6 +191,71 @@ describe('ask_user 与 done 的时序', () => {
     const snap = makerChatStore.getSnapshot(SESSION_ID);
     expect(snap.pendingAskUser?.requestId).toBe('ask-1');
     expect(pendingAskStatuses()).toEqual(['pending']);
+  });
+
+  it('codex:done 的 Host 快照重放保留答题状态及 questions 引用', async () => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    emitAskUserRequest('ask-replay', [{
+      question: 'Pick details',
+      header: 'Details',
+      multiSelect: true,
+      options: [{ label: 'A', description: 'First option' }],
+    }]);
+    makerChatStore.setAskUserDraft(SESSION_ID, {
+      requestId: 'ask-replay', currentIndex: 0, answers: {},
+    });
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+    // A fresh IPC payload, including different object key order, is still the same question.
+    const questions: AskUserQuestionItem[] = [{
+      options: [{ description: 'First option', label: 'A' }],
+      multiSelect: true,
+      header: 'Details',
+      question: 'Pick details',
+    }];
+    getPendingInteractions.mockResolvedValue([{
+      request: { kind: 'ask_user_question', requestId: 'ask-replay', questions },
+      persistId: 'persist-ask-replay',
+    }]);
+
+    emitDone('codex');
+
+    // Wait for the actual async snapshot replay, not just the synchronous done reducer.
+    await vi.waitFor(() => {
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages.find(
+        (m) => m.askUserRequestId === 'ask-replay',
+      )?.askUserQuestions).toBe(questions);
+    });
+    const after = makerChatStore.getSnapshot(SESSION_ID);
+    // The prompt restores local unsubmitted text/checkboxes whenever questions changes identity.
+    expect(after.pendingAskUser).toBe(before.pendingAskUser);
+    expect(after.askUserDraft).toBe(before.askUserDraft);
+    expect(after.askUserViewerState).toBe('minimized');
+    expect(pendingAskStatuses()).toEqual(['pending']);
+  });
+
+  it.each([
+    ['new request', 'ask-new', [{ question: 'Pick', options: [{ label: 'A' }] }]],
+    ['changed question', 'ask-edit', [{ question: 'Different', options: [{ label: 'A' }] }]],
+    ['changed option', 'ask-edit', [{ question: 'Pick', options: [{ label: 'B' }] }]],
+    ['changed mode', 'ask-edit', [{ question: 'Pick', options: [{ label: 'A' }], multiSelect: true }]],
+  ] as const)('%s still initializes a fresh question', (_name, requestId, questions) => {
+    emitAskUserRequest('ask-edit', [{ question: 'Pick', options: [{ label: 'A' }] }]);
+    makerChatStore.setAskUserDraft(SESSION_ID, {
+      requestId: 'ask-edit', currentIndex: 0, answers: {},
+    });
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+
+    emitAskUserRequest(requestId, questions.map((q) => ({
+      ...q, options: q.options.map((option) => ({ ...option })),
+    })));
+
+    const after = makerChatStore.getSnapshot(SESSION_ID);
+    expect(after.pendingAskUser).not.toBe(before.pendingAskUser);
+    expect(after.pendingAskUser?.questions).toEqual(questions);
+    expect(after.askUserDraft).toBeNull();
+    expect(after.askUserViewerState).toBe('expanded');
   });
 
   it('claude:turn 结束仍将 pending 提问卡标过期', () => {

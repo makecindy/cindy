@@ -7650,7 +7650,7 @@
         "reconnect": "重新连接",
         "manage": "管理来源",
         "railLabel": "来源",
-        "connect": "添加模型",
+        "connect": "配置模型",
         "connectCta": "连接来源 →",
         "viaSource": "来源：{{source}}",
         "emptyTitle": "暂无可用来源",
@@ -7990,6 +7990,18 @@
       "editTitle": "编辑粘贴的文本",
       "cancelEdit": "取消编辑",
       "saveEdit": "保存文本"
+    },
+    "mediaDownload": {
+      "title": "允许下载生成的媒体？",
+      "description": "媒体已生成，需要从下方地址下载。",
+      "scope": "仅允许本次下载。",
+      "source": "这个地址不在 Cindy 已确认的下载来源中，因此需要你确认。",
+      "http": "这个地址使用未加密的 HTTP 连接，下载内容可能被网络中的其他方读取或修改。",
+      "port": "这个地址使用非默认网络端口，需要确认访问该端口。",
+      "credentials": "这个下载地址包含登录信息。允许后，仅向该地址发送其中的登录信息。",
+      "network": "这个地址指向本机、局域网或保留网络，访问它可能触及设备上的内部服务。",
+      "allow": "允许本次下载",
+      "defer": "暂不下载"
     },
     "permissionPrompt": {
       "alwaysAllowScoped": "本任务都允许 {{scope}}",
@@ -9015,8 +9027,6 @@
       "runningTool": "{{tool}} 运行中…"
     },
     "remoteSession": {
-      "syncing": "正在同步…",
-      "recovered": "已恢复",
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
       "degraded": "与被控设备的连接不稳定，正在自动重试…",

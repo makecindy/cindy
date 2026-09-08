@@ -8,6 +8,7 @@
  * 这样可以确保 localDb.ensureReady(userId) 已经完成才能用 SessionStorage。
  */
 
+import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash } from 'node:crypto';
@@ -832,6 +833,11 @@ export function getMaker(): Maker {
     };
 
     const makerMemoryProviderDeps = {
+      createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
+        const session = _maker?.getSession(sessionId);
+        if (!session || session.instanceId !== sessionInstanceId) return undefined;
+        return createMediaDownloadContext(session, () => _maker?.getSession(sessionId) === session);
+      },
       getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
@@ -1401,7 +1407,7 @@ export function getMaker(): Maker {
         );
       },
       onCodexLocalModelsListed: (models) => {
-        setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
+        setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models), { source: 'list' });
       },
       // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
       // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。

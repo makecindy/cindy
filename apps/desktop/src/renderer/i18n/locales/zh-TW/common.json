@@ -7649,7 +7649,7 @@
         "reconnect": "重新連線",
         "manage": "管理來源",
         "railLabel": "來源",
-        "connect": "新增模型",
+        "connect": "設定模型",
         "connectCta": "連線來源 →",
         "viaSource": "來源：{{source}}",
         "emptyTitle": "暫無可用來源",
@@ -7990,6 +7990,18 @@
       "editTitle": "編輯貼上的文字",
       "cancelEdit": "取消編輯",
       "saveEdit": "儲存文字"
+    },
+    "mediaDownload": {
+      "title": "允許下載產生的媒體？",
+      "description": "媒體已產生，需要從下方位址下載。",
+      "scope": "僅允許本次下載。",
+      "source": "這個位址不在 Cindy 已確認的下載來源中，因此需要你確認。",
+      "http": "這個位址使用未加密的 HTTP 連線，下載內容可能被網路中的其他方讀取或修改。",
+      "port": "這個位址使用非預設網路連接埠，需要確認存取該連接埠。",
+      "credentials": "這個下載位址包含登入資訊。允許後，僅向該位址傳送其中的登入資訊。",
+      "network": "這個位址指向本機、區域網路或保留網路，存取它可能觸及裝置上的內部服務。",
+      "allow": "允許本次下載",
+      "defer": "暫不下載"
     },
     "permissionPrompt": {
       "alwaysAllowScoped": "本任務都允許 {{scope}}",
@@ -9015,8 +9027,6 @@
       "runningTool": "{{tool}} 執行中…"
     },
     "remoteSession": {
-      "syncing": "正在同步…",
-      "recovered": "已恢復",
       "reconnecting": "與被控裝置的連線中斷，正在重連…",
       "hostOffline": "被控裝置已離線，暫時無法同步",
       "degraded": "與被控裝置的連線不穩定，正在自動重試…",

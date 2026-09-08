@@ -1,6 +1,7 @@
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Image as ExpoImage } from 'expo-image';
 import {
   ArrowLeftRight,
   ArrowUp,
@@ -1386,8 +1387,8 @@ export function MessageRenderer({
     () => mobileMessageListKeysSignature(itemKeys),
     [itemKeys],
   );
-  // Keep main's rendered-row progress signal for near-start auto paging. The host cursor remains
-  // the stronger transaction commit signal because local synthetic rows can sit before host data.
+  // Use host-cursor progress for both paging and transaction settlement. A history page may
+  // expand a folded group or sit after a local synthetic row without changing the first item.
   const firstItemKey = itemKeys[0] ?? null;
   const historyProgressKey = loadEarlierProgressKey ?? firstItemKey;
   // A successful history page changes the oldest host cursor. Restore the captured visible row
@@ -1891,7 +1892,7 @@ export function MessageRenderer({
     const continueAfterRegroup = userScrolledForOlder
       && regroupedHistoryContinuationRef.current;
     if (!userScrolledForOlder && !initialAutoFillAllowed && !continueAfterRegroup) return;
-    if (firstItemKey !== null && lastAutoLoadEarlierKeyRef.current === firstItemKey) return;
+    if (historyProgressKey !== null && lastAutoLoadEarlierKeyRef.current === historyProgressKey) return;
     if (continueAfterRegroup) {
       if (!loadEarlierAction.visible) {
         regroupedHistoryContinuationRef.current = false;
@@ -1900,9 +1901,9 @@ export function MessageRenderer({
       // A merged page did make host-cursor progress but added no visible top-level history. Do not
       // reapply the near-start gate after app-owned anchor restoration moved the viewport; main
       // immediately continues from the changed first rendered row in the same situation.
-      if (loadEarlierAction.disabled || firstItemKey === null) return;
+      if (loadEarlierAction.disabled || historyProgressKey === null) return;
       regroupedHistoryContinuationRef.current = false;
-      lastAutoLoadEarlierKeyRef.current = firstItemKey;
+      lastAutoLoadEarlierKeyRef.current = historyProgressKey;
       requestLoadEarlier();
       return;
     }
@@ -1961,18 +1962,18 @@ export function MessageRenderer({
       actionVisible: loadEarlierAction.visible,
       atEnd: listState.isAtEnd,
       atStart: listState.isAtStart || nativeAtStart,
-      firstItemKey,
+      progressKey: historyProgressKey,
       initialAutoFillAllowed,
-      lastAttemptedFirstItemKey: lastAutoLoadEarlierKeyRef.current,
+      lastAttemptedProgressKey: lastAutoLoadEarlierKeyRef.current,
       nearStart: listState.isNearStart || nativeNearStart,
       userScrolledForOlder,
     });
     if (!eligible) return;
-    lastAutoLoadEarlierKeyRef.current = firstItemKey;
+    lastAutoLoadEarlierKeyRef.current = historyProgressKey;
     if (initialAutoFillAllowed) initialHistoryAutofillRemainingRef.current -= 1;
     requestLoadEarlier();
   }, [
-    firstItemKey,
+    historyProgressKey,
     loadEarlierAction.disabled,
     loadEarlierAction.visible,
     listRevealed,
@@ -2663,6 +2664,27 @@ const RenderItemView = memo(function RenderItemView({
           <PendingSendBubble
             actions={actions.pendingSend}
             item={item}
+            screenWidth={actions.screenWidth}
+            renderImage={(uri) => uri ? (
+              <PendingAttachmentImage key={uri}
+                layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })}
+                uri={uri}
+              />
+            ) : (
+              <View style={[styles.attachmentImagePending, {
+                width: buildMessageContentLayout({ screenWidth: actions.screenWidth }).attachmentImageMaxWidth,
+                height: buildMessageContentLayout({ screenWidth: actions.screenWidth }).attachmentImageMaxHeight,
+              }]} />
+            )}
+            renderFile={(name, index) => (
+              <FileChip key={`${name}:${index}`} name={name} presentationOnly
+                layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
+            )}
+            renderText={(text, index) => (
+              <MarkdownBody key={`text:${index}`} text={text} streaming={false}
+                selectable={false} pinContentWidth={false}
+                layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
+            )}
             resolveRemoteMedia={actions.onResolveRemoteMedia}
           />
         )
@@ -5797,6 +5819,36 @@ function ToolMediaBlock({
 const attachmentIntrinsicSizeCache = new Map<string, AttachmentImageIntrinsicSize>();
 const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
 
+// 相册候选仍可能是 ph://，必须由 expo-image 加载；只复用正式附件的布局，
+// 不把本地相册地址声明为 RN Image / 远端查看器可直接预览的媒体。
+function PendingAttachmentImage({ layout, uri }: { layout: MessageContentLayout; uri: string }) {
+  const styles = useThemedStyles(makeStyles);
+  const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
+    () => attachmentIntrinsicSizeCache.get(uri) ?? null,
+  );
+  const displaySize = attachmentImageDisplaySize(
+    intrinsicSize, layout.attachmentImageMaxWidth, layout.attachmentImageMaxHeight,
+  );
+  return (
+    <View style={styles.attachmentImageWrap}>
+      <ExpoImage
+        source={{ uri }}
+        recyclingKey={uri}
+        contentFit="contain"
+        onLoad={({ source: { width, height } }) => {
+          if (!(width > 0 && height > 0)) return;
+          if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) {
+            attachmentIntrinsicSizeCache.clear();
+          }
+          attachmentIntrinsicSizeCache.set(uri, { width, height });
+          setIntrinsicSize({ width, height });
+        }}
+        style={[styles.attachmentImage, displaySize]}
+      />
+    </View>
+  );
+}
+
 /**
  * MediaPreview — 聊天列表里的媒体缩略图 / 占位卡片。
  * 图片:可直接预览的(http/data:)直接渲染缩略图;桌面端媒体(xdt-image://)mount 时
@@ -5816,6 +5868,7 @@ function MediaPreview({
   onOpen,
   onResolveRemoteMedia,
   variant = 'card',
+  presentationOnly = false,
 }: {
   layout: MessageContentLayout;
   media: NormalizedToolMedia;
@@ -5823,6 +5876,7 @@ function MediaPreview({
   onOpen?: () => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   variant?: 'card' | 'attachment';
+  presentationOnly?: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
@@ -5914,6 +5968,7 @@ function MediaPreview({
     );
     return (
       <MessageContentOpenButton
+      presentationOnly={presentationOnly}
         accessibilityLabel={`${preview.actionLabel} ${preview.title}`}
         onPress={onOpen}
         style={styles.attachmentImageWrap}
@@ -5952,6 +6007,7 @@ function MediaPreview({
     const frameSize = { height: layout.imagePreviewHeight, width: layout.imagePreviewWidth };
     return (
       <MessageContentOpenButton
+      presentationOnly={presentationOnly}
         accessibilityLabel={`${preview.actionLabel} ${preview.title}`}
         onPress={onOpen}
         style={[
@@ -5984,6 +6040,7 @@ function MediaPreview({
 
   return (
     <MessageContentOpenButton
+      presentationOnly={presentationOnly}
       accessibilityLabel={`${preview.actionLabel} ${preview.title}`}
       onPress={onOpen}
       style={[
@@ -6035,17 +6092,20 @@ function FileChip({
   name,
   onOpen,
   path,
+  presentationOnly = false,
 }: {
   layout: MessageContentLayout;
   name: string;
   onOpen?: () => void;
   path?: string;
+  presentationOnly?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildFilePayload(name, path ?? ''));
   return (
     <MessageContentOpenButton
+      presentationOnly={presentationOnly}
       accessibilityLabel={`${preview.actionLabel} ${name}`}
       onPress={onOpen}
       style={[
@@ -6156,6 +6216,7 @@ function MessageContentOpenButton({
   accessibilityLabel,
   children,
   disabled = false,
+  presentationOnly = false,
   onPress,
   style,
   testID,
@@ -6163,12 +6224,14 @@ function MessageContentOpenButton({
   accessibilityLabel: string;
   children: ReactNode;
   disabled?: boolean;
+  presentationOnly?: boolean;
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const interactionDisabled = disabled || !onPress;
+  if (presentationOnly) return <View style={style} testID={testID}>{children}</View>;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
