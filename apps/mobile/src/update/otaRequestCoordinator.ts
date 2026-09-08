@@ -5,6 +5,8 @@ import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 
 import { OTA_SERVER_BASE_URL } from '@/config/env';
 import { updateChannelRequestHeaders } from './canaryChannelStore';
+import { getNativeOtaBridge } from './nativeOtaBridge';
+import { createNativeOtaRequestCoordinator, type NativeOtaBridge } from './nativeOtaRequestCoordinator';
 
 /**
  * expo-updates 要求 EAS-Client-ID 是合法 UUID；自建 OTA 全设备共用这个非设备标识值。
@@ -356,6 +358,8 @@ const nativeCoordinator = createOtaRequestCoordinator({
   },
 });
 
+const nativeV1Coordinators = new WeakMap<NativeOtaBridge, ReturnType<typeof createNativeOtaRequestCoordinator>>();
+
 /** 自建 OTA 的唯一网络入口；启动、回前台、手动检查必须全部走这里。 */
 export function runSelfHostedOtaRequest<T>(
   channel: UpdateChannel,
@@ -365,6 +369,31 @@ export function runSelfHostedOtaRequest<T>(
     fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
   }: OtaRequestTimeouts = {},
 ): Promise<T> {
+  try {
+    const bridge = getNativeOtaBridge();
+    if (bridge) {
+      let coordinator = nativeV1Coordinators.get(bridge);
+      if (!coordinator) {
+        coordinator = createNativeOtaRequestCoordinator(bridge, {
+          checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
+          fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
+          reloadAsync: () => Updates.reloadAsync(),
+        });
+        nativeV1Coordinators.set(bridge, coordinator);
+      }
+      return coordinator.run({
+        channel,
+        currentUpdateId: Updates.updateId,
+        runtimeVersion: Updates.runtimeVersion,
+        checkTimeoutMs,
+        fetchTimeoutMs,
+      }, operation);
+    }
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  // Old binaries retain the already-shipped bridge behavior and URL source.
+  // Native v1 never reads or persists this mutable endpoint as its OTA identity.
   if (!OTA_SERVER_BASE_URL) {
     return Promise.reject(new Error('endpoint manifest missing mobileUpdateBaseUrl'));
   }

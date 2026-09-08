@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { SettingsSegmentedControl } from './SettingsSegmentedControl';
 import {
   Sun,
   Moon,
@@ -23,16 +25,8 @@ import {
   DEFAULT_UI_FONT_SIZE,
   useFontSettings,
 } from '@/hooks/useFontSettings';
-import {
-  useSidebarCardMode,
-  useSidebarMainViewMode,
-  type SidebarMainViewMode,
-  type SidebarViewMode,
-} from '@/hooks/useSidebarCardMode';
-import {
-  useGhostPanelRestoreMode,
-  type GhostPanelRestoreMode,
-} from '@/hooks/useGhostPanelRestoreMode';
+import { useSidebarCardMode, useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
+import { useGhostPanelRestoreMode } from '@/hooks/useGhostPanelRestoreMode';
 import { getThemeFamilies, resolveFamilyVariant, type ThemeFamily } from '@/themes/families';
 import { buildCopyFromTheme, onLocalThemesChange, refreshLocalThemes } from '@/themes/local-themes';
 import { toast } from '@/lib/toast';
@@ -827,35 +821,16 @@ export function AppearanceSection() {
             </p>
           </div>
 
-          <div
-            role="radiogroup"
+          <SettingsSegmentedControl
             aria-label={t('settings.appearance.sidebarCardMode.aria')}
-            className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-          >
-            {(
-              [
-                { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
-                { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard' },
-                { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide' },
-              ] as Array<{ value: SidebarViewMode; labelKey: string }>
-            ).map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={sidebarViewMode === opt.value}
-                onClick={() => setSidebarViewMode(opt.value)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  sidebarViewMode === opt.value
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                {t(opt.labelKey)}
-              </button>
-            ))}
-          </div>
+            value={sidebarViewMode}
+            onValueChange={setSidebarViewMode}
+            options={[
+              { value: 'text', label: t('ccAgent.sidebar.viewStyleList') },
+              { value: 'card', label: t('ccAgent.sidebar.viewStyleCard') },
+              { value: 'list', label: t('ccAgent.sidebar.viewStyleListWide') },
+            ]}
+          />
         </div>
 
         <div className="flex items-center justify-between gap-3">
@@ -871,34 +846,15 @@ export function AppearanceSection() {
             </p>
           </div>
 
-          <div
-            role="radiogroup"
+          <SettingsSegmentedControl
             aria-label={t('settings.appearance.sidebarMainListMode.aria')}
-            className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-          >
-            {(
-              [
-                { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
-                { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide' },
-              ] as Array<{ value: SidebarMainViewMode; labelKey: string }>
-            ).map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={sidebarMainViewMode === opt.value}
-                onClick={() => setSidebarMainViewMode(opt.value)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  sidebarMainViewMode === opt.value
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                {t(opt.labelKey)}
-              </button>
-            ))}
-          </div>
+            value={sidebarMainViewMode}
+            onValueChange={setSidebarMainViewMode}
+            options={[
+              { value: 'text', label: t('ccAgent.sidebar.viewStyleList') },
+              { value: 'list', label: t('ccAgent.sidebar.viewStyleListWide') },
+            ]}
+          />
         </div>
 
         <div className="flex items-center justify-between gap-3">
@@ -914,34 +870,15 @@ export function AppearanceSection() {
             </p>
           </div>
 
-          <div
-            role="radiogroup"
+          <SettingsSegmentedControl
             aria-label={t('settings.appearance.ghostPanelRestore.aria')}
-            className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-          >
-            {(
-              [
-                { value: 'bubble', labelKey: 'settings.appearance.ghostPanelRestore.bubble' },
-                { value: 'sidebar', labelKey: 'settings.appearance.ghostPanelRestore.sidebar' },
-              ] as Array<{ value: GhostPanelRestoreMode; labelKey: string }>
-            ).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={ghostPanelRestoreMode === option.value}
-                onClick={() => setGhostPanelRestoreMode(option.value)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  ghostPanelRestoreMode === option.value
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                {t(option.labelKey)}
-              </button>
-            ))}
-          </div>
+            value={ghostPanelRestoreMode}
+            onValueChange={setGhostPanelRestoreMode}
+            options={[
+              { value: 'bubble', label: t('settings.appearance.ghostPanelRestore.bubble') },
+              { value: 'sidebar', label: t('settings.appearance.ghostPanelRestore.sidebar') },
+            ]}
+          />
         </div>
       </div>
 

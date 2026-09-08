@@ -2359,33 +2359,37 @@ describe('TelegramIM', () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
     await connect();
-    api.pushUpdates([
-      groupMessage({ text: '改个文件', fromId: 111, messageId: 99, mentionBot: true }),
-    ]);
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    await vi.waitFor(() => {
-      expect(
-        api.calls.some((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200'),
-      ).toBe(true);
-    });
+    vi.useFakeTimers();
+    try {
+      api.pushUpdates([
+        groupMessage({ text: '改个文件', fromId: 111, messageId: 99, mentionBot: true }),
+      ]);
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(
+          api.calls.some((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200'),
+        ).toBe(true);
+      });
 
     // 卡片投的是宿主私聊 —— callSend 只会停它自己那条 chat 的 typing loop,
     // 群里那条必须由转发分支显式停掉, 否则每 4.5s 继续打一次 sendChatAction。
-    await im.sendInteractiveCard(
-      events[0].senderId,
-      { title: '需要授权', body: '改 src/app.ts？', buttons: [{ id: 'allow', label: '允许' }] },
-      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
-    );
-    const groupTypingAfterCard = api.calls.filter(
-      (c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200',
-    ).length;
-    // **必须跨过一个 TYPING_REFRESH_MS(4.5s)**: loop 每 4.5s 才刷一次, 只等 100ms 的话
-    // 循环还没来得及打下一枪, 断言对「有没有真的停掉」没有判别力(反向验证时会假通过)。
-    await new Promise((r) => setTimeout(r, 4_700));
-    expect(
-      api.calls.filter((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200')
-        .length,
-    ).toBe(groupTypingAfterCard);
+      await im.sendInteractiveCard(
+        events[0].senderId,
+        { title: '需要授权', body: '改 src/app.ts？', buttons: [{ id: 'allow', label: '允许' }] },
+        { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+      );
+      const groupTypingAfterCard = api.calls.filter(
+        (c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200',
+      ).length;
+      // 跨过一个 TYPING_REFRESH_MS(4.5s)，验证循环确实已停止。
+      await vi.advanceTimersByTimeAsync(4_700);
+      expect(
+        api.calls.filter((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200')
+          .length,
+      ).toBe(groupTypingAfterCard);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // 交互卡的 callback token 只活在进程内存里(codec 的 callbackRefs), 重启或被淘汰后

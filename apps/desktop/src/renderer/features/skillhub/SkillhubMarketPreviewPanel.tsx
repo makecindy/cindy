@@ -303,7 +303,7 @@ export function SkillhubMarketPreviewPanel({
                 <h3 className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-[var(--cmd-palette-item-meta)]">
                   {t('skillhub.marketDetail.files')}
                 </h3>
-                <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                   {filesLoading ? null : tree.length === 0 ? (
                     <p className="px-1 text-xs text-[var(--cmd-palette-item-meta)]">
                       {t('skillhub.marketDetail.noPreviewFiles')}
@@ -320,7 +320,7 @@ export function SkillhubMarketPreviewPanel({
 
               <main
                 className={cn(
-                  'flex min-w-0 flex-1 flex-col overflow-y-auto bg-[hsl(var(--content-area))]',
+                  'flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain bg-[hsl(var(--content-area))]',
                   'text-15 font-normal leading-[1.65] text-[var(--text-primary)]',
                 )}
               >

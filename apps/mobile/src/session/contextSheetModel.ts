@@ -27,6 +27,20 @@ const FULL_TOP_RESERVED_HEIGHT = 64;
 /** 松手高度低于 half 档的该比例时判定为「想关掉」。 */
 export const CONTEXT_SHEET_DISMISS_RATIO = 0.62;
 
+// Keep worklet helpers before their callers. The Worklets Babel transform
+// materializes worklet function declarations in source order; a later helper
+// would otherwise be captured as `undefined` during module initialization.
+function normalizeHeights(heights: ContextSheetSnapHeights): ContextSheetSnapHeights {
+  'worklet';
+  const half = Math.max(1, Math.round(heights.half));
+  return { half, full: Math.max(half, Math.round(heights.full)) };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  'worklet';
+  return Math.min(Math.max(value, min), max);
+}
+
 export interface ComputeContextSheetSnapHeightsInput {
   /** 窗口高度（useWindowDimensions().height）。 */
   screenHeight: number;
@@ -83,21 +97,10 @@ export function settleContextSheetDrag(input: SettleContextSheetDragInput): Cont
   return 'half';
 }
 
-function normalizeHeights(heights: ContextSheetSnapHeights): ContextSheetSnapHeights {
-  'worklet';
-  const half = Math.max(1, Math.round(heights.half));
-  return { half, full: Math.max(half, Math.round(heights.full)) };
-}
-
 function normalizePositiveDimension(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function normalizeNonNegativeDimension(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  'worklet';
-  return Math.min(Math.max(value, min), max);
 }

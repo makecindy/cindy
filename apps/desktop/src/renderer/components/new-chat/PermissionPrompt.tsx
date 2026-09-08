@@ -50,6 +50,7 @@ function firstString(input: Record<string, unknown>, keys: string[]): string | u
 // 按语义分组(命令 / 文件 / 模式)归一化,任一命名命中就抽出清爽正文,否则回退 JSON。
 export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
   const name = toolName.toLowerCase();
+  if (name === 'cindy.media.download' && typeof input.source === 'string') return input.source;
   const fallback = () => {
     const text = JSON.stringify(input, null, 2);
     return text.length > 500 ? text.slice(0, 500) + '...' : text;
@@ -83,6 +84,7 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable } = permission;
+  const isMediaDownload = toolName === 'cindy.media.download';
   const promptDescription = autoReviewUnavailable
     ? t('newChat.permissionPrompt.autoReviewUnavailable')
     : description;
@@ -212,7 +214,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             'transition-colors hover:bg-[var(--perm-code-bg)]',
           )}
         >
-          <span>{t('agentIsland.native.deny')}</span>
+          <span>{t(isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
@@ -271,7 +273,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             'transition-colors hover:opacity-90',
           )}
         >
-          <span>{t('agentIsland.native.allowOnce')}</span>
+          <span>{t(isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
           </kbd>

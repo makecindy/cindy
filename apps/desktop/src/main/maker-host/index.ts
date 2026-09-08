@@ -8,6 +8,7 @@
  * 这样可以确保 localDb.ensureReady(userId) 已经完成才能用 SessionStorage。
  */
 
+import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash } from 'node:crypto';
@@ -832,6 +833,11 @@ export function getMaker(): Maker {
     };
 
     const makerMemoryProviderDeps = {
+      createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
+        const session = _maker?.getSession(sessionId);
+        if (!session || session.instanceId !== sessionInstanceId) return undefined;
+        return createMediaDownloadContext(session, () => _maker?.getSession(sessionId) === session);
+      },
       getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),

@@ -534,30 +534,19 @@ export class Session {
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
-    this.handle.setInteractionResolver(async (req) => {
-      // 等用户回应期间挂起 stall 看门狗:用户可能离开电脑很久,没有事件是正常的,
-      // 中断这种 turn 等于把"等你决定"误判成"卡死"(见 DEFAULT_TURN_STALL_MS)。
-      this.pendingInteractions += 1;
-      const interactionRuntime = this.observeInteractionStarted(req);
-      this.clearTurnStallWatchdog();
-      try {
-        if (!this.interactionListener) {
-          this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
-          if (req.kind === 'ask_user_question') {
-            return { kind: 'ask_user_question', answers: {} };
-          }
-          if (req.kind === 'plan_review') {
-            return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
-          }
-          return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
+    this.handle.setInteractionResolver((req) => this.runHostInteraction(req, async () => {
+      if (!this.interactionListener) {
+        this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
+        if (req.kind === 'ask_user_question') {
+          return { kind: 'ask_user_question', answers: {} };
         }
-        return await this.interactionListener(req);
-      } finally {
-        this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
-        this.observeInteractionSettled(interactionRuntime);
-        this.armTurnStallWatchdog();
+        if (req.kind === 'plan_review') {
+          return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
+        }
+        return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
       }
-    });
+      return await this.interactionListener(req);
+    }));
   }
 
   // ── 公开 API ─────────────────────────────────────────────────────────────
@@ -1905,6 +1894,23 @@ export class Session {
   onStatusChange(listener: SessionStatusListener): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
+  }
+
+  /** Host-owned permissions share the same waiting lifecycle as provider interactions. */
+  async runHostInteraction(
+    request: InteractionRequest,
+    resolve: () => Promise<InteractionDecision>,
+  ): Promise<InteractionDecision> {
+    this.pendingInteractions += 1;
+    const runtime = this.observeInteractionStarted(request);
+    this.clearTurnStallWatchdog();
+    try {
+      return await resolve();
+    } finally {
+      this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
+      this.observeInteractionSettled(runtime);
+      this.armTurnStallWatchdog();
+    }
   }
 
   setInteractionListener(listener: InteractionRequestListener | null): void {

@@ -53,7 +53,11 @@ import {
   isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
-import { extractRenderedMarkdownImageTargets } from './markdownImageTargets';
+import {
+  extractCachedRenderedMarkdownImageTargets,
+  extractRenderedMarkdownImageTargets,
+  type MarkdownImageTargetCache,
+} from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -1450,6 +1454,8 @@ export function buildRenderItems(
     workingDir?: string;
     /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
     botSessionId?: string;
+    /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
+    markdownImageTargetCache?: MarkdownImageTargetCache;
   },
 ): {
   items: RenderItem[];
@@ -1499,7 +1505,14 @@ export function buildRenderItems(
     const urls = new Set<string>();
     for (const message of messages.slice(lo, hi)) {
       if (message.role !== 'assistant' || message.systemCardType || message.isStreaming) continue;
-      for (const url of extractRenderedMarkdownImageTargets(message.content)) urls.add(url);
+      const imageTargets = opts?.markdownImageTargetCache
+        ? extractCachedRenderedMarkdownImageTargets(
+            message.content,
+            opts.markdownImageTargetCache,
+            message.clientId,
+          )
+        : extractRenderedMarkdownImageTargets(message.content);
+      for (const url of imageTargets) urls.add(url);
     }
     inlineImageUrlsByTurnStart.set(lo, urls);
   };
@@ -2697,12 +2710,18 @@ export function MessageStream({
   const generatedFilesItemCacheRef = useRef(
     new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
   );
+  // Completed assistant bodies are immutable for the rest of a turn, while
+  // the active tail keeps changing on every stream batch. Keep this cache at
+  // MessageStream scope so history pagination and live deltas can share the
+  // parsed image targets without retaining state beyond the session mount.
+  const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
     const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
       historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
+      markdownImageTargetCache: markdownImageTargetCacheRef.current,
     });
     return {
       items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),

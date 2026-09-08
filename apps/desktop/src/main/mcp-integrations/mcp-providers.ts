@@ -16,6 +16,7 @@ import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
+  type CindyGhostsHostDeps,
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
@@ -76,6 +77,7 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 
 export interface DesktopMcpProvidersDeps {
+  createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
@@ -741,6 +743,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getCindyGhostsMcpDeps(ctx, {
           getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          createMediaDownloadContext: deps.createMediaDownloadContext,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),

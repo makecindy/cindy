@@ -38,7 +38,11 @@ import {
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
-import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import {
+  getStreamingMarkdownThrottleInterval,
+  splitStreamingMarkdownChunks,
+  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
+} from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
@@ -320,8 +324,8 @@ interface MarkdownRendererProps {
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
   content: string;
-  /** When true, react-markdown re-parse + rehype-highlight runs at most
-   *  ~10fps via useStreamingThrottle. The final value is always flushed
+  /** When true, react-markdown re-parse + rehype-highlight is rate-limited
+   *  (10fps for short content, slower for long documents). The final value is always flushed
    *  synchronously when this flag flips back to false, so the completed
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
@@ -382,8 +386,8 @@ function parseSessionCardHref(href: string): {
 }
 
 /**
- * Throttle a rapidly-changing string to at most one render per
- * `intervalMs`. Caps react-markdown re-parse + rehype-highlight CPU
+ * Throttle a rapidly-changing string to at most one render per adaptive
+ * interval. Caps react-markdown re-parse + rehype-highlight CPU
  * during SDK streaming, where text deltas can land 30-60 times/s even
  * after the main-process IPC batcher.
  *
@@ -393,11 +397,22 @@ function parseSessionCardHref(href: string): {
  *   guaranteed (no-token-lost). Switching back to false flushes the
  *   latest value synchronously.
  */
-function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100): string {
+function useStreamingThrottle(value: string, enabled: boolean): string {
+  const intervalMs = enabled
+    ? getStreamingMarkdownThrottleInterval(value)
+    : STREAMING_MARKDOWN_THROTTLE_BASE_MS;
   const [throttled, setThrottled] = useState(value);
+  const throttledRef = useRef(value);
   const latestRef = useRef(value);
   const lastEmitRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+
+  const emit = useCallback((nextValue: string, now: number) => {
+    lastEmitRef.current = now;
+    if (throttledRef.current === nextValue) return;
+    throttledRef.current = nextValue;
+    setThrottled(nextValue);
+  }, []);
 
   useEffect(() => {
     latestRef.current = value;
@@ -409,27 +424,39 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
       }
       // Stream just ended — flush whatever the most recent value is so
       // the final frame is never the last throttled snapshot.
-      if (throttled !== value) setThrottled(value);
+      if (throttledRef.current !== value) {
+        throttledRef.current = value;
+        setThrottled(value);
+      }
+      // A new stream should get a leading frame even if it starts shortly
+      // after the previous one ended.
+      lastEmitRef.current = 0;
       return;
     }
 
     const now = performance.now();
     const elapsed = now - lastEmitRef.current;
     if (elapsed >= intervalMs) {
-      lastEmitRef.current = now;
-      setThrottled(value);
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      emit(value, now);
       return;
     }
-    if (timerRef.current == null) {
-      timerRef.current = window.setTimeout(() => {
+
+    // Re-arm on every update so an interval bucket change cannot leave a
+    // timer using the previous (shorter) delay. The latest ref keeps the
+    // trailing edge lossless even when several batches arrive in between.
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(
+      () => {
         timerRef.current = null;
-        lastEmitRef.current = performance.now();
-        setThrottled(latestRef.current);
-      }, intervalMs - elapsed);
-    }
-    // No new timer needed — an in-flight one will pick up latestRef
-    // when it fires.
-  }, [value, enabled, intervalMs, throttled]);
+        emit(latestRef.current, performance.now());
+      },
+      Math.max(0, intervalMs - elapsed),
+    );
+  }, [emit, value, enabled, intervalMs]);
 
   useEffect(() => {
     return () => {

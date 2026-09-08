@@ -22,6 +22,7 @@ function renderAskUser(
 ) {
   return render(
     createElement(AskUserQuestionPrompt, {
+      sessionId: 'ask-actions',
       pending,
       onAnswer,
       viewerState: 'expanded',

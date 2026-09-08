@@ -18,6 +18,7 @@ function renderAskUser(
 ) {
   return render(
     createElement(AskUserQuestionPrompt, {
+      sessionId: 'ask-long-answer',
       pending,
       onAnswer,
       viewerState: 'expanded',
