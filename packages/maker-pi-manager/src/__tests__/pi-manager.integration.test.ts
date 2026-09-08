@@ -35,7 +35,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ManagerServer } from "../server.js";
 import { PiSessionRegistry } from "../session-registry.js";
@@ -1042,13 +1042,10 @@ describe.skipIf(process.platform === "win32")(
         (idleRegistry as any).recycleIdle();
 
         // Wait for the async kill chain (SIGTERM → waitForExit → teardown)
-        await new Promise((r) => setTimeout(r, 2000));
-
-        // The child (`sleep 0.1`) should have exited quickly, so kill should
-        // succeed and teardown should fire
-        // Verify session was recycled
-        expect(closedSessions).toContain("idle-s1");
-        expect(idleRegistry.list()).toHaveLength(0);
+        await vi.waitFor(() => {
+          expect(closedSessions).toContain("idle-s1");
+          expect(idleRegistry.list()).toHaveLength(0);
+        }, { timeout: 5_000, interval: 20 });
 
         // Clean up
         idleRegistry.close();
