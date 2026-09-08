@@ -2,7 +2,7 @@
 
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import type { Schedule } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { Session } from '@/lib/ccAgent.types';
 
 import { useScheduleForm } from '../useScheduleForm';
@@ -43,6 +43,41 @@ describe('useScheduleForm validate — script 模式跳过隐藏的前置检查�
 
 
 describe('saved automation model selection', () => {
+  const template: ScheduleTemplate = {
+    id: 'model-template', name: 'Model template', description: '',
+    category: 'code-quality', source: 'builtin',
+  };
+
+  it.each(['codex', 'pi'] as const)('saves the %s template Harness with its model after binding a task', (agentKind) => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    act(() => result.current.selectBoundSession({ id: 'bound-codex', agentKind: 'codex' } as Session));
+    expect(result.current.toInput()).toHaveProperty('modelAgentKind', undefined);
+
+    act(() => result.current.applyTemplateAgentFields({
+      ...template, agentKind, model: 'template-model', providerId: 'custom', effort: 'medium', fastMode: true,
+    }));
+    expect(result.current.toInput()).toMatchObject({
+      targetSessionId: 'bound-codex', agentKind, modelAgentKind: agentKind,
+      model: 'template-model', providerId: 'custom', effort: 'medium', fastMode: true,
+    });
+
+    act(() => result.current.selectModelConfiguration(null));
+    expect(result.current.toInput()).toMatchObject({
+      targetSessionId: 'bound-codex', agentKind: 'codex', modelAgentKind: undefined,
+      model: undefined, providerId: undefined, effort: undefined, fastMode: undefined,
+    });
+  });
+
+  it('keeps following the bound task when the template supplies no model selection', () => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    act(() => result.current.selectBoundSession({ id: 'bound-codex', agentKind: 'codex' } as Session));
+    act(() => result.current.applyTemplateAgentFields(template));
+    expect(result.current.toInput()).toMatchObject({
+      targetSessionId: 'bound-codex', agentKind: 'codex', modelAgentKind: undefined,
+      model: undefined, providerId: undefined, effort: undefined, fastMode: undefined,
+    });
+  });
+
   it('saves every selected axis for the next fire and clears all overrides when following the task', () => {
     const { result } = renderHook(() => useScheduleForm(null));
     act(() => result.current.setField('targetSessionId', 'existing-task'));
