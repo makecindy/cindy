@@ -72,8 +72,20 @@ describe('mobile message media thumbnail wiring', () => {
       rendererSource.indexOf("case 'pending_send':"),
       rendererSource.indexOf('const RenderListItemView'),
     );
-    expect(pendingBranch).toContain('<MediaPreview');
-    expect(pendingBranch).toContain('variant="attachment"');
+    expect(pendingBranch).toContain('<PendingAttachmentImage');
+    expect(pendingBranch).not.toContain('previewable: true');
+    const pendingImage = rendererSource.slice(
+      rendererSource.indexOf('function PendingAttachmentImage'),
+      rendererSource.indexOf('function MediaPreview'),
+    );
+    // iOS ph:// 必须沿用相册托盘的 Expo 解码器，并从加载结果量尺寸。
+    expect(rendererSource).toContain("import { Image as ExpoImage } from 'expo-image'");
+    expect(pendingImage).toContain('<ExpoImage');
+    expect(pendingImage).toContain('contentFit="contain"');
+    expect(pendingImage).toContain('source: { width, height }');
+    expect(pendingImage).toContain('attachmentImageDisplaySize');
+    expect(pendingImage).toContain('styles.attachmentImageWrap');
+    expect(pendingImage).not.toContain('Image.getSize');
     expect(pendingBranch).toContain('<FileChip');
     expect(pendingBranch).toContain('<MarkdownBody');
     expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody ?'));

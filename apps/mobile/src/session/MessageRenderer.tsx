@@ -1,6 +1,7 @@
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Image as ExpoImage } from 'expo-image';
 import {
   ArrowLeftRight,
   ArrowUp,
@@ -2665,11 +2666,9 @@ const RenderItemView = memo(function RenderItemView({
             item={item}
             screenWidth={actions.screenWidth}
             renderImage={(uri) => uri ? (
-              <MediaPreview key={uri} presentationOnly
+              <PendingAttachmentImage key={uri}
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })}
-                media={{ kind: 'image', url: uri, previewable: true }}
-                label=""
-                variant="attachment"
+                uri={uri}
               />
             ) : (
               <View style={[styles.attachmentImagePending, {
@@ -5819,6 +5818,36 @@ function ToolMediaBlock({
  */
 const attachmentIntrinsicSizeCache = new Map<string, AttachmentImageIntrinsicSize>();
 const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
+
+// 相册候选仍可能是 ph://，必须由 expo-image 加载；只复用正式附件的布局，
+// 不把本地相册地址声明为 RN Image / 远端查看器可直接预览的媒体。
+function PendingAttachmentImage({ layout, uri }: { layout: MessageContentLayout; uri: string }) {
+  const styles = useThemedStyles(makeStyles);
+  const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
+    () => attachmentIntrinsicSizeCache.get(uri) ?? null,
+  );
+  const displaySize = attachmentImageDisplaySize(
+    intrinsicSize, layout.attachmentImageMaxWidth, layout.attachmentImageMaxHeight,
+  );
+  return (
+    <View style={styles.attachmentImageWrap}>
+      <ExpoImage
+        source={{ uri }}
+        recyclingKey={uri}
+        contentFit="contain"
+        onLoad={({ source: { width, height } }) => {
+          if (!(width > 0 && height > 0)) return;
+          if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) {
+            attachmentIntrinsicSizeCache.clear();
+          }
+          attachmentIntrinsicSizeCache.set(uri, { width, height });
+          setIntrinsicSize({ width, height });
+        }}
+        style={[styles.attachmentImage, displaySize]}
+      />
+    </View>
+  );
+}
 
 /**
  * MediaPreview — 聊天列表里的媒体缩略图 / 占位卡片。
