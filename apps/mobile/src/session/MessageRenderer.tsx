@@ -3426,6 +3426,7 @@ function MessageBubble({
               return (
                 <NativePullDownMenu
                   actions={messageMenu.map((item) => ({
+                    image: item.image,
                     destructive: item.destructive,
                     disabled: actionBusy && (item.id === 'rewind' || item.id === 'delete'),
                     id: item.id,

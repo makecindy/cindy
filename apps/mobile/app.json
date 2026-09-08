@@ -57,6 +57,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/with-message-menu-icons",
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
       "./plugins/with-wechat-opensdk-modulemap",

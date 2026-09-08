@@ -363,16 +363,16 @@ describe("PiAgent native auto-compaction ownership", () => {
       "prompt",
       (handle: AgentSessionHandle) =>
         handle.send({
-          role: "user",
-          content: [{ type: "text", text: "hi" }],
+          type: "user",
+          content: "hi",
         }),
     ],
     [
       "steer",
       (handle: AgentSessionHandle) =>
         handle.steer!({
-          role: "user",
-          content: [{ type: "text", text: "steer now" }],
+          type: "user",
+          content: "steer now",
         }),
     ],
   ] as const)(
@@ -488,7 +488,7 @@ describe("PiAgent native auto-compaction ownership", () => {
       piAutoCompactThresholdPct: 90,
     };
     deps.capabilityAdditions = {
-      availableModels: deps.capabilityAdditions!.availableModels.map((model) =>
+      availableModels: deps.capabilityAdditions!.availableModels!.map((model) =>
         model.id === "n" ? { ...model, contextWindow: 200_000 } : model,
       ),
     };

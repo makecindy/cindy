@@ -7,14 +7,27 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  lt,
+  lte,
+  gt,
+  gte,
+  desc,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
-import { persistSessionListPreview } from '../sessionListProjection';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -178,11 +191,7 @@ async function maybeBroadcastSessionListPreview(
   // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
   // 校验同一 clientId 的内容版本，交错改写会把旧正文写回非 NULL 缓存。
   // 侧栏即时刷新靠广播；下次 list/回填从 messages 现算。
-  broadcastOwnedPayload(
-    'local-db:sessions:patched',
-    { sessionId, patch: { preview } },
-    ownerScope,
-  );
+  broadcastOwnedPayload('local-db:sessions:patched', { sessionId, patch: { preview } }, ownerScope);
 }
 
 function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
@@ -191,9 +200,9 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
     const parsed: unknown = JSON.parse(agentMetaJson);
     return Boolean(
       parsed &&
-        typeof parsed === 'object' &&
-        !Array.isArray(parsed) &&
-        (parsed as { autoResume?: unknown }).autoResume === true,
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (parsed as { autoResume?: unknown }).autoResume === true,
     );
   } catch {
     return false;
@@ -980,13 +989,9 @@ export async function commitMessageDeletion(
   try {
     const latest = await latestVisiblePreviewRow(sessionId);
     preview = extractMessagePreview(latest?.content, latest?.role);
-    await persistSessionListPreview(
-      sessionId,
-      preview,
-      latest?.role ?? null,
-      latest?.createdAt,
-      latest?.clientId,
-    );
+    // Keep the transaction's invalidation. Only SQL backfill may populate the
+    // raw Markdown cache; persisting this display text would parse code literals
+    // a second time on the next list read (and could overwrite a newer edit).
   } catch (error) {
     // 删除已经原子提交；message.delete 事务已把 list_preview / role / count 置 NULL，
     // 投影刷新失败不能把成功操作伪装成失败。广播保守空值，list 回落子查询。
@@ -1009,7 +1014,8 @@ export async function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
-    reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+    reason:
+      'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
     sourceUserClientId: string | null;
     sourceAgentKind?: DbAgentKind;
     sourceModel?: string | null;
@@ -1028,7 +1034,9 @@ export async function commitContextRebuild(
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
-      ...(meta.replacementRoute ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId } : {}),
+      ...(meta.replacementRoute
+        ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId }
+        : {}),
       ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
       ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
       ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
@@ -1506,35 +1514,35 @@ export async function createMessage(
       expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
     });
     if (guarded && inserted.changes === 0) {
-        const [existingAfterGuard] = await db
-          .select()
-          .from(messages)
-          .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-          .limit(1);
-        const [sessionAfterGuard] = await db
-          .select({ clearedAt: sessions.clearedAt })
-          .from(sessions)
-          .where(eq(sessions.id, sessionId))
-          .limit(1);
-        const actual = sessionAfterGuard?.clearedAt ?? null;
-        if (
-          existingAfterGuard &&
-          actual === expected &&
-          existingAfterGuard.rewindAt === null &&
-          (expected === null || existingAfterGuard.createdAt > expected)
-        ) {
-          return messageToCamel(existingAfterGuard);
-        }
-        if (actual !== expected) {
-          throw Object.assign(
-            new Error(
-              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
-            ),
-            { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
-          );
-        }
-        throw new Error('Message insert skipped without a clear-boundary change');
+      const [existingAfterGuard] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+        .limit(1);
+      const [sessionAfterGuard] = await db
+        .select({ clearedAt: sessions.clearedAt })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const actual = sessionAfterGuard?.clearedAt ?? null;
+      if (
+        existingAfterGuard &&
+        actual === expected &&
+        existingAfterGuard.rewindAt === null &&
+        (expected === null || existingAfterGuard.createdAt > expected)
+      ) {
+        return messageToCamel(existingAfterGuard);
       }
+      if (actual !== expected) {
+        throw Object.assign(
+          new Error(
+            `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
+          ),
+          { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
+        );
+      }
+      throw new Error('Message insert skipped without a clear-boundary change');
+    }
   } catch (err) {
     const after = await db
       .select()

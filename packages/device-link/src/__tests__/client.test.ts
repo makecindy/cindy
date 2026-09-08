@@ -1168,6 +1168,7 @@ describe('DeviceLinkClient', () => {
   });
 
   it('入站 link 的可靠重试耗尽只重置该 peer link:relay 连接不拆,发 transport-timeout link-close,重开后 live 帧按原 seq 重放', async () => {
+    vi.useFakeTimers();
     const warn = vi.fn();
     const h = makeHarness({
       timing: {
@@ -1179,81 +1180,77 @@ describe('DeviceLinkClient', () => {
       },
       logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     });
-    h.client.start();
-    await tick();
-    h.current().ack();
-    await establishInboundReliableLink(h, 'inbound-timeout-stream');
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const initialOpen = establishInboundReliableLink(h, 'inbound-timeout-stream');
+      await vi.advanceTimersByTimeAsync(0);
+      await initialOpen;
 
-    const firstSocket = h.current();
-    // 可丢弃前缀(陈旧实时镜像) + 不可丢弃的 live invoke-result
-    h.client.sendPush('dev-b', 'maker:event', { drop: 'me' });
-    h.client.sendInvokeResult('dev-b', 'keep-me', { ok: true, result: [] });
-    const firstReliable = firstSocket.sent.find((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ))!;
-    const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
+      const firstSocket = h.current();
+      // 可丢弃前缀(陈旧实时镜像) + 不可丢弃的 live invoke-result
+      h.client.sendPush('dev-b', 'maker:event', { drop: 'me' });
+      h.client.sendInvokeResult('dev-b', 'keep-me', { ok: true, result: [] });
+      const firstReliable = firstSocket.sent.find((env) => (
+        env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+      ))!;
+      const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
 
-    // 对端永不 ACK → 重试耗尽 → 只重置该 peer 的 link 并通知对端
-    await vi.waitFor(() => {
+      // 对端永不 ACK → 重试耗尽 → 只重置该 peer 的 link 并通知对端
+      await vi.advanceTimersByTimeAsync(50);
       expect(firstSocket.sent.some((env) => (
         env.kind === 'link-close'
         && env.dst === 'dev-b'
         && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
       ))).toBe(true);
-    });
-    // relay 连接毫发无损:既没 terminate,也没新建 socket(其它 peer 零感知)
-    expect(firstSocket.terminated).toBe(false);
-    expect(firstSocket.closed).toBeNull();
-    expect(h.sockets).toHaveLength(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(
-      /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
-    ));
+      // relay 连接毫发无损:既没 terminate,也没新建 socket(其它 peer 零感知)
+      expect(firstSocket.terminated).toBe(false);
+      expect(firstSocket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(
+        /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
+      ));
 
-    // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
-    const sentBefore = firstSocket.sent.length;
-    await establishInboundReliableLink(h, 'inbound-timeout-stream');
-    // 模拟真实接收端:重放帧已写入 socket FIFO 后立即回 ACK(见 client.ts
-    // sendTransportAck 的交付即确认语义)。不 ACK 的话,重放后 retryTimer
-    // 会在 Windows 低精度计时器(≈12ms>配置 5ms)或慢 Linux runner 下把同一
-    // 帧再发一遍。等重放出现后再 ACK 全部副本,按 seq 去重断言,避免把
-    // 「重试重发」误判成「重放两次」。
-    await vi.waitFor(() => {
-      expect(firstSocket.sent.slice(sentBefore).some((env) => (
+      // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
+      const sentBefore = firstSocket.sent.length;
+      const reopened = establishInboundReliableLink(h, 'inbound-timeout-stream');
+      await vi.advanceTimersByTimeAsync(0);
+      await reopened;
+      // 受控时钟保持在重开时刻:真实计时器可能在 tick 等待期间已跨过 5ms
+      // 重试窗口,此时再 ACK 也来不及阻止第二帧。确认重放后再 ACK,不放宽数量断言。
+      const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
         env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-      ))).toBe(true);
-    });
-    const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ));
-    for (const env of justReplayed) {
-      const meta = parseTransportPayload(env.payload)!.meta;
-      h.current().push({
-        v: PROTOCOL_VERSION,
-        kind: 'push',
-        src: 'dev-b',
-        payload: {
-          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-          payload: { streamId: meta.streamId, ackSeq: meta.seq },
-        },
+      ));
+      if (justReplayed.length > 0) {
+        const meta = parseTransportPayload(justReplayed[0].payload)!.meta;
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'push',
+          src: 'dev-b',
+          payload: {
+            channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+            payload: { streamId: meta.streamId, ackSeq: meta.seq },
+          },
+        });
+      }
+      const replayed = firstSocket.sent.slice(sentBefore);
+      const replays = replayed.filter((env) => (
+        env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+      ));
+      expect(replays).toHaveLength(1);
+      expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
+        streamId: firstMeta.streamId,
+        seq: firstMeta.seq,
       });
+      expect(replayed.filter((env) => (
+        env.kind === 'push'
+        && parseTransportPayload(env.payload)
+      ))).toHaveLength(0);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
     }
-    const replayed = firstSocket.sent.slice(sentBefore);
-    const replays = replayed.filter((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ));
-    const uniqueSeqs = [...new Set(replays.map((env) => (
-      parseTransportPayload(env.payload)!.meta.seq
-    )))];
-    expect(uniqueSeqs).toEqual([firstMeta.seq]);
-    expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
-      streamId: firstMeta.streamId,
-      seq: firstMeta.seq,
-    });
-    expect(replayed.filter((env) => (
-      env.kind === 'push'
-      && parseTransportPayload(env.payload)
-    ))).toHaveLength(0);
-    h.client.stop();
   });
 
   it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {

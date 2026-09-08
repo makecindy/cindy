@@ -129,7 +129,7 @@ function toAgentModel(
 ): ProviderRuntimeModelConfig {
   const named = {
     ...model,
-    name: curatedOllamaDisplayName(model.id) ?? model.name,
+    name: model.name || curatedOllamaDisplayName(model.id) || model.id,
   };
   if (agent === 'pi') return named;
   return {

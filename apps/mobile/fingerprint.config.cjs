@@ -17,6 +17,17 @@ const sourceSkips = [
 
 module.exports = {
   sourceSkips,
+  // These images are compiled into the native catalog, not delivered by Metro.
+  extraSources: [
+    'cindy-message-square-plus',
+    'cindy-link-2',
+    'cindy-undo-2',
+    'cindy-trash-2',
+  ].map((name) => ({
+    type: 'dir',
+    filePath: `assets/message-menu/${name}.imageset`,
+    reasons: ['native message menu assets'],
+  })),
   fileHookTransform(source, chunk, isEndOfFile) {
     if (source.type !== 'file' || source.filePath !== 'eas.json') {
       return chunk;

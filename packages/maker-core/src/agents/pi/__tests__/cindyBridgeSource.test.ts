@@ -158,7 +158,7 @@ function loadBashPackageHomeHelper(): {
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
-  const context: Record<string, unknown> = {
+  const context: Record<string, unknown> & { process: { env: Record<string, string | undefined> } } = {
     process: { env: {} },
     path,
   };

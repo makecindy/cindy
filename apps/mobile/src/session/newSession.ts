@@ -95,6 +95,12 @@ export interface NewSessionStoredPreferences {
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。
    */
   permissionModeByAgent: Partial<Record<NewSessionAgentKind, string>>;
+  /**
+   * 每台被控电脑上次在新建页**显式选择**的项目目录(deviceId → 绝对路径,#4103)。
+   * 只在用户点选最近项目 / 在目录浏览器里确认时写入;自动取最近项目首项不算显式选择。
+   * 按设备归属,避免把一台电脑的路径套到另一台;没有记忆的设备沿用最近项目默认逻辑。
+   */
+  workingDirByDevice: Record<string, string>;
 }
 
 export interface NewSessionDraftSummary {
@@ -840,11 +846,19 @@ export function resolveNewSessionAutoDefault(input: {
   };
 }
 
+/**
+ * 空白新建的初始项目目录:草稿已有目录 → 不动;否则先用该设备记住的上次显式选择
+ * (#4103,不要求它仍在最近列表里——列表只保留 6 项,且用户本就有目录浏览入口),
+ * 没有记忆再取最近项目首项。
+ */
 export function pickInitialNewSessionWorkspace(
   currentWorkingDir: string,
   recentWorkspaces: readonly RecentWorkspaceOption[],
+  rememberedWorkingDir?: string | null,
 ): string | null {
   if (currentWorkingDir.trim()) return null;
+  // 记忆目录原样返回(首尾空格可能是路径的一部分),只用 trim 判空。
+  if (rememberedWorkingDir?.trim()) return rememberedWorkingDir;
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 

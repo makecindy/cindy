@@ -3768,7 +3768,7 @@ describe('CodexAgent reference directories', () => {
       expect(events.filter((event) => event.type === 'done')).toHaveLength(2),
     );
 
-    const doneEvents = events.filter((event): event is Extract<AgentEvent, { type: 'done' }> =>
+    const doneEvents = events.filter((event) =>
       event.type === 'done',
     );
     expect((doneEvents[0]?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toHaveLength(1);
@@ -5533,7 +5533,7 @@ describe('CodexAgent fast mode service tier', () => {
     await sendPromise;
     await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
 
-    const done = events.find((event): event is Extract<AgentEvent, { type: 'done' }> => event.type === 'done');
+    const done = events.find((event) => event.type === 'done');
     expect((done?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toEqual([
       expect.objectContaining({ inputTokens: 20, outputTokens: 10, priceVariant: 'standard' }),
     ]);
@@ -8985,8 +8985,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
     }
 
-    it('arms HTTP fallback and retries the same zero-output turn once', async () => {
-      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+    it.each([
+      ['encrypted_content', ENCRYPTED_ERROR],
+      ['tool_item_id', "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'."],
+    ])('arms HTTP fallback and retries the same zero-output turn once (%s)', async (reason, recoveryError) => {
+      const armCodexHttpRecovery = vi.fn(() => reason);
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
       const host = installRecoveryHost(agent);
       const handle = await agent.startSession({
@@ -9009,7 +9012,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         willRetry: false,
         error: {
           message: 'Bad request',
-          additionalDetails: ENCRYPTED_ERROR,
+          additionalDetails: recoveryError,
           codexErrorInfo: 'badRequest',
         },
       });
@@ -9021,7 +9024,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         turn: {
           id: 'turn-1',
           status: 'failed',
-          error: { message: ENCRYPTED_ERROR },
+          error: { message: recoveryError },
         },
       });
 
@@ -9035,7 +9038,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         sessionId: 'session-ws-body-recovery',
         threadId: 'start-thread-id',
         message: 'Bad request',
-        additionalDetails: ENCRYPTED_ERROR,
+        additionalDetails: recoveryError,
       });
       expect(
         events.some(
@@ -9051,7 +9054,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         turn: {
           id: 'turn-1',
           status: 'failed',
-          error: { message: ENCRYPTED_ERROR },
+          error: { message: recoveryError },
         },
       });
       expect(handle.getCurrentTurnId?.()).toBe('turn-2');
@@ -9370,8 +9373,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     });
 
-    it('does not replay a recovery error after the turn has produced output', async () => {
-      const armCodexHttpRecovery = vi.fn(() => 'image_generation_id');
+    it.each([
+      ['image_generation_id', 'Image generation items without `id` are not supported for this request.'],
+      ['tool_item_id', "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'."],
+    ])('does not replay a recovery error after the turn has produced output (%s)', async (reason, recoveryError) => {
+      const armCodexHttpRecovery = vi.fn(() => reason);
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
       const host = installRecoveryHost(agent);
       const handle = await agent.startSession({
@@ -9395,7 +9401,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         turnId: 'turn-1',
         willRetry: false,
         error: {
-          message: 'Image generation items without `id` are not supported for this request.',
+          message: recoveryError,
           codexErrorInfo: 'badRequest',
         },
       });
@@ -13809,7 +13815,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (!handlers?.mcpServerElicitation) {
       throw new Error('expected mcpServerElicitation handler');
     }
-    handlers.itemStarted({
+    handlers.itemStarted!({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
       item: {
@@ -13844,7 +13850,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       toolName: 'mcp:cindy_contacts',
       suggestions: undefined,
     });
-    handlers.itemStarted({
+    handlers.itemStarted!({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
       item: {
@@ -13871,7 +13877,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     expect(resolver.mock.calls[1]?.[0]).not.toHaveProperty('toolUseId');
     for (const itemId of ['contacts-call-1', 'contacts-call-2']) {
-      handlers.itemCompleted({
+      handlers.itemCompleted!({
         threadId: 'start-thread-id',
         turnId: 'turn-wechat-mcp',
         item: {
@@ -13883,7 +13889,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         },
       } as never);
     }
-    handlers.itemUpdated({
+    handlers.itemUpdated!({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
       item: {
@@ -23276,7 +23282,7 @@ describe('CodexAgent turn lifecycle', () => {
           turnStartResponse.resolve({ turn: { id: 'turn-retry-state' } });
           await sendPromise;
         } else {
-          handlers.turnStarted({
+          handlers.turnStarted!({
             threadId: 'start-thread-id',
             turn: { id: 'turn-retry-state' },
           });
@@ -30530,7 +30536,7 @@ describe('CodexAgent context window reporting', () => {
           currentTurnResponse.resolve({ turn: { id: 'turn-current-diff' } });
           await sendPromise;
         } else {
-          handlers.turnStarted({
+          handlers.turnStarted!({
             threadId: 'start-thread-id',
             turn: { id: 'turn-current-diff' },
           });

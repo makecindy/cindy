@@ -101,7 +101,7 @@ vi.mock('../rpc-client.js', () => ({
     }
     async request(
       cmd: Record<string, unknown> & { type: string },
-    ): Promise<{ success: boolean; command?: string; data?: unknown }> {
+    ): Promise<{ success: boolean; command?: string; data?: unknown; error?: string }> {
       captured.requests.push(cmd);
       if (cmd.type === 'set_model' && captured.holdSetModel) {
         await captured.holdSetModel;
@@ -733,8 +733,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('Pi extension installed')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Pi extension installed')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -879,8 +880,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('Installed')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Installed')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -1585,7 +1587,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         { type: 'user', content: 'pi install npm:context-mode' },
         desktopCommandOptions('pi install npm:context-mode'),
       );
-      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
+      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message;
+      if (typeof prompt !== 'string') throw new Error('expected prompt message');
       expect(prompt).toContain('"ok":true');
       expect(prompt).toContain('do not claim every task has already stopped');
       expect(prompt).toContain('this task remains active');
@@ -1699,8 +1702,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('context-mode')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('context-mode')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -1767,8 +1771,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('"name":"extension"')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('"name":"extension"')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -1832,8 +1837,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('Pi 扩展操作失败。')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Pi 扩展操作失败。')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -2084,8 +2090,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('Pi 扩展操作失败。')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Pi 扩展操作失败。')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -2262,8 +2269,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('Pi 扩展已安装')) {
-          visibleReceipt = event.value.data.text;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Pi 扩展已安装')) {
+          visibleReceipt = data.text;
           break;
         }
       }
@@ -2432,7 +2440,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         { type: 'user', content: 'pi install npm:oversized-extension' },
         desktopCommandOptions('pi install npm:oversized-extension'),
       );
-      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
+      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message;
+      if (typeof prompt !== 'string') throw new Error('expected prompt message');
       expect(prompt.length).toBeLessThanOrEqual(16_384);
       expect(prompt).toContain('"name":"oversized-extension"');
       expect(prompt).toContain('"version":"9.8.7"');

@@ -441,7 +441,7 @@ describe('Maker local Pi package generation fence', () => {
 
   it.each([
     ['remote', { remoteHostId: 'ssh-host' }],
-    ['Review', { reviewMode: true }],
+    ['Review', { reviewMode: true as const }],
   ])('does not fence an in-flight %s Pi startup', async (_label, boundary) => {
     const started = createDeferred<AgentSessionHandle>();
     const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
