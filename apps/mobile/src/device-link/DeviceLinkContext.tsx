@@ -3,6 +3,7 @@ import { createBackgroundConnection } from './backgroundConnection';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   DeviceLinkClient,
   DeviceLinkError,
@@ -451,6 +452,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         const held = markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
         noteSessionLiveStreamsAcked(held);
         if (held.length > 0) record?.('subscription', 'applied', held.length);
+        mobileDebugLog('debug', 'recovery', 'subscription acknowledged', { topicCount: held.length });
       },
     });
   }, []);
@@ -1154,6 +1156,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     void import('expo-network').then(({ addNetworkStateListener }) => {
       if (disposed) return;
       networkSubscription = addNetworkStateListener((network) => {
+        mobileDebugLog('debug', 'device-link', 'network changed', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState });
         if (AppState.currentState !== 'active' || network.isConnected === false) return;
         client.notifyNetworkChanged();
       });
@@ -1899,6 +1902,7 @@ const mobileDeviceLinkLogger = {
 };
 
 function logMobileDeviceLink(level: MobileDeviceLinkLogLevel, args: unknown[]): void {
+  mobileDebugLog(level, 'device-link', ...args);
   if (!__DEV__ && level === 'debug') return;
   if (level === 'error') {
     console.error('[device-link]', ...args);

@@ -36,6 +36,8 @@ import { createLogger } from '../logger.js';
 import {
   REMOTE_ALLOWED_SERVER_NAMES,
   REMOTE_COLLAB_SERVER_NAMES,
+  REMOTE_BOT_HELPER_SERVER_NAME,
+  withMcpRouteIdentity,
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
 } from '../mcp-integrations/codexHttpBridge.js';
@@ -199,6 +201,46 @@ export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
   });
 }
 
+/** Bind the remote daemon's disabled helper transport to one concrete Session.
+ * Read the port at use time: SSH forwarding is established after host construction.
+ * Only Bot MCP policy enables this transport; ordinary remote threads keep it disabled.
+ */
+export function buildRemoteCodexSessionMcpConfig(
+  hostId: string,
+  sessionInstanceId: string,
+  opts: {
+    bridgeInstanceId: string | null;
+    serverNames: string[];
+    collabEnabled: boolean;
+    makerMemoryEnabled: boolean;
+  },
+): Record<string, unknown> {
+  const prefs = readPortPrefs()[hostId];
+  const token = getRemoteMcpBridgeToken();
+  if (!prefs?.appliedFingerprint || !sessionInstanceId || !token || !opts.bridgeInstanceId) return {};
+  const serverNames = selectRemoteInjectableServerNames(opts.serverNames, {
+    collabEnabled: opts.collabEnabled,
+    memoryEnabled: opts.makerMemoryEnabled,
+    botHelperEnabled: true,
+  });
+  // A written config is not proof that a busy daemon has loaded this generation.
+  // Never combine a new route with its old token or pre-helper server config.
+  if (!serverNames.includes(REMOTE_BOT_HELPER_SERVER_NAME) || prefs.appliedFingerprint !== computeRemoteMcpFingerprint({
+    token,
+    bridgeInstanceId: opts.bridgeInstanceId,
+    remotePort: prefs.remotePort,
+    serverNames,
+  })) return {};
+  return {
+    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.url`]: withMcpRouteIdentity(
+      `http://127.0.0.1:${prefs.remotePort}/mcp/${REMOTE_BOT_HELPER_SERVER_NAME}`,
+      { sessionInstanceId },
+    ),
+    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.bearer_token_env_var`]: TOKEN_ENV,
+    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.enabled`]: false,
+  };
+}
+
 // ── 远端 config.toml 管理段 (纯函数, 便于单测) ──────────────────────────────
 
 /** 生成我们管理的 mcp_servers 配置块 (带 begin/end 标记)。 */
@@ -218,6 +260,7 @@ export function renderManagedMcpBlock(opts: {
       `[mcp_servers.${name}]`,
       `url = "http://127.0.0.1:${opts.remotePort}/mcp/${name}"`,
       `bearer_token_env_var = "${TOKEN_ENV}"`,
+      ...(name === REMOTE_BOT_HELPER_SERVER_NAME ? ['enabled = false'] : []),
       'startup_timeout_sec = 600',
       'tool_timeout_sec = 600',
       '',
@@ -672,12 +715,13 @@ export function hasPendingRemoteMcpDrift(
      * 含 cindy_memory — 与 ensure 内的注入集合同源, 开关翻转构成漂移。
      */
     makerMemoryEnabled: boolean;
+    botHelperAvailable?: boolean;
     token: string | null;
     bridgeInstanceId: string | null;
   },
 ): boolean {
   const applied = readPortPrefs()[hostId]?.appliedFingerprint ?? null;
-  if ((!opts.collabEnabled && !opts.makerMemoryEnabled) || !opts.token) {
+  if ((!opts.collabEnabled && !opts.makerMemoryEnabled && !opts.botHelperAvailable) || !opts.token) {
     // 清理语义:applied 存在 = 待清理 (strip / 清理路径未跑过)。
     return applied !== null;
   }
@@ -695,6 +739,7 @@ export function hasPendingRemoteMcpDrift(
     serverNames: selectRemoteInjectableServerNames([...REMOTE_ALLOWED_SERVER_NAMES], {
       collabEnabled: opts.collabEnabled,
       memoryEnabled: opts.makerMemoryEnabled,
+      botHelperEnabled: opts.botHelperAvailable,
     }),
   });
   return desired !== applied;
@@ -794,6 +839,8 @@ async function doEnsureRemoteCodexMcpBridge(
     let serverNames = selectRemoteInjectableServerNames(bridge.serverNames, {
       collabEnabled,
       memoryEnabled: deps.isMakerMemoryEnabled?.() ?? false,
+      // Shared transport stays disabled; the Bot policy enables it per thread.
+      botHelperEnabled: true,
     });
     if (
       !collabEnabled &&

@@ -4792,6 +4792,14 @@ export class CodexAgent extends BaseAgent {
         );
       }
     }
+    const readSessionMcpConfig = (): Record<string, unknown> => {
+      const config = host.getSessionMcpConfig(opts.sessionInstanceId);
+      if (opts.remoteHostId && opts.botRuntimeProfile?.mcpPolicy
+        && typeof config['mcp_servers.cindy_helper.url'] !== 'string') {
+        throw new Error('Remote Codex Bot tools are not ready. Retry after the active remote task finishes.');
+      }
+      return config;
+    };
     let botMcpConfig: Record<string, unknown> = {};
     if (!reviewMode && opts.botRuntimeProfile?.mcpPolicy) {
       try {
@@ -4802,11 +4810,15 @@ export class CodexAgent extends BaseAgent {
         assertCurrentHost('Bot MCP configuration');
         const transports = new Set(Object.entries(asRecord(asRecord(response.config).mcp_servers))
           .filter(([, value]) => hasCodexMcpTransport(value)).map(([name]) => name));
-        for (const [key, value] of Object.entries(host.getSessionMcpConfig(opts.sessionInstanceId))) {
+        for (const [key, value] of Object.entries(readSessionMcpConfig())) {
           const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.(?:url|command)$/.exec(key);
           if (match && typeof value === 'string' && value.trim()) transports.add(match[1]);
         }
         botMcpConfig = buildCodexBotMcpConfigOverrides(opts.botRuntimeProfile.mcpPolicy, transports);
+        // Remote daemons keep this shared transport disabled for ordinary tasks.
+        if (opts.remoteHostId && transports.has('cindy_helper')) {
+          botMcpConfig['mcp_servers.cindy_helper.enabled'] = true;
+        }
         if (!makerMemoryEnabled && transports.has('cindy_memory')) {
           botMcpConfig['mcp_servers.cindy_memory.enabled'] = false;
         }
@@ -5585,8 +5597,19 @@ export class CodexAgent extends BaseAgent {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       const threadContextWindow = effectiveThreadContextWindow(contextLimit);
       const config = {
+        // Apply transport defaults before the per-session Bot capability policy.
+        ...(reviewMode ? {} : readSessionMcpConfig()),
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
+        // Bot memory and delegation belong to its Cindy Profile and Session
+        // tasks, not the shared native home or hidden harness child threads.
+        ...(opts.botRuntimeProfile ? {
+          'features.multi_agent': false,
+          'features.multi_agent_v2': false,
+          'agents.enabled': false,
+          'memories.generate_memories': false,
+          'memories.use_memories': false,
+        } : {}),
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         ...(reviewMode
@@ -5599,7 +5622,6 @@ export class CodexAgent extends BaseAgent {
               'features.remote_plugin': false,
             }
           : {}),
-        ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
         ...(!makerMemoryEnabled && !opts.botRuntimeProfile
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
@@ -5947,6 +5969,15 @@ export class CodexAgent extends BaseAgent {
     let codexThreadModelProviderId: string | undefined;
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
+    const withMcpDiscoveryContext = <T>(run: () => Promise<T>): Promise<T> => {
+      if (reviewMode || !sid || !opts.sessionInstanceId || !this.deps.withCodexMcpDiscoveryContext) return run();
+      return this.deps.withCodexMcpDiscoveryContext({
+        sessionId: sid, sessionInstanceId: opts.sessionInstanceId,
+        workingDir: opts.workingDir, vendorOptions: vo,
+        ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
+      }, run);
+    };
+
     /**
      * Start a replacement thread after the exact provider proof that the
      * persisted thread has no rollout. This is intentionally narrower than a
@@ -5965,9 +5996,9 @@ export class CodexAgent extends BaseAgent {
       };
       acquireHostBindingLeaseIfNeeded();
       assertCurrentHost('thread/start');
-      const resp = await host.request<ThreadStartResponse>(Method.ThreadStart, params, {
+      const resp = await withMcpDiscoveryContext(() => host.request<ThreadStartResponse>(Method.ThreadStart, params, {
         timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-      });
+      }));
       assertCurrentHost('thread/start');
       if (Object.hasOwn(resp, 'serviceTier')) {
         mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -6079,9 +6110,9 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
+        const resp = await withMcpDiscoveryContext(() => host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
           timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-        });
+        }));
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -6521,6 +6552,7 @@ export class CodexAgent extends BaseAgent {
       forcePrompt?: boolean;
       /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
       unavailableHandoff?: boolean;
+      onSystemDenied?: (reason: string) => void;
     }
     const pendingApprovals = new Map<string, PendingEntry>();
     const seenGuardianReviewIds = new Set<string>();
@@ -6767,6 +6799,29 @@ export class CodexAgent extends BaseAgent {
     ): Promise<ApprovalDecision> {
       const timingPauseId = `approval:${kind}:${requestId}`;
       return withCodexGenerationPaused(requestThreadId, turnId, timingPauseId, async () => {
+        // Native Codex currently flattens MCP declines to "user rejected" and
+        // discards response content/_meta on that path. Preserve the cause in
+        // Cindy's diagnostic/UI channel; this notice is NOT model context.
+        const reportMcpDenial = (source: 'auto-review' | 'system' | 'user', reason?: string, visible = true) => {
+          if (kind !== 'mcpServerElicitation') return;
+          const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
+            (reason === 'timeout' || reason?.endsWith('_timeout'));
+          const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
+            : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
+          // IDs and a closed set of causes only: no arguments, credentials, or
+          // free-text reviewer output may enter the diagnostic log.
+          log.info('MCP approval denied', {
+            threadId: requestThreadId, turnId, requestId, itemId: opts?.itemId,
+            source, cause: source === 'user' ? 'user-denied' : code,
+          });
+          if (source === 'user' || !visible) return;
+          const text = source === 'auto-review'
+            ? 'Automatic approval review blocked this tool call. No user rejection was received.'
+            : timedOut
+              ? 'The permission request timed out without a confirmed decision. This does not establish whether the user clicked a button.'
+              : 'The permission confirmation could not be completed. No user rejection was received.';
+          emitAutoReviewRuntimeNotice(`[${code}] ${text}`);
+        };
         let forcePrompt =
           opts?.forcePrompt === true ||
           (req.kind === 'permission' &&
@@ -6836,8 +6891,8 @@ export class CodexAgent extends BaseAgent {
           } else if (decision.verdict === 'allow') {
             return 'accept';
           } else if (decision.verdict === 'block') {
-            // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默。
-            // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
+            // Keep the denial, but distinguish it from a user decision in Cindy.
+            reportMcpDenial('auto-review');
             return 'decline';
           } else {
             // AI ask decisions reach the user and cannot be remembered.
@@ -6866,6 +6921,7 @@ export class CodexAgent extends BaseAgent {
             ...(opts?.itemId ? { itemId: opts.itemId } : {}),
             forcePrompt,
             ...(unavailableHandoff ? { unavailableHandoff: true } : {}),
+            onSystemDenied: (reason) => reportMcpDenial('system', reason, false),
           };
           pendingApprovals.set(requestId, entry);
           const finalize = (d: ApprovalDecision) => {
@@ -6878,14 +6934,20 @@ export class CodexAgent extends BaseAgent {
           };
           dispatchInteraction(routedRequest)
             .then((decision) => {
+              if (entry.settled) return;
               if (decision.kind !== 'permission') {
                 log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
-                if (unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+                reportMcpDenial('system');
+                if (unavailableHandoff && kind !== 'mcpServerElicitation') autoReviewConfirmUndeliveredNotice.notify();
                 finalize('decline');
                 return;
               }
+              if (decision.behavior === 'deny') {
+                reportMcpDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason);
+              }
               if (
                 unavailableHandoff
+                && kind !== 'mcpServerElicitation'
                 && decision.behavior === 'deny'
                 && isSystemPermissionDenialReason(decision.reason)
               ) {
@@ -6894,8 +6956,10 @@ export class CodexAgent extends BaseAgent {
               finalize(mapPermissionDecisionToApproval(decision));
             })
             .catch((e) => {
+              if (entry.settled) return;
               log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
-              if (unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              reportMcpDenial('system');
+              if (unavailableHandoff && kind !== 'mcpServerElicitation') autoReviewConfirmUndeliveredNotice.notify();
               finalize('decline');
             });
         });
@@ -6920,7 +6984,8 @@ export class CodexAgent extends BaseAgent {
         // 里宽松模式仍强制弹 UI 的语义一致。
         const effectiveResolveAs: 'allow' | 'deny' =
           resolveAs === 'allow' && entry.forcePrompt === true ? 'deny' : resolveAs;
-        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+        if (effectiveResolveAs === 'deny') entry.onSystemDenied?.(reason);
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff && entry.kind !== 'mcpServerElicitation') {
           autoReviewConfirmUndeliveredNotice.notify();
         }
         entry.resolve(effectiveResolveAs === 'allow' ? 'accept' : 'decline');
@@ -7950,34 +8015,34 @@ export class CodexAgent extends BaseAgent {
     function mcpElicitationPermissionInput(params: McpServerElicitationRequestParams): Record<string, unknown> {
       const meta = mcpElicitationMeta(params);
       const input: Record<string, unknown> = {
-        serverName: params.serverName,
+        ...mcpToolApprovalContext(params),
         message: params.message,
       };
-      const toolName = stringFromMeta(meta, 'tool_name');
       const toolTitle = stringFromMeta(meta, 'tool_title');
       const toolDescription = stringFromMeta(meta, 'tool_description');
-      if (toolName) input.toolName = toolName;
       if (toolTitle) input.toolTitle = toolTitle;
       if (toolDescription) input.toolDescription = toolDescription;
       if (meta?.tool_params_display != null) input.toolParamsDisplay = meta.tool_params_display;
-      if (meta?.tool_params != null) input.toolParams = meta.tool_params;
-      else {
-        const matches = matchingActiveMcpTools(params);
-        if (matches.length === 1) {
-          input.toolName ??= matches[0].context.tool;
-          if (matches[0].context.arguments !== undefined) input.toolParams = matches[0].context.arguments;
-        }
-      }
       return input;
     }
 
     function mcpToolApprovalContext(params: McpServerElicitationRequestParams) {
       const meta = mcpElicitationMeta(params);
-      const toolName = stringFromMeta(meta, 'tool_name');
+      let toolName = stringFromMeta(meta, 'tool_name');
+      let toolParams = meta?.tool_params;
+      // Older app-servers omit either field. Policy and presentation must use
+      // the same evidence; never guess across concurrent tools or turns.
+      if (!toolName || toolParams == null) {
+        const matches = matchingActiveMcpTools(params);
+        if (matches.length === 1) {
+          toolName ??= matches[0].context.tool ?? undefined;
+          toolParams ??= matches[0].context.arguments;
+        }
+      }
       return {
         serverName: params.serverName,
         ...(toolName ? { toolName } : {}),
-        ...(meta?.tool_params != null ? { toolParams: meta.tool_params } : {}),
+        ...(toolParams != null ? { toolParams } : {}),
       };
     }
 
@@ -8164,7 +8229,7 @@ export class CodexAgent extends BaseAgent {
         log.debug('mcp elicitation auto-approved by host policy', {
           serverName: params.serverName,
           mode: params.mode,
-          toolName: stringFromMeta(mcpElicitationMeta(params), 'tool_name'),
+          toolName: policyPermissionInput.toolName,
           innerToolName: mcpInnerToolName(params),
         });
         return { action: 'accept', content: null, _meta: null };

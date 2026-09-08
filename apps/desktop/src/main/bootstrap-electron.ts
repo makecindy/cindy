@@ -299,6 +299,7 @@ import {
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
+import { openMakeToolsDirectory } from './cindy-make/toolsDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   getAllRegisteredDraftUrls,
@@ -618,6 +619,7 @@ import {
   anySessionInTurn,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
+  clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
@@ -1748,6 +1750,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     // 的 Maker 上兑现旧 owner 的记忆设置重启(shutdown 触发的会话关闭事件也会
     // 撞上它,先清再关)。
     clearDeferredCodexRestartForOwnerBoundary();
+    clearWorkingDirectoryRecoveryForOwnerBoundary();
     // interrupted-turn-resume:shutdown 批量 close 会话会触发 close teardown 的
     // markSessionTurnEnded,把"边界时还在飞的 turn"伪装成正常收尾 —— 被切换打断的
     // 任务从此既无中断横幅也无红点,呈现为"卡住且无报错"(与 ⌘Q 的 quit freeze 同款
@@ -7135,6 +7138,18 @@ const registerIpcHandlers = () => {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  // Settings → Cindy Make: open Cindy's private managed-tool directory.
+  // The path is derived in main so the renderer cannot choose an arbitrary folder.
+  ipcMain.handle(
+    'app:open-cindy-make-tools-dir',
+    async (event): Promise<{ success: boolean }> => {
+      assertTrustedAppRendererEvent(event);
+      return openMakeToolsDirectory(app.getPath('userData'), {
+        openPath: (directory) => shell.openPath(directory),
+      });
+    },
+  );
 
   // ── Native clipboard helpers (media:copy-to-clipboard) ──
   //

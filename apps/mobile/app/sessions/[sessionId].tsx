@@ -1,4 +1,5 @@
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -2040,6 +2041,7 @@ export default function SessionScreen() {
   useEffect(() => {
     if (contentRecoveryState === 'syncing') recoveryStartedAtRef.current = Date.now();
     else console.debug('[device-link] content recovered', { elapsedMs: Date.now() - recoveryStartedAtRef.current });
+    mobileDebugLog('debug', 'recovery', 'content recovery state', { state: contentRecoveryState, elapsedMs: Date.now() - recoveryStartedAtRef.current });
   }, [contentRecoveryState]);
   const showConnectionBanner = useShowConnectionBanner(
     status,
@@ -3174,6 +3176,7 @@ export default function SessionScreen() {
         // 落一条 debug:区分不了「瞬时离线可自愈」与「sessionId 非法 / 协议不匹配」等永久性
         // 错误,后者会让镜像长期过期到下次重连才补读——留痕便于排查 device-link 兼容回归。
         console.debug('[agent-switch] getSessionAgentSwitchIntent 读回失败,保留现有镜像', err);
+        mobileDebugLog('debug', 'recovery', 'agent switch intent read failed; retaining snapshot', err);
       });
     return () => {
       cancelled = true;
@@ -3399,6 +3402,7 @@ export default function SessionScreen() {
       if (contentKeyAtStart !== null && contentRecoveryKeyRef.current === contentKeyAtStart) {
         syncRun.satisfy('subscription-acked');
         console.debug('[device-link] recovery snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
+        mobileDebugLog('debug', 'recovery', 'snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
       }
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早

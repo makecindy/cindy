@@ -136,7 +136,8 @@
       "help": "Help",
       "about": "About",
       "imBot": "IM bots",
-      "ghosts": "Plugins"
+      "ghosts": "Plugins",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "User",
@@ -2009,8 +2010,8 @@
         "hostProfileApple": "Apple silicon · about {{memory}} GB unified memory",
         "hostProfileGeneric": "About {{memory}} GB memory",
         "hostProfileUnknown": "This computer’s memory isn’t available yet",
-        "bestForYou": "Best for you",
-        "alsoCoding": "Also good for coding",
+        "bestForYou": "Capability pick",
+        "alsoCoding": "Speed alternative",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2027,41 +2028,12 @@
         "noSearchResults": "No matching models",
         "alreadyInstalled": "Installed",
         "searchResults": "Search results",
-        "moreModels": "More local models",
-        "memoryWarning": "Not enough memory on this computer (needs {{need}} GB, about {{have}} GB available)",
+        "moreModels": "Other candidate models",
+        "memoryWarning": "Below the estimated memory threshold ({{need}} GB; this computer has about {{have}} GB)",
         "manualDownload": "Manual download",
         "manualDownloadPlaceholder": "Ollama library name or Hugging Face URL",
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines."
-          },
-          "gemma4-e2b": {
-            "blurb": "Smallest Gemma 4. Light machines, with vision."
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 small. Light daily use, with vision."
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 mid-size. Steadier chat and multimodal."
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory."
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
-          },
-          "glm-47-flash": {
-            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
-          }
-        },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
         "installInCindy": "Install in Cindy",
@@ -2130,8 +2102,8 @@
         "cancelDownload": "Delete Incomplete Download",
         "notRecommended": "This Mac doesn’t meet the 32 GB memory bar for Qwen3.8 27B. You can still enter an exact library name.",
         "sizeHint": "About {{size}} · needs {{memory}} GB unified memory",
-        "sizeHintApple": "About {{size}} · needs {{memory}} GB unified memory",
-        "sizeHintGeneric": "About {{size}} · needs {{memory}} GB memory",
+        "sizeHintApple": "Download {{size}} · estimated {{memory}} GB unified memory",
+        "sizeHintGeneric": "Download {{size}} · estimated {{memory}} GB memory",
         "deleteFromCindy": "Remove from Cindy",
         "deleteConfirmTitle": "Remove Ollama from Cindy?",
         "deleteConfirmBody": "This only removes the Cindy connection. Models already downloaded in Ollama stay on disk, and the service keeps running.",
@@ -2140,7 +2112,8 @@
         "deleteModelConfirmBody": "This deletes the downloaded model files from this computer and removes them from Cindy. You can download the model again later.",
         "deleteModelConfirm": "Delete",
         "deleteModelDone": "Deleted {{name}}",
-        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again."
+        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again.",
+        "noRecommendation": "No recommendation with sufficient evidence fits this computer yet. You can choose a candidate below."
       },
       "xdSignin": {
         "badge": "Recommended",
@@ -5480,6 +5453,19 @@
       "hint": "Remote IM keeps confirmation enabled for actions that need approval.",
       "fullAccessDisabled": "Full Access is unavailable for remote IM because actions that cannot be safely confirmed must not run directly.",
       "permissionModeDisabled": "This permission mode is unavailable because remote IM uses Cindy Desktop's confirmation policy."
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "Open tools folder",
+      "description": "The card below checks this computer and lets you install missing portable tools. Native compiler prerequisites show an official installation guide.",
+      "checking": "Checking environment…",
+      "forceManaged": {
+        "title": "Test Installation: Ignore System Tools",
+        "description": "Development builds only. Check portable tools in Cindy-managed copies and simulate missing Windows compiler tools. This switch only rechecks the environment; it does not start installation.",
+        "ariaLabel": "Test Installation: Ignore System Tools",
+        "enabledHint": "The card below can test downloading and installing missing Windows tools. Existing Cindy-managed tools are reused. This takes effect immediately and resets on reload or restart; system tools stay unchanged.",
+        "reportHint": "Installation test is on: portable tools use Cindy-managed copies. Windows compiler tools are shown as missing to test the official installation guide; turn off the switch to check their real status."
+      }
     }
   },
   "remoteDevice": {
@@ -8010,7 +7996,10 @@
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
       "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
-      "ruleSeparator": ", "
+      "ruleSeparator": ", ",
+      "submitting": "Submitting your decision…",
+      "submissionFailed": "No confirmation was received. Check your connection and try again if the prompt is still open.",
+      "requestEnded": "This permission request has ended or was already handled. Check the latest status."
     },
     "deviceSwitcher": {
       "label": "Device",
@@ -8891,7 +8880,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
+      "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received."
     },
     "generatedFiles": {
       "title": "Files created this message",
@@ -12035,5 +12027,145 @@
     "realtime": "For real-time voice conversations.",
     "embedding": "For finding related content by meaning.",
     "compression": "For condensing lengthy content."
+  },
+  "cindyMakeDoctor": {
+    "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",
+    "title": "Cindy Make · Environment",
+    "scope": "Check tools on this computer",
+    "limits": "Checks only; no installation or source checkout. Source and project dependencies still need checking when building.",
+    "running": "Checking",
+    "passed": "Basic checks passed",
+    "needsAttention": "Some items need attention",
+    "cancelled": "Check stopped",
+    "failed": "Check incomplete. Please retry.",
+    "details": "Show details",
+    "hideDetails": "Hide details",
+    "stop": "Stop check",
+    "recheck": "Check again",
+    "timeout": "The check timed out. Make sure the tool can start, then retry.",
+    "commandUnavailable": "The command list is not ready, or this running version does not include the command. Retry later or update Cindy.",
+    "usage": "Environment checks take no arguments or attachments. Send /cindy-make-doctor on its own.",
+    "localOnly": "Use /cindy-make-doctor on a local Desktop. SSH and device-link are not supported yet.",
+    "checks": {
+      "platform": "System and architecture",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "Native build tools",
+      "storage": "Storage and permissions"
+    },
+    "checkStatus": {
+      "pending": "Pending",
+      "checking": "Checking",
+      "passed": "Passed",
+      "missing": "Not found",
+      "incompatible": "Incompatible",
+      "failed": "Not verified",
+      "warning": "Attention needed",
+      "cancelled": "Stopped",
+      "downloading": "Downloading",
+      "installing": "Installing"
+    },
+    "requirements": {
+      "platform": "Windows x64, macOS x64/arm64, and Linux x64/arm64 are supported. Build on the corresponding OS.",
+      "git": "Requires working Git 2.x or newer. No GitHub account is needed.",
+      "gitLfs": "Requires Git LFS to retrieve large files in the source.",
+      "node": "Requires Node.js ≥ 22.12.",
+      "pnpm": "Requires pnpm ≥ 10.7 and < 11; 10.33.2 is recommended. Automatic downloads are disabled for this check.",
+      "python": "Requires Python 3.{{pythonMinor}} or a newer Python 3.",
+      "native": "Requires C/C++ build tools for this OS.",
+      "nativeWin": "Requires Visual Studio C++ Build Tools, MSBuild, and Windows 10/11 SDK.",
+      "nativeMac": "Requires Xcode Command Line Tools, macOS SDK, and make.",
+      "nativeLinux": "Requires g++ and make (typically provided by build-essential).",
+      "storage": "Checks write access to Cindy's data directory; {{freeGiB}} GiB available. At least 10 GiB is recommended; actual build size varies."
+    }
+  },
+  "cindyMake": {
+    "description": "Check and prepare local tools for a personal Cindy build. Usage: /cindy-make [request]",
+    "localOnly": "/cindy-make currently supports local desktop sessions only. Switch to this device to use it.",
+    "usage": "Use /cindy-make or /cindy-make request. Environment checks do not yet accept attachments, references or comments. Your input is preserved.",
+    "request": "Requested changes",
+    "prepare": {
+      "scope": "Reuse compatible tools; automatically install missing portable tools",
+      "limits": "Tools stay in Cindy's data directory; global tools and PATH are unchanged. System build tools require your OS installer. No source checkout or build yet.",
+      "running": "Preparing tools",
+      "passed": "Basic environment ready",
+      "needsAttention": "Some items need attention",
+      "cancelled": "Preparation stopped",
+      "failed": "Preparation incomplete. Please retry.",
+      "stop": "Stop",
+      "retry": "Retry preparation",
+      "source": {
+        "system": "Existing",
+        "managed": "Managed by Cindy"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "Installation guide",
+      "install": "Install missing tools",
+      "errors": {
+        "downloadFailed": "Download failed. Check your connection and retry.",
+        "checksum": "Integrity check failed. Nothing was installed. Please retry.",
+        "installFailed": "The tool could not be installed or started. Check free space and OS compatibility, or install a compatible tool manually, then retry.",
+        "busy": "Another preparation is running. Wait for it to finish, then retry."
+      },
+      "guidance": {
+        "windows": "Install Visual Studio Build Tools with Desktop development with C++, MSBuild and Windows 10/11 SDK, then retry.",
+        "mac": "Install Xcode Command Line Tools (includes Git and macOS SDK) using the command below, then retry.",
+        "linux": "Install Git and C/C++ build tools with your distribution package manager. Choose the matching command below, then retry."
+      }
+    },
+    "upstream": {
+      "pending": "Upstream search starts automatically once every environment check passes.",
+      "needsRequest": "A change request is needed",
+      "needRequest": "Describe the change, including a feature name or error, to search upstream.",
+      "placeholder": "For example: fix message stream flickering",
+      "search": "Search upstream",
+      "searching": "Searching upstream Issues and PRs…",
+      "found": "Found potentially related upstream work",
+      "notFound": "No matching upstream work found",
+      "failed": "Upstream search failed",
+      "cancelled": "Upstream search stopped",
+      "terms": "Keywords: {{terms}}",
+      "author": "by {{author}}",
+      "updated": "updated {{date}}",
+      "notFoundHint": "No public Issue or PR matched these keywords. Different wording may return other results.",
+      "resultHint": "Review the links to judge relevance. Results include only currently open Issues and PRs.",
+      "wait": "Wait for upstream",
+      "personal": "Continue with a personal version",
+      "retry": "Recheck and search again",
+      "expand": "Show upstream results",
+      "collapse": "Hide upstream results",
+      "count": "Found {{count}} potentially related open Issues or PRs",
+
+      "kind": {
+        "issue": "Issue",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "Open",
+        "closed": "Closed",
+        "merged": "Merged",
+        "unknown": "Closed · merge status unverified"
+      },
+      "choice": {
+        "wait": "Chose to wait for upstream",
+        "personal": "Chose a personal version"
+      },
+      "decisionHint": {
+        "wait": "This workflow has stopped. No subscription or automatic update was created.",
+        "personal": "Your choice is recorded in this card. Source preparation and building are not connected yet; no source has been downloaded or changed."
+      },
+      "failure": {
+        "network": "Could not reach GitHub. Check your connection and retry.",
+        "rateLimit": "GitHub is limiting requests. Wait a moment and retry.",
+        "timeout": "The search timed out. Please retry.",
+        "invalidResponse": "GitHub returned an incomplete or unreadable result. Please retry."
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · Prepare environment",
+    "stepUpstream": "2 · Check upstream"
   }
 }

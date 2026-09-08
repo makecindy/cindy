@@ -1,3 +1,4 @@
+import { registryEntryDefaults } from "./modelMetadataLayers.js";
 import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
 import type {
   ModelAccessV2Agent,
@@ -193,7 +194,21 @@ export function findModelRegistryRoute(
   modelId: string,
   agent?: ModelAccessV2Agent,
 ): { entry: ModelRegistryEntry; route: ModelRegistryRoute } | undefined {
-  return matchingModelRegistryRoutes(registry, providerId, modelId, agent)[0];
+  const matched = matchingModelRegistryRoutes(
+    registry,
+    providerId,
+    modelId,
+    agent,
+  )[0];
+  if (!matched || registry?.schemaVersion !== 4) return matched;
+  return {
+    route: matched.route,
+    entry: {
+      ...matched.entry,
+      ...registryEntryDefaults(registry, matched.entry, matched.route),
+      ...matched.route.forceOverrides,
+    } as ModelRegistryEntry,
+  };
 }
 
 /**

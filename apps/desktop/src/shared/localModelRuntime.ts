@@ -4,12 +4,17 @@
  * 安全边界：renderer 只传 runtime / 操作枚举和已校验的模型名；
  * URL、路径、shell 一律由 Main 写死。
  *
- * 精选目录是纯数据（`ollamaCuratedCatalog.json`）。挑选算法和库名白名单留在本文件，
- * 以后这份 JSON 可以改由 `/api/model-catalog/catalog` 下发；未知根字段现在不能写进
- * Catalog schema，所以本 PR 不改热更协议。
+ * 精选目录来自活动 Registry V4；缺少该字段时使用随包快照。
+ * 筛选与运行操作留在客户端，服务端仅下发经过校验的数据。
  */
 
-import curatedCatalogJson from './ollamaCuratedCatalog.json' with { type: 'json' };
+import {
+  BUNDLED_CATALOG,
+  parseLocalModelCatalog,
+  type LocalModelCatalog,
+  type LocalCatalogModel,
+  type LocalModelVariant,
+} from '@cindy/model-providers';
 
 export const MANAGED_OLLAMA_PROVIDER_ID = 'cindy-local-ollama';
 export const MANAGED_LMSTUDIO_PROVIDER_ID = 'cindy-local-lmstudio';
@@ -128,6 +133,8 @@ export interface RecommendedLocalModel {
 
 export interface CuratedOllamaModel extends RecommendedLocalModel {
   aliases: string[];
+  descriptions?: LocalCatalogModel['descriptions'];
+  runtimeProfile?: LocalCatalogModel['runtimeProfile'];
 }
 
 export type OllamaPackaging = 'mxfp8' | 'mlx' | 'q4';
@@ -165,12 +172,7 @@ export interface LocalModelPullProgress {
   error?: string;
 }
 
-export type OllamaPullErrorKind =
-  | 'not-gguf'
-  | 'not-found'
-  | 'unauthorized'
-  | 'refused'
-  | 'generic';
+export type OllamaPullErrorKind = 'not-gguf' | 'not-found' | 'unauthorized' | 'refused' | 'generic';
 
 const OLLAMA_PULL_ERROR_KINDS = new Set<OllamaPullErrorKind>([
   'not-gguf',
@@ -197,10 +199,7 @@ export function isHfMlxPullName(name: string): boolean {
   return /mlx/i.test(repo) && !/gguf/i.test(name);
 }
 
-export function classifyOllamaPullError(
-  value: unknown,
-  pullName?: string,
-): OllamaPullErrorKind {
+export function classifyOllamaPullError(value: unknown, pullName?: string): OllamaPullErrorKind {
   if (typeof value === 'string' && OLLAMA_PULL_ERROR_KINDS.has(value as OllamaPullErrorKind)) {
     return value as OllamaPullErrorKind;
   }
@@ -255,72 +254,17 @@ export interface LocalModelRecommendInput {
 
 const GIB = 1024 * 1024 * 1024;
 
-interface CuratedTagSpec {
-  libraryName: string;
-  sizeBytes: number;
-  minUnifiedMemoryGb: number;
-  appleSiliconOnly?: boolean;
-}
-
-interface CuratedModelSpec {
-  id: string;
-  name: string;
-  libraryName: string;
-  appleLibraryName?: string;
-  aliases: string[];
-  sizeBytes: number;
-  minUnifiedMemoryGb: number;
-}
-
-interface CuratedCatalogSpec {
-  version: number;
-  qwen38: {
-    id: string;
-    name: string;
-    aliases: string[];
-    mxfp8: CuratedTagSpec;
-    mlx: CuratedTagSpec;
-    generic: CuratedTagSpec;
-  };
-  featuredIds: string[];
-  featuredCoderId?: string;
-  models: CuratedModelSpec[];
-}
+const BUNDLED_CURATED_CATALOG = BUNDLED_CATALOG.modelRegistry!.localModels!;
 
 function recommendedFromTag(
   id: string,
   name: string,
-  spec: CuratedTagSpec,
+  spec: LocalModelVariant,
 ): RecommendedLocalModel {
-  return {
-    id,
-    name,
-    libraryName: spec.libraryName,
-    sizeBytes: spec.sizeBytes,
-    minUnifiedMemoryGb: spec.minUnifiedMemoryGb,
-    appleSiliconOnly: spec.appleSiliconOnly === true,
-  };
+  return { id, name, ...spec, appleSiliconOnly: spec.appleSiliconOnly === true };
 }
-
-const BUNDLED_CURATED_CATALOG = curatedCatalogJson as CuratedCatalogSpec;
-
-export const QWEN38_MXFP8: RecommendedLocalModel = recommendedFromTag(
-  BUNDLED_CURATED_CATALOG.qwen38.mxfp8.libraryName,
-  BUNDLED_CURATED_CATALOG.qwen38.name,
-  BUNDLED_CURATED_CATALOG.qwen38.mxfp8,
-);
-
-export const QWEN38_MLX: RecommendedLocalModel = recommendedFromTag(
-  BUNDLED_CURATED_CATALOG.qwen38.mlx.libraryName,
-  BUNDLED_CURATED_CATALOG.qwen38.name,
-  BUNDLED_CURATED_CATALOG.qwen38.mlx,
-);
-
-export const QWEN38_CURATED_TAGS = new Set<string>([
-  QWEN38_MXFP8.libraryName,
-  QWEN38_MLX.libraryName,
-  BUNDLED_CURATED_CATALOG.qwen38.generic.libraryName,
-]);
+// Runtime support is client-owned and survives withdrawal from the catalog.
+export const QWEN38_CURATED_TAGS = new Set(['qwen3.8:27b', 'qwen3.8:27b-mlx', 'qwen3.8:27b-mxfp8']);
 
 export function isOllamaModelName(value: unknown): value is string {
   return typeof value === 'string' && OLLAMA_MODEL_NAME_RE.test(value);
@@ -366,7 +310,9 @@ export function normalizeOllamaPullName(value: string): string | null {
   }
 
   let quant: string | undefined;
-  const blobIndex = parts.findIndex((part) => part === 'blob' || part === 'tree' || part === 'resolve');
+  const blobIndex = parts.findIndex(
+    (part) => part === 'blob' || part === 'tree' || part === 'resolve',
+  );
   if (blobIndex >= 0 && parts[blobIndex + 2]) {
     const file = parts[blobIndex + 2] ?? '';
     const match = file.match(/[-_.]([Qq]\d[\w.-]*|UD-[\w.-]+|iq\d[\w.-]*)\.gguf$/i);
@@ -446,228 +392,66 @@ export function unifiedMemoryGb(totalmemBytes: number): number {
   return Math.floor(totalmemBytes / GIB);
 }
 
-/** 低于 32GB 统一内存不推荐 27B；MLX 仅 Apple Silicon。算法留在客户端，门槛来自策展数据。 */
-export function recommendQwen38(
-  input: LocalModelRecommendInput,
-  remote?: unknown,
-): RecommendedLocalModel | null {
-  if (!isAppleSilicon(input)) return null;
-  const spec = resolveCuratedCatalogSpec(remote);
-  const gb = unifiedMemoryGb(input.totalmemBytes);
-  if (gb >= spec.qwen38.mxfp8.minUnifiedMemoryGb) {
-    return recommendedFromTag(spec.qwen38.mxfp8.libraryName, spec.qwen38.name, spec.qwen38.mxfp8);
-  }
-  if (gb >= spec.qwen38.mlx.minUnifiedMemoryGb) {
-    return recommendedFromTag(spec.qwen38.mlx.libraryName, spec.qwen38.name, spec.qwen38.mlx);
-  }
-  return null;
-}
-
 export function isCuratedQwen38Tag(name: string): boolean {
   return QWEN38_CURATED_TAGS.has(name);
 }
 
-export function curatedOllamaDisplayName(libraryName: string): string | undefined {
-  const catalogs = [
-    resolveCuratedOllamaCatalog({
-      platform: 'darwin',
-      arch: 'arm64',
-      totalmemBytes: 128 * GIB,
-    }),
-    resolveCuratedOllamaCatalog({
-      platform: 'linux',
-      arch: 'x64',
-      totalmemBytes: 128 * GIB,
-    }),
-  ];
-  for (const catalog of catalogs) {
-    const exact = catalog.find((entry) => entry.libraryName === libraryName);
-    if (exact) return exact.name;
-  }
-  const family = libraryName.split(':')[0] ?? libraryName;
-  for (const catalog of catalogs) {
-    const hit = catalog.find((entry) => (entry.libraryName.split(':')[0] ?? '') === family);
-    if (hit) return hit.name;
-  }
-  return undefined;
+export function resolveCuratedCatalogSpec(remote?: unknown): LocalModelCatalog {
+  return parseLocalModelCatalog(remote) ?? BUNDLED_CURATED_CATALOG;
 }
 
-function isSafeId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value);
+export function findCuratedOllamaModel(
+  name: string,
+  remote?: unknown,
+): LocalCatalogModel | undefined {
+  return resolveCuratedCatalogSpec(remote).models.find((m) =>
+    m.variants.some((v) => ollamaModelRefsEqual(v.libraryName, name)),
+  );
 }
 
-function isSafeName(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= 80;
+export function curatedOllamaDisplayName(name: string, remote?: unknown): string | undefined {
+  return findCuratedOllamaModel(name, remote)?.name;
 }
 
-function isSafeAlias(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= 40;
-}
-
-function isSafeSize(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= GIB && value <= 256 * GIB;
-}
-
-function isSafeMemoryGb(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 4 && value <= 512;
-}
-
-function sanitizeTagSpec(raw: unknown): CuratedTagSpec | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const spec = raw as CuratedTagSpec;
-  if (!isCuratedOllamaLibraryName(spec.libraryName)) return null;
-  if (!isSafeSize(spec.sizeBytes) || !isSafeMemoryGb(spec.minUnifiedMemoryGb)) return null;
-  return {
-    libraryName: spec.libraryName,
-    sizeBytes: spec.sizeBytes,
-    minUnifiedMemoryGb: spec.minUnifiedMemoryGb,
-    ...(spec.appleSiliconOnly === true ? { appleSiliconOnly: true } : {}),
-  };
-}
-
-function sanitizeModelSpec(raw: unknown): CuratedModelSpec | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const spec = raw as CuratedModelSpec;
-  if (!isSafeId(spec.id) || !isSafeName(spec.name)) return null;
-  if (!isCuratedOllamaLibraryName(spec.libraryName)) return null;
-  if (spec.appleLibraryName !== undefined && !isCuratedOllamaLibraryName(spec.appleLibraryName)) {
-    return null;
-  }
-  if (!Array.isArray(spec.aliases) || spec.aliases.length > 16 || !spec.aliases.every(isSafeAlias)) {
-    return null;
-  }
-  if (!isSafeSize(spec.sizeBytes) || !isSafeMemoryGb(spec.minUnifiedMemoryGb)) return null;
-  return {
-    id: spec.id,
-    name: spec.name.trim(),
-    libraryName: spec.libraryName,
-    ...(spec.appleLibraryName ? { appleLibraryName: spec.appleLibraryName } : {}),
-    aliases: spec.aliases.map((alias) => alias.trim()),
-    sizeBytes: spec.sizeBytes,
-    minUnifiedMemoryGb: spec.minUnifiedMemoryGb,
-  };
-}
-
-function sanitizeCatalogSpec(raw: unknown): CuratedCatalogSpec | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const spec = raw as CuratedCatalogSpec;
-  if (spec.version !== 1) return null;
-  if (!spec.qwen38 || !isSafeId(spec.qwen38.id) || !isSafeName(spec.qwen38.name)) return null;
-  if (
-    !Array.isArray(spec.qwen38.aliases) ||
-    spec.qwen38.aliases.length > 16 ||
-    !spec.qwen38.aliases.every(isSafeAlias)
-  ) {
-    return null;
-  }
-  const mxfp8 = sanitizeTagSpec(spec.qwen38.mxfp8);
-  const mlx = sanitizeTagSpec(spec.qwen38.mlx);
-  const generic = sanitizeTagSpec(spec.qwen38.generic);
-  if (!mxfp8 || !mlx || !generic) return null;
-  if (!Array.isArray(spec.featuredIds) || spec.featuredIds.length === 0 || spec.featuredIds.length > 8) {
-    return null;
-  }
-  if (!spec.featuredIds.every(isSafeId)) return null;
-  if (spec.featuredCoderId !== undefined && !isSafeId(spec.featuredCoderId)) return null;
-  if (!Array.isArray(spec.models) || spec.models.length > MAX_CURATED_OLLAMA_MODELS) return null;
-  const models: CuratedModelSpec[] = [];
-  const seen = new Set<string>([spec.qwen38.id]);
-  for (const entry of spec.models) {
-    const model = sanitizeModelSpec(entry);
-    if (!model || seen.has(model.id)) continue;
-    seen.add(model.id);
-    models.push(model);
-  }
-  return {
-    version: 1,
-    qwen38: {
-      id: spec.qwen38.id,
-      name: spec.qwen38.name.trim(),
-      aliases: spec.qwen38.aliases.map((alias) => alias.trim()),
-      mxfp8,
-      mlx,
-      generic,
-    },
-    featuredIds: spec.featuredIds,
-    ...(spec.featuredCoderId ? { featuredCoderId: spec.featuredCoderId } : {}),
-    models,
-  };
-}
-
-function modelFromSpec(
-  spec: CuratedModelSpec,
-  apple: boolean,
-): CuratedOllamaModel {
-  const libraryName = apple && spec.appleLibraryName ? spec.appleLibraryName : spec.libraryName;
-  return {
-    id: spec.id,
-    name: spec.name,
-    libraryName,
-    aliases: spec.aliases,
-    sizeBytes: spec.sizeBytes,
-    minUnifiedMemoryGb: spec.minUnifiedMemoryGb,
-    appleSiliconOnly: apple && Boolean(spec.appleLibraryName),
-  };
-}
-
-/**
- * 策展数据入口。现在只读 bundled JSON；以后可把 remote 换成 catalog section。
- * 远端/覆盖数据不合法时整表回落 bundled，挑选算法仍在客户端。
- */
-export function resolveCuratedCatalogSpec(remote?: unknown): CuratedCatalogSpec {
-  return sanitizeCatalogSpec(remote) ?? sanitizeCatalogSpec(BUNDLED_CURATED_CATALOG)!;
-}
-
-/** 可搜索目录：比推荐区更大，默认不展示。 */
+/** Ordered variants express packaging preference; hardware fit is always checked locally. */
 export function resolveCuratedOllamaCatalog(
   input: LocalModelRecommendInput,
   remote?: unknown,
 ): CuratedOllamaModel[] {
-  const spec = resolveCuratedCatalogSpec(remote);
   const apple = isAppleSilicon(input);
-  const qwen38 =
-    recommendQwen38(input, spec) ??
-    recommendedFromTag(
-      spec.qwen38.id,
-      spec.qwen38.name,
-      apple ? spec.qwen38.mlx : spec.qwen38.generic,
-    );
-
-  return [
-    {
-      ...qwen38,
-      id: spec.qwen38.id,
-      name: spec.qwen38.name,
-      aliases: spec.qwen38.aliases,
-    },
-    ...spec.models.map((entry) => modelFromSpec(entry, apple)),
-  ];
+  const memory = unifiedMemoryGb(input.totalmemBytes);
+  return resolveCuratedCatalogSpec(remote).models.flatMap((model) => {
+    const variants = model.variants.filter((v) => apple || !v.appleSiliconOnly);
+    const variant =
+      variants.find((v) => memory >= v.minUnifiedMemoryGb) ??
+      [...variants].sort((a, b) => a.minUnifiedMemoryGb - b.minUnifiedMemoryGb)[0];
+    if (!variant) return [];
+    return [
+      {
+        ...recommendedFromTag(model.id, model.name, variant),
+        aliases: model.aliases,
+        descriptions: model.descriptions,
+        runtimeProfile: model.runtimeProfile,
+      },
+    ];
+  });
 }
-
 function fits(model: CuratedOllamaModel, memoryGb: number): boolean {
   return memoryGb >= model.minUnifiedMemoryGb;
 }
 
 export type LocalRecommendReason =
-  | 'apple-mxfp8'
-  | 'apple-mlx'
-  | 'generic-27b'
-  | 'compact'
-  | 'unknown';
+  'apple-mxfp8' | 'apple-mlx' | 'generic-27b' | 'compact' | 'unknown';
 
 export interface HostModelRecommendation {
-  primary: CuratedOllamaModel;
+  primary: CuratedOllamaModel | null;
   secondary: CuratedOllamaModel | null;
   reason: LocalRecommendReason;
   appleSilicon: boolean;
   memoryGb: number;
 }
 
-function smallestByMemory(models: readonly CuratedOllamaModel[]): CuratedOllamaModel | undefined {
-  return [...models].sort((left, right) => left.minUnifiedMemoryGb - right.minUnifiedMemoryGb)[0];
-}
-
-/** 每个用户一条主推：按芯片和内存选官方封装，绝不把跑不动的 27B 硬塞给小机器。 */
+/** 只从有证据的推荐名单中按内存选择；候选目录不能自动补位。 */
 export function recommendForHost(
   input: LocalModelRecommendInput,
   remote?: unknown,
@@ -677,46 +461,27 @@ export function recommendForHost(
   const memoryGb = unifiedMemoryGb(input.totalmemBytes);
   const appleSilicon = isAppleSilicon(input);
   const byId = (id: string) => catalog.find((entry) => entry.id === id);
-  const qwen = byId(spec.qwen38.id);
-
-  let primary: CuratedOllamaModel | undefined;
-  let reason: LocalRecommendReason = 'compact';
-
-  if (memoryGb <= 0) {
-    primary =
-      [...spec.featuredIds].reverse().map(byId).find(Boolean) ?? smallestByMemory(catalog);
-    reason = 'unknown';
-  } else if (appleSilicon && qwen && memoryGb >= spec.qwen38.mxfp8.minUnifiedMemoryGb) {
-    primary = qwen;
-    reason = 'apple-mxfp8';
-  } else if (appleSilicon && qwen && memoryGb >= spec.qwen38.mlx.minUnifiedMemoryGb) {
-    primary = qwen;
-    reason = 'apple-mlx';
-  } else if (!appleSilicon && qwen && memoryGb >= spec.qwen38.generic.minUnifiedMemoryGb) {
-    primary = qwen;
-    reason = 'generic-27b';
-  } else {
-    primary =
-      spec.featuredIds.map(byId).find((entry) => entry && fits(entry, memoryGb)) ??
-      [...catalog]
-        .filter((entry) => fits(entry, memoryGb))
-        .sort((left, right) => right.minUnifiedMemoryGb - left.minUnifiedMemoryGb)[0] ??
-      smallestByMemory(catalog);
-    reason = 'compact';
+  const primary =
+    memoryGb > 0
+      ? (spec.featuredIds.map(byId).find((entry) => entry && fits(entry, memoryGb)) ?? null)
+      : null;
+  let reason: LocalRecommendReason = memoryGb > 0 ? 'compact' : 'unknown';
+  if (primary?.id === 'qwen38-27b') {
+    reason = !appleSilicon
+      ? 'generic-27b'
+      : primary.libraryName === 'qwen3.8:27b-mxfp8'
+        ? 'apple-mxfp8'
+        : 'apple-mlx';
   }
-
-  const fallback = primary ?? catalog[0];
-  if (!fallback) {
-    throw new Error('curated ollama catalog is empty');
-  }
-  const coder = spec.featuredCoderId ? byId(spec.featuredCoderId) : undefined;
+  const coder = spec.featuredIds
+    .map(byId)
+    .find((entry) => entry && entry.id !== primary?.id && fits(entry, memoryGb));
   const secondary =
-    coder && coder.id !== fallback.id && (memoryGb <= 0 || fits(coder, memoryGb)) ? coder : null;
-
-  return { primary: fallback, secondary, reason, appleSilicon, memoryGb };
+    primary && coder && coder.id !== primary.id && fits(coder, memoryGb) ? coder : null;
+  return { primary, secondary, reason, appleSilicon, memoryGb };
 }
 
-/** 外面只露 1–2 条：主推 + 内存够时的编程备选。 */
+/** 推荐区只展示有依据且内存适配的选择，允许为空。 */
 export function pickFeaturedOllamaModels(
   input: LocalModelRecommendInput,
   remote?: unknown,

@@ -136,7 +136,8 @@
       "help": "ヘルプ",
       "about": "情報",
       "imBot": "IM ボット",
-      "ghosts": "プラグイン"
+      "ghosts": "プラグイン",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "ユーザー",
@@ -2008,8 +2009,8 @@
         "hostProfileApple": "Apple シリコン · 統合メモリ 約 {{memory}} GB",
         "hostProfileGeneric": "メモリ 約 {{memory}} GB",
         "hostProfileUnknown": "このコンピュータのメモリをまだ確認できません",
-        "bestForYou": "あなたに最適",
-        "alsoCoding": "コーディングにも",
+        "bestForYou": "能力で推奨",
+        "alsoCoding": "速度の候補",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2026,41 +2027,12 @@
         "noSearchResults": "一致するモデルがありません",
         "alreadyInstalled": "インストール済み",
         "searchResults": "検索結果",
-        "moreModels": "その他のよく使うモデル",
-        "memoryWarning": "このコンピュータのメモリが不足しています（{{need}} GB 必要、現在約 {{have}} GB）",
+        "moreModels": "その他の候補モデル",
+        "memoryWarning": "推定メモリ目安未満（{{need}} GB、本機は約 {{have}} GB）",
         "manualDownload": "手動ダウンロード",
         "manualDownloadPlaceholder": "Ollama のライブラリ名、または Hugging Face の URL",
         "invalidLibraryName": "Ollama のライブラリ名を入力するか、huggingface.co のモデルページ URL を貼り付けてください",
         "advancedExactName": "上級：正確なライブラリ名",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。"
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。"
-          },
-          "gemma4-e2b": {
-            "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。"
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。"
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。"
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。"
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。"
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。"
-          },
-          "glm-47-flash": {
-            "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。"
-          }
-        },
         "onboardingTitle": "先に Ollama ランタイムをインストール",
         "onboardingBody": "Ollama をインストールすれば、Ollama アプリを開かなくても Cindy 内でローカルモデルをダウンロードして使えます。Ollama は無料のオープンソース製サードパーティランタイムです。",
         "installInCindy": "Cindy 内でインストール",
@@ -2129,8 +2101,8 @@
         "cancelDownload": "未完了のダウンロードを削除",
         "notRecommended": "この Mac は Qwen3.8 27B に必要な 32 GB メモリに達していません。正確なライブラリ名を入力して自分でダウンロードできます。",
         "sizeHint": "約 {{size}} · 統合メモリ {{memory}} GB が必要",
-        "sizeHintApple": "約 {{size}} · 統合メモリ {{memory}} GB が必要",
-        "sizeHintGeneric": "約 {{size}} · メモリ {{memory}} GB が必要",
+        "sizeHintApple": "ダウンロード {{size}} · 統合メモリの目安 {{memory}} GB",
+        "sizeHintGeneric": "ダウンロード {{size}} · メモリの目安 {{memory}} GB",
         "deleteFromCindy": "Cindy から削除",
         "deleteConfirmTitle": "Cindy から Ollama を削除しますか？",
         "deleteConfirmBody": "Cindy 側の接続だけを削除します。Ollama にダウンロード済みのモデルはディスクに残り、サービスも停止しません。",
@@ -2139,7 +2111,8 @@
         "deleteModelConfirmBody": "このパソコンからダウンロード済みのモデルファイルを削除し、Cindy からも取り除きます。必要ならあとから再ダウンロードできます。",
         "deleteModelConfirm": "削除",
         "deleteModelDone": "{{name}} を削除しました",
-        "deleteModelFailed": "削除できませんでした。Ollama が起動していることを確認して、もう一度お試しください。"
+        "deleteModelFailed": "削除できませんでした。Ollama が起動していることを確認して、もう一度お試しください。",
+        "noRecommendation": "このコンピュータのメモリに適合し、十分な根拠のある推奨モデルはまだありません。下の候補から選べます。"
       },
       "xdSignin": {
         "badge": "おすすめ",
@@ -5478,6 +5451,19 @@
       "hint": "リモート IM では、承認が必要な操作の確認フローを維持します。",
       "fullAccessDisabled": "安全に確認できない操作が直接実行されないよう、リモート IM では Full Access を利用できません。",
       "permissionModeDisabled": "リモート IM は Cindy Desktop の確認ポリシーを使用するため、この権限モードは利用できません。"
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "ツールフォルダを開く",
+      "description": "下のカードで本機の環境を確認し、不足するポータブルツールをインストールできます。ネイティブなコンパイラが不足している場合は公式の案内を表示します。",
+      "checking": "環境を確認中…",
+      "forceManaged": {
+        "title": "インストールテスト：システムのツールを無視",
+        "description": "開発版のみ。ポータブルツールは Cindy 管理のコピーを確認し、Windows のコンパイラが不足した状態を再現します。切り替えは再確認のみで、インストールは開始しません。",
+        "ariaLabel": "インストールテスト：システムのツールを無視",
+        "enabledHint": "下のカードから Windows ツールのダウンロードとインストールをテストできます。インストール済みの Cindy 管理ツールは再利用します。切り替えは即時反映され、再読み込みや再起動でオフになります。システムのツールは変更しません。",
+        "reportHint": "インストールテストがオンです。ポータブルツールは Cindy 管理のコピーを使用します。公式の案内をテストするため、Windows のコンパイラを不足として表示します。実際の状態を確認するにはスイッチをオフにしてください。"
+      }
     }
   },
   "remoteDevice": {
@@ -8008,7 +7994,10 @@
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
       "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。",
-      "ruleSeparator": "、"
+      "ruleSeparator": "、",
+      "submitting": "確認を送信中…",
+      "submissionFailed": "確認結果を受信できませんでした。接続を確認し、確認画面がまだ表示されている場合はもう一度クリックしてください。",
+      "requestEnded": "この権限リクエストは終了したか、すでに処理されています。最新の状態をご確認ください。"
     },
     "deviceSwitcher": {
       "label": "デバイス",
@@ -8885,7 +8874,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
       "LOCAL_OLLAMA_NOT_READY": "ローカル Ollama の準備ができていません。設定 → モデルプロバイダー → Ollama を開いてください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
+      "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。"
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
@@ -12018,5 +12010,145 @@
     "realtime": "リアルタイムの音声でのやり取りに。",
     "embedding": "意味の近い内容を探すために。",
     "compression": "長い内容を短くまとめるために。"
+  },
+  "cindyMakeDoctor": {
+    "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",
+    "title": "Cindy Make · 環境チェック",
+    "scope": "このコンピューターのツールを確認",
+    "limits": "確認のみを行い、インストールやソースの取得はしません。ビルド時にはソースとプロジェクトの依存関係を別途確認します。",
+    "running": "確認中",
+    "passed": "基本チェック完了",
+    "needsAttention": "対応が必要な項目があります",
+    "cancelled": "チェックを停止しました",
+    "failed": "チェックが完了しませんでした。再試行してください。",
+    "details": "詳細を表示",
+    "hideDetails": "詳細を閉じる",
+    "stop": "チェックを停止",
+    "recheck": "再チェック",
+    "timeout": "チェックがタイムアウトしました。ツールが起動できることを確認して再試行してください。",
+    "commandUnavailable": "コマンド一覧が未準備か、実行中のバージョンがこのコマンドに対応していません。後で再試行するか Cindy を更新してください。",
+    "usage": "環境チェックに引数や添付ファイルは不要です。/cindy-make-doctor だけを送信してください。",
+    "localOnly": "現在はローカル Desktop で /cindy-make-doctor を使用してください。SSH とデバイス接続にはまだ対応していません。",
+    "checks": {
+      "platform": "システムとアーキテクチャ",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "ネイティブビルドツール",
+      "storage": "ストレージと権限"
+    },
+    "checkStatus": {
+      "pending": "未確認",
+      "checking": "確認中",
+      "passed": "確認済み",
+      "missing": "見つかりません",
+      "incompatible": "非対応バージョン",
+      "failed": "確認できません",
+      "warning": "要確認",
+      "cancelled": "停止",
+      "downloading": "ダウンロード中",
+      "installing": "インストール中"
+    },
+    "requirements": {
+      "platform": "Windows x64、macOS x64/arm64、Linux x64/arm64 に対応しています。対応する OS 上でビルドします。",
+      "git": "動作する Git 2.x 以降が必要です。GitHub アカウントは不要です。",
+      "gitLfs": "ソースの大容量ファイル取得には Git LFS が必要です。",
+      "node": "Node.js ≥ 22.12 が必要です。",
+      "pnpm": "pnpm ≥ 10.7 かつ < 11 が必要です。推奨は 10.33.2 です。チェック中の自動ダウンロードは無効です。",
+      "python": "Python 3.{{pythonMinor}} 以降の Python 3 が必要です。",
+      "native": "この OS の C/C++ ビルドツールが必要です。",
+      "nativeWin": "Visual Studio C++ Build Tools、MSBuild、Windows 10/11 SDK が必要です。",
+      "nativeMac": "Xcode Command Line Tools、macOS SDK、make が必要です。",
+      "nativeLinux": "g++ と make が必要です（通常は build-essential に含まれます）。",
+      "storage": "Cindy データディレクトリの書き込み権限を確認します。空き容量：{{freeGiB}} GiB。10 GiB 以上を推奨しますが、必要容量はビルドにより異なります。"
+    }
+  },
+  "cindyMake": {
+    "description": "ローカルのツールを確認・準備して個人版 Cindy を作成します。使い方: /cindy-make [変更内容]",
+    "localOnly": "/cindy-make は現在、ローカルのデスクトップセッションでのみ使用できます。このデバイスに切り替えてください。",
+    "usage": "/cindy-make または /cindy-make 要望 を使用してください。環境チェックは添付ファイル、参照、コメントにまだ対応していません。入力内容は保持されます。",
+    "request": "変更の要望",
+    "prepare": {
+      "scope": "互換性のあるツールを再利用し、不足するポータブルツールを自動でインストール",
+      "limits": "ツールは Cindy のデータフォルダーに保存され、グローバルのツールや PATH は変更されません。システムのビルドツールは OS のインストーラーで導入してください。ソースの取得やビルドはまだ行いません。",
+      "running": "ツールを準備中",
+      "passed": "基本環境の準備完了",
+      "needsAttention": "対応が必要な項目があります",
+      "cancelled": "準備を停止しました",
+      "failed": "準備が完了しませんでした。再試行してください。",
+      "stop": "停止",
+      "retry": "準備を再試行",
+      "source": {
+        "system": "既存のツール",
+        "managed": "Cindy が管理"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "インストールガイド",
+      "install": "不足している環境をインストール",
+      "errors": {
+        "downloadFailed": "ダウンロードに失敗しました。接続を確認して再試行してください。",
+        "checksum": "整合性チェックに失敗したため、インストールしませんでした。再試行してください。",
+        "installFailed": "ツールをインストールまたは起動できません。空き容量と OS の互換性を確認するか、互換性のあるツールを手動でインストールしてから再試行してください。",
+        "busy": "別の環境準備が実行中です。完了後に再試行してください。"
+      },
+      "guidance": {
+        "windows": "Visual Studio Build Tools をインストールし、「C++ によるデスクトップ開発」、MSBuild、Windows 10/11 SDK を選択してから再試行してください。",
+        "mac": "以下のコマンドで Xcode Command Line Tools（Git と macOS SDK を含む）をインストールしてから再試行してください。",
+        "linux": "ディストリビューションのパッケージマネージャーで Git と C/C++ ビルドツールをインストールしてください。以下から対応するコマンドを選び、完了後に再試行してください。"
+      }
+    },
+    "upstream": {
+      "pending": "すべての環境チェックに合格すると、上流の検索を自動で開始します。",
+      "needsRequest": "変更内容の入力待ち",
+      "needRequest": "変更したい機能名や具体的なエラーを入力して、関連する上流の内容を検索します。",
+      "placeholder": "例：メッセージ表示のちらつきを修正",
+      "search": "上流を検索",
+      "searching": "上流の Issue と PR を検索中…",
+      "found": "関連する可能性のある上流の内容が見つかりました",
+      "notFound": "一致する上流の内容は見つかりませんでした",
+      "failed": "上流の検索に失敗しました",
+      "cancelled": "上流の検索を停止しました",
+      "terms": "検索語：{{terms}}",
+      "author": "作成者：{{author}}",
+      "updated": "更新日：{{date}}",
+      "notFoundHint": "これらの検索語に一致する公開 Issue や PR はありませんでした。表現を変えると別の結果が見つかる場合があります。",
+      "resultHint": "リンクを開いて関連性を確認してください。現在オープン中の Issue と PR のみ表示しています。",
+      "wait": "上流を待つ",
+      "personal": "個人版の作成を続ける",
+      "retry": "環境を再確認して検索",
+      "expand": "上流の結果を表示",
+      "collapse": "上流の結果を隠す",
+      "count": "関連する可能性のあるオープン Issue／PR が {{count}} 件見つかりました",
+
+      "kind": {
+        "issue": "Issue",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "オープン",
+        "closed": "クローズ済み",
+        "merged": "マージ済み",
+        "unknown": "クローズ済み · マージ状態は未確認"
+      },
+      "choice": {
+        "wait": "上流を待つことを選択しました",
+        "personal": "個人版の作成を選択しました"
+      },
+      "decisionHint": {
+        "wait": "このフローは停止しました。通知の購読や自動更新は設定していません。",
+        "personal": "選択をこのカードに記録しました。ソースの準備とビルドはまだ未対応です。ソースの取得や変更は行っていません。"
+      },
+      "failure": {
+        "network": "GitHub に接続できません。接続を確認して再試行してください。",
+        "rateLimit": "GitHub のリクエスト制限に達しました。しばらくしてから再試行してください。",
+        "timeout": "検索がタイムアウトしました。再試行してください。",
+        "invalidResponse": "GitHub の結果が不完全か読み取れません。再試行してください。"
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · 環境の準備",
+    "stepUpstream": "2 · 上流の検索"
   }
 }

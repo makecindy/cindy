@@ -1,4 +1,5 @@
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Image as ExpoImage } from 'expo-image';
@@ -2004,6 +2005,10 @@ export function MessageRenderer({
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
     scrollMetricsRef.current = metrics;
+    if (mobileDebugEnabled()) mobileDebugLog('debug', 'scroll', 'list scroll', {
+      ...metrics, dragging: isDragSample, momentum: isMomentumScrollingRef.current,
+      readingOlder: readingOlderRef.current, nearBottom: nearBottomRef.current,
+    });
     if (readingOlderRef.current) {
       if (
         isDragSample
@@ -2407,7 +2412,7 @@ export function MessageRenderer({
   }, [requestLoadEarlier]);
 
   const renderMessageItem = useCallback(({ item }: { item: MobileMessageRenderItem }) => {
-    if (__DEV__) recordMobileMessageRenderItem();
+    if (__DEV__ || mobileDebugEnabled()) recordMobileMessageRenderItem();
     return (
       <RenderListItemView
         actions={actions}
@@ -3421,6 +3426,7 @@ function MessageBubble({
               return (
                 <NativePullDownMenu
                   actions={messageMenu.map((item) => ({
+                    image: item.image,
                     destructive: item.destructive,
                     disabled: actionBusy && (item.id === 'rewind' || item.id === 'delete'),
                     id: item.id,
@@ -4915,7 +4921,11 @@ function MarkdownBody({
   }, [text]);
   useLayoutEffect(() => {
     markdownParseRef.current = markdownParse.result;
-    if (__DEV__) recordMobileMarkdownParse(markdownParse.result, markdownParse.durationMs);
+    if (__DEV__ || mobileDebugEnabled()) recordMobileMarkdownParse(markdownParse.result, markdownParse.durationMs);
+    if (mobileDebugEnabled()) mobileDebugLog('debug', 'performance', 'markdown parsed', {
+      durationMs: markdownParse.durationMs, incremental: markdownParse.result.incremental,
+      reusedBlockCount: markdownParse.result.reusedBlockCount, parsedSourceUtf16Length: markdownParse.result.parsedSourceUtf16Length,
+    });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
   // Android 的 selectable Text 内嵌 View(直连内联图)行为未定义,含这类 inline 的块不开选中。

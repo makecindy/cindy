@@ -136,7 +136,8 @@
       "help": "帮助",
       "about": "关于",
       "imBot": "IM 机器人",
-      "ghosts": "插件"
+      "ghosts": "插件",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "用户",
@@ -2008,8 +2009,8 @@
         "hostProfileApple": "Apple 芯片 · 约 {{memory}} GB 统一内存",
         "hostProfileGeneric": "约 {{memory}} GB 内存",
         "hostProfileUnknown": "还不能确定这台电脑的内存",
-        "bestForYou": "最适合你",
-        "alsoCoding": "也适合编程",
+        "bestForYou": "能力推荐",
+        "alsoCoding": "速度备选",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2026,41 +2027,12 @@
         "noSearchResults": "没有匹配的模型",
         "alreadyInstalled": "已在本机",
         "searchResults": "搜索结果",
-        "moreModels": "更多常用模型",
-        "memoryWarning": "这台电脑内存不足（需要 {{need}} GB，当前约 {{have}} GB）",
+        "moreModels": "其他候选模型",
+        "memoryWarning": "低于估算内存门槛（{{need}} GB，本机约 {{have}} GB）",
         "manualDownload": "手动下载",
         "manualDownloadPlaceholder": "Ollama 库名或 Hugging Face 链接",
         "invalidLibraryName": "请输入 Ollama 库名，或粘贴 huggingface.co 上的模型页链接",
         "advancedExactName": "高级：精确库名",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "当前最强可本机跑的稠密模型，适合编程和长任务。"
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI 开源 20B，16GB 级机器上的对话和推理首选。"
-          },
-          "gemma4-e2b": {
-            "blurb": "Gemma 4 最小杯，轻量机器也能跑，带视觉。"
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 小杯，轻量日常，带视觉。"
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 中杯，日常对话和多模态更稳。"
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 大杯，对话和多模态更强，也更吃内存。"
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 的 MoE 中大杯，激活参数更少，适合中高配。"
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 中杯 MoE，本机编程和 Agent 备选。"
-          },
-          "glm-47-flash": {
-            "blurb": "智谱新一代编程模型，30B MoE，适合写代码和 Agent。"
-          }
-        },
         "onboardingTitle": "先安装 Ollama 运行环境",
         "onboardingBody": "安装 Ollama 后，即可在 Cindy 中下载和使用本机模型，无需打开 Ollama App。Ollama 是免费开源的第三方运行环境。",
         "installInCindy": "在 Cindy 里安装",
@@ -2129,8 +2101,8 @@
         "cancelDownload": "删除未完成下载",
         "notRecommended": "这台电脑未达到 Qwen3.8 27B 所需的 32 GB 内存门槛。你仍可输入精确库名自行下载。",
         "sizeHint": "约 {{size}} · 需要 {{memory}} GB 统一内存",
-        "sizeHintApple": "约 {{size}} · 需要 {{memory}} GB 统一内存",
-        "sizeHintGeneric": "约 {{size}} · 需要 {{memory}} GB 内存",
+        "sizeHintApple": "下载 {{size}} · 估算需要 {{memory}} GB 统一内存",
+        "sizeHintGeneric": "下载 {{size}} · 估算需要 {{memory}} GB 内存",
         "deleteFromCindy": "从 Cindy 移除",
         "deleteConfirmTitle": "从 Cindy 移除 Ollama？",
         "deleteConfirmBody": "只会移除 Cindy 中的连接。Ollama 里已下载的模型仍在磁盘上，服务也不会停止。",
@@ -2139,7 +2111,8 @@
         "deleteModelConfirmBody": "会从这台电脑删除已下载的模型文件，Cindy 里也会一并移除。需要时可以重新下载。",
         "deleteModelConfirm": "删除",
         "deleteModelDone": "已删除 {{name}}",
-        "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试"
+        "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试",
+        "noRecommendation": "这台电脑暂时没有证据充分且内存适配的推荐，可在下方手动选择候选模型。"
       },
       "xdSignin": {
         "badge": "推荐",
@@ -5478,6 +5451,19 @@
       "hint": "远程 IM 会为需要审批的操作保留确认流程。",
       "fullAccessDisabled": "远程 IM 不支持完全访问，避免无法安全确认的操作被直接执行。",
       "permissionModeDisabled": "远程 IM 使用 Cindy 桌面端确认策略，因此该权限模式不可用。"
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "打开工具目录",
+      "description": "下方卡片会检查本机环境，并可安装缺少的便携工具。原生编译工具缺失时会显示官方下载指引。",
+      "checking": "正在检查环境…",
+      "forceManaged": {
+        "title": "测试安装：忽略系统工具",
+        "description": "仅开发版可用。便携工具只检查 Cindy 管理的副本，并模拟 Windows 原生编译工具缺失。切换开关只重新检查，不会开始安装。",
+        "ariaLabel": "测试安装：忽略系统工具",
+        "enabledHint": "下方卡片可以测试 Windows 工具的下载与安装，已安装的 Cindy 工具会复用。开关立即生效，刷新或重启后关闭，不改动系统工具。",
+        "reportHint": "安装测试已开启：便携工具使用 Cindy 管理的副本。Windows 原生编译工具会模拟缺失，以便测试官方安装指引；关闭开关可检查真实状态。"
+      }
     }
   },
   "remoteDevice": {
@@ -8008,7 +7994,10 @@
       "alwaysAllowScopedHint": "作用于整个任务，且只限这里列出的范围。",
       "alwaysAllowSessionHint": "作用于整个任务，不只是这一次请求。",
       "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
-      "ruleSeparator": "、"
+      "ruleSeparator": "、",
+      "submitting": "正在提交确认…",
+      "submissionFailed": "未收到确认结果。请检查连接，若确认框仍在，可重新点击。",
+      "requestEnded": "这条权限请求已结束或已被处理，请以最新状态为准。"
     },
     "deviceSwitcher": {
       "label": "设备",
@@ -8885,7 +8874,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
       "LOCAL_OLLAMA_NOT_READY": "本机 Ollama 还没就绪。请打开设置 → 模型供应商 → Ollama。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
+      "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审核拦截，未收到你手动拒绝的记录。",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。"
     },
     "generatedFiles": {
       "title": "本条消息生成的文件",
@@ -12018,5 +12010,145 @@
     "realtime": "用于实时语音交流。",
     "embedding": "按语义查找相关内容。",
     "compression": "用于精简冗长内容。"
+  },
+  "cindyMakeDoctor": {
+    "description": "检查本机构建 Cindy 所需的环境。用法：/cindy-make-doctor",
+    "title": "Cindy Make · 环境检查",
+    "scope": "检查本机已有工具",
+    "limits": "本次只检查，不安装或拉取源码。通过基础检查后，构建时仍需检查源码和项目依赖。",
+    "running": "正在检查",
+    "passed": "基础检查已通过",
+    "needsAttention": "有项目需要处理",
+    "cancelled": "检查已停止",
+    "failed": "检查未完成，请重试",
+    "details": "展开检查明细",
+    "hideDetails": "收起检查明细",
+    "stop": "停止检查",
+    "recheck": "重新检查",
+    "timeout": "检查超时，请确认工具能正常启动后重试。",
+    "commandUnavailable": "命令清单尚未就绪，或当前运行版本尚未包含此命令。请稍后重试或更新 Cindy。",
+    "usage": "环境检查不需要参数或附件。请单独发送 /cindy-make-doctor。",
+    "localOnly": "目前请在本机 Desktop 使用 /cindy-make-doctor；暂不支持 SSH 或设备互联。",
+    "checks": {
+      "platform": "系统与架构",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "原生编译工具",
+      "storage": "存储空间与权限"
+    },
+    "checkStatus": {
+      "pending": "待检查",
+      "checking": "检查中",
+      "passed": "已通过",
+      "missing": "未找到",
+      "incompatible": "版本不兼容",
+      "failed": "未能验证",
+      "warning": "需要留意",
+      "cancelled": "已停止",
+      "downloading": "下载中",
+      "installing": "安装中"
+    },
+    "requirements": {
+      "platform": "支持 Windows x64、macOS x64/arm64、Linux x64/arm64，在对应系统上构建。",
+      "git": "需要可运行的 Git 2.x 或更新版本，不需要 GitHub 账号。",
+      "gitLfs": "需要 Git LFS，用于获取源码中的大文件。",
+      "node": "需要 Node.js ≥ 22.12。",
+      "pnpm": "需要 pnpm ≥ 10.7 且 < 11；推荐 10.33.2。检查时禁止自动下载。",
+      "python": "需要 Python 3.{{pythonMinor}} 或更新的 Python 3。",
+      "native": "需要当前系统的 C/C++ 编译工具。",
+      "nativeWin": "需要 Visual Studio C++ 构建工具、MSBuild 和 Windows 10/11 SDK。",
+      "nativeMac": "需要 Xcode Command Line Tools、macOS SDK 和 make。",
+      "nativeLinux": "需要 g++ 和 make（通常由 build-essential 提供）。",
+      "storage": "检查 Cindy 数据目录的可写权限；当前可用 {{freeGiB}} GiB。建议至少预留 10 GiB，实际占用随构建变化。"
+    }
+  },
+  "cindyMake": {
+    "description": "检查并准备本机工具，开始制作个人版 Cindy。用法：/cindy-make [修改需求]",
+    "localOnly": "/cindy-make 暂仅支持本机桌面任务。请切回本机后使用。",
+    "usage": "请在 /cindy-make 后填写要修改的内容，例如 /cindy-make 修复消息流闪烁。空指令不会开始环境检查。环境检查暂不支持附件、引用或批注。",
+    "request": "修改需求",
+    "prepare": {
+      "scope": "复用兼容工具，自动下载安装缺少的便携工具",
+      "limits": "工具保存在 Cindy 数据目录，不修改全局工具和 PATH。系统编译工具需通过系统安装器安装。当前尚不拉取源码或构建。",
+      "running": "正在准备工具",
+      "passed": "基础环境已就绪",
+      "needsAttention": "部分项目需要处理",
+      "cancelled": "已停止准备",
+      "failed": "准备未完成，请重试。",
+      "stop": "停止",
+      "retry": "重试准备",
+      "source": {
+        "system": "已有工具",
+        "managed": "Cindy 托管"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "安装指南",
+      "install": "安装缺失环境",
+      "errors": {
+        "downloadFailed": "下载失败，请检查网络后重试。",
+        "checksum": "下载文件未通过完整性校验，未安装，请重试。",
+        "installFailed": "工具无法安装或启动。请检查可用空间和系统兼容性，或手动安装兼容工具后重试。",
+        "busy": "另一个环境准备正在运行，请等待完成后重试。"
+      },
+      "guidance": {
+        "windows": "安装 Visual Studio Build Tools，勾选“使用 C++ 的桌面开发”、MSBuild 和 Windows 10/11 SDK，然后重试。",
+        "mac": "运行下方命令安装 Xcode Command Line Tools（包含 Git 和 macOS SDK），完成后重试。",
+        "linux": "使用系统包管理器安装 Git 和 C/C++ 编译工具。选择下方对应发行版的命令，完成后重试。"
+      }
+    },
+    "upstream": {
+      "pending": "环境全部通过后，自动查询上游。",
+      "needsRequest": "等待补充修改需求",
+      "needRequest": "填写要修改的功能名称或具体报错，查询相关上游内容。",
+      "placeholder": "例如：修复消息流闪烁",
+      "search": "查询上游",
+      "searching": "正在查询上游 Issue 和 PR…",
+      "found": "找到可能相关的上游内容",
+      "notFound": "没有找到匹配的上游内容",
+      "failed": "上游查询失败",
+      "cancelled": "上游查询已停止",
+      "terms": "查询关键词：{{terms}}",
+      "author": "作者：{{author}}",
+      "updated": "更新于 {{date}}",
+      "notFoundHint": "没有找到匹配这些关键词的公开 Issue 或 PR，换一种描述可能会有其他结果。",
+      "resultHint": "请打开链接判断是否相关。这里只显示当前开放的 Issue 和 PR。",
+      "wait": "等待上游",
+      "personal": "继续制作个人版",
+      "retry": "重新检查并查询",
+      "expand": "展开上游结果",
+      "collapse": "收起上游结果",
+      "count": "找到 {{count}} 条可能相关的开放 Issue 或 PR",
+
+      "kind": {
+        "issue": "Issue",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "开放中",
+        "closed": "已关闭",
+        "merged": "已合并",
+        "unknown": "已关闭 · 合并状态未确认"
+      },
+      "choice": {
+        "wait": "已选择等待上游",
+        "personal": "已选择制作个人版"
+      },
+      "decisionHint": {
+        "wait": "本次流程已停止，尚未订阅通知或设置自动更新。",
+        "personal": "选择已记录在本卡片中。源码准备和构建尚未接入，当前没有拉取或修改源码。"
+      },
+      "failure": {
+        "network": "无法连接 GitHub，请检查网络后重试。",
+        "rateLimit": "GitHub 查询次数受限，请稍后重试。",
+        "timeout": "上游查询超时，请重试。",
+        "invalidResponse": "GitHub 返回的结果不完整或无法识别，请重试。"
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · 准备环境",
+    "stepUpstream": "2 · 查询上游"
   }
 }

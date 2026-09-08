@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BUNDLED_CATALOG } from "../builtin.js";
+import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 import {
   compareModelRegistryRevisions,
   findModelRegistryRoute,
@@ -115,7 +116,10 @@ describe("model registry", () => {
     ).toMatchObject({
       entry: {
         contextWindow: 1_050_000,
-        perAgent: { codex: { contextWindow: 272_000 }, 'claude-code': { contextWindow: 272_000 } },
+        perAgent: {
+          codex: { contextWindow: 272_000 },
+          "claude-code": { contextWindow: 272_000 },
+        },
         maxOutputTokens: 128_000,
       },
     });
@@ -322,20 +326,37 @@ describe("model registry", () => {
   });
 });
 
-
 it.each([
-  { variant: 'standard' as const, input: 20, output: 75, read: 2, write: 25 },
-  { variant: 'fast' as const, input: 40, output: 150, read: 4, write: 50 },
-])('uses verified Astra $variant long-input rates from September 7', ({ variant, input, output, read, write }) => {
-  const options = { variant, at: new Date('2026-09-07T00:00:00Z') };
-  expect(resolveModelReferencePrice(registry, 'openai', 'gpt-6-astra', { ...options, inputTokens: 272_000 })?.price)
-    .toMatchObject({ inputPerMtok: input / 2, outputPerMtok: output / 1.5 });
-  expect(resolveModelReferencePrice(registry, 'openai', 'gpt-6-astra', { ...options, inputTokens: 272_001 })?.price)
-    .toMatchObject({ inputPerMtok: input, outputPerMtok: output, cacheReadPerMtok: read, cacheWritePerMtok: write });
-});
+  { variant: "standard" as const, input: 20, output: 75, read: 2, write: 25 },
+  { variant: "fast" as const, input: 40, output: 150, read: 4, write: 50 },
+])(
+  "uses verified Astra $variant long-input rates from September 7",
+  ({ variant, input, output, read, write }) => {
+    const options = { variant, at: new Date("2026-09-07T00:00:00Z") };
+    expect(
+      resolveModelReferencePrice(registry, "openai", "gpt-6-astra", {
+        ...options,
+        inputTokens: 272_000,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: input / 2, outputPerMtok: output / 1.5 });
+    expect(
+      resolveModelReferencePrice(registry, "openai", "gpt-6-astra", {
+        ...options,
+        inputTokens: 272_001,
+      })?.price,
+    ).toMatchObject({
+      inputPerMtok: input,
+      outputPerMtok: output,
+      cacheReadPerMtok: read,
+      cacheWritePerMtok: write,
+    });
+  },
+);
 
-
-it('records the GA DeepSeek V4 Pro tiers without changing its daily default', () => {
-  expect(registry?.models.find((m) => m.id === 'deepseek/deepseek-v4-pro'))
-    .toMatchObject({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' });
+it("records the GA DeepSeek V4 Pro tiers without changing its daily default", () => {
+  expect(
+    expandedRegistryEntries(registry!).find(
+      (m) => m.id === "deepseek/deepseek-v4-pro",
+    ),
+  ).toMatchObject({ efforts: ["low", "high", "max"], defaultEffort: "high" });
 });

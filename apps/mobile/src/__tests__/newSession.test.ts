@@ -1442,6 +1442,22 @@ describe('new session model', () => {
     expect(pickInitialNewSessionWorkspace('', [])).toBeNull();
   });
 
+  it('prefers the directory the user last explicitly chose on this device over the most recent workspace (#4103)', () => {
+    const recentWorkspaces = buildRecentWorkspaceOptions([
+      remoteSession('latest', { workingDir: '/repo/latest', userSendAt: '2026-01-01T00:10:00.000Z' }),
+      remoteSession('third', { workingDir: '/repo/third', userSendAt: '2026-01-01T00:01:00.000Z' }),
+    ]);
+    // 记忆的目录优先;不要求它仍在最近列表里(列表只保留 6 项,用户本就可从浏览器选任意目录)
+    expect(pickInitialNewSessionWorkspace('', recentWorkspaces, '/repo/third')).toBe('/repo/third');
+    // 路径原样返回:首尾空格可能是目录名的一部分(review:Greptile P1)
+    expect(pickInitialNewSessionWorkspace('', recentWorkspaces, ' /elsewhere/app ')).toBe(' /elsewhere/app ');
+    expect(pickInitialNewSessionWorkspace('', [], '/repo/third')).toBe('/repo/third');
+    // 草稿已有目录时仍然不动;没有记忆时回落最近项目首项
+    expect(pickInitialNewSessionWorkspace('/explicit', recentWorkspaces, '/repo/third')).toBeNull();
+    expect(pickInitialNewSessionWorkspace('', recentWorkspaces, null)).toBe('/repo/latest');
+    expect(pickInitialNewSessionWorkspace('', recentWorkspaces, '   ')).toBe('/repo/latest');
+  });
+
   it('normalizes create results and can synthesize a fallback session row', () => {
     const result = normalizeCreateSessionResult({
       sessionId: 's-new',
