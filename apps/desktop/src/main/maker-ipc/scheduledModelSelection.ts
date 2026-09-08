@@ -11,6 +11,11 @@ export interface ScheduledModelSelection {
   fastMode: boolean;
 }
 
+export interface ScheduledModelSelectionLease {
+  release: () => void;
+  selection: ScheduledModelSelection;
+}
+
 export class ScheduledModelSelectionBusyError extends Error {}
 
 interface ScheduledModelTarget {
@@ -61,10 +66,12 @@ export async function applyScheduledModelSelection(
     switchHarness: (selection: ScheduledModelSelection) => Promise<{ engineReady: boolean; retryPending?: boolean }>;
     applyModel: (selection: ScheduledModelSelection) => Promise<void>;
   },
-): Promise<void> {
+): Promise<ScheduledModelSelection> {
   const target = await deps.getTarget();
   // The runner owns missing/archived target recovery, including persistent-task rebinding.
-  if (!target || target.status === 'archived' || target.status === 'deleted') return;
+  if (!target || target.status === 'archived' || target.status === 'deleted') {
+    return deps.resolveSelection(selection);
+  }
   if (deps.isBusy()) throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
   assertScheduledHarnessSupported(target, selection.agentKind);
   const resolved = await deps.resolveSelection(selection);
@@ -73,4 +80,5 @@ export async function applyScheduledModelSelection(
     if (!result.engineReady || result.retryPending) throw new Error('Scheduled Harness switch did not become ready');
   }
   await deps.applyModel(resolved);
+  return resolved;
 }

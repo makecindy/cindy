@@ -1,4 +1,4 @@
-import { ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
+import { ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from '../maker-ipc/scheduledModelSelection';
 /**
  * Phase 3: MakerScheduleRunner
  *
@@ -67,7 +67,7 @@ import {
   setSessionProvider,
   hydrateSessionProvider,
 } from '../maker-host/session-provider-store.js';
-import { setSessionFastMode } from '../maker-host/session-effort-store.js';
+import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import {
   CredentialModeSwitchBusyError,
   isCodexThreadModelProviderIdentityMismatch,
@@ -241,7 +241,7 @@ export interface MakerScheduleRunnerDeps {
    * 锁住 heartbeat session、落实 deferred switch 并 bootstrap 新 live session。
    * runner 在 Session.send 返回后 release。
    */
-  acquirePendingAgentSwitch?: (sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection) => Promise<() => void>;
+  acquirePendingAgentSwitch?: (sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection) => Promise<(() => void) | ScheduledModelSelectionLease>;
   /** 新建可见会话落库后通知本机窗口与 device-link 列表订阅者。 */
   onSessionCreated?: (sessionId: string) => void;
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
@@ -647,6 +647,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 持续会话当前选定的来源(供应商)id —— schedule.providerId 留空时沿用它
     // （与 model 留空沿用 meta.model 对称）。取自 sessions.provider_id 快照,null=未选。
     let heartbeatProviderId: string | null = null;
+    // Fire-local catalog snapshot. Keep the saved preferences untouched, but never
+    // re-read their stale effort/Fast after the host has resolved the actual route.
+    let resolvedSelection: ScheduledModelSelection | undefined;
 
     // 2. heartbeat archived/missing 兜底
     if (isHeartbeat) {
@@ -665,10 +668,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
         throw new Error('Scheduled model selection is not available');
       }
       try {
-        holder.releaseAgentSwitchLock =
-          (await (selection
-            ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, selection)
-            : this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal))) ?? undefined;
+        const lease = await (selection
+          ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, selection)
+          : this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal));
+        holder.releaseAgentSwitchLock = typeof lease === 'function' ? lease : lease?.release;
+        if (selection) {
+          if (!lease || typeof lease === 'function') throw new Error('Scheduled model selection was not resolved');
+          resolvedSelection = lease.selection;
+          schedule = { ...schedule, agentKind: resolvedSelection.agentKind,
+            model: resolvedSelection.model, providerId: resolvedSelection.providerId ?? undefined,
+            effort: resolvedSelection.effort ?? undefined, fastMode: resolvedSelection.fastMode };
+        }
       } catch (error) {
         if (error instanceof ScheduledModelSelectionBusyError) {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
@@ -838,9 +848,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 都空时按 agentKind 兜底 (与 renderer schedulerFallbackModel 同源)，
     // 不留空字符串 — UI picker 显示 placeholder。
     // permissionMode: schedule 没字段，runner 强制 'bypassPermissions'（headless 唯一可行）。
-    const effectiveAgentKind = isHeartbeat
+    const effectiveAgentKind = resolvedSelection?.agentKind ?? (isHeartbeat
       ? (heartbeatAgentKind ?? schedule.agentKind)
-      : schedule.agentKind;
+      : (schedule.modelAgentKind ?? schedule.agentKind));
     const rawModel = schedule.model?.trim()
       ? schedule.model
       : isHeartbeat
@@ -927,18 +937,23 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 模型已声明支持的档原样保留(不降级 —— 保 #352 交互式口径);schedule 配置本身不回写,
     // 只影响本次 fire 的运行值(该模型日后支持该档时自动生效)。直发 / 排队两路径共用
     // reconcileEffortForModel(见其注释),口径一致;lookup 失败不阻断 headless 运行。
-    let reconciledEffort = this.reconcileEffortForModel(
-      effectiveAgentKind,
-      model,
-      schedule.effort,
-      schedule.id,
-    );
+    if (resolvedSelection && createProviderId !== resolvedSelection.providerId) {
+      throw new Error('Scheduled model route changed after selection; retry with the current catalog');
+    }
+    let reconciledEffort = resolvedSelection
+      ? resolvedSelection.effort ?? undefined
+      : this.reconcileEffortForModel(
+          effectiveAgentKind,
+          model,
+          schedule.effort,
+          schedule.id,
+        );
     // 隐式改道后的来源级 reconcile(PR #744 review 第二十七轮):上面的 clamp 用的是
     // merged capability,分辨不出来源差异 —— 改道后的落地拷贝 effort 支持可能更窄、
     // 可能不支持 Fast,原样透传会被上游拒。按 (verdict.providerId, model) 的拷贝重查:
     // 仍支持则保留,不支持取该拷贝默认档(与 model-route-guard withEffort 同口径);
     // Fast 不支持则清掉。查不到 / 目录故障保持 merged 口径,不阻断 headless 运行。
-    if (reroutedProviderId && this.deps.resolveRouteCopyCapabilities) {
+    if (!resolvedSelection && reroutedProviderId && this.deps.resolveRouteCopyCapabilities) {
       try {
         const copy = await this.deps.resolveRouteCopyCapabilities(
           effectiveAgentKind,
@@ -1194,7 +1209,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 当前 effort(heartbeatEffort)而非 undefined —— 否则「只换 model、不改 effort」换到不支持
     // 当前档的模型时,reconcile(undefined) 返回 undefined、heartbeatEffortChanged=false,会话仍带
     // 旧的 max 跑到新的 capped 模型被上游拒(PR #479 review「Clamp followed effort when switching models」)。
-    const desiredEffort = schedule.effort ? schedule.effort : heartbeatEffort;
+    if (resolvedSelection && runtimeModel !== resolvedSelection.model) {
+      throw new Error('Scheduled model selection did not reach the live session');
+    }
+    const desiredEffort = resolvedSelection
+      ? resolvedSelection.effort ?? undefined
+      : schedule.effort || heartbeatEffort;
     // runtimeModel===model 且未走 follow(desiredEffort===schedule.effort)时直接复用上方
     // createSession 已算好的 reconciledEffort,不重复 lookup / 不重复打 reconcile 日志。
     const runtimeReconciledEffort =
@@ -1225,8 +1245,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 仅当 fresh 且要落的档 == createSession 已应用的档时,setEffort 只是幂等兜底,失败可照常落库。
         if (reusedLiveSession || runtimeReconciledEffort !== reconciledEffort)
           effortSwitchApplied = false;
+        if (resolvedSelection) throw new Error('Scheduled effort selection could not be applied', { cause: err });
         this.deps.logger.warn?.('[runner] heartbeat setEffort failed (non-fatal)', err);
       }
+    }
+
+    if (resolvedSelection && effortSwitchApplied) {
+      setSessionEffort(session.id, resolvedSelection.effort);
     }
 
     // 4.4.2 per-session 来源(供应商)注入。语义与 model 对称、但更简单 —— provider 走
@@ -1287,6 +1312,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 落 runtimeReconciledEffort（按实际运行模型 clamp 后的值),session 行 effort 反映真跑的档,
         // 不落超额的原始配置,也不落「为一个没切成功的模型 clamp 出来的」错档(PR #479 review)。
         effort: effortSwitchApplied ? runtimeReconciledEffort : undefined,
+        fastMode: resolvedSelection?.fastMode,
         // heartbeat 模型被 schedule.model 覆盖时落库 —— chat UI picker 与
         // 下次 fire 读到的 meta.model 必须跟实际运行一致（4.4.1 已 setModel）。
         // 同 effort: 复用路径 setModel 失败时跳过, 留给下次 fire 重试。
@@ -1342,6 +1368,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         {
           model: session.model ?? model,
           effort: runtimeReconciledEffort,
+          fastMode,
+          resolvedSelection,
           providerId: getSessionProvider(session.id),
         },
         {
@@ -1715,6 +1743,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       model?: string;
       effort?: string;
       fastMode?: boolean;
+      resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
     options?: { sessionAlreadyBound?: boolean; onAccepted?: () => void },
@@ -1755,6 +1784,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       model?: string;
       effort?: string;
       fastMode?: boolean;
+      resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
     markHeadlessTurnDispatched: () => void,
@@ -2206,6 +2236,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       model?: string;
       effort?: string;
       fastMode?: boolean;
+      resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
   ): Promise<void> {
@@ -2243,6 +2274,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
     const nextProviderId = applyProviderId ?? currentProviderId;
+    const resolvedSelection = baseline.resolvedSelection;
+    if (resolvedSelection && (live.agentKind !== resolvedSelection.agentKind ||
+      targetModel !== resolvedSelection.model || nextProviderId !== resolvedSelection.providerId)) {
+      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+    }
     if (
       crossesCodexAppliedCustomProviderIdentity({
         agentKind: live.agentKind,
@@ -2289,6 +2325,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           live.codexCindyRemoteCompactionCompatible,
       })
     ) {
+      if (resolvedSelection) {
+        throw new QueuedRouteDisabledError('Scheduled model route requires rebuilding before queued dispatch');
+      }
       // 早退 = 本轮沿用 live 当前路由派发:这条保留路由自己也要过停用裁决 ——
       // 目标来源启用但需要凭证切换、而**当前**来源在排队等待期间被停用时,不裁决
       // 就成了绕过口,照发等于继续经停用路由扣费(PR #744 review 第十轮)。
@@ -2391,12 +2430,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 快照 clamp 后 setEffort 会覆盖用户的新选择;而运行时无 live effort getter、拿不到当前真实值 ——
     // 遵循「follow 且当前值不可知 → 不动 effort」(PR #479 review「Re-read effort before following
     // queued sessions」)。显式 effort 才是权威意图,按实际运行模型 clamp 后下发。
-    const reconciledEffort = this.reconcileEffortForModel(
-      live.agentKind,
-      runtimeModel,
-      schedule.effort,
-      schedule.id,
-    );
+    if (resolvedSelection && runtimeModel !== resolvedSelection.model) {
+      throw new QueuedRouteDisabledError('Scheduled model selection did not reach the queued session');
+    }
+    const reconciledEffort = resolvedSelection
+      ? resolvedSelection.effort ?? undefined
+      : this.reconcileEffortForModel(
+          live.agentKind,
+          runtimeModel,
+          schedule.effort,
+          schedule.id,
+        );
     // 显式 effort 存在即下发,不靠 `!== baseline.effort` 判断:baseline.effort 是 enqueue 时刻快照,
     // 且上一次 fire 可能已把它 backfill 成 clamp 后的值 —— 若据此判"未变"而 skip,当用户在排队期间
     // 把 live effort 调低时,这一 turn 会跑用户的低档而非 schedule 的显式档。setEffort 幂等,显式档
@@ -2409,7 +2453,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
         await live.setEffort(reconciledEffort as Effort);
       } catch (err) {
         effortApplied = false;
+        if (resolvedSelection) throw new QueuedRouteDisabledError('Scheduled effort selection could not be applied', { cause: err });
         this.deps.logger.warn?.('[runner] queued heartbeat setEffort failed (non-fatal)', err);
+      }
+    }
+    if (resolvedSelection && effortApplied) {
+      setSessionEffort(live.id, resolvedSelection.effort);
+    }
+    if (resolvedSelection && live.agentKind === 'codex') {
+      try {
+        await live.setFastMode(resolvedSelection.fastMode);
+      } catch (err) {
+        throw new QueuedRouteDisabledError('Scheduled Fast selection could not be applied', { cause: err });
       }
     }
     // applyProviderId = 裁决后的落地来源:显式来源(通过裁决)或隐式默认被停用时的
@@ -2420,13 +2475,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (live.agentKind === 'pi') {
       setSessionFastMode(live.id, baseline.fastMode === true);
     }
-    if ((modelChanged && modelApplied) || (effortChanged && effortApplied) || applyProviderId) {
+    if (resolvedSelection || (modelChanged && modelApplied) || (effortChanged && effortApplied) || applyProviderId) {
       await backfillSessionMeta(
         this.deps.getDb(),
         live.id,
         {
           model: modelChanged && modelApplied ? targetModel : undefined,
           effort: effortChanged && effortApplied ? reconciledEffort : undefined,
+          fastMode: resolvedSelection?.fastMode,
           providerId: applyProviderId ?? undefined,
         },
         this.deps.logger,

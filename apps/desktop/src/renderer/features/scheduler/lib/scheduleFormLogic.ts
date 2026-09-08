@@ -14,7 +14,7 @@
  *   - buildScheduleInput:表单 → CreateScheduleInput(原 toInput 迁入)
  */
 
-import type { CreateScheduleInput, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
+import type { Schedule, CreateScheduleInput, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
 import {
   effectiveSourceIdForModel,
   getModel,
@@ -564,4 +564,33 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
   return base;
+}
+
+/** Clone/demote drops the binding, so freeze the explicitly selected Harness for the new task. */
+export function scheduleToUserCreateInput(
+  schedule: Schedule,
+  overrides: Partial<CreateScheduleInput> = {},
+): CreateScheduleInput {
+  return {
+    name: schedule.name,
+    prompt: schedule.prompt,
+    kind: schedule.kind,
+    cronExpr: schedule.cronExpr,
+    timezone: schedule.timezone,
+    recurring: schedule.recurring,
+    manual: schedule.manual,
+    intervalMs: schedule.intervalMs,
+    agentKind: schedule.modelAgentKind ?? schedule.agentKind,
+    modelAgentKind: schedule.modelAgentKind,
+    model: schedule.model,
+    providerId: schedule.providerId,
+    fastMode: schedule.fastMode,
+    effort: schedule.effort,
+    workspaceKind: schedule.workspaceKind,
+    workingDir: schedule.workingDir,
+    useWorktree: schedule.useWorktree,
+    persistentSession: schedule.persistentSession,
+    notify: schedule.notify,
+    ...overrides,
+  };
 }

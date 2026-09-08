@@ -458,3 +458,27 @@ describe('mobile schedule form model', () => {
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
+
+
+describe('mobile explicit Harness round-trip', () => {
+  it('displays and preserves the Desktop override through a JSON update', () => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
+      model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: true, targetSessionId: 'bound' }));
+    expect(draft.agentKind).toBe('pi');
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...draft, name: 'Renamed' })));
+    expect(input).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', model: 'shared-model',
+      providerId: 'selected', effort: 'high', fastMode: true, targetSessionId: 'bound' });
+  });
+  it('replaces a saved Pi marker and clears its provider when Mobile chooses Codex', () => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
+      model: 'pi-model', providerId: 'pi-only', fastMode: true, targetSessionId: 'bound' }));
+    const selected = updateDraftAgentKind(draft, 'codex');
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput(selected)));
+    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.5',
+      providerId: '', effort: '', fastMode: false });
+  });
+  it('keeps older schedules without an override in follow mode', () => {
+    const draft = createMobileScheduleDraft(schedule({ targetSessionId: 'bound', model: '' }));
+    expect(buildMobileScheduleInput(draft)).not.toHaveProperty('modelAgentKind');
+  });
+});

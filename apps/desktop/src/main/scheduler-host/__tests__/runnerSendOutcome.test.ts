@@ -1,3 +1,4 @@
+import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type {
@@ -312,9 +313,9 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const releaseAgentSwitchLock = vi.fn(() => {
       order.push('release');
     });
-    const acquirePendingAgentSwitch = vi.fn(async () => {
+    const acquirePendingAgentSwitch = vi.fn(async (_id: string, _signal?: AbortSignal, selection?: ScheduledModelSelection) => {
       order.push('apply');
-      return releaseAgentSwitchLock;
+      return selection ? { release: releaseAgentSwitchLock, selection } : releaseAgentSwitchLock;
     });
     const { runner, maker } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
     vi.mocked(maker.getSessionMeta).mockImplementation(async () => {

@@ -36,10 +36,12 @@ describe('saved automation model selection at dispatch', () => {
     expect(deps.switchHarness).not.toHaveBeenCalled();
     expect(deps.applyModel).not.toHaveBeenCalled();
   });
-  it.each(['archived', 'deleted'])('leaves %s target recovery to the scheduler', async (status) => {
+  it.each(['missing', 'archived', 'deleted'])('returns the resolved snapshot for %s target recovery without touching the target', async (status) => {
     const deps = fixture();
-    deps.getTarget.mockResolvedValue({ agentKind: 'codex', status });
-    await applyScheduledModelSelection(selection, deps);
+    const expected = { ...selection, effort: 'medium' as const };
+    deps.getTarget.mockResolvedValue(status === 'missing' ? null as never : { agentKind: 'codex', status });
+    deps.resolveSelection.mockResolvedValue(expected);
+    await expect(applyScheduledModelSelection(selection, deps)).resolves.toEqual(expected);
     expect(deps.switchHarness).not.toHaveBeenCalled();
     expect(deps.applyModel).not.toHaveBeenCalled();
   });
@@ -70,8 +72,9 @@ describe('saved automation model selection at dispatch', () => {
   it('clears stale Fast before switching Harness or applying the saved selection', async () => {
     const deps = fixture();
     deps.resolveSelection.mockImplementation(async (choice) => resolveScheduledModelSelection(choice, [provider('custom')]));
-    await applyScheduledModelSelection({ ...selection, providerId: null, fastMode: true }, deps);
     const expected = { ...selection, effort: 'medium', fastMode: false };
+    await expect(applyScheduledModelSelection({ ...selection, providerId: null, fastMode: true }, deps))
+      .resolves.toEqual(expected);
     expect(deps.switchHarness).toHaveBeenCalledWith(expected);
     expect(deps.applyModel).toHaveBeenCalledWith(expected);
   });

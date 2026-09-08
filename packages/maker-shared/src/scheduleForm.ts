@@ -53,6 +53,7 @@ export interface MobileScheduleDraft {
    */
   intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
+  modelAgentKind?: RemoteScheduleAgentKind;
   model: string;
   providerId: string;
   effort: string;
@@ -168,8 +169,9 @@ export function createMobileScheduleDraft(
     timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
-    agentKind: schedule.agentKind ?? 'claude-code',
-    model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
+    agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',
+    modelAgentKind: schedule.modelAgentKind,
+    model: schedule.model ?? defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code'),
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
@@ -212,6 +214,7 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     intervalMinutesTouched: true,
     agentKind,
+    ...(draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
     model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
@@ -420,11 +423,19 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     };
   }
 
+  if (draft.modelAgentKind) {
+    input.modelAgentKind = draft.agentKind;
+    input.model = draft.model.trim();
+    input.providerId = draft.providerId.trim();
+    input.effort = draft.effort.trim();
+    input.fastMode = draft.fastMode;
+  }
+
   if (targetSessionId) {
     input.useWorktree = false;
-    input.model = draft.model.trim() || undefined;
+    input.model = draft.modelAgentKind ? draft.model.trim() : draft.model.trim() || undefined;
     const effort = draft.effort.trim();
-    input.effort = isMobileScheduleEffort(effort) ? effort : undefined;
+    input.effort = isMobileScheduleEffort(effort) ? effort : draft.modelAgentKind ? '' : undefined;
     return input;
   }
 
@@ -473,6 +484,7 @@ export function updateDraftAgentKind(
   return {
     ...draft,
     agentKind,
+    ...(draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
     model: defaultModelFor(agentKind),
     providerId: '',
     effort: '',

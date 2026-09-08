@@ -28,6 +28,7 @@ import type { SchedulerDrizzleDb } from '../storage';
  */
 export interface BackfillSessionMetaPatch {
   effort?: string;
+  fastMode?: boolean;
   /**
    * heartbeat 模式 schedule.model 覆盖了绑定 session 的旧 model 时落库，
    * 让 chat UI model picker 与下次 fire 读到的 meta.model 跟实际运行一致。
@@ -64,6 +65,7 @@ export async function backfillSessionMeta(
       updatedAt: Date.now(),
     };
     if (meta.effort) patch.effort = meta.effort;
+    if (meta.fastMode !== undefined) patch.fastMode = meta.fastMode;
     if (meta.model) patch.model = meta.model;
     if (meta.providerId) patch.providerId = meta.providerId;
     if (meta.workspaceKind) patch.workspaceKind = meta.workspaceKind;
