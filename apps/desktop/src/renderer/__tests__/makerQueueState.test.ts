@@ -84,6 +84,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   continuationInFlightProjectionCapability: 'unknown',
   isLoadingMore: false,
   hasMoreMessages: false,
+  historyWindowIslands: [],
   isFirstMessage: false,
   streamingClientId: null,
   streamingText: '',

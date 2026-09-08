@@ -1189,7 +1189,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('long-thinking');
     expect(ids).toContain('client-auth-b');
     // 关键:按落库时间线它在权威范围之外 → 按孤岛处理。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:同毫秒但没有 rowid 的 live push 保守按脱离处理', async () => {
@@ -1223,7 +1223,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
       'client-same-ms-no-rowid',
     );
     // 关键:排不出先后 → 按孤岛处理,而不是当成连续。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:同毫秒、rowid 更小的范围内晚到行不被误判成脱离', async () => {
@@ -1256,9 +1256,11 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     ]);
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
 
-    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain('client-inside');
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain(
+      'client-inside',
+    );
     // 关键:范围内 → 不记孤岛。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
   });
 
   it('远程会话:加性提交不能替一次无关的 rewind 背书,rewind 掉的尾部不得被补回', async () => {
@@ -1338,7 +1340,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('client-same-ms-later');
     expect(ids).toContain('client-auth-1');
     // 关键:同毫秒但 rowid 更大 → 落在权威范围之外 → 按孤岛处理。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:权威重建保留了比权威窗口更新的晚到行时也记孤岛(推送有损)', async () => {
@@ -1370,7 +1372,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('client-last-of-burst');
     expect(ids).toContain('client-auth-1');
     // 关键:范围外的晚到行按孤岛处理,下一次跳转会尝试补连续。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:purge 清掉对账次序簿,但旧代际的对账仍被代际守卫拦下', async () => {
@@ -1402,7 +1404,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     const s = sid();
     makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
 
     const pendingList = deferred<Message[]>();
     remoteListResolver = () => pendingList.promise;
@@ -1426,7 +1428,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('client-far-older');
     expect(ids).toContain('client-auth-1');
     // 关键:保留了脱离新窗口的行 → 标记必须点亮,后续跳转才会尝试补连续。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:分页期间转入 streaming 时,不 bump 代际也不抢别人的分页锁', async () => {
@@ -1492,7 +1494,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 先制造孤岛状态。
     remoteAround = [dbMessage(s, 'island', 'island row', '2026-06-01T00:00:00.000Z')];
     await makerChatStore.loadAroundMessageClientId(s, 'client-island', { radius: 60 });
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
 
     // 无重叠对账 → 权威重建,期间没有任何 remote push 进来。
     remoteListResolver = () => [
@@ -1501,9 +1503,11 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     makerChatStore.reconcileRemoteMessages(s);
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
 
-    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual(['client-auth-1']);
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual([
+      'client-auth-1',
+    ]);
     // 关键:窗口是完整重建出来的,标记必须清零。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
   });
 
   it('远程会话:权威重建作废在飞行中的跳转补齐,并释放分页锁', async () => {
