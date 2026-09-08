@@ -426,3 +426,11 @@ async function doStart(
       : {}),
   };
 }
+
+/** Native startup discovery is earlier than the thread registration callback. */
+export function withCodexMcpDiscoveryContext<T>(
+  ctx: LiziMcpSessionContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return activeBridge ? activeBridge.withDiscoveryContext(ctx, run) : run();
+}

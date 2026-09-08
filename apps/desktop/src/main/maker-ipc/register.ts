@@ -1,3 +1,4 @@
+import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -147,7 +148,7 @@ import {
   shutdownCodexEnvironment,
 } from '../mcp-integrations/codexEnvironment.js';
 import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
-import { REMOTE_MEMORY_SERVER_NAME } from '../mcp-integrations/codexHttpBridge.js';
+import { REMOTE_MEMORY_SERVER_NAME, REMOTE_BOT_HELPER_SERVER_NAME } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import {
   checkComputerDriverUpdate,
@@ -6792,6 +6793,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 不能只看 manager 现值 — 否则旧 bridge 缺 cindy_memory 时 drift 永不
       // 收敛, 每次 live send 白跑完整 ensure。
       makerMemoryEnabled: remoteMakerMemoryEnabledForBridge(),
+      botHelperAvailable: getActiveCodexBridgeServerNames()?.includes(REMOTE_BOT_HELPER_SERVER_NAME) ?? false,
       token: getRemoteMcpBridgeToken(),
       bridgeInstanceId: getActiveCodexBridgeInstanceId(),
     };
@@ -14785,7 +14787,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 可以乐观调用 (UI 更新先行, IPC 失败也不会回滚 UI, 老 agentManager 同语义)。
 
   const handleSetModel = async (
-    event: Electron.IpcMainInvokeEvent | undefined,
     sessionId: unknown,
     model: unknown,
     providerId: unknown,
@@ -14793,9 +14794,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     selection: unknown,
     internalOptions: InternalRuntimeSelectionOptions,
   ) => {
-    if (internalOptions.source === 'user' && !internalOptions.sessionLockHeld && !isDeviceLinkInvoke()) {
-      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
-    }
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
@@ -15992,14 +15990,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
   };
   applySessionRuntimeSelection = (sessionId, model, providerId, selection, options) =>
-    handleSetModel(undefined, sessionId, model, providerId, undefined, selection, options);
-  ipcMain.handle(
-    MAKER_INVOKE.SET_MODEL,
-    (event, sessionId, model, providerId, expectedAgentSwitchRevision, selection) =>
-      handleSetModel(event, sessionId, model, providerId, expectedAgentSwitchRevision, selection, {
-        source: 'user',
-      }),
-  );
+    handleSetModel(sessionId, model, providerId, undefined, selection, options);
+  registerSessionSetModelHandler(makerSessionRegistry, {
+    isDeviceLinkInvoke,
+    assertTrustedSender: (event) => assertTrustedAppRendererEvent(
+      event as Parameters<typeof assertTrustedAppRendererEvent>[0],
+    ),
+    apply: (sessionId, model, providerId, revision, selection) =>
+      handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' }),
+  });
 
   const recoverRemoteRuntimeAxisPersistence = async (
     sessionId: string,

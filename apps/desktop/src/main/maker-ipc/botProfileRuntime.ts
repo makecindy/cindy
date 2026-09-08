@@ -792,7 +792,8 @@ export async function hydrateBotProfileRuntime(
     displayName: profile.displayName,
     identitySource: identity,
   });
-  const helperAvailable = !opts.remoteHostId || opts.agentKind === 'pi';
+  const helperAvailable = !opts.remoteHostId || opts.agentKind === 'pi'
+    || toolsetCatalog.some((item) => item.id === 'xdt_helper' && item.available !== false);
   // 三层装配(见 botSystemPrompt.ts):身份与「你会做什么」进稳定段,会话控制等
   // 进上下文段,技能索引与记忆快照进易变段并排在最后。能力说明按**这个伙伴
   // 实际挂载到的 toolset** 注入 —— 挂了 docs 才讲怎么做文件,没挂的一个字不提。

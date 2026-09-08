@@ -5360,7 +5360,15 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       developerInstructions?: string;
+      config?: Record<string, unknown>;
     };
+    expect(params.config).toMatchObject({
+      'features.multi_agent': false,
+      'features.multi_agent_v2': false,
+      'agents.enabled': false,
+      'memories.generate_memories': false,
+      'memories.use_memories': false,
+    });
     expect(params.developerInstructions).toContain('BOT SOUL');
     expect(params.developerInstructions).toContain('BOT HOME CONTEXT');
     expect(params.developerInstructions).not.toContain('GLOBAL CINDY HOST PROMPT');
@@ -8478,6 +8486,98 @@ describe('CodexAgent MCP thread context hooks', () => {
       'start-thread-id',
       'instance-codex-mcp-context',
     );
+  });
+
+  it.each([{ resume: false, remote: false }, { resume: true, remote: false }, { resume: false, remote: true }, { resume: true, remote: true }])('registers discovery identity around native startup ($resume, $remote)', async ({ resume, remote }) => {
+    const order: string[] = [];
+    const deps = createDeps();
+    deps.withCodexMcpDiscoveryContext = async (ctx, run) => {
+      expect(ctx).toMatchObject({ sessionId: 'bot-parent', sessionInstanceId: 'bot-instance' });
+      expect(ctx.remoteHostId).toBe(remote ? 'remote-bot-host' : undefined);
+      order.push('discovery');
+      try { return await run(); } finally { order.push('released'); }
+    };
+    const agent = new CodexAgent(deps);
+    const host = installFakeHost(agent);
+    const original = host.request.getMockImplementation()!;
+    host.request.mockImplementation(async (...args) => {
+      if (args[0] === Method.ThreadStart || args[0] === Method.ThreadResume) {
+        expect(order).toEqual(['discovery']);
+        order.push('native');
+      }
+      return original(...args);
+    });
+    const handle = await agent.startSession({
+      sessionId: 'bot-parent', sessionInstanceId: 'bot-instance', workingDir: '/bot', model: 'gpt-5.4',
+      ...(remote ? { remoteHostId: 'remote-bot-host' } : {}),
+      ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+    });
+    expect(order).toEqual(['discovery', 'native', 'released']);
+    await handle.close();
+  });
+
+  it.each([{ bot: true, resume: false }, { bot: true, resume: true }, { bot: false, resume: false }])(
+    'enables the remote helper transport only for a Bot (bot=$bot, resume=$resume)', async ({ bot, resume }) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, undefined, {
+        userAgent: 'mock-codex/0.145.0',
+        buildSessionMcpConfig: (instance) => ({
+          'mcp_servers.cindy_helper.url': `http://127.0.0.1:47921/mcp/cindy_helper?instance=${instance}`,
+          'mcp_servers.cindy_helper.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+          'mcp_servers.cindy_helper.enabled': false,
+        }),
+      });
+      const handle = await agent.startSession({
+        sessionId: 'remote-bot', sessionInstanceId: 'remote-instance', remoteHostId: 'ssh-host', workingDir: '/bot', model: 'gpt-5.4',
+        ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+        ...(bot ? { botRuntimeProfile: {
+          botId: 'bot-1', profileVersion: 1,
+          skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        } } : {}),
+      });
+      const params = host.request.mock.calls.find(([method]) => method === (resume ? Method.ThreadResume : Method.ThreadStart))?.[1] as { config: Record<string, unknown> };
+      expect(params.config['mcp_servers.cindy_helper.enabled']).toBe(bot);
+      expect(params.config['mcp_servers.cindy_helper.url']).toBe('http://127.0.0.1:47921/mcp/cindy_helper?instance=remote-instance');
+      await handle.close();
+    },
+  );
+
+  it.each([
+    { resume: false, driftAfterRead: false }, { resume: true, driftAfterRead: false },
+    { resume: false, driftAfterRead: true }, { resume: true, driftAfterRead: true },
+  ])('does not start a remote Bot with unapplied helper config (resume=$resume, late=$driftAfterRead)', async ({ resume, driftAfterRead }) => {
+    const agent = new CodexAgent(createDeps());
+    let ready = false;
+    let reads = 0;
+    const host = installFakeHost(agent, (method) => method === Method.ConfigRead
+      ? { config: { mcp_servers: { cindy_helper: { url: 'http://127.0.0.1:47921/mcp/cindy_helper' } } } }
+      : undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      // config/read can still contain an old daemon transport. Only the Host's
+      // current instance-bound config proves its generation has been applied.
+      buildSessionMcpConfig: () => ready || (driftAfterRead && reads++ === 0)
+        ? { 'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47921/mcp/cindy_helper?instance=remote-instance' }
+        : {},
+    });
+    const opts = {
+      sessionId: 'remote-bot', sessionInstanceId: 'remote-instance', remoteHostId: 'ssh-host', workingDir: '/bot', model: 'gpt-5.4',
+      ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+      botRuntimeProfile: {
+        botId: 'bot-1', profileVersion: 1,
+        skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+      },
+    };
+    await expect(agent.startSession(opts)).rejects.toThrow('Remote Codex Bot tools are not ready');
+    expect(host.request.mock.calls.some(([method]) =>
+      method === Method.ThreadStart || method === Method.ThreadResume || method === Method.TurnStart)).toBe(false);
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt)).toBe(false);
+    ready = true;
+    const handle = await agent.startSession(opts);
+    await handle.close();
   });
 
   it('applies instance-bound MCP URLs to both thread/start and thread/resume', async () => {
