@@ -1214,13 +1214,19 @@ describe('DeviceLinkClient', () => {
     await establishInboundReliableLink(h, 'inbound-timeout-stream');
     // 模拟真实接收端:重放帧已写入 socket FIFO 后立即回 ACK(见 client.ts
     // sendTransportAck 的交付即确认语义)。不 ACK 的话,重放后 retryTimer
-    // 会在 Windows 低精度计时器(≈12ms>配置 5ms)下把同一帧再发一遍,慢 CI
-    // runner 上断言窗口跨过该周期时会把「重试重发」误判成「重放两次」。
+    // 会在 Windows 低精度计时器(≈12ms>配置 5ms)或慢 Linux runner 下把同一
+    // 帧再发一遍。等重放出现后再 ACK 全部副本,按 seq 去重断言,避免把
+    // 「重试重发」误判成「重放两次」。
+    await vi.waitFor(() => {
+      expect(firstSocket.sent.slice(sentBefore).some((env) => (
+        env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+      ))).toBe(true);
+    });
     const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
       env.kind === 'invoke-result' && parseTransportPayload(env.payload)
     ));
-    if (justReplayed.length > 0) {
-      const meta = parseTransportPayload(justReplayed[0].payload)!.meta;
+    for (const env of justReplayed) {
+      const meta = parseTransportPayload(env.payload)!.meta;
       h.current().push({
         v: PROTOCOL_VERSION,
         kind: 'push',
@@ -1235,7 +1241,10 @@ describe('DeviceLinkClient', () => {
     const replays = replayed.filter((env) => (
       env.kind === 'invoke-result' && parseTransportPayload(env.payload)
     ));
-    expect(replays).toHaveLength(1);
+    const uniqueSeqs = [...new Set(replays.map((env) => (
+      parseTransportPayload(env.payload)!.meta.seq
+    )))];
+    expect(uniqueSeqs).toEqual([firstMeta.seq]);
     expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
       streamId: firstMeta.streamId,
       seq: firstMeta.seq,
