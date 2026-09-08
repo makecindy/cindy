@@ -114,6 +114,7 @@ describe('newSessionPreferenceStore', () => {
       device: null,
       workspaceKind: null,
       permissionModeByAgent: {},
+      workingDirByDevice: {},
     });
   });
 
