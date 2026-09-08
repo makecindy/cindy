@@ -668,11 +668,21 @@ export function createModelRoutingTransform(): RoutingTransform {
       );
     }
 
-    if (subagentRoute && piProviderId) {
+    if (piProviderId && piProviderId !== 'xd' && (subagentRoute || !selectedPiProviderId)) {
       // A provider-pinned child token is both the authorization boundary and
       // the route source. Re-reading the parent session provider here would
       // authenticate Anthropic but still route through an OpenAI/XD parent,
       // eventually falling into the proxy's default upstream.
+      //
+      // Root tokens take the same pin whenever the session store holds no
+      // explicit source: a model-only `set_model` (runtimeSetModel only writes
+      // the store when `providerId !== undefined`) and a legacy session whose
+      // `sessions.provider_id` is empty both leave it null while PI already
+      // runs on the resolved subscription provider. ② 段默认路由会把这种请求
+      // 拿网关 key 打到网关(用户以为在用 Claude 订阅,实际计费在网关),无网关
+      // key 时更会把 `sk-ant-oat` 占位 token 直发 api.anthropic.com。这里的
+      // piProviderId 已过 registered 匹配门,就是授权边界也是路由来源;openai /
+      // xai 在上方已按同一判据早返回,'xd' 留给网关分支(记账 + sanitize)。
       return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
         .then((resolved) => resolved?.decision ?? unavailablePiProviderRoute(piProviderId))
         .catch(() => unavailablePiProviderRoute(piProviderId));

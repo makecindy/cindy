@@ -121,6 +121,22 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
 const PI_OPENAI_PROXY_KEY_ENV = 'CINDY_PI_OPENAI_PROXY_KEY';
+const PI_ANTHROPIC_PROXY_KEY_ENV = 'CINDY_PI_ANTHROPIC_PROXY_KEY';
+/**
+ * Claude 订阅占位 token。Pi 的 anthropic 适配器按 `apiKey.includes('sk-ant-oat')` 判定
+ * OAuth 形态,命中后才走原生订阅请求构造:Bearer 鉴权、`claude-code-20250219,oauth-2025-04-20`
+ * 加各 beta(fine-grained tool streaming / server-side fallback 等)、Claude Code 身份 system
+ * 段与 `claude-cli` UA。占位值本身不含授权能力;真 token 由 loopback proxy 在解析出
+ * anthropic provider 路由时覆盖 `authorization`,故该路由是占位值被换掉的唯一保证 ——
+ * 请求带 provider 头就必须钉在该路由上,不能落回默认上游(见
+ * anthropic-compat-proxy-host 的 piProviderId 钉住分支)。
+ * 用普通字串会让 Pi 按 x-api-key 形态发请求,proxy 再补 beta 头就会
+ * 与 body 里 Pi 已注入的 `fallbacks` 等字段脱节(400 `fallbacks: Extra inputs are not permitted`)。
+ *
+ * 取值即探针要求的最短形态(二进制里只有 `sk-ant-oat` 这一个字面量,版本段不参与判定),
+ * 与仓内既有 OAuth 形态夹具同值 —— 不额外造一个更长、更像真 token 的字串去撞密钥扫描。
+ */
+const PI_ANTHROPIC_PROXY_PLACEHOLDER_TOKEN = 'sk-ant-oat01';
 const PI_PROVIDER_HEADER = 'x-cindy-pi-provider-id';
 
 export interface PiBundledModelInfo {
@@ -544,6 +560,7 @@ export function buildPiSubscriptionNativeProviders(
   const env: Record<string, string> = {
     [PI_OPENAI_PROXY_KEY_ENV]: piOpenaiProxyPlaceholderJwt(),
     [PI_XAI_PROXY_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY,
+    [PI_ANTHROPIC_PROXY_KEY_ENV]: PI_ANTHROPIC_PROXY_PLACEHOLDER_TOKEN,
   };
   const add = (
     sourceProviderId: 'anthropic' | 'openai' | 'xai',
@@ -606,6 +623,7 @@ export function buildPiSubscriptionNativeProviders(
       name,
       baseUrl,
       inheritModels: true,
+      ...(sourceProviderId === 'anthropic' ? { apiKeyEnvVar: PI_ANTHROPIC_PROXY_KEY_ENV } : {}),
       ...(sourceProviderId === 'openai' ? { apiKeyEnvVar: PI_OPENAI_PROXY_KEY_ENV } : {}),
       ...(sourceProviderId === 'xai' ? { apiKeyEnvVar: PI_XAI_PROXY_API_KEY_ENV } : {}),
       modelIdAliases,

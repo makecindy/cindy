@@ -3142,7 +3142,7 @@ class CindyMcpGateway {
         name: CINDY_START_SESSION_TASK_TOOL,
         label: 'Start a Cindy Session task',
         description:
-          'Start one real independent Cindy Session task in the background. Use it when the user explicitly asks to create a task, Session, or background task, and for development or deliverable work that needs independent execution, verification, progress, cancellation, and automatic result/artifact return. This never selects or wakes a Bot, including a Bot named Cindy. Start it once and do not poll.',
+          'Start one real independent Cindy Session task in the background. Proactively use it for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline. Include the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. This never selects or wakes a Bot, including a Bot named Cindy. Start it once, do not duplicate its work or poll, and review the result when it returns automatically.',
         parameters: {
           type: 'object',
           properties: {

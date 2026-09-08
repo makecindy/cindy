@@ -317,7 +317,6 @@ describe('pi: provider-aware Anthropic wire routing', () => {
       upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
       headerOverride: {
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
         authorization: 'Bearer claude-live-token',
       },
       headerDelete: ['x-api-key'],

@@ -1236,10 +1236,15 @@ describe('custom model defaults with partial registry metadata', () => {
       models: [{
         id: 'sparse-model', name: 'Sparse model',
         efforts: ['low', 'medium', 'high'],
-        ...(declared !== undefined ? { defaultEffort: declared } : {}),
         routes: [{ providerId: 'relay', modelId: 'sparse-model', agents: ['codex'] }],
       }],
     };
+    if (declared === null) {
+      // @ts-expect-error Exercise malformed registry metadata outside the wire contract.
+      modelRegistry.models[0].defaultEffort = declared;
+    } else if (declared !== undefined) {
+      modelRegistry.models[0].defaultEffort = declared;
+    }
     const provider = buildUserProvider({
       id: 'relay', name: 'Custom relay',
       runtimes: { codex: { baseUrl: 'https://relay.example/v1', models: [{ id: 'sparse-model', name: 'My model' }] } },

@@ -853,8 +853,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       sourceProviderId: 'anthropic',
       baseUrl: 'http://127.0.0.1:4567/',
       inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_ANTHROPIC_PROXY_KEY',
       models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
     });
+    // Pi 按 `sk-ant-oat` 前缀识别 OAuth 形态,才会自己拼 claude-code/oauth/server-side-fallback
+    // 等 beta 头与 Claude Code 身份;占位值不能是真 token 形态之外的普通字串。
+    expect(env.CINDY_PI_ANTHROPIC_PROXY_KEY).toContain('sk-ant-oat');
     expect(providers[1]).toMatchObject({
       sourceProviderId: 'openai',
       baseUrl: 'http://127.0.0.1:4567/',

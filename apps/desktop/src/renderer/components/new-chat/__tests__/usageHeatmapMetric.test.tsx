@@ -27,13 +27,13 @@ const days = [
 ];
 
 function cellStyles(container: HTMLElement): string[] {
-  return [...container.querySelectorAll<HTMLElement>('div.rounded-\\[3px\\]')].map(
+  return [...container.querySelectorAll<HTMLElement>('div[title]')].map(
     (cell) => cell.style.backgroundColor,
   );
 }
 
 function cellTitles(container: HTMLElement): string[] {
-  return [...container.querySelectorAll<HTMLElement>('div.rounded-\\[3px\\]')]
+  return [...container.querySelectorAll<HTMLElement>('div[title]')]
     .map((cell) => cell.title)
     .filter(Boolean);
 }
@@ -191,7 +191,7 @@ describe('UsageHeatmap metric', () => {
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
 
-  it('可点击日期格保留小视觉标记但提供 24px 命中区域', () => {
+  it('可点击日期格保持 12px 方格，不因点击行为撑大周网格', () => {
     const { getByRole } = render(
       <UsageHeatmap
         days={days}
@@ -204,8 +204,8 @@ describe('UsageHeatmap metric', () => {
 
     const button = getByRole('button', { name: /Aug 21, 2026/ });
     const visual = button.firstElementChild as HTMLElement;
-    expect(button.style.width).toBe('24px');
-    expect(button.style.height).toBe('24px');
+    expect(button.style.width).toBe('12px');
+    expect(button.style.height).toBe('12px');
     expect(visual.style.width).toBe('12px');
     expect(visual.style.height).toBe('12px');
   });
@@ -235,7 +235,7 @@ describe('UsageHeatmap metric', () => {
     expect(container.querySelector('div[title^="2026-08-21"]')).toBeTruthy();
   });
 
-  it('可点击日期格的可见彩色表面使用 pill 圆角', () => {
+  it('可点击数据方格使用登记的 2px 圆角，不变成圆点', () => {
     const onDayClick = vi.fn();
     const { getByRole } = render(
       <UsageHeatmap
@@ -248,7 +248,7 @@ describe('UsageHeatmap metric', () => {
     );
 
     expect(getByRole('button', { name: /Aug 21, 2026/ }).firstElementChild?.className).toContain(
-      'rounded-full',
+      'rounded-[2px]',
     );
   });
 

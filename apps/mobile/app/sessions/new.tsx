@@ -311,6 +311,7 @@ import {
   isValidWorktreeBranchPreferenceSnapshot,
   isWorktreeChannelNotAllowedError,
   parseWorktreeCreateResult,
+  initialWorktreeProbeEligibility,
   resolveWorktreeEligibility,
   shouldAcceptWorktreeBranchListResult,
   shouldBlockNewSessionCreateForWorktree,
@@ -2286,9 +2287,16 @@ export default function NewRemoteSessionScreen() {
     };
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const probingEligibility: NewSessionWorktreeEligibility = { status: 'probing' };
-    worktreeEligibilityRef.current = probingEligibility;
-    setWorktreeProbe({ target, eligibility: probingEligibility });
+    // 起始状态由纯函数决定(#4046):设备与目录都已选、但链路不在 online(如完全断网)
+    // 时直接进 recovering 而不是停在 probing —— 下面的提前返回不会进 catch,停在
+    // probing 就是永久的「检测环境中…」。
+    const initialEligibility: NewSessionWorktreeEligibility = initialWorktreeProbeEligibility({
+      hasDevice: Boolean(selectedDeviceId),
+      hasWorkingDir: cwd.length > 0,
+      online: deviceLinkStatus === 'online',
+    });
+    worktreeEligibilityRef.current = initialEligibility;
+    setWorktreeProbe({ target, eligibility: initialEligibility });
     // Relay 离线时不把预期的 NOT_CONNECTED 固化成 detect-failed；online /
     // connectionEpoch / presenceVersion 变化后自动重探，覆盖手机重连和工作端
     // 重新上线两种路径。

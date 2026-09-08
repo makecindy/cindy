@@ -271,7 +271,8 @@ function registerStartSessionTaskEntry(
     category: 'bots',
     description: [
       'Start one real independent Cindy Session task in the background.',
-      'Use this when the user explicitly asks to create/start a task, Session, or background task, and for development or deliverable work that should run independently with progress, cancellation, verification, and automatic result/artifact return.',
+      'Proactively use this for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline.',
+      'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
       "This never calls a Cindy Bot or any other teammate. Use send_to_agent for a bounded message to a named teammate.",
       "The task appears in the user's task list and returns its completion automatically. Start it once and use check_session_task, message_session_task, or stop_session_task only when there is a concrete reason.",
     ].join('\n'),

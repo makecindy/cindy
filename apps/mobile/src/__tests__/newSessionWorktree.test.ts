@@ -16,6 +16,7 @@ import {
   classifyWorktreePreferenceSeed,
   fallbackWorktreeName,
   formatWorktreeCreateFailure,
+  initialWorktreeProbeEligibility,
   isExactRemoteSessionClaimed,
   isValidWorktreeBranchPreferenceSnapshot,
   isWorktreeChannelNotAllowedError,
@@ -354,6 +355,38 @@ describe('worktreeEligibilityFromError', () => {
     )).toBe(true);
     expect(isWorktreeChannelNotAllowedError(new Error('INVOKE_TIMEOUT'))).toBe(false);
     expect(isWorktreeChannelNotAllowedError(new Error('socket closed'))).toBe(false);
+  });
+});
+
+describe('initialWorktreeProbeEligibility(#4046 完全断网时探测起始态)', () => {
+  it('设备 + 目录都已选但链路不在 online → recovering(自动重试文案,不停在检测中)', () => {
+    expect(initialWorktreeProbeEligibility({ hasDevice: true, hasWorkingDir: true, online: false }))
+      .toEqual({ status: 'recovering' });
+  });
+
+  it('设备或目录未选全 → probing(探测尚未开始,不把输入未完整误报成网络错误)', () => {
+    expect(initialWorktreeProbeEligibility({ hasDevice: false, hasWorkingDir: true, online: false }))
+      .toEqual({ status: 'probing' });
+    expect(initialWorktreeProbeEligibility({ hasDevice: true, hasWorkingDir: false, online: false }))
+      .toEqual({ status: 'probing' });
+    expect(initialWorktreeProbeEligibility({ hasDevice: false, hasWorkingDir: false, online: true }))
+      .toEqual({ status: 'probing' });
+  });
+
+  it('三者齐备 → probing,由后续请求结果 / 抛错归并覆盖', () => {
+    expect(initialWorktreeProbeEligibility({ hasDevice: true, hasWorkingDir: true, online: true }))
+      .toEqual({ status: 'probing' });
+  });
+
+  it('recovering 起始态与探测抛错的 recovering 走同一文案,且创建门禁保持 fail-closed', () => {
+    const offline = initialWorktreeProbeEligibility({ hasDevice: true, hasWorkingDir: true, online: false });
+    expect(worktreeEligibilityCaptionKey(offline)).toBe('session.new.worktreeRecovering');
+    expect(shouldBlockNewSessionCreateForWorktree({
+      applicable: true,
+      enabled: true,
+      eligibility: offline,
+      preferenceSaving: false,
+    })).toBe(true);
   });
 });
 
