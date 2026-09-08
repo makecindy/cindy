@@ -58,6 +58,32 @@ async function loadSettingsModule() {
 }
 
 describe('voice input dictionary learning settings', () => {
+  it('legacy path admits on third observation and coalesces aliases within one result', () => {
+    const base = { action: 'add_candidate' as const, term: 'Slack', type: 'product_name' as const, confidence: 'medium' as const };
+    let next = applyVoiceInputDictionaryLearningActions(settings, [
+      { ...base, aliases: ['Slate'] }, { ...base, aliases: ['Slak'] },
+    ]);
+    expect(next.dictionaryCandidates[0].evidenceCount).toBe(1);
+    next = applyVoiceInputDictionaryLearningActions(next, [{ ...base, aliases: ['Slate'] }]);
+    next = applyVoiceInputDictionaryLearningActions(next, [{ ...base, aliases: [] }]);
+    expect(next.dictionaryCandidates).toEqual([]);
+    expect(next.dictionaryEntries[0]).toMatchObject({ frequency: 3, aliases: [
+      { text: 'Slate', count: 2 }, { text: 'Slak', count: 1 },
+    ] });
+  });
+
+  it('无别名词汇进入润色词表,但不生成纠错提示', async () => {
+    const { recordVoiceInputDictionaryLearningActions, getVoiceInputSettings,
+      formatVoiceInputDictionary, buildVoiceInputDictionaryAliasHints } = await loadSettingsModule();
+    await recordVoiceInputDictionaryLearningActions([
+      { action: 'add_entry', term: 'Slack', aliases: [], type: 'product_name', confidence: 'high' },
+    ]);
+    const entries = getVoiceInputSettings().dictionaryEntries;
+    expect(entries).toEqual([expect.objectContaining({ text: 'Slack', aliases: [], frequency: 1 })]);
+    expect(formatVoiceInputDictionary(entries)).toContain('- Slack');
+    expect(buildVoiceInputDictionaryAliasHints(entries)).toBeUndefined();
+  });
+
   it('does not learn while refinement or automatic dictionary learning is disabled', async () => {
     const {
       getVoiceInputSettings,

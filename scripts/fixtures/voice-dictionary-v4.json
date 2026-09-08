@@ -1,0 +1,873 @@
+{
+  "version": 1,
+  "id": "voice-prompt-v7-confirmation24",
+  "labelPolicy": "Analyst-constructed confirmation originally frozen before v7/v8 selection and first evaluated after the final prompt was selected. Results are now known: use as regression, not unseen validation. Not author-blinded; no real private records; labels unchanged.",
+  "cases": [
+    {
+      "id": "confirm-0",
+      "category": "confirmation_correction",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 Android Stduio 的设置。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 Android Studio 的设置。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Android Studio"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Android Studio",
+          "alias": "Android Stduio",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "confirm-1",
+      "category": "confirmation_correction",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 Affinity Desginer 的设置。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 Affinity Designer 的设置。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Affinity Designer"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Affinity Designer",
+          "alias": "Affinity Desginer",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "confirm-2",
+      "category": "confirmation_correction",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 DaVinci Reslove 的设置。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 DaVinci Resolve 的设置。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "DaVinci Resolve"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "DaVinci Resolve",
+          "alias": "DaVinci Reslove",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "confirm-3",
+      "category": "confirmation_correction",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 Unreal Engnie 的设置。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请打开 Unreal Engine 的设置。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Unreal Engine"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Unreal Engine",
+          "alias": "Unreal Engnie",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "confirm-4",
+      "category": "confirmation_phrase",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请拖状这个文件到窗口里。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请拖拽这个文件到窗口里。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "拖拽",
+            "拖拽这个文件"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "拖拽",
+          "alias": "拖状",
+          "required": false
+        },
+        {
+          "term": "拖拽这个文件",
+          "alias": "拖状这个文件",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "confirm-5",
+      "category": "confirmation_phrase",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。页面需要向左饭页。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。页面需要向左翻页。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "翻页",
+            "向左翻页"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "翻页",
+          "alias": "饭页",
+          "required": false
+        },
+        {
+          "term": "向左翻页",
+          "alias": "向左饭页",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "confirm-6",
+      "category": "confirmation_phrase",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请先锁订这一列。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请先锁定这一列。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "锁定",
+            "锁定这一列"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "锁定",
+          "alias": "锁订",
+          "required": false
+        },
+        {
+          "term": "锁定这一列",
+          "alias": "锁订这一列",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "confirm-7",
+      "category": "confirmation_phrase",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请调第这段声音的音量。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请调低这段声音的音量。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "调低",
+            "调低这段声音的音量"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "调低",
+          "alias": "调第",
+          "required": false
+        },
+        {
+          "term": "调低这段声音的音量",
+          "alias": "调第这段声音的音量",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "confirm-8",
+      "category": "confirmation_addition",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这份笔记放到那个项目里。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这份笔记放到 FathomNote 项目里。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "FathomNote"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "confirm-9",
+      "category": "confirmation_addition",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这里填写新项目的名字。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这里填写新项目的名字 Nexa Forge。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Nexa Forge"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "confirm-10",
+      "category": "confirmation_addition",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。我们用这个框架。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。我们用 Tauri 这个框架。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Tauri"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "confirm-11",
+      "category": "confirmation_addition",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。先去设计工具里核对一下。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。先去 Figma 里核对一下。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Figma"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "confirm-12",
+      "category": "confirmation_addition",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这里需要补充一下使用的框架。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这里需要补充一下使用的框架 SvelteKit。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "SvelteKit"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "confirm-13",
+      "category": "confirmation_addition",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。我给这个实验起了一个代号。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。我给这个实验起了代号 Paper Lantern。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Paper Lantern"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "confirm-14",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请把计划发到频道。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请把计划整理好再发到频道。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-15",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。程序启动后才能继续。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。等程序完全启动后才能继续。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-16",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。我们把结果放在这里。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。我们暂时把结果放在这里，以便晚点核对。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-17",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。工具列表里今天有三项。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。工具列表里今天有四项。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-18",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这个按钮用了蓝色。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这个按钮使用绿色。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-19",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请转发给两个人。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。请不要转发给其他人。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-20",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这里称为页面顶部。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。这里称为页面上方。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-21",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。检查一下 AtomicReader 的状态。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。检查一下 AtomicReader 的状态，并详细说明结果。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-22",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。先保留这三种方案。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。先保留原来的方案。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "confirm-23",
+      "category": "confirmation_negative",
+      "split": "confirmation24",
+      "rationale": "Constructed and frozen before v7 selection; no real user record. Canonical name aliases required; contextual span alternatives declared before model output.",
+      "input": {
+        "beforeText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。先看重点。",
+        "afterText": "这一轮检查已经完成，大部分内容保持原来的安排。接下来继续核对刚才记录的细节，先把这一处情况说清楚，其他地方暂时不作变动。先看重点，不要急着下结论。",
+        "existingEntries": [
+          {
+            "term": "AtomicReader",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "线程",
+                "count": 5
+              }
+            ]
+          },
+          {
+            "term": "QuartzDeck",
+            "source": "manual",
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    }
+  ]
+}

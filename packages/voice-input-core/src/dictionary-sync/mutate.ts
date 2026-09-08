@@ -12,6 +12,7 @@
  */
 
 import { compareHlc, hlcWallMs, tickHlc, type HlcClock, type HlcTimestamp } from './hlc';
+import { DICTIONARY_CANDIDATE_PROMOTION_COUNT } from '../dictionaryLearningPolicy';
 import { MATERIALIZED_ID_PREFIX, materializeDictionary, pickDisplayText } from './materialize';
 import { deriveMoveTag } from './move-tag';
 import { createMovedAliasResolver } from './moved-aliases';
@@ -116,6 +117,7 @@ export function recordLearningEvent(
   // 各记各的桶,合并后求和仍是真实事件总数。
   const target = live[0];
   const targetAliases = createMovedAliasResolver(state)(key, target);
+  const nextCount = live.reduce((sum, item) => sum + readCounterTotal(item.counters), 0) + 1;
   return {
     state: putRecord(state, key, {
       ...record!,
@@ -123,7 +125,7 @@ export function recordLearningEvent(
         ...copyDictionaryMap(record!.incarnations),
         [target.tag]: bumpIncarnation({ ...target, aliases: targetAliases }, {
           nodeId: clock.nodeId,
-          stage: input.stage,
+          stage: nextCount >= DICTIONARY_CANDIDATE_PROMOTION_COUNT ? 'entry' : input.stage,
           aliasTexts,
           stamp: ticked.stamp,
           nowMs: input.nowMs,
@@ -194,6 +196,26 @@ export function promoteTermToEntry(
     clock,
     changed: true,
   };
+}
+
+/** Apply admission policy after merging, without changing CRDT merge algebra or counts. */
+export function promoteEligibleDictionaryCandidates(
+  state: VoiceDictionarySyncState,
+  clock: HlcClock,
+  nowMs: number,
+): MutationResult {
+  let next = state;
+  for (const [key, record] of Object.entries(state.records)) {
+    const live = listLiveIncarnations(record);
+    if (hasDictionaryKey(state.suppressed, key) || live.some((item) => item.stage === 'entry')) continue;
+    const count = live.reduce((sum, item) => sum + readCounterTotal(item.counters), 0);
+    if (count < DICTIONARY_CANDIDATE_PROMOTION_COUNT) continue;
+    next = promoteTermToEntry(next, clock, {
+      termKey: key,
+      nowMs: Math.max(nowMs, ...live.map((item) => item.updatedAt)),
+    }).state;
+  }
+  return { state: next, clock, changed: next !== state };
 }
 
 export function seedTerm(

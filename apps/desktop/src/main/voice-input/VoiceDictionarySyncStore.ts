@@ -40,6 +40,7 @@ import {
   mergeSyncStates,
   observeHlc,
   pruneWeakAutomaticCandidates,
+  promoteEligibleDictionaryCandidates,
   reconcileFromLocalSnapshot,
   type HlcClock,
   type LocalDictionarySnapshot,
@@ -378,7 +379,6 @@ export class VoiceDictionarySyncStore {
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
       this.data = normalizeStoredData(parsed);
-      return this.data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         log.warn('dictionary sync state read failed, starting fresh', {
@@ -386,8 +386,14 @@ export class VoiceDictionarySyncStore {
         });
       }
       this.data = createInitialData();
-      return this.data;
     }
+    // Persist the existing entry stage so older clients also observe the promotion.
+    // Keep write failures outside the read-error fallback: never replace valid data with empty state.
+    if (!this.data.incompatible) {
+      const promoted = promoteEligibleDictionaryCandidates(this.data.state, this.readClock(this.data), Date.now());
+      if (promoted.changed) this.persist({ ...this.data, state: promoted.state });
+    }
+    return this.data;
   }
 
   private persist(next: StoredSyncData): void {
@@ -395,7 +401,9 @@ export class VoiceDictionarySyncStore {
     // 用空状态销毁它。
     if (next.incompatible || this.data?.incompatible) return;
     const filePath = getDataFilePath();
-    const merged = this.mergeWithOnDiskState(next, filePath);
+    const combined = this.mergeWithOnDiskState(next, filePath);
+    const promoted = promoteEligibleDictionaryCandidates(combined.state, this.readClock(combined), Date.now());
+    const merged = promoted.changed ? { ...combined, state: promoted.state } : combined;
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
