@@ -24,6 +24,8 @@ describe('mobile Home connection feedback', () => {
     const source = readSource('app/devices/index.tsx');
     expect(source).toContain('resolveEffectiveHomeConnectionError(error, homeDeviceUnresponsive)');
     expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
+    expect(source).toContain('const showConnectionRow = homeDeviceUnresponsive ||');
+    expect(source).toContain("homeDeviceUnresponsive ? t('deviceLink.deviceUnresponsiveTitle')");
     const row = source.slice(source.indexOf('{showConnectionRow ? ('), source.indexOf('<SectionList'));
     expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
     const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
@@ -432,8 +434,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
     expect(source).toContain(
-      "const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+      "const showConnectionRow = homeDeviceUnresponsive || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
     );
+    expect(source).toContain('homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id))');
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");

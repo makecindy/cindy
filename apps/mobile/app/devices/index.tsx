@@ -1842,7 +1842,7 @@ function HomeScreenContent() {
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const showConnectionRow = homeDeviceUnresponsive || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
@@ -1856,13 +1856,14 @@ function HomeScreenContent() {
     && (status === 'connecting' || homeDeviceUnresponsive);
   const connectionTone = activeConnectionIssue
     ? 'off'
-    : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+    : homeDeviceUnresponsive ? 'busy' : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const connectionTitle = activeConnectionIssue
     ? connectionIssueTitle(activeConnectionIssue.kind)
-    : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
+    : homeDeviceUnresponsive ? t('deviceLink.deviceUnresponsiveTitle')
+      : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
   const connectionCopy = activeConnectionIssue
     ? connectionIssueHint(activeConnectionIssue.kind)
-    : connectionError;
+    : homeDeviceUnresponsive ? t('deviceLink.deviceUnresponsiveHint') : connectionError;
   const emptyStateTitle = initialHomeError ? t('devices.list.syncFailed') : home.emptyTitle;
   const emptyStateCopy = initialHomeError ? (connectionError ?? t('devices.list.requestFailed')) : home.emptyCopy;
   // 无可控制电脑的引导态(landing)可见性,与 ListEmptyComponent 的分支同口径。
