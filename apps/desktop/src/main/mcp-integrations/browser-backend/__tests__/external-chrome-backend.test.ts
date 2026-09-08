@@ -1,5 +1,5 @@
-// Verifies the external backend wraps `BrowserControlRuntime` 1:1: every call
-// reaches the runtime verbatim, every result comes back verbatim, and dispose
+// Verifies requests reach the runtime verbatim, status identifies the backend,
+// other results pass through unchanged, and dispose
 // goes through the same `stopRuntimeForQuit` contract (logs-and-swallows).
 
 import { describe, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ describe('ExternalChromeBackend', () => {
     expect(backend.kind).toBe('external');
   });
 
-  it('delegates call() to the underlying runtime verbatim', async () => {
+  it('identifies the external backend while preserving runtime status fields', async () => {
     const result: BrowserControlResult = { ok: true, action: 'status', status: 200, data: { ready: true } };
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(async () => result);
     const backend = new ExternalChromeBackend({ call }, fakeLogger());
@@ -28,7 +28,8 @@ describe('ExternalChromeBackend', () => {
 
     expect(call).toHaveBeenCalledTimes(1);
     expect(call.mock.calls[0][0]).toEqual({ action: 'status' });
-    expect(got).toBe(result);
+    expect(got).toEqual({ ...result, data: { ready: true, backend: 'external' } });
+    expect(result.data).toEqual({ ready: true });
   });
 
   it('passes complex requests through unchanged', async () => {

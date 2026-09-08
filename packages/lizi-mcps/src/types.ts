@@ -527,6 +527,8 @@ export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi' | 'grok-build';
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
   getRuntime(): BrowserControlRuntime;
+  /** Switch the host-wide, persisted automation target; returns the actual mode. */
+  setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */
