@@ -23,7 +23,7 @@ describe('mobile Home connection feedback', () => {
 
   it('wires Home itself to the shared recovery indicator instead of an unconditional retry button', () => {
     const source = readSource('app/devices/index.tsx');
-    expect(source).toContain('resolveHomeConnectionFeedback(error, homeDeviceUnresponsive, describeRemoteError)');
+    expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
     expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
     expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
     expect(source).toContain('const showConnectionRow = homeDeviceUnresponsive ||');
@@ -38,15 +38,43 @@ describe('mobile Home connection feedback', () => {
 });
 
 describe('Home recovery completion', () => {
-  const stale = { deviceName: 'MacBook', error: '[DEVICE_UNRESPONSIVE] circuit open' };
+  const stale = { deviceId: 'a', deviceName: 'MacBook', error: '[DEVICE_UNRESPONSIVE] circuit open' };
+  const recovering = new Set(['a']);
+  const recovered = new Set<string>();
+  it('tracks ordinary failures through same-device and other-device circuit transitions', () => {
+    const failure = { deviceId: 'a', deviceName: 'Same name', error: '[IPC_ERROR] failed' };
+    const other = { deviceId: 'b', deviceName: 'Same name', error: '[REQUEST_TIMEOUT] failed' };
+    for (const [ids, failures, expectedRecovery, expectedError] of [
+      [[], [failure], false, 'Same name: [IPC_ERROR] failed'],
+      [['a'], [failure], true, 'Same name: [IPC_ERROR] failed'],
+      [['a'], [failure, other], false, 'Same name: [REQUEST_TIMEOUT] failed'],
+      [['a', 'b'], [failure, other], true, 'Same name: [IPC_ERROR] failed；Same name: [REQUEST_TIMEOUT] failed'],
+      [['b'], [failure, other], false, 'Same name: [IPC_ERROR] failed'],
+      [[], [failure], false, 'Same name: [IPC_ERROR] failed'],
+    ] as const) {
+      const feedback = resolveHomeConnectionFeedback([...failures], new Set(ids));
+      expect(feedback).toEqual({ error: expectedError, deviceRecovery: expectedRecovery });
+      expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+        deviceUnresponsive: feedback.deviceRecovery, hasRequestError: feedback.error !== null,
+        requestErrorAutoRecovering: false,
+      })).toBe(!expectedRecovery);
+    }
+  });
+  it('expires a recovered device marker while another device is still probing', () => {
+    expect(resolveHomeConnectionFeedback(stale, new Set(['b']))).toEqual({ error: null, deviceRecovery: true });
+  });
+  it('keeps page-level errors independent of a device circuit', () => {
+    expect(resolveHomeConnectionFeedback('[NETWORK_UNAVAILABLE] failed', recovering))
+      .toEqual({ error: '[NETWORK_UNAVAILABLE] failed', deviceRecovery: false });
+  });
   it.each([
     [true, true, true],
     [false, true, true],
     [true, false, false],
     [false, false, false],
   ])('keeps mixed-device recovery independent (circuit=%s, manual=%s)', (circuit, manual, canSync) => {
-    const ordinary = { deviceName: 'Other', error: '[REQUEST_TIMEOUT] failed' };
-    const feedback = resolveHomeConnectionFeedback(manual ? [stale, ordinary] : stale, circuit);
+    const ordinary = { deviceId: 'b', deviceName: 'Other', error: '[REQUEST_TIMEOUT] failed' };
+    const feedback = resolveHomeConnectionFeedback(manual ? [stale, ordinary] : stale, circuit ? recovering : recovered);
     expect(feedback.error).toBe(manual ? 'Other: [REQUEST_TIMEOUT] failed' : circuit ? 'MacBook: [DEVICE_UNRESPONSIVE] circuit open' : null);
     expect(feedback.deviceRecovery).toBe(circuit && !manual);
     expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
@@ -55,31 +83,31 @@ describe('Home recovery completion', () => {
     })).toBe(canSync);
   });
   it('shows background recovery even without a stored request error', () => {
-    expect(resolveHomeConnectionFeedback(null, true)).toEqual({ error: null, deviceRecovery: true });
+    expect(resolveHomeConnectionFeedback(null, recovering)).toEqual({ error: null, deviceRecovery: true });
   });
   it('clears the stale circuit error once probing succeeds', () => {
-    expect(resolveHomeConnectionFeedback(stale, true).error).toBe('MacBook: [DEVICE_UNRESPONSIVE] circuit open');
-    expect(resolveHomeConnectionFeedback(stale, false).error).toBeNull();
+    expect(resolveHomeConnectionFeedback(stale, recovering).error).toBe('MacBook: [DEVICE_UNRESPONSIVE] circuit open');
+    expect(resolveHomeConnectionFeedback(stale, recovered).error).toBeNull();
   });
   it('preserves a different device failure in the joined error', () => {
-    expect(resolveHomeConnectionFeedback([stale, { deviceName: 'Other', error: 'denied' }], false).error).toBe('Other: denied');
+    expect(resolveHomeConnectionFeedback([stale, { deviceId: 'b', deviceName: 'Other', error: 'denied' }], recovered).error).toBe('Other: denied');
   });
   it.each(['REQUEST_TIMEOUT', 'NETWORK_UNAVAILABLE'])('keeps manual retry after %s exhausts bounded retries', (code) => {
-    const error = resolveHomeConnectionFeedback(`[${code}] failed`, false).error;
+    const error = resolveHomeConnectionFeedback(`[${code}] failed`, recovered).error;
     expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
       deviceUnresponsive: false, hasRequestError: error !== null, requestErrorAutoRecovering: false,
     })).toBe(true);
   });
   it.each(['DEVICE_UNRESPONSIVE', '[DEVICE_UNRESPONSIVE]', 'Mac: [DEVICE_UNRESPONSIVE]；Other'])('never classifies the device name %s as an error code', (deviceName) => {
-    const ordinary = { deviceName, error: '[REQUEST_TIMEOUT] failed' };
-    for (const recovering of [false, true]) {
-      const feedback = resolveHomeConnectionFeedback([stale, ordinary], recovering, describeRemoteError);
+    const ordinary = { deviceId: 'b', deviceName, error: '[REQUEST_TIMEOUT] failed' };
+    for (const ids of [recovered, recovering]) {
+      const feedback = resolveHomeConnectionFeedback([stale, ordinary], ids, describeRemoteError);
       expect(feedback.error).toBe(`${deviceName}: ${describeRemoteError(ordinary.error)}`);
       expect(feedback.deviceRecovery).toBe(false);
     }
   });
   it('classifies all failures before limiting display to two entries', () => {
-    expect(resolveHomeConnectionFeedback([stale, stale, { deviceName: 'Third', error: 'denied' }], true).error).toBe('Third: denied');
+    expect(resolveHomeConnectionFeedback([stale, stale, { deviceId: 'c', deviceName: 'Third', error: 'denied' }], recovering).error).toBe('Third: denied');
   });
 });
 
@@ -467,7 +495,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain(
       "const showConnectionRow = homeDeviceUnresponsive || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
     );
-    expect(source).toContain('homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id))');
+    expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id))');
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");

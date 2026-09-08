@@ -807,7 +807,7 @@ function HomeScreenContent() {
       if (offline) markDeviceOffline(device.deviceId);
       updateDeviceConnectionState(device.deviceId, 'failed');
       return {
-        failure: { deviceName: device.name, error: formatRemoteError(err) },
+        failure: { deviceId: device.deviceId, deviceName: device.name, error: formatRemoteError(err) },
         offline,
         superseded: false,
       };
@@ -1813,8 +1813,9 @@ function HomeScreenContent() {
     metricCount: 3,
     screenWidth,
   });
-  const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
-  const { error: connectionError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeDeviceUnresponsive, describeRemoteError);
+  const homeRecoveringDeviceIds = new Set(homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)));
+  const homeDeviceUnresponsive = homeRecoveringDeviceIds.size > 0;
+  const { error: connectionError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;
