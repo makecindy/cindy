@@ -330,3 +330,32 @@ it.each(["entry", "runtime"] as const)(
     }
   },
 );
+
+it("keeps local packaging names outside supplier public identity fallback", () => {
+  const r = structuredClone(registry);
+  r.localModels = {
+    version: 1,
+    featuredIds: [],
+    models: [
+      {
+        id: "local-model",
+        name: "Local",
+        modelRef: "vendor/model",
+        aliases: [],
+        variants: [
+          { libraryName: "model:local", sizeBytes: 1024 ** 3, minUnifiedMemoryGb: 4 },
+        ],
+      },
+    ],
+  };
+  expect(parseModelRegistry(r).ok).toBe(true);
+  expect(resolveModelMetadata(r, "unknown", "model:local")).toEqual({});
+  expect(resolveModelMetadata(r, "unknown", "vendor/model").name).toBe("Model");
+  expect(resolveModelMetadata(r, "unknown", "model").name).toBe("Model");
+  // Local modelRef continues resolving explicitly; only public aliases opt cloud IDs in.
+  expect(
+    resolveModelMetadata(r, "unknown", r.localModels.models[0].modelRef!).name,
+  ).toBe("Model");
+  r.baseModels![0].aliases.push("model:local");
+  expect(resolveModelMetadata(r, "unknown", "model:local").name).toBe("Model");
+});

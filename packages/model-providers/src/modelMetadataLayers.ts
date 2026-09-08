@@ -84,19 +84,9 @@ export function findBaseModel(
   registry: ModelRegistry | undefined,
   identity: string,
 ): BaseModel | undefined {
-  const localRefs = new Set(
-    registry?.localModels?.models
-      .filter((model) =>
-        model.variants.some((variant) => variant.libraryName === identity),
-      )
-      .map((model) => model.modelRef),
-  );
   const matches =
     registry?.baseModels?.filter(
-      (m) =>
-        m.id === identity ||
-        m.aliases.includes(identity) ||
-        localRefs.has(m.id),
+      (m) => m.id === identity || m.aliases.includes(identity),
     ) ?? [];
   return matches.length === 1 ? matches[0] : undefined;
 }
