@@ -1522,12 +1522,9 @@ function computeMerged(): Catalog {
     providers = [...projectedProviders];
   }
 
-  if (providers === b.providers && !localOverrides.localModels) return b; // 无 augment、无 custom → 原样返回
-  const effectiveLocalModels = applyLocalModelCatalogOverrides(
-    b.modelRegistry?.localModels,
-    localOverrides.localModels,
-    b.modelRegistry?.baseModels,
-  );
+  if (providers === b.providers && !localOverrides.localModels && !localOverrides.baseModels)
+    return b;
+  const effectiveLocalModels = projectLocalModelCatalog(b);
   providers = providers.map((provider) => ({
     ...provider,
     models: Object.fromEntries(
@@ -1613,7 +1610,16 @@ function computeMerged(): Catalog {
       ]),
     ),
   }));
-  const localModels = b.modelRegistry?.localModels;
+  const modelRegistry = b.modelRegistry
+    ? { ...b.modelRegistry, localModels: effectiveLocalModels }
+    : undefined;
+  return { ...b, modelRegistry, providers };
+}
+
+function projectLocalModelCatalog(catalog: Catalog) {
+  // A local fallback is not a server Registry revision or a source of cloud routes.
+  const localModels =
+    catalog.modelRegistry?.localModels ?? BUNDLED_CATALOG.modelRegistry!.localModels;
   const userNamedLocalModels = localModels
     ? {
         ...localModels,
@@ -1625,17 +1631,15 @@ function computeMerged(): Catalog {
         }),
       }
     : undefined;
-  const modelRegistry = b.modelRegistry
-    ? {
-        ...b.modelRegistry,
-        localModels: applyLocalModelCatalogOverrides(
-          userNamedLocalModels,
-          localOverrides.localModels,
-          b.modelRegistry.baseModels,
-        ),
-      }
-    : undefined;
-  return { ...b, modelRegistry, providers }; // spread 保留 presets 等目录顶层字段
+  return applyLocalModelCatalogOverrides(
+    userNamedLocalModels,
+    localOverrides.localModels,
+    catalog.modelRegistry?.baseModels ?? BUNDLED_CATALOG.modelRegistry!.baseModels,
+  );
+}
+
+export function getActiveLocalModelCatalog() {
+  return projectLocalModelCatalog(base ?? BUNDLED_CATALOG);
 }
 
 /**

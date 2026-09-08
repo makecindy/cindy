@@ -1,4 +1,4 @@
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { getActiveLocalModelCatalog } from '../maker-host/active-catalog.js';
 import {
   normalizeOllamaPullName,
   type LocalInstalledModel,
@@ -60,7 +60,7 @@ export function registerLocalModelHandlers(
   const service =
     deps.service ??
     createLocalModelService({
-      getLocalCatalog: () => getActiveCatalog().modelRegistry?.localModels,
+      getLocalCatalog: getActiveLocalModelCatalog,
       onStatus: deps.broadcastStatus,
       onPullProgress: deps.broadcastPullProgress,
       onInstallProgress: deps.broadcastInstallProgress,

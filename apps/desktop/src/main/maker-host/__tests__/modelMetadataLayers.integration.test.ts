@@ -43,6 +43,7 @@ import {
 } from '@cindy/model-providers';
 import {
   getActiveCatalog,
+  getActiveLocalModelCatalog,
   setActiveCatalog,
   setCustomProviders,
   setLocalCatalogOverrides,
@@ -107,6 +108,56 @@ afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
 });
 describe('metadata layers through the active catalog', () => {
+  it.each(['absent', 'legacy', 'empty'] as const)(
+    'applies local overrides after %s registry fallback',
+    (kind) => {
+      const bundled = BUNDLED_CATALOG.modelRegistry!.localModels!;
+      const [first, second] = bundled.models;
+      const modelRegistry: ModelRegistry | undefined =
+        kind === 'absent'
+          ? undefined
+          : {
+              schemaVersion: 2,
+              updatedAt: '2026-09-08T13:00:00.000Z',
+              models: [],
+              ...(kind === 'empty'
+                ? { localModels: { version: 1 as const, models: [], featuredIds: [] } }
+                : {}),
+            };
+      setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry });
+      setLocalCatalogOverrides(
+        sanitizeModelCatalogOverrides({
+          version: 1,
+          localModels: {
+            removedIds: [second.id],
+            patches: { [first.id]: { name: 'My fallback model' } },
+            additions: [
+              {
+                id: 'user-local',
+                name: 'User local',
+                aliases: [],
+                variants: [
+                  { libraryName: 'user-local:latest', sizeBytes: 2 ** 30, minUnifiedMemoryGb: 4 },
+                ],
+              },
+            ],
+            featuredIds: [],
+          },
+        }).overrides,
+      );
+      const result = { localModels: getActiveLocalModelCatalog() };
+      expect(result.localModels?.featuredIds).toEqual([]);
+      expect(result.localModels?.models.some((m) => m.id === second.id)).toBe(false);
+      expect(result.localModels?.models.find((m) => m.id === 'user-local')?.name).toBe(
+        'User local',
+      );
+      expect(result.localModels?.models.find((m) => m.id === first.id)?.name).toBe(
+        kind === 'empty' ? undefined : 'My fallback model',
+      );
+      expect(getActiveCatalog().modelRegistry?.models).toEqual(kind === 'absent' ? undefined : []);
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    },
+  );
   it('separates escaped supplier IDs from colon-containing model IDs', () => {
     const { overrides, invalid } = sanitizeModelCatalogOverrides({
       version: 1,

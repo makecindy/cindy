@@ -75,6 +75,50 @@ afterEach(() => {
 });
 
 describe('validateCustomProviderConfig (per-runtime)', () => {
+  it.each(['codex', 'claude-code', 'pi'] as const)(
+    'round-trips opaque preset references for %s',
+    async (agent) => {
+      mountDb();
+      for (const catalogPresetId of ['My_Preset', 'vendor/preset:v2', '预设', 'x'.repeat(300)]) {
+        const config: CustomProviderConfig = {
+          id: 'preset-reference',
+          name: 'Reference',
+          runtimes: {
+            [agent]: {
+              baseUrl: 'https://example.test/v1',
+              catalogPresetId,
+              wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
+              models: [{ id: 'model', name: 'Model' }],
+            },
+          },
+        };
+        expect(validateCustomProviderConfig(config).ok).toBe(true);
+        await createCustomProvider(config);
+        expect((await getCustomProvider(config.id))?.runtimes[agent]?.catalogPresetId).toBe(
+          catalogPresetId,
+        );
+        expect((await listCustomProviders())[0]?.runtimes[agent]?.catalogPresetId).toBe(
+          catalogPresetId,
+        );
+        await deleteCustomProvider(config.id);
+      }
+      for (const catalogPresetId of ['', 42, null]) {
+        expect(
+          validateCustomProviderConfig({
+            ...valid,
+            runtimes: {
+              [agent]: {
+                baseUrl: 'https://example.test/v1',
+                wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
+                catalogPresetId,
+                models: [],
+              },
+            },
+          }).ok,
+        ).toBe(false);
+      }
+    },
+  );
   it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
     'rejects credentials in modelsUrl without exposing them: %s',
     (userinfo) => {
@@ -953,24 +997,44 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
-  it.each(['codex', 'claude-code', 'pi'] as const)('preserves reasoning off across %s updates and restores inheritance on deletion', async (agent) => {
-    mountDb();
-    const provider = await createCustomProvider({
-      id: 'reasoning-choice', name: 'Choice', auth: { method: 'none' },
-      runtimes: { [agent]: { baseUrl: 'https://example.test/v1', models: [
-        { id: 'model', name: 'Model', reasoning: true, reasoningEfforts: ['low', 'high'], reasoningDefaultEffort: 'high' },
-      ] } },
-    });
-    provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model', reasoning: false }];
-    await updateCustomProvider(provider.id, provider);
-    expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).toEqual({
-      id: 'model', name: 'Model', reasoning: false,
-    });
-    expect((await listCustomProviders())[0]?.runtimes[agent]?.models[0]?.reasoning).toBe(false);
-    provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model' }];
-    await updateCustomProvider(provider.id, provider);
-    expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).not.toHaveProperty('reasoning');
-  });
+  it.each(['codex', 'claude-code', 'pi'] as const)(
+    'preserves reasoning off across %s updates and restores inheritance on deletion',
+    async (agent) => {
+      mountDb();
+      const provider = await createCustomProvider({
+        id: 'reasoning-choice',
+        name: 'Choice',
+        auth: { method: 'none' },
+        runtimes: {
+          [agent]: {
+            baseUrl: 'https://example.test/v1',
+            models: [
+              {
+                id: 'model',
+                name: 'Model',
+                reasoning: true,
+                reasoningEfforts: ['low', 'high'],
+                reasoningDefaultEffort: 'high',
+              },
+            ],
+          },
+        },
+      });
+      provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model', reasoning: false }];
+      await updateCustomProvider(provider.id, provider);
+      expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).toEqual({
+        id: 'model',
+        name: 'Model',
+        reasoning: false,
+      });
+      expect((await listCustomProviders())[0]?.runtimes[agent]?.models[0]?.reasoning).toBe(false);
+      provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model' }];
+      await updateCustomProvider(provider.id, provider);
+      expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).not.toHaveProperty(
+        'reasoning',
+      );
+    },
+  );
 
   it('round-trips Claude Code thinking toggle and reasoning efforts', async () => {
     mountDb();

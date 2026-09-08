@@ -199,6 +199,11 @@ function isAllowedWireProtocol(agent: string, value: unknown): value is Provider
   );
 }
 
+/** ProviderPreset.id is an opaque, non-empty string in the catalog contract. */
+function isCatalogPresetId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (!rt || typeof rt !== 'object') return invalid(`runtime '${agent}' must be an object`);
   const r = rt as Record<string, unknown>;
@@ -361,10 +366,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
   }
-  if (
-    r.catalogPresetId !== undefined &&
-    (typeof r.catalogPresetId !== 'string' || !/^[a-z0-9-]+$/.test(r.catalogPresetId))
-  )
+  if (r.catalogPresetId !== undefined && !isCatalogPresetId(r.catalogPresetId))
     return invalid(`runtime '${agent}' catalogPresetId invalid`);
   if (
     r.piCatalogProviderId !== undefined &&
@@ -767,9 +769,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
           })
       : [];
     const entry: CustomProviderRuntimeConfig = {
-      ...(typeof r.catalogPresetId === 'string' && /^[a-z0-9-]+$/.test(r.catalogPresetId)
-        ? { catalogPresetId: r.catalogPresetId }
-        : {}),
+      ...(isCatalogPresetId(r.catalogPresetId) ? { catalogPresetId: r.catalogPresetId } : {}),
       baseUrl,
       models,
     };
