@@ -52,6 +52,25 @@ function permission(suggestions?: unknown[]): PendingPermission {
 }
 
 describe('PermissionPrompt 的会话级授权按钮', () => {
+  it('提交中禁用按钮和快捷键，失败后允许重试', () => {
+    const onRespond = vi.fn();
+    const request = permission([bashRule]);
+    const { rerender } = render(<PermissionPrompt permission={{ ...request, submitting: true }} onRespond={onRespond} />);
+    for (const button of screen.getAllByRole('button')) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button);
+    }
+    fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe('newChat.permissionPrompt.submitting');
+    rerender(<PermissionPrompt permission={{ ...request, submitting: false, submissionFailed: true }} onRespond={onRespond} />);
+    expect(screen.getByRole('status').textContent).toBe('newChat.permissionPrompt.submissionFailed');
+    fireEvent.click(screen.getByRole('button', { name: /allowOnce/ }));
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+  });
+
   it('把规则范围写进按钮文案', () => {
     render(<PermissionPrompt permission={permission([bashRule])} onRespond={vi.fn()} />);
 

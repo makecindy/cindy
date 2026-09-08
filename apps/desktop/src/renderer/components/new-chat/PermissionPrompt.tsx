@@ -83,7 +83,8 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 
 export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
-  const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable } = permission;
+  const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
+    submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
   const promptDescription = autoReviewUnavailable
     ? t('newChat.permissionPrompt.autoReviewUnavailable')
@@ -108,12 +109,14 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   // ── Action handlers ──
 
   const handleAllowOnce = useCallback(() => {
+    if (submitting) return;
     onRespond({
       behavior: 'allow',
     });
-  }, [onRespond]);
+  }, [onRespond, submitting]);
 
   const handleAlwaysAllow = useCallback(() => {
+    if (submitting) return;
     if (!canAlwaysAllowForSession) {
       handleAllowOnce();
       return;
@@ -123,15 +126,16 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       updatedPermissions: sessionSuggestions,
       decisionClassification: 'user_permanent',
     });
-  }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions]);
+  }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions, submitting]);
 
   const handleDeny = useCallback(() => {
+    if (submitting) return;
     onRespond({
       behavior: 'deny',
       message: 'User denied',
       decisionClassification: 'user_reject',
     });
-  }, [onRespond]);
+  }, [onRespond, submitting]);
 
   // ── Keyboard shortcuts ──
 
@@ -202,11 +206,17 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       {/* Action buttons — inline text + kbd badges, right-aligned.
           flex-wrap:带范围的「本对话都允许 …」按钮会比原来长,窄宽(doc rail portal)
           下允许整行折行,而不是把 Deny / Allow once 挤出容器。 */}
-      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+      {(submitting || submissionFailed) && (
+        <p role="status" className="mt-3 text-13 text-[var(--status-bar-meta)]">
+          {t(submitting ? 'newChat.permissionPrompt.submitting' : 'newChat.permissionPrompt.submissionFailed')}
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
         {/* Deny */}
         <button
           type="button"
           onClick={handleDeny}
+          disabled={submitting}
           className={cn(
             'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
             'border-[var(--chat-input-border)] bg-transparent',
@@ -238,6 +248,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             <button
               type="button"
               onClick={handleAlwaysAllow}
+              disabled={submitting}
               className={cn(
                 // max-w:规则可能很长(完整命令串),截断后完整内容看 tooltip。
                 'flex min-w-0 max-w-[460px] items-center gap-2 rounded-[8px] border px-3 py-[7px]',
@@ -265,6 +276,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
         <button
           type="button"
           onClick={handleAllowOnce}
+          disabled={submitting}
           className={cn(
             'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
             'border-[var(--chat-input-border)]',

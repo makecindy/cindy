@@ -42,9 +42,12 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { CindyMakeDoctorCard } from './CindyMakeDoctorCard';
 
 interface SystemCardProps {
   cardType:
+    | 'cindy-make-doctor'
+    | 'cindy-make'
     | 'help'
     | 'cost'
     | 'context'
@@ -1296,6 +1299,9 @@ export function SystemCard({
   autoResumeInFlight,
 }: SystemCardProps) {
   switch (cardType) {
+    case 'cindy-make-doctor':
+    case 'cindy-make':
+      return <CindyMakeDoctorCard data={data} sessionId={sessionId} />;
     case 'help':
       return <HelpCard data={data} />;
     case 'cost':

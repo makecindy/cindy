@@ -19,6 +19,23 @@ const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 let tmpUserData = '';
 let scratchRoot = '';
 
+const symlinkSupported = (() => {
+  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-symlink-probe-'));
+  const target = path.join(probeRoot, 'target');
+  const link = path.join(probeRoot, 'link');
+  try {
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, link);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+})();
+
+const symlinkIt = symlinkSupported ? it : it.skip;
+
 vi.mock('electron', () => ({
   app: { getPath: () => tmpUserData },
 }));
@@ -148,7 +165,7 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     expect(fs.readFileSync(sample.dest)).toEqual(sample.buffer);
   });
 
-  it.each(['link', 'rename'] as const)('%s 分支:symlink 不当成去重成功', async (mode) => {
+  symlinkIt.each(['link', 'rename'] as const)('%s 分支:symlink 不当成去重成功', async (mode) => {
     const sample = hashedPng(`symlink-${mode}`);
     const outsideDir = scratchDir(`outside-${mode}`);
     const outside = path.join(outsideDir, 'payload.bin');
@@ -173,7 +190,7 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     expect(fs.statSync(sample.dest).isDirectory()).toBe(true);
   });
 
-  it.each(['link', 'rename'] as const)('%s 分支:检查期间替换不当成去重成功', async (mode) => {
+  symlinkIt.each(['link', 'rename'] as const)('%s 分支:检查期间替换不当成去重成功', async (mode) => {
     const sample = hashedPng(`swap-${mode}`);
     seedDest(sample.dest, sample.buffer);
     const outsideDir = scratchDir(`swap-${mode}`);
@@ -200,7 +217,7 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     }
   });
 
-  it('bucket 被换成指向仓外的 symlink 时 fail closed,不追随写入', async () => {
+  symlinkIt('bucket 被换成指向仓外的 symlink 时 fail closed,不追随写入', async () => {
     const sample = hashedPng('bucket-symlink');
     const outsideDir = scratchDir('bucket-outside');
     fs.mkdirSync(sample.shard, { recursive: true });
@@ -213,7 +230,7 @@ describe('writeBlob(已存在副本核验与自愈)', () => {
     expect(fs.readdirSync(outsideDir)).toEqual([]);
   });
 
-  it.each(['cindy-media', 'blobs'] as const)('%s 祖先 symlink fail closed', async (kind) => {
+  symlinkIt.each(['cindy-media', 'blobs'] as const)('%s 祖先 symlink fail closed', async (kind) => {
     const sample = hashedPng(`anc-${kind}`);
     const target = path.join(tmpUserData, 'cindy-media', ...(kind === 'blobs' ? ['blobs'] : []));
     const outside = scratchDir(`anc-${kind}`);

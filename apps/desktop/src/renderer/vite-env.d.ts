@@ -2976,6 +2976,9 @@ interface ElectronAPI {
    */
   openLogsDir: () => Promise<{ success: boolean; error?: string }>;
 
+  /** Open Cindy's managed Make tools directory (`<userData>/cindy-make/tools`). */
+  openCindyMakeToolsDir: () => Promise<{ success: boolean }>;
+
   /**
    * Reveal a file in the OS file manager (Explorer / Finder). Accepts either
    * an `xdt-image://` URL (resolved on the main side) or an absolute file
@@ -5332,8 +5335,17 @@ interface ElectronAPI {
 
     executeDesktopCommand: (
       name: string,
-      ctx: { sessionId?: string; workingDir?: string; args?: string; deviceId?: string },
-    ) => Promise<{ success: boolean; error?: string }>;
+      ctx: {
+        sessionId?: string;
+        workingDir?: string;
+        args?: string;
+        deviceId?: string;
+      } & import('../shared/cindyMakeDoctor').MakeDoctorCommandContext,
+    ) => Promise<{
+      success: boolean;
+      error?: string;
+      doctorReport?: import('../shared/cindyMakeDoctor').MakeDoctorReport;
+    }>;
 
     startReview: (input: {
       sourceSessionId: string;
@@ -5385,6 +5397,7 @@ interface ElectronAPI {
     onDesktopCommandTriggered: (
       handler: (payload: {
         command: string;
+        doctorReport?: import('../shared/cindyMakeDoctor').MakeDoctorReport;
         sessionId?: string;
         workingDir?: string;
         args?: string;

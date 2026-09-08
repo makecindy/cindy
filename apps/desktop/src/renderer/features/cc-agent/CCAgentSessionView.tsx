@@ -3072,6 +3072,7 @@ export function CCAgentSessionView({
         ...(workingDir ? { workingDir } : {}),
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
+        ...(session?.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       });
       return { handled: true, accepted: true, message };
     },
@@ -3079,6 +3080,7 @@ export function CCAgentSessionView({
       getHelpCommandsSnapshot,
       isRemoteSession,
       session?.agentKind,
+      session?.remoteHostId,
       session?.id,
       session?.workingDir,
       sessionId,

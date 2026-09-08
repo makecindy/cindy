@@ -23,6 +23,23 @@ const OWNER_ID = 'owner-a';
 const OWNER_KEY = 'a'.repeat(20);
 const OWNER_SCOPE_KEY = 'cloud:owner-a:1';
 
+const symlinkSupported = (() => {
+  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-symlink-probe-'));
+  const target = path.join(probeRoot, 'target');
+  const link = path.join(probeRoot, 'link');
+  try {
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, link);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+})();
+
+const symlinkIt = symlinkSupported ? it : it.skip;
+
 vi.mock('electron', () => ({
   app: { getPath: () => tmpUserData },
 }));
@@ -269,7 +286,7 @@ describe('ingestMedia(全局去重)', () => {
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
   });
 
-  it('symlink 拒绝后账本零副作用,不追随链接改仓外文件', async () => {
+  symlinkIt('symlink 拒绝后账本零副作用,不追随链接改仓外文件', async () => {
     const dest = blobPathOf(PNG_HASH, '.png');
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-outside-'));
     const outside = path.join(outsideDir, 'leave-me-alone.bin');
