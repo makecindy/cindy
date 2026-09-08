@@ -233,6 +233,7 @@ function createRunnerHarness(
   opts: {
     sessionAlive?: boolean;
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
+    resolveModelSelection?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveModelSelection'];
     activeSessions?: Session[];
     availableModels?: Array<{
       id: string;
@@ -270,6 +271,7 @@ function createRunnerHarness(
     logger: createLogger(),
     checkModelRoute: opts.checkModelRoute,
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
+    resolveModelSelection: opts.resolveModelSelection,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
   });
@@ -347,6 +349,40 @@ describe('MakerScheduleRunner model selection', () => {
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: h.session.id });
         expect(harness.createSession.mock.calls[0][0].id).not.toBe(schedule.targetSessionId);
       }
+    });
+
+    it.each([null, 'ultra', 'none'] as const)('resolves fresh explicit routes before creation, including %s effort', async (effort) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });
+      const selectedEfforts = effort === 'none' ? [] : ['medium', 'high'];
+      const providers = [{
+        id: 'selected', name: 'Selected', connected: true, agents: ['pi'],
+        models: { pi: [{ id: 'shared-model', name: 'Shared', efforts: selectedEfforts,
+          defaultEffort: effort === 'none' ? null : 'high', supportsFastMode: false }] },
+      }, {
+        id: 'other', name: 'Other', connected: true, agents: ['pi'],
+        models: { pi: [{ id: 'shared-model', name: 'Shared', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] },
+      }] as unknown as ProviderView[];
+      const resolveModelSelection = vi.fn(async (choice) => resolveScheduledModelSelection(choice, providers));
+      const harness = createRunnerHarness(h, null, {
+        availableModels: [{ id: 'shared-model', efforts: ['ultra'], defaultEffort: 'ultra' }],
+        resolveModelSelection,
+      });
+      const schedule = baseSchedule({ agentKind: 'pi', modelAgentKind: 'pi', model: 'shared-model',
+        providerId: 'selected', effort: effort === null ? undefined : 'ultra', fastMode: true });
+      const saved = structuredClone(schedule);
+      const opts = await fireToCompletion(harness, h, schedule);
+      const expectedEffort = effort === 'none' ? undefined : 'high';
+      expect(opts).toMatchObject({ agentKind: 'pi', model: 'shared-model', providerId: 'selected',
+        effort: expectedEffort, fastMode: false });
+      expect(resolveModelSelection).toHaveBeenCalledTimes(1);
+      expect(resolveModelSelection.mock.invocationCallOrder[0]).toBeLessThan(harness.createSession.mock.invocationCallOrder[0]);
+      expect(mocks.setSessionFastMode).toHaveBeenLastCalledWith(h.session.id, false);
+      expect(mocks.setSessionEffort).toHaveBeenLastCalledWith(h.session.id, expectedEffort ?? null);
+      expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(expect.anything(), h.session.id,
+        expect.objectContaining({ effort: expectedEffort, fastMode: false, providerId: 'selected' }), expect.anything());
+      expect(h.send).toHaveBeenCalledTimes(1);
+      expect(schedule).toEqual(saved);
     });
 
     it('keeps resolved null effort instead of restoring saved or historical tiers', async () => {

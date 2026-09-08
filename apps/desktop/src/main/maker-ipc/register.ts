@@ -67,7 +67,7 @@ import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
-import { applyScheduledModelSelection, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
+import { applyScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
   activeOwnerScopeKey,
@@ -862,6 +862,7 @@ import {
 import {
   pinExclusiveSessionProvider,
   resolveLenientSessionRoute,
+  resolveScheduledModelSelectionLive,
   shouldApplyExclusiveProviderRerouteLive,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
@@ -5063,6 +5064,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
       // key,由旧引擎的隐式清空承担等价语义)。
       supportsScheduleIntervalNullClear: true,
+      // Full scheduled model selection, including bound Harness changes and template overrides.
+      supportsScheduleModelSelection: true,
     };
   });
 
@@ -8040,13 +8043,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isBusy: () => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning(),
           resolveSelection: async (route) => {
             const reroute = await assertModelRouteUsable(route.agentKind, route.model, route.providerId);
-            const providers = await getDesktopProviderService().listProviders({
-              allowSideEffects: false, catalog: getActiveCatalog(),
-            });
-            return resolveScheduledModelSelection({ ...route,
+            return resolveScheduledModelSelectionLive({ ...route,
               providerId: reroute && shouldApplyExclusiveProviderRerouteLive(route.providerId)
                 ? reroute : route.providerId,
-            }, providers);
+            });
           },
           switchHarness: (route) => performSessionAgentSwitch(agentSwitchDeps, {
             sessionId, targetAgentKind: route.agentKind, model: route.model,

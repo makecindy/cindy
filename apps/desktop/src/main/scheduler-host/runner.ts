@@ -242,6 +242,8 @@ export interface MakerScheduleRunnerDeps {
    * runner 在 Session.send 返回后 release。
    */
   acquirePendingAgentSwitch?: (sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection) => Promise<(() => void) | ScheduledModelSelectionLease>;
+  /** Resolve the same provider-specific snapshot for fresh explicit choices. */
+  resolveModelSelection?: (selection: ScheduledModelSelection) => Promise<ScheduledModelSelection>;
   /** 新建可见会话落库后通知本机窗口与 device-link 列表订阅者。 */
   onSessionCreated?: (sessionId: string) => void;
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
@@ -931,6 +933,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
         createProviderId = verdict.providerId;
         reroutedProviderId = verdict.providerId;
       }
+    }
+    if (!isHeartbeat && schedule.modelAgentKind && !resolvedSelection) {
+      if (!this.deps.resolveModelSelection) throw new Error('Scheduled model selection is not available');
+      resolvedSelection = await this.deps.resolveModelSelection({
+        agentKind: effectiveAgentKind, model, providerId: createProviderId,
+        effort: (schedule.effort as Effort | undefined) ?? null, fastMode: fastMode === true,
+      });
+      createProviderId = resolvedSelection.providerId;
+      fastMode = resolvedSelection.fastMode;
+      schedule = { ...schedule, agentKind: resolvedSelection.agentKind,
+        model: resolvedSelection.model, providerId: resolvedSelection.providerId ?? undefined,
+        effort: resolvedSelection.effort ?? undefined, fastMode: resolvedSelection.fastMode };
     }
     // issue #456:未门控入口(定时任务 fire)按所选模型自报的 supported efforts 把 effort
     // clamp 到最高兼容档,避免把模型不支持的档(如 gpt-5.5 + max/ultra)透给上游被拒。

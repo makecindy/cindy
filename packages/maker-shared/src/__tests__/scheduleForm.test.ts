@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
+  ScheduleModelSelectionUnsupportedError,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -522,5 +523,34 @@ describe('mobile explicit Harness round-trip', () => {
   it('keeps older schedules without an override in follow mode', () => {
     const draft = createMobileScheduleDraft(schedule({ targetSessionId: 'bound', model: '' }));
     expect(buildMobileScheduleInput(draft)).not.toHaveProperty('modelAgentKind');
+  });
+});
+
+
+describe('mixed-version scheduled model selections', () => {
+  it.each([null, 600_000])('rejects an explicit bound selection on old/unknown hosts with interval %s', (intervalMs) => {
+    const input = { ...buildMobileScheduleInput(createMobileScheduleDraft(schedule())),
+      targetSessionId: 'bound', modelAgentKind: 'pi' as const, agentKind: 'pi' as const,
+      model: 'pi-model', providerId: 'pi-source', fastMode: true, intervalMs };
+    const saved = structuredClone(input);
+    expect(() => applyScheduleWireCompat(input, { supportsIntervalNullClear: true }))
+      .toThrow(ScheduleModelSelectionUnsupportedError);
+    expect(applyScheduleWireCompat(input, { supportsIntervalNullClear: true, supportsModelSelection: true })).toBe(input);
+    expect(input).toEqual(saved);
+  });
+
+  it('materializes fresh selections into legacy fields without losing model settings', () => {
+    const input = { ...buildMobileScheduleInput(createMobileScheduleDraft(schedule())),
+      targetSessionId: undefined, modelAgentKind: 'pi' as const, agentKind: 'codex' as const,
+      model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true, intervalMs: null };
+    const wire = JSON.parse(JSON.stringify(applyScheduleWireCompat(input, { supportsIntervalNullClear: false })));
+    expect(wire).toMatchObject({ agentKind: 'pi', model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true });
+    expect(wire).not.toHaveProperty('modelAgentKind');
+    expect(wire).not.toHaveProperty('intervalMs');
+  });
+
+  it('keeps legacy follow bindings editable on an old host', () => {
+    const input = { ...buildMobileScheduleInput(createMobileScheduleDraft(schedule())), targetSessionId: 'bound' };
+    expect(applyScheduleWireCompat(input, { supportsIntervalNullClear: true })).toBe(input);
   });
 });

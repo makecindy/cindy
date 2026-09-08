@@ -30,6 +30,7 @@ import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSele
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
+  resolveScheduledModelSelectionLive,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -110,6 +111,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    resolveModelSelection: resolveScheduledModelSelectionLive,
     onSessionCreated: broadcastSessionCreated,
     // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
     checkModelRoute: verdictForModelRoute,

@@ -457,8 +457,10 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   return input;
 }
 
+export class ScheduleModelSelectionUnsupportedError extends Error {}
+
 /**
- * 按被控端能力决定 intervalMs 清空的 wire 形态(device-link 两端版本会错位):
+ * 按被控端能力决定 intervalMs 清空与显式模型选择的 wire 形态(device-link 两端版本会错位):
  *
  * - 新 desktop(capabilities.supportsScheduleIntervalNullClear)认识 null,
  *   IPC 入口把它归一化成引擎的「带 key 的 undefined」显式清空;
@@ -471,10 +473,20 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
  */
 export function applyScheduleWireCompat(
   input: RemoteScheduleWriteInput,
-  opts: { supportsIntervalNullClear: boolean },
+  opts: { supportsIntervalNullClear: boolean; supportsModelSelection?: boolean },
 ): RemoteScheduleWriteInput {
-  if (opts.supportsIntervalNullClear || input.intervalMs !== null) return input;
-  const { intervalMs: _legacyDropped, ...legacy } = input;
+  let compatible = input;
+  if (!opts.supportsModelSelection && input.modelAgentKind) {
+    // Old hosts cannot apply an explicit bound selection. Do not report a successful
+    // save when Harness/Fast would be ignored. Fresh creation can use its legacy fields.
+    if (input.targetSessionId) {
+      throw new ScheduleModelSelectionUnsupportedError('Scheduled model selection requires a newer desktop');
+    }
+    const { modelAgentKind, ...legacy } = input;
+    compatible = { ...legacy, agentKind: modelAgentKind };
+  }
+  if (opts.supportsIntervalNullClear || compatible.intervalMs !== null) return compatible;
+  const { intervalMs: _legacyDropped, ...legacy } = compatible;
   return legacy;
 }
 
