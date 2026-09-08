@@ -993,6 +993,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
             parsedBody.input[2],
           ],
         },
+        requestHeaders: ctx.headers,
         res,
       });
     } finally {
@@ -1062,6 +1063,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
           instructions: 'PRODUCT_PROMPT',
           input: [],
         },
+        requestHeaders: ctx.headers,
         res,
       });
     } finally {
@@ -1861,6 +1863,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
           reasoning: { effort: 'high', summary: 'auto' },
           instructions: 'PRODUCT_PROMPT',
         },
+        requestHeaders: ctx.headers,
         res,
       });
     } finally {
@@ -3512,6 +3515,7 @@ describe('codex proxy host', () => {
         model: 'deepseek-v4',
         tools: [{ type: 'function', name: 'shell' }],
       },
+      requestHeaders: ctx.headers,
       res,
     });
 
@@ -3564,6 +3568,7 @@ describe('codex proxy host', () => {
         instructions: 'PRODUCT_PROMPT',
         tools: [{ type: 'function', name: 'shell' }],
       },
+      requestHeaders: ctx.headers,
       res,
     });
 
@@ -3619,6 +3624,7 @@ describe('codex proxy host', () => {
         tools: [{ type: 'function', name: 'shell' }],
         tool_choice: 'auto',
       },
+      requestHeaders: ctx.headers,
       res,
     });
 
