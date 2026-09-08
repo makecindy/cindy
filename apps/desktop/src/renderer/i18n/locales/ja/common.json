@@ -7656,7 +7656,7 @@
         "reconnect": "再接続",
         "manage": "接続先を管理",
         "railLabel": "ソース",
-        "connect": "モデルを追加",
+        "connect": "モデル設定",
         "connectCta": "ソースを接続 →",
         "viaSource": "ソース：{{source}}",
         "emptyTitle": "利用可能なソースがありません",

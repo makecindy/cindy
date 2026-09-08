@@ -28,6 +28,11 @@ const usageHistorySectionSource = readFileSync(
   'utf8',
 );
 
+const chartStyles = readFileSync(
+  resolve(__dirname, '../components/settings/usage/usageCharts.css'),
+  'utf8',
+);
+
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
     expect(source).toMatch(
@@ -82,18 +87,27 @@ describe('HomeUsageDashboard source contract', () => {
   it('keeps selected usage chart days flat without ad-hoc shadows', () => {
     expect(heatmapSource).not.toContain('boxShadow');
     expect(tokenBarsSource).not.toContain('boxShadow');
-    expect(heatmapSource).toContain("'2px solid var(--focus-ring-soft)'");
-    expect(tokenBarsSource).toContain("'2px solid var(--focus-ring-soft)'");
+    expect(heatmapSource).toContain('usage-chart-indicator');
+    expect(tokenBarsSource).toContain('usage-chart-indicator');
+    expect(chartStyles).toContain('outline: 2px solid var(--focus-ring)');
+    expect(chartStyles).toContain('prefers-reduced-motion: reduce');
+    expect(chartStyles).toContain('transition: none');
   });
 
-  it('keeps clickable data geometry compact without widening the history plot', () => {
+  // The owner removed the added date form. This verifies the retained chart
+  // entry points and geometry, not WCAG target-size conformance; the unresolved
+  // target-size requirement remains documented in usage-history-charts.md.
+  it('keeps dense chart geometry and the two retained date-selection entry points', () => {
+    expect(heatmapSource).not.toContain('INTERACTIVE_CELL_PX');
     expect(heatmapSource).toContain('const cellSize = CELL_PX;');
-    expect(heatmapSource).toContain('style={{ width: cellSize, height: cellSize }}');
+    expect(heatmapSource).toContain('data-usage-mark="usage-heatmap-day"');
     expect(tokenBarsSource).toContain('const hitHeight = Math.max(24, visualHeight);');
-    expect(tokenBarsSource).toContain('height: visualHeight');
+    expect(tokenBarsSource).toContain('data-usage-mark="usage-token-bar"');
     expect(tokenBarsSource).not.toContain('minWidth: bars.list.length * 24');
     expect(tokenBarsSource).not.toContain('minWidth: 24');
     expect(tokenBarsSource).not.toContain('overflow-x-auto');
+    expect(usageHistorySectionSource.match(/onDayClick=\{handleDayClick\}/g)).toHaveLength(2);
+    expect(usageHistorySectionSource).not.toContain('UsageDateFilter');
   });
 
   it('keeps the home heatmap non-interactive when no day callback is supplied', () => {

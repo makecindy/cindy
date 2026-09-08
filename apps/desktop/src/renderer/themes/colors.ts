@@ -241,6 +241,33 @@ registerColor('process-utility-icon', {
   light: '#059669',
   dark: '#34D399',
 }, '资源用量表：Utility 服务进程图标');
+// Usage History colors: owner-approved 2026-09-08 reference refinement.
+// Chart-specific category hues; process/status colors and heatmap blue stay unchanged.
+registerColor('usage-heatmap-high', {
+  light: 'var(--process-agent-task-icon)',
+  dark: 'var(--process-agent-task-icon)',
+}, '用量历史图表：usage-heatmap-high（09-08 登记的配色引用）');
+registerColor('usage-model-1', {
+  light: '#14B8A6',
+  dark: '#2DD4BF',
+}, '用量历史图表：模型类别 1（09-08 参考图配色裁决）');
+registerColor('usage-model-2', {
+  light: '#F43F5E',
+  dark: '#FB7185',
+}, '用量历史图表：模型类别 2（09-08 参考图配色裁决）');
+registerColor('usage-model-3', {
+  light: '#8B5CF6',
+  dark: '#A78BFA',
+}, '用量历史图表：模型类别 3（09-08 参考图配色裁决）');
+registerColor('usage-model-4', {
+  light: '#6366F1',
+  dark: '#818CF8',
+}, '用量历史图表：模型类别 4（09-08 参考图配色裁决）');
+registerColor('usage-model-5', {
+  light: '#F59E0B',
+  dark: '#FBBF24',
+}, '用量历史图表：模型类别 5（09-08 参考图配色裁决）');
+
 registerColor('shadow-soft-panel', {
   light: '0 4px 12px rgb(0 0 0 / 0.08)',
   dark: '0 4px 12px rgb(0 0 0 / 0.3)',

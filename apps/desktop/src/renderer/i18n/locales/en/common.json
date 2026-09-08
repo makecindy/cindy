@@ -7658,7 +7658,7 @@
         "reconnect": "Reconnect",
         "manage": "Manage source",
         "railLabel": "Source",
-        "connect": "Add a model",
+        "connect": "Configure models",
         "connectCta": "Connect a source →",
         "viaSource": "Source: {{source}}",
         "emptyTitle": "No available source",

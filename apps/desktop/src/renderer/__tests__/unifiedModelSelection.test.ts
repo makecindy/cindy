@@ -783,14 +783,14 @@ describe('buildUnifiedRail', () => {
   });
 });
 
-describe('computeSelectedRowScrollTop(选中行居中,Chris 2026-08-19)', () => {
+describe('computeSelectedRowScrollTop(选中行位于 35% 高度)', () => {
   const base = { scrollTop: 0, clientHeight: 400, scrollHeight: 2000, headerInset: 0 };
 
-  it('把选中行的中心对齐到可视区中心', () => {
-    // 行 [1000,1044] → 中心 1022;可视区高 400 → 目标 scrollTop = 1022 - 200 = 822。
+  it('把选中行的中心对齐到可视区 35%', () => {
+    // 行 [1000,1044] → 中心 1022;可视区高 400 → 目标 scrollTop = 1022 - 140 = 882。
     expect(
       computeSelectedRowScrollTop({ ...base, rowTop: 1000, rowBottom: 1044 }),
-    ).toEqual({ scrollTop: 822, oversized: false });
+    ).toEqual({ scrollTop: 882, oversized: false });
   });
 
   it('列表头部的行夹到 0(不能负滚),尾部的行夹到 scrollHeight - clientHeight', () => {
@@ -806,7 +806,7 @@ describe('computeSelectedRowScrollTop(选中行居中,Chris 2026-08-19)', () => 
     expect(
       computeSelectedRowScrollTop({ ...base, headerInset: 38, rowTop: 1000, rowBottom: 1044 })
         .scrollTop,
-    ).toBe(803);
+    ).toBe(857);
   });
 
   it('行比可视区还高 → 顶对齐并标 oversized(调用方据此一次收工,防振荡)', () => {

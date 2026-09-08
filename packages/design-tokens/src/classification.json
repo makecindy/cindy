@@ -1,10 +1,10 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 536,
+  "snapshotCount": 542,
   "categories": {
-    "literal": 261,
-    "alias": 239,
+    "literal": 266,
+    "alias": 240,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 30
   },
@@ -479,6 +479,58 @@
     },
     {
       "id": "process-utility-icon",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-heatmap-high",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "process-agent-task-icon",
+        "dark": "process-agent-task-icon"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-1",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-2",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-3",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-4",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-5",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "hex",

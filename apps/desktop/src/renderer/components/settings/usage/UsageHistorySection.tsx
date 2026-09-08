@@ -17,6 +17,8 @@
  * (见 UsageTokenBars 的注释), 但共享同一条聚合链路与配色。
  */
 
+import './usageCharts.css';
+
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as Select from '@radix-ui/react-select';
@@ -60,11 +62,11 @@ function Card({
   const { t } = useTranslation();
   return (
     <div className="mb-3.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
-      <div className="mb-3 flex items-baseline gap-2">
-        <span className="text-12 font-medium text-[var(--text-secondary)]">{title}</span>
-        {subtitle ? <span className="text-11 text-[var(--text-tertiary)]">{subtitle}</span> : null}
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-14 font-medium text-[var(--text-primary)]">{title}</span>
+        {subtitle ? <span className="text-12 text-[var(--text-tertiary)]">{subtitle}</span> : null}
         {refreshing ? (
-          <span className="ml-auto inline-flex items-center gap-1 text-10 font-normal leading-none text-[var(--text-tertiary)]">
+          <span className="ml-auto inline-flex items-center gap-1 text-11 font-normal leading-none text-[var(--text-tertiary)]">
             <Spinner icon={RefreshCw} size={10} className="opacity-70" />
             {t('usageDashboard.updating')}
           </span>
@@ -92,12 +94,11 @@ export function UsageHistorySection(): React.JSX.Element {
   const selectedDay = usageRangeDay(range, history?.todayKey);
   const rangeLabel = useMemo(() => {
     if (selectedDay) {
-      const [year, month, day] = selectedDay.split('-').map(Number);
       return new Intl.DateTimeFormat(i18n.language, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
-      }).format(new Date(year, (month ?? 1) - 1, day ?? 1));
+      }).format(new Date(`${selectedDay}T12:00:00`));
     }
     return t(`usageHistory.range.${range}`);
   }, [i18n.language, range, selectedDay, t]);
@@ -141,22 +142,22 @@ export function UsageHistorySection(): React.JSX.Element {
   };
 
   return (
-    <div className="pb-2">
-      <h2 className="mb-1.5 text-15 font-semibold text-[var(--text-primary)]">
+    <div className="usage-history-charts pb-2">
+      <h2 className="mb-1.5 text-16 font-medium text-[var(--text-primary)]">
         {t('settings.tabs.usage')}
       </h2>
-      <p className="mb-4 max-w-[640px] text-12 leading-[1.7] text-[var(--text-tertiary)]">
+      <p className="mb-4 max-w-[640px] text-13 leading-[1.5] text-[var(--settings-section-desc)]">
         {t('usageHistory.description')}
       </p>
 
       <div className="mb-4 flex items-center justify-between gap-3">
-        <span className="text-12 font-medium text-[var(--text-secondary)]">
+        <span className="text-13 font-medium text-[var(--text-secondary)]">
           {t('usageHistory.range.label')}
         </span>
         <Select.Root value={range} onValueChange={handleRangeChange}>
           <Select.Trigger
             aria-label={t('usageHistory.range.ariaLabel')}
-            className="flex h-9 w-[190px] items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            className="flex h-9 w-[190px] items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
           >
             <Select.Value />
             <Select.Icon asChild>
@@ -176,7 +177,7 @@ export function UsageHistorySection(): React.JSX.Element {
                   <Select.Item
                     key={option}
                     value={option}
-                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]"
+                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]"
                   >
                     <Select.ItemText>{t(`usageHistory.range.${option}`)}</Select.ItemText>
                     <Select.ItemIndicator>
@@ -187,7 +188,7 @@ export function UsageHistorySection(): React.JSX.Element {
                 {range.startsWith('day:') && selectedDay ? (
                   <Select.Item
                     value={range}
-                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]"
+                    className="flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]"
                   >
                     <Select.ItemText>{rangeLabel}</Select.ItemText>
                     <Select.ItemIndicator>
@@ -211,13 +212,13 @@ export function UsageHistorySection(): React.JSX.Element {
         </div>
       ) : loadFailed ? (
         <div
-          className="flex min-h-[176px] items-center justify-center rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 text-center text-12 text-[var(--error-fg)]"
+          className="flex min-h-[176px] items-center justify-center rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 text-center text-13 text-[var(--error-fg)]"
           role="alert"
         >
           {t('usageHistory.loadFailed')}
         </div>
       ) : empty ? (
-        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-8 text-center text-12 text-[var(--text-tertiary)]">
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-8 text-center text-13 text-[var(--text-tertiary)]">
           {t('usageHistory.empty')}
         </div>
       ) : (
@@ -252,6 +253,7 @@ export function UsageHistorySection(): React.JSX.Element {
               colorOrder={colorOrder}
               todayKey={chartHistory?.todayKey ?? ''}
               selectedDay={selectedDay}
+              highlightRecentWeek={range === '7d'}
               onDayClick={handleDayClick}
             />
           </Card>

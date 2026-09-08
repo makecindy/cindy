@@ -16,10 +16,11 @@ import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { usageRankColor, usageRankOf } from '@/components/new-chat/usagePalette';
 import { type AgentTokenRow, type ModelTokenRow, type UsageAgentKind } from './usageHistoryStats';
+import { usageHistoryModelColor } from './usageHistoryColors';
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
-/** 与 usagePalette 的 rank 阶梯对齐: 让同一 agent 在两张表与柱图里颜色一致。 */
+/** 与 usagePalette 的 rank 阶梯对齐: Agent 标记保持独立的中性配色，不借用模型类别色。 */
 const AGENT_RANK: Record<UsageAgentKind, number> = {
   'claude-code': 0,
   codex: 1,
@@ -28,9 +29,9 @@ const AGENT_RANK: Record<UsageAgentKind, number> = {
 };
 
 const TH_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-11 font-medium text-[var(--text-tertiary)]';
+  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-12 font-medium text-[var(--text-secondary)]';
 const TD_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-12 tabular-nums';
+  'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-13 tabular-nums';
 
 /**
  * 首列 (agent / model) 是唯一可收缩的列, 实现与 UsageTaskTable 的任务列相同:
@@ -40,25 +41,34 @@ const TD_CLASS =
  */
 const FIRST_COL_CLASS = 'w-full max-w-0 pl-0';
 
-function Swatch({ rank }: { rank: number }): React.JSX.Element {
-  return (
-    <span
-      className="size-2 shrink-0 rounded-[2px]"
-      style={{ backgroundColor: usageRankColor(rank) }}
-    />
-  );
+function Swatch({
+  rank,
+  color = usageRankColor(rank),
+}: {
+  rank: number;
+  color?: string;
+}): React.JSX.Element {
+  return <span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />;
 }
 
 function HitRateCell({ value }: { value: number | null }): React.JSX.Element {
   return <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>;
 }
 
-function ShareCell({ share, rank }: { share: number; rank: number }): React.JSX.Element {
+function ShareCell({
+  share,
+  rank,
+  color = usageRankColor(rank),
+}: {
+  share: number;
+  rank: number;
+  color?: string;
+}): React.JSX.Element {
   return (
     <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
       <span
         className="mr-1.5 inline-block h-1 rounded-[2px] align-[2px]"
-        style={{ width: `${Math.max(2, share * 46)}px`, backgroundColor: usageRankColor(rank) }}
+        style={{ width: `${Math.max(2, share * 46)}px`, backgroundColor: color }}
       />
       {formatUsagePercent(share)}
     </td>
@@ -124,7 +134,7 @@ export function UsageAgentTable({
                 <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                   <span className="flex min-w-0 items-center gap-2">
                     <Swatch rank={rank} />
-                    <span className="truncate" title={row.agentKind}>
+                    <span className="truncate font-medium" title={row.agentKind}>
                       {row.agentKind}
                     </span>
                   </span>
@@ -181,22 +191,23 @@ export function UsageModelTable({
       <tbody>
         {rows.map((row) => {
           const rank = usageRankOf(colorOrder, row.key);
+          const color = usageHistoryModelColor(rank, colorOrder.length);
           return (
             <tr key={row.key}>
               <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                 <span className="flex min-w-0 items-center gap-2">
-                  <Swatch rank={rank} />
-                  <span className="truncate" title={row.model}>
+                  <Swatch rank={rank} color={color} />
+                  <span className="truncate font-medium" title={row.model}>
                     {formatModelShort(row.model)}
                   </span>
                   {/* 同一模型 id 可能跨 agent 撞名, 标签让两行区分得开 */}
-                  <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-10 leading-none text-[var(--text-tertiary)]">
+                  <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
                     {row.agentKind}
                   </span>
                 </span>
               </td>
               <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
-              <ShareCell share={row.share} rank={rank} />
+              <ShareCell share={row.share} rank={rank} color={color} />
               <td className={TD_CLASS}>{formatCompactTokens(row.inputTokens)}</td>
               <td className={TD_CLASS}>{formatCompactTokens(row.outputTokens)}</td>
               <td className={TD_CLASS}>{formatCompactTokens(row.cacheReadTokens)}</td>

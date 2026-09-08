@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 536,
+  "count": 542,
   "colors": [
     {
       "id": "surface",
@@ -276,6 +276,36 @@
       "id": "process-utility-icon",
       "light": "#059669",
       "dark": "#34D399"
+    },
+    {
+      "id": "usage-heatmap-high",
+      "light": "var(--process-agent-task-icon)",
+      "dark": "var(--process-agent-task-icon)"
+    },
+    {
+      "id": "usage-model-1",
+      "light": "#14B8A6",
+      "dark": "#2DD4BF"
+    },
+    {
+      "id": "usage-model-2",
+      "light": "#F43F5E",
+      "dark": "#FB7185"
+    },
+    {
+      "id": "usage-model-3",
+      "light": "#8B5CF6",
+      "dark": "#A78BFA"
+    },
+    {
+      "id": "usage-model-4",
+      "light": "#6366F1",
+      "dark": "#818CF8"
+    },
+    {
+      "id": "usage-model-5",
+      "light": "#F59E0B",
+      "dark": "#FBBF24"
     },
     {
       "id": "shadow-soft-panel",

@@ -35,6 +35,8 @@
 
 - **2026-09-07（圆角改按可见层与登记分配）**：`DESIGN.md §5` 重写为两步判定树——Step 1 已登记形状（keycap / data mark）优先，Step 2 普通控件三档；判定对象从 DOM 标签改为「可见层」，§5 成为半径唯一权威（§§1/4/7/9 与组件条目只引用不另立）。新增 data mark 类目（0px 或 2px、按成员钉死），首批四个成员四角 2px：`usage-heatmap-day`、`usage-token-bar`、`workflow-status-cell`、`system-category-square`；07-28「status micro-cells（2px）」窄例外被后两个成员吸收——数值与组件不变，依据从「≤8px 非交互」改为图元角色，解除 non-interactive 限定、尺寸不再作归类边界。`every button` /「唯一豁免」等绝对化措辞改为「未命中 Step 1 的普通控件框」。命中尺寸采用 Equivalent 路径：用量历史同页补足产生相同单日筛选的合规日期选择控件；原定与密度恢复同 PR 交付的时序已被 #4064 先行恢复密度超越，控件单独交付，交付前密集目标为 §5 登记在案的过渡不合规。`REVIEW.md` 审查入口与 `design-governance.md §13` 同步；`UsageHeatmap` / `UsageTokenBars` 的生产差异登记为待迁移项。裁决全文与两处范围变更见 [`design-decision-log.md`](./design-decision-log.md)「09-07」条。**本条取代 08-29 条的「按钮一律胶囊／裸文字按钮唯一豁免」绝对化表述与 07-28 条的微格尺寸判据（三档数值本身不变）。**
 
+- **2026-09-08（用量历史图表配色与交互登记，#4076）**：`DESIGN.md §2` 登记 Usage History 图表类别色（五个模型色相与热力图对进程蓝的引用）；§5 data mark 成员 `usage-heatmap-day` / `usage-token-bar` 之上登记悬停/焦点/选中有限放大、柱图选中淡化与热力格中性描边（Interaction constraints 内的组件交互登记）；§14.4 登记图表强调响应。移除草稿日期表单后的命中尺寸方案仍待裁决，见 `usage-history-charts.md`。
+
 - **2026-09-07（设置分段选项与用量数据图形）**：`DESIGN.md §4` 补设置分段单选逐态与键盘合同，统一复用 `SettingsSegmentedControl`；§4/§5 明确用量热力方格、细柱与点击承载的 2px 数据图形例外，保留灰度色阶和日期筛选，避免普通按钮胶囊规则改变图表形状。
 
 - **2026-09-07（DS-5 路线与双端设计合同）**：治理 §12 将未开始批次对齐为 DS-5—12（9=聊天、10=Mobile），以 G1—G4 分别验收；补 DS-4b / #4010 已合入及其局部兼容边界。Token README 登记当前数值权威、未来接管与两端真实消费样本；inventory 及生成器仅同步下一动作与静态说明，不改变迁移状态、发现能力或产品界面。此前日期记录中的旧编号保留为历史。

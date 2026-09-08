@@ -7656,7 +7656,7 @@
         "reconnect": "다시 연결",
         "manage": "제공자 관리",
         "railLabel": "소스",
-        "connect": "모델 추가",
+        "connect": "모델 설정",
         "connectCta": "소스 연결 →",
         "viaSource": "소스: {{source}}",
         "emptyTitle": "사용 가능한 소스 없음",
