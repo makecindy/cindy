@@ -9,6 +9,7 @@
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 
 import type {
   sessions,
@@ -73,9 +74,7 @@ type SessionUsageRow = Pick<
  * 运行时固定 effort 模型用 `null`；`sessions.effort` 是 NOT NULL 枚举。
  * 空白 / null 表示不落库，UPDATE 保留该行已有的合法档位。
  */
-export function persistableSessionEffort(
-  effort: unknown,
-): SessionInsert['effort'] | undefined {
+export function persistableSessionEffort(effort: unknown): SessionInsert['effort'] | undefined {
   if (typeof effort !== 'string') return undefined;
   const trimmed = effort.trim();
   return trimmed ? (trimmed as SessionInsert['effort']) : undefined;
@@ -125,7 +124,7 @@ const PREVIEW_CONTENT_BOUND_CHARS = 4096;
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
  *  - user 消息：content 是 `{"text":"...","images":[],"files":[]}` → 取 .text
- *  - assistant 消息：content 是 JSON.stringify 后的 markdown 字符串 → 解析后原样用
+ *  - assistant 消息：content 是 JSON.stringify 后的 markdown 字符串 → 提取可读正文
  *  - 解析失败 / 空文本 → null（渲染端隐藏预览行）
  * 换行折叠成空格——卡片预览是流式 3 行 clamp，不保留消息内排版。
  */
@@ -140,7 +139,8 @@ export function finalizePlainPreview(
   // 实现细节。返回 null 与"无预览"同渲染语义。
   if (isSyntheticTriggerText(next)) return null;
   if (role === 'assistant') next = stripInternalWebCitations(next);
-  const collapsed = next.replace(/\s+/g, ' ').trim();
+  // Strip formatting before the display limit: URLs must not consume the preview budget.
+  const collapsed = markdownPreviewText(next);
   if (!collapsed) return null;
   return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
 }
@@ -203,8 +203,7 @@ export function boundSerializedMessageContent(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney =
-    row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -224,8 +223,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
   // 否则(CNY 无法表达进 USD 字段)保持冻结历史值。只消费 totalCostUsd 的读方
   // (device-link v1 / 手机端)在全量 reseed 后才不会丢本构建新增的 USD 花费。
   const legacyUsdProjection =
-    row.totalCostUsd +
-    (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
+    row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
@@ -824,8 +822,7 @@ export function projectAutomationConsentToRow(
 
 /** ScheduleRun 行 → 内存对象。 */
 export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
-  const legacyCost =
-    row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
+  const legacyCost = row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
   const currentCost =
     row.costCurrency && row.costAmount > 0
       ? normalizeRegionalMoney({
@@ -860,9 +857,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
       ? legacyEstimate.currency === currentEstimate.currency
         ? addRegionalMoney([legacyEstimate, currentEstimate])
         : currentEstimate
-      : (currentEstimate ??
-        legacyEstimate ??
-        zeroUsageMoney('value-estimate'));
+      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
   return {
     id: row.id,
     scheduleId: row.scheduleId,
