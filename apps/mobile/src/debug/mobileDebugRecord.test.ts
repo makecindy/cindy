@@ -8,6 +8,35 @@ import { serializeMobileDebugRecord } from "./mobileDebugRecord";
 
 afterEach(() => setMobileDebugSink(undefined));
 describe("detailed phone debug records", () => {
+  it.each([
+    "Cookie: session=fixtureA; csrf=fixtureB",
+    "Set-Cookie: session=fixtureA; HttpOnly; other=fixtureB",
+    'Authorization: Digest username="fixtureA", response="fixtureB"',
+    "Proxy-Authorization: Custom fixtureA, fixtureB",
+    "cOoKiE: session=fixtureA;\r\n csrf=fixtureB",
+    JSON.stringify({
+      Authorization: 'Digest username="fixtureA", response="fixtureB"',
+    }),
+  ])(
+    "removes whole multipart credential headers across every text entry: %s",
+    (text) => {
+      const error = new Error(text, { cause: new Error(text) });
+      const result = JSON.parse(
+        serializeMobileDebugRecord("error", "device-link", [
+          text,
+          error,
+          { diagnostic: text },
+          { elapsedMs: 12 },
+        ]),
+      );
+      expect(JSON.stringify(result)).not.toMatch(/fixtureA|fixtureB/);
+      expect(result.args[0]).toBe("[redacted credential header]");
+      expect(result.args[1].message).toBe("[redacted credential header]");
+      expect(result.args[1].stack).toBe("[redacted credential header]");
+      expect(result.args[1].cause.message).toBe("[redacted credential header]");
+      expect(result.args[3].elapsedMs).toBe(12);
+    },
+  );
   it.each([0, 1, 2, 3])(
     "redacts credentials in JSON encoded %s times, including errors and causes",
     (depth) => {
