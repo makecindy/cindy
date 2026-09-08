@@ -168,7 +168,12 @@ export function flushDiagnostics(): Promise<void> {
 }
 
 export async function setDiagnosticsEnabled(value: boolean): Promise<void> {
-  await hydrateDiagnostics();
+  if (!ready) await hydrateDiagnostics();
+  // Opt-out stops collection before any storage await; a failed save restores the durable state.
+  if (!value) {
+    enabled = false;
+    updateDebugSink();
+  }
   override = value;
   dirty = true;
   try {

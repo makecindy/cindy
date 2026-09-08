@@ -56,6 +56,45 @@ beforeEach(() => {
   files.available.mockReset().mockResolvedValue(true);
 });
 describe("local journal persistence", () => {
+  it.each([false, true])(
+    "stops collection throughout a delayed opt-out (save fails: %s)",
+    async (fails) => {
+      vi.useFakeTimers();
+      const log = await import("./localDiagnostics");
+      const debug = await import("./mobileDebugLog");
+      const stop = log.startLocalDiagnostics();
+      await log.hydrateDiagnostics();
+      await log.flushDiagnostics();
+      const before = await log.diagnosticSnapshot();
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      storage.setItem.mockImplementationOnce(
+        () =>
+          new Promise<void>((yes, no) => {
+            resolve = yes;
+            reject = no;
+          }),
+      );
+      const pending = log.setDiagnosticsEnabled(false);
+      const outcome = pending.catch(() => {});
+      expect(debug.mobileDebugEnabled()).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(4000);
+      debug.mobileDebugLog("debug", "recovery", "after opt-out");
+      log.recordDiagnostic("relay connection error");
+      if (fails) reject(new Error("save failed"));
+      else resolve();
+      await outcome;
+      expect(log.diagnosticsEnabled()).toBe(fails);
+      await log.flushDiagnostics();
+      expect(
+        files.append.mock.calls.map(([batch]) => batch).join(""),
+      ).not.toContain("after opt-out");
+      expect(await log.diagnosticSnapshot()).toEqual(before);
+      expect(vi.getTimerCount()).toBe(fails ? 1 : 0);
+      stop();
+    },
+  );
   it("prunes on disabled startup and foreground without recording or starting a probe", async () => {
     vi.useFakeTimers();
     storage.getItem.mockResolvedValue(
