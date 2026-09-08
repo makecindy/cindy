@@ -16,7 +16,7 @@
  * 项目 vitest env=node,无 window。沿用 providerModelMemory.test.ts 的最小 localStorage stub。
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { unifiedModelEntries, type ProviderView } from '@cindy/model-providers';
 
 class MemLocalStorage {
@@ -84,6 +84,175 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+describe('model visibility across renderer windows', () => {
+  const initKey = 'xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a';
+  const mapKey = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+  const model = (id: string, defaultEnabled = true) => ({
+    id, name: id, defaultEnabled, contextWindow: 200000, efforts: [], defaultEffort: null,
+  });
+  const catalog = (agent: 'pi' | 'codex' | 'claude-code', defaultEnabled = true): ProviderView => ({
+    id: 'xd', name: 'Cindy AI', source: 'builtin', connected: true, agents: [agent],
+    auth: { method: 'apiKey' }, routing: {}, models: { [agent]: [model(agent, defaultEnabled)] },
+  } as ProviderView);
+
+  // Shared queue models Chromium's cross-renderer Web Locks. Separate module instances
+  // share storage and the lock manager, but each retains its own owner/cache state.
+  class Locks {
+    chains = new Map<string, Promise<unknown>>();
+    request<T>(key: string, run: () => T | Promise<T>): Promise<T> {
+      const next = (this.chains.get(key) ?? Promise.resolve()).then(run);
+      this.chains.set(key, next.catch(() => undefined));
+      return next;
+    }
+    hold(key = initKey): () => void {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      void this.request(key, () => held);
+      return release;
+    }
+    async settle(): Promise<void> {
+      for (let i = 0; i < 5; i += 1) {
+        await Promise.all([...this.chains.values()]);
+        await Promise.resolve();
+      }
+    }
+  }
+  let locks: Locks;
+  let handlers: Array<(event: StorageEvent) => void>;
+
+  beforeEach(() => {
+    locks = new Locks();
+    handlers = [];
+    vi.stubGlobal('navigator', { locks });
+    Object.assign(window, {
+      addEventListener: (type: string, handler: (event: StorageEvent) => void) => {
+        if (type === 'storage') handlers.push(handler);
+      },
+      removeEventListener: vi.fn(),
+    });
+    const setItem = memStorage.setItem.bind(memStorage);
+    vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
+      setItem(key, value);
+      queueMicrotask(() => handlers.forEach((handler) => handler({ key } as StorageEvent)));
+    });
+  });
+  afterEach(async () => {
+    await locks.settle();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  async function windows() {
+    const a = await loadModuleForOwner();
+    vi.resetModules();
+    const b = await loadModuleForOwner();
+    await locks.settle();
+    return { a, b };
+  }
+
+  it('serializes first catalogs without optimistic overwrites and keeps the first baseline frozen', async () => {
+    const { a, b } = await windows();
+    const release = locks.hold();
+    const first = a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi')]);
+    const second = b.migrateModelVisibilityDefaults('owner-a', 1, [catalog('codex')]);
+    expect(JSON.parse(memStorage.getItem(initKey)!).scopes).toEqual([]);
+    release();
+    await Promise.all([first, second]);
+    await locks.settle();
+    for (const prefs of [a, b]) {
+      expect(prefs.isModelEnabled('pi', 'xd', model('pi', false))).toBe(true);
+      expect(prefs.isModelEnabled('codex', 'xd', model('codex', false))).toBe(true);
+    }
+    const changed = catalog('pi', false);
+    changed.models.pi!.push(model('later'));
+    await b.migrateModelVisibilityDefaults('owner-a', 1, [changed]);
+    vi.resetModules();
+    const restarted = await loadModuleForOwner();
+    expect(restarted.isModelEnabled('pi', 'xd', model('pi', false))).toBe(true);
+    expect(restarted.isModelEnabled('pi', 'xd', model('later'))).toBe(false);
+    expect(restarted.isModelEnabled('codex', 'xd', model('codex', false))).toBe(true);
+  });
+
+  it('rebases concurrent restores, explicit switches, and another initialized scope', async () => {
+    const { a, b } = await windows();
+    await a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi'), catalog('codex')]);
+    await a.setModelVisibility('pi', 'xd', 'pi', false);
+    await b.setModelVisibility('codex', 'xd', 'codex', false);
+    const release = locks.hold();
+    const writes = [
+      a.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'pi' }]),
+      b.resetModelVisibilities('xd', [{ agent: 'codex', modelId: 'codex' }]),
+      a.setModelVisibility('pi', 'xd', 'manual', true),
+      b.migrateModelVisibilityDefaults('owner-a', 1, [catalog('claude-code')]),
+    ];
+    expect(a.isModelEnabled('pi', 'xd', model('pi'))).toBe(false);
+    release();
+    expect((await Promise.all(writes)).slice(0, 3)).toEqual([true, true, true]);
+    await locks.settle();
+    expect(JSON.parse(memStorage.getItem(mapKey)!)).toEqual({ 'pi:xd:manual': true });
+    for (const prefs of [a, b]) {
+      for (const agent of ['pi', 'codex'] as const) {
+        expect(prefs.isModelEnabled(agent, 'xd', model(agent))).toBe(true);
+        expect(prefs.isModelEnabled(agent, 'xd', model(agent, false))).toBe(false);
+        expect(prefs.isModelVisibilityCustomized(agent, 'xd', agent)).toBe(false);
+      }
+      expect(prefs.isModelEnabled('claude-code', 'xd', model('claude-code', false))).toBe(true);
+      expect(prefs.isModelEnabled('pi', 'xd', model('manual', false))).toBe(true);
+    }
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1,
+      expect.objectContaining({ 'claude-code:xd:claude-code': true, 'pi:xd:manual': true }),
+      expect.objectContaining({ followCatalogKeys: expect.arrayContaining(['pi:xd:pi', 'codex:xd:codex']) }));
+  });
+
+  it('cancels queued writes after an owner switch without blocking the new owner', async () => {
+    const { a } = await windows();
+    const before = memStorage.getItem(mapKey);
+    const release = locks.hold();
+    const pending = a.setModelVisibility('pi', 'xd', 'old-owner', true);
+    setOwnerClaim('owner-b', 2, false, false, true);
+    await a.setModelVisibilityOwner('owner-b', 2, 'cloud');
+    expect(await a.setModelVisibility('pi', 'xd', 'new-owner', true)).toBe(true);
+    release();
+    expect(await pending).toBe(false);
+    expect(memStorage.getItem(mapKey)).toBe(before);
+    expect(a.isModelEnabled('pi', 'xd', model('new-owner', false))).toBe(true);
+    expect(a.isModelVisibilityCustomized('pi', 'xd', 'old-owner')).toBe(false);
+  });
+
+  it('does not initialize a catalog superseded while waiting for the lock', async () => {
+    const { a } = await windows();
+    const release = locks.hold();
+    let current = true;
+    const stale = a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi')], () => current);
+    current = false;
+    release();
+    await stale;
+    expect(JSON.parse(memStorage.getItem(initKey)!).scopes).toEqual([]);
+    await a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi', false)]);
+    expect(a.isModelEnabled('pi', 'xd', model('pi'))).toBe(false);
+  });
+
+  it('returns lock failures without writing outside the lock and permits retry', async () => {
+    const { a } = await windows();
+    const before = memStorage.getItem(mapKey);
+    const request = vi.spyOn(locks, 'request').mockRejectedValueOnce(new Error('lock unavailable'));
+    expect(await a.setModelVisibility('pi', 'xd', 'pi', true)).toBe(false);
+    expect(memStorage.getItem(mapKey)).toBe(before);
+    request.mockRestore();
+    expect(await a.setModelVisibility('pi', 'xd', 'pi', true)).toBe(true);
+  });
+
+  it('adopts another window completing deferred migration without republishing pending state', async () => {
+    setOwnerClaim('owner-a', 1, true, false);
+    const { a, b } = await windows();
+    setOwnerClaim('owner-a', 1);
+    await a.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi')]);
+    await locks.settle();
+    expect(b.isModelEnabled('pi', 'xd', model('pi', false))).toBe(true);
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, { 'pi:xd:pi': true },
+      expect.not.objectContaining({ pending: true }));
+  });
+});
+
 async function loadModule() {
   return await import('@/state/modelVisibilityPrefs');
 }
@@ -94,7 +263,7 @@ async function loadModuleForOwner(
   mode: 'signed-out' | 'local' | 'cloud' = 'cloud',
 ) {
   const module = await loadModule();
-  module.setModelVisibilityOwner(ownerId, ownerGeneration, mode);
+  await module.setModelVisibilityOwner(ownerId, ownerGeneration, mode);
   return module;
 }
 
@@ -112,16 +281,16 @@ describe('modelVisibilityPrefs store', () => {
   it('set override 覆盖目录默认:默认开的关掉、默认关的打开', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
     // 默认开 → 用户关
-    setModelVisibility('claude-code', 'xd', 'claude-opus-4-8', false);
+    await setModelVisibility('claude-code', 'xd', 'claude-opus-4-8', false);
     expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(false);
     // 默认关(defaultEnabled:false)→ 用户开
-    setModelVisibility('claude-code', 'xd', 'b', true);
+    await setModelVisibility('claude-code', 'xd', 'b', true);
     expect(isModelEnabled('claude-code', 'xd', { id: 'b', defaultEnabled: false })).toBe(true);
   });
 
   it('set/get 往返 + 跨重启持久化', async () => {
     const m1 = await loadModuleForOwner();
-    m1.setModelVisibility('codex', 'xd', 'gpt-5.5', false);
+    await m1.setModelVisibility('codex', 'xd', 'gpt-5.5', false);
     expect(m1.isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(false);
 
     vi.resetModules();
@@ -131,8 +300,8 @@ describe('modelVisibilityPrefs store', () => {
 
   it('按 (agent, providerId, modelId) 分槽:同名 gpt-5.5 在 cc / codex 互不覆盖', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
-    setModelVisibility('codex', 'xd', 'gpt-5.5', true);
-    setModelVisibility('claude-code', 'xd', 'gpt-5.5', false); // cc 下关掉
+    await setModelVisibility('codex', 'xd', 'gpt-5.5', true);
+    await setModelVisibility('claude-code', 'xd', 'gpt-5.5', false); // cc 下关掉
     // codex 已开启的配置不受影响
     expect(isModelEnabled('claude-code', 'xd', { id: 'gpt-5.5' })).toBe(false);
     expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(true);
@@ -140,8 +309,8 @@ describe('modelVisibilityPrefs store', () => {
 
   it('同一来源不同 provider 互不影响(xd vs openai)', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
-    setModelVisibility('codex', 'openai', 'gpt-5.5', true);
-    setModelVisibility('codex', 'xd', 'gpt-5.5', false);
+    await setModelVisibility('codex', 'openai', 'gpt-5.5', true);
+    await setModelVisibility('codex', 'xd', 'gpt-5.5', false);
     expect(isModelEnabled('codex', 'xd', { id: 'gpt-5.5' })).toBe(false);
     expect(isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(true);
   });
@@ -149,11 +318,11 @@ describe('modelVisibilityPrefs store', () => {
   it('setManyVisibility:全部关 → 全部开,写显式 override(含目录默认关的也被打开)', async () => {
     const { isModelEnabled, setManyVisibility } = await loadModuleForOwner();
     const ids = ['claude-opus-4-8', 'claude-sonnet-4-6', 'b'];
-    setManyVisibility('claude-code', 'xd', ids, false);
+    await setManyVisibility('claude-code', 'xd', ids, false);
     for (const id of ids) {
       expect(isModelEnabled('claude-code', 'xd', { id })).toBe(false);
     }
-    setManyVisibility('claude-code', 'xd', ids, true);
+    await setManyVisibility('claude-code', 'xd', ids, true);
     // 即便 'b' 目录默认是关,「全部开启」也把它显式打开
     expect(isModelEnabled('claude-code', 'xd', { id: 'b', defaultEnabled: false })).toBe(true);
     expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(true);
@@ -164,7 +333,7 @@ describe('modelVisibilityPrefs store', () => {
     const setItem = vi.spyOn(memStorage, 'setItem');
 
     expect(
-      module.setModelVisibilities(
+      await module.setModelVisibilities(
         'xd',
         [
           { agent: 'claude-code', modelId: 'claude-sonnet-4-6' },
@@ -195,13 +364,13 @@ describe('modelVisibilityPrefs store', () => {
       { agent: 'codex' as const, modelId: 'gpt-5.6' },
     ];
 
-    expect(module.setModelVisibilities('xd', targets, false)).toBe(false);
+    expect(await module.setModelVisibilities('xd', targets, false)).toBe(false);
     expect(memStorage.getItem(storageKey)).toBe(rawBeforeFailure);
     expect(module.isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(true);
     expect(module.isModelEnabled('codex', 'xd', { id: 'gpt-5.6' })).toBe(true);
     expect(syncModelVisibility).toHaveBeenCalledTimes(mirrorCallsBeforeFailure);
 
-    expect(module.setModelVisibilities('xd', targets, false)).toBe(true);
+    expect(await module.setModelVisibilities('xd', targets, false)).toBe(true);
     expect(module.isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(false);
     expect(module.isModelEnabled('codex', 'xd', { id: 'gpt-5.6' })).toBe(false);
     setItem.mockRestore();
@@ -209,15 +378,15 @@ describe('modelVisibilityPrefs store', () => {
 
   it('同值写入短路:不抛,值保持', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
-    expect(setModelVisibility('codex', 'openai', 'gpt-5.4', false)).toBe(true);
-    expect(setModelVisibility('codex', 'openai', 'gpt-5.4', false)).toBe(true);
+    expect(await setModelVisibility('codex', 'openai', 'gpt-5.4', false)).toBe(true);
+    expect(await setModelVisibility('codex', 'openai', 'gpt-5.4', false)).toBe(true);
     expect(isModelEnabled('codex', 'openai', { id: 'gpt-5.4' })).toBe(false);
   });
 
   it('空 providerId / modelId 入参被忽略', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
-    setModelVisibility('claude-code', '', 'x', false);
-    setModelVisibility('claude-code', 'xd', '', false);
+    await setModelVisibility('claude-code', '', 'x', false);
+    await setModelVisibility('claude-code', 'xd', '', false);
     // 都没写进去 → 仍跟随默认(开)
     expect(isModelEnabled('claude-code', 'xd', { id: 'x' })).toBe(true);
   });
@@ -235,14 +404,14 @@ describe('modelVisibilityPrefs store', () => {
     );
 
     setOwnerClaim('owner-b', 2, false, false, true);
-    module.setModelVisibilityOwner('owner-b', 2, 'cloud');
+    await module.setModelVisibilityOwner('owner-b', 2, 'cloud');
 
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(true);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-b')).toBeNull();
     expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-b', 2, {}, expect.objectContaining({ pending: true }));
 
     setOwnerClaim('owner-a', 3, true, true);
-    module.setModelVisibilityOwner('owner-a', 3, 'cloud');
+    await module.setModelVisibilityOwner('owner-a', 3, 'cloud');
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(false);
   });
 
@@ -257,13 +426,13 @@ describe('modelVisibilityPrefs store', () => {
     setOwnerClaim('owner-a', 1, true, false);
     const module = await loadModuleForOwner();
 
-    module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
+    await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-a')).toBe(
       JSON.stringify({ 'codex:openai:gpt-5.5': false }),
     );
 
     setOwnerClaim('owner-a', 1, true, true);
-    module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
+    await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
 
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(false);
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(false);
@@ -280,7 +449,7 @@ describe('modelVisibilityPrefs store', () => {
     setOwnerClaim('owner-a', 1, false, false);
     const module = await loadModuleForOwner();
 
-    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
 
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-a')).toBe(
       JSON.stringify({ 'codex:openai:gpt-5.5': false }),
@@ -291,7 +460,7 @@ describe('modelVisibilityPrefs store', () => {
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(false);
 
     setOwnerClaim('owner-a', 1, true, true);
-    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(false);
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(false);
   });
@@ -300,7 +469,7 @@ describe('modelVisibilityPrefs store', () => {
     setOwnerClaim('owner-a', 1, false, false, false, false);
     const module = await loadModuleForOwner();
 
-    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(false);
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(false);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-a')).toBeNull();
     expect(logToMain).toHaveBeenCalledWith(
       'warn',
@@ -316,7 +485,7 @@ describe('modelVisibilityPrefs store', () => {
       throw new Error('injected storage failure');
     });
 
-    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(false);
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(false);
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(true);
     expect(syncModelVisibility).toHaveBeenCalledTimes(mirrorCallsBeforeFailure);
     expect(logToMain).toHaveBeenCalledWith(
@@ -344,10 +513,10 @@ describe('modelVisibilityPrefs store', () => {
 
   it('未登录时不写 override，并将空镜像推给 Main 清除前账号状态', async () => {
     const module = await loadModuleForOwner();
-    module.setModelVisibility('codex', 'openai', 'gpt-5.6', false);
+    await module.setModelVisibility('codex', 'openai', 'gpt-5.6', false);
 
-    module.setModelVisibilityOwner(null, 2, 'signed-out');
-    module.setModelVisibility('codex', 'openai', 'gpt-5.6', false);
+    await module.setModelVisibilityOwner(null, 2, 'signed-out');
+    await module.setModelVisibility('codex', 'openai', 'gpt-5.6', false);
 
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(true);
     expect(syncModelVisibility).toHaveBeenLastCalledWith(null, 2, {});
@@ -361,9 +530,9 @@ describe('modelVisibilityPrefs store', () => {
       await vi.advanceTimersByTimeAsync(250);
       expect(syncModelVisibility).toHaveBeenCalledTimes(2);
       syncModelVisibility.mockRejectedValueOnce(new Error('temporary failure'));
-      prefs.setModelVisibility('pi', 'xd', 'a', true);
+      await prefs.setModelVisibility('pi', 'xd', 'a', true);
       await Promise.resolve();
-      prefs.setModelVisibility('pi', 'xd', 'a', false);
+      await prefs.setModelVisibility('pi', 'xd', 'a', false);
       const count = syncModelVisibility.mock.calls.length;
       await vi.advanceTimersByTimeAsync(2000);
       expect(syncModelVisibility).toHaveBeenCalledTimes(count);
@@ -381,7 +550,7 @@ describe('modelVisibilityPrefs store', () => {
     const module = await loadModuleForOwner('local-v1', 1, 'local');
 
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(false);
-    module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
+    await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(false);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1')).not.toBeNull();
   });
@@ -412,9 +581,9 @@ describe('modelVisibilityPrefs store', () => {
 it('restoring model visibility deletes overrides and follows future online defaults', async () => {
   const prefs = await loadModuleForOwner();
   const target = { agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
-  prefs.setModelVisibility(target.agent, 'openai', target.modelId, true);
+  await prefs.setModelVisibility(target.agent, 'openai', target.modelId, true);
   expect(prefs.isModelVisibilityCustomized(target.agent, 'openai', target.modelId)).toBe(true);
-  expect(prefs.resetModelVisibilities('openai', [target])).toBe(true);
+  expect(await prefs.resetModelVisibilities('openai', [target])).toBe(true);
   expect(prefs.isModelVisibilityCustomized(target.agent, 'openai', target.modelId)).toBe(false);
   expect(prefs.isModelEnabled(target.agent, 'openai', { id: target.modelId, defaultEnabled: false })).toBe(false);
   expect(prefs.isModelEnabled(target.agent, 'openai', { id: target.modelId, defaultEnabled: true })).toBe(true);
@@ -450,7 +619,7 @@ describe('compact model defaults upgrade', () => {
     engines.setModelEnginePrefsOwner(ownerId);
     favorites.setModelFavoritesOwner(ownerId);
     const prefs = await loadModuleForOwner(ownerId, generation);
-    prefs.migrateModelVisibilityDefaults(ownerId, generation, [snapshot]);
+    await prefs.migrateModelVisibilityDefaults(ownerId, generation, [snapshot]);
     return prefs;
   }
 
@@ -495,7 +664,7 @@ describe('compact model defaults upgrade', () => {
 
   it.each([false, true])('retains first-run eligibility across a restart before any nonempty catalog (empty snapshot: %s)', async (emptySnapshot) => {
     const prefs = await loadModuleForOwner();
-    if (emptySnapshot) prefs.migrateModelVisibilityDefaults('owner-a', 1, []);
+    if (emptySnapshot) await prefs.migrateModelVisibilityDefaults('owner-a', 1, []);
     expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, {},
       expect.objectContaining({ pending: true }));
 
@@ -516,9 +685,9 @@ describe('compact model defaults upgrade', () => {
     });
     try {
       if (prefs) {
-        prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+        await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
         // A user action during the failed baseline write still wins on recovery.
-        expect(prefs.setModelVisibility('pi', 'xd', 'gemini', false)).toBe(true);
+        expect(await prefs.setModelVisibility('pi', 'xd', 'gemini', false)).toBe(true);
       } else {
         await upgrade();
         expect(memStorage.getItem(scopedKey)).toBeNull();
@@ -535,8 +704,8 @@ describe('compact model defaults upgrade', () => {
   it.each([false, true])('keeps delayed provider/agent initialization independent of manual switches (restart: %s)', async (restart) => {
     const partial = { ...provider, models: { pi: provider.models.pi, 'claude-code': [], codex: [] } };
     let prefs = await upgrade('owner-a', 1, partial);
-    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
-    prefs.setModelVisibility('codex', 'xd', 'late-off', false);
+    await prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    await prefs.setModelVisibility('codex', 'xd', 'late-off', false);
     if (restart) {
       vi.resetModules();
       prefs = await upgrade('owner-a', 1, partial);
@@ -549,7 +718,7 @@ describe('compact model defaults upgrade', () => {
       models: { pi: [...provider.models.pi!, { ...lateModels[0]!, id: 'pi-added' }],
         'claude-code': lateModels, codex: lateModels },
     }));
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, catalogs);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, catalogs);
     for (const providerId of ['xd', 'other-provider']) {
       for (const agent of ['claude-code', 'codex'] as const) {
         expect(prefs.isModelEnabled(agent, providerId, lateModels[0]!)).toBe(true);
@@ -576,7 +745,7 @@ describe('compact model defaults upgrade', () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'pi:xd:gemini': false }));
     setOwnerClaim('owner-a', 1, false, false);
     const prefs = await upgrade();
-    prefs.setModelVisibility('pi', 'xd', 'fable-5', true);
+    await prefs.setModelVisibility('pi', 'xd', 'fable-5', true);
     vi.resetModules();
     setOwnerClaim('owner-a', 1);
     const restarted = await upgrade();
@@ -594,7 +763,7 @@ describe('compact model defaults upgrade', () => {
         { ...provider.models.pi![0]!, id: 'brand-new', defaultEnabled: true },
       ] },
     };
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [changed]);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [changed]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: false })).toBe(true);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'fable-5', defaultEnabled: true })).toBe(false);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'brand-new', defaultEnabled: true })).toBe(false);
@@ -607,17 +776,17 @@ describe('compact model defaults upgrade', () => {
 
   it('preserves manually disabled defaults and allows manually enabling a new model', async () => {
     const prefs = await upgrade();
-    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
-    prefs.setModelVisibility('codex', 'xd', 'brand-new', true);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    await prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    await prefs.setModelVisibility('codex', 'xd', 'brand-new', true);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
     expect(prefs.isModelEnabled('codex', 'xd', { id: 'brand-new', defaultEnabled: false })).toBe(true);
   });
 
   it('Restore defaults applies only to explicitly named routes, including future online defaults', async () => {
     const prefs = await upgrade();
-    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
-    expect(prefs.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'gemini' }])).toBe(true);
+    await prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    expect(await prefs.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'gemini' }])).toBe(true);
     vi.resetModules();
     const restarted = await upgrade();
     expect(restarted.isModelVisibilityCustomized('pi', 'xd', 'gemini')).toBe(false);
@@ -642,8 +811,8 @@ describe('compact model defaults upgrade', () => {
     const prefs = await upgrade();
     expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5', defaultEnabled: false })).toBe(true);
     expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'chatgpt/fable-5-1', defaultEnabled: true })).toBe(false);
-    expect(prefs.resetModelVisibilities('xd', [{ agent: 'claude-code', modelId: 'chatgpt/fable-5' }])).toBe(true);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(await prefs.resetModelVisibilities('xd', [{ agent: 'claude-code', modelId: 'chatgpt/fable-5' }])).toBe(true);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelVisibilityCustomized('claude-code', 'xd', 'chatgpt/fable-5')).toBe(false);
   });
 
@@ -653,20 +822,20 @@ describe('compact model defaults upgrade', () => {
     const prefs = await upgrade();
     expect(memStorage.getItem(markerKey)).toBeNull();
     setOwnerClaim('owner-a', 1);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
     expect(memStorage.getItem(markerKey)).not.toBeNull();
   });
 
   it('isolates owner baselines and rejects stale owner generations', async () => {
     const first = await upgrade();
-    first.setModelVisibility('pi', 'xd', 'gemini', false);
+    await first.setModelVisibility('pi', 'xd', 'gemini', false);
     setOwnerClaim('owner-b', 2, false, false, true);
     const prefs = await upgrade('owner-b', 2);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(true);
     const before = memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-b');
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
-    prefs.migrateModelVisibilityDefaults('owner-b', 1, [provider]);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    await prefs.migrateModelVisibilityDefaults('owner-b', 1, [provider]);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-b')).toBe(before);
   });
 
@@ -674,11 +843,11 @@ describe('compact model defaults upgrade', () => {
     if (hasLegacy) memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'pi:xd:fable-5': false }));
     setOwnerClaim('owner-a', 1, true, false);
     const prefs = await upgrade();
-    prefs.setModelVisibility('pi', 'xd', 'fable-5-1', false);
+    await prefs.setModelVisibility('pi', 'xd', 'fable-5-1', false);
     if (hasLegacy) expect(memStorage.getItem(markerKey)).toBeNull();
     else expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
     setOwnerClaim('owner-a', 1);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(!hasLegacy);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'fable-5-1', defaultEnabled: true })).toBe(false);
   });
@@ -690,11 +859,11 @@ describe('compact model defaults upgrade', () => {
       if (key === markerKey) throw new Error('storage full');
       original(key, value);
     });
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
     spy.mockRestore();
-    prefs.setModelVisibility('pi', 'xd', 'gemini', false);
-    prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    await prefs.setModelVisibility('pi', 'xd', 'gemini', false);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(false);
   });
 });

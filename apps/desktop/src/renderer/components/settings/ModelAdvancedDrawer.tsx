@@ -545,10 +545,10 @@ export function ModelAdvancedDrawer({
                                     : false
                                 }
                                 disabled={!supported || paymentRequired || !selectionAvailable}
-                                onCheckedChange={(next) => {
+                                onCheckedChange={async (next) => {
                                   if (!model || !selectionAvailable) return;
                                   if (
-                                    setModelVisibility(agent, provider.id, model.id, next) === false
+                                    await setModelVisibility(agent, provider.id, model.id, next) === false
                                   ) {
                                     toast.error(
                                       t('settings.providers.models.visibilityWriteFailed'),
@@ -564,8 +564,8 @@ export function ModelAdvancedDrawer({
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
                         <button
                           type="button"
-                          onClick={() => {
-                            if (!resetModelVisibilities(provider.id, visibilityTargets))
+                          onClick={async () => {
+                            if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
                           className="mt-2 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"

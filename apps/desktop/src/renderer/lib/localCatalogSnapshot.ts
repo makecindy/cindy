@@ -7,6 +7,7 @@
  * device-link 的远端 capabilities 不经过这里，继续按 deviceId 独立缓存。
  */
 import { createLogger } from '@/lib/logger';
+import { migrateModelVisibilityDefaults } from '@/state/modelVisibilityPrefs';
 import {
   beginLocalCapabilitiesRefresh,
   commitLocalCapabilitiesSnapshot,
@@ -34,13 +35,13 @@ export async function refreshLocalCatalogSnapshot(): Promise<boolean> {
       loadProvidersSnapshot(),
       loadLocalCapabilitiesSnapshot(),
     ]);
-    if (
-      refreshGeneration !== generation ||
-      !isProvidersRefreshCurrent(providersGeneration, providers) ||
-      !isLocalCapabilitiesRefreshCurrent(capabilitiesGeneration)
-    ) {
-      return false;
-    }
+    const isCurrent = (): boolean => refreshGeneration === generation
+      && isProvidersRefreshCurrent(providersGeneration, providers)
+      && isLocalCapabilitiesRefreshCurrent(capabilitiesGeneration);
+    if (!isCurrent()) return false;
+    await migrateModelVisibilityDefaults(providers.dataOwnerId, providers.ownerGeneration, providers.providers, isCurrent);
+    // Waiting for another renderer's preference write must not publish a stale catalog.
+    if (!isCurrent()) return false;
 
     // 两次提交均为同步通知；React 会把同一事件循环内的 hook 更新批处理到同一帧。
     commitLocalCapabilitiesSnapshot(capabilitiesGeneration, capabilities);

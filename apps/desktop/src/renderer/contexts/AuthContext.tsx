@@ -213,7 +213,7 @@ export function AuthProvider({
       setPendingHandoffOwner(state.dataOwnerId);
       setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
-      setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
+      void setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
       const chatEmbeddingOwnerChanged = setChatEmbeddingSettingsOwner(
         state.dataOwnerId,
         state.ownerGeneration,

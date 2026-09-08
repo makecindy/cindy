@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   commitProviders: vi.fn(),
   providersCurrent: vi.fn(),
   loadProviders: vi.fn(),
+  initializeVisibility: vi.fn(),
   warn: vi.fn(),
 }));
 
@@ -28,6 +29,10 @@ vi.mock('@/lib/providersSnapshotStore', () => ({
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: mocks.warn }),
+}));
+
+vi.mock('@/state/modelVisibilityPrefs', () => ({
+  migrateModelVisibilityDefaults: mocks.initializeVisibility,
 }));
 
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
@@ -53,6 +58,7 @@ describe('refreshLocalCatalogSnapshot', () => {
     mocks.capabilitiesCurrent.mockReturnValue(true);
     mocks.commitProviders.mockReturnValue(true);
     mocks.commitCapabilities.mockReturnValue(true);
+    mocks.initializeVisibility.mockResolvedValue(undefined);
   });
 
   it('keeps the last valid snapshot when any member of the refresh fails', async () => {
@@ -116,5 +122,23 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.commitProviders).toHaveBeenCalledTimes(1);
     expect(mocks.commitProviders.mock.calls[0]?.[1]).toEqual([{ id: 'new-provider' }]);
     expect(mocks.commitCapabilities).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for visibility initialization and rechecks ownership before publishing either snapshot', async () => {
+    const initialization = deferred<void>();
+    const providers = { dataOwnerId: 'owner-a', ownerGeneration: 1, providers: [], providerOrder: [] };
+    mocks.loadProviders.mockResolvedValueOnce(providers);
+    mocks.loadCapabilities.mockResolvedValueOnce([]);
+    mocks.initializeVisibility.mockReturnValueOnce(initialization.promise);
+    const refresh = refreshLocalCatalogSnapshot();
+    await vi.waitFor(() => expect(mocks.initializeVisibility).toHaveBeenCalledOnce());
+    expect(mocks.commitProviders).not.toHaveBeenCalled();
+    expect(mocks.commitCapabilities).not.toHaveBeenCalled();
+    mocks.providersCurrent.mockReturnValue(false);
+    expect(mocks.initializeVisibility.mock.calls[0]?.[3]()).toBe(false);
+    initialization.resolve();
+    await expect(refresh).resolves.toBe(false);
+    expect(mocks.commitProviders).not.toHaveBeenCalled();
+    expect(mocks.commitCapabilities).not.toHaveBeenCalled();
   });
 });

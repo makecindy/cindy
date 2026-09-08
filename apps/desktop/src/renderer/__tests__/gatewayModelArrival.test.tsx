@@ -57,14 +57,14 @@ it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
   },
 );
 
-it('lists downloaded Gateway models in settings without enabling them until the user chooses them', () => {
+it('lists downloaded Gateway models in settings without enabling them until the user chooses them', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
     claimLegacyModelVisibilityOwner: () => ({ dataOwnerId: 'arrival-test', ownerGeneration: 1,
       canWriteOwnerScoped: true, claimed: true, canInitialize: true }),
     syncModelVisibility: vi.fn(async () => undefined),
   } } });
   __resetForTest();
-  setModelVisibilityOwner('arrival-test', 1, 'cloud');
+  await setModelVisibilityOwner('arrival-test', 1, 'cloud');
   setActiveCatalog(BUNDLED_CATALOG);
   const raw = (id: string, name: string) => ({
     id,
@@ -96,7 +96,7 @@ it('lists downloaded Gateway models in settings without enabling them until the 
     }) as ProviderView;
   const existing = raw('deepseek/deepseek-current', 'Existing Model');
   download([existing]);
-  migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
+  await migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
   // A known native family uses Pi by default while compatibility stays opt-in.
   expect(snapshot().models.pi?.find((m) => m.id === existing.id)).toMatchObject({
     nativeApi: 'openai-completions', piApi: 'openai-completions',
@@ -105,12 +105,12 @@ it('lists downloaded Gateway models in settings without enabling them until the 
   const view = render(<UnifiedModelList provider={snapshot()} />);
   expect(screen.getByText('Existing Model')).toBeTruthy();
   expect(screen.queryByText('Future Model 9')).toBeNull();
-  const changed = vi.fn(() => {
-    migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
+  const changed = vi.fn(async () => {
+    await migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
     view.rerender(<UnifiedModelList provider={snapshot()} />);
   });
   setActiveCatalogChangedListener(changed);
-  act(() => download([existing, raw('new-labs/future-9', 'Future Model 9')]));
+  await act(async () => download([existing, raw('new-labs/future-9', 'Future Model 9')]));
   expect(changed).toHaveBeenCalledTimes(1);
   // Settings now keeps disabled visibility rows expanded, while picker filtering stays off.
   expect(screen.getByText('Future Model 9')).toBeTruthy();
@@ -120,7 +120,7 @@ it('lists downloaded Gateway models in settings without enabling them until the 
   const pickerEntries = () => unifiedModelEntries({ providers: [snapshot()],
     isVisible: (providerId, model, agent) => isModelEnabled(agent, providerId, model) });
   expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(false);
-  fireEvent.click(screen.getByRole('switch', { name: /Future Model 9/ }));
+  await act(async () => fireEvent.click(screen.getByRole('switch', { name: /Future Model 9/ })));
   expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe('true');
   expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(true);
   expect(screen.getByText('new-labs')).toBeTruthy();

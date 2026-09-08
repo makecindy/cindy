@@ -23,8 +23,8 @@
  *   - 写:ProvidersSection 的模型开关 / 批量按钮(setModelVisibility / setModelVisibilities)。
  *   - 读:ModelSelector 的右栏过滤(isModelEnabled);ProvidersSection 的计数与开关态。
  *
- * 持久化频率低(仅用户点开关触发),同步写 localStorage,不做 batch / debounce —— 与
- * providerModelMemory / newMakerDraft 取舍一致(避免热更新 relaunch 强退丢最近一次改动)。
+ * 持久化频率低(仅用户点开关触发)。同 owner 的所有窗口共用 Web Lock，在锁内重读并同步
+ * 写 localStorage；调用方等待落盘结果后再报告成功，不做乐观整表覆盖或事后重放。
  * 另外维护一个递增 version + 订阅者集合,供 useSyncExternalStore 让消费组件在开关变更后
  * 实时重算(设置页与聊天页可能同时挂载:设置里改完、返回聊天,ModelSelector 不重挂也能刷新)。
  */
@@ -113,6 +113,59 @@ function saveInitialization(next: InitializationState): boolean {
     return true;
   } catch (error) {
     log.warn('model visibility initialization write failed', error);
+    return false;
+  }
+}
+
+/** Adopt the latest owner state only after all storage reads succeed. */
+function readOwnerState(ownerId: string): void {
+  const nextInitialization = readInitialization(ownerId);
+  const raw = window.localStorage.getItem(ownerStorageKey(ownerId));
+  const eligible = nextInitialization?.eligibleForDefaults ?? (raw === null
+    && window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === null
+    && window.localStorage.getItem(`${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`) === null
+    && !hasAnyProviderModelOverride() && !hasProviderModelHistory()
+    && !hasAnyModelEngineOverride() && listModelFavorites().length === 0);
+  initialization = nextInitialization;
+  mayInitializeDefaults = eligible;
+  cache = readStoredMap(raw);
+}
+
+/**
+ * Serialize the complete read/modify/write, including migration and explicit overrides.
+ * Unlike replayable favorites, a frozen first catalog must never be optimistically lost
+ * and then reconstructed from a newer catalog. No persistence happens outside this lock.
+ * Chromium supplies Web Locks; older single-window hosts/test environments run inline.
+ */
+async function withOwnerLock(
+  ownerId: string | null,
+  ownerGeneration: number,
+  operation: () => boolean,
+): Promise<boolean> {
+  if (!ownerId) return false;
+  const run = (): boolean => {
+    if (ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration
+      || activeOwnerMode === 'signed-out') return false;
+    const snapshot = (): string => JSON.stringify([
+      cache, initialization, mayInitializeDefaults, activeOwnerReadyForWrites, activeOwnerMigrationPending,
+    ]);
+    const before = snapshot();
+    try {
+      readOwnerState(ownerId);
+      return operation();
+    } finally {
+      if (snapshot() !== before) {
+        mirrorToMain(cache ?? {});
+        version += 1;
+        for (const listener of listeners) listener();
+      }
+    }
+  };
+  try {
+    const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+    return locks?.request ? await locks.request(initializationKey(ownerId), run) : run();
+  } catch (error) {
+    log.warn('model visibility update failed', error);
     return false;
   }
 }
@@ -234,8 +287,7 @@ function ensureActiveOwnerReadyForWrites(): boolean {
   if (!activeOwnerReadyForWrites) return false;
   if (!activeOwnerMigrationPending) {
     // A deferred migration may have imported the legacy map after this owner was first loaded.
-    cache = null;
-    load();
+    cache = readStoredMap(window.localStorage.getItem(ownerStorageKey(activeOwnerId)));
   }
   return true;
 }
@@ -330,10 +382,6 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
-  version += 1;
-  // 每次开关变更后把最新快照重推 main,保持 IM /model 与应用内可见性一致。
-  mirrorToMain(map);
-  for (const l of listeners) l();
   return true;
 }
 
@@ -349,11 +397,11 @@ function getVersion(): number {
 }
 
 /** Select the owner namespace used by this renderer's model visibility overrides. */
-export function setModelVisibilityOwner(
+export async function setModelVisibilityOwner(
   ownerId: string | null,
   ownerGeneration: number,
   mode: 'signed-out' | 'local' | 'cloud',
-): void {
+): Promise<void> {
   if (
     activeOwnerId === ownerId
     && activeOwnerGeneration === ownerGeneration
@@ -363,27 +411,19 @@ export function setModelVisibilityOwner(
   activeOwnerGeneration = ownerGeneration;
   activeOwnerMode = mode;
   activeOwnerReadyForWrites = false;
-  activeOwnerMigrationPending = false;
+  activeOwnerMigrationPending = !!ownerId && mode !== 'signed-out';
   cache = null;
   initialization = null;
   mayInitializeDefaults = false;
   if (ownerId && mode !== 'signed-out') {
     try {
-      initialization = readInitialization(ownerId);
-      mayInitializeDefaults = initialization?.eligibleForDefaults ?? (initialization === null
-        && window.localStorage.getItem(ownerStorageKey(ownerId)) === null
-        && window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === null
-        && window.localStorage.getItem(`${DEFAULTS_MIGRATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`) === null
-        && !hasAnyProviderModelOverride() && !hasProviderModelHistory() && !hasAnyModelEngineOverride() && listModelFavorites().length === 0);
+      readOwnerState(ownerId);
     } catch { /* Storage unavailable: never infer permission to initialize an existing profile. */ }
-
-    const migration = migrateLegacyVisibility(ownerId, ownerGeneration);
-    activeOwnerReadyForWrites = migration.readyForWrites;
-    activeOwnerMigrationPending = migration.migrationPending;
   }
-  load();
+  mirrorToMain(cache ?? {});
   version += 1;
   for (const listener of listeners) listener();
+  await withOwnerLock(ownerId, ownerGeneration, ensureActiveOwnerReadyForWrites);
 }
 
 /**
@@ -392,56 +432,58 @@ export function setModelVisibilityOwner(
  * Missing routes remain off. Baselines are separate from user overrides so customization
  * and Restore defaults retain their meaning. No remote catalog enters this path.
  */
-export function migrateModelVisibilityDefaults(
+export async function migrateModelVisibilityDefaults(
   ownerId: string | null,
   ownerGeneration: number,
   providers: readonly ProviderView[],
-): void {
-  if (!ownerId || ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration) return;
-  if (!ensureActiveOwnerReadyForWrites() || activeOwnerMigrationPending) return;
-  try {
-    const stored = readInitialization(ownerId);
-    // Re-read other windows' completed scopes and overrides before adding anything.
-    const state = stored ?? initialization ?? emptyInitialization();
-    const next: InitializationState = { ...state, defaults: { ...state.defaults }, scopes: [...state.scopes], followCatalogKeys: [...state.followCatalogKeys] };
-    const map = readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
-    const aliases = { ...map };
-    for (const provider of providers) {
-      for (const agent of provider.agents) {
-        const models = provider.models[agent] ?? [];
-        if (!models.length) continue;
-        const scope = JSON.stringify([provider.id, agent]);
-        const initializeScope = state.eligibleForDefaults && !next.scopes.includes(scope);
-        for (const model of models) {
-          const key = keyOf(agent, provider.id, model.id);
-          if (initializeScope) next.defaults[key] = model.defaultEnabled !== false;
-          // Only a declared same-engine bridge alias may carry an actual old switch.
-          // Never propagate another engine's choice or infer an on switch from favorites.
-          if (Object.hasOwn(map, key) || next.followCatalogKeys.includes(key)) continue;
-          for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
-            if (!model.id.startsWith(prefix)) continue;
-            const oldKey = keyOf(agent, provider.id, model.id.slice(prefix.length));
-            if (Object.hasOwn(map, oldKey)) aliases[key] = map[oldKey]!;
-            break;
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  if (!ownerId) return;
+  await withOwnerLock(ownerId, ownerGeneration, () => {
+    if (!isCurrent() || !ensureActiveOwnerReadyForWrites() || activeOwnerMigrationPending) return false;
+    try {
+      const stored = readInitialization(ownerId);
+      // Re-read other windows' completed scopes and overrides before adding anything.
+      const state = stored ?? initialization ?? emptyInitialization();
+      const next: InitializationState = { ...state, defaults: { ...state.defaults }, scopes: [...state.scopes], followCatalogKeys: [...state.followCatalogKeys] };
+      const map = readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
+      const aliases = { ...map };
+      for (const provider of providers) {
+        for (const agent of provider.agents) {
+          const models = provider.models[agent] ?? [];
+          if (!models.length) continue;
+          const scope = JSON.stringify([provider.id, agent]);
+          const initializeScope = state.eligibleForDefaults && !next.scopes.includes(scope);
+          for (const model of models) {
+            const key = keyOf(agent, provider.id, model.id);
+            if (initializeScope) next.defaults[key] = model.defaultEnabled !== false;
+            // Only a declared same-engine bridge alias may carry an actual old switch.
+            // Never propagate another engine's choice or infer an on switch from favorites.
+            if (Object.hasOwn(map, key) || next.followCatalogKeys.includes(key)) continue;
+            for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
+              if (!model.id.startsWith(prefix)) continue;
+              const oldKey = keyOf(agent, provider.id, model.id.slice(prefix.length));
+              if (Object.hasOwn(map, oldKey)) aliases[key] = map[oldKey]!;
+              break;
+            }
           }
+          if (!next.scopes.includes(scope)) next.scopes.push(scope);
         }
-        if (!next.scopes.includes(scope)) next.scopes.push(scope);
       }
+      if (Object.keys(aliases).length !== Object.keys(map).length
+        && !persist(aliases, { operation: 'bulk', providerId: '*', enabled: true })) return false;
+      if (JSON.stringify(state) === JSON.stringify(next) && stored !== null) {
+        initialization = stored;
+        return true;
+      }
+      if (!saveInitialization(next)) return false;
+      cache = aliases;
+      return true;
+    } catch (error) {
+      log.warn('model visibility initialization deferred', error);
+      return false;
     }
-    if (Object.keys(aliases).length !== Object.keys(map).length
-      && !persist(aliases, { operation: 'bulk', providerId: '*', enabled: true })) return;
-    if (JSON.stringify(state) === JSON.stringify(next) && stored !== null) {
-      initialization = stored;
-      return;
-    }
-    if (!saveInitialization(next)) return;
-    cache = aliases;
-    mirrorToMain(aliases);
-    version += 1;
-    for (const listener of listeners) listener();
-  } catch (error) {
-    log.warn('model visibility initialization deferred', error);
-  }
+  });
 }
 
 /**
@@ -465,38 +507,40 @@ export function isModelEnabled(
     ? isModelVisible(undefined, model.defaultEnabled) : false;
 }
 
-function setVisibilityTargets(
+async function setVisibilityTargets(
   providerId: string,
   targets: readonly { agent: AgentKind; modelId: string }[],
   enabled: boolean,
   context: VisibilityWriteContext,
-): boolean {
+): Promise<boolean> {
   if (!providerId || targets.some(({ modelId }) => !modelId)) {
     log.warn('model visibility write rejected', { reason: 'invalid-target', ...context });
     return false;
   }
   if (targets.length === 0) return true;
-  if (!ensureActiveOwnerReadyForWrites()) {
-    log.warn('model visibility write rejected', {
-      reason: 'owner-write-not-ready',
-      ...context,
-      ownerGeneration: activeOwnerGeneration,
-      mode: activeOwnerMode,
-      migrationPending: activeOwnerMigrationPending,
-    });
-    return false;
-  }
-  const map = load();
-  let changed = false;
-  const next = { ...map };
-  for (const { agent, modelId } of targets) {
-    const k = keyOf(agent, providerId, modelId);
-    if (next[k] !== enabled) {
-      next[k] = enabled;
-      changed = true;
+  return withOwnerLock(activeOwnerId, activeOwnerGeneration, () => {
+    if (!ensureActiveOwnerReadyForWrites()) {
+      log.warn('model visibility write rejected', {
+        reason: 'owner-write-not-ready',
+        ...context,
+        ownerGeneration: activeOwnerGeneration,
+        mode: activeOwnerMode,
+        migrationPending: activeOwnerMigrationPending,
+      });
+      return false;
     }
-  }
-  return changed ? persist(next, context) : true;
+    const map = load();
+    let changed = false;
+    const next = { ...map };
+    for (const { agent, modelId } of targets) {
+      const k = keyOf(agent, providerId, modelId);
+      if (next[k] !== enabled) {
+        next[k] = enabled;
+        changed = true;
+      }
+    }
+    return changed ? persist(next, context) : true;
+  });
 }
 
 /** 写单个 (agent, 来源, 模型) 的可见性 override。同值短路,避免无意义落盘 / 通知。 */
@@ -505,7 +549,7 @@ export function setModelVisibility(
   providerId: string,
   modelId: string,
   enabled: boolean,
-): boolean {
+): Promise<boolean> {
   const context: VisibilityWriteContext = {
     operation: 'single',
     agent,
@@ -526,7 +570,7 @@ export function setManyVisibility(
   providerId: string,
   modelIds: readonly string[],
   enabled: boolean,
-): boolean {
+): Promise<boolean> {
   const context: VisibilityWriteContext = {
     operation: 'bulk',
     agent,
@@ -550,7 +594,7 @@ export function setModelVisibilities(
   providerId: string,
   targets: readonly { agent: AgentKind; modelId: string }[],
   enabled: boolean,
-): boolean {
+): Promise<boolean> {
   return setVisibilityTargets(providerId, targets, enabled, {
     operation: 'bulk',
     providerId,
@@ -561,32 +605,58 @@ export function setModelVisibilities(
 }
 
 /** Remove explicit choices so subsequent local/online defaults apply again. */
-export function resetModelVisibilities(
+export async function resetModelVisibilities(
   providerId: string,
   targets: readonly { agent: AgentKind; modelId: string }[],
-): boolean {
-  if (!ensureActiveOwnerReadyForWrites()) return false;
-  const map = load();
-  const next = { ...map };
-  if (targets.length === 0) return true;
-  let state: InitializationState;
-  try {
-    state = readInitialization(activeOwnerId!) ?? initialization ?? emptyInitialization();
-  } catch (error) {
-    log.warn('model visibility reset read failed', error);
-    return false;
-  }
-  const follows = new Set(state.followCatalogKeys);
-  for (const target of targets) {
-    const key = keyOf(target.agent, providerId, target.modelId);
-    delete next[key];
-    follows.add(key);
-  }
-  // Write permission to follow defaults first; the old explicit value keeps winning until
-  // its removal succeeds. A failed override write can be retried without losing the choice.
-  if (!saveInitialization({ ...state, followCatalogKeys: [...follows] })) return false;
-  return persist(next, { operation: 'bulk', providerId, enabled: false, modelCount: targets.length });
+): Promise<boolean> {
+  return withOwnerLock(activeOwnerId, activeOwnerGeneration, () => {
+    if (!ensureActiveOwnerReadyForWrites()) return false;
+    const map = load();
+    const next = { ...map };
+    if (targets.length === 0) return true;
+    let state: InitializationState;
+    try {
+      state = readInitialization(activeOwnerId!) ?? initialization ?? emptyInitialization();
+    } catch (error) {
+      log.warn('model visibility reset read failed', error);
+      return false;
+    }
+    const follows = new Set(state.followCatalogKeys);
+    for (const target of targets) {
+      const key = keyOf(target.agent, providerId, target.modelId);
+      delete next[key];
+      follows.add(key);
+    }
+    // Write permission to follow defaults first; the old explicit value keeps winning until
+    // its removal succeeds. A failed override write can be retried without losing the choice.
+    if (!saveInitialization({ ...state, followCatalogKeys: [...follows] })) return false;
+    return persist(next, { operation: 'bulk', providerId, enabled: false, modelCount: targets.length });
+  });
 }
+
+// Other windows publish only durable state. Re-read under the same owner lock instead of
+// trusting event.newValue, which may already be stale when the event is delivered.
+const removeStorageListener = (() => {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  const onStorage = (event: StorageEvent): void => {
+    if (!activeOwnerId || (event.storageArea && event.storageArea !== window.localStorage)) return;
+    if (event.key !== null && event.key !== initializationKey(activeOwnerId)
+      && event.key !== ownerStorageKey(activeOwnerId)
+      && event.key !== ownerMigrationCompleteKey(activeOwnerId)) return;
+    const ownerId = activeOwnerId;
+    void withOwnerLock(ownerId, activeOwnerGeneration, () => {
+      if (window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === '1') {
+        activeOwnerReadyForWrites = true;
+        activeOwnerMigrationPending = false;
+      }
+      return true;
+    });
+  };
+  window.addEventListener('storage', onStorage);
+  return () => window.removeEventListener('storage', onStorage);
+})();
+
+if (import.meta.hot) import.meta.hot.dispose(() => removeStorageListener?.());
 
 export function isModelVisibilityCustomized(agent: AgentKind, providerId: string, modelId: string): boolean {
   return Object.hasOwn(load(), keyOf(agent, providerId, modelId));
