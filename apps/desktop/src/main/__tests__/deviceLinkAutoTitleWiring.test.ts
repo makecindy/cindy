@@ -208,7 +208,7 @@ describe('user rename notification ordering', () => {
       // patchSessionMetaInDb(device-link 远程改名)
       [
         'if (patch.title !== undefined) noteUserTitleWritten(sessionId);',
-        'withStatusWriteLock(sessionId, patch.status, async () => {',
+        'withStatusWriteLock(db, sessionId, patch.status, async () => {',
       ],
       // renameSessionTitlesInDb(MCP 批量改名)
       [

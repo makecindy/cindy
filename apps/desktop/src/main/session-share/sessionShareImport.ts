@@ -261,6 +261,8 @@ export interface CommitShareImportRuntimeScope {
   dbClient: DbClient;
   assertStillValid(): void;
   refCompensationScope: MediaRefCompensationScope;
+  /** Persist cleanup intent before an overwrite transaction marks old sessions deleted. */
+  requestWorktreeRecycle?: (sessionId: string) => Promise<void>;
 }
 
 export interface CommitShareImportResult {
@@ -553,6 +555,15 @@ export async function commitShareImport(
       if (!conflictExisting.some((candidate) => candidate.id === row.id)) {
         conflictExisting.push(row);
       }
+    }
+  }
+
+  // The overwrite transaction below marks these sessions deleted. Persist the
+  // worktree cleanup intent first so a process exit between the two operations
+  // cannot strand their directories without a durable recycle request.
+  if (runtimeScope.requestWorktreeRecycle) {
+    for (const existing of conflictExisting) {
+      await guarded(() => runtimeScope.requestWorktreeRecycle!(existing.id));
     }
   }
 
