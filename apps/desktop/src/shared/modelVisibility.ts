@@ -11,7 +11,7 @@ export interface ModelVisibilityLegacyOwnerClaim extends DataOwnerPushStamp {
   /** This process currently has exclusive access and may snapshot the legacy Renderer key. */
   readonly canInitialize: boolean;
   /** Main's persistent profile-creation provenance; absent on older Main versions. */
-  readonly profileOrigin?: 'new' | 'existing' | 'pending';
+  readonly profileOrigin?: 'new' | 'existing' | 'pending' | 'adopted-local';
 }
 
 export function isModelVisibilityLegacyOwnerClaim(
@@ -24,7 +24,7 @@ export function isModelVisibilityLegacyOwnerClaim(
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).claimed === 'boolean' &&
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).claimedByOtherOwner === 'boolean' &&
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).canInitialize === 'boolean' &&
-    (origin === undefined || origin === 'new' || origin === 'existing' || origin === 'pending')
+    (origin === undefined || origin === 'new' || origin === 'existing' || origin === 'pending' || origin === 'adopted-local')
   );
 }
 

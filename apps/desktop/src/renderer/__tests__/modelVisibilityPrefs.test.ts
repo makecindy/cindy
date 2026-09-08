@@ -45,7 +45,7 @@ let ownerClaim: {
   claimed: boolean;
   claimedByOtherOwner?: boolean;
   canInitialize: boolean;
-  profileOrigin?: 'new' | 'existing' | 'pending';
+  profileOrigin?: 'new' | 'existing' | 'pending' | 'adopted-local';
 };
 
 function setOwnerClaim(
@@ -84,6 +84,115 @@ beforeEach(() => {
   });
   vi.stubGlobal('localStorage', memStorage);
   vi.resetModules();
+});
+
+describe('local profile visibility adoption', () => {
+  const initKey = (owner: string) => `xdt:modelVisibilityPrefs:v1.initialization.owner.${owner}`;
+  const mapKey = (owner: string) => `xdt:modelVisibilityPrefs:v1.owner.${owner}`;
+  const source = {
+    eligibleForDefaults: true,
+    defaults: { 'pi:xd:default': true, 'pi:xd:off': true },
+    scopes: [JSON.stringify(['xd', 'pi'])],
+    followCatalogKeys: ['pi:xd:restored'],
+  };
+  const catalog = {
+    id: 'xd', agents: ['pi'], routing: {}, models: { pi: [
+      { id: 'default', defaultEnabled: false }, { id: 'off', defaultEnabled: true },
+      { id: 'added', defaultEnabled: true },
+    ] },
+  } as ProviderView;
+  function seed() {
+    memStorage.setItem(initKey('local-v1'), JSON.stringify(source));
+    memStorage.setItem(mapKey('local-v1'), JSON.stringify({ 'pi:xd:off': false, 'pi:xd:on': true }));
+    setOwnerClaim('owner-a', 1, false, false, true);
+    ownerClaim.profileOrigin = 'adopted-local';
+  }
+
+  it('retains local defaults, explicit switches and restore-default routes across cloud login and restart', async () => {
+    seed();
+    let prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'off', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'on', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'added', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'restored', defaultEnabled: true })).toBe(true);
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [{ ...catalog,
+      agents: ['codex'], models: { codex: [{ id: 'late', defaultEnabled: true }] },
+    } as ProviderView])).toBe(true);
+    expect(prefs.isModelEnabled('codex', 'xd', { id: 'late', defaultEnabled: false })).toBe(true);
+    expect(JSON.parse(memStorage.getItem(initKey('local-v1'))!)).toEqual(source);
+    await prefs.setModelVisibility('pi', 'xd', 'default', false);
+    vi.resetModules();
+    prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: true })).toBe(false);
+    setOwnerClaim('owner-b', 2, false, false, true);
+    ownerClaim.profileOrigin = 'existing';
+    await prefs.setModelVisibilityOwner('owner-b', 2, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-b', 2, [catalog])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'on', defaultEnabled: true })).toBe(false);
+  });
+
+  it('keeps target overrides and initialized scopes authoritative', async () => {
+    seed();
+    memStorage.setItem(mapKey('owner-a'), JSON.stringify({ 'pi:xd:on': false }));
+    memStorage.setItem(initKey('owner-a'), JSON.stringify({
+      eligibleForDefaults: false, defaults: { 'pi:xd:default': false },
+      scopes: source.scopes, followCatalogKeys: [],
+    }));
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'on', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'restored', defaultEnabled: true })).toBe(false);
+  });
+
+  it('retries a partial handoff after restart before publishing the catalog', async () => {
+    seed();
+    let prefs = await import('../state/modelVisibilityPrefs');
+    const original = memStorage.setItem.bind(memStorage);
+    const write = vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === initKey('owner-a')) throw new Error('disk full');
+      original(key, value);
+    });
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+    expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, expect.any(Object), expect.objectContaining({ pending: true }));
+    write.mockRestore();
+    vi.resetModules();
+    prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'off', defaultEnabled: true })).toBe(false);
+  });
+
+  it('does not infer adoption from a first-owner reservation or an existing cloud database', async () => {
+    seed();
+    ownerClaim.profileOrigin = 'existing';
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog]);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'on', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: true })).toBe(false);
+  });
+
+  it('waits for adoption provenance even when the target already has initialization artifacts', async () => {
+    seed();
+    memStorage.setItem(initKey('owner-a'), JSON.stringify({
+      eligibleForDefaults: false, defaults: {}, scopes: [], followCatalogKeys: [],
+    }));
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    ownerClaim.profileOrigin = 'pending';
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+    ownerClaim.profileOrigin = 'adopted-local';
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: false })).toBe(true);
+  });
 });
 
 describe('model visibility across renderer windows', () => {
@@ -150,6 +259,26 @@ describe('model visibility across renderer windows', () => {
     await locks.settle();
     return { a, b };
   }
+
+  it('waits for an in-flight local switch before adopting into a cloud window', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.initialization.owner.local-v1', JSON.stringify({
+      eligibleForDefaults: true, defaults: { 'pi:xd:pi': true },
+      scopes: [JSON.stringify(['xd', 'pi'])], followCatalogKeys: [],
+    }));
+    setOwnerClaim('owner-a', 1, false, false, true);
+    ownerClaim.profileOrigin = 'adopted-local';
+    const release = locks.hold('xdt:modelVisibilityPrefs:v1.initialization.owner.local-v1');
+    const prefs = await import('../state/modelVisibilityPrefs');
+    const adopting = prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    await Promise.resolve();
+    expect(memStorage.getItem(mapKey)).toBeNull();
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.local-v1', JSON.stringify({ 'pi:xd:pi': false }));
+    release();
+    await adopting;
+    await locks.settle();
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog('pi')])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', model('pi'))).toBe(false);
+  });
 
   it('serializes first catalogs without optimistic overwrites and keeps the first baseline frozen', async () => {
     const { a, b } = await windows();

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ownerDatabasePath, prepareModelDefaultsProfile, readModelDefaultsProfileOrigin } from '../localDb/modelDefaultsProfile';
+import { recordModelVisibilityAdoption } from '../localDb/modelVisibilityAdoption';
 
 let root: string;
 let database: string;
@@ -17,6 +18,32 @@ afterEach(() => {
 });
 
 describe('model defaults profile creation provenance', () => {
+  it('recognizes only the published local snapshot across restart, not a reserved or competing target', () => {
+    const snapshot = `${database}.snapshot`;
+    fs.writeFileSync(snapshot, 'local snapshot');
+    recordModelVisibilityAdoption(database, snapshot);
+    expect(readModelDefaultsProfileOrigin(database)).toBe('pending');
+    fs.writeFileSync(database, 'existing cloud profile');
+    expect(readModelDefaultsProfileOrigin(database)).toBe('existing');
+    fs.unlinkSync(database);
+    fs.linkSync(snapshot, database);
+    fs.unlinkSync(snapshot);
+    expect(readModelDefaultsProfileOrigin(database)).toBe('adopted-local');
+    prepareModelDefaultsProfile(database);
+    expect(readModelDefaultsProfileOrigin(database)).toBe('adopted-local');
+    expect(readModelDefaultsProfileOrigin(ownerDatabasePath(root, 'owner-b'))).toBe('pending');
+  });
+
+  it('keeps an unreadable adoption receipt pending instead of publishing empty preferences', () => {
+    fs.writeFileSync(database, 'adopted profile');
+    const marker = `${database}.model-visibility-adoption.v1.json`;
+    fs.writeFileSync(marker, '{');
+    expect(readModelDefaultsProfileOrigin(database)).toBe('pending');
+    fs.renameSync(marker, `${marker}.bak`);
+    expect(readModelDefaultsProfileOrigin(database)).toBe('pending');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
   it('persists eligibility before DB creation and keeps it across retries/restarts', () => {
     expect(readModelDefaultsProfileOrigin(database)).toBe('pending');
     // The actual startup lease is already held at the profile-creation callsite.

@@ -47,6 +47,8 @@ const STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.owner`;
 const INITIALIZATION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.initialization.owner`;
 const DEFAULTS_MIGRATION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.defaults-migration.v1.owner`;
 const MIGRATION_COMPLETE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.migration-complete.owner`;
+const LOCAL_ADOPTION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.local-adoption.owner`;
+const LOCAL_OWNER_ID = 'local-v1';
 
 /** override 表:key=`${agent}:${providerId}:${modelId}` → 用户显式设定的可见性。 */
 type VisibilityMap = Record<string, boolean>;
@@ -117,6 +119,45 @@ function saveInitialization(next: InitializationState): boolean {
   }
 }
 
+/** Called while both owner locks are held. Target choices win; the local source stays intact. */
+function adoptLocalModelVisibility(ownerId: string): void {
+  if (ownerId === LOCAL_OWNER_ID || activeOwnerMode !== 'cloud') return;
+  const completed = `${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
+  if (window.localStorage.getItem(completed) === '1') return;
+  const claim = window.electronAPI?.maker?.claimLegacyModelVisibilityOwner?.();
+  if (claim?.dataOwnerId !== ownerId || claim.ownerGeneration !== activeOwnerGeneration
+    || !claim.canWriteOwnerScoped) return;
+  if (claim.profileOrigin === 'pending') throw new Error('Local profile adoption is not ready');
+  if (claim.profileOrigin !== 'adopted-local') return;
+
+  const source = readInitialization(LOCAL_OWNER_ID) ?? emptyInitialization();
+  const target = readInitialization(ownerId);
+  const targetPrefixes = (target?.scopes ?? []).flatMap((scope) => {
+    try {
+      const parsed: unknown = JSON.parse(scope);
+      return Array.isArray(parsed) && parsed.length === 2 && parsed.every((part) => typeof part === 'string')
+        ? [`${parsed[1]}:${parsed[0]}:`] : [];
+    } catch { return []; }
+  });
+  const hasTargetScope = (key: string): boolean => targetPrefixes.some((prefix) => key.startsWith(prefix));
+  const next: InitializationState = {
+    eligibleForDefaults: source.eligibleForDefaults || target?.eligibleForDefaults === true,
+    defaults: { ...Object.fromEntries(Object.entries(source.defaults).filter(([key]) => !hasTargetScope(key))), ...target?.defaults },
+    scopes: [...new Set([...source.scopes, ...target?.scopes ?? []])],
+    followCatalogKeys: [...new Set([...source.followCatalogKeys.filter((key) => !hasTargetScope(key)), ...target?.followCatalogKeys ?? []])],
+  };
+  const overrides = {
+    ...readStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID))),
+    ...readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId))),
+  };
+  // A failed write leaves the handoff pending. Re-reading and merging under the locks
+  // makes retry/restart safe without overwriting intervening target choices.
+  window.localStorage.setItem(ownerStorageKey(ownerId), JSON.stringify(overrides));
+  window.localStorage.setItem(initializationKey(ownerId), JSON.stringify(next));
+  window.localStorage.setItem(ownerMigrationCompleteKey(ownerId), '1');
+  window.localStorage.setItem(completed, '1');
+}
+
 /** Adopt the latest owner state only after all storage reads succeed. */
 function readOwnerState(ownerId: string): void {
   const nextInitialization = readInitialization(ownerId);
@@ -161,8 +202,13 @@ async function withOwnerLock(
     ]);
     const before = snapshot();
     try {
+      adoptLocalModelVisibility(ownerId);
       readOwnerState(ownerId);
       return operation();
+    } catch (error) {
+      activeOwnerReadyForWrites = false;
+      activeOwnerMigrationPending = true;
+      throw error;
     } finally {
       if (snapshot() !== before) {
         mirrorToMain(cache ?? {});
@@ -173,7 +219,13 @@ async function withOwnerLock(
   };
   try {
     const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
-    return locks?.request ? await locks.request(initializationKey(ownerId), run) : run();
+    return locks?.request ? await locks.request(initializationKey(ownerId), () => {
+      // Cloud operations may read local-v1 only during the one-time adoption. The
+      // local writer never acquires a cloud lock, so this order cannot form a cycle.
+      const needsLocalLock = activeOwnerMode === 'cloud' && ownerId !== LOCAL_OWNER_ID
+        && window.localStorage.getItem(`${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`) !== '1';
+      return needsLocalLock ? locks.request(initializationKey(LOCAL_OWNER_ID), run) : run();
+    }) : run();
   } catch (error) {
     log.warn('model visibility update failed', error);
     return false;

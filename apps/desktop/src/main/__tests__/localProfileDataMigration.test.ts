@@ -20,6 +20,7 @@ import {
   type LocalProfileDataMigrationDeps,
 } from '../localProfileDataMigration.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
+import { readModelVisibilityAdoption } from '../localDb/modelVisibilityAdoption.js';
 
 const roots: string[] = [];
 
@@ -54,6 +55,62 @@ afterEach(async () => {
 });
 
 describe('adoptLocalProfileDatabase', () => {
+  it('retries receipt publication failure without losing the local database', async () => {
+    const { root, deps } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(source, 'local-db');
+    const writeFile = originalFs.writeFileSync;
+    const failReceipt = vi.spyOn(originalFs, 'writeFileSync').mockImplementation((...args) => {
+      if (String(args[0]).includes('.model-visibility-adoption.v1.json')) {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return writeFile.apply(originalFs, args);
+    });
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('failed');
+    await expect(fs.access(target)).rejects.toThrow();
+    expect(await fs.readFile(source, 'utf8')).toBe('local-db');
+    failReceipt.mockRestore();
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('adopted');
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
+  });
+
+  it('records the actual exclusive-copy target identity on filesystems without hard links', async () => {
+    const { root, deps } = await fixture();
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    deps.fs.link = async () => { throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' }); };
+    deps.fs.copyNoReplace = createProductionLocalProfileDataMigrationDeps(root, 'cindy').fs.copyNoReplace;
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('adopted');
+    const target = path.join(root, 'cindy-owner-a.db');
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
+    await expect(fs.access(`${target}.local-profile-copy-pending`)).rejects.toThrow();
+  });
+
+  it('hands local preferences only to the adopted database, retaining proof on restart', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    expect(readModelVisibilityAdoption(target)).toBe('absent');
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('adopted');
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('target-exists');
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
+    expect((await adoptLocalProfileDatabase('owner-b', deps)).status).toBe('claimed-by-other-owner');
+    expect(readModelVisibilityAdoption(path.join(root, 'cindy-owner-b.db'))).toBe('absent');
+  });
+
+  it('does not grant a handoff when a different target wins publication', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    deps.fs.link = async (_source, destination) => {
+      await fs.writeFile(destination, 'cloud-db');
+      throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    };
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('target-exists');
+    expect(readModelVisibilityAdoption(target)).toBe('absent');
+    expect(await fs.readFile(target, 'utf8')).toBe('cloud-db');
+  });
   it('reserves the first cloud owner synchronously and rejects a different owner', async () => {
     const { root } = await fixture();
 
@@ -144,6 +201,7 @@ describe('adoptLocalProfileDatabase', () => {
       status: 'adopted',
     });
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('local-db');
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
   });
 
   it('keeps the cloud target when exclusive snapshot copy loses the race', async () => {

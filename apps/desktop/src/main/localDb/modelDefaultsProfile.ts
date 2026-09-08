@@ -4,13 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { readModelVisibilityAdoption } from './modelVisibilityAdoption.js';
 
 /** The canonical local profile path, shared by its creator and the early preference IPC. */
 export function ownerDatabasePath(userDataDir: string, ownerId: string): string {
   return path.join(userDataDir, `${BRAND_IDENTITY.dbFilePrefix}-${ownerId}.db`);
 }
 
-export type ModelDefaultsProfileOrigin = 'new' | 'existing' | 'pending';
+export type ModelDefaultsProfileOrigin = 'new' | 'existing' | 'pending' | 'adopted-local';
 
 function markerPath(dbFilePath: string): string {
   return `${dbFilePath}.model-defaults-origin.v1.json`;
@@ -18,6 +19,9 @@ function markerPath(dbFilePath: string): string {
 
 /** Missing model preferences cannot prove a fresh profile. Only its creator grants eligibility. */
 export function readModelDefaultsProfileOrigin(dbFilePath: string): ModelDefaultsProfileOrigin {
+  const adoption = readModelVisibilityAdoption(dbFilePath);
+  if (adoption === 'adopted') return 'adopted-local';
+  if (adoption === 'pending') return 'pending';
   try {
     const bytes = readBoundedFileNoFollowSync(markerPath(dbFilePath), 1_024);
     if (!bytes) return 'existing';

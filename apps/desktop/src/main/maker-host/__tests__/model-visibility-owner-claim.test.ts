@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ownerDatabasePath, prepareModelDefaultsProfile } from '../../localDb/modelDefaultsProfile.js';
+import { recordModelVisibilityAdoption } from '../../localDb/modelVisibilityAdoption.js';
+import { isModelVisibilityLegacyOwnerClaim } from '../../../shared/modelVisibility.js';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,6 +75,24 @@ afterEach(() => {
 });
 
 describe('model visibility legacy Renderer owner claim', () => {
+  it('passes stamped adoption provenance through the preload contract without granting legacy ownership', () => {
+    harness.mode = 'local';
+    harness.ownerId = 'local-v1';
+    claimLegacyModelVisibilityOwner();
+    harness.mode = 'cloud';
+    harness.ownerId = 'owner-a';
+    harness.ownerGeneration = 2;
+    const database = ownerDatabasePath(harness.root, 'owner-a');
+    fs.writeFileSync(database, 'adopted database');
+    recordModelVisibilityAdoption(database);
+    const claim = claimLegacyModelVisibilityOwner();
+    expect(claim).toMatchObject({ dataOwnerId: 'owner-a', ownerGeneration: 2,
+      profileOrigin: 'adopted-local', claimed: false, claimedByOtherOwner: true });
+    expect(isModelVisibilityLegacyOwnerClaim(claim)).toBe(true);
+    harness.ownerId = 'owner-b';
+    expect(claimLegacyModelVisibilityOwner().profileOrigin).toBe('pending');
+  });
+
   it('atomically binds the legacy key to the active stable owner only once', () => {
     expect(claimLegacyModelVisibilityOwner()).toEqual({
       dataOwnerId: 'owner-a',
