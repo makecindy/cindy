@@ -146,8 +146,11 @@ function adoptLocalModelVisibility(ownerId: string): void {
     scopes: [...new Set([...source.scopes, ...target?.scopes ?? []])],
     followCatalogKeys: [...new Set([...source.followCatalogKeys.filter((key) => !hasTargetScope(key)), ...target?.followCatalogKeys ?? []])],
   };
+  const targetFollowCatalogKeys = new Set(target?.followCatalogKeys ?? []);
+  const sourceOverrides = readStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID)));
   const overrides = {
-    ...readStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID))),
+    // Restore defaults is an explicit target choice even though it has no override.
+    ...Object.fromEntries(Object.entries(sourceOverrides).filter(([key]) => !targetFollowCatalogKeys.has(key))),
     ...readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId))),
   };
   // A failed write leaves the handoff pending. Re-reading and merging under the locks

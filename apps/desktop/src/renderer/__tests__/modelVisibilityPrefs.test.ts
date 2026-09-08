@@ -149,6 +149,48 @@ describe('local profile visibility adoption', () => {
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'restored', defaultEnabled: true })).toBe(false);
   });
 
+  it.each([false, true])('preserves target restore-default choices through adoption and restart (interrupted: %s)', async (interrupted) => {
+    seed();
+    const sourceOverrides = { 'pi:xd:off': false, 'pi:xd:on': true, 'pi:xd:keep': true, 'pi:xd:manual': true };
+    memStorage.setItem(mapKey('local-v1'), JSON.stringify(sourceOverrides));
+    memStorage.setItem(initKey('owner-a'), JSON.stringify({
+      eligibleForDefaults: false, defaults: {}, scopes: [],
+      followCatalogKeys: ['pi:xd:off', 'pi:xd:on', 'pi:xd:manual'],
+    }));
+    // A subsequent explicit target switch still outranks its earlier Restore defaults.
+    memStorage.setItem(mapKey('owner-a'), JSON.stringify({ 'pi:xd:manual': false }));
+    let prefs = await import('../state/modelVisibilityPrefs');
+    if (interrupted) {
+      const write = memStorage.setItem.bind(memStorage);
+      const failure = vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
+        if (key === initKey('owner-a')) throw new Error('disk full');
+        write(key, value);
+      });
+      await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+      expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+      failure.mockRestore();
+      vi.resetModules();
+      prefs = await import('../state/modelVisibilityPrefs');
+    }
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    const checkChoices = () => {
+      for (const id of ['off', 'on']) {
+        expect(prefs.isModelEnabled('pi', 'xd', { id, defaultEnabled: true })).toBe(true);
+        expect(prefs.isModelEnabled('pi', 'xd', { id, defaultEnabled: false })).toBe(false);
+      }
+      expect(prefs.isModelEnabled('pi', 'xd', { id: 'manual', defaultEnabled: true })).toBe(false);
+      expect(prefs.isModelEnabled('pi', 'xd', { id: 'keep', defaultEnabled: false })).toBe(true);
+      expect(JSON.parse(memStorage.getItem(mapKey('owner-a'))!)).toEqual({ 'pi:xd:keep': true, 'pi:xd:manual': false });
+      expect(JSON.parse(memStorage.getItem(mapKey('local-v1'))!)).toEqual(sourceOverrides);
+    };
+    checkChoices();
+    vi.resetModules();
+    prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    checkChoices();
+  });
+
   it('retries a partial handoff after restart before publishing the catalog', async () => {
     seed();
     let prefs = await import('../state/modelVisibilityPrefs');
