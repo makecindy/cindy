@@ -299,6 +299,7 @@ import {
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
+import { openMakeToolsDirectory } from './cindy-make/toolsDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   getAllRegisteredDraftUrls,
@@ -7135,6 +7136,18 @@ const registerIpcHandlers = () => {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  // Settings → Cindy Make: open Cindy's private managed-tool directory.
+  // The path is derived in main so the renderer cannot choose an arbitrary folder.
+  ipcMain.handle(
+    'app:open-cindy-make-tools-dir',
+    async (event): Promise<{ success: boolean }> => {
+      assertTrustedAppRendererEvent(event);
+      return openMakeToolsDirectory(app.getPath('userData'), {
+        openPath: (directory) => shell.openPath(directory),
+      });
+    },
+  );
 
   // ── Native clipboard helpers (media:copy-to-clipboard) ──
   //

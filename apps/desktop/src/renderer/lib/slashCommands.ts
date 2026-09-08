@@ -460,6 +460,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
  */
 export interface DispatchContext {
   sessionId?: string;
+  remoteHostId?: string;
   workingDir?: string;
   /** `/name args...` 中 name 后面的剩余文本; 没有则空串。 */
   args?: string;
@@ -490,6 +491,7 @@ export async function dispatchCommand(
         ...(ctx.workingDir ? { workingDir: ctx.workingDir } : {}),
         ...(ctx.args ? { args: ctx.args } : {}),
         ...(ctx.deviceId ? { deviceId: ctx.deviceId } : {}),
+        ...(ctx.remoteHostId ? { remoteHostId: ctx.remoteHostId } : {}),
       });
     } catch (err) {
       log.warn(

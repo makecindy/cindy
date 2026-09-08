@@ -55,6 +55,30 @@ beforeEach(() => {
   h.webContentsSend.mockClear();
 });
 
+describe('/cindy-make composer entry', () => {
+  it('appears in the built-in catalog under the final command name', () => {
+    const { registry } = makeHarness();
+    expect(registry.list()).toContainEqual({
+      kind: 'desktop',
+      name: 'cindy-make',
+      description: expect.stringContaining('/cindy-make'),
+    });
+    expect(registry.list().some((command) => command.name === 'cindy-maker')).toBe(false);
+  });
+
+  it.each([undefined, 'remote-device'])(
+    'rejects unbound IPC without broadcasting or routing (%s)',
+    async (deviceId) => {
+      const { registry, remoteInvoke } = makeHarness();
+      await expect(registry.execute('cindy-make', { sessionId: 'source', deviceId })).rejects.toThrow(
+        '[INVALID_PARAMS]',
+      );
+      expect(h.webContentsSend).not.toHaveBeenCalled();
+      expect(remoteInvoke).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('/goal 远程路由', () => {
   it('deviceId + objective → 隧道 maker:goal:set,不触本机 controller', async () => {
     const { registry, goalController, remoteInvoke } = makeHarness();
