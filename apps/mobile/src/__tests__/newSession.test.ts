@@ -894,6 +894,7 @@ describe('resolveNewSessionAutoDefault', () => {
   it('intent ②b: provider list unavailable → regional default from normalized capabilities (upstream main 移植)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
+      providersUnsupported: true,
       currentEffort: 'high',
       availableModels: [
         {
@@ -941,7 +942,7 @@ describe('resolveNewSessionAutoDefault', () => {
       sessions: [],
       modelRows: [],
       catalogReady: false,
-      providersUnavailable: true,
+      providersUnsupported: true,
       availableModels: [
         {
           id: 'flat-default',
@@ -971,7 +972,7 @@ describe('resolveNewSessionAutoDefault', () => {
       sessions: [],
       modelRows: [],
       catalogReady: false,
-      providersUnavailable: false,
+      providersUnsupported: false,
       availableModels: [{
         id: 'flat-default', label: 'Flat Default', efforts: ['medium'], effortDisplayNames: {}, defaultEffort: 'medium', supportsFastMode: false, newSessionDefault: ['claude-code'],
       } as MobileModelOption],

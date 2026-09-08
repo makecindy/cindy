@@ -23,10 +23,11 @@ export type ModelPickerSheetView =
 export function canUseFlatModelFallback(args: {
   providers: readonly ProviderView[];
   providersReady: boolean;
+  providersUnsupported?: boolean;
   browsingOtherAgent: boolean;
   loading?: boolean;
 }): boolean {
-  return !args.loading && !args.providersReady && args.providers.length === 0 && !args.browsingOtherAgent;
+  return args.providersUnsupported === true && !args.loading && !args.providersReady && args.providers.length === 0 && !args.browsingOtherAgent;
 }
 
 /**

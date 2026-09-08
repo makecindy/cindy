@@ -18,6 +18,7 @@
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
+import { createIpcError } from '../../shared/ipc-errors.js';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 
 /** 有效开关表:key=`${agent}:${providerId}:${modelId}` → 用户显式设定的可见性。 */
@@ -29,7 +30,7 @@ let ready = false;
 const readinessWaiters = new Set<(error?: Error) => void>();
 
 function notReady(): Error {
-  return new Error('MODEL_VISIBILITY_NOT_READY: current account model preferences have not synchronized');
+  return createIpcError('MODEL_VISIBILITY_NOT_READY', 'current account model preferences have not synchronized');
 }
 
 /** Wait only for current-account preferences; never manufacture factory defaults. */

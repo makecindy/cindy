@@ -1019,7 +1019,15 @@ export function registerProviderHandlers(
         allowSideEffects: trusted,
       });
       assertProviderMutationOwner(ownerAtIngress);
-      const modelVisibilityOverrides = await deps.getModelVisibilityOverrides(providers, trusted);
+      let modelVisibilityOverrides: Record<string, boolean>;
+      try {
+        modelVisibilityOverrides = await deps.getModelVisibilityOverrides(providers, trusted);
+      } catch (error) {
+        if (isIpcError(error) && error.code === 'MODEL_VISIBILITY_NOT_READY') {
+          throwIpcError('MODEL_VISIBILITY_NOT_READY', 'Model preferences are still synchronizing. Retry shortly.');
+        }
+        throw error;
+      }
       assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
