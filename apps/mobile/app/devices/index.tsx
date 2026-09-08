@@ -66,6 +66,8 @@ import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
+import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
+import { buildHomeProjectMachineIdentities, type HomeProjectMachineIdentity } from '@/session/homeProjectMachineIdentity';
 import {
   HomeNativeStackHeader,
   NativePullDownMenu,
@@ -1700,6 +1702,10 @@ function HomeScreenContent() {
     }),
     [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t],
   );
+  const projectMachineIdentities = useMemo(
+    () => buildHomeProjectMachineIdentities(home, deviceConnectionStates),
+    [home, deviceConnectionStates],
+  );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const session of homeSessions) {
@@ -2288,6 +2294,7 @@ function HomeScreenContent() {
       expandedAutomationGroups={expandedAutomationGroups}
       isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1 && sections.length > 1}
       item={item}
+      machineIdentity={item.kind === 'project' ? projectMachineIdentities.get(item.project.key) : undefined}
       nextIsBlock={isBlockHomeRow(section.data[index + 1])}
       onArchive={archiveSession}
       onOpenAutomationGroup={openAutomationGroup}
@@ -2336,6 +2343,7 @@ function HomeScreenContent() {
     toggleSessionPinned,
     homeScrollY,
     screenHeight,
+    projectMachineIdentities,
   ]);
 
   // 底部边到边:列表填满到物理屏底(内容滚到 home indicator 下方),用 inset 兜底而非靠 SafeAreaView 留白带。
@@ -3311,6 +3319,7 @@ function ProjectRow({
   expandedAutomationGroups,
   headerRefs,
   kind = 'project',
+  machineIdentity,
   onDragEnd,
   onDragMove,
   onDragStart,
@@ -3331,6 +3340,7 @@ function ProjectRow({
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, View>>;
   kind?: 'project' | 'dialogue';
+  machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
   onDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
@@ -3421,8 +3431,9 @@ function ProjectRow({
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
-  const deviceName = kind === 'project' ? project.deviceName.trim() : '';
-  const displayTitle = deviceName ? `${project.title} - ${deviceName}` : project.title;
+  const displayTitle = machineIdentity
+    ? `${project.title} (${machineIdentity.displayLabel})`
+    : project.title;
   const reorderable = kind === 'project' && !!onDragStart && !!onDragMove && !!onDragEnd;
   const dragGesture = useMemo(() => {
     if (!onDragStart || !onDragMove || !onDragEnd || kind !== 'project') return null;
@@ -3485,11 +3496,7 @@ function ProjectRow({
       )}
       <View style={styles.projectLabel}>
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
-        {deviceName ? (
-          <Text style={styles.projectDeviceName} numberOfLines={1} ellipsizeMode="middle">
-            {` - ${deviceName}`}
-          </Text>
-        ) : null}
+        {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
     </Pressable>
@@ -3638,6 +3645,7 @@ function HomeListRowInner({
   expandedAutomationGroups,
   isLastPinnedRow,
   item,
+  machineIdentity,
   nextIsBlock,
   onArchive,
   onOpenAutomationGroup,
@@ -3665,6 +3673,7 @@ function HomeListRowInner({
   /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
   isLastPinnedRow: boolean;
   item: HomeRow;
+  machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;
   onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
@@ -3696,6 +3705,7 @@ function HomeListRowInner({
         expandedAutomationGroups={expandedAutomationGroups}
         headerRefs={projectHeaderRefs}
         kind={item.kind}
+        machineIdentity={machineIdentity}
         onDragEnd={item.kind === 'project' ? onProjectDragEnd : undefined}
         onDragMove={item.kind === 'project' ? onProjectDragMove : undefined}
         onDragStart={item.kind === 'project' ? onProjectDragStart : undefined}
@@ -4660,9 +4670,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   projectLabel: {
-    alignItems: 'baseline',
+    alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
+    gap: 6, // Desktop ProjectNode name / remote icon / machine label gap-1.5.
     minWidth: 0,
   },
   projectTitle: {
@@ -4676,15 +4687,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   projectFolderTitle: {
     flex: 0,
     flexShrink: 1,
-  },
-  projectDeviceName: {
-    color: colors.textTertiary,
-    flexShrink: 0,
-    fontSize: typeScale.footnote,
-    fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.listTitle,
-    // Reserve room for both names; long folders must not push the device away.
-    maxWidth: '50%',
   },
   projectCount: {
     color: colors.textTertiary,
