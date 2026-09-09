@@ -4423,7 +4423,7 @@ export class CodexAgent extends BaseAgent {
           model: opts.model,
         });
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
-    const initialCustomContextWindow = !reviewMode && !opts.remoteHostId
+    const initialCustomContextWindow = !reviewMode
       ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const customContextCatalogIdentity = (
@@ -4437,7 +4437,9 @@ export class CodexAgent extends BaseAgent {
       opts.model,
       initialCustomContextWindow,
     );
-    const usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
+    // SSH shares a daemon across tasks; its context settings belong to each
+    // thread/start or thread/resume config, never a local single-session host.
+    const usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
     const resolveModelSwitchCatalogIdentity = async (
       newModel: string,
       setOpts?: { providerId?: string | null },
@@ -4445,7 +4447,7 @@ export class CodexAgent extends BaseAgent {
       const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : mutableProviderId;
-      const contextWindow = reviewMode || opts.remoteHostId
+      const contextWindow = reviewMode
         ? null
         : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
       return customContextCatalogIdentity(newModel, contextWindow);
