@@ -8,7 +8,10 @@ import {
 } from '../fixedDirectory';
 
 function directoryStat(isDirectory: boolean): fs.Stats {
-  return { isDirectory: () => isDirectory } as fs.Stats;
+  return {
+    isDirectory: () => isDirectory,
+    isSymbolicLink: () => false,
+  } as fs.Stats;
 }
 
 function missingPathError(): NodeJS.ErrnoException {
@@ -205,10 +208,14 @@ describe('getFixedDirectoryStats', () => {
       }
       return [{ name: 'b.bin', isDirectory: () => false }];
     });
-    const lstat = vi.fn(async (filePath: string) => ({
-      isFile: () => filePath.endsWith('.bin'),
-      size: filePath.endsWith('a.bin') ? 3 : 5,
-    }));
+    const lstat = vi.fn(async (filePath: string) =>
+      filePath === '/cache'
+        ? { isDirectory: () => true, isSymbolicLink: () => false }
+        : {
+            isFile: () => filePath.endsWith('.bin'),
+            size: filePath.endsWith('a.bin') ? 3 : 5,
+          },
+    );
 
     const fileSystem = { readdir, lstat } as unknown as FixedDirectoryStatsFileSystem;
     await expect(getFixedDirectoryStats('/cache', fileSystem)).resolves.toEqual({
@@ -222,8 +229,22 @@ describe('getFixedDirectoryStats', () => {
     await expect(
       getFixedDirectoryStats('/cache', {
         readdir: vi.fn().mockRejectedValue(error),
-        lstat: vi.fn(),
+        lstat: vi.fn().mockRejectedValue(error),
       } as unknown as FixedDirectoryStatsFileSystem),
     ).resolves.toEqual({ bytes: 0, fileCount: 0 });
+  });
+
+  it('does not traverse a symlinked root', async () => {
+    const readdir = vi.fn();
+    await expect(
+      getFixedDirectoryStats('/cache', {
+        lstat: vi.fn().mockResolvedValue({
+          isDirectory: () => true,
+          isSymbolicLink: () => true,
+        }),
+        readdir,
+      } as unknown as FixedDirectoryStatsFileSystem),
+    ).resolves.toEqual({ bytes: 0, fileCount: 0 });
+    expect(readdir).not.toHaveBeenCalled();
   });
 });

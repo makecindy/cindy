@@ -57,6 +57,18 @@ export async function getFixedDirectoryStats(
   rootDir: string,
   fileSystem: FixedDirectoryStatsFileSystem = fs.promises,
 ): Promise<FixedDirectoryStats> {
+  try {
+    const rootStat = await fileSystem.lstat(rootDir);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      return { bytes: 0, fileCount: 0 };
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return { bytes: 0, fileCount: 0 };
+    }
+    throw error;
+  }
+
   const walk = async (directory: string): Promise<FixedDirectoryStats> => {
     let entries: Array<{ name: string; isDirectory(): boolean }>;
     try {

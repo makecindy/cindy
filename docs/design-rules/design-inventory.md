@@ -151,3 +151,11 @@ Mobile 尚未展开顶层 screen，**待 DS-7 增量发现**；数值接管在 D
 | `desktop.window.sidebar` | unassigned | legacy | DESIGN.md §15 CINDY 皮肤族 | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
 | `desktop.window.voice-dictionary-toast` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
 | `desktop.window.voice-overlay` | unassigned | legacy | — | DS-8 提供适用数值；DS-9 按入口核对标准组件与呈现继承 | DS-9 核对实际消费者、局部 alias 与跨入口影响；保留现有保护合同，残余项登记理由、实际负责人及复查日期 |
+
+
+### Usage History category colors (2026-09-09)
+
+- Surface: `desktop.settings`; owner: kirozeng.
+- All historical model identities share the category palette across table and daily bars; Agent/harness marks reuse `--engine-badge-cc`, `--engine-badge-codex` and `--usage-model-1` for pi teal (owner refinement, 2026-09-09).
+- `usageHistoryColors.ts` derives OKLCH hues from existing `--usage-model-*` seeds at runtime (governance §3.4), outside static token migration.
+- Geometry, hit testing and filtering retain their existing contracts. Light/Dark evidence and designer acceptance are recorded separately.

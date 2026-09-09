@@ -7706,11 +7706,15 @@ const registerIpcHandlers = () => {
           activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
       };
     };
-    const withActiveChatAttachmentRoot = <T>(
+    const withActiveChatAttachmentRoot = async <T>(
       action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
     ): Promise<T> => {
       const { rootDir, isCurrentOwner } = captureActiveChatAttachmentRoot();
-      return action(rootDir, isCurrentOwner);
+      const result = await action(rootDir, isCurrentOwner);
+      if (!isCurrentOwner()) {
+        throwIpcError('PRECONDITION_FAILED', 'chat attachment directory owner changed');
+      }
+      return result;
     };
 
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
@@ -8505,6 +8509,12 @@ app.on('ready', async () => {
       const dbClientTakeover = await ensureLifecycleDbClient(userId);
       logStartupPhase('db-client-takeover');
       if (dbClientTakeover.mode === 'failed' || dbClientTakeover.mode === 'skipped') {
+        // Do not expose the previous owner's startup snapshot after a failed
+        // takeover. A later successful takeover will capture a fresh snapshot.
+        startupDatabaseSizeWarningStatus = { databaseBytes: null };
+        startupDatabaseSizeWarningStatusChecked = false;
+        startupDatabaseSizeWarningOwnerScope = null;
+        broadcastDatabaseSizeWarningChanged();
         dbClientLog.warn('[DbClient] lifecycle client unavailable; skip db-client startup hooks', {
           userId,
           mode: dbClientTakeover.mode,

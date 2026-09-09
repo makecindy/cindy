@@ -5084,6 +5084,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
       ipcRenderer.invoke('local-db:ensure-ready', userId),
     databaseSizeWarning: {
+      // Settings and the startup capacity snapshot are local to this device's
+      // shared Electron userData profile; they are not synced across devices
+      // or persisted in the cloud account.
       getSettings: (): Promise<{
         thresholdGiB: number;
         disabled: boolean;
