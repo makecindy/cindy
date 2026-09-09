@@ -1,3 +1,4 @@
+import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptSessionRuntimeMutation, getPendingSessionRuntimeMutation, clearSessionRuntimeControlState } from '../sessionRuntimeControl.js';
 import { createPendingAgentSwitchRegistry } from '../sessionAgentSwitchHandler.js';
@@ -1326,16 +1327,19 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
 
-  it.each(['claude-code', 'codex', 'pi'] as const)('reloads %s context settings only after the current turn', async (agentKind) => {
+  it.each((['claude-code', 'codex', 'pi'] as const).flatMap(agentKind => [null, 'ssh-host'].map(remoteHostId => ({ agentKind, remoteHostId }))))('reloads $agentKind context on $remoteHostId after the turn without cleanup', async ({ agentKind, remoteHostId }) => {
     const sessionId = rememberSession(`context-reload-${agentKind}`);
     setSessionProvider(sessionId, 'xd');
     let busy = true;
-    const closeSession = vi.fn(async () => {});
+    const cleanup = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {
+      await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, cleanup);
+    });
     const setModel = vi.fn(async () => {});
     const registerPendingCredentialSwitch = vi.fn();
     const maker: RuntimeSetModelMaker = {
-      getSession: () => ({ agentKind, model: 'same-model', setModel }),
-      listActiveSessions: () => [{ id: sessionId, agentKind, isTurnRunning: () => busy }],
+      getSession: () => ({ agentKind, remoteHostId, model: 'same-model', setModel }),
+      listActiveSessions: () => [{ id: sessionId, agentKind, remoteHostId, isTurnRunning: () => busy }],
       closeSession,
     };
     const input = { maker, sessionId, model: 'same-model', providerId: 'xd',
@@ -1348,6 +1352,9 @@ describe('applyRuntimeSetModelChange', () => {
     expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId);
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(cleanup).not.toHaveBeenCalled();
+    await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, cleanup);
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {

@@ -6350,7 +6350,10 @@ export class PiAgent extends BaseAgent {
         // Same-route configuration changes need models.json to be reloaded too.
         // Ordinary route changes continue through Pi's existing switch_model path.
         const provider = target?.providerId !== undefined ? target.providerId : mutableProviderId;
-        if (model !== mutableModel || provider !== mutableProviderId) return false;
+        // The host stores XD (or null), while Pi runs the same gateway as cindy.
+        const contextSource = (id: string | null | undefined) =>
+          id == null || id === 'xd' || id === PI_PROVIDER_ID ? PI_PROVIDER_ID : id;
+        if (model !== mutableModel || contextSource(provider) !== contextSource(mutableProviderId)) return false;
         const window = deps.resolveModelContextLimit?.(provider, model);
         return typeof window === 'number' && window > 0 && window !== ctx.contextWindow;
       },

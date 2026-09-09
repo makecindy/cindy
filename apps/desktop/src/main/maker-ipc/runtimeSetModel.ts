@@ -1,3 +1,4 @@
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 
 import {
@@ -299,7 +300,7 @@ export async function applyRuntimeSetModelChange(
         // A configuration reload targets this task's remote handle only. The
         // local-only credential helper deliberately does not close SSH handles.
         if (isSelfBusy()) throw new CredentialModeSwitchBusyError([sessionId]);
-        await maker.closeSession(sessionId);
+        await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
       } else {
         await prepareLocalSessionCredentialModeSwitch({
           maker,

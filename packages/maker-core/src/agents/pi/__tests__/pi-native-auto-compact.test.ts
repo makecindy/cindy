@@ -183,6 +183,26 @@ describe("PiAgent native auto-compaction ownership", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {
+    let window = 200_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => window;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'context-alias', workingDir: cwd, model: 'm', providerId });
+    try {
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(false);
+      }
+      window = 100_000;
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(true);
+      }
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'other-source' })).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('n', { providerId: 'xd' })).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
   function buildDeps(): AgentDeps {
     return {
       auth: {

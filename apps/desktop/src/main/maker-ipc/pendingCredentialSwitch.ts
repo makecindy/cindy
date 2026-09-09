@@ -1,3 +1,4 @@
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { AgentKind } from '@cindy/maker-core';
 
 import {
@@ -180,7 +181,7 @@ export class PendingCredentialSwitchService {
       if (session) {
         try {
           if (session.remoteHostId && target.forceSessionRebuild) {
-            await this.deps.maker.closeSession(sessionId);
+            await withRehydrateCloseSuppressed(sessionId, () => this.deps.maker.closeSession(sessionId));
           } else {
             await prepareLocalSessionCredentialModeSwitch({
               maker: this.deps.maker,
