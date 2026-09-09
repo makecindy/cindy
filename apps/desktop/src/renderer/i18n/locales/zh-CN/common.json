@@ -7798,7 +7798,7 @@
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "常规工具无需询问直接执行；安装、更新或卸载 Pi 扩展仍需确认。风险最高，只适合可信任务。"
+            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
           }
         }
       }
@@ -8779,7 +8779,7 @@
       "contextRebuild": {
         "labelOverflow": "已整理上下文并继续",
         "labelTimeout": "上一轮没有响应，已整理后继续",
-        "labelStrip": "已去掉过大图片并继续",
+        "labelStrip": "已整理历史图片",
         "toggleHint": "查看交接内容",
         "handoffTitle": "交接内容——整理后发送给后续对话的上下文摘要(不计入对话记录，仅在此展示)",
         "handoffTitleEnglishSource": "交接内容——整理后发送给后续对话的上下文摘要，原文为英文(不计入对话记录，仅在此展示)"
@@ -9338,6 +9338,8 @@
         "all": "全部"
       },
       "filterSortBy": {
+        "created": "创建时间",
+        "activity": "最近活动",
         "recency": "按时间排序",
         "manual": "手动排序",
         "priority": "优先级"
@@ -9353,7 +9355,7 @@
       "filterTaskSortHeading": "任务排序",
       "filterProjectOrderHeading": "项目顺序",
       "filterProjectOrder": {
-        "activity": "按最近活动",
+        "activity": "跟随任务排序",
         "custom": "手动"
       },
       "filterProjectOrderTip": {
@@ -11411,7 +11413,7 @@
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
-      "codexHistoryOversized": "这段历史里有过大的图片，远端压缩发不出去。Cindy 会自动略去这些图片，并在当前任务里继续。",
+      "codexHistoryOversized": "图片历史未能自动恢复并继续。请发送“继续”，接着完成当前任务。",
       "codexHistoryOversizedRemote": "这段历史里有过大的图片，远端压缩发不出去。请在运行 Codex 的那台电脑上打开任务后再发送，Cindy 会自动略去这些图片并继续。",
       "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",

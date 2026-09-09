@@ -10,10 +10,14 @@ const loggerMocks = vi.hoisted(() => ({
 
 const storeMocks = vi.hoisted(() => ({
   mayHaveChangedState: vi.fn(() => false),
+  command: vi.fn(),
+  commandFailure: vi.fn(),
 }));
 
 vi.mock('../pi-package-store.js', () => ({
   mutatePiPackage: vi.fn(),
+  executePiNativeManagementCommand: storeMocks.command,
+  piNativeManagementFailure: storeMocks.commandFailure,
   piPackageMutationMayHaveChangedState: storeMocks.mayHaveChangedState,
 }));
 
@@ -40,6 +44,23 @@ function buildDeps() {
 }
 
 describe('Pi managed package Main authorization', () => {
+  it('retains safe core failure diagnostics through the legacy error wrapper', async () => {
+    const details = { phase: 'host-binary-update', hostStage: 'download', packagesUpdated: true,
+      recovery: 'check-host-update-and-retry-core' } as const;
+    storeMocks.command.mockRejectedValueOnce(createPiPackageCommandError('ENOTFOUND token=secret', {
+      phase: 'native-command', outcome: 'failed', command: 'update', exitCode: 1,
+    }));
+    storeMocks.commandFailure.mockReturnValueOnce(details);
+    storeMocks.mayHaveChangedState.mockReturnValueOnce(true);
+    const error = await mutateAuthorizedPiManagedPackage({ action: 'command', command: { kind: 'all', force: false },
+      authorization: 'confirmed-tool-call' }).catch(error => error);
+    expect(error).toBeInstanceOf(PiManagedPackageMutationFailedError);
+    expect(error).toMatchObject({ mayHaveChangedState: true, commandFailure: details,
+      diagnostic: { reason: 'network', exitCode: 1, recovery: 'check-network' } });
+    expect(error).not.toHaveProperty('cause');
+    expect(JSON.stringify(error)).not.toContain('secret');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

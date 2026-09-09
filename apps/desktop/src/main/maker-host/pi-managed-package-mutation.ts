@@ -16,6 +16,8 @@ import {
 } from './pi-package-mutation-grant.js';
 import {
   mutatePiPackage,
+  executePiNativeManagementCommand,
+  piNativeManagementFailure,
   piPackageMutationMayHaveChangedState,
   type PiPackageMutationHooks,
 } from './pi-package-store.js';
@@ -42,12 +44,7 @@ export async function mutateAuthorizedPiManagedPackage(
   request: PiManagedPackageMutationRequest,
   deps: PiManagedPackageMutationDeps = defaultDeps,
   hooks?: PiPackageMutationHooks,
-): Promise<PiPackageMutationResult> {
-  const storeRequest = {
-    action: request.action,
-    source: request.source,
-  } as const;
-
+): Promise<PiPackageMutationResult | Record<string, unknown>> {
   if (
     request.authorization !== 'local-desktop-command'
     && request.authorization !== 'authenticated-im-command'
@@ -57,6 +54,8 @@ export async function mutateAuthorizedPiManagedPackage(
   }
 
   try {
+    if (request.action === 'command') return await executePiNativeManagementCommand(request.command);
+    const storeRequest = { action: request.action, source: request.source };
     const grant = deps.issueGrant(storeRequest);
     return await (hooks
       ? deps.mutate(storeRequest, grant, hooks)
@@ -65,18 +64,21 @@ export async function mutateAuthorizedPiManagedPackage(
     if (error instanceof PiManagedPackageMutationCancelledError) throw error;
     const diagnostic = piPackageCommandDiagnostic(error);
     const failureCode = piPackageMutationFailureCategory(error);
+    const commandFailure = request.action === 'command' ? piNativeManagementFailure(error) : undefined;
     const mayHaveChangedState = piPackageMutationMayHaveChangedState(error);
     // This wrapper can receive raw Pi/npm/Git stderr containing source
     // credentials. Persist only stable recovery metadata, never Error.message.
-    log.warn('Pi managed package native mutation failed', {
+    log.warn(commandFailure ? 'Pi management command failed' : 'Pi managed package native mutation failed', {
       action: request.action,
       failureCode,
       mayHaveChangedState,
       ...(diagnostic ? { diagnostic } : {}),
+      ...(commandFailure ? { commandFailure } : {}),
     });
     throw new PiManagedPackageMutationFailedError(
       mayHaveChangedState,
       failureCode,
+      commandFailure,
       diagnostic,
     );
   }

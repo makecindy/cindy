@@ -154,6 +154,9 @@ Cindy 对 Pi 的产品安全升级，更不能拿来扩大阻断范围。
 
 Full access 读/搜/bash 与原生对齐的需求正本见 [`pi-full-access-native-parity.md`](pi-full-access-native-parity.md)。
 
+Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
+[`pi-managed-commands.md`](pi-managed-commands.md)。
+
 ## 4. 维护不变量(改动时不得破坏)
 
 1. **权限档从严到宽**:`capabilities.permissionModes` 必须 `[ask, auto, bypassPermissions]`

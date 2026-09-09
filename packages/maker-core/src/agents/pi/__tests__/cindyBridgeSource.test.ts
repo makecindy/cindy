@@ -384,6 +384,7 @@ describe('cindy-bridge extension source', () => {
         ? { ok: false, error: 'Safe failure',
             ...(outcome === 'cancelled' ? { cancelled: true } : {
               failureCode: 'native-command-failed', mayHaveChangedState: true, diagnostic,
+              commandFailure: { phase: 'native-core', packagesUpdated: true, recovery: 'retry-core-only', stderr: 'fake-private-command' },
             }),
             argv: '--token=fake-private-argv',
           }
@@ -392,6 +393,7 @@ describe('cindy-bridge extension source', () => {
         .catch((failure: Error) => failure);
       expect(error.message).toContain(outcome === 'cancelled' ? '"cancelled":true' : '"outcome":"' + outcome + '"');
       expect(error.message).not.toContain('fake-private');
+      if (outcome !== 'cancelled') expect(error.message).toContain('"recovery":"retry-core-only"');
       failed = false;
       const result = await tool.execute('retry', { action: 'install', source: 'npm:sample' }, undefined, undefined, ctx);
       expect(result.content[0].text).toContain('"nativeCommandSucceeded":true');
@@ -1633,7 +1635,6 @@ describe('cindy-bridge extension source', () => {
       "printf '%s\\0' 'pi update npm:context-mode' | xargs -0 sh -c",
       "printf '%s\\0' 'pi remove npm:context-mode' | parallel",
       'find . -exec env -u PI_CODING_AGENT_DIR pi install npm:context-mode +',
-      '$(printf pi) install npm:context-mode',
       'echo safe && pi install npm:context-mode',
     ];
     for (const command of commands) {
@@ -1659,6 +1660,9 @@ describe('cindy-bridge extension source', () => {
     }
 
     for (const command of [
+      '$SHELL -c echo',
+      'backup=$(mktemp -d); echo ready',
+      '$(printf pi) install npm:context-mode',
       'pi --version',
       'pi help install',
       'npm install context-mode',
@@ -1695,9 +1699,9 @@ describe('cindy-bridge extension source', () => {
     expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
   });
 
-  it('does not let Full Access bypass Cindy-managed extension confirmation', () => {
+  it('routes both Pi command names to the single host permission service', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "if (event.toolName === 'cindy_pi_extension') return;",
+      "if (event.toolName === 'cindy_pi_extension' || event.toolName === 'cindy_pi_command') return;",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "if (permission.mode === 'bypassPermissions') return;",

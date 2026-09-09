@@ -7,7 +7,7 @@
  *   - vendor   : 'all' | 'cc' | 'codex'           → 客户端 render 阶段过滤
  *   - lastActivity : 'all' | '1d' | ...           → 客户端 render 阶段过滤
  *   - groupBy  : 'project' | 'flat'               → 客户端 render 阶段切换主列表分组
- *   - sortBy   : 'recency' | 'priority'           → 客户端 render 阶段切换任务排序
+ *   - sortBy   : 'recency' | 'created' | 'priority'           → 客户端 render 阶段切换任务排序
  *   - projectOrder : 'activity' | 'custom'        → 按项目分组时的项目行顺序
  *   - manualProjectOrder : string[]               → Project 分组的自定义顺序
  *

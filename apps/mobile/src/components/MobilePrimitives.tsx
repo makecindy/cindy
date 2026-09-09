@@ -15,6 +15,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { fontWeight, iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -335,6 +336,7 @@ export function ScreenHeader({
   subtitle,
   title,
   titleTestID,
+  syncing,
 }: {
   action?: MainWindowAction;
   backTestID?: string;
@@ -346,6 +348,7 @@ export function ScreenHeader({
   subtitle?: string | null;
   title: string;
   titleTestID?: string;
+  syncing?: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
   const compact = density === 'compact';
@@ -360,9 +363,12 @@ export function ScreenHeader({
       ) : null}
       <View style={styles.headerText}>
         {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
-        <Text numberOfLines={1} style={[styles.headerTitle, compact && styles.headerTitleCompact]} testID={titleTestID}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Text numberOfLines={1} style={[styles.headerTitle, compact && styles.headerTitleCompact, { flexShrink: 1 }]} testID={titleTestID}>
           {title}
         </Text>
+        {syncing !== undefined ? <QuietSyncIndicator active={syncing} /> : null}
+        </View>
         {subtitle ? (
           <Text numberOfLines={1} style={styles.headerSubtitle}>
             {subtitle}

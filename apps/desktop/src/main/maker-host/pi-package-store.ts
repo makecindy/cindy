@@ -1,3 +1,4 @@
+import { piBinaryUpdateFailureStage } from '../agent-binaries/pi-self-update.js';
 /**
  * Cindy-owned Pi package store.
  *
@@ -16,6 +17,8 @@ import { StringDecoder } from 'node:string_decoder';
 
 import type {
   PiPackageCommandDiagnostic,
+  PiNativeManagementCommand,
+  PiManagedCommandFailure,
   PiNativePackageEntry,
 } from '@cindy/maker-core';
 import { app } from 'electron';
@@ -31,7 +34,7 @@ import {
   type PiPackageView,
 } from '../../shared/piPackages.js';
 import { createLogger } from '../logger.js';
-import { getReadyBinaryPath } from '../agent-binaries/index.js';
+import { getReadyBinaryPath, updateReadyPiBinary } from '../agent-binaries/index.js';
 import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import {
@@ -364,8 +367,6 @@ interface PackageManifest {
   peerDependencies?: Record<string, string>;
   scripts?: Record<string, unknown>;
 }
-
-let currentPiVersionPromise: Promise<string | undefined> | undefined;
 
 export interface PiManagedPackageSkill {
   path: string;
@@ -851,6 +852,8 @@ async function runPackageProcess(
       env: {
         ...process.env,
         PI_CODING_AGENT_DIR: packageHome(),
+        PI_PACKAGE_DIR: undefined,
+        PI_MANAGED_INSTALL_ROOT: undefined,
         NO_COLOR: '1',
         GIT_TERMINAL_PROMPT: '0',
         npm_config_yes: 'true',
@@ -976,25 +979,120 @@ function parsePiVersionOutput(output: string): string | undefined {
   return match?.[1];
 }
 
-async function getCurrentPiVersion(): Promise<string | undefined> {
-  if (currentPiVersionPromise) return currentPiVersionPromise;
-  currentPiVersionPromise = (async () => {
-    const binaryPath = getReadyBinaryPath('pi');
-    if (!binaryPath) return undefined;
-    const directoryVersion = path.basename(path.dirname(binaryPath));
-    if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(directoryVersion)) return directoryVersion;
+let currentPiVersionProbe: { identity: string; promise: Promise<string | undefined> } | undefined;
+
+async function getCurrentPiVersion(force = false): Promise<string | undefined> {
+  const binary = getReadyBinaryPath('pi');
+  if (!binary) return undefined;
+  const stat = await fs.stat(binary).catch(() => undefined);
+  const identity = stat ? [binary, stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':') : undefined;
+  // Share inspection probes only while the executable identity is unchanged.
+  // Explicit core-update verification always executes --version again.
+  if (!force && identity && currentPiVersionProbe?.identity === identity) return currentPiVersionProbe.promise;
+  const promise = runPiPackageCommand(['--version'], 10_000)
+    .then(({ stdout }) => parsePiVersionOutput(stdout), () => undefined);
+  if (identity) currentPiVersionProbe = { identity, promise };
+  const version = await promise;
+  if (!version && currentPiVersionProbe?.promise === promise) currentPiVersionProbe = undefined;
+  return version;
+}
+
+function piNativeManagementArgs(command: PiNativeManagementCommand): string[] {
+  switch (command.kind) {
+    case 'self': case 'all': return ['update', `--${command.kind}`, ...(command.force ? ['--force'] : []), '--no-approve'];
+    case 'extensions': case 'models': return ['update', `--${command.kind}`, '--no-approve'];
+    case 'list': return ['list', '--no-approve'];
+    case 'version': return ['--version'];
+    case 'help': return [...(command.topic ? [command.topic] : []), '--help'];
+  }
+}
+
+const commandFailures = new WeakMap<object, PiManagedCommandFailure>();
+export function piNativeManagementFailure(error: unknown): PiManagedCommandFailure | undefined {
+  return error !== null && typeof error === 'object' ? commandFailures.get(error) : undefined;
+}
+
+/** Same process/lock as package mutations; core updates never retire live callers. */
+export async function executePiNativeManagementCommand(
+  command: PiNativeManagementCommand,
+): Promise<Record<string, unknown>> {
+  if (command.kind === 'models') {
+    // The managed package home intentionally contains no session provider credentials.
+    // Refreshing it would falsely claim that Cindy's host-owned model catalog changed.
+    throw new Error('Pi model catalogs are owned by Cindy providers; this command is not supported in the package home.');
+  }
+  return enqueueMutation(async () => {
+    const core = command.kind === 'self' || command.kind === 'all';
+    const packages = command.kind === 'extensions' || command.kind === 'all';
+    const beforeVersion = core ? await getCurrentPiVersion(true) : undefined;
+    let execution: 'native' | 'host-binary-update' = 'native';
+    const progress: { phase: PiManagedCommandFailure['phase'] } = {
+      phase: packages ? 'native-packages' : core ? 'native-core' : 'native-query',
+    };
+    let packagesUpdated = false;
+    let output = { stdout: '', stderr: '' };
+    let listedPackages: ListedPackage[] = [];
     try {
-      const { stdout, stderr } = await runPiPackageCommand(['--version']);
-      return parsePiVersionOutput(`${stdout}\n${stderr}`);
+      // Pi --all updates packages first. Keep that phase outside core fallback:
+      // a package's stderr must never be mistaken for an unsupported updater.
+      if (command.kind === 'all') {
+        await runPiPackageCommand(['update', '--extensions', '--no-approve']);
+        packagesUpdated = true;
+        progress.phase = 'native-core';
+      }
+      try {
+        if (command.kind === 'list') {
+          listedPackages = await runPiPackageListCommand();
+        } else {
+          output = await runPiPackageCommand(piNativeManagementArgs(command.kind === 'all'
+            ? { kind: 'self', force: command.force } : command));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (!core || !/cannot self-update this installation|self-update on Windows is only supported/.test(message)) throw error;
+        progress.phase = 'host-binary-update';
+        await updateReadyPiBinary(command.force);
+        execution = 'host-binary-update';
+      }
     } catch (error) {
-      log.warn('failed to read Cindy Pi version for package compatibility', {
-        failureCategory: piPackageMutationFailureCategory(error),
-        diagnostic: piPackageCommandDiagnostic(error),
+      const failure = error instanceof Error ? error : new Error('Pi management command failed');
+      const { phase } = progress;
+      if (packages || (core && phase === 'native-core')) packageMutationMayHaveChangedErrors.add(failure);
+      commandFailures.set(failure, {
+        phase, packagesUpdated,
+        ...(phase === 'host-binary-update' ? { hostStage: piBinaryUpdateFailureStage(error) } : {}),
+        recovery: phase === 'host-binary-update' ? 'check-host-update-and-retry-core'
+          : packagesUpdated ? 'retry-core-only' : 'inspect-state-before-retry',
       });
-      return undefined;
+      throw failure;
+    } finally {
+      if (core || packages) {
+        // --all can update packages before core fails. Drop stale advisory
+        // caches on both outcomes, without changing enablement or closing tasks.
+        invalidateInspectionCache();
+        try { await publishPiPackagesChanged({ invalidateCache: true }); }
+        catch { log.warn('Pi command settled; package projection unavailable'); }
+      }
     }
-  })();
-  return currentPiVersionPromise;
+    const afterVersion = command.kind === 'version' ? parsePiVersionOutput(output.stdout)
+      : core ? await getCurrentPiVersion(true) : undefined;
+    return {
+      kind: command.kind,
+      nativeSucceeded: execution === 'native',
+      execution,
+      ...(core ? { beforeVersion, afterVersion,
+        versionVerified: afterVersion !== undefined } : {}),
+      ...(core || packages ? { activation: core ? 'new-root-tasks' : 'new-pi-processes', activeTasksPreserved: true } : {}),
+      ...(command.kind === 'version' ? { version: afterVersion } : {}),
+      ...(['help', 'list'].includes(command.kind)
+        ? { output: command.kind === 'list'
+          ? JSON.stringify(listedPackages.map(pkg => ({
+              source: projectPiListSource(pkg.source),
+              filtered: pkg.filtered === true,
+            })))
+          : redactPackageCommandMessage(output.stdout) } : {}),
+    };
+  });
 }
 
 function appendPiPackageListLine(
@@ -2274,6 +2372,23 @@ async function resolvePackageMutationTarget(
   ));
   if (!match) throw new Error('Pi package mutation target is no longer installed');
   return match.source;
+}
+
+/** Model-visible list output must not expose local package locations. */
+function projectPiListSource(source: string): string {
+  let localPath = source;
+  if (/^file:/i.test(source)) {
+    try {
+      // Decode before taking the basename: encoded separators are paths too.
+      localPath = decodeURIComponent(new URL(source).pathname);
+    } catch {
+      return '[local-package]';
+    }
+  } else if (!isLocalPackageSource(source) && !path.win32.isAbsolute(source)) {
+    return projectPackageSource(source).displaySource;
+  }
+  // win32.basename recognizes both separators, independently of the Host OS.
+  return truncateDisplayField(path.win32.basename(localPath) || '[local-package]', MAX_SOURCE_LENGTH);
 }
 
 function projectPackageSource(source: string): PackageSourceProjection {

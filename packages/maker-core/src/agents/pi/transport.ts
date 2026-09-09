@@ -118,6 +118,8 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   // run a fresh SIGTERM -> SIGKILL sequence.
   let closing = false;
   let closeAttempt: Promise<void> | null = null;
+  let exitInfo: PiTransportCloseInfo | null = null;
+  let exitDrainTimer: ReturnType<typeof setTimeout> | undefined;
   let disposeProcessRegistration: (() => void) | undefined;
   if (child.pid != null && child.pid > 0) {
     try {
@@ -143,6 +145,8 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   const fireClose = (info: PiTransportCloseInfo): void => {
     if (closed) return;
     closed = true;
+    if (exitDrainTimer) clearTimeout(exitDrainTimer);
+    exitDrainTimer = undefined;
     disposeRegistration();
     for (const handler of closeHandlers) {
       try { handler(info); } catch { /* handler should not throw */ }
@@ -168,6 +172,7 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   };
 
   attachJsonlReader(child.stdout, (line) => {
+    if (closed) return;
     for (const handler of lineHandlers) handler(line);
   });
   attachJsonlReader(child.stderr, (line) => {
@@ -182,10 +187,34 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
 
   child.on('error', (err) => {
     logger.error('pi process error', { message: err.message });
+    // kill() may synchronously emit error (e.g. EPERM). An error while
+    // terminating is not exit evidence: retain registration and the attempt's
+    // escalation/confirmation timers until exit or close actually arrives.
+    if (closing) return;
     fireClose({ code: null, signal: null, reason: `pi process error: ${err.message}` });
   });
   child.on('close', (code, signal) => {
     fireClose({ code, signal, reason: `pi process exited (code=${code}, signal=${signal})` });
+  });
+  child.on('exit', (code, signal) => {
+    // A shell/build descendant can inherit the pipes after Pi itself exits.
+    // Node's `close` then waits for that descendant, potentially indefinitely.
+    // Exit is authoritative executor loss, but allow already-written RPC tail
+    // frames to drain before notifying owners. This is NOT a tool timeout:
+    // a quiet, live Pi process never enters this path.
+    closing = true;
+    const info = { code, signal, reason: `pi process exited (code=${code}, signal=${signal})` };
+    exitInfo = info;
+    if (closed) return;
+    exitDrainTimer = setTimeout(() => {
+      fireClose(info);
+      // Release only our pipe endpoints after the confirmed executor exit.
+      // No process-tree kill or automatic command replay is performed.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.stdin.destroy();
+    }, 250);
+    exitDrainTimer.unref?.();
   });
 
   const KILL_GRACE_MS = 3_000;
@@ -203,15 +232,20 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
       const finish = (): void => {
         if (done) return;
         done = true;
-        clearTimeout(killTimer);
+        if (killTimer) clearTimeout(killTimer);
         if (confirmTimer) clearTimeout(confirmTimer);
         child.removeListener('close', onClose);
+        closeHandlers.delete(onConfirmedExit);
         resolve();
       };
       const onClose = (): void => finish();
-      const killTimer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      const onConfirmedExit = (): void => { if (exitInfo) finish(); };
+      const killTimer = exitInfo ? undefined : setTimeout(() => {
+        if (exitInfo) return; // Confirmed exit is still draining its tail frames.
+        try { child.kill('SIGKILL'); } catch { /* still require exit confirmation */ }
+        if (done) return;
         confirmTimer = setTimeout(() => {
+          if (exitInfo) return;
           survived = true;
           logger.error('pi process did not confirm exit after SIGKILL', {
             pid: child.pid,
@@ -220,12 +254,16 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
         }, KILL_CONFIRM_MS);
         confirmTimer.unref?.();
       }, KILL_GRACE_MS);
-      killTimer.unref?.();
+      killTimer?.unref?.();
+      // The same close notification also completes an explicit Stop/close
+      // racing an exit whose inherited pipes have not reached EOF yet.
+      closeHandlers.add(onConfirmedExit);
       child.once('close', onClose);
+      if (exitInfo) return;
       try {
         child.kill('SIGTERM');
       } catch {
-        finish();
+        // A thrown kill failure is not proof of exit either. Keep escalation.
       }
     });
 

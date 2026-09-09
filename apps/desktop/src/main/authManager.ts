@@ -92,6 +92,7 @@ import {
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
 import { createLogger } from './logger';
+import { AuthOwnerChangeShellGate } from './authOwnerChangeShellGate';
 import {
   isGhostSkillProjectionBoundaryStableForOwner,
   withGhostSkillProjectionOwnerCommit,
@@ -375,18 +376,18 @@ let sessionInvalidationPromise: Promise<void> | null = null;
 // Real owner change / logout: keep the renderer fail-closed even if a late
 // notifyRenderer() races the teardown. Same-owner Ghost repair must not set
 // this — that was the 55-minute /login flash.
-let ownerChangeShellPendingDepth = 0;
+const ownerChangeShellGate = new AuthOwnerChangeShellGate();
 
 function enterOwnerChangeShellPending(): void {
-  ownerChangeShellPendingDepth += 1;
+  ownerChangeShellGate.enter();
 }
 
 function leaveOwnerChangeShellPending(): void {
-  ownerChangeShellPendingDepth = Math.max(0, ownerChangeShellPendingDepth - 1);
+  ownerChangeShellGate.leave();
 }
 
 function isOwnerChangeShellPending(): boolean {
-  return ownerChangeShellPendingDepth > 0;
+  return ownerChangeShellGate.isPending();
 }
 /**
  * 设备标识。默认绑定物理机(machineIdSync)。
@@ -4902,6 +4903,13 @@ async function discoverOrganizationRealm(org: string, expectedLoginFlowEpoch = l
 }
 
 export async function getLoginState(): Promise<DesktopLoginActionResult> {
+  // A logout publishes the signed-out shell before its owner transition has
+  // finished. Start provider discovery only after that transition settles so
+  // this request captures the post-logout login epoch instead of reporting a
+  // recoverable supersession as a terminal login-page error.
+  while (isOwnerChangeShellPending()) {
+    await ownerChangeShellGate.waitForSettled();
+  }
   const expectedLoginFlowEpoch = loginFlowEpoch;
   try {
     if (loginFlowState) return { success: true, state: loginFlowState };
