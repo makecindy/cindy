@@ -12,7 +12,6 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X } from 'lucide-react';
 import type {
   AccountDeletionStatus,
   CaptchaConfig,
@@ -26,7 +25,6 @@ import { createLogger } from '@/lib/logger';
 import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { WindowControls } from '@/components/title-bar/WindowControls';
-import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useLogin } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
@@ -1276,6 +1274,9 @@ export function LoginPage({
         ssoOrgGroupY: false,
         node: (
           <LoginPanel testId="login-panel-preparing">
+            {isAddAccount && onClose ? (
+              <LoginBackButton label={t('login.back')} onClick={onClose} />
+            ) : null}
             <LoginTitleBlock title={t('login.preparing')} subtitle={t('login.preparingSubtitle')} />
             <LoginLoadingRing y={LOADING_RING.yPreparing} label={t('login.working')} />
           </LoginPanel>
@@ -1313,11 +1314,12 @@ export function LoginPage({
         ssoOrgGroupY: false,
         node: (
           <LoginPanel testId="login-panel-browser-redirect">
+            <LoginBackButton
+              label={t('login.cancel')}
+              onClick={() => void dispatch({ type: 'cancel-browser' })}
+            />
             <LoginTitleBlock title={t('login.browserWaiting')} subtitle={loginState.label} />
             <LoginLoadingRing y={LOADING_RING.yBrowser} label={t('login.working')} />
-            <LoginPrimaryButton onClick={() => void dispatch({ type: 'cancel-browser' })}>
-              {t('login.cancel')}
-            </LoginPrimaryButton>
           </LoginPanel>
         ),
       };
@@ -1457,24 +1459,12 @@ export function LoginPage({
         className="absolute left-0 top-0 z-40 flex w-full items-center justify-end"
         style={{ height: DRAG_BAR_HEIGHT, WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        {(isAddAccount && onClose) || !isMac ? (
+        {!isMac ? (
           <div
             className="flex h-full items-center"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            {isAddAccount && onClose ? (
-              <ChromeIconButton
-                data-testid="add-account-close"
-                className={isMac ? 'mr-2' : 'mr-1'}
-                aria-label={t('sidebar.accountSwitcher.close')}
-                tooltip={t('sidebar.accountSwitcher.close')}
-                tooltipSide="bottom"
-                onClick={onClose}
-              >
-                <X size={14} aria-hidden="true" />
-              </ChromeIconButton>
-            ) : null}
-            {!isMac ? <WindowControls /> : null}
+            <WindowControls />
           </div>
         ) : null}
       </div>
