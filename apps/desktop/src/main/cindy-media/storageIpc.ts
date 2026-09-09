@@ -220,7 +220,7 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
         log.warn('storage stats failed', { error: message });
         return {
           success: false,
-          error: message,
+          error: 'storage statistics unavailable',
           blobs: EMPTY_STATS,
           legacy: { bytes: 0, fileCount: 0 },
           fixedCaches: {

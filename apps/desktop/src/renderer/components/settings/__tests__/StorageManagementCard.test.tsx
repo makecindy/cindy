@@ -394,6 +394,150 @@ describe('StorageManagementCard fixed cache directories', () => {
     expect((reset as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('subscribes to setting changes without recalculating storage and unsubscribes on unmount', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    let notify!: () => void;
+    const unsubscribe = vi.fn();
+    vi.mocked(api.onChanged).mockImplementation((listener) => {
+      notify = listener;
+      return unsubscribe;
+    });
+    const view = render(<StorageManagementCard />);
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    const disabledSwitch = screen.getByRole('switch', {
+      name: 'settings.about.storage.dbSizeWarningDisableLabel',
+    });
+    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement;
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+
+    vi.mocked(api.getSettings).mockResolvedValue({
+      thresholdGiB: 25, disabled: true, isCustomized: true, defaultThresholdGiB: 10,
+    });
+    act(() => notify());
+    await waitFor(() => {
+      expect(input.value).toBe('25');
+      expect(disabledSwitch.getAttribute('aria-checked')).toBe('true');
+      expect(reset.disabled).toBe(false);
+    });
+
+    vi.mocked(api.getSettings).mockResolvedValue({
+      thresholdGiB: 10, disabled: false, isCustomized: false, defaultThresholdGiB: 10,
+    });
+    act(() => notify());
+    await waitFor(() => {
+      expect(input.value).toBe('10');
+      expect(disabledSwitch.getAttribute('aria-checked')).toBe('false');
+      expect(reset.disabled).toBe(true);
+    });
+    expect(api.measure).toHaveBeenCalledOnce();
+    expect(window.electronAPI.cindyMediaStorage.stats).toHaveBeenCalledOnce();
+    expect(api.setSettings).not.toHaveBeenCalled();
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a draft during delayed hydration and notification reads', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    let resolveSettings!: (value: Awaited<ReturnType<typeof api.getSettings>>) => void;
+    vi.mocked(api.getSettings).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSettings = resolve;
+    }));
+    let notify!: () => void;
+    vi.mocked(api.onChanged).mockImplementation((listener) => {
+      notify = listener;
+      return vi.fn();
+    });
+    render(<StorageManagementCard />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '30' } });
+    vi.mocked(api.getSettings).mockResolvedValue({
+      thresholdGiB: 25, disabled: true, isCustomized: true, defaultThresholdGiB: 10,
+    });
+    await act(async () => {
+      notify();
+      resolveSettings({ thresholdGiB: 10, disabled: false, isCustomized: false, defaultThresholdGiB: 10 });
+    });
+    await waitFor(() => expect(screen.getByRole('switch', {
+      name: 'settings.about.storage.dbSizeWarningDisableLabel',
+    }).getAttribute('aria-checked')).toBe('true'));
+    expect(input.value).toBe('30');
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ thresholdGiB: 30 }));
+  });
+
+  it('does not overwrite a newer draft when a save completes and emits a change', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    let notify!: () => void;
+    vi.mocked(api.onChanged).mockImplementation((listener) => {
+      notify = listener;
+      return vi.fn();
+    });
+    let resolveSave!: (value: Awaited<ReturnType<typeof api.setSettings>>) => void;
+    vi.mocked(api.setSettings).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
+    render(<StorageManagementCard />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '20' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalledOnce());
+    fireEvent.change(input, { target: { value: '30' } });
+    const saved = { thresholdGiB: 20, disabled: false, isCustomized: true, defaultThresholdGiB: 10 };
+    vi.mocked(api.getSettings).mockResolvedValue(saved);
+    await act(async () => {
+      notify();
+      resolveSave(saved);
+    });
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    expect(input.value).toBe('30');
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.setSettings).toHaveBeenLastCalledWith({ thresholdGiB: 30 }));
+  });
+
+  it('can return to the previous value while an earlier save is in flight', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    let resolveSave!: (value: Awaited<ReturnType<typeof api.setSettings>>) => void;
+    vi.mocked(api.setSettings).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
+    render(<StorageManagementCard />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '20' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalledOnce());
+    fireEvent.change(input, { target: { value: '10' } });
+    fireEvent.blur(input);
+    await act(async () => {
+      resolveSave({ thresholdGiB: 20, disabled: false, isCustomized: true, defaultThresholdGiB: 10 });
+    });
+    await waitFor(() => expect(api.setSettings).toHaveBeenLastCalledWith({ thresholdGiB: 10 }));
+    expect(input.value).toBe('10');
+  });
+
+  it.each(['', '0', '1025'])(
+    'keeps invalid threshold %j visible with an associated error until corrected',
+    async (value) => {
+      render(<StorageManagementCard />);
+      const api = window.electronAPI.localDb.databaseSizeWarning;
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+      const input = screen.getByRole('spinbutton') as HTMLInputElement;
+      fireEvent.change(input, { target: { value } });
+      fireEvent.blur(input);
+      expect(input.value).toBe(value);
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      const error = screen.getByText('settings.about.storage.dbSizeWarningThresholdInvalid');
+      expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(error.id);
+      expect(api.setSettings).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: '12' } });
+      fireEvent.blur(input);
+      await waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ thresholdGiB: 12 }));
+      expect(input.getAttribute('aria-invalid')).toBeNull();
+    },
+  );
+
   it('opens the fixed legacy image directory through the dedicated API', async () => {
     render(<StorageManagementCard />);
 

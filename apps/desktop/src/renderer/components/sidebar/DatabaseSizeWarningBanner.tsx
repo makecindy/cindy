@@ -8,6 +8,7 @@ import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 const GIB_BYTES = 1024 ** 3;
 
@@ -65,8 +66,10 @@ export function DatabaseSizeWarningBanner({
     try {
       await window.electronAPI.localDb.databaseSizeWarning.setSettings({ disabled: true });
       setDisabled(true);
-    } catch {
-      toast.error(t('settings.about.storage.statsFailed'));
+    } catch (err) {
+      const fallback = 'settings.about.storage.dbSizeWarningSaveFailed';
+      const key = mapIpcErrorToI18nKey(err, { fallback });
+      toast.error(t(key === 'ipcError.INTERNAL' ? fallback : key));
     }
   };
 

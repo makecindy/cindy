@@ -31,6 +31,7 @@ import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
@@ -564,8 +565,12 @@ function DatabaseSlimmingSection({
   const [warningDisabled, setWarningDisabled] = useState(false);
   const [warningCustomized, setWarningCustomized] = useState(false);
   const [warningSaving, setWarningSaving] = useState(false);
-  const warningWriteQueueRef = useRef(Promise.resolve());
+  const warningSettingsQueueRef = useRef(Promise.resolve());
   const warningThresholdPersistedRef = useRef(warningThresholdGiB);
+  const [warningThresholdDraft, setWarningThresholdDraft] = useState(String(warningThresholdGiB));
+  const [warningThresholdInvalid, setWarningThresholdInvalid] = useState(false);
+  const warningThresholdDirtyRef = useRef(false);
+  const warningThresholdEditVersionRef = useRef(0);
   const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
     DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
   );
@@ -581,22 +586,42 @@ function DatabaseSlimmingSection({
   const activeTasksConfirmationPendingRef = useRef(false);
   const interactionLockReleaseRef = useRef<(() => void) | null>(null);
 
+  const applyWarningSettings = (
+    settings: Awaited<ReturnType<typeof window.electronAPI.localDb.databaseSizeWarning.getSettings>>,
+    savedDraftVersion?: number,
+  ) => {
+    warningThresholdPersistedRef.current = settings.thresholdGiB;
+    onWarningThresholdChange(settings.thresholdGiB);
+    setWarningDisabled(settings.disabled);
+    setWarningCustomized(settings.isCustomized === true);
+    if (!warningThresholdDirtyRef.current || savedDraftVersion === warningThresholdEditVersionRef.current) {
+      warningThresholdDirtyRef.current = false;
+      setWarningThresholdDraft(String(settings.thresholdGiB));
+      setWarningThresholdInvalid(false);
+    }
+  };
+
   useEffect(() => {
     const api = window.electronAPI?.localDb?.databaseSizeWarning;
     if (!api) return undefined;
     let cancelled = false;
-    void api
-      .getSettings()
-      .then((settings) => {
+    // Serialize notification reads with writes so an older read cannot undo a save.
+    const refreshSettings = () => {
+      warningSettingsQueueRef.current = warningSettingsQueueRef.current.then(async () => {
         if (cancelled) return;
-        warningThresholdPersistedRef.current = settings.thresholdGiB;
-        onWarningThresholdChange(settings.thresholdGiB);
-        setWarningDisabled(settings.disabled);
-        setWarningCustomized(settings.isCustomized === true);
-      })
-      .catch(() => undefined);
+        try {
+          const settings = await api.getSettings();
+          if (!cancelled) applyWarningSettings(settings);
+        } catch {
+          // Keep the last known settings when the optional read is unavailable.
+        }
+      });
+    };
+    const unsubscribe = api.onChanged(refreshSettings);
+    refreshSettings();
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 
@@ -605,35 +630,47 @@ function DatabaseSlimmingSection({
     patch?: { thresholdGiB?: number; disabled?: boolean },
     blockControls = true,
   ) => {
-    const pending = warningWriteQueueRef.current.then(async () => {
+    const savedDraftVersion = !patch || patch.thresholdGiB !== undefined
+      ? warningThresholdEditVersionRef.current
+      : undefined;
+    const pending = warningSettingsQueueRef.current.then(async () => {
+      // Compare after earlier reads/writes, not at blur: a newer edit may undo an in-flight save.
+      if (patch && patch.thresholdGiB === warningThresholdPersistedRef.current && patch.disabled === undefined) {
+        if (savedDraftVersion === warningThresholdEditVersionRef.current) {
+          warningThresholdDirtyRef.current = false;
+          setWarningThresholdInvalid(false);
+        }
+        return;
+      }
       if (blockControls) setWarningSaving(true);
       try {
         const api = window.electronAPI.localDb.databaseSizeWarning;
         const saved = patch ? await api.setSettings(patch) : await api.resetSettings();
-        warningThresholdPersistedRef.current = saved.thresholdGiB;
-        onWarningThresholdChange(saved.thresholdGiB);
-        setWarningDisabled(saved.disabled);
-        setWarningCustomized(saved.isCustomized === true);
+        applyWarningSettings(saved, savedDraftVersion);
       } catch (err) {
-        onWarningThresholdChange(warningThresholdPersistedRef.current);
+        if (savedDraftVersion === warningThresholdEditVersionRef.current) {
+          warningThresholdDirtyRef.current = false;
+          setWarningThresholdDraft(String(warningThresholdPersistedRef.current));
+        }
         toast.error(t(mapIpcErrorToI18nKey(err)));
       } finally {
         if (blockControls) setWarningSaving(false);
       }
     });
-    warningWriteQueueRef.current = pending;
+    warningSettingsQueueRef.current = pending;
     return pending;
   };
 
   const saveWarningThreshold = () => {
-    const value = Number(warningThresholdGiB);
-    if (!Number.isFinite(value) || value < 1 || value > 1024) {
-      onWarningThresholdChange(warningThresholdPersistedRef.current);
+    const value = Number(warningThresholdDraft);
+    if (!warningThresholdDraft.trim() || !Number.isFinite(value) || value < 1 || value > 1024) {
+      setWarningThresholdInvalid(true);
       return;
     }
-    if (value !== warningThresholdPersistedRef.current) {
+    if (warningThresholdDirtyRef.current) {
       return persistWarningSettings({ thresholdGiB: value }, false);
     }
+    setWarningThresholdInvalid(false);
   };
 
   const acquireInteractionLock = () => {
@@ -813,15 +850,15 @@ function DatabaseSlimmingSection({
             {t('settings.about.storage.dbSlimmingDescription')}
           </p>
         </div>
-        <CardButton
-          emphasis
+        <Button
+          variant="cta"
+          size="md"
+          className="gap-1.5"
           onClick={handleScan}
-          disabled={scanLoading}
-          busy={scanLoading}
+          loading={scanLoading}
         >
-          {scanLoading && <Spinner size={12} />}
           {t('settings.about.storage.dbSlimmingScanButton')}
-        </CardButton>
+        </Button>
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
@@ -998,33 +1035,40 @@ function DatabaseSlimmingSection({
       />
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-        <label htmlFor="db-size-warning-threshold" className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-12 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSizeWarningThresholdLabel')}
-          </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.dbSizeWarningThresholdDescription')}
-          </span>
-        </label>
-        <div className="flex items-center gap-1.5">
-          <input
-            id="db-size-warning-threshold"
-            type="number"
-            min={1}
-            max={1024}
-            step={1}
-            value={warningThresholdGiB}
-            disabled={warningSaving}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (Number.isFinite(value)) onWarningThresholdChange(value);
-            }}
-            onBlur={() => void saveWarningThreshold()}
-            className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
-          />
-          <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
-        </div>
+        <FormField
+          id="db-size-warning-threshold"
+          label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
+          hint={t('settings.about.storage.dbSizeWarningThresholdDescription')}
+          error={warningThresholdInvalid ? t('settings.about.storage.dbSizeWarningThresholdInvalid') : undefined}
+          reserveFeedback
+          className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
+        >
+          {({ error, ...control }) => (
+            <div className="flex items-center gap-1.5">
+              <input
+                {...control}
+                type="number"
+                min={1}
+                max={1024}
+                step={1}
+                value={warningThresholdDraft}
+                disabled={warningSaving}
+                onChange={(event) => {
+                  warningThresholdDirtyRef.current = true;
+                  warningThresholdEditVersionRef.current += 1;
+                  setWarningThresholdDraft(event.target.value);
+                  setWarningThresholdInvalid(false);
+                }}
+                onBlur={() => void saveWarningThreshold()}
+                className={cn(
+                  'h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50',
+                  error && 'border-[var(--error-border)] focus-visible:ring-[var(--error-fg)]',
+                )}
+              />
+              <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
+            </div>
+          )}
+        </FormField>
 
         <label
           htmlFor="db-size-warning-disabled"
