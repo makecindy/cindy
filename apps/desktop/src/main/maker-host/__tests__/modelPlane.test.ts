@@ -1018,6 +1018,30 @@ it('preserves the upstream maximum separately from per-harness recommended windo
   });
 });
 
+it.each([{ agents: undefined }, { agents: ['codex', 'pi'] }])('keeps Pi working defaults when a root addition declares agents $agents', ({ agents }) => {
+  const catalog = baseCatalog([gpt6Entry()]);
+  catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [{
+    id: 'gpt-6', name: 'Pi authority', contextWindow: 1_000_000,
+    efforts: ['medium'], defaultEffort: 'medium',
+  }];
+  setActiveCatalog(catalog, { authorityCatalog: catalog });
+  const additions = { 'openai:gpt-6': {
+    ...(agents ? { agents } : {}),
+    base: { name: 'Root addition', contextWindow: 450_000,
+      efforts: ['medium'], defaultEffort: 'medium' },
+  } };
+  setLocalCatalogOverrides(overridesOf({ additions }));
+  expect(models('openai', 'codex').find((model) => model.id === 'gpt-6'))
+    .toMatchObject({ name: 'Root addition', contextWindow: 450_000 });
+  expect(models('openai', 'pi').find((model) => model.id === 'chatgpt/gpt-6'))
+    .toMatchObject({ name: 'Pi authority', contextWindow: 272_000, contextWindowMax: 1_000_000 });
+  setLocalCatalogOverrides(overridesOf({ additions, patches: {
+    'openai:chatgpt/gpt-6': { agents: ['pi'], base: { contextWindow: 550_000 } },
+  } }));
+  expect(models('openai', 'pi').find((model) => model.id === 'chatgpt/gpt-6'))
+    .toMatchObject({ contextWindow: 550_000, contextWindowMax: 1_000_000 });
+});
+
 it('honors local working defaults and separate maximums in all three GPT harnesses', () => {
   setActiveCatalog(BUNDLED_CATALOG);
   for (const maximum of [900_000, 1_000_000]) {
