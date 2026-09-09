@@ -507,12 +507,24 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getLastInboundEventAt(s)).toEqual(expect.any(Number));
   });
 
-  it('远程会话:对账找不到重叠时替换为权威最新窗口,避免跨断层合并', async () => {
+  it.each(['idle', 'force', 'session-sync'] as const)('远程会话:对账找不到重叠时替换为权威最新窗口,避免跨断层合并 (%s)', async (recovery) => {
     const s = sid();
+    makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [
       dbMessage(s, 'old-cache', 'old cached text', '2026-06-15T00:00:00.000Z'),
       dbMessage(s, 'cached-future', 'controller clock ahead text', '2026-06-16T00:00:00.000Z'),
     ]);
+    if (recovery !== 'idle') {
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:event',
+        payload: {
+          sessionId: s,
+          event: { type: 'status', source: 'claude-code', data: { status: 'thinking', isRunning: true } },
+        },
+      });
+      expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+    }
     markSessionAutomaticHistoryLoadCompleted(s);
     const completionAttemptsAtRebuildNotification: number[] = [];
     const unsubscribe = makerChatStore.subscribe(s, () => {
@@ -533,11 +545,23 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     );
     remoteListResolver = (args) => pageMessages(remoteHistory, args);
 
-    makerChatStore.reconcileRemoteMessages(s);
+    invoke.mockClear();
+    if (recovery === 'session-sync') {
+      // A legacy Host has no HistoryView or in-flight text snapshot. This
+      // ingress combines force + repair while the controller is still streaming.
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:session-sync',
+        payload: { sessionId: s, resyncRequired: true },
+      });
+    } else {
+      await makerChatStore.reconcileRemoteMessages(s, { force: recovery === 'force' });
+    }
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
     unsubscribe();
 
     const snapshot = makerChatStore.getSnapshot(s);
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:list')).toHaveLength(10);
     expect(snapshot.messages).toHaveLength(500);
     expect(snapshot.messages.map((m) => m.clientId)).not.toContain('client-old-cache');
     expect(snapshot.messages.map((m) => m.clientId)).not.toContain('client-cached-future');
@@ -545,6 +569,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(snapshot.messages.at(-1)?.clientId).toBe('client-new-549');
     expect(snapshot.oldestMessageId).toBe('new-50');
     expect(snapshot.hasMoreMessages).toBe(true);
+    expect(snapshot.historyWindowIslands).toHaveLength(0);
     expect(restoreSessionAutomaticHistoryLoadAttempts(s, 5)).toBe(0);
     expect(completionAttemptsAtRebuildNotification).toContain(0);
   });
@@ -1724,15 +1749,27 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
   });
 
-  it('远程会话:权威重建作废在飞行中的跳转补齐,并释放分页锁', async () => {
+  it.each([false, true])('远程会话:权威重建作废在飞行中的跳转补齐,并释放分页锁 (force=%s)', async (force) => {
     // review #676(codex P1):无重叠分支换掉整片窗口 + 改写 oldestMessageId,却不 bump
     // 代际。此时一个在飞行中的搜索跳转补齐会带着**重建前**的游标返回,把脱离上下文的旧
     // 历史接到新窗口上;若那一页里有跳转目标,补齐还会判 covered、连孤岛标记都不留,
     // 退化成本 PR 要修的静默空洞。
     const s = sid();
+    makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [
       dbMessage(s, 'stale-tail', 'stale cached tail', '2026-06-15T00:00:00.000Z'),
     ]);
+    if (force) {
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:event',
+        payload: {
+          sessionId: s,
+          event: { type: 'status', source: 'claude-code', data: { status: 'thinking', isRunning: true } },
+        },
+      });
+      expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+    }
 
     const target = dbMessage(s, 'jump-target', 'jump target', '2026-06-10T00:00:00.000Z');
     // 跳转补齐用 limit=100 翻页(JUMP_BACKFILL_PAGE_SIZE),对账用 limit=50 —— 按 limit
@@ -1751,7 +1788,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).isLoadingMore).toBe(true);
 
     // 对账落地:与已有窗口没有重叠 → 权威重建。
-    makerChatStore.reconcileRemoteMessages(s);
+    await makerChatStore.reconcileRemoteMessages(s, { force });
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
     expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual(['client-auth-1']);
     // 锁归本次重置释放:被作废的补齐不会代清。
