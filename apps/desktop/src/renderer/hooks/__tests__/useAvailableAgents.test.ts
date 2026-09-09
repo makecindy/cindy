@@ -129,6 +129,25 @@ describe('useAvailableAgents roster cache', () => {
     await waitFor(() => expect(remounted.result.current.availableVendors.has('pi')).toBe(true));
   });
 
+  it('does not probe an unrelated phone while a desktop roster is in use', async () => {
+    const { api, presenceListeners } = installDeviceLinkApi();
+    api.invoke.mockResolvedValue(['claude-code']);
+    const { useAvailableAgents } = await import('../useAvailableAgents');
+    const { prefetchDeviceCapabilities } = await import('../useAgentCapabilities');
+    const { result } = renderHook(() => useAvailableAgents('desktop'));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await act(async () => {
+      for (const listener of presenceListeners) listener({ deviceId: 'phone', online: true });
+    });
+    expect(api.invoke).toHaveBeenCalledTimes(1);
+    expect(prefetchDeviceCapabilities).not.toHaveBeenCalled();
+    await act(async () => {
+      for (const listener of presenceListeners) listener({ deviceId: 'desktop', online: true });
+    });
+    expect(prefetchDeviceCapabilities).toHaveBeenCalledWith('desktop');
+    expect(api.invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('refetches a remote roster after the selected device reconnects', async () => {
     const first = deferred<RuntimeAgentKind[]>();
     const second = deferred<RuntimeAgentKind[]>();

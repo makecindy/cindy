@@ -8,6 +8,7 @@ import {
   invalidateScheduleIndexForDevice,
   invalidateTransientScheduleIndexFailureFor,
   invalidateTransientScheduleIndexFailures,
+  loadLightweightSessionScheduleIndex,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
@@ -621,4 +622,17 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     await loadSessionScheduleIndex(maker);
     expect(maxInFlight).toBe(1);
   });
+});
+
+it('a drawer status read never replaces the full home binding cache', async () => {
+  resetScheduleIndexThrottleForTesting();
+  const full = new Map<string, RemoteSessionScheduleInfo>([['bound-no-run', {
+    scheduleId: 'a', scheduleName: 'a', unreadRunIds: [], unreadCount: 0, running: false, latestRunAt: 0,
+  }]]);
+  await loadSessionScheduleIndexThrottled('device', async () => full);
+  const invoke = vi.fn().mockResolvedValue({ runs: [] });
+  expect((await loadLightweightSessionScheduleIndex('device', invoke)).size).toBe(0);
+  const reload = vi.fn(async () => new Map<string, RemoteSessionScheduleInfo>());
+  expect(await loadSessionScheduleIndexThrottled('device', reload)).toBe(full);
+  expect(reload).not.toHaveBeenCalled();
 });

@@ -16,6 +16,8 @@
  * main 侧广播语义保持不变(仍只在真实更新时发,其他窗口/消费方照旧)。
  */
 
+import { refreshRemoteDeviceSessions } from '../../device-link/refreshRemoteSessions';
+
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
@@ -46,13 +48,16 @@ export interface MarkScheduleRunsReadResult {
  */
 export async function markScheduleRunsReadAndSync(
   runIds: readonly string[],
+  deviceId?: string,
 ): Promise<MarkScheduleRunsReadResult> {
   const processed: string[] = [];
   const failed: string[] = [];
   let firstError: string | undefined;
   if (runIds.length > 0) {
     const results = await Promise.allSettled(
-      runIds.map((runId) => window.electronAPI.maker.schedule.markRunRead(runId)),
+      runIds.map((runId) => deviceId
+        ? window.electronAPI.deviceLink.invoke(deviceId, 'maker:schedule:mark-run-read', [runId])
+        : window.electronAPI.maker.schedule.markRunRead(runId)),
     );
     results.forEach((result, index) => {
       const runId = runIds[index];
@@ -67,7 +72,8 @@ export async function markScheduleRunsReadAndSync(
       }
     });
   }
-  emit();
+  if (deviceId) await refreshRemoteDeviceSessions(deviceId, undefined, { scope: 'schedule' });
+  else emit();
   return firstError === undefined ? { processed, failed } : { processed, failed, firstError };
 }
 

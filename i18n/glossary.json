@@ -14,6 +14,30 @@
   ],
   "terms": [
     {
+      "id": "remote-desktop-lock-screen-control",
+      "status": "proposed",
+      "en": "Lock screen control",
+      "translations": {
+        "zh-CN": "锁屏控制",
+        "zh-TW": "鎖定畫面控制",
+        "ja": "ロック画面の操作",
+        "ko": "잠금 화면 제어"
+      },
+      "note": "Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。"
+    },
+    {
+      "id": "remote-desktop",
+      "status": "proposed",
+      "en": "Remote desktop",
+      "translations": {
+        "zh-CN": "远程桌面",
+        "zh-TW": "遠端桌面",
+        "ja": "リモートデスクトップ",
+        "ko": "원격 데스크톱"
+      },
+      "note": "同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。"
+    },
+    {
       "id": "cindy-make",
       "status": "proposed",
       "en": "Cindy Make",
@@ -1952,6 +1976,54 @@
         "ko": "Doubao"
       },
       "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+    },
+    {
+      "id": "remote-desktop-resolution",
+      "status": "proposed",
+      "en": "Computer resolution",
+      "translations": {
+        "zh-CN": "电脑分辨率",
+        "zh-TW": "電腦解析度",
+        "ja": "パソコンの解像度",
+        "ko": "컴퓨터 해상도"
+      },
+      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture."
+    },
+    {
+      "id": "remote-desktop-pip",
+      "status": "proposed",
+      "en": "Picture in picture",
+      "translations": {
+        "zh-CN": "小窗模式",
+        "zh-TW": "小窗模式",
+        "ja": "ピクチャインピクチャ",
+        "ko": "화면 속 화면"
+      },
+      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture."
+    },
+    {
+      "id": "remote-desktop-native-resolution",
+      "status": "proposed",
+      "en": "Native resolution",
+      "translations": {
+        "zh-CN": "原生分辨率",
+        "zh-TW": "原生解析度",
+        "ja": "ネイティブ解像度",
+        "ko": "기본 해상도"
+      },
+      "note": "Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生."
+    },
+    {
+      "id": "remote-desktop-takeover",
+      "status": "proposed",
+      "en": "Take over connection",
+      "translations": {
+        "zh-CN": "接管连接",
+        "zh-TW": "接管連線",
+        "ja": "接続を引き継ぐ",
+        "ko": "연결 넘겨받기"
+      },
+      "note": "Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery."
     },
     {
       "id": "routine",

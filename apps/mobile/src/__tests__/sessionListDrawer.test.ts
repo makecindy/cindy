@@ -77,7 +77,7 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('excludeOrcaWorkerSessions(sessions)');
     expect(text).toContain('buildMobileHomePresentation({');
     expect(text).toContain('buildHomeSections(home, false, false)');
-    expect(text).toContain('resolveMobileSessionRightStatus({');
+    expect(text).toContain('resolveMobileSessionRowStatus(item, sessionIsRunning)');
     expect(text).toMatch(/buildRemoteSessionCardPreview\((?:(?!\);)[\s\S])*?\{ running \},?\s*\)/);
     expect(text).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
     expect(text).toContain('conversationSearchOriginsFromDeviceModels');

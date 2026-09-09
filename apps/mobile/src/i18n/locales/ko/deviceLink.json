@@ -1,4 +1,8 @@
 {
+  "cachedHistory": {
+    "title": "컴퓨터 연결 안 됨",
+    "hint": "저장된 내용을 볼 수 있습니다. 더 불러오려면 컴퓨터를 연결하세요."
+  },
   "recovery": {
     "syncing": "동기화 중…",
     "recovered": "복구됨",

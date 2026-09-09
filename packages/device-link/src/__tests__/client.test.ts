@@ -2766,7 +2766,9 @@ describe('DeviceLinkClient', () => {
       (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
     );
     let meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
-    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
+    // Prefix eviction immediately admits the next unsent message in the
+    // receive window, while the new tail stays in bounded local pending.
+    expect(meta.seq).toBe(17);
     expect(meta.baseSeq).toBe(2);
 
     // 连续洪峰：每条新 push 轮换掉一条最旧帧，队列保持满员而不再抛背压
@@ -2774,7 +2776,7 @@ describe('DeviceLinkClient', () => {
       h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' }),
     ).not.toThrow();
     meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
-    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 2);
+    expect(meta.seq).toBe(18);
     expect(meta.baseSeq).toBe(3);
     h.client.stop();
   });
@@ -3324,17 +3326,26 @@ describe('DeviceLinkClient', () => {
     expect(() =>
       h.client.sendInvokeResult('dev-b', 'queued-result', { ok: true, result: [] }),
     ).not.toThrow();
-    const resultFrame = h.current().sent.find(
+    expect(h.current().sent.find(
       (env) => env.kind === 'invoke-result' && env.id === 'queued-result',
-    )!;
-    const meta = parseTransportPayload(resultFrame.payload)!.meta;
-    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
-    expect(meta.baseSeq).toBe(2);
+    )).toBeUndefined();
 
     // 再次满员且队头已是 live invoke：前缀为空，维持 BACKPRESSURE，不死循环不死锁
     expect(() => h.client.sendInvokeResult('dev-b', 'r2', { ok: true, result: [] })).toThrow(
       expect.objectContaining({ code: 'BACKPRESSURE' }),
     );
+    // Drain the admitted prefixes; the queued result must eventually emerge
+    // without waiting for a retry timer or crossing the live invoke.
+    for (let i = 0; i < 8; i++) {
+      const last = h.current().sent.filter(e => parseTransportPayload(e.payload)).at(-1)!;
+      const meta = parseTransportPayload(last.payload)!.meta;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: meta.streamId, ackSeq: meta.seq },
+      } });
+    }
+    const resultFrame = h.current().sent.find(e => e.id === 'queued-result')!;
+    expect(parseTransportPayload(resultFrame.payload)!.meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
     h.client.stop();
   });
 
@@ -6913,6 +6924,69 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       vi.useRealTimers();
     }
   }
+
+  it('holds a large future response locally until ACK frees receive slots, then sends without the 30s retry wait', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      for (let i = 0; i < 16; i++) {
+        h.client.sendInvokeResult('dev-b', `before-${i}`, { ok: true, result: i });
+      }
+      // This was previously sent into a full receiver and all three chunks
+      // could be rejected, even though the business timeout is only 12s.
+      h.client.sendInvokeResult('dev-b', 'large-future', { ok: true, result: 'x'.repeat(322_115) });
+      h.client.sendInvokeResult('dev-b', 'after-large', { ok: true, result: 'latest' });
+      expect(ws.sent.filter(e => e.id === 'large-future')).toHaveLength(0);
+      expect(ws.sent.filter(e => e.id === 'after-large')).toHaveLength(0);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(18);
+      const meta = parseTransportPayload(ws.sent.find(e => e.id === 'before-15')!.payload)!.meta;
+      await advance(100);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: meta.streamId, ackSeq: meta.seq },
+      } });
+      expect(ws.sent.filter(e => e.id === 'large-future')).toHaveLength(3);
+      expect(ws.sent.filter(e => e.id === 'after-large')).toHaveLength(1);
+      await advance(18_000);
+      expect(ws.sent.filter(e => e.id === 'large-future')).toHaveLength(3);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('a full receive window queues locally even with a full socket and does not block another peer', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      const linked = establishInboundReliableLink(h, 'healthy-stream', 1, 'healthy');
+      await advance(1);
+      await linked;
+      for (let i = 0; i < 16; i++) h.client.sendInvokeResult('dev-b', `held-${i}`, { ok: true, result: null });
+      ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+      expect(() => h.client.sendInvokeResult('dev-b', 'local-only', { ok: true, result: null })).not.toThrow();
+      expect(ws.sent.some(e => e.id === 'local-only')).toBe(false);
+      ws.bufferedAmount = 0;
+      h.client.sendInvokeResult('healthy', 'healthy-result', { ok: true, result: null });
+      expect(ws.sent.some(e => e.id === 'healthy-result')).toBe(true);
+      expect(h.client.isLinkReady('healthy')).toBe(true);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('a timed-out invoke outside the receive window becomes a skip delivered when ACK advances', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      for (let i = 0; i < 16; i++) h.client.sendInvokeResult('dev-b', `held-${i}`, { ok: true, result: null });
+      const outcome = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 100)
+        .catch((error: unknown) => error);
+      await advance(101);
+      expect(await outcome).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(ws.sent.some(e => e.kind === 'invoke')).toBe(false);
+      const meta = parseTransportPayload(ws.sent.find(e => e.id === 'held-15')!.payload)!.meta;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: meta.streamId, ackSeq: meta.seq },
+      } });
+      const skip = ws.sent.find(e => e.kind === 'invoke')!;
+      expect(parseTransportPayload(skip.payload)!.meta.seq).toBe(meta.seq + 1);
+      expect(parseTransportPayload(skip.payload)!.data).toBe(JSON.stringify(makeTransportSkipPayload()));
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
 
   it('a large response delivered after 18s is not duplicated while waiting for its first ACK', async () => {
     await withFakeTimers(async (h, advance) => {

@@ -1,13 +1,16 @@
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
+import {
+  hasPendingSessionInterruption,
+  type SessionInterruptionState,
+} from '@cindy/maker-shared/session-activity';
 import type { RemoteSessionActivityPhase } from '@/features/device-link/remoteSessionActivityStore';
-import type { SidebarRightStatusKind } from './sidebarRightStatus';
 
 export type CollapsedAttentionTone = 'error' | 'done';
 /** @deprecated 保留旧名给既有调用点;新代码用 CollapsedAttentionTone。 */
 export type CollapsedProjectAttentionTone = CollapsedAttentionTone;
 
 interface CollapsedAttentionInput {
-  sessions: readonly { id: string }[];
+  sessions: readonly ({ id: string } & SessionInterruptionState)[];
   runningSessionIds: ReadonlySet<string>;
   notifications: ReadonlySet<string>;
   attentionKinds: ReadonlyMap<string, AttentionKind>;
@@ -50,6 +53,14 @@ export function resolveCollapsedAttention({
   const errorSessionIds: string[] = [];
 
   for (const session of sessions) {
+    if (hasPendingSessionInterruption(session)) {
+      errorSessionIds.push(session.id);
+      continue;
+    }
+    if (urgentSessionIds.has(session.id)) {
+      errorSessionIds.push(session.id);
+      continue;
+    }
     const remotePhase = remotePhaseOf(session.id);
     if (remotePhase) {
       if (remotePhase === 'error') errorSessionIds.push(session.id);
@@ -98,20 +109,7 @@ export function resolveCollapsedProjectAttentionTone(
  *     「仍在跑却看起来已完成」的错觉(sidebarRightStatus 里有同款告警)。
  * awaiting(蓝)刻意不升格,与项目折叠头口径一致。
  */
-export function resolveCollapsedGroupRightStatus({
-  collapsed,
-  latestKind,
-  tone,
-}: {
-  collapsed: boolean;
-  latestKind: SidebarRightStatusKind;
-  tone: CollapsedAttentionTone | null;
-}): SidebarRightStatusKind {
-  if (!collapsed) return latestKind;
-  if (tone === 'error') return 'error';
-  if (tone === 'done' && latestKind === 'time') return 'done';
-  return latestKind;
-}
+export { resolveCollapsedGroupRightStatus } from '@cindy/maker-shared/session-activity';
 
 /**
  * 组头点击打开哪一条。展开态仍打开最新一条;收起且整组是红时,

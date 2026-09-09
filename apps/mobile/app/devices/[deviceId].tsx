@@ -891,6 +891,11 @@ function DeviceDetailScreenContent() {
         }}
         testID="deviceDetail.summary"
       >
+        <MainWindowActionButton action={{
+          label: t('remoteDesktop.title'),
+          onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
+          testID: 'deviceDetail.remoteDesktop',
+        }} />
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
             accessibilityLabel={t('devices.detail.metric.activeA11y')}
