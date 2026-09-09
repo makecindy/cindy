@@ -310,7 +310,11 @@ import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
 } from './rehydrateCloseSuppression.js';
-import { getSessionProvider, hydrateSessionProvider } from './session-provider-store.js';
+import {
+  freezeSessionProviderAtStart,
+  getSessionProvider,
+  hydrateSessionProvider,
+} from './session-provider-store.js';
 import { prepareLocalCodexCredentialModeSwitch } from './codex-credential-switch.js';
 import { createDesktopOrcaTeamStoreAdapter } from './orcaTeamStoreAdapter.js';
 import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
@@ -2427,6 +2431,8 @@ export function getMaker(): Maker {
               { code: ACCOUNT_PROVIDER_NOT_READY_CODE },
             );
           }
+          // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
+          freezeSessionProviderAtStart(sessionId, opts.providerId);
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
             const thinkingEnabled = getThinkingEnabledFromMemory(

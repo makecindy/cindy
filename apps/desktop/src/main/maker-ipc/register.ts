@@ -6222,7 +6222,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         o.providerId = row.providerId?.trim() || null;
       }
     } catch (err) {
-      log.debug('pre-hydrate session provider failed (non-fatal)', {
+      // 读不到只能按「调用方未指定」继续 → 整个会话跑在非用户所选的上游上。
+      log.warn('pre-hydrate session provider failed (non-fatal)', {
         sessionId: o.id,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -6450,7 +6451,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setSessionFastMode(session.id, !!efRow?.fastMode);
       }
     } catch (err) {
-      log.debug('hydrate session provider failed (non-fatal)', {
+      // 来源没能落库 → 所选来源在下次冷启动后消失(本次路由已在启动边界冻结)。
+      log.warn('hydrate session provider failed (non-fatal)', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
       });
