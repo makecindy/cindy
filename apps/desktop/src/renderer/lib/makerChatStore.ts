@@ -11704,7 +11704,7 @@ const _remoteReconcileInFlight = new Map<
 type HistoryViewForceFlight = {
   run: Promise<boolean>;
   rerun: boolean;
-  rowsAtStart: ReadonlyMap<string, unknown>;
+  rowsAtStart: Map<string, ChatMessage>;
   latestOpts: {
     force?: boolean;
     repair?: boolean;
@@ -11725,9 +11725,20 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
   const view = getRemoteHistoryView(sessionId);
   if (view && (view.getSnapshot().ready || opts?.freshHistory || opts?.repair)) {
-    const runHistoryView = () => {
+    const runHistoryView = (flight?: HistoryViewForceFlight) => {
       const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
       const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
+      const noteHydration = (before: readonly ChatMessage[], after: readonly ChatMessage[]) => {
+        if (!flight) return;
+        const previous = new Map(before.map((row) => [row.clientId, row]));
+        for (const row of after) {
+          // Advance only our own writes. A row changed by live ingress must
+          // keep its old baseline so the trailing read still protects it.
+          if (flight.rowsAtStart.get(row.clientId) === previous.get(row.clientId)) {
+            flight.rowsAtStart.set(row.clientId, row);
+          }
+        }
+      };
       // Force needs a post-signal page, even when a normal repair is in flight.
       // Keep this view and its expansion state instead of falling back to raw history.
       return Promise.all([
@@ -11737,22 +11748,26 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
         if (isHistoryViewUnavailable(view.getSnapshot().error)) {
           releaseRemoteHistoryView(sessionId, view);
-          return runRemoteReconcile(sessionId, { ...opts, force: true });
+          return runRemoteReconcile(sessionId, { ...opts, force: true }, noteHydration);
         }
         if (opts?.force) {
           // readPage starts expanded details without awaiting them. Join those
           // same reads before hydrating; their cached display may still be old.
           await Promise.all(historyWorkSummaries(view.getSnapshot().items)
             .map((summary) => view.loadDetails(summary, { allowCollapsed: true })));
-          const detailError = historyWorkSummaries(view.getSnapshot().items)
-            .map((summary) => view.getSnapshot().details.get(summary.key))
-            .find((detail) => detail?.error)?.error;
-          if (detailError) {
-            // A failed expanded read must not look like a successful repair with
-            // the work-group body silently omitted. Fall back to the raw,
-            // authoritative window so a transient details failure can still heal
-            // the lost terminal row; if that read also fails, preserve rejection.
-            return runRemoteReconcile(sessionId, opts);
+          if (getRemoteHistoryView(sessionId) !== view || !view.isActive()
+            || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
+          const detailsSnapshot = view.getSnapshot();
+          const incompleteDetails = historyWorkSummaries(detailsSnapshot.items).some((summary) => {
+            const detail = detailsSnapshot.details.get(summary.key);
+            return !detail?.complete || !!detail.error || detail.revision !== summary.revision;
+          });
+          if (incompleteDetails) {
+            // Collapse can cancel a joined detail read without rejecting it.
+            // Missing, partial, failed or stale details cannot certify recovery.
+            // Use the same authoritative fallback as a transient read failure;
+            // if that read also fails, preserve rejection.
+            return runRemoteReconcile(sessionId, opts, noteHydration);
           }
         }
         if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
@@ -11778,6 +11793,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
             // Preserve rows changed by live events while this read was pending.
             const untouched = new Set(state.messages.filter((row) => rowsAtStart.get(row.clientId) === row).map((row) => row.clientId));
             const messages = mergeMessages(available, state.messages, { addOnly: true, addOnlyExcept: untouched });
+            noteHydration(state.messages, messages);
             return messages === state.messages ? state : { ...state, messages };
           });
         }
@@ -11802,7 +11818,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       try {
         let applied: boolean;
         try {
-          applied = await runHistoryView();
+          applied = await runHistoryView(entry);
         } catch (error) {
           // Replacing the view while its page is in flight rejects the old
           // controller read. A coalesced force signal still needs to retry on
@@ -11886,7 +11902,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   preserveClientIds?: ReadonlySet<string>;
-}): Promise<boolean> {
+}, noteHydration?: (before: readonly ChatMessage[], after: readonly ChatMessage[]) => void): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
@@ -12049,6 +12065,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
               'newest-first',
             )
           : mergeAuthoritativeRemoteWindow(mapped, lateArrivals, 'newest-first');
+        noteHydration?.(s.messages, messages);
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
         if (messages === s.messages) return s;
         if (isContiguous) return { ...s, messages };
