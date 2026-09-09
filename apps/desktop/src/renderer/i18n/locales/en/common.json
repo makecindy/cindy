@@ -925,7 +925,7 @@
         "databaseSectionTitle": "Database",
         "overviewTitle": "Local storage overview",
         "overviewDescription": "Your database and media cache stay on this computer. Cindy does not delete your history automatically.",
-        "mediaSectionHint": "Manage separately without affecting task history",
+        "mediaSectionHint": "Manage separately; review items before clearing",
         "databaseUsage": "Using {{size}}",
         "databaseWarningNote": "Scan first, then choose what to clean. Scanning does not delete files immediately.",
         "dbSizeWarningThresholdLabel": "Database reminder threshold",

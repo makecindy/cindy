@@ -925,7 +925,7 @@
         "databaseSectionTitle": "資料庫",
         "overviewTitle": "本機儲存空間",
         "overviewDescription": "資料庫和媒體快取保存在這台電腦上，Cindy 不會自動刪除歷史記錄。",
-        "mediaSectionHint": "單獨管理，不影響任務歷史",
+        "mediaSectionHint": "單獨管理；清理前請先確認內容",
         "databaseUsage": "佔用 {{size}}",
         "databaseWarningNote": "請先掃描，再選擇要清理的內容。掃描不會立即刪除檔案。",
         "dbSizeWarningThresholdLabel": "資料庫提醒門檻",

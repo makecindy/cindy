@@ -925,7 +925,7 @@
         "databaseSectionTitle": "データベース",
         "overviewTitle": "ローカルストレージ",
         "overviewDescription": "データベースとメディアキャッシュはこのコンピューターに保存されます。Cindy は履歴を自動削除しません。",
-        "mediaSectionHint": "タスク履歴に影響せず個別に管理",
+        "mediaSectionHint": "個別に管理し、削除前に内容を確認してください",
         "databaseUsage": "使用量 {{size}}",
         "databaseWarningNote": "まずスキャンしてから、削除する項目を選択してください。スキャンだけでは削除されません。",
         "dbSizeWarningThresholdLabel": "データベース通知のしきい値",

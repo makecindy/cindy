@@ -925,7 +925,7 @@
         "databaseSectionTitle": "데이터베이스",
         "overviewTitle": "로컬 저장 공간",
         "overviewDescription": "데이터베이스와 미디어 캐시는 이 컴퓨터에 저장됩니다. Cindy는 기록을 자동으로 삭제하지 않습니다.",
-        "mediaSectionHint": "작업 기록에 영향을 주지 않고 별도로 관리",
+        "mediaSectionHint": "별도로 관리하며 삭제하기 전에 내용을 확인하세요",
         "databaseUsage": "사용량 {{size}}",
         "databaseWarningNote": "먼저 검사한 다음 정리할 항목을 선택하세요. 검사만으로는 파일이 삭제되지 않습니다.",
         "dbSizeWarningThresholdLabel": "데이터베이스 알림 기준",

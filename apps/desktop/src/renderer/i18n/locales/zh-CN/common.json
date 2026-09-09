@@ -925,7 +925,7 @@
         "databaseSectionTitle": "数据库",
         "overviewTitle": "本地存储空间",
         "overviewDescription": "数据库和媒体缓存保存在这台电脑上，Cindy 不会自动删除历史记录。",
-        "mediaSectionHint": "单独管理，不影响任务历史",
+        "mediaSectionHint": "单独管理；清理前请先确认内容",
         "databaseUsage": "占用 {{size}}",
         "databaseWarningNote": "请先扫描，再选择要清理的内容。扫描不会立即删除文件。",
         "dbSizeWarningThresholdLabel": "数据库提醒阈值",
