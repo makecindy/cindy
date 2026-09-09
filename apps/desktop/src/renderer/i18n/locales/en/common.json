@@ -3144,11 +3144,23 @@
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
-        "build-failed": "Pi completed the operation, but Cindy could not finish the optional build. Check the extension’s build dependencies.",
+        "analysisIncomplete": "Pi completed the operation, but Cindy could not finish its follow-up analysis or optional build.",
         "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
         "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
         "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
         "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
+      },
+      "recovery": {
+        "check-credentials": "Check the source credentials.",
+        "check-permissions": "Check file and directory permissions.",
+        "check-network": "Check the network connection.",
+        "check-source": "Check the package name or repository address.",
+        "check-version": "Check the requested package version.",
+        "check-runtime": "Check that the Pi runtime is available.",
+        "free-disk-space": "Free up disk space.",
+        "check-build-dependencies": "Check the extension’s build dependencies.",
+        "refresh-package-state": "Refresh the extension list to check its current state.",
+        "inspect-state-before-retry": "Check the current extension state before retrying unfinished steps."
       },
       "failure": {
         "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",

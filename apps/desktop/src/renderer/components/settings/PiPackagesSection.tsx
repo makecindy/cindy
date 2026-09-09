@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import type {
   PiPackageMutationAction,
+  PiPackageMutationResult,
   PiPackageResourceKind,
   PiPackageResourceView,
   PiPackageRuntimeRequirement,
@@ -37,6 +38,19 @@ const ICON_ACTION_CLASS = cn(
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
   'disabled:cursor-not-allowed disabled:opacity-50',
 );
+
+const PACKAGE_RECOVERY_KEYS = {
+  'check-credentials': 'settings.piPackages.recovery.check-credentials',
+  'check-permissions': 'settings.piPackages.recovery.check-permissions',
+  'check-network': 'settings.piPackages.recovery.check-network',
+  'check-source': 'settings.piPackages.recovery.check-source',
+  'check-version': 'settings.piPackages.recovery.check-version',
+  'check-runtime': 'settings.piPackages.recovery.check-runtime',
+  'free-disk-space': 'settings.piPackages.recovery.free-disk-space',
+  'check-build-dependencies': 'settings.piPackages.recovery.check-build-dependencies',
+  'refresh-package-state': 'settings.piPackages.recovery.refresh-package-state',
+  'inspect-state-before-retry': 'settings.piPackages.recovery.inspect-state-before-retry',
+} as const satisfies Record<NonNullable<PiPackageMutationResult['diagnostics']>[number]['recovery'], string>;
 
 type PiPackagesLoadState = 'loading' | 'ready' | 'error';
 
@@ -226,8 +240,16 @@ export function PiPackagesSection() {
       }
       if (result.projectionUnavailable) {
         toast.error(t('settings.piPackages.failure.stateUnavailable'));
-      } else if (result.diagnostics?.some((diagnostic) => diagnostic.phase === 'cindy-analysis')) {
-        toast.error(t('settings.piPackages.warning.build-failed'));
+      } else {
+        const diagnostic = result.diagnostics?.find((entry) => entry.phase === 'cindy-analysis');
+        if (diagnostic) {
+          // Use the host's recovery decision: timeout/unknown outcomes may require
+          // checking state first even when the output mentions a specific cause.
+          const recoveryKey = Object.prototype.hasOwnProperty.call(PACKAGE_RECOVERY_KEYS, diagnostic.recovery)
+            ? PACKAGE_RECOVERY_KEYS[diagnostic.recovery]
+            : PACKAGE_RECOVERY_KEYS['inspect-state-before-retry'];
+          toast.error(`${t('settings.piPackages.warning.analysisIncomplete')} ${t(recoveryKey)}`);
+        }
       }
       return true;
     } catch (error) {

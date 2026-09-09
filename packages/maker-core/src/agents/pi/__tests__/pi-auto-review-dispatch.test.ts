@@ -1622,6 +1622,39 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it.each([true, undefined])('explains missing install projection using native success evidence %s', async (nativeCommandSucceeded) => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true, projectionUnavailable: true,
+      ...(nativeCommandSucceeded ? { nativeCommandSucceeded } : {}),
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-missing-projection', workingDir: cwd, model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:sample' },
+        desktopCommandOptions('pi install npm:sample'),
+      );
+      const prompt = String(captured.requests.find((request) => request.type === 'prompt')?.message);
+      expect(prompt).toContain('"projectionUnavailable":true');
+      expect(prompt).toContain('Do not run bash');
+      expect(deps.mutatePiManagedPackage).toHaveBeenCalledOnce();
+      if (nativeCommandSucceeded) {
+        expect(prompt).toContain('"nativeCommandSucceeded":true');
+        expect(prompt).toContain('The native Pi installation succeeded. Report installation success.');
+        expect(prompt).toContain('Cindy cannot currently confirm the enabled state');
+        expect(prompt).not.toContain('Cindy could not leave the extension installed and enabled');
+      } else {
+        expect(prompt).not.toContain('The native Pi installation succeeded.');
+        expect(prompt).toContain('Cindy could not leave the extension installed and enabled');
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('keeps direct native success while publishing bounded recovery on host failure', async () => {
     const deps = buildDeps();
     const warn = vi.fn();

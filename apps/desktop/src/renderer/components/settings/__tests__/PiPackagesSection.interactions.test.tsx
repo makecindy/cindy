@@ -304,17 +304,30 @@ describe('PiPackagesSection interaction state machine', () => {
     expect(toastMocks.success).not.toHaveBeenCalled();
   });
 
-  it('separates successful native mutation from a failed Cindy build', async () => {
+  it.each([
+    ['build-failed', 'check-build-dependencies', 'check-build-dependencies'],
+    ['network', 'check-network', 'check-network'],
+    ['permission', 'check-permissions', 'check-permissions'],
+    ['disk-full', 'free-disk-space', 'free-disk-space'],
+    ['authentication', 'check-credentials', 'check-credentials'],
+    // The recovery decision takes precedence over a tentative cause.
+    ['network', 'inspect-state-before-retry', 'inspect-state-before-retry'],
+    ['unknown', 'fake-private-recovery', 'inspect-state-before-retry'],
+  ])('preserves native success and follows recovery for %s / %s', async (reason, recovery, expectedRecovery) => {
     installElectronApi({ mutatePiPackage: vi.fn(async () => ({
       available: true, packages: [], changed: true, nativeCommandSucceeded: true,
-      diagnostics: [{ phase: 'cindy-analysis', outcome: 'failed', exitCode: 1,
-        reason: 'build-failed', recovery: 'check-build-dependencies' }],
+      diagnostics: [{ phase: 'cindy-analysis',
+        outcome: recovery === 'inspect-state-before-retry' ? 'timed-out' : 'failed', exitCode: 1,
+        reason, recovery, ...(reason === 'network' ? { nativeCode: 'ENOTFOUND' } : {}) }],
     })) });
     render(<PiPackagesSection />);
     await screen.findByText('sample-extension-2');
     fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
     await waitFor(() => expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.settingsRemove'));
-    expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.warning.build-failed');
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      `settings.piPackages.warning.analysisIncomplete settings.piPackages.recovery.${expectedRecovery}`,
+    );
+    expect(JSON.stringify(toastMocks.error.mock.calls)).not.toContain('fake-private-recovery');
     expect(toastMocks.error).not.toHaveBeenCalledWith('settings.piPackages.operationFailed');
   });
 

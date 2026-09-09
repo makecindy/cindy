@@ -3143,11 +3143,23 @@
       "runtimeUnknown": "{{packageName}}에는 Pi {{range}}가 필요하지만 현재 Cindy의 Pi 버전이 요구 사항을 충족하는지 확인할 수 없습니다.",
       "warning": {
         "no-resources": "이 확장에서 Pi 리소스를 찾지 못했습니다.",
-        "build-failed": "Pi 작업은 완료되었지만 Cindy의 보조 빌드는 완료되지 않았습니다. 확장의 빌드 의존성을 확인하세요.",
+        "analysisIncomplete": "Pi 작업은 완료되었지만 Cindy의 후속 분석 또는 보조 빌드는 완료되지 않았습니다.",
         "inspection-failed": "Cindy가 설치된 내용을 검사하지 못했지만 이 때문에 비활성화하지 않습니다. Pi가 기본 방식으로 처리합니다.",
         "inspection-limit": "Cindy가 상세 분석 한도에서 추가 표시를 중단했습니다. 패키지는 Pi 기본 로더를 통해 계속 사용할 수 있습니다.",
         "unsupported-filter": "Cindy가 아직 이 Pi 리소스 필터를 표시할 수 없습니다. 패키지와 필터는 Pi가 기본 방식으로 처리합니다.",
         "unsafe-source": "저장된 소스에 자격 증명 또는 비공개 URL 매개변수가 포함되어 있습니다. Cindy는 이 화면에서 민감한 필드만 숨기며 Pi의 패키지 동작은 차단하지 않습니다."
+      },
+      "recovery": {
+        "check-credentials": "소스의 인증 정보를 확인하세요.",
+        "check-permissions": "파일과 디렉터리 권한을 확인하세요.",
+        "check-network": "네트워크 연결을 확인하세요.",
+        "check-source": "패키지 이름 또는 저장소 주소를 확인하세요.",
+        "check-version": "요청한 패키지 버전을 확인하세요.",
+        "check-runtime": "Pi 실행 환경을 사용할 수 있는지 확인하세요.",
+        "free-disk-space": "디스크 공간을 확보하세요.",
+        "check-build-dependencies": "확장의 빌드 의존성을 확인하세요.",
+        "refresh-package-state": "확장 목록을 새로 고쳐 현재 상태를 확인하세요.",
+        "inspect-state-before-retry": "확장의 현재 상태를 확인한 후 완료되지 않은 단계를 다시 시도하세요."
       },
       "failure": {
         "sourceUnavailable": "소스에 접근할 수 없습니다. 네트워크나 URL을 확인하거나 다른 소스로 다시 시도하세요.",

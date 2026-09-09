@@ -3143,11 +3143,23 @@
       "runtimeUnknown": "{{packageName}} には Pi {{range}} が必要ですが、現在の Cindy の Pi バージョンが要件を満たすか確認できませんでした。",
       "warning": {
         "no-resources": "この拡張機能には Pi リソースが見つかりません。",
-        "build-failed": "Pi の操作は完了しましたが、Cindy の補助ビルドは完了しませんでした。拡張機能のビルド依存関係を確認してください。",
+        "analysisIncomplete": "Pi の操作は完了しましたが、Cindy の後続分析または補助ビルドは完了しませんでした。",
         "inspection-failed": "Cindy はインストール済み内容を検査できませんでしたが、それを理由に無効化しません。Pi がネイティブに処理します。",
         "inspection-limit": "Cindy は詳細分析の上限で表示を停止しました。パッケージは Pi のネイティブローダーで引き続き利用できます。",
         "unsupported-filter": "Cindy はこの Pi リソースフィルターをまだ表示できません。パッケージとフィルターは Pi がネイティブに処理します。",
         "unsafe-source": "保存済みソースには認証情報または非公開 URL パラメーターが含まれています。Cindy はこの画面で機密項目だけを隠し、Pi のパッケージ動作はブロックしません。"
+      },
+      "recovery": {
+        "check-credentials": "ソースの認証情報を確認してください。",
+        "check-permissions": "ファイルとディレクトリの権限を確認してください。",
+        "check-network": "ネットワーク接続を確認してください。",
+        "check-source": "パッケージ名またはリポジトリアドレスを確認してください。",
+        "check-version": "指定したパッケージのバージョンを確認してください。",
+        "check-runtime": "Pi の実行環境が利用可能か確認してください。",
+        "free-disk-space": "ディスクの空き容量を増やしてください。",
+        "check-build-dependencies": "拡張機能のビルド依存関係を確認してください。",
+        "refresh-package-state": "拡張機能一覧を更新して現在の状態を確認してください。",
+        "inspect-state-before-retry": "拡張機能の現在の状態を確認してから、未完了の手順を再試行してください。"
       },
       "failure": {
         "sourceUnavailable": "ソースにアクセスできません。ネットワークまたは URL を確認するか、別のソースをお試しください。",
