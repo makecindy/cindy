@@ -2150,6 +2150,18 @@ describe('session-agent-switch handoff injection', () => {
     expect(intent).not.toContain('assistant handoff');
   });
 
+  it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {
+    const { deps, session } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Internal continuation', undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: 'Continue',
+      [AUTO_REVIEW_USER_INTENT]: intent,
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBe(intent);
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('Continue');
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('invalidates old grants for oversized stamped input (deviceLink=%s)', async (deviceLink) => {
     const raw = 'x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000);
     const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'long', text: raw,

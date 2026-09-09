@@ -26,6 +26,10 @@ import { buildHandoffText, extractPlainText, type HandoffSourceMessage } from '.
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
 
+export const CODEX_HISTORY_CONTINUE_MESSAGE =
+  'Continue the unfinished task from the retained history. Do not repeat completed actions. ' +
+  'Some historical tool images were omitted during recovery; inspect them again only if needed.';
+
 export interface OverflowSourceMessage extends HandoffSourceMessage {
   clientId: string;
   agentMeta?: Record<string, unknown> | null;
@@ -366,7 +370,14 @@ export interface ContextOverflowRolloverDeps {
     sessionId: string,
     content: unknown,
     agentFacingWireContent?: unknown,
+    recovery?: {
+      signal?: AbortSignal;
+      resumeRetainedHistory: true;
+      sourceUserContent: unknown;
+      sourceUserClientId: string;
+    },
   ): Promise<{ accepted: boolean }>;
+  getRecoveryAbortSignal?(sessionId: string): AbortSignal;
   onRebuilt?(sessionId: string): void;
   withSessionLock?<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
   withCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
@@ -439,6 +450,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   ): Promise<ModelWindowSwitchPreparationResult>;
 } {
   const inFlight = new Set<string>();
+  // One automatic continuation per source input, not one per replacement thread.
+  const continuedInputs = new Map<string, string>();
 
   const runStripRelink = async (
     sessionId: string,
@@ -466,7 +479,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     });
   };
 
-  const runRecover = async (sessionId: string, errorData: unknown): Promise<boolean> => {
+  const runRecover = async (
+    sessionId: string,
+    errorData: unknown,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
     if (!isContextOverflowErrorData(errorData) && !oversized) return false;
     await deps.drainPersistQueue();
@@ -490,16 +508,39 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         tokens,
       });
       if (action === 'strip') {
+        const source = await deps.listMessages(sessionId);
+        const sourceUser =
+          [...source].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message)) ??
+          (await deps.findLatestUser?.(sessionId));
+        if (signal?.aborted) return true;
+        if (sourceUser && continuedInputs.get(sessionId) === sourceUser.clientId) return false;
         const strip = await runStripRelink(sessionId, sessionRow);
         const next = afterStripAttempt(strip, { local: true, tokens });
-        if (next === 'done') {
+        if (next === 'done' || (strip === 'not-needed' && next === 'none')) {
+          // A repaired thread still needs a turn. Continue from retained history,
+          // never replay the original input after tools may already have run.
+          if (signal?.aborted) return true;
+          if (!sourceUser || isExternalDispatchOwner(sourceUser.agentMeta)) return false;
+          continuedInputs.set(sessionId, sourceUser.clientId);
+          const continuation = await deps.replayUserMessage(
+            sessionId,
+            CODEX_HISTORY_CONTINUE_MESSAGE,
+            undefined,
+            {
+              signal,
+              resumeRetainedHistory: true,
+              sourceUserContent: sourceUser.content,
+              sourceUserClientId: sourceUser.clientId,
+            },
+          );
+          if (signal?.aborted) return true;
+          if (!continuation.accepted) return false;
           deps.onRebuilt?.(sessionId);
           deps.log.info('codex oversized history strip settled', { sessionId, strip, next });
           return true;
         }
         if (next === 'none') {
-          if (strip === 'not-needed') deps.onRebuilt?.(sessionId);
-          return strip === 'not-needed';
+          return false;
         }
         action = next;
         deps.log.warn('codex oversized strip did not finish; rebuilding', { sessionId, strip });
@@ -901,12 +942,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     },
 
     async tryRecover(sessionId: string, errorData: unknown): Promise<boolean> {
+      let signal: AbortSignal | undefined;
       try {
+        signal = deps.getRecoveryAbortSignal?.(sessionId);
         if (deps.withSessionLock) {
-          return await deps.withSessionLock(sessionId, () => runRecover(sessionId, errorData));
+          return await deps.withSessionLock(sessionId, () => runRecover(sessionId, errorData, signal));
         }
-        return await runRecover(sessionId, errorData);
+        return await runRecover(sessionId, errorData, signal);
       } catch (error) {
+        if (signal?.aborted) return true;
         deps.log.warn('context overflow rollover failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),

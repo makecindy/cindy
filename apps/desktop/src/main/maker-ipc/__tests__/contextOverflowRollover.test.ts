@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  CODEX_HISTORY_CONTINUE_MESSAGE,
   createContextOverflowRollover,
   effectiveContextWindow,
   effectivePiContextWindow,
@@ -1347,6 +1348,7 @@ describe('createContextOverflowRollover', () => {
   it('strips oversized Codex history in place instead of forking a Cindy session', async () => {
     const deps = makeDeps([
       msg('user', '继续', 'u1'),
+      msg('assistant', 'Already changed files; still checking the result', 'a1'),
       msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
     ]);
     deps.getSessionRow.mockResolvedValue({
@@ -1380,7 +1382,52 @@ describe('createContextOverflowRollover', () => {
     });
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
+    expect(deps.replayUserMessage).toHaveBeenCalledWith(
+      's1', CODEX_HISTORY_CONTINUE_MESSAGE, undefined,
+      { signal: undefined, resumeRetainedHistory: true, sourceUserContent: '继续', sourceUserClientId: 'u1' },
+    );
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(false);
+    expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['cancelled', 'dispatch-cancelled', 'rejected', 'external', 'before-send'] as const)(
+    'does not claim automatic continuation succeeded when %s', async (scenario) => {
+      const user = msg('user', 'finish editing', 'u1');
+      if (scenario === 'external') user.agentMeta = { origin: { kind: 'scheduler' } };
+      const deps = makeDeps([user, msg('error', { reason: 'codex_history_oversized' }, 'e1')]);
+      deps.getSessionRow.mockResolvedValue({
+        ...(await deps.getSessionRow()), agentKind: 'codex', sdkSessionId: 'fat-thread',
+      });
+      const cancellation = new AbortController();
+      deps.replayUserMessage.mockResolvedValue({ accepted: false });
+      if (scenario === 'dispatch-cancelled') {
+        deps.replayUserMessage.mockImplementation(async () => {
+          cancellation.abort();
+          throw new Error('cancelled during admission');
+        });
+      }
+      const rollover = createContextOverflowRollover({
+        ...deps,
+        getRecoveryAbortSignal: () => cancellation.signal,
+        tryStripOversizedCodexHistory: async () => {
+          if (scenario === 'cancelled') cancellation.abort();
+          return 'recovered';
+        },
+      });
+      if (scenario === 'before-send') {
+        await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+      } else {
+        rollover.claim('s1');
+        await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' }))
+          .resolves.toBe(scenario === 'cancelled' || scenario === 'dispatch-cancelled');
+        expect(deps.onRebuilt).not.toHaveBeenCalled();
+      }
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(
+        scenario === 'rejected' || scenario === 'dispatch-cancelled' ? 1 : 0,
+      );
+    },
+  );
 
   it('falls back to rollover when oversized strip fails', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);

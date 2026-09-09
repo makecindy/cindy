@@ -7720,7 +7720,7 @@ export class CodexAgent extends BaseAgent {
       // 先立终态墓碑:下面合成的本地收口据此走 suppressTerminalUi 分支(只清状态、
       // 不再推一遍终态 UI),迟到的 item / error 也一并被 stale guard 拦住。
       if (turnId) terminalErroredTurnIds.add(turnId);
-      eventQueue.push({
+      const timeoutEvent: AgentEvent = {
         type: 'error',
         data: {
           // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
@@ -7736,7 +7736,34 @@ export class CodexAgent extends BaseAgent {
           msSinceLastEvent: msSinceLast,
         },
         source: 'codex',
-      });
+      };
+      // Main can only relink an idle native thread. Publishing this error before
+      // interrupt ACK made its one-shot recovery see busy and abandon the task.
+      const deferOversizedError =
+        opts?.reason === CODEX_HISTORY_OVERSIZED_REASON && !pendingTurnId && !!turnId;
+      const interruptedSend = overloadRetry;
+      let timeoutEmitted = false;
+      const emitTimeout = (settled = false): void => {
+        if (timeoutEmitted || closed) return;
+        timeoutEmitted = true;
+        if (!deferOversizedError || !interruptedSend?.isCancelled()) eventQueue.push(timeoutEvent);
+        if (deferOversizedError && settled) {
+          // Session drains terminal errors with an idle tail. Do not leave its
+          // drain watchdog armed when Main cannot recover this thread.
+          eventQueue.push({
+            type: 'status',
+            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+            source: 'codex',
+          });
+        }
+      };
+      if (deferOversizedError) {
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Compacting...', ...usageTracker.snapshot(), isRunning: true },
+          source: 'codex',
+        });
+      } else emitTimeout();
       if (pendingTurnId) {
         // 重连提示可能早于 turnStarted 到达。此时 turn/start 仍在飞，不能只清掉
         // 看门狗：迟到的 response / turnStarted 必须被隔离，否则用户已经看到终态后
@@ -7812,9 +7839,11 @@ export class CodexAgent extends BaseAgent {
               threadId,
               turn: { id: turnId, status: 'failed' },
             } as TurnCompletedParams)) clearReconnectStallCleanup(turnId);
+          if (deferOversizedError) emitTimeout(true);
           return;
         }
         if (settleReconnectStallCleanup(turnId)) {
+          if (deferOversizedError) emitTimeout(true);
           log.info('reconnect-stall turn completed while interrupt was settling; keeping shared host', {
             threadId,
             turnId,
@@ -7851,6 +7880,9 @@ export class CodexAgent extends BaseAgent {
           'upstream-idle watchdog: turn interrupt not confirmed — closing this codex host so the next send rebuilds it',
           { threadId, turnId },
         );
+        // Unconfirmed interruption is a real failure, not a successful recovery.
+        // Surface it before close ends the event stream; Main will refuse busy.
+        if (deferOversizedError) emitTimeout();
         try {
           // thread/unsubscribe 失败本身不能先强退共享 host：同 turn 的权威
           // completion 仍可能在 close 等待期间到达。先只终止当前 handle，等下方

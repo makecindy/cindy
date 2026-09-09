@@ -210,6 +210,8 @@ export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage):
 
 type MakerSendOptions = {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+  /** Main-only continuation: a restored intent is not an authored user turn. */
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
   userName?: string;
@@ -1186,8 +1188,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : mainOwnedSendContext?.origin.kind === 'desktop' ? mainOwnedSendContext.rawChannelText : undefined;
       const autoReviewSourceContent = so[AUTO_REVIEW_SOURCE_CONTENT]
         ?? (typeof normalized === 'string' ? normalized : normalized.content) as UserMessage['content'];
-      let restoredAutoReviewIntent: string | undefined;
-      if (isOrdinaryUserTurn && trustedUserText !== undefined
+      let restoredAutoReviewIntent = so[AUTO_REVIEW_USER_INTENT];
+      if (restoredAutoReviewIntent === undefined && isOrdinaryUserTurn && trustedUserText !== undefined
         && (!mainOwnedSendContext || mainOwnedSendContext.origin.kind === 'desktop')) {
         let history: AutoReviewHistoryMessage[] = [];
         try {

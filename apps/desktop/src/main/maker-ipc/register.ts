@@ -34,7 +34,7 @@ import {
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
-import { restoreAutoReviewSteerIntent } from './autoReviewUserIntent.js';
+import { readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import type {
   AgentEvent,
   AgentKind,
@@ -12079,13 +12079,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // recovery 和错误横幅。重放绕开 coordinator，随后的 done 会被 recovery 吃掉。
       agentInputCoordinatorHolder?.clearError(sessionId);
     },
-    replayUserMessage: async (sessionId, content, agentFacingWireContent) => {
+    getRecoveryAbortSignal: (sessionId) =>
+      agentInputCoordinatorHolder!.getInputAbortSignal(sessionId),
+    replayUserMessage: async (sessionId, content, agentFacingWireContent, recovery) => {
       const [row] = await getDbClient()
         .drizzle.select()
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       if (!row?.workingDir) return { accepted: false };
+      if (recovery?.signal?.aborted) return { accepted: false };
       const createOpts = buildCreateOptsWithStderr({
         id: sessionId,
         agentKind: dbToMakerAgentKind(row.agentKind),
@@ -12098,6 +12101,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         planMode: !!row.planModeEnabled,
         title: row.title ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
+        ...(recovery?.resumeRetainedHistory ? { resumeSessionId: row.sdkSessionId ?? undefined } : {}),
       });
       if (createOpts.extraDirs === undefined) {
         try {
@@ -12114,10 +12118,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
         if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
       }
+      const recoveryIntent = recovery
+        ? restoreAutoReviewUserIntent(await readAutoReviewHistory(sessionId), {
+            clientId: recovery.sourceUserClientId,
+            content: recovery.sourceUserContent,
+          })
+        : undefined;
       const result = await sendToAgentAcceptedUnlocked(
         sessionId,
         persistedUserContentToWireMessage(agentFacingWireContent ?? content),
         createOpts,
+        recovery
+          ? {
+              signal: recovery.signal,
+              // The internal continuation is not fresh user authorization. Restore
+              // intent from authored history, never attachment/quote projections.
+              [AUTO_REVIEW_SOURCE_CONTENT]: readAutoReviewUserText(recovery.sourceUserContent) ?? '',
+              [AUTO_REVIEW_USER_INTENT]: recoveryIntent,
+            }
+          : undefined,
       );
       return { accepted: result.accepted === true };
     },

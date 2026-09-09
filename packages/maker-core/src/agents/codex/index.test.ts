@@ -29027,6 +29027,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     agent: CodexAgent,
     sessionId: string,
     interruptAck?: Promise<unknown>,
+    signal?: AbortSignal,
   ) {
     const host = installReconnectHost(agent, false, interruptAck);
     const handle = await agent.startSession({ sessionId, model: 'gpt-5.4', workingDir: '/repo' });
@@ -29034,7 +29035,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     void (async () => {
       for await (const event of handle.events()) seen.push(event);
     })();
-    await handle.send({ type: 'user', content: 'go' });
+    await handle.send({ type: 'user', content: 'go' }, { signal });
     const handlers = host.getThreadHandlers();
     if (!handlers) throw new Error('expected thread handlers');
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
@@ -29084,7 +29085,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
-  it('classifies reconnect stall as oversized only when live-tail images are strip-worthy', async () => {
+  it.each([false, true])('settles oversized recovery after ACK and respects cancellation=%s', async (cancelled) => {
     vi.useFakeTimers();
     const agent = new CodexAgent(createDeps());
     const proto = Object.getPrototypeOf(agent) as {
@@ -29103,19 +29104,33 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         scannedBytes: 20 * 1024 * 1024,
       });
     try {
-      const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized');
+      let acknowledge!: (value: unknown) => void;
+      const ack = new Promise((resolve) => { acknowledge = resolve; });
+      const cancellation = new AbortController();
+      const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal);
       emitReconnect(handlers, 1);
       await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
       await Promise.resolve();
       await Promise.resolve();
+      expect(handle.isTurnRunning?.()).toBe(true);
       expect(seen).toContainEqual(expect.objectContaining({
-        type: 'error',
-        data: expect.objectContaining({
-          reason: 'codex_history_oversized',
-          isTerminal: true,
-        }),
+        type: 'status', data: expect.objectContaining({ status: 'Compacting...', isRunning: true }),
       }));
-      expect(seen.filter((event) => event.type === 'error' && (event.data as { reason?: string }).reason === 'codex_history_oversized')).toHaveLength(1);
+      expect(seen.some((event) => event.type === 'error' &&
+        (event.data as { reason?: string }).reason === 'codex_history_oversized')).toBe(false);
+      if (cancelled) cancellation.abort();
+      acknowledge({});
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      const oversizedIndex = seen.findIndex((event) => event.type === 'error' &&
+        (event.data as { reason?: string }).reason === 'codex_history_oversized');
+      if (cancelled) expect(oversizedIndex).toBe(-1);
+      else {
+        expect(oversizedIndex).toBeGreaterThanOrEqual(0);
+        expect(seen[oversizedIndex + 1]).toMatchObject({
+          type: 'status', data: { isRunning: false },
+        });
+      }
       await handle.close();
     } finally {
       localHome.mockRestore();
