@@ -26,7 +26,14 @@ function parse(result: { content: Array<{ type: string; text?: string }> }) {
 function tools(server: unknown) {
   return (
     server as {
-      _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }>;
+      _registeredTools: Record<
+        string,
+        {
+          description?: string;
+          handler: (args: unknown) => Promise<unknown>;
+          inputSchema?: { shape?: Record<string, unknown> };
+        }
+      >;
     }
   )._registeredTools;
 }
@@ -55,10 +62,21 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       targetTitle: null,
       targetLastUserSendAt: null,
     })),
+    interruptWorker: vi.fn(async () => ({
+      ok: true as const,
+      agentKind: 'codex' as const,
+      queuedMessageId: 'queued-interrupt-1',
+      stopOutcome: 'requested' as const,
+      queuePaused: false,
+    })),
     listWorkerQueuedMessages: vi.fn(async () => ({
       ok: true as const,
       workerId: 'worker-1',
       workerSessionId: 'worker-session-1',
+      status: 'running',
+      isWorking: true,
+      willQueue: true,
+      queuePaused: false,
       messages: [],
     })),
     updateWorkerQueuedMessage: vi.fn(async () => ({
@@ -70,6 +88,12 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       ok: true as const,
       workerId: 'worker-1',
       queuedMessageId: 'queued-1',
+    })),
+    mergeWorkerQueuedMessages: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      queuedMessageId: 'queued-1',
+      messages: [],
     })),
     idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
     endTeam: vi.fn(async () => ({ ok: true as const })),
@@ -110,7 +134,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
 }
 
 describe('dynamic lizi MCP session context', () => {
-  it('keeps the 16-tool Orca manifest order stable across server construction', () => {
+  it('keeps the 18-tool Orca manifest order stable across server construction', () => {
     const context = {
       agentKind: 'codex' as const,
       workingDir: 'C:\\repo',
@@ -120,16 +144,222 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    expect(first).toHaveLength(16);
+    expect(first).toHaveLength(18);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
+    expect(first).toContain('interrupt_worker');
+    expect(first).toContain('get_worker_queue_status');
+    expect(first).toContain('merge_queued_messages');
+    expect(first).not.toContain('list_worker_queue');
+  });
+
+  it('keeps send_to_worker public schema free of interrupt controls', () => {
+    const server = createOrcaMcpServer(createOrcaDeps(), {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+    const schemaKeys = Object.keys(
+      tools(server).send_to_worker.inputSchema?.shape ?? {},
+    );
+    expect(schemaKeys).toEqual(['target_session_id', 'message']);
+    expect(schemaKeys).not.toContain('interrupt');
+  });
+
+  it('exposes interrupt_worker as the sole interrupt contract', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = await tools(server).interrupt_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'replace active work',
+    });
+    expect(parse(result as never)).toMatchObject({
+      ok: true,
+      target_session_id: 'worker-session-1',
+      queued_message_id: 'queued-interrupt-1',
+      stop_outcome: 'requested',
+      queue_paused: false,
+    });
+    expect(deps.interruptWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'replace active work',
+    });
+    expect(tools(server).interrupt_worker.description).toContain(
+      'This ends the unfinished turn. Do not use it for additional context, progress requests, or independent follow-up work; use send_to_worker instead.',
+    );
+  });
+
+  it('returns worker flow status and the complete visible queue', async () => {
+    const deps = createOrcaDeps({
+      listWorkerQueuedMessages: vi.fn(async () => ({
+        ok: true as const,
+        workerId: 'worker-1',
+        workerSessionId: 'worker-session-1',
+        status: 'running',
+        isWorking: true,
+        willQueue: true,
+        queuePaused: true,
+        messages: [
+          {
+            queuedMessageId: 'active-1',
+            position: 0,
+            source: 'lead' as const,
+            content: 'being accepted',
+            consuming: true,
+          },
+        ],
+      })),
+    });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = await tools(server).get_worker_queue_status.handler({
+      worker_id: 'worker-1',
+    });
+    expect(parse(result as never)).toMatchObject({
+      ok: true,
+      status: 'running',
+      is_working: true,
+      will_queue: true,
+      queued_count: 1,
+      queue_paused: true,
+      queue: [{ queued_message_id: 'active-1', consuming: true }],
+    });
+  });
+
+  it('uses the same queued_count for a consuming item in workspace and queue status', async () => {
+    const consuming = {
+      queuedMessageId: 'consuming-1',
+      position: 0,
+      source: 'lead' as const,
+      content: 'crossing dispatch boundary',
+      consuming: true,
+    };
+    const deps = createOrcaDeps({
+      getWorkspaceInfo: vi.fn(async () => ({
+        ok: true as const,
+        workflow: null,
+        ui_capacity: 1,
+        worker_count: 1,
+        workers: [{
+          worker_id: 'worker-1',
+          session_id: 'worker-session-1',
+          status: 'running',
+          session_status: 'active',
+          idle_ms: null,
+          restored_from_storage: false,
+          is_working: true,
+          will_queue: true,
+          queued_count: 1,
+          queue_paused: false,
+          label: 'dev',
+          role: 'developer',
+          agent_kind: 'codex' as const,
+          model: 'gpt-5.5',
+          effort: 'high',
+          focused: true,
+          working_dir: '/repo',
+        }],
+      })),
+      listWorkerQueuedMessages: vi.fn(async () => ({
+        ok: true as const,
+        workerId: 'worker-1',
+        workerSessionId: 'worker-session-1',
+        status: 'running',
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+        messages: [consuming],
+      })),
+    });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const workspace = parse(await tools(server).get_workspace_info.handler({}) as never);
+    const queue = parse(
+      await tools(server).get_worker_queue_status.handler({ worker_id: 'worker-1' }) as never,
+    );
+    expect(workspace).toMatchObject({ workers: [{ queued_count: 1 }] });
+    expect(queue).toMatchObject({ queued_count: 1, queue: [{ consuming: true }] });
+  });
+
+  it('returns QUEUE_CHANGED with the latest queue from atomic merge', async () => {
+    const deps = createOrcaDeps({
+      mergeWorkerQueuedMessages: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: 'QUEUE_CHANGED' as const,
+        message: 'queue changed',
+        messages: [
+          {
+            queuedMessageId: 'latest-1',
+            position: 0,
+            source: 'user' as const,
+            content: 'latest',
+            consuming: false,
+          },
+        ],
+      })),
+    });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = await tools(server).merge_queued_messages.handler({
+      worker_id: 'worker-1',
+      queued_message_ids: ['q1', 'q2'],
+      message: 'merged',
+    });
+    expect(parse(result as never)).toMatchObject({
+      ok: false,
+      errorCode: 'QUEUE_CHANGED',
+      data: {
+        queue: [{ queued_message_id: 'latest-1', source: 'user' }],
+      },
+    });
   });
 
   // github_lizi / gitlab_lizi 的同款用例已分别随 lizi_github / lizi_gitlab 退役
   // 删除(2026-07-14,能力迁入内置意识 cindy-github / cindy-gitlab)。原覆盖的
   // 两条路径由 cindy_memory 版承接:Claude 绑定语境路径见下面第一个用例,Codex
   // call-time 动态语境路径见既有的 dynamic 用例。
+
+  it('keeps Bot Home Memory available when global Maker Memory is disabled', () => {
+    const getManager = () => ({ isEnabled: () => false }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager } })
+      .find((item) => item.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+    expect(provider.isEnabled?.({
+      agentKind: 'pi',
+      workingDir: '/bot/workspace',
+      memoryScopeKey: 'bot:bot-a',
+      vendorOptions: {},
+    })).toBe(true);
+    expect(provider.isEnabled?.({
+      agentKind: 'pi',
+      workingDir: '/ordinary/project',
+      vendorOptions: {},
+    })).toBe(false);
+  });
 
   it('lets cindy_memory resolve the workingDir from the bound Claude session', async () => {
     // Claude 绑定语境:toClaudeSdkConfig 传入的 workingDir 即会话绑定值,tool
@@ -280,6 +510,63 @@ describe('dynamic lizi MCP session context', () => {
     );
     expect(parse(local as never)).toMatchObject({ ok: true, data: [] });
     expect(getStore).toHaveBeenLastCalledWith('/home/me/proj');
+  });
+
+  it('uses the host-owned Bot memory scope instead of the route workdir', async () => {
+    const getStore = vi.fn(async (_scope: string) => ({
+      list: vi.fn(async () => []),
+    }));
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore,
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'claude-code',
+      workingDir: '/project-a',
+      memoryScopeKey: 'bot:release-helper',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+
+    const result = await tools(cfg.instance).call_tool.handler({
+      name: 'memory_list',
+      args: {},
+    });
+
+    expect(parse(result as never)).toMatchObject({ ok: true, data: [] });
+    expect(getStore).toHaveBeenLastCalledWith('bot:release-helper');
+  });
+
+  it('passes host-owned Bot identity to session_search without exposing it as tool input', async () => {
+    const searchSessions = vi.fn(async () => []);
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore: vi.fn(),
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager, searchSessions } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'claude-code',
+      workingDir: '/project-a',
+      memoryScopeKey: 'bot:release-helper',
+      sessionId: 'bot-session-a',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+
+    await tools(cfg.instance).call_tool.handler({
+      name: 'session_search',
+      args: { query: 'release' },
+    });
+
+    expect(searchSessions).toHaveBeenCalledWith('release', {
+      callerMemoryScopeKey: 'bot:release-helper',
+      callerSessionId: 'bot-session-a',
+    });
   });
 
   it('advertises Cindy as the helper self-inspection category', async () => {
@@ -980,6 +1267,10 @@ describe('dynamic lizi MCP session context', () => {
     const withoutIdleCtx = await tools(server).idle_worker.handler({
       worker_id: 'worker-1',
     });
+    const withoutInterruptCtx = await tools(server).interrupt_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'replace current work',
+    });
     const withoutArchiveCtx = await tools(server).archive_worker.handler({
       worker_id: 'worker-1',
     });
@@ -992,11 +1283,16 @@ describe('dynamic lizi MCP session context', () => {
       ok: false,
       errorCode: 'LEAD_NOT_SUPPORTED',
     });
+    expect(parse(withoutInterruptCtx as never)).toMatchObject({
+      ok: false,
+      errorCode: 'LEAD_NOT_SUPPORTED',
+    });
     expect(parse(withoutArchiveCtx as never)).toMatchObject({
       ok: false,
       errorCode: 'LEAD_NOT_SUPPORTED',
     });
     expect(deps.sendToWorker).not.toHaveBeenCalled();
+    expect(deps.interruptWorker).not.toHaveBeenCalled();
     expect(deps.idleWorker).not.toHaveBeenCalled();
     expect(deps.archiveWorker).not.toHaveBeenCalled();
 
@@ -1012,6 +1308,10 @@ describe('dynamic lizi MCP session context', () => {
           target_session_id: 'worker-session-1',
           message: 'hello',
         });
+        await tools(server).interrupt_worker.handler({
+          target_session_id: 'worker-session-1',
+          message: 'replace current work',
+        });
         await tools(server).idle_worker.handler({
           worker_id: 'worker-1',
         });
@@ -1025,6 +1325,11 @@ describe('dynamic lizi MCP session context', () => {
       callerLeadSessionId: 'codex-lead-session',
       targetSessionId: 'worker-session-1',
       message: 'hello',
+    });
+    expect(deps.interruptWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'codex-lead-session',
+      targetSessionId: 'worker-session-1',
+      message: 'replace current work',
     });
     expect(deps.idleWorker).toHaveBeenCalledWith({
       callerLeadSessionId: 'codex-lead-session',
@@ -1054,6 +1359,10 @@ describe('dynamic lizi MCP session context', () => {
           session_status: 'not_running',
           idle_ms: 123,
           restored_from_storage: true,
+          is_working: false,
+          will_queue: true,
+          queued_count: 0,
+          queue_paused: true,
           label: 'dev',
           role: 'developer',
           agent_kind: 'codex' as const,
@@ -1118,9 +1427,14 @@ describe('dynamic lizi MCP session context', () => {
             session_id: 'worker-session-1',
             session_status: 'not_running',
             restored_from_storage: true,
+            queued_count: 0,
+            queue_paused: true,
             working_dir: '/repo',
           }],
         });
+        expect(tools(server).get_workspace_info.description).toContain(
+          'including whether each worker queue is paused',
+        );
 
         const status = parse(await tools(server).worker_status.handler({ worker_id: 'worker-1' }) as never);
         expect(status).toMatchObject({

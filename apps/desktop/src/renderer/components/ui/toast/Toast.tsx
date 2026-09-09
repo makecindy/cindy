@@ -94,11 +94,29 @@ export function Toast({ item }: ToastProps) {
       {/* Message — 默认单行 nowrap, 但允许多行 (whitespace-pre-line) 给诊断类
           toast 用 (例如 silent install 失败时把 install log 尾巴拼进 message)。
           单行短文本仍然展示成一行不变化, 因为没有 \n 就不会换。 */}
-      <span
-        className="text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line max-w-[480px] break-words"
-      >
+      <span className="text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line max-w-[480px] break-words">
         {item.message}
       </span>
+
+      {item.action && (
+        <button
+          type="button"
+          onClick={() => {
+            try {
+              item.action?.onClick();
+            } finally {
+              toast.dismiss(item.id);
+            }
+          }}
+          className={cn(
+            'ml-1 shrink-0 rounded-full px-2.5 py-1 text-12 font-medium',
+            'text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          )}
+        >
+          {item.action.label}
+        </button>
+      )}
     </div>
   );
 }

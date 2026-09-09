@@ -21,6 +21,7 @@ import {
   buildLastTurnCappedData,
   canUsePatchBasedReviewActions,
   CappedSourceView,
+  countEagerExpandedDiffRows,
   descriptorForReviewSource,
   discardForReviewDiff,
   filterWhitespaceHiddenDiffs,
@@ -139,6 +140,60 @@ describe('ReviewTabBody Last turn actions', () => {
         (item) => item.path,
       ),
     ).toEqual([]);
+  });
+});
+
+describe('ReviewTabBody expanded diff budget', () => {
+  function diffWithRows(path: string, rowCount: number): FileDiff {
+    return diff('unstaged', path, {
+      hunks: [
+        {
+          index: 0,
+          header: `@@ -1,${rowCount} +1,${rowCount} @@`,
+          oldStart: 1,
+          oldLines: rowCount,
+          newStart: 1,
+          newLines: rowCount,
+          section: '',
+          lines: Array.from({ length: rowCount }, (_, index) => ({
+            index,
+            type: 'context' as const,
+            content: `line ${index}`,
+            raw: ` line ${index}`,
+            oldLineNumber: index + 1,
+            newLineNumber: index + 1,
+            originalLineNumber: index + 1,
+            selectable: false,
+            noTrailingNewLine: false,
+          })),
+          selectableLines: [],
+          raw: '',
+        },
+      ],
+    });
+  }
+
+  it('adds only expanded diffs that do not already virtualize their own rows', () => {
+    const first = diffWithRows('first.ts', 120);
+    const second = diffWithRows('second.ts', 120);
+    const selfVirtualized = diffWithRows('large.ts', 201);
+
+    expect(countEagerExpandedDiffRows([first, second], new Set([first.id]), 'unified')).toBe(120);
+    expect(
+      countEagerExpandedDiffRows(
+        [first, second, selfVirtualized],
+        new Set([first.id, second.id, selfVirtualized.id]),
+        'unified',
+      ),
+    ).toBe(240);
+  });
+
+  it('skips expanded-row scanning when file count already virtualizes the outer list', () => {
+    const diffs = Array.from({ length: 101 }, (_, index) => diff('unstaged', `${index}.ts`));
+
+    expect(countEagerExpandedDiffRows(diffs, new Set(diffs.map((item) => item.id)), 'unified')).toBe(
+      0,
+    );
   });
 });
 
@@ -456,7 +511,7 @@ describe('ReviewTabBody refresh control', () => {
     );
 
     const button = screen.getByRole('button', { name: 'rightSidebar.review.refreshGitData' });
-    expect(button.querySelector('.animate-spin')).toBeTruthy();
+    expect(button.querySelector('.animate-spinner')).toBeTruthy();
     button.click();
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
@@ -830,7 +885,7 @@ describe('ReviewTabBody hover-reveal action affordance', () => {
     expect(stageButton.querySelector('.sr-only')?.textContent).toBe(
       'rightSidebar.review.actions.stageAll',
     );
-    expect(stageButton.querySelector('.animate-spin')).toBeTruthy();
+    expect(stageButton.querySelector('.animate-spinner')).toBeTruthy();
   });
 });
 

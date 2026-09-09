@@ -25,7 +25,7 @@ describe('published status badges', () => {
   });
 
   it('maps special states to the user-facing review label keys', () => {
-    expect(publishedStatusLabelKey('pending')).toBe('skillhub.publishedStatus.machineReviewing');
+    expect(publishedStatusLabelKey('pending')).toBe('skillhub.publishedStatus.waitingReview');
     expect(publishedStatusLabelKey('scanning')).toBe('skillhub.publishedStatus.machineReviewing');
     expect(publishedStatusLabelKey('quarantine')).toBe('skillhub.publishedStatus.manualReviewing');
     expect(publishedStatusLabelKey('rejected')).toBe('skillhub.publishedStatus.rejected');

@@ -24,6 +24,7 @@ import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
+import { isKnownProductDefaultTupleIdentity } from '@/lib/newMakerDefaultTuple';
 import type { OrcaWorkerPermissionMode } from '../../shared/orca-worker-permission-mode';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths';
@@ -141,6 +142,8 @@ export interface NewMakerDraft {
    * 清空(NewMakerDraftRoute mount)、**不跨重启还原**(sanitize 一律置空)。
    */
   extraDirs: string[];
+  /** 单次草稿内用户明确授予的附加可读写目录；不跨重启。 */
+  writableDirs: string[];
   /** 每个 vendor 的"上次使用配置"——切回该 vendor 时自动恢复。 */
   lastByVendor: Record<MakerVendor, VendorPrefs>;
   /**
@@ -154,6 +157,16 @@ export interface NewMakerDraft {
    * 也不得在已打标后改写 lastByVendor.model / providerId / effort。
    */
   modelChosenByVendor: Partial<Record<MakerVendor, boolean>>;
+  /**
+   * 用户是否明确改过新任务的模型组合（Harness / 来源 / 模型 / 思考深度 / Fast）。
+   * false 才允许连接态为新任务下放产品默认；目录热更与登录变化不得覆盖 true。
+   */
+  defaultTupleCustomized: boolean;
+  /**
+   * 自定义里是否包含 Harness / 来源 / 模型选择。与只调 effort / Fast 分开记，
+   * 这样「恢复推荐」只能撤销调档意图，不会顺手清掉真正的路由选择。
+   */
+  defaultTupleSelectionCustomized: boolean;
 }
 
 /**
@@ -213,6 +226,7 @@ function makeDefault(): NewMakerDraft {
     fastModeByModel: {},
     effortByModel: {},
     extraDirs: [],
+    writableDirs: [],
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
@@ -220,6 +234,8 @@ function makeDefault(): NewMakerDraft {
       codex: defaultVendorPrefs('codex'),
     },
     modelChosenByVendor: {},
+    defaultTupleCustomized: false,
+    defaultTupleSelectionCustomized: false,
   };
 }
 
@@ -285,6 +301,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // 单次草稿的临时授权范围,静默还原会让用户无感知地把旧目录带进新会话。
   // NewMakerDraftRoute mount 时也会清空(同一决定的双保险)。
   const extraDirs: string[] = [];
+  const writableDirs: string[] = [];
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
@@ -350,6 +367,61 @@ function sanitize(raw: unknown): NewMakerDraft {
   for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
+  // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast 都是足够强的
+  // 用户意图证据。preserving 写回会保留完整 vendor 快照与空 marker,所以不能再用
+  // 「只有 cc 单槽单字段」识别；cc 模型偏离当时同源的 seed 才是可保护的旧选择。
+  // 反过来,仅 vendor=codex/pi 不能算用户选择:旧版会在 cc 不可用时由系统自动 fallback。
+  const legacyCcPrefs = lastByVendorRaw.cc;
+  // 已经随旧版完整草稿自然落盘过的 cc seed。它们不是用户选择，不能因为新版目录换了
+  // seed 就反过来把系统快照认成自定义；这里只服务一次性迁移，不参与新会话默认决策。
+  const legacyCcSeedModels = new Set([def.lastByVendor.cc.model, 'claude-sonnet-4-6']);
+  const isKnownProductTuple = (slotVendor: MakerVendor, prefs: Partial<VendorPrefs>): boolean =>
+    typeof prefs.providerId === 'string' &&
+    prefs.providerId.length > 0 &&
+    typeof prefs.model === 'string' &&
+    prefs.model.length > 0 &&
+    isKnownProductDefaultTupleIdentity({
+      vendor: slotVendor,
+      providerId: prefs.providerId,
+      model: prefs.model,
+    });
+  const legacyCcModelCandidate =
+    vendor === 'cc' &&
+    legacyCcPrefs &&
+    typeof legacyCcPrefs === 'object' &&
+    typeof legacyCcPrefs.model === 'string' &&
+    legacyCcPrefs.model.length > 0 &&
+    !legacyCcSeedModels.has(legacyCcPrefs.model);
+  const legacyCcModel =
+    legacyCcModelCandidate &&
+    (r.defaultTupleCustomized === undefined || !isKnownProductTuple('cc', legacyCcPrefs));
+  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi'] as const).some((slotVendor) => {
+    const prefs = lastByVendorRaw[slotVendor];
+    if (
+      !prefs ||
+      typeof prefs !== 'object' ||
+      typeof prefs.providerId !== 'string' ||
+      prefs.providerId.length === 0
+    ) {
+      return false;
+    }
+    // 老版本完全没有组合标记时，来源是唯一可用的显式证据；已有单一 boolean 的过渡
+    // 版本则只排除产品策略能够自动写出的精确 tuple，保住“只换来源”的真实选择。
+    return r.defaultTupleCustomized === undefined || !isKnownProductTuple(slotVendor, prefs);
+  });
+  const legacySelectionCustomized =
+    Object.values(modelChosenByVendor).some(Boolean) || legacyCcModel || legacySourceSelection;
+  const legacyTuningCustomized =
+    Object.keys(effortByModel).length > 0 || Object.keys(fastModeByModel).length > 0;
+  const defaultTupleSelectionCustomized =
+    r.defaultTupleSelectionCustomized === true ||
+    (r.defaultTupleSelectionCustomized === undefined &&
+      r.defaultTupleCustomized !== false &&
+      legacySelectionCustomized);
+  const defaultTupleCustomized =
+    r.defaultTupleCustomized === true ||
+    defaultTupleSelectionCustomized ||
+    (r.defaultTupleCustomized === undefined && legacyTuningCustomized);
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
   // 可安全迁移为 override；旧 false 无法区分“默认快照”与“明确关闭”，按未自定义处理。
   const worktreePreferenceCustomized =
@@ -380,6 +452,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     fastModeByModel,
     effortByModel,
     extraDirs,
+    writableDirs,
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
@@ -387,6 +460,8 @@ function sanitize(raw: unknown): NewMakerDraft {
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
     modelChosenByVendor,
+    defaultTupleCustomized,
+    defaultTupleSelectionCustomized,
   };
 }
 
@@ -423,6 +498,29 @@ interface StoredWorktreePreference {
   worktreePreferenceCustomized: boolean;
 }
 
+type StoredDefaultTuplePreference = Pick<
+  NewMakerDraft,
+  | 'vendor'
+  | 'fastModeByModel'
+  | 'effortByModel'
+  | 'lastByVendor'
+  | 'modelChosenByVendor'
+  | 'defaultTupleCustomized'
+  | 'defaultTupleSelectionCustomized'
+>;
+
+function defaultTuplePreferenceOf(draft: NewMakerDraft): StoredDefaultTuplePreference {
+  return {
+    vendor: draft.vendor,
+    fastModeByModel: draft.fastModeByModel,
+    effortByModel: draft.effortByModel,
+    lastByVendor: draft.lastByVendor,
+    modelChosenByVendor: draft.modelChosenByVendor,
+    defaultTupleCustomized: draft.defaultTupleCustomized,
+    defaultTupleSelectionCustomized: draft.defaultTupleSelectionCustomized,
+  };
+}
+
 function parseStoredWorktreePreference(
   raw: string | null,
 ): StoredWorktreePreference | undefined {
@@ -443,6 +541,14 @@ function parseStoredWorktreePreference(
   };
 }
 
+function parseStoredDefaultTuplePreference(
+  raw: string | null,
+): StoredDefaultTuplePreference | undefined {
+  const parsed = parseStoredDraftRecord(raw);
+  if (!parsed) return undefined;
+  return defaultTuplePreferenceOf(sanitize(parsed));
+}
+
 function readStoredDraftRecord(): StoredDraftRecord | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
@@ -461,20 +567,55 @@ function readStoredWorktreePreference(): StoredWorktreePreference | undefined {
   }
 }
 
+function readStoredDefaultTuplePreference(): StoredDefaultTuplePreference | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    return parseStoredDefaultTuplePreference(window.localStorage.getItem(storageKey()));
+  } catch {
+    return undefined;
+  }
+}
+
+function hasSameDefaultTuplePreference(
+  left: StoredDefaultTuplePreference,
+  right: StoredDefaultTuplePreference,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 type PreferenceSyncFallback = 'full-draft' | 'worktree-only' | null;
 let preferenceSyncFallback: PreferenceSyncFallback = null;
 
 /**
+ * 显式 tuple 操作先采用跨窗口持久真相，再只施加自己的字段变更。
+ * 这样既不会带着旧整表复活已恢复的 override，也不会吞掉本窗口刚发生的真实选模意图。
+ */
+function rebaseStoredDefaultTuplePreference(): void {
+  const stored = readStoredDefaultTuplePreference();
+  if (
+    stored !== undefined &&
+    !hasSameDefaultTuplePreference(stored, defaultTuplePreferenceOf(currentDraft))
+  ) {
+    currentDraft = { ...currentDraft, ...stored };
+    // 等价于 storage event 已到达：即使后续显式操作因同值短路，订阅者也必须看到这次收敛。
+    emit();
+  }
+}
+
+/**
  * Persist a complete draft snapshot without letting another renderer's stale in-memory copy
- * overwrite the workstation-wide worktree preference.
+ * overwrite workstation-wide worktree or user-customized default-tuple preferences.
  *
  * Electron windows do not share this module instance. A storage event normally refreshes the
- * other windows below, but that event is asynchronous; rebasing this one shared field at write
+ * other windows below, but that event is asynchronous; rebasing shared preferences at write
  * time also closes the race where a secondary/sidebar window mutates another draft field before
  * it has received the event.
  */
 function scheduleWrite(
-  options: { preserveStoredWorktreePreference?: boolean } = {},
+  options: {
+    preserveStoredWorktreePreference?: boolean;
+    preserveStoredDefaultTuplePreference?: boolean;
+  } = {},
 ): void {
   if (typeof window === 'undefined') return;
   const storedWorktreePreference = options.preserveStoredWorktreePreference !== false
@@ -489,6 +630,22 @@ function scheduleWrite(
     )
   ) {
     currentDraft = { ...currentDraft, ...storedWorktreePreference };
+  }
+  const storedDefaultTuplePreference =
+    options.preserveStoredDefaultTuplePreference !== false
+      ? readStoredDefaultTuplePreference()
+      : undefined;
+  // 无关字段写入必须无条件采用最新完整 tuple，方向不能只保护 false → true：恢复推荐刚把
+  // true 清成 false 后，旧窗口的 workdir/collab 写入同样不能把旧 tuple/true 整体复活。
+  // 显式 tuple 操作已在变更前调用 rebaseStoredDefaultTuplePreference，再通过 option 跳过此处。
+  if (
+    storedDefaultTuplePreference !== undefined &&
+    !hasSameDefaultTuplePreference(
+      storedDefaultTuplePreference,
+      defaultTuplePreferenceOf(currentDraft),
+    )
+  ) {
+    currentDraft = { ...currentDraft, ...storedDefaultTuplePreference };
   }
   try {
     window.localStorage.setItem(storageKey(), JSON.stringify(currentDraft));
@@ -513,9 +670,9 @@ const removeStorageListener = (() => {
     if (event.storageArea && event.storageArea !== window.localStorage) return;
     // A queued storage event can arrive after this window has already written a newer value.
     // Re-read the shared storage truth first so the event payload itself cannot roll state back.
-    const livePreference = readStoredWorktreePreference();
-    const nextPreference =
-      livePreference ??
+    const liveWorktreePreference = readStoredWorktreePreference();
+    const nextWorktreePreference =
+      liveWorktreePreference ??
       (
         event.newValue == null
           ? {
@@ -524,17 +681,34 @@ const removeStorageListener = (() => {
             }
           : parseStoredWorktreePreference(event.newValue)
       );
-    if (
-      nextPreference === undefined
-      || (
-        nextPreference.worktreeEnabled === currentDraft.worktreeEnabled
-        && nextPreference.worktreePreferenceCustomized
-          === currentDraft.worktreePreferenceCustomized
-      )
-    ) return;
-    // Only this workstation-wide preference is cross-window shared. Keep transient per-window
-    // draft targets (deviceLinkDeviceId/extraDirs, etc.) untouched.
-    currentDraft = { ...currentDraft, ...nextPreference };
+    const liveDefaultTuplePreference = readStoredDefaultTuplePreference();
+    const nextDefaultTuplePreference =
+      liveDefaultTuplePreference ??
+      (
+        event.newValue == null
+          ? defaultTuplePreferenceOf(makeDefault())
+          : parseStoredDefaultTuplePreference(event.newValue)
+      );
+    const worktreeChanged =
+      nextWorktreePreference !== undefined
+      && (
+        nextWorktreePreference.worktreeEnabled !== currentDraft.worktreeEnabled
+        || nextWorktreePreference.worktreePreferenceCustomized
+          !== currentDraft.worktreePreferenceCustomized
+      );
+    const defaultTupleChanged =
+      nextDefaultTuplePreference !== undefined
+      && !hasSameDefaultTuplePreference(
+        nextDefaultTuplePreference,
+        defaultTuplePreferenceOf(currentDraft),
+      );
+    if (!worktreeChanged && !defaultTupleChanged) return;
+    // 只有工作端级偏好跨窗口同步；deviceLinkDeviceId / extraDirs 等单窗口临时目标保持不动。
+    currentDraft = {
+      ...currentDraft,
+      ...(worktreeChanged ? nextWorktreePreference : {}),
+      ...(defaultTupleChanged ? nextDefaultTuplePreference : {}),
+    };
     emit();
   };
   window.addEventListener('storage', onStorage);
@@ -698,6 +872,7 @@ export function resetDraftWorkspaceTargets(): void {
   patchDraft({
     workingDir: null,
     extraDirs: [],
+    writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },
   });
 }
@@ -709,22 +884,134 @@ export function patchCollab(patch: Partial<CollabDraft>): void {
 
 /**
  * 切 vendor 的便捷入口:
- *   1. 把当前 vendor 的 (model/effort/permissionMode) 落进 lastByVendor[currentVendor]
+ *   1. 保留当前 vendor 已同步进草稿的 (model/effort/permissionMode)
  *   2. 切到新 vendor
  * NewMakerDraftRoute 的 VendorSegmentedSwitcher 切换时调本函数;切回某 vendor 时 ChatInput 通过 lastByVendor[vendor] 取上次值。
  */
-export function switchVendor(next: MakerVendor, currentPrefs: VendorPrefs): void {
+export function switchVendor(next: MakerVendor): void {
+  rebaseStoredDefaultTuplePreference();
   if (currentDraft.vendor === next) return;
-  const prev = currentDraft.vendor;
   currentDraft = {
     ...currentDraft,
     vendor: next,
-    lastByVendor: {
-      ...currentDraft.lastByVendor,
-      [prev]: currentPrefs,
-    },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+}
+
+/**
+ * 当前草稿 Harness 不可用时按系统顺序回退。
+ *
+ * 必须在调用瞬间读取模块级 currentDraft:产品默认 effect 可能刚把 cc 改成 Pi,若这里继续
+ * 使用 React 上一轮 closure 的 cc/currentPrefs,会把 xAI→Pi 又覆盖成 Codex。系统回退不标记
+ * defaultTupleCustomized,因为它不是用户选择。
+ */
+export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVendor>): boolean {
+  rebaseStoredDefaultTuplePreference();
+  const currentVendor = currentDraft.vendor;
+  if (availableVendors.has(currentVendor)) return false;
+  const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
+    availableVendors.has(vendor),
+  );
+  if (!fallback) return false;
+  switchVendor(fallback);
+  return true;
+}
+
+export interface SuggestedDefaultTuple {
+  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
+  providerId: string;
+  model: string;
+  effort?: Effort | null;
+}
+
+/** 原子应用产品默认；只改未自定义草稿，不把默认伪装成用户显式选模。 */
+export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolean {
+  rebaseStoredDefaultTuplePreference();
+  if (currentDraft.defaultTupleCustomized) return false;
+  const previous = currentDraft.lastByVendor[tuple.vendor];
+  const nextPrefs: VendorPrefs = {
+    ...previous,
+    model: tuple.model,
+    providerId: tuple.providerId,
+    ...(tuple.effort ? { effort: tuple.effort } : {}),
+  };
+  if (
+    currentDraft.vendor === tuple.vendor &&
+    previous.model === nextPrefs.model &&
+    previous.providerId === nextPrefs.providerId &&
+    previous.effort === nextPrefs.effort
+  ) {
+    return false;
+  }
+  currentDraft = {
+    ...currentDraft,
+    vendor: tuple.vendor,
+    lastByVendor: { ...currentDraft.lastByVendor, [tuple.vendor]: nextPrefs },
+  };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+  return true;
+}
+
+/** 用户开始调整默认组合后立刻封住后续自动下放。 */
+export function markDefaultTupleCustomized(selectionCustomized = true): void {
+  rebaseStoredDefaultTuplePreference();
+  if (
+    currentDraft.defaultTupleCustomized &&
+    (!selectionCustomized || currentDraft.defaultTupleSelectionCustomized)
+  ) {
+    return;
+  }
+  currentDraft = {
+    ...currentDraft,
+    defaultTupleCustomized: true,
+    defaultTupleSelectionCustomized:
+      currentDraft.defaultTupleSelectionCustomized || selectionCustomized,
+  };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+}
+
+/**
+ * 「恢复推荐」删除当前模型的旧草稿调档，并在所有 override 都已清空时撤销组合封锁。
+ *
+ * providerModelMemory / modelEnginePrefs 是独立 store，由调用方先删当前项、再把同步重读后的
+ * 汇总结果传进来。草稿内仍需在同一次写入里删除 legacy effort / Fast 键；否则 marker 虽清，
+ * 重启后残留记忆仍会把旧档顶回来。任一模型选择、其它模型调档或外部 override 仍存在时，
+ * defaultTupleCustomized 必须继续保护用户意图。
+ */
+export function clearDefaultTupleTuningCustomization(args: {
+  modelId: string;
+  hasExternalOverrides: boolean;
+}): void {
+  rebaseStoredDefaultTuplePreference();
+  const nextEffortByModel = { ...currentDraft.effortByModel };
+  const nextFastModeByModel = { ...currentDraft.fastModeByModel };
+  const hadEffortOverride = args.modelId in nextEffortByModel;
+  const hadFastOverride = args.modelId in nextFastModeByModel;
+  delete nextEffortByModel[args.modelId];
+  delete nextFastModeByModel[args.modelId];
+
+  const hasSelectionOverride =
+    currentDraft.defaultTupleSelectionCustomized ||
+    Object.values(currentDraft.modelChosenByVendor).some(Boolean);
+  const hasRemainingDraftTuning =
+    Object.keys(nextEffortByModel).length > 0 || Object.keys(nextFastModeByModel).length > 0;
+  const shouldUnlock =
+    currentDraft.defaultTupleCustomized &&
+    !hasSelectionOverride &&
+    !hasRemainingDraftTuning &&
+    !args.hasExternalOverrides;
+  if (!hadEffortOverride && !hadFastOverride && !shouldUnlock) return;
+
+  currentDraft = {
+    ...currentDraft,
+    effortByModel: nextEffortByModel,
+    fastModeByModel: nextFastModeByModel,
+    ...(shouldUnlock ? { defaultTupleCustomized: false } : {}),
+  };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -739,6 +1026,9 @@ function patchVendorPrefsInternal(
   patch: Partial<VendorPrefs>,
   opts: { markModelChoice: boolean },
 ): void {
+  rebaseStoredDefaultTuplePreference();
+  const marksSelection = opts.markModelChoice && ('model' in patch || 'providerId' in patch);
+  const marksDefaultTuple = marksSelection || (opts.markModelChoice && 'effort' in patch);
   const modelChosen = { ...currentDraft.modelChosenByVendor };
   const nextPatch = { ...patch };
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
@@ -765,13 +1055,16 @@ function patchVendorPrefsInternal(
   }
   currentDraft = {
     ...currentDraft,
+    defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
+    defaultTupleSelectionCustomized:
+      currentDraft.defaultTupleSelectionCustomized || marksSelection,
     modelChosenByVendor: modelChosen,
     lastByVendor: {
       ...currentDraft.lastByVendor,
       [vendor]: { ...currentDraft.lastByVendor[vendor], ...nextPatch },
     },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -805,6 +1098,7 @@ export function getEffortForModel(modelId: string | null | undefined): Effort | 
 
 export function setEffortForModel(modelId: string, effort: Effort): void {
   if (!modelId) return;
+  rebaseStoredDefaultTuplePreference();
   // 同值短路,避免无意义的 emit / write。
   if (currentDraft.effortByModel[modelId] === effort) return;
   currentDraft = {
@@ -814,7 +1108,7 @@ export function setEffortForModel(modelId: string, effort: Effort): void {
       [modelId]: effort,
     },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -825,6 +1119,7 @@ export function getFastModeForModel(modelId: string | null | undefined): boolean
 
 export function setFastModeForModel(modelId: string, enabled: boolean): void {
   if (!modelId) return;
+  rebaseStoredDefaultTuplePreference();
   currentDraft = {
     ...currentDraft,
     fastModeByModel: {
@@ -832,7 +1127,7 @@ export function setFastModeForModel(modelId: string, enabled: boolean): void {
       [modelId]: enabled,
     },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -840,6 +1135,7 @@ export function clearDraft(): void {
   currentDraft = makeDefault();
   scheduleWrite({
     preserveStoredWorktreePreference: false,
+    preserveStoredDefaultTuplePreference: false,
   });
   emit();
 }

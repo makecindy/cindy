@@ -8,9 +8,13 @@ import { IssueConfirmCard } from '../IssueConfirmCard';
 import { clearIssueConfirmDraftsForSession } from '@/lib/issueConfirmDraftStore';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 
+const { tMock } = vi.hoisted(() => ({
+  tMock: vi.fn((key: string) => key),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: tMock,
     i18n: { language: 'zh-CN' },
   }),
 }));
@@ -27,6 +31,8 @@ const initialPending: PendingIssueConfirm = {
     platform: 'win32',
     arch: 'x64',
     osVersion: '10.0',
+    harness: 'Codex',
+    modelId: 'gpt-5.6',
   },
   submissionIdentity: {
     kind: 'platform',
@@ -70,8 +76,51 @@ function confirmPublicContent() {
 
 afterEach(() => {
   cleanup();
+  tMock.mockClear();
   clearIssueConfirmDraftsForSession('session-a');
   clearIssueConfirmDraftsForSession('session-b');
+});
+
+describe('IssueConfirmCard environment metadata', () => {
+  it('把完整 OS 版本、Harness 和 Model ID 交给确认卡文案', () => {
+    render(<IssueConfirmCard sessionId="session-a" pending={initialPending} onRespond={vi.fn()} />);
+
+    expect(tMock).toHaveBeenCalledWith('issueAgent.confirm.envLine', {
+      appVersion: '0.1.18',
+      platform: 'win32',
+      arch: 'x64',
+      osVersion: '10.0',
+      uiLanguage: 'zh-CN',
+    });
+    expect(tMock).toHaveBeenCalledWith('issueAgent.confirm.runtimeLine', {
+      harness: 'Codex',
+      modelId: 'gpt-5.6',
+    });
+    expect(screen.getByText('issueAgent.confirm.runtimeLine').className).toContain(
+      '[overflow-wrap:anywhere]',
+    );
+  });
+
+  it('兼容旧 Main 未提供 runtime metadata 的确认卡', () => {
+    render(
+      <IssueConfirmCard
+        sessionId="session-a"
+        pending={{
+          ...initialPending,
+          requestId: 'issue-request-old-main',
+          env: {
+            appVersion: '0.1.18',
+            platform: 'win32',
+            arch: 'x64',
+            osVersion: '10.0',
+          },
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(tMock).not.toHaveBeenCalledWith('issueAgent.confirm.runtimeLine', expect.anything());
+  });
 });
 
 describe('IssueConfirmCard draft persistence', () => {

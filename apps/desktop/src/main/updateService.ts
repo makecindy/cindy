@@ -34,10 +34,13 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
+import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
+import { compareAppUpdateVersions } from './updateVersionPolicy';
+import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
 
 import { createLogger, maskPath } from './logger';
 import {
@@ -67,8 +70,15 @@ import { disposeAndroidAdb } from './mcp-integrations/android';
 import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
+import {
+  checkWindowsUpdaterPrerequisites,
+  stageBundledWindowsUpdaterRuntime,
+  WINDOWS_UPDATER_RUNTIME_FILES,
+  WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE,
+} from './windowsUpdaterPrerequisites';
 
 const log = createLogger('updateService');
+let cancelStartupBinaryUpdateCheck: (() => void) | undefined;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -207,7 +217,7 @@ function broadcastStatus(payload: UpdateStatusPayload): void {
 
 function channelSettingsWire() {
   return {
-    enableBeta: process.platform === 'linux' ? false : readUpdateChannelSettings().enableBeta,
+    enableBeta: readObservedEnableBetaFromDisk(),
     isCustomized: isEnableBetaUserCustomized(),
   };
 }
@@ -225,9 +235,41 @@ function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): 
   currentStatus = status;
   lastErrorCode = extra?.errorCode;
   broadcastStatus({ status, ...extra });
-  if (status === 'ready' && !startupUpdateCheckInProgress) {
+  if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     void evaluateAutoRelaunch('status-ready');
   }
+}
+
+function blockWindowsUpdaterForMissingRuntime(missingFiles: readonly string[]): false {
+  log.error(
+    'Windows updater prerequisites missing (%s); keeping patch staged',
+    missingFiles.join(', '),
+  );
+  isRelaunching = false;
+  autoRelaunchInProgress = false;
+  setStatus('ready', {
+    version: readyVersion,
+    errorCode: WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE,
+  });
+  return false;
+}
+
+function ensureWindowsUpdaterPrerequisites(options?: {
+  allowBundledRuntime?: boolean;
+}): boolean {
+  if (process.platform !== 'win32') return true;
+
+  const resourcesPath = options?.allowBundledRuntime === false
+    ? ''
+    : process.resourcesPath;
+  const result = checkWindowsUpdaterPrerequisites(undefined, resourcesPath);
+  if (!result.satisfied) {
+    return blockWindowsUpdaterForMissingRuntime(result.missingFiles);
+  }
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) {
+    lastErrorCode = undefined;
+  }
+  return true;
 }
 
 function autoUpdateSettingsWire() {
@@ -270,6 +312,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   if (!readAutoUpdateSettings().autoRelaunchOnIdle) return 'disabled';
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   const hasBusyTasksNow = await hasBusyTasks();
 
@@ -317,6 +360,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
 async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason | null> {
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   // pkexec 必须用户在场输入密码，启动时不能自己装。
   if (process.platform === 'linux') return 'interactive-auth';
@@ -334,6 +378,9 @@ async function buildStartupReadyReply(version: string | undefined): Promise<{
   action: 'relaunch' | 'none';
   version: string | undefined;
 }> {
+  if (!ensureWindowsUpdaterPrerequisites()) {
+    return { hasUpdate: true, action: 'none', version };
+  }
   const blockReason = await getStartupRelaunchBlockReason();
   if (blockReason) {
     lastAutoRelaunchBlockReason = blockReason;
@@ -502,6 +549,9 @@ export function isUpdateRelaunchImminent(): boolean {
   if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
   // The native updater replaces the *installed* app; it never runs in dev.
   if (isDev()) return false;
+  // A missing VC++ Runtime requires an explicit user install. Treating that
+  // indefinite wait as imminent would keep startup side-effects disabled.
+  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return false;
   // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
   if (process.platform === 'linux') return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
@@ -582,7 +632,12 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   try {
     const raw = fs.readFileSync(infoPath, 'utf-8');
     patchInfo = JSON.parse(raw) as PatchInfo;
-    if (!patchInfo.version || !patchInfo.fileName) {
+    if (
+      typeof patchInfo.version !== 'string' ||
+      !patchInfo.version ||
+      typeof patchInfo.fileName !== 'string' ||
+      !patchInfo.fileName
+    ) {
       throw new Error('invalid patch-info');
     }
   } catch {
@@ -595,7 +650,7 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
     return { action: 'check' };
   }
 
-  const currentEnableBeta = readUpdateChannelSettings().enableBeta;
+  const currentEnableBeta = readObservedEnableBetaFromDisk();
   if (typeof patchInfo.enableBeta === 'boolean' && patchInfo.enableBeta !== currentEnableBeta) {
     log.info(
       'discarding staged patch v%s from another update channel (patch=%s current=%s)',
@@ -603,20 +658,26 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
       patchInfo.enableBeta ? 'beta' : 'release',
       currentEnableBeta ? 'beta' : 'release',
     );
-    try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
-    removePatchInfo();
-    const flag = readReloginFlag();
-    if (flag?.version === patchInfo.version) {
-      clearReloginFlag();
-    }
+    discardExistingPatch(patchInfo, patchFilePath, true);
     return { action: 'check' };
   }
 
   const currentVersion = app.getVersion();
-  if (patchInfo.version === currentVersion) {
+  const versionRelation = compareAppUpdateVersions(patchInfo.version, currentVersion);
+  if (versionRelation === 'same') {
     // Patch matches current version → already applied; clean up and re-check.
-    try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
-    removePatchInfo();
+    // Keep the matching relogin flag: auth initialization owns consuming it.
+    discardExistingPatch(patchInfo, patchFilePath, false);
+    return { action: 'check' };
+  }
+  if (versionRelation !== 'newer') {
+    log.warn(
+      'discarding non-upgrade staged patch: current=%s patch=%s relation=%s',
+      currentVersion,
+      patchInfo.version,
+      versionRelation,
+    );
+    discardExistingPatch(patchInfo, patchFilePath, true);
     return { action: 'check' };
   }
 
@@ -653,6 +714,20 @@ function removePatchInfo(): void {
   try { fs.unlinkSync(path.join(getUpdatesDir(), PATCH_INFO_FILE)); } catch { /* ignore */ }
 }
 
+function discardExistingPatch(
+  patchInfo: PatchInfo,
+  patchFilePath: string,
+  clearMatchingReloginFlag: boolean,
+): void {
+  try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
+  removePatchInfo();
+  if (!clearMatchingReloginFlag) return;
+  const flag = readReloginFlag();
+  if (flag?.version === patchInfo.version) {
+    clearReloginFlag();
+  }
+}
+
 function isUpdateApplyCommitted(): boolean {
   return isRelaunching || autoRelaunchInProgress;
 }
@@ -663,7 +738,10 @@ function invalidateInFlightChannelDownloads(): void {
 }
 
 function readObservedEnableBetaFromDisk(): boolean {
-  return readUpdateChannelSettings().enableBeta;
+  return (
+    supportsBetaUpdateChannel(process.platform, process.arch) &&
+    readUpdateChannelSettings().enableBeta
+  );
 }
 
 function restoreObservedEnableBetaFromDisk(): boolean {
@@ -747,6 +825,21 @@ function isCurrentPatchNewerThanDeferred(
 }
 
 function discardStagedPatchFiles(): void {
+  // A background manifest check can resume while the native updater is already
+  // reading this same file. Keep the patch intact in that window; the apply
+  // path owns cleanup after it either succeeds or reports a spawn failure.
+  if (isUpdateApplyCommitted()) {
+    log.info('skipping staged patch discard — update apply already in flight');
+    return;
+  }
+  if (autoRelaunchDecisionDepth > 0) {
+    rememberDeferredStagedPatch();
+    // Keep the payload until the async eligibility check settles, but remove
+    // the marker now so a channel/app relaunch cannot revive this patch.
+    removePatchInfo();
+    log.info('deferring staged patch discard until auto-relaunch eligibility settles');
+    return;
+  }
   const discardedVersion = readyVersion;
   if (readyFilePath) {
     try { fs.unlinkSync(readyFilePath); } catch { /* ignore */ }
@@ -1019,20 +1112,56 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     return 'manifest_failed';
   }
 
-  const asset = resolveUpdateAsset(manifest);
-  if (!asset) {
-    log.info(process.platform === 'linux' ? 'No installer in Linux manifest' : 'No hotfix in manifest');
-    if (!wasReady) currentStatus = 'idle';
-    return 'idle';
-  }
-
   const latestVersion = manifest.app.version;
   const currentVersion = app.getVersion();
   log.info('Version check: current=%s, latest=%s, ready=%s', currentVersion, latestVersion, previousReadyVersion ?? '<none>');
 
-  if (latestVersion === currentVersion) {
+  const versionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+  if (versionRelation === 'invalid') {
+    log.error(
+      'Refusing app update because version comparison is invalid: current=%s latest=%s',
+      currentVersion,
+      latestVersion,
+    );
+    if (wasReady) {
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
+    return 'manifest_failed';
+  }
+  if (versionRelation === 'same') {
     log.info('Versions match, no update needed');
-    if (!wasReady) currentStatus = 'idle';
+    if (wasReady) {
+      log.info('Discarding staged patch because the current manifest no longer advertises an upgrade');
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
+    return 'idle';
+  }
+  if (versionRelation === 'older') {
+    log.warn(
+      'Skipping app downgrade from %s to %s',
+      currentVersion,
+      latestVersion,
+    );
+    if (wasReady) {
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
+    return 'idle';
+  }
+
+  const asset = resolveUpdateAsset(manifest);
+  if (!asset) {
+    log.info(process.platform === 'linux' ? 'No installer in Linux manifest' : 'No hotfix in manifest');
+    if (wasReady) {
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
     return 'idle';
   }
 
@@ -1245,6 +1374,8 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
 // ── Spawn failure handler ─────────────────────────────────────────────────
 
 function handleApplyFailure(reason: string): void {
+  cancelStartupBinaryUpdateCheck?.();
+  cancelStartupBinaryUpdateCheck = undefined;
   log.error('Update apply failed (reason=%s), clearing patch and notifying renderer', reason);
   removePatchInfo();
   readyVersion = undefined;
@@ -1319,11 +1450,40 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
   try {
     fs.mkdirSync(workDir, { recursive: true });
     fs.copyFileSync(updaterSrc, updaterRun);
+    const runtimeStageResult = stageBundledWindowsUpdaterRuntime(
+      process.resourcesPath,
+      workDir,
+    );
+    if (runtimeStageResult === 'blocked') {
+      log.error(
+        'Windows updater app-local Runtime could not be staged or safely removed; keeping patch staged',
+      );
+      blockWindowsUpdaterForMissingRuntime(WINDOWS_UPDATER_RUNTIME_FILES);
+      return;
+    }
+    if (
+      runtimeStageResult === 'fallback-safe'
+      && !ensureWindowsUpdaterPrerequisites({ allowBundledRuntime: false })
+    ) {
+      log.error(
+        'Windows updater Runtime became unavailable while preparing the updater; keeping patch staged',
+      );
+      return;
+    }
+    log.info(
+      'Windows updater runtime source: %s',
+      runtimeStageResult === 'staged' ? 'bundled app-local DLLs' : 'System32 fallback',
+    );
   } catch (err) {
     log.error('failed to set up updater workdir at %s:', maskPath(workDir), err);
     handleApplyFailure('workdir_setup_failed');
     return;
   }
+
+  // Count the attempt only after the last Runtime check. If security software
+  // removes the bundled DLLs between the early guard and this copy, keeping the
+  // patch staged must not consume a retry or recreate the relaunch loop.
+  incrementApplyAttempts();
 
   // Theme is resolved by the renderer (collapses 'system' via the live DOM
   // class) and forwarded through the `update-relaunch` IPC, so the updater's
@@ -1668,9 +1828,9 @@ function executeUpdateLinux(debPath: string): void {
   });
 }
 
-async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = false): Promise<void> {
   try {
-    await executeRelaunchUnguarded(theme);
+    await executeRelaunchUnguarded(theme, checkForBinaryUpdates);
   } catch (err) {
     log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
     try {
@@ -1682,11 +1842,15 @@ async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
     // Any return from here that is not `process.exit` means the relaunch did
     // not happen, so the fence must come down — including the early returns
     // inside the guarded body.
-    if (!isRelaunching) await clearSubagentLaunchFence();
+    if (!isRelaunching) {
+      cancelStartupBinaryUpdateCheck?.();
+      cancelStartupBinaryUpdateCheck = undefined;
+      await clearSubagentLaunchFence();
+    }
   }
 }
 
-async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
+async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryUpdates: boolean): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1731,6 +1895,29 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
     return;
   }
 
+  const currentVersion = app.getVersion();
+  const versionRelation = compareAppUpdateVersions(readyVersion, currentVersion);
+  if (versionRelation !== 'newer') {
+    log.error(
+      'executeRelaunch() refused non-upgrade patch: current=%s patch=%s relation=%s',
+      currentVersion,
+      readyVersion ?? '<unknown>',
+      versionRelation,
+    );
+    isRelaunching = false;
+    autoRelaunchInProgress = false;
+    discardStagedPatchFiles();
+    return;
+  }
+
+  // The Windows updater is an x64 MSVC binary. Prefer its verified app-local
+  // Runtime and keep a machine-wide installation as the legacy/damaged-package
+  // fallback. This guard is Windows-only; macOS and Linux keep their existing
+  // update executors unchanged. Run it before stopping Subagents, incrementing
+  // the durable attempt counter, or spawning anything so a missing Runtime
+  // keeps both Cindy and the already-downloaded patch intact.
+  if (!ensureWindowsUpdaterPrerequisites()) return;
+
   // Gate *before* the updater is spawned, not inside forceQuit: once the
   // updater script is running it polls our pid and SIGKILLs us after 120s
   // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
@@ -1748,24 +1935,28 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
     return;
   }
 
-  // Increment applyAttempts before spawning so that if the updater itself
-  // crashes (spawn succeeds → forceQuit → updater fails → old version boots),
-  // the counter persists across restarts and eventually breaks the loop.
-  incrementApplyAttempts();
-
   log.info(
     'Executing relaunch with file: %s (%s bytes)',
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
   );
+
+  if (checkForBinaryUpdates && readyVersion) {
+    cancelStartupBinaryUpdateCheck = writeStartupBinaryUpdateMarker(app.getPath('userData'), readyVersion);
+  }
 
   switch (process.platform) {
     case 'win32':
       executeUpdateWindows(readyFilePath, theme);
       break;
     case 'darwin':
+      // Increment immediately before starting the platform executor so a
+      // failed updater can be bounded across restarts. Windows does this only
+      // after its final app-local/System32 Runtime check inside the executor.
+      incrementApplyAttempts();
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
+      incrementApplyAttempts();
       executeUpdateLinux(readyFilePath);
       break;
     default:
@@ -1792,7 +1983,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    void executeRelaunch(resolved);
+    void executeRelaunch(resolved, true);
   });
 
   ipcMain.handle(
@@ -1855,8 +2046,8 @@ export function initUpdateService(): void {
 
   ipcMain.handle('update-channel-settings-set', async (event, payload: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (process.platform === 'linux') {
-      throwIpcError('INVALID_PARAMS', 'Linux does not support the beta update channel');
+    if (!supportsBetaUpdateChannel(process.platform, process.arch)) {
+      throwIpcError('INVALID_PARAMS', 'This build does not support the beta update channel');
     }
     if (!payload || typeof payload !== 'object') {
       throwIpcError('INVALID_PARAMS', 'update channel settings payload required');
@@ -2008,9 +2199,32 @@ export function initUpdateService(): void {
       const currentVersion = app.getVersion();
       log.info('Startup: current=%s, latest=%s', currentVersion, latestVersion);
 
-      if (latestVersion === currentVersion) {
-        // Already up to date — clean up any stale patch directory.
-        checkExistingPatch();
+      const startupVersionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+      if (startupVersionRelation !== 'newer') {
+        // The online manifest is authoritative. A local patch that is no longer
+        // advertised must not survive into a later offline startup.
+        const patchResult = checkExistingPatch();
+        if (patchResult.action === 'relaunch') {
+          log.info(
+            'Discarding unadvertised local patch v%s (manifest relation=%s)',
+            patchResult.version,
+            startupVersionRelation,
+          );
+          discardStagedPatchFiles();
+        }
+        if (startupVersionRelation === 'invalid') {
+          log.info('[diag] update-check-startup returning error=manifest_failed');
+          return { hasUpdate: false, action: 'none' as const, error: 'manifest_failed' as const };
+        }
+        return { hasUpdate: false, action: 'none' as const };
+      }
+
+      if (!resolveUpdateAsset(manifest)) {
+        const patchResult = checkExistingPatch();
+        if (patchResult.action === 'relaunch') {
+          log.info('Discarding local patch v%s because the manifest has no update asset', patchResult.version);
+          discardStagedPatchFiles();
+        }
         return { hasUpdate: false, action: 'none' as const };
       }
 
@@ -2113,7 +2327,7 @@ export function initUpdateService(): void {
     }, POLL_INTERVAL_MS);
   }, FIRST_CHECK_DELAY_MS);
 
-  observedEnableBeta = readUpdateChannelSettings().enableBeta;
+  observedEnableBeta = readObservedEnableBetaFromDisk();
   log.info('Initialized — first check in 10s, polling every 30min');
 }
 
@@ -2125,8 +2339,8 @@ export function initUpdateService(): void {
 export async function enableUncustomizedBetaChannel(
   shouldWrite: () => boolean = () => true,
 ): Promise<boolean> {
-  // Linux 没有 beta 清单,组织默认打开只会把客户端钉在不可达渠道。
-  if (process.platform === 'linux') return false;
+  // Linux 目前仅 x64 发布 beta .deb；arm64 等不支持构建不得写入组织默认。
+  if (!supportsBetaUpdateChannel(process.platform, process.arch)) return false;
   const wasBeta = readUpdateChannelSettings().enableBeta;
   // 先拦住 apply 再等落盘。身份守卫拒绝或写入失败时,旧补丁还得能用。
   if (!wasBeta) {

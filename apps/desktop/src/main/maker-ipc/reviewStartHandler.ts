@@ -9,11 +9,12 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import type { ReviewAttachmentInput } from '../reviewer/reviewEvidence.js';
-import type {
-  ReviewFailureCode,
-  ReviewRunMeta,
-  ReviewRunOwner,
-  ReviewTargetKind,
+import {
+  isStaleReviewFailureCode,
+  type ReviewFailureCode,
+  type ReviewRunMeta,
+  type ReviewRunOwner,
+  type ReviewTargetKind,
 } from '../../shared/reviewRun.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
@@ -137,7 +138,7 @@ export interface PreparedReviewLaunch {
   reviewerCreateOpts: MakerSessionCreateOpts;
   /** Fail closed if evidence changed after extraction but before provider start. */
   verifyBeforeStart(): Promise<ReviewFailureReason | null>;
-  /** Return a user-facing failure reason instead of publishing a stale result. */
+  /** Return why a completed result no longer represents the current source state. */
   verifyBeforePublish(): Promise<ReviewFailureReason | null>;
 }
 
@@ -171,7 +172,7 @@ export interface ReviewCardWrite {
 
 export interface ReviewStartHandlerDeps {
   assertCaller(event: unknown): void;
-  waitUntilReady(): Promise<void>;
+  waitUntilReady(sourceSessionId: string): Promise<void>;
   createRunId(): string;
   createReviewerSessionId(): string;
   owner: ReviewRunOwner;
@@ -211,14 +212,31 @@ export interface ReviewStartHandlerDeps {
   warn(message: string, fields: Record<string, unknown>): void;
 }
 
+export interface ReviewRunControl {
+  /** Record local user intent before the shared input coordinator aborts the Reviewer turn. */
+  noteReviewerStopRequested(reviewerSessionId: string): boolean;
+}
+
 function terminalErrorDetails(event: AgentEvent): {
   error?: string;
   failureCode?: ReviewFailureCode;
 } {
-  const data = event.data as { message?: unknown } | null;
+  const data = event.data as { message?: unknown; reason?: unknown } | null;
+  if (data?.reason === 'tool_use_loop_detected') {
+    // The producer message is a diagnostic fallback and may contain Chinese
+    // text plus an internal contract category. Persist the stable code so the
+    // Reviewer card renders through its localized failure catalog.
+    return { failureCode: 'provider-failed' };
+  }
   return typeof data?.message === 'string' && data.message
     ? { error: data.message }
     : { failureCode: 'provider-failed' };
+}
+
+function isCancelledReviewDone(event: AgentEvent): boolean {
+  if (event.type !== 'done') return false;
+  const data = event.data as { cancelled?: unknown } | null;
+  return data?.cancelled === true;
 }
 
 export class ReviewPreconditionError extends Error {
@@ -241,13 +259,14 @@ const REVIEW_TERMINAL_CARD_RETRY_MAX_MS = 5_000;
 export function registerReviewStartHandler(
   registry: IpcHandlerRegistry,
   deps: ReviewStartHandlerDeps,
-): void {
+): ReviewRunControl {
   const activeReviewsBySource = new Map<string, { runId: string; reviewerSessionId: string }>();
+  const activeStopNotifiersByReviewer = new Map<string, () => boolean>();
 
   registry.handle(MAKER_INVOKE.START_REVIEW, async (event, raw: unknown) => {
     deps.assertCaller(event);
-    await deps.waitUntilReady();
     const request = readStartReviewRequest(raw);
+    await deps.waitUntilReady(request.sourceSessionId);
     if (activeReviewsBySource.has(request.sourceSessionId)) {
       throwIpcError('SESSION_RUNNING', 'This task already has a review in progress');
     }
@@ -277,6 +296,13 @@ export function registerReviewStartHandler(
     let pendingTerminalCard: ReviewCardWrite | null = null;
     let terminalCardPersisted = false;
     let sourceCardWriteChain = Promise.resolve();
+    let stopRequested = false;
+    const noteStopRequested = (): boolean => {
+      if (settled) return false;
+      stopRequested = true;
+      return true;
+    };
+    activeStopNotifiersByReviewer.set(reviewerSessionId, noteStopRequested);
 
     const enqueueSourceCardWrite = (write: () => Promise<void>): Promise<void> => {
       const next = sourceCardWriteChain.then(write, write);
@@ -332,6 +358,9 @@ export function registerReviewStartHandler(
         releaseRetryDelayMs = REVIEW_SOURCE_LEASE_RELEASE_RETRY_MS;
         const active = activeReviewsBySource.get(request.sourceSessionId);
         if (active?.runId === runId) activeReviewsBySource.delete(request.sourceSessionId);
+        if (activeStopNotifiersByReviewer.get(reviewerSessionId) === noteStopRequested) {
+          activeStopNotifiersByReviewer.delete(reviewerSessionId);
+        }
       })();
       releasePromise = pending;
       void pending.finally(() => {
@@ -487,6 +516,11 @@ export function registerReviewStartHandler(
         settlementCause = 'provider-terminal';
         disposeReviewerListeners();
         terminalFinalization = (async () => {
+          if (stopRequested || isCancelledReviewDone(reviewEvent)) {
+            await updateSourceCard('failed', '', undefined, 'reviewer-closed');
+            await closeReviewer();
+            return;
+          }
           if (terminalError) {
             const details = terminalErrorDetails(reviewEvent);
             await updateSourceCard('failed', '', details.error, details.failureCode);
@@ -502,7 +536,14 @@ export function registerReviewStartHandler(
           }
           const staleReason = await launch.verifyBeforePublish();
           if (staleReason) {
-            await updateSourceCard('failed', '', staleReason.message, staleReason.code);
+            if (isStaleReviewFailureCode(staleReason.code)) {
+              // Keep the persisted status readable by older clients. The stable
+              // reason code distinguishes an out-of-date completed result from
+              // a Reviewer execution failure in current clients.
+              await updateSourceCard('failed', result, staleReason.message, staleReason.code);
+            } else {
+              await updateSourceCard('failed', '', staleReason.message, staleReason.code);
+            }
             await closeReviewer();
             return;
           }
@@ -646,4 +687,9 @@ export function registerReviewStartHandler(
       throw error;
     }
   });
+
+  return {
+    noteReviewerStopRequested: (reviewerSessionId) =>
+      activeStopNotifiersByReviewer.get(reviewerSessionId)?.() ?? false,
+  };
 }

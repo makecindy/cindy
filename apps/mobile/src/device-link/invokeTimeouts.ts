@@ -47,6 +47,9 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
+  // Even a small row count can contain one large message: the Android weak-link
+  // regression took ~18s to deliver 200KB. Do not enqueue another copy at 15s.
+  'local-db:messages:list': 30_000,
   'device-link:media:fetch': 30_000,
   'device-link:voice:dictionary-learning': 30_000,
   'device-link:voice:transcribe': 30_000,
@@ -66,7 +69,11 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;
 
-export function resolveMobileInvokeTimeoutMs(channel: string): number | undefined {
+export function resolveMobileInvokeTimeoutMs(channel: string, args?: unknown[]): number | undefined {
+  // Renewals must settle before the 12s lease, independently of slow media offers.
+  const request = args?.[0];
+  if (channel === 'device-link:remote-desktop:v1' && request &&
+      typeof request === 'object' && 'op' in request && request.op === 'heartbeat') return 5_000;
   const exact = MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   if (exact !== undefined) return exact;
   if (channel.startsWith('maker:schedule:')) return MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS;

@@ -14,6 +14,90 @@
   ],
   "terms": [
     {
+      "id": "remote-desktop-lock-screen-control",
+      "status": "proposed",
+      "en": "Lock screen control",
+      "translations": {
+        "zh-CN": "锁屏控制",
+        "zh-TW": "鎖定畫面控制",
+        "ja": "ロック画面の操作",
+        "ko": "잠금 화면 제어"
+      },
+      "note": "Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。"
+    },
+    {
+      "id": "remote-desktop",
+      "status": "proposed",
+      "en": "Remote desktop",
+      "translations": {
+        "zh-CN": "远程桌面",
+        "zh-TW": "遠端桌面",
+        "ja": "リモートデスクトップ",
+        "ko": "원격 데스크톱"
+      },
+      "note": "同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。"
+    },
+    {
+      "id": "cindy-make",
+      "status": "proposed",
+      "en": "Cindy Make",
+      "translations": {
+        "zh-CN": "Cindy Make",
+        "zh-TW": "Cindy Make",
+        "ja": "Cindy Make",
+        "ko": "Cindy Make"
+      },
+      "note": "用户通过内置 /cindy-make 显式开启的 Cindy 个人版制作流程，先复用 /cindy-make-doctor 检查本机环境，再按平台补齐缺少的便携工具，并在消息流卡片中保留修改需求；Doctor 自身只检查，上游查询与构建分阶段接入。命令名已由用户指定，卡片保留同一专名。"
+    },
+    {
+      "id": "cindy-ai-free-tier",
+      "status": "proposed",
+      "en": "Free tier",
+      "translations": {
+        "zh-CN": "免费版",
+        "zh-TW": "免費版",
+        "ja": "無料版",
+        "ko": "무료 버전"
+      },
+      "note": "Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。"
+    },
+    {
+      "id": "use-my-browser-logins",
+      "status": "proposed",
+      "en": "Use my browser logins",
+      "translations": {
+        "zh-CN": "使用我的浏览器登录态",
+        "zh-TW": "使用我的瀏覽器登入態",
+        "ja": "ブラウザのログイン状態を使う",
+        "ko": "내 브라우저 로그인 사용"
+      },
+      "note": "设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。"
+    },
+    {
+      "id": "harness",
+      "status": "proposed",
+      "en": "Harness",
+      "translations": {
+        "zh-CN": "Harness",
+        "zh-TW": "Harness",
+        "ja": "Harness",
+        "ko": "Harness"
+      },
+      "note": "用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
+    },
+    {
+      "id": "model-id",
+      "status": "proposed",
+      "en": "Model ID",
+      "translations": {
+        "zh-CN": "Model ID",
+        "zh-TW": "Model ID",
+        "ja": "Model ID",
+        "ko": "Model ID"
+      },
+      "note": "用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。"
+    },
+    {
       "id": "plugin-main-view",
       "status": "proposed",
       "en": "Main view",
@@ -288,6 +372,7 @@
       "en": "Dev",
       "translations": {
         "zh-CN": "Dev",
+        "zh-TW": "Dev",
         "ja": "Dev",
         "ko": "Dev"
       },
@@ -315,7 +400,20 @@
         "desktop:settings.about.debugLogDescription",
         "desktop:settings.voiceInput.permissions.inputMonitoring.tooltip"
       ],
-      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。"
+      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。2026-08-26 起 CindyDev 内部的业务服务器环境切换也沿用 Dev 标签；这里只表示所连接的服务环境，不能据此改变安装包区域或身份。"
+    },
+    {
+      "id": "dev-server-environment-release",
+      "status": "proposed",
+      "en": "Release",
+      "translations": {
+        "zh-CN": "Release",
+        "zh-TW": "Release",
+        "ja": "Release",
+        "ko": "Release"
+      },
+      "checkCase": false,
+      "note": "CindyDev 内部设置中的正式业务服务器环境标签，五语固定保留英文 Release。它表示 App 当前连接哪套服务，不代表安装包发行版本、OTA 通道或 cn / global 区域；因 release 也是普通英文单词，关闭全局大小写扫描，具体 UI key 由 Mobile 定向测试约束。"
     },
     {
       "id": "agent",
@@ -1247,6 +1345,18 @@
       "note": "产品名，五语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。"
     },
     {
+      "id": "smart-subagent-routing",
+      "status": "proposed",
+      "en": "Smart routing",
+      "translations": {
+        "zh-CN": "智能调配",
+        "zh-TW": "智慧調配",
+        "ja": "スマートルーティング",
+        "ko": "스마트 라우팅"
+      },
+      "note": "Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。"
+    },
+    {
       "id": "subagent",
       "status": "decided",
       "en": "Subagent",
@@ -1634,6 +1744,19 @@
       "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。"
     },
     {
+      "id": "teammate",
+      "status": "proposed",
+      "en": "Teammate",
+      "translations": {
+        "zh-CN": "伙伴",
+        "zh-TW": "夥伴",
+        "ja": "仲間",
+        "ko": "동료"
+      },
+      "checkCase": false,
+      "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
+    },
+    {
       "id": "upload-code",
       "status": "proposed",
       "en": "Upload code",
@@ -1746,6 +1869,19 @@
       "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
     },
     {
+      "id": "engine",
+      "status": "proposed",
+      "en": "Engine",
+      "translations": {
+        "zh-CN": "引擎",
+        "zh-TW": "引擎",
+        "ja": "エンジン",
+        "ko": "엔진"
+      },
+      "checkCase": false,
+      "note": "伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。"
+    },
+    {
       "id": "local-model",
       "status": "proposed",
       "en": "Local model",
@@ -1756,6 +1892,162 @@
         "ko": "로컬 모델"
       },
       "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
+    },
+    {
+      "id": "database-cleanup",
+      "status": "proposed",
+      "en": "Database cleanup",
+      "translations": {
+        "zh-CN": "数据库清理",
+        "zh-TW": "資料庫清理",
+        "ja": "データベースのクリーンアップ",
+        "ko": "데이터베이스 정리"
+      },
+      "note": "设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。"
+    },
+    {
+      "id": "openai-responses-api",
+      "status": "proposed",
+      "en": "Responses",
+      "translations": {
+        "zh-CN": "Responses",
+        "zh-TW": "Responses",
+        "ja": "Responses",
+        "ko": "Responses"
+      },
+      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。"
+    },
+    {
+      "id": "openai-chat-completions-api",
+      "status": "proposed",
+      "en": "Chat Completions",
+      "translations": {
+        "zh-CN": "Chat Completions",
+        "zh-TW": "Chat Completions",
+        "ja": "Chat Completions",
+        "ko": "Chat Completions"
+      },
+      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。"
+    },
+    {
+      "id": "model-native-api",
+      "status": "proposed",
+      "en": "Native API",
+      "translations": {
+        "zh-CN": "原生协议",
+        "zh-TW": "原生協定",
+        "ja": "ネイティブAPI",
+        "ko": "기본 API"
+      },
+      "note": "模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。"
+    },
+    {
+      "id": "qwen-model-brand",
+      "status": "proposed",
+      "en": "Qwen",
+      "translations": {
+        "zh-CN": "千问",
+        "zh-TW": "千問",
+        "ja": "Qwen",
+        "ko": "Qwen"
+      },
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+    },
+    {
+      "id": "hunyuan-model-brand",
+      "status": "proposed",
+      "en": "Hunyuan",
+      "translations": {
+        "zh-CN": "混元",
+        "zh-TW": "混元",
+        "ja": "Hunyuan",
+        "ko": "Hunyuan"
+      },
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+    },
+    {
+      "id": "doubao-model-brand",
+      "status": "proposed",
+      "en": "Doubao",
+      "translations": {
+        "zh-CN": "豆包",
+        "zh-TW": "豆包",
+        "ja": "Doubao",
+        "ko": "Doubao"
+      },
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+    },
+    {
+      "id": "remote-desktop-resolution",
+      "status": "proposed",
+      "en": "Computer resolution",
+      "translations": {
+        "zh-CN": "电脑分辨率",
+        "zh-TW": "電腦解析度",
+        "ja": "パソコンの解像度",
+        "ko": "컴퓨터 해상도"
+      },
+      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture."
+    },
+    {
+      "id": "remote-desktop-pip",
+      "status": "proposed",
+      "en": "Picture in picture",
+      "translations": {
+        "zh-CN": "小窗模式",
+        "zh-TW": "小窗模式",
+        "ja": "ピクチャインピクチャ",
+        "ko": "화면 속 화면"
+      },
+      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture."
+    },
+    {
+      "id": "remote-desktop-native-resolution",
+      "status": "proposed",
+      "en": "Native resolution",
+      "translations": {
+        "zh-CN": "原生分辨率",
+        "zh-TW": "原生解析度",
+        "ja": "ネイティブ解像度",
+        "ko": "기본 해상도"
+      },
+      "note": "Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生."
+    },
+    {
+      "id": "remote-desktop-takeover",
+      "status": "proposed",
+      "en": "Take over connection",
+      "translations": {
+        "zh-CN": "接管连接",
+        "zh-TW": "接管連線",
+        "ja": "接続を引き継ぐ",
+        "ko": "연결 넘겨받기"
+      },
+      "note": "Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery."
+    },
+    {
+      "id": "routine",
+      "status": "proposed",
+      "en": "Routine",
+      "translations": {
+        "zh-CN": "例行任务",
+        "zh-TW": "例行任務",
+        "ja": "ルーティン",
+        "ko": "루틴"
+      },
+      "note": "伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。"
+    },
+    {
+      "id": "routine-trigger",
+      "status": "proposed",
+      "en": "Trigger",
+      "translations": {
+        "zh-CN": "触发器",
+        "zh-TW": "觸發器",
+        "ja": "トリガー",
+        "ko": "트리거"
+      },
+      "note": "例行任务的时间或事件触发条件。"
     }
   ]
 }

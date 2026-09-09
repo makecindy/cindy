@@ -8,13 +8,26 @@ import { cn } from '@/lib/utils';
 import {
   WORKLOUDER_CODEX_ENCODER_DETENT_DEG,
   WORKLOUDER_CODEX_KEYCAP_IDS,
+  canonicalizeWorkLouderCodexKeycapId,
+  creatorCommandAssignment,
+  isCreatorTaskKey,
+  isWorkLouderCodexBlankKeycap,
   isWorkLouderCodexDoubleKeycap,
+  isWorkLouderCodexDuplicateBlankKeycap,
+  normalizeWorkLouderCreatorTaskKeys,
+  workLouderLayoutMerges,
+  workLouderMergeDirectionOf,
+  workLouderMergeForKey,
+  WORKLOUDER_KEY_CELL,
+  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   workLouderCodexStickPreviewOffset,
+  type WorkLouderCreatorProgrammableKey,
   type WorkLouderCodexAgentSlotState,
   type WorkLouderCodexCommandSlot,
   type WorkLouderCodexKeycapId,
   type WorkLouderCodexLayout,
   type WorkLouderCodexPreviewPart,
+  type WorkLouderModel,
 } from '../../../shared/workLouderCodex';
 import { WorkLouderCodexKeycapGlyph } from './WorkLouderCodexKeycapGlyphs';
 
@@ -39,6 +52,8 @@ export interface WorkLouderCodexKeyboardLayoutProps {
   layout: WorkLouderCodexLayout;
   agentSlots: readonly WorkLouderCodexAgentSlotState[];
   disabled?: boolean;
+  /** Which physical board to draw; the two models do not look alike. */
+  model?: WorkLouderModel;
   labels: {
     analogStick: string;
     encoder: string;
@@ -61,18 +76,22 @@ export interface WorkLouderCodexKeyboardLayoutProps {
 }
 
 /**
- * Draws the Codex Micro as the physical object it is: a 4×4 board with the
- * analog stick in one corner and the encoder in the other.
+ * Draws the physical object the user owns: a 4×4 board with the analog stick
+ * in one corner and the encoder in the other. Both boards keep the same three
+ * status lights bottom-left. They differ in the rest of the bottom row and
+ * the cap colours: Codex has a double-width MIC keycap; Creator has thirteen
+ * blank 1U caps.
  *
- * The real keycaps carry artwork and nothing else — no legends are printed on
- * them — so neither does this. What a key is bound to belongs in the hover
- * tooltip, and changing it belongs behind a click on the key itself, which is
- * why there are no separate per-key rows anywhere else in the panel.
+ * The real keycaps carry artwork (Codex) or nothing at all (Creator) and no
+ * legends either way, so neither does this. What a key is bound to belongs in
+ * the hover tooltip, and changing it belongs behind a click on the key itself,
+ * which is why there are no separate per-key rows anywhere else in the panel.
  */
 export function WorkLouderCodexKeyboardLayout({
   layout,
   agentSlots,
   disabled = false,
+  model = 'codex-micro',
   labels,
   hintFor,
   canEdit,
@@ -81,17 +100,13 @@ export function WorkLouderCodexKeyboardLayout({
   encoderTurns = 0,
   analogStick = null,
 }: WorkLouderCodexKeyboardLayoutProps) {
+  const isCreator = model === 'creator-micro-2';
   const editHandlerFor = (key: WorkLouderCodexEditableKey) =>
     canEdit && !canEdit(key) ? undefined : onEditKeycap;
-  const agentKeys = Array.from(
-    { length: 6 },
-    (_, index) => `AG${index.toString().padStart(2, '0')}` as WorkLouderCodexAgentKey,
-  );
-  const microphoneSlots: WorkLouderCodexCommandSlot[] = layout.separateMicrophoneKeys
-    ? ['ACT10', 'ACT11']
-    : ['ACT10_ACT11'];
+  const taskKeys = normalizeWorkLouderCreatorTaskKeys(layout.taskKeys);
+  const merges = workLouderLayoutMerges(layout);
 
-  const renderAgentKey = (slot: WorkLouderCodexAgentKey, index: number) => (
+  const renderAgentKey = (slot: WorkLouderCodexEditableKey, index: number) => (
     <BoardPart
       key={slot}
       part={slot}
@@ -99,15 +114,25 @@ export function WorkLouderCodexKeyboardLayout({
       disabled={disabled}
       pressed={pressedParts?.has(slot) ?? false}
       onEdit={editHandlerFor(slot)}
-      className="bg-[var(--wl-agent-cap)] shadow-[var(--wl-agent-shadow)]"
+      // Default shipped caps: Codex task keys are translucent; Creator's set is
+      // all black. Hardware is the same — only the factory keycap kit differs.
+      className={
+        isCreator
+          ? 'bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]'
+          : 'bg-[var(--wl-agent-cap)] shadow-[var(--wl-agent-shadow)]'
+      }
     >
       {/* Agent keys wear no artwork — just the lit dot that marks a task slot. */}
       <span aria-hidden="true" className="block size-3 rounded-full bg-[var(--wl-agent-dot)]" />
     </BoardPart>
   );
 
-  const renderCommandKey = (slot: WorkLouderCodexCommandSlot, className?: string) => {
-    const keycapId = layout.slots[slot].keycapId;
+  const renderCommandKey = (
+    slot: WorkLouderCodexCommandSlot | WorkLouderCreatorProgrammableKey,
+    className?: string,
+  ) => {
+    const keycapId = creatorCommandAssignment(layout, slot as WorkLouderCreatorProgrammableKey)
+      .keycapId;
     return (
       <BoardPart
         key={slot}
@@ -126,19 +151,33 @@ export function WorkLouderCodexKeyboardLayout({
     );
   };
 
+  const renderPhysicalKey = (slot: WorkLouderCreatorProgrammableKey) => {
+    const merge = workLouderMergeForKey(merges, slot);
+    if (merge?.cover === slot) return null;
+    const index = taskKeys.indexOf(slot);
+    const key =
+      index >= 0 ? renderAgentKey(slot, index) : renderCommandKey(slot);
+    return (
+      <div key={slot} style={workLouderGridItemStyle(slot, merge)}>
+        {key}
+      </div>
+    );
+  };
+
   return (
     <div
       className={cn(
-        // The board is a fixed-size object, so it sizes to its keys rather than
-        // stretching to whatever container it happens to sit in.
-        'flex w-fit flex-col gap-2 rounded-[20px] p-3',
+        'grid w-fit grid-cols-4 gap-2 rounded-[20px] p-3',
         'border border-[var(--wl-edge)] bg-[var(--wl-board)] shadow-[var(--wl-board-shadow)]',
       )}
       data-testid="worklouder-codex-keyboard-layout"
-      style={WORKLOUDER_CODEX_BOARD_TOKENS}
+      style={{
+        ...(isCreator ? WORKLOUDER_CREATOR_BOARD_TOKENS : WORKLOUDER_CODEX_BOARD_TOKENS),
+        gridTemplateRows: 'repeat(4, var(--wl-key-size))',
+        gridTemplateColumns: 'repeat(4, var(--wl-key-size))',
+      }}
     >
-      {/* Row 1 — encoder, two agent keys, analog stick. */}
-      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
+      <div style={{ gridColumn: 1, gridRow: 1 }}>
         <BoardPart
           part="encoder"
           hint={hintFor?.('encoder') ?? { legend: labels.encoder }}
@@ -150,7 +189,8 @@ export function WorkLouderCodexKeyboardLayout({
         >
           <Encoder label={labels.encoder} turns={encoderTurns} />
         </BoardPart>
-        {agentKeys.slice(0, 2).map((slot, index) => renderAgentKey(slot, index))}
+      </div>
+      <div style={{ gridColumn: 4, gridRow: 1 }}>
         <BoardPart
           part="analog"
           hint={hintFor?.('analog') ?? { legend: labels.analogStick }}
@@ -162,33 +202,34 @@ export function WorkLouderCodexKeyboardLayout({
           <AnalogStick label={labels.analogStick} analog={analogStick} />
         </BoardPart>
       </div>
-
-      {/* Row 2 — the remaining four agent keys. */}
-      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
-        {agentKeys.slice(2).map((slot, index) => renderAgentKey(slot, index + 2))}
-      </div>
-
-      {/* Row 3 — the four command keys. */}
-      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
-        {(['ACT06', 'ACT07', 'ACT08', 'ACT09'] as const).map((slot) => renderCommandKey(slot))}
-      </div>
-
-      {/* Row 4 — status lights, the microphone key (double width unless split), Codex. */}
-      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
-        <div className="flex items-center gap-2 px-1" role="img" aria-label={labels.indicator}>
-          <StatusLights />
-          <span
-            aria-hidden="true"
-            className="size-8 rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
-          />
-        </div>
-        {microphoneSlots.map((slot) =>
-          renderCommandKey(slot, slot === 'ACT10_ACT11' ? 'col-span-2' : undefined),
-        )}
-        {renderCommandKey('ACT12')}
+      {WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.map((slot) => renderPhysicalKey(slot))}
+      <div
+        className="flex items-center gap-2 px-1"
+        role="img"
+        aria-label={labels.indicator}
+        style={{ gridColumn: 1, gridRow: 4 }}
+      >
+        <StatusLights />
+        <span
+          aria-hidden="true"
+          className="size-8 rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
+        />
       </div>
     </div>
   );
+}
+
+function workLouderGridItemStyle(
+  key: WorkLouderCreatorProgrammableKey,
+  merge: ReturnType<typeof workLouderMergeForKey>,
+): CSSProperties {
+  const { row, col } = WORKLOUDER_KEY_CELL[key];
+  const direction =
+    merge?.origin === key ? workLouderMergeDirectionOf(merge) : null;
+  return {
+    gridColumn: `${col + 1} / span ${direction === 'right' ? 2 : 1}`,
+    gridRow: `${row + 1} / span ${direction === 'down' ? 2 : 1}`,
+  };
 }
 
 /**
@@ -226,6 +267,33 @@ const WORKLOUDER_CODEX_BOARD_TOKENS = {
 } as CSSProperties;
 
 /**
+ * Creator's factory kit is all black PBT, so the on-screen board matches that
+ * default layout. The PCB is the same as Codex; only the shipped caps differ.
+ */
+const WORKLOUDER_CREATOR_BOARD_TOKENS = {
+  '--wl-key-size': '64px',
+  '--wl-board': 'var(--surface-chip)',
+  '--wl-edge': 'var(--border-default)',
+  '--wl-board-shadow':
+    'inset 0 1px 0 rgb(255 255 255 / 0.06), inset 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 8px rgb(0 0 0 / 0.22)',
+  // Task keys: the same black PBT as the command keys, with a brighter slot
+  // dot so the six agent keys stay readable against all-dark caps.
+  '--wl-agent-cap': '#2a2b30',
+  '--wl-agent-shadow':
+    'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
+  '--wl-agent-dot': '#a99df2',
+  // Command keys: identical black caps.
+  '--wl-command-cap': '#2a2b30',
+  '--wl-command-shadow':
+    'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
+  '--wl-command-glyph': 'rgb(236 236 236)',
+  '--wl-stick-housing': 'rgb(198 198 200 / 0.96)',
+  '--wl-stick-housing-shadow':
+    'inset 0 1px 3px rgb(0 0 0 / 0.22), inset 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 0 rgb(255 255 255 / 0.35)',
+  '--wl-stick-cap': '#2a2b30',
+} as CSSProperties;
+
+/**
  * One clickable part of the board. Everything the user can configure — keycaps,
  * agent keys, the stick, the encoder — renders through here so they share the
  * same press feedback, focus ring, and hover tooltip.
@@ -251,10 +319,7 @@ function BoardPart({
 }) {
   const label = [hint.legend, hint.name].filter(Boolean).join(' ');
   const classes = cn(
-    'flex min-w-0 items-center justify-center transition-transform',
-    // Every part is one key tall. A double-width key spans two columns but must
-    // not grow taller with them, so height is fixed rather than an aspect ratio.
-    'h-[var(--wl-key-size)]',
+    'flex h-full min-h-[var(--wl-key-size)] w-full min-w-0 items-center justify-center transition-transform',
     rounded === 'full' ? 'aspect-square rounded-full' : 'rounded-xl',
     onEdit && !disabled && 'cursor-pointer active:scale-[0.97]',
     onEdit &&
@@ -362,7 +427,7 @@ function StatusLights() {
 
 export interface WorkLouderCodexKeycapPickerProps {
   open: boolean;
-  slot: WorkLouderCodexCommandSlot | null;
+  slot: WorkLouderCodexCommandSlot | WorkLouderCreatorProgrammableKey | null;
   selectedKeycapId: WorkLouderCodexKeycapId | null;
   query: string;
   onQueryChange(query: string): void;
@@ -370,8 +435,14 @@ export interface WorkLouderCodexKeycapPickerProps {
   onSelect(keycapId: WorkLouderCodexKeycapId): void;
   onSave?(): void;
   onCancel?(): void;
+  /** Keycap artwork this board cannot physically wear, e.g. Creator's missing MIC caps. */
+  excludeKeycaps?: readonly WorkLouderCodexKeycapId[];
+  /** When true, only 2U caps are listed. Defaults to the legacy merged-mic slot. */
+  double?: boolean;
   /** Extra controls shown under the grid, e.g. the action bound to this key. */
   children?: ReactNode;
+  /** Role or other controls that must sit above the keycap library. */
+  header?: ReactNode;
   copy: {
     title: string;
     description: string;
@@ -379,7 +450,14 @@ export interface WorkLouderCodexKeycapPickerProps {
     close: string;
     cancel?: string;
     save?: string;
+    /** Label for unprinted caps. The catalogue numbers them; the user should not see that. */
+    blank: string;
   };
+}
+
+function keycapPickerLabel(keycapId: WorkLouderCodexKeycapId, blank: string): string {
+  const canonical = canonicalizeWorkLouderCodexKeycapId(keycapId);
+  return isWorkLouderCodexBlankKeycap(canonical) ? blank : canonical;
 }
 
 /** Codex-style visual keycap library used by the keyboard layout editor. */
@@ -393,15 +471,31 @@ export function WorkLouderCodexKeycapPicker({
   onSelect,
   onSave,
   onCancel,
+  excludeKeycaps,
+  double,
   children,
+  header,
   copy,
 }: WorkLouderCodexKeycapPickerProps) {
-  const double = slot === 'ACT10_ACT11';
+  const twoUnit = double ?? slot === 'ACT10_ACT11';
   const normalizedQuery = query.trim().toLowerCase();
+  const selectedCanonical = selectedKeycapId
+    ? canonicalizeWorkLouderCodexKeycapId(selectedKeycapId)
+    : null;
   const keycaps = WORKLOUDER_CODEX_KEYCAP_IDS.filter((keycapId) => {
-    if (double !== isWorkLouderCodexDoubleKeycap(keycapId)) return false;
-    return normalizedQuery.length === 0 || keycapId.toLowerCase().includes(normalizedQuery);
-  });
+    if (excludeKeycaps?.includes(keycapId)) return false;
+    if (isWorkLouderCodexDuplicateBlankKeycap(keycapId) || keycapId === 'MIC1') return false;
+    if (keycapId !== 'MIC' && twoUnit !== isWorkLouderCodexDoubleKeycap(keycapId)) return false;
+    const label = keycapPickerLabel(keycapId, copy.blank);
+    return (
+      normalizedQuery.length === 0 ||
+      keycapId.toLowerCase().includes(normalizedQuery) ||
+      label.toLowerCase().includes(normalizedQuery)
+    );
+  }).sort(
+    (left, right) =>
+      Number(isWorkLouderCodexBlankKeycap(right)) - Number(isWorkLouderCodexBlankKeycap(left)),
+  );
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -418,6 +512,7 @@ export function WorkLouderCodexKeycapPicker({
               </Dialog.Description>
             </div>
           </div>
+          {header ? <div className="px-6 pb-4">{header}</div> : null}
           <div className="px-6 pb-4">
             <label className="flex h-10 items-center gap-2 rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]">
               <Search size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
@@ -431,28 +526,31 @@ export function WorkLouderCodexKeycapPicker({
             </label>
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-6 gap-3 overflow-y-auto px-6 pb-6 max-md:grid-cols-4">
-            {keycaps.map((keycapId) => (
-              <button
-                key={keycapId}
-                type="button"
-                aria-label={keycapId}
-                aria-pressed={selectedKeycapId === keycapId}
-                onClick={() => onSelect(keycapId)}
-                className={cn(
-                  'flex aspect-square min-w-0 flex-col items-center justify-center gap-2 rounded-xl border p-2 text-center transition-colors',
-                  'bg-[var(--settings-theme-card-bg)] text-[var(--text-primary)] shadow-[0_1px_0_var(--settings-theme-card-border)]',
-                  selectedKeycapId === keycapId
-                    ? 'border-[var(--focus-ring)] ring-2 ring-[var(--focus-ring-soft)]'
-                    : 'border-[var(--settings-theme-card-border)] hover:border-[var(--focus-ring)] hover:bg-[var(--surface-chip)]',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                )}
-              >
-                <WorkLouderCodexKeycapGlyph keycapId={keycapId} className="size-[22px]" />
-                <span className="max-w-full truncate text-11 font-medium tracking-wide">
-                  {keycapId}
-                </span>
-              </button>
-            ))}
+            {keycaps.map((keycapId) => {
+              const label = keycapPickerLabel(keycapId, copy.blank);
+              return (
+                <button
+                  key={keycapId}
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={selectedCanonical === keycapId}
+                  onClick={() => onSelect(canonicalizeWorkLouderCodexKeycapId(keycapId))}
+                  className={cn(
+                    'flex aspect-square min-w-0 flex-col items-center justify-center gap-2 rounded-xl border p-2 text-center transition-colors',
+                    'bg-[var(--settings-theme-card-bg)] text-[var(--text-primary)] shadow-[0_1px_0_var(--settings-theme-card-border)]',
+                    selectedCanonical === keycapId
+                      ? 'border-[var(--focus-ring)] ring-2 ring-[var(--focus-ring-soft)]'
+                      : 'border-[var(--settings-theme-card-border)] hover:border-[var(--focus-ring)] hover:bg-[var(--surface-chip)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                  )}
+                >
+                  <WorkLouderCodexKeycapGlyph keycapId={keycapId} className="size-[22px]" />
+                  <span className="max-w-full truncate text-11 font-medium tracking-wide">
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
           <div className="border-t border-[var(--border-default)] px-6 py-4">
             {children}
@@ -494,6 +592,7 @@ export function WorkLouderCodexPartEditor({
   description,
   closeLabel,
   children,
+  onConfirm,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -501,6 +600,7 @@ export function WorkLouderCodexPartEditor({
   description: string;
   closeLabel: string;
   children: ReactNode;
+  onConfirm?: () => void;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -517,7 +617,10 @@ export function WorkLouderCodexPartEditor({
           <div className="flex justify-end border-t border-[var(--border-default)] px-6 py-4">
             <button
               type="button"
-              onClick={() => onOpenChange(false)}
+              onClick={() => {
+                onConfirm?.();
+                onOpenChange(false);
+              }}
               className="rounded-lg bg-[var(--accent-cta-bg)] px-3 py-2 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
             >
               {closeLabel}

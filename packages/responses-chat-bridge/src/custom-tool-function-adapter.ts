@@ -46,6 +46,77 @@ function unwrapArguments(value: unknown): string {
   return parsed.input;
 }
 
+/**
+ * Item ids are dialect-coupled. Codex >=0.152 stamps a `<kind>_<uuid7>` id on every input item
+ * it replays, and a Responses upstream rejects an item whose id prefix disagrees with its type
+ * (`Invalid 'input[n].id' ... Expected an ID that begins with 'fc'`). Flipping an item to the
+ * function dialect therefore has to flip its id prefix too.
+ */
+const CUSTOM_TO_FUNCTION_ID_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['ctco_', 'fco_'],
+  ['ctc_', 'fc_'],
+];
+
+/**
+ * Rewrites one adapted item's id for the function dialect.
+ *
+ * Ids already in the function dialect are left untouched: the upstream minted them, so it is the
+ * authority on what it accepts, and `fc` is the prefix its own validator asks for. An id that is
+ * in neither dialect is dropped rather than forwarded — omitting `id` is exactly what Codex did
+ * before 0.152 and every Responses upstream accepts it, so a future Codex prefix we do not know
+ * about degrades to a missing id instead of failing the whole request. The
+ * `codexExecFunctionAdapter` e2e enforces this invariant against the pinned binary so a new
+ * prefix surfaces on the next bump instead of in production.
+ */
+function adaptItemId(item: Record<string, unknown>): Record<string, unknown> {
+  const id = item.id;
+  if (typeof id !== 'string') return item;
+  for (const [from, to] of CUSTOM_TO_FUNCTION_ID_PREFIXES) {
+    if (id.startsWith(from)) return { ...item, id: `${to}${id.slice(from.length)}` };
+  }
+  if (id.startsWith('fc')) return item;
+  const next = { ...item };
+  delete next.id;
+  return next;
+}
+
+/** Repair only known dialect mismatches; opaque provider ids and absent ids stay intact.
+ * `call_id` identifies the invocation/result pair and must never be rewritten.
+ */
+function normalizeToolItemId(item: Record<string, unknown>): Record<string, unknown> {
+  const prefixes: readonly [string, string] | null = item.type === 'custom_tool_call' ? ['fc_', 'ctc_']
+    : item.type === 'custom_tool_call_output' ? ['fco_', 'ctco_']
+      : item.type === 'function_call' ? ['ctc_', 'fc_']
+        : item.type === 'function_call_output' ? ['ctco_', 'fco_'] : null;
+  if (!prefixes || typeof item.id !== 'string' || !item.id.startsWith(prefixes[0])) return item;
+  return { ...item, id: prefixes[1] + item.id.slice(prefixes[0].length) };
+}
+
+/**
+ * Repair legacy histories on the wire, including tool-less compact requests and native-custom
+ * routes. Do not rewrite the rollout, tool payloads, opaque compaction blobs or unrelated ids.
+ * Return null for an unchanged body, following the proxy request-transform contract.
+ */
+export function normalizeResponsesToolItemIds(body: unknown): Record<string, unknown> | null {
+  if (!isObject(body) || !Array.isArray(body.input)) return null;
+  let changed = false;
+  const input = body.input.map((item: unknown) => {
+    if (!isObject(item)) return item;
+    const next = normalizeToolItemId(item);
+    if (next !== item) changed = true;
+    return next;
+  });
+  // item_reference ids address server-owned stored items, not local payloads. Keep them opaque.
+  return changed ? { ...body, input } : null;
+}
+
+/** SSE argument events reference the output item, not the invocation's call_id. */
+function customToolEvent(event: Record<string, unknown>): Record<string, unknown> {
+  return typeof event.item_id === 'string' && event.item_id.startsWith('fc_')
+    ? { ...event, item_id: 'ctc_' + event.item_id.slice(3) }
+    : event;
+}
+
 interface AdaptedCall {
   spec: ChatBridgeToolSpec;
   arguments: string;
@@ -84,7 +155,7 @@ class CustomToolResponseTransform extends Transform {
       input: call?.input ?? unwrapArguments(call?.arguments ?? item.arguments),
     };
     delete next.arguments;
-    return next;
+    return normalizeToolItemId(next);
   }
   private rewriteEvent(event: unknown): Record<string, unknown>[] | null {
     if (!isObject(event) || typeof event.type !== 'string') return null;
@@ -115,7 +186,7 @@ class CustomToolResponseTransform extends Transform {
         ...event.item, type: 'custom_tool_call', name: spec.name, input: '',
       };
       delete item.arguments;
-      return [{ ...event, item }];
+      return [{ ...customToolEvent(event), item: normalizeToolItemId(item) }];
     }
 
     const call = this.calls.get(index);
@@ -133,10 +204,10 @@ class CustomToolResponseTransform extends Transform {
     if (event.type === 'response.function_call_arguments.done' && call) {
       call.input = unwrapArguments(typeof event.arguments === 'string' ? event.arguments : call.arguments);
       const delta: Record<string, unknown> = {
-        ...event, type: 'response.custom_tool_call_input.delta', delta: call.input,
+        ...customToolEvent(event), type: 'response.custom_tool_call_input.delta', delta: call.input,
       };
       const done: Record<string, unknown> = {
-        ...event, type: 'response.custom_tool_call_input.done', input: call.input,
+        ...customToolEvent(event), type: 'response.custom_tool_call_input.done', input: call.input,
       };
       delete delta.arguments;
       delete done.arguments;
@@ -147,7 +218,7 @@ class CustomToolResponseTransform extends Transform {
       if (!item) return null;
       this.calls.delete(index);
       this.responseArgumentBytes -= call ? Buffer.byteLength(call.arguments, 'utf8') : 0;
-      return [{ ...event, item }];
+      return [{ ...customToolEvent(event), item }];
     }
     if (isObject(event.response) && Array.isArray(event.response.output)) {
       let changed = false;
@@ -289,7 +360,7 @@ export function createResponsesCustomToolFunctionAdapter(
         if (!functionName) return item;
         if (item.type === 'custom_tool_call') {
           const next: Record<string, unknown> = {
-            ...item, type: 'function_call', name: functionName,
+            ...adaptItemId(item), type: 'function_call', name: functionName,
             arguments: JSON.stringify({ input: stringifyInput(item.input) }),
           };
           delete next.input;
@@ -297,7 +368,7 @@ export function createResponsesCustomToolFunctionAdapter(
           return next;
         }
         return item.type === 'custom_tool_call_output'
-          ? { ...item, type: 'function_call_output' }
+          ? { ...adaptItemId(item), type: 'function_call_output' }
           : item;
       }) : body.input;
       let toolChoice = body.tool_choice;

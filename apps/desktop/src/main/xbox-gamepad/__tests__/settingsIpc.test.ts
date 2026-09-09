@@ -1,28 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createXboxGamepadDefaultSettings } from '../../../shared/xboxGamepad.js';
+import {
+  createXboxGamepadDefaultSettings,
+  emptyGamepadDevice,
+  GAMEPAD_FAMILIES,
+  type GamepadAccessoriesState,
+  type XboxGamepadSettings,
+} from '../../../shared/xboxGamepad.js';
 import { createXboxGamepadSettingsIpc } from '../settingsIpc.js';
 
+function accessories(settings: XboxGamepadSettings): GamepadAccessoriesState {
+  return Object.fromEntries(
+    GAMEPAD_FAMILIES.map((family) => [
+      family,
+      {
+        connectionStatus: 'disabled' as const,
+        devicePresent: true,
+        deviceName: family,
+        device: emptyGamepadDevice(family),
+        settings,
+      },
+    ]),
+  ) as GamepadAccessoriesState;
+}
+
 describe('Xbox gamepad settings IPC', () => {
-  it('enables the adapter through a trusted sender', () => {
+  it('enables one accessory through a trusted sender', () => {
     let settings = createXboxGamepadDefaultSettings();
     const applySettings = vi.fn();
     const handlers = createXboxGamepadSettingsIpc({
       assertTrustedSender: vi.fn(),
-      getState: () => ({
-        connectionStatus: 'disabled',
-        devicePresent: true,
-        deviceName: 'Xbox Wireless Controller',
-        device: {
-          name: 'Xbox Wireless Controller',
-          category: 'Xbox One',
-          transport: 'unknown',
-          batteryPercentage: null,
-          batteryState: 'unknown',
-        },
-        settings,
-      }),
-      writeSettings: (patch) => {
+      getState: () => accessories(settings),
+      writeSettings: (_family, patch) => {
         settings = { ...settings, ...patch, layout: patch.layout ?? settings.layout };
         return settings;
       },
@@ -35,29 +44,20 @@ describe('Xbox gamepad settings IPC', () => {
       setLayoutPreviewActive: vi.fn(),
     });
 
-    const next = handlers.set({}, { deviceEnabled: true });
-    expect(next.settings.deviceEnabled).toBe(true);
-    expect(applySettings).toHaveBeenCalledWith(expect.objectContaining({ deviceEnabled: true }));
+    const next = handlers.set({}, 'playstation', { deviceEnabled: true });
+    expect(next.playstation.settings.deviceEnabled).toBe(true);
+    expect(applySettings).toHaveBeenCalledWith(
+      'playstation',
+      expect.objectContaining({ deviceEnabled: true }),
+    );
   });
 
   it('accepts a remapped layout', () => {
     let settings = createXboxGamepadDefaultSettings();
     const handlers = createXboxGamepadSettingsIpc({
       assertTrustedSender: vi.fn(),
-      getState: () => ({
-        connectionStatus: 'disabled',
-        devicePresent: true,
-        deviceName: 'Xbox Wireless Controller',
-        device: {
-          name: 'Xbox Wireless Controller',
-          category: 'Xbox One',
-          transport: 'unknown',
-          batteryPercentage: null,
-          batteryState: 'unknown',
-        },
-        settings,
-      }),
-      writeSettings: (patch) => {
+      getState: () => accessories(settings),
+      writeSettings: (_family, patch) => {
         settings = { ...settings, ...patch, layout: patch.layout ?? settings.layout };
         return settings;
       },
@@ -68,8 +68,8 @@ describe('Xbox gamepad settings IPC', () => {
     });
     const layout = createXboxGamepadDefaultSettings().layout;
     layout.buttons.a = { type: 'command', commandId: 'newTask' };
-    const next = handlers.set({}, { layout });
-    expect(next.settings.layout.buttons.a).toEqual({ type: 'command', commandId: 'newTask' });
+    const next = handlers.set({}, 'xbox', { layout });
+    expect(next.xbox.settings.layout.buttons.a).toEqual({ type: 'command', commandId: 'newTask' });
   });
 
   it('rejects unknown settings keys', () => {
@@ -82,7 +82,7 @@ describe('Xbox gamepad settings IPC', () => {
       probeDevice: vi.fn(),
       setLayoutPreviewActive: vi.fn(),
     });
-    expect(() => handlers.set({}, { rumble: true })).toThrow('[INVALID_PARAMS]');
+    expect(() => handlers.set({}, 'xbox', { rumble: true })).toThrow('[INVALID_PARAMS]');
   });
 
   it('forwards the renderer event when toggling layout preview', () => {
@@ -99,6 +99,8 @@ describe('Xbox gamepad settings IPC', () => {
     });
 
     handlers.setLayoutPreviewActive(event, true);
-    expect(setLayoutPreviewActive).toHaveBeenCalledWith(true, event);
+    expect(setLayoutPreviewActive).toHaveBeenCalledWith(true, 'xbox', event);
+    handlers.setLayoutPreviewActive(event, { active: true, family: 'nintendo' });
+    expect(setLayoutPreviewActive).toHaveBeenCalledWith(true, 'nintendo', event);
   });
 });

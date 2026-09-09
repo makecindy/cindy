@@ -84,8 +84,10 @@
 
 ## 2. 运行时沙箱与进程隔离
 
-- 每个运行中的插件使用独立 Electron 沙箱进程与专属 session partition。沙箱禁止直接访问
-  Node、宿主文件系统和网络。
+- 每个运行中的插件使用独立 Electron 沙箱进程与按 owner × plugin 隔离的内存 session
+  partition。同插件的 `settingsHtml`、panel 与逻辑页继续共享该 partition，保留 browser
+  storage 与 `BroadcastChannel` 契约；沙箱禁止直接访问 Node、宿主文件系统和通用网络，
+  唯一例外是第 4 节明确限定的 HTTPS 图片资源。
 - 插件只允许读取自身安装目录内、经安全相对路径校验的静态资源，不得越权读取其它目录。
 - 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 保持零特权桥。
 - 主机按 `webContents` 绑定反查真实 ghostId，**不信任 sender 自报身份**。
@@ -118,8 +120,19 @@
   `defaultInstall`。安装成功默认启用；插件声明哪些能力不改变
   安装动作是否需要确认，因为安装不设能力确认弹窗。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
-  自定义市场还必须匹配 `sourceKey`；已装目录的 canonical manifest digest 必须与账本一致。
-  任何同 id 来源冲突或目录漂移都不得被自动覆盖，只能由用户显式选择替换来源。
+  自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
+  一致。旧记录缺少 raw 字段时，Host 只能按已发布的 legacy digest 编码核对同一份受限读取
+  的字节，命中后原地补字段且不改 `updatedAt`；raw 字段已经存在但不匹配时必须 fail closed，
+  不得用当前目录覆盖基线。`manifestDigest` 保留旧语义供降级客户端读取，不能改写成 raw SHA。
+  同 id 来源冲突或目录漂移通常不得被自动覆盖，只能由用户显式选择替换来源。唯一受控例外是：
+  当前组织下发 `defaultInstall`、组织与合法非空前缀都精确匹配、同 ghost id 在目录中唯一时，
+  可以接管无有效市场来源的普通本地安装，或修复同一目标 `pluginId` 的坏 market / legacy-adopted
+  记录。接管仍要求现有 receipt 已批准、未显式卸载退订、插件不忙，并在落位前于 ghost id 锁内
+  重读 owner、来源、批准与退订事实；不得覆盖有效的公开／其它组织市场路由或 Git／本地自定义
+  市场路由。`ghost_forge_install` 的首装与更新一律记录 `agent-forge`，作为作者本地自测保护，
+  不进入自动接管；普通 `.cindy` 导入仍是 `manual`，不享受这项保护。自动接管不得复用用户手动
+  换源的退订语义，不写 `markRemoved` 或 default-install opt-out。普通本地／Forge 换源只把
+  旧来源记录置为 `installed=false`，不得新增或清除 opt-out；只有用户显式卸载才写 opt-out。
 - 所有仍匹配稳定来源的已装插件都静默自动更新，不限 public／organization、也不限
   `defaultInstall`。更新保持现有启用状态，不弹成功 toast；插件正有调用、派活或 Cindy
   工作时跳过，下一轮重试。服务端市场按客户端版本投影最近发布、曾上架且仍有效的兼容
@@ -229,10 +242,14 @@
   Worker。设置页只能读取 `hostAvailable` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用，第三方插件不得声明。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
-  Membership 生效。资格有两条：当前组织的 Plugin Market organization 安装记录仍有效、
-  且安装目录 manifest digest 与记录一致；或企业作者显式使用 `ghost_forge_install`
+  Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
+  且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；
+  Manifest 与身份必须来自同一次受限读取，禁止分两次读取后分别校验与消费；或企业作者显式使用 `ghost_forge_install`
   安装、在提交前核对插件 id 与精确注入域名，且插件 id 命中当前组织前缀。手动导入不取得
-  Forge 作者资格。Host 根据当前组织和插件 id 推导 audience。
+  Forge 作者资格。另有一条点名例外：`ghostId` 精确等于 `mivo-canvas` 的组织成员本地安装，
+  在已装 manifest 声明的精确 `oidc-token` host 仅为 `mivo-canvas.dsworks.cn` 时可解析 audience；其它本地插件、个人账号、
+  通配 host、其它精确 host 仍不签发。若该插件已有市场 organization 记录（含 `installed:false` 的卸载残留），不得走白名单捷径，必须仍走
+  digest 校验。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成「无记录」走例外。Host 根据当前组织和插件 id 推导 audience。
   插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
   `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，
   不允许通配。实际目标必须精确命中这份可信 manifest 声明的服务域名才会签发和注入。它没有用户输入、`url`、`exchange` 或
@@ -269,7 +286,9 @@
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
   `ghost_call` 的 `attachments`／`dir`／`save_dir` 在目标位于 workdir 外时，普通权限档
-  仍沿用现有确认与授权记忆策略；仅当 Host 能现读到**本地活跃会话**的运行时权限恰为
+  仍沿用现有确认与授权记忆策略；Auto 档把真实过户动作交给当前会话的 AI 审阅器，
+  allow 逐次放行、block 返回原因、ask 或服务故障才交用户确认。Full Access 旁路则仅当
+  Host 能现读到**本地活跃会话**的运行时权限恰为
   `bypassPermissions`（Full Access）时自动批准。该判定不得读取启动期 MCP context 快照，
   也不得回退可能滞后的 DB `permission_mode`。business `sessionId` 不足以证明仍是同一内存
   Session，必须同时匹配由 Maker 铸造、调用方不可覆盖的 instance identity；权限切换在途、
@@ -278,10 +297,11 @@
   identity 写入 Host 生成的 loopback URL；桥接层必须将 URL identity 与注册表中的当前实例
   严格比对，不匹配直接 401。兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
   但必须剥除 instance 能力，使 Full Access 自动交接继续 fail closed。
-  自动批准须在日志标明来源为 Full Access，不得伪装为用户点击，也不得写入人工目录授权
+  自动批准须区分 Full Access 与 AI 审阅来源，不得伪装为用户点击，也不得写入人工目录授权
   记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
   边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
-  授权。热切回其它档位后新请求必须恢复确认。此旁路**不适用于** workspace 创建、插件
+  授权。切回 Ask 后新请求恢复确认。Auto 的工作区草稿创建和媒体路径揭示也逐动作送审，
+  审阅期间任务实例、轮次或权限变化时旧 allow 失效。Full Access 旁路**不适用于** workspace 创建、插件
   Setup、OAuth、Secret／凭证或其它运行时确认边界，也不改变第 3.1 节的安装／更新策略。
   `dir`／`save_dir` 批准的是裁决时解析到的 canonical realpath 快照；出票必须使用该规范路径
   并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
@@ -301,6 +321,16 @@
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
+- 所有插件 HTML 页面（`settingsHtml`、panel、mainView 与逻辑页）都可以通过 `<img>` 或
+  CSS 图片直接加载任意 HTTPS 地址，这是唯一的页面网络直连例外。Host 统一生成包含
+  `img-src https:` 的 CSP，并由 owner × plugin session 请求闸把外部请求严格限定为
+  `protocol === "https:" && resourceType === "image"`。HTTP 图片、`fetch` / XHR、脚本、
+  样式表、字体、音视频、WebSocket 与其它协议一律不因此放行；同 ghost 的
+  `cindy-ghost://` 资源继续放行。该能力不新增 HTML sanitizer 或图片属性白名单；既有 CSP
+  继续阻止内联脚本和内联事件处理器，同包脚本行为不变。远程图片请求会向第三方暴露用户的
+  网络地址及完整 URL，作者不得把密钥、令牌或用户私密数据拼进图片 URL。session listener
+  按 owner × plugin 幂等注册；设置页与同插件其它页面继续共享 browser storage、IndexedDB
+  与 `BroadcastChannel`。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 - `iosSimulator` 能力只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
@@ -478,8 +508,9 @@ topic 路由；产品层多端语义见
 
 ## Review 清单
 
-1. 沙箱是否保持进程隔离、专属 partition、无 Node／宿主 FS／网络直连？身份是否由主机
-   反查而非信任 sender 自报？
+1. 沙箱是否保持进程隔离、专属 partition、无 Node／宿主 FS／通用网络直连？HTTPS 图片
+   例外是否仍严格限定为 `protocol === "https:" && resourceType === "image"`？身份是否由
+   主机反查而非信任 sender 自报？
 2. 是否先按执行者分清边界：当前 Agent 在途的通用操作是否严格绑定同插件、同会话、
    未交卷的 `callId` 并复用 Agent 授权；插件自主 Host 能力是否以 manifest 直接字段声明、
    在详情如实展示并由 Host 守门？是否误把安装弹窗或前端展示当成授权事实？

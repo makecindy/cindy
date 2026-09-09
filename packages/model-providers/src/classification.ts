@@ -396,12 +396,14 @@ export function isModelSelectableForNewRoute(
     mode?: string;
     disabled?: boolean;
     status?: string;
+    availability?: 'available' | 'requires_payment';
   },
   opts?: { userProvider?: boolean },
 ): boolean {
   return (
     model.disabled !== true &&
     model.status !== 'retired' &&
+    model.availability !== 'requires_payment' &&
     isAgentSelectableModel(model, opts)
   );
 }

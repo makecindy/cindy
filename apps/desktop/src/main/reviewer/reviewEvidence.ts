@@ -43,6 +43,7 @@ import {
   ReviewCappedWorkspaceChangedError,
 } from './reviewCappedWorkspaceFingerprint.js';
 import { readStagedIndexIdentity } from '../git-review/indexIdentityReader.js';
+import { readReviewSubmoduleIdentity } from './reviewSubmoduleIdentity.js';
 
 export interface ReviewAttachmentInput {
   name: string;
@@ -196,12 +197,14 @@ interface ReviewWorkspaceSnapshotDeps {
   readReviewData: typeof readReviewData;
   fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles;
   readStagedIndexIdentity: typeof readStagedIndexIdentity;
+  readSubmoduleIdentity: typeof readReviewSubmoduleIdentity;
 }
 
 const defaultReviewWorkspaceSnapshotDeps: ReviewWorkspaceSnapshotDeps = {
   readReviewData,
   fingerprintCappedWorkspaceFiles: fingerprintReviewCappedWorkspaceFiles,
   readStagedIndexIdentity,
+  readSubmoduleIdentity: readReviewSubmoduleIdentity,
 };
 
 /**
@@ -217,34 +220,28 @@ function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): strin
   const capped = [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap(
     (bucket) =>
       bucket
-        ? bucket.files.flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
+        ? bucket.files
+            // capped bucket 同样排除 submodule(理由同下方非 capped 分支):
+            // gitlink 是目录,喂给普通文件指纹器会直接抛错,含 capped 子仓的
+            // 大型 dirty workspace 整个 Review 起不来;其身份由
+            // submoduleEvidencePaths()(已含 capped bucket)路由到 submodule
+            // reader 绑定(Codex review #2515)。
+            .filter((file) => !file.isSubmodule)
+            .flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
         : [],
   );
   const contentless = [...workspace.diffs.staged, ...workspace.diffs.unstaged]
     // Submodules are excluded on purpose: a gitlink is a directory, and the
     // content fingerprinter only accepts regular files, so passing one would
     // abort evidence loading outright — an initialized submodule anywhere in
-    // the workspace would make Review refuse to run at all.
+    // the workspace would make Review refuse to run at all. Do not "fix" the
+    // binding gap by feeding the directory back in, which is that crash.
     //
-    // The accepted cost, stated plainly: edits living *inside* a dirty
-    // submodule are not bound. Porcelain v2 spends one boolean on "the
-    // submodule has modified content" and FileStatus keeps neither that flag
-    // nor any object id, so replacing one internal edit with another leaves
-    // every value this digest sees unchanged. Closing it needs an identity
-    // read this layer does not have — the gitlink oid plus a recursive digest
-    // of the inner worktree — which is a submodule-aware reader, not another
-    // path added to the file fingerprinter. That reader is out of scope here
-    // and tracked in #2463; do not "fix" this by feeding the directory back
-    // in, which is the crash described above.
-    //
-    // What bounds the exposure meanwhile: inner content is never part of the
-    // evidence (diffReader classifies every submodule entry as `submodule`
-    // with an empty patch, so no inner bytes reach the prompt), and a file
-    // inside a submodule that is explicitly attached lands in reviewReadPaths
-    // and is fully content-hashed by fingerprintReviewArtifacts. The unbound
-    // case is the reviewer opening an inner file that is neither — the same
-    // class as opening any unchanged tracked file, which no fingerprint here
-    // covers either.
+    // Their identity is bound elsewhere: submoduleEvidencePaths() routes every
+    // submodule evidence entry to the submodule-aware reader (#2463), which
+    // binds the gitlink oids, the inner HEAD, the inner staged index identity
+    // and a bounded content hash of inner dirty regular files — the identity
+    // read this file-path digest cannot express.
     .filter((diff) => !diff.rawPatch && !diff.isSubmodule)
     .flatMap((diff) => [diff.path, diff.oldPath].filter(Boolean) as string[]);
   return [...new Set([...capped, ...contentless])];
@@ -274,20 +271,45 @@ function stagedEvidencePaths(workspace: ReviewWorkspaceEvidence): string[] {
   return [...new Set([...staged, ...capped])];
 }
 
+/**
+ * Sanitized evidence paths that are submodules and need an identity manifest
+ * (#2463). The file fingerprinter cannot bind them (a gitlink is a directory)
+ * and porcelain keeps only a dirty boolean, so a submodule-aware reader binds
+ * the gitlink oids, the inner HEAD and the inner dirty file identities.
+ */
+function submoduleEvidencePaths(
+  workspace: ReviewWorkspaceEvidence,
+  sanitizedStatusFiles: readonly { path: string; isSubmodule: boolean }[],
+): string[] {
+  const capped = [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap(
+    (bucket) => (bucket ? bucket.files.filter((file) => file.isSubmodule).map((file) => file.path) : []),
+  );
+  const diffs = [...workspace.diffs.staged, ...workspace.diffs.unstaged]
+    .filter((diff) => diff.isSubmodule)
+    .map((diff) => diff.path);
+  // Diffs alone can miss a dirty submodule: one whose only change is untracked
+  // inner content has no numstat entry, so with ignoreWhitespace enabled the
+  // summary builder drops it as a whitespace-only modification — and when the
+  // unstaged bucket is capped there is no detailed diff to catch it either.
+  // Status still lists it, so bind from the sanitized status records as well
+  // (Codex review #2515).
+  const status = sanitizedStatusFiles
+    .filter((file) => file.isSubmodule)
+    .map((file) => file.path);
+  return [...new Set([...diffs, ...capped, ...status])];
+}
+
 async function buildReviewWorkspaceSnapshot(
   reviewData: Awaited<ReturnType<typeof readReviewData>>,
   deps: Pick<
     ReviewWorkspaceSnapshotDeps,
-    'fingerprintCappedWorkspaceFiles' | 'readStagedIndexIdentity'
+    'fingerprintCappedWorkspaceFiles' | 'readStagedIndexIdentity' | 'readSubmoduleIdentity'
   >,
 ): Promise<ReviewWorkspaceSnapshot> {
   const workspace = mapReviewWorkspace(reviewData);
   const contentlessPaths = workspacePathsWithoutContent(workspace);
-  // Whichever files needed their own content hash also need the stability
-  // re-read below: both are answering "did these bytes hold still?".
-  const hasCappedDiff = contentlessPaths.length > 0;
   const cappedContentFingerprint =
-    hasCappedDiff && reviewData.scope.repoRoot
+    contentlessPaths.length > 0 && reviewData.scope.repoRoot
       ? await deps.fingerprintCappedWorkspaceFiles(reviewData.scope.repoRoot, contentlessPaths)
       : null;
   const stagedPaths = stagedEvidencePaths(workspace);
@@ -297,6 +319,29 @@ async function buildReviewWorkspaceSnapshot(
     stagedPaths.length > 0 && reviewData.scope.repoRoot
       ? await deps.readStagedIndexIdentity(reviewData.scope.repoRoot, stagedPaths)
       : null;
+  const submodulePaths = submoduleEvidencePaths(
+    workspace,
+    sanitizeReviewStatusFiles(reviewData.status?.files ?? []),
+  );
+  // SSH 远程工作区:submodule 身份读取含本机 fs 探测(lstat/realpath/readdir)。
+  // repoRoot 在远端时,本机 ENOENT 会被误判成 'uninitialized' 放行过期结论;
+  // 本机碰巧存在同路径目录时,还会把本机字节和远端 git 状态绑在一起。git 命令
+  // 经 GitExecutionBackend 走远程,fs 探测不走——在读到任何本机状态之前显式
+  // fail closed(拒绝发布而非放行),与其它 Git 证据读取失败同一收口。完整远程
+  // 支持需经 remote-file-service 通道,见 PR 描述的远程适配结论。
+  if (submodulePaths.length > 0 && reviewData.scope.source === 'remote') {
+    throw new Error(
+      'Review submodule identity is not supported over SSH remote workspaces; refusing to bind local filesystem state (fail closed).',
+    );
+  }
+  const submoduleIdentity =
+    submodulePaths.length > 0 && reviewData.scope.repoRoot
+      ? await deps.readSubmoduleIdentity(reviewData.scope.repoRoot, submodulePaths)
+      : null;
+  // Whichever files needed their own content hash also need the stability
+  // re-read below: both are answering "did these bytes hold still?". Inner
+  // submodule file hashes (#2463) join the same window.
+  const hasCappedDiff = contentlessPaths.length > 0 || submoduleIdentity?.hashedContent === true;
   return {
     workspace,
     // A clean tree is not proof that the reviewer saw the same code: changing
@@ -321,6 +366,7 @@ async function buildReviewWorkspaceSnapshot(
               workspace,
               cappedContentFingerprint,
               stagedIndexIdentity,
+              submoduleIdentity: submoduleIdentity?.identities ?? null,
             }),
           )
           .digest('hex')

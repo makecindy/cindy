@@ -137,6 +137,7 @@ let onDeviceLinkStatusChanged: ((data: unknown) => void) | undefined;
 let onPresenceChanged: ((data: unknown) => void) | undefined;
 let onRemotePush: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
+let onErrorPersisted: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onInputProjection: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
 let onInteractionDismissed: ((data: unknown) => void) | undefined;
@@ -179,7 +180,7 @@ const input = {
     void clearedAt;
     return projection(sessionId);
   }),
-  persistTurnErrorDeferred: vi.fn(async () => {}),
+  persistTurnErrorDeferred: vi.fn(async (): Promise<string | undefined> => undefined),
 };
 
 function projection(
@@ -254,6 +255,7 @@ function installElectronBridge(): void {
   onPresenceChanged = undefined;
   onRemotePush = undefined;
   onDbMessageCreated = undefined;
+  onErrorPersisted = undefined;
   onInputProjection = undefined;
   onInteractionRequest = undefined;
   onInteractionDismissed = undefined;
@@ -324,6 +326,10 @@ function installElectronBridge(): void {
             onDbMessageCreated = cb;
             return vi.fn();
           },
+          onErrorPersisted: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+            onErrorPersisted = cb;
+            return vi.fn();
+          },
         },
         sessions: {
           ackInterrupted: vi.fn(async () => undefined),
@@ -378,7 +384,11 @@ function installElectronBridge(): void {
   };
 }
 
-function emitTextDelta(text: string, sessionId = SESSION_ID): void {
+function emitTextDelta(
+  text: string,
+  sessionId = SESSION_ID,
+  persistId = 'assistant-1',
+): void {
   onEvent?.({
     sessionId,
     event: {
@@ -386,7 +396,7 @@ function emitTextDelta(text: string, sessionId = SESSION_ID): void {
       source: 'claude-code',
       data: { text, isFinal: false },
     },
-    persistId: 'assistant-1',
+    persistId,
   });
 }
 
@@ -1615,6 +1625,99 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('does not append a second bubble when a DB snapshot arrives before the first batched delta', () => {
+    emitTextDelta('draft');
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: {
+        clientId: 'assistant-1', role: 'assistant', content: 'complete answer',
+        createdAt: '2026-06-15T00:00:05.000Z',
+      },
+    });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'complete answer', isStreaming: false }),
+    ]);
+  });
+
+  it('calibrates an earlier finalized item in place without sealing a newer stream', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'pi', data: { text: 'draft', isFinal: true, isFullText: true } },
+      persistId: 'assistant-1',
+    });
+    emitTextDelta('new answer', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+    const previousMeta = makerChatStore.getSnapshot(SESSION_ID).lastAgentMeta;
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'pi',
+        data: { text: 'corrected', isFinal: true, isFullText: true },
+        agentMeta: { model: 'earlier-model' },
+      },
+      persistId: 'assistant-1',
+    });
+    emitTextDelta(' tail', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.streamingClientId).toBe('assistant-2');
+    expect(snapshot.lastAgentMeta).toBe(previousMeta);
+    expect(snapshot.messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'corrected', isStreaming: false, model: 'earlier-model' }),
+      expect.objectContaining({ clientId: 'assistant-2', content: 'new answer tail', isStreaming: true }),
+    ]);
+  });
+
+  it('ignores late deltas and partial final blocks for an already finalized item', () => {
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: { clientId: 'assistant-1', role: 'assistant', content: 'full answer', createdAt: new Date().toISOString() },
+    });
+    emitTextDelta('stale', SESSION_ID, 'assistant-1');
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'claude-code', data: { text: 'answer', isFinal: true } },
+      persistId: 'assistant-1',
+    });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'full answer', isStreaming: false }),
+    ]);
+  });
+
+  it('does not reset or duplicate thinking on a repeated start, including after its DB echo', () => {
+    const start = {
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'start', blockId: 'thinking-replayed', startedAt: Date.now() } },
+    };
+    onEvent?.(start);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'delta', blockId: 'thinking-replayed', text: 'reasoning' } },
+    });
+    onEvent?.(start);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'thinking-replayed', content: 'reasoning', isStreaming: true }),
+    ]);
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: {
+        clientId: 'thinking-replayed', role: 'thinking',
+        content: { kind: 'thinking', text: 'finished reasoning', durationMs: 5000, isRedacted: false },
+        createdAt: new Date().toISOString(),
+      },
+    });
+    onEvent?.(start);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'delta', blockId: 'thinking-replayed', text: 'late delta' } },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'thinking-replayed', content: 'finished reasoning', isStreaming: false }),
+    ]);
+  });
+
   it('calibrates an in-flight bubble to a shorter authoritative final text', () => {
     emitTextDelta('Hello worxderful');
 
@@ -1637,6 +1740,61 @@ describe('makerChatStore text delta batching', () => {
         clientId: 'assistant-1',
         role: 'assistant',
         content: 'Hello wonderful',
+      }),
+    ]);
+  });
+
+  it('keeps commentary when a distinct Codex final_answer item follows it', () => {
+    emitTextDelta('Execution preview');
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
+      },
+      persistId: 'assistant-2',
+    });
+
+    vi.advanceTimersByTime(32);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Execution preview',
+        isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'assistant-2',
+        content: 'Please confirm.',
+        isStreaming: false,
+      }),
+    ]);
+  });
+
+  it('flushes batched deltas when the assistant persist id changes', () => {
+    emitTextDelta('Execution preview', SESSION_ID, 'assistant-1');
+    emitTextDelta('Please confirm.', SESSION_ID, 'assistant-2');
+
+    vi.advanceTimersByTime(32);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Execution preview',
+        isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'assistant-2',
+        content: 'Please confirm.',
+        isStreaming: true,
       }),
     ]);
   });
@@ -2338,6 +2496,7 @@ describe('makerChatStore text delta batching', () => {
       source: null,
       endpoint: null,
       errorCode: 'NETWORK_ERROR',
+      accountTier: null,
     });
     onInputProjection?.(
       projection(SESSION_ID, {
@@ -2358,6 +2517,186 @@ describe('makerChatStore text delta batching', () => {
     expect(input.retryLastError).not.toHaveBeenCalled();
     expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('deferred persist IPC 回执只绑定 persistId，写失败时离开视图也不清 live error', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-deferred');
+    makerChatStore.enterView(SESSION_ID);
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-deferred');
+
+    makerChatStore.leaveView(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-deferred');
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-deferred' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('迟到的 deferred persist IPC 不得把 A 的 persistId 绑到下一轮 live error B', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    let resolvePersist: ((id: string | undefined) => void) | undefined;
+    input.persistTurnErrorDeferred.mockImplementationOnce(
+      () =>
+        new Promise<string | undefined>((resolve) => {
+          resolvePersist = resolve;
+        }),
+    );
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'later error B' },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    resolvePersist?.('err-persist-A');
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('迟到的落库脏信号不得清掉下一轮 live error B', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    let resolvePersist: ((id: string | undefined) => void) | undefined;
+    input.persistTurnErrorDeferred.mockImplementationOnce(
+      () =>
+        new Promise<string | undefined>((resolve) => {
+          resolvePersist = resolve;
+        }),
+    );
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'later error B' },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+
+    resolvePersist?.('err-persist-A');
+    await flushPromises();
+    await flushPromises();
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-A' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('deferred persist IPC 回执不清后台 live error，要等真实脏信号', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-bg');
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-bg');
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-bg' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
   });
 
   it('does not treat a custom LiteLLM provider token error as Cindy credentials', async () => {
@@ -2833,6 +3172,111 @@ describe('makerChatStore text delta batching', () => {
     expect(snap.pendingQueue).toHaveLength(1);
     expect(snap.pendingQueue[0]?.text).toBe('queued');
     expect(snap.messages.some((m) => m.role === 'user' && m.content === 'queued')).toBe(false);
+  });
+
+  it('shows a local busy send before the enqueue projection settles', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let queued: AgentInputQueuedMessage | undefined;
+    let resolveEnqueue!: (value: AgentInputProjection) => void;
+    input.enqueue.mockImplementationOnce(
+      async (_sessionId: string, item: AgentInputQueuedMessage) => {
+        queued = item;
+        return new Promise<AgentInputProjection>((resolve) => {
+          resolveEnqueue = resolve;
+        });
+      },
+    );
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'local busy message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([
+      expect.objectContaining({ text: 'local busy message', isPendingEnqueue: true }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([]);
+
+    resolveEnqueue(projection(SESSION_ID, { pendingQueue: queued ? [queued] : [] }));
+    await expect(send).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([
+      expect.objectContaining({ text: 'local busy message' }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue[0]?.isPendingEnqueue).toBeUndefined();
+  });
+
+  it('keeps a busy send visible when enqueue immediately dispatches and projects an empty queue', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let resolveEnqueue!: (value: AgentInputProjection) => void;
+    input.enqueue.mockImplementationOnce(async () => new Promise<AgentInputProjection>((resolve) => {
+      resolveEnqueue = resolve;
+    }));
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'immediately dispatched message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(1);
+
+    resolveEnqueue(projection(SESSION_ID, { pendingQueue: [] }));
+    await expect(send).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: 'immediately dispatched message',
+        isPendingPersist: true,
+      }),
+    ]);
+  });
+
+  it('removes a locally optimistic busy send when enqueue fails before acceptance', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    input.enqueue.mockRejectedValueOnce(new Error('transport unavailable'));
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'failed busy message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await expect(send).resolves.toBe(false);
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingQueue.some((item) => item.text === 'failed busy message')).toBe(false);
+    expect(snapshot.messages.some((item) => item.content === 'failed busy message')).toBe(false);
   });
 
   it('dedupes the main DB-created ack for optimistic user bubbles', async () => {
@@ -6593,6 +7037,21 @@ describe('makerChatStore text delta batching', () => {
       'existing-row-3',
       'newer-row-5',
     ]);
+  });
+
+  it('deduplicates history batches and previously duplicated runtime rows by message identity', () => {
+    const old: ChatMessage = {
+      clientId: 'assistant-1', role: 'assistant', content: 'old', isStreaming: false,
+      createdAt: '2026-06-15T00:00:03.000Z',
+    };
+    const latest = { ...old, content: 'latest' };
+    const persisted = { ...latest, id: 'db-1', rowid: 1 };
+    const other = { ...old, clientId: 'assistant-2', content: 'other' };
+    expect(makerChatStore.__mergeMessagesForTest([old, persisted, other], [])).toEqual([persisted, other]);
+    expect(makerChatStore.__mergeMessagesForTest([persisted, persisted, other], [old, latest])).toEqual([persisted, other]);
+    expect(makerChatStore.__mergeMessagesForTest([old], [latest, latest], { addOnly: true })).toEqual([latest]);
+    const stable = [persisted, other];
+    expect(makerChatStore.__mergeMessagesForTest([persisted], stable)).toBe(stable);
   });
 
   it('does not stop remote reconciliation on row-trimmed overlaps', () => {

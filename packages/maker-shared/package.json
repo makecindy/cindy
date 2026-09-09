@@ -67,12 +67,17 @@
     "./thinking-text": "./src/thinkingText.ts",
     "./turn-continuation": "./src/turnContinuation.ts",
     "./tool-use-descriptor": "./src/toolUseDescriptor.ts",
+    "./tool-result-compaction": "./src/toolResultCompaction.ts",
+    "./tool-loop-error": "./src/toolLoopError.ts",
     "./update-channel": "./src/updateChannel.ts",
     "./url-text-boundary": "./src/urlTextBoundary.ts",
     "./usage-format": "./src/usageFormat.ts",
     "./work-activity-projection": "./src/workActivityProjection.ts",
     "./worktree-paths": "./src/worktreePaths.ts",
-    "./codex-usage-buckets": "./src/codexUsageBuckets.ts"
+    "./codex-usage-buckets": "./src/codexUsageBuckets.ts",
+    "./botCollaboration": "./src/botCollaboration.ts",
+    "./botDirectMessage": "./src/botDirectMessage.ts",
+    "./botDelegation": "./src/botDelegation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

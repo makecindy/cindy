@@ -10,7 +10,12 @@ import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { isResourceUsageWindow } from '@/lib/resourceUsageWindow';
-import type { WindowsCloseBehavior } from '../../../shared/windowBehavior';
+import type {
+  LinuxCloseBehavior,
+  WindowsCloseBehavior,
+} from '../../../shared/windowBehavior';
+
+type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
 interface WindowControlsProps {
   /**
@@ -37,10 +42,10 @@ export function WindowControls({
   onClose,
 }: WindowControlsProps = {}) {
   const [showCloseDialog, setShowCloseDialog] = useState(false);
-  const [showWindowsCloseBehaviorDialog, setShowWindowsCloseBehaviorDialog] = useState(false);
-  const [savingWindowsCloseBehavior, setSavingWindowsCloseBehavior] = useState(false);
-  const savingWindowsCloseBehaviorRef = useRef(false);
-  const windowsCloseBehaviorDialogVisibleRef = useRef(false);
+  const [showCloseBehaviorDialog, setShowCloseBehaviorDialog] = useState(false);
+  const [savingCloseBehavior, setSavingCloseBehavior] = useState(false);
+  const savingCloseBehaviorRef = useRef(false);
+  const closeBehaviorDialogVisibleRef = useRef(false);
   // 点 X 后 (无论走确认框还是直接关) 进入不可取消的 closing 态:
   //   - 有 in-flight turn 路径: ConfirmDialog 显示 loading spinner + 锁住关闭
   //   - 无 in-flight 路径:      全屏 ClosingOverlay 显示 spinner + "正在关闭…"
@@ -53,28 +58,38 @@ export function WindowControls({
 
   useEffect(() => {
     if (
-      window.electronAPI.platform !== 'win32' ||
+      (window.electronAPI.platform !== 'win32' && window.electronAPI.platform !== 'linux') ||
       isSecondaryWindow() ||
       isSidebarWindow() ||
       isGhostPanelWindow() ||
       isResourceUsageWindow()
     )
       return;
-    return window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(() => {
-      if (windowsCloseBehaviorDialogVisibleRef.current) {
-        window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
+    const onCloseBehaviorRequested = (): void => {
+      if (closeBehaviorDialogVisibleRef.current) {
+        if (window.electronAPI.platform === 'win32') {
+          window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
+        } else {
+          window.electronAPI.windowBehavior.notifyLinuxCloseBehaviorPromptShown();
+        }
         return;
       }
-      setShowWindowsCloseBehaviorDialog(true);
-    });
+      setShowCloseBehaviorDialog(true);
+    };
+    return window.electronAPI.platform === 'win32'
+      ? window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(onCloseBehaviorRequested)
+      : window.electronAPI.windowBehavior.onLinuxCloseBehaviorRequested(onCloseBehaviorRequested);
   }, []);
 
   useEffect(() => {
-    windowsCloseBehaviorDialogVisibleRef.current = showWindowsCloseBehaviorDialog;
-    if (showWindowsCloseBehaviorDialog && window.electronAPI.platform === 'win32') {
+    closeBehaviorDialogVisibleRef.current = showCloseBehaviorDialog;
+    if (!showCloseBehaviorDialog) return;
+    if (window.electronAPI.platform === 'win32') {
       window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
+    } else if (window.electronAPI.platform === 'linux') {
+      window.electronAPI.windowBehavior.notifyLinuxCloseBehaviorPromptShown();
     }
-  }, [showWindowsCloseBehaviorDialog]);
+  }, [showCloseBehaviorDialog]);
 
   const controlBase = cn(
     'flex items-center justify-center',
@@ -100,9 +115,13 @@ export function WindowControls({
     window.electronAPI.windowClose();
   };
 
-  const continueCloseWithBehavior = async (behavior: WindowsCloseBehavior): Promise<void> => {
+  const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
     if (behavior === 'tray') {
       window.electronAPI.windowClose();
+      return;
+    }
+    if (behavior === 'minimize') {
+      window.electronAPI.windowMinimize();
       return;
     }
 
@@ -119,19 +138,27 @@ export function WindowControls({
     }
   };
 
-  const selectWindowsCloseBehavior = async (behavior: WindowsCloseBehavior): Promise<void> => {
-    if (savingWindowsCloseBehaviorRef.current) return;
-    savingWindowsCloseBehaviorRef.current = true;
-    setSavingWindowsCloseBehavior(true);
+  const selectCloseBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
+    if (savingCloseBehaviorRef.current) return;
+    savingCloseBehaviorRef.current = true;
+    setSavingCloseBehavior(true);
     try {
-      await window.electronAPI.windowBehavior.setWindowsCloseBehavior(behavior);
-      setShowWindowsCloseBehaviorDialog(false);
+      if (window.electronAPI.platform === 'linux') {
+        await window.electronAPI.windowBehavior.setLinuxCloseBehavior(
+          behavior === 'minimize' ? behavior : 'quit',
+        );
+      } else {
+        await window.electronAPI.windowBehavior.setWindowsCloseBehavior(
+          behavior === 'tray' ? behavior : 'quit',
+        );
+      }
+      setShowCloseBehaviorDialog(false);
       await continueCloseWithBehavior(behavior);
     } catch {
       // 弹窗尚未关闭；持久化失败时保留它，不带着未知行为进入关闭流程。
     } finally {
-      savingWindowsCloseBehaviorRef.current = false;
-      setSavingWindowsCloseBehavior(false);
+      savingCloseBehaviorRef.current = false;
+      setSavingCloseBehavior(false);
     }
   };
 
@@ -169,7 +196,21 @@ export function WindowControls({
         // Main close handler remains the final authority for the persisted behavior.
       }
       if (!closeBehavior) {
-        setShowWindowsCloseBehaviorDialog(true);
+        setShowCloseBehaviorDialog(true);
+        return;
+      }
+      await continueCloseWithBehavior(closeBehavior);
+      return;
+    }
+    if (window.electronAPI.platform === 'linux') {
+      let closeBehavior: LinuxCloseBehavior | null = null;
+      try {
+        closeBehavior = await window.electronAPI.windowBehavior.getLinuxCloseBehavior();
+      } catch {
+        // Main close handler remains the final authority for the persisted behavior.
+      }
+      if (!closeBehavior) {
+        setShowCloseBehaviorDialog(true);
         return;
       }
       await continueCloseWithBehavior(closeBehavior);
@@ -177,6 +218,9 @@ export function WindowControls({
     }
     await continueCloseWithBehavior('quit');
   };
+
+  const keepRunningBehavior: Exclude<DesktopCloseBehavior, 'quit'> =
+    window.electronAPI.platform === 'linux' ? 'minimize' : 'tray';
 
   return (
     <>
@@ -228,24 +272,28 @@ export function WindowControls({
         )}
       </div>
       <ConfirmDialog
-        open={showWindowsCloseBehaviorDialog}
+        open={showCloseBehaviorDialog}
         onOpenChange={(next) => {
           // 首次关闭必须明确选择；ESC / 点击遮罩不应静默写入默认值或关窗。
-          if (next) setShowWindowsCloseBehaviorDialog(true);
+          if (next) setShowCloseBehaviorDialog(true);
         }}
         title={t('settings.windowBehavior.closePrompt.title')}
         description={t('settings.windowBehavior.closePrompt.message')}
         content={
           <p className="text-sm leading-6 text-[var(--confirm-desc)]">
-            {t('settings.windowBehavior.closePrompt.detail')}
+            {t(
+              window.electronAPI.platform === 'linux'
+                ? 'settings.windowBehavior.closePrompt.linuxDetail'
+                : 'settings.windowBehavior.closePrompt.detail',
+            )}
           </p>
         }
-        confirmText={t('settings.windowBehavior.closeBehavior.tray')}
+        confirmText={t(`settings.windowBehavior.closeBehavior.${keepRunningBehavior}`)}
         cancelText={t('settings.windowBehavior.closeBehavior.quit')}
         autoFocusConfirm
-        loading={savingWindowsCloseBehavior}
-        onConfirm={() => void selectWindowsCloseBehavior('tray')}
-        onCancel={() => void selectWindowsCloseBehavior('quit')}
+        loading={savingCloseBehavior}
+        onConfirm={() => void selectCloseBehavior(keepRunningBehavior)}
+        onCancel={() => void selectCloseBehavior('quit')}
       />
       <ConfirmDialog
         open={showCloseDialog}

@@ -22,17 +22,24 @@ export type ManualUpdateCheckOutcome =
   | { kind: 'busy' }
   | { kind: 'error'; reason: 'bundle-check' | 'ota-check'; detail?: string };
 
+export interface ManualOtaClient {
+  checkForUpdateAsync: () => Promise<{ isAvailable: boolean }>;
+  fetchUpdateAsync: () => Promise<{ isNew: boolean }>;
+  reloadAsync: () => Promise<void>;
+}
+
 /** 统一更新检查所需的外部能力,由设置页注入真实 Expo / 整包更新实现。 */
 export interface ManualUpdateCheckDeps {
   /** 自建线传入整包检查;EAS 线省略后直接检查 OTA。 */
   checkBundleUpdate?: () => Promise<BundleUpdateCheckOutcome>;
   otaEnabled: boolean;
   /**
-   * 隐私同意闸门(动态判定,非调用瞬间快照):manifest 请求前与资源下载前分别重查。
-   * 用户点击「检查更新」后、请求尚未完成时登出撤销同意,这里必须停止继续携带
-   * eas-client-id 的请求。缺省(未提供)视为不启用该闸门。
+   * 非自建 EAS / TestFlight 的隐私同意闸门(动态判定,非调用瞬间快照)：manifest
+   * 请求前与资源下载前分别重查。自建 OTA 不传，由 withOtaClient 覆盖共享 UUID。
    */
   isConsented?: () => boolean;
+  /** 自建 OTA 用它包住完整 check → fetch → reload 事务；EAS/TestFlight 不传。 */
+  withOtaClient?: <T>(operation: (client: ManualOtaClient) => Promise<T>) => Promise<T>;
   checkOtaUpdate: () => Promise<{ isAvailable: boolean }>;
   /** isNew 表示确实落盘了一个新 bundle(reload 失败时用它区分"已下载待重启"与"什么都没拿到")。 */
   fetchOtaUpdate: () => Promise<{ isNew: boolean }>;
@@ -53,6 +60,7 @@ export async function runManualUpdateCheck({
   checkBundleUpdate,
   otaEnabled,
   isConsented,
+  withOtaClient,
   checkOtaUpdate,
   fetchOtaUpdate,
   reload,
@@ -74,22 +82,32 @@ export async function runManualUpdateCheck({
   }
 
   if (!otaEnabled) return { kind: 'ota-unavailable' };
-  // 整包检查是匿名请求,不受同意门约束;只有 OTA manifest/资源会携带 eas-client-id,
-  // 在发起 manifest 请求前先问一次同意(处理「点击检查时未同意」的快照与实况不一致)。
+  // 整包检查是匿名请求，不受同意门约束；非自建 OTA 在发起 manifest 前先问一次同意。
   if (isConsented && !isConsented()) return { kind: 'ota-unavailable' };
 
   let fetchedNewBundle = false;
   try {
-    const ota = await checkOtaUpdate();
-    if (!ota.isAvailable) return { kind: 'up-to-date' };
-    // manifest 请求期间用户可能登出撤销同意:下载资源前再问一次,不得在撤销后继续
-    // 拉取带标识的 bundle。
-    if (isConsented && !isConsented()) return { kind: 'ota-unavailable' };
-    onPhase('downloading');
-    const fetched = await fetchOtaUpdate();
-    fetchedNewBundle = fetched.isNew;
-    await reload();
-    return { kind: 'reloading' };
+    const operation = async (client: ManualOtaClient): Promise<ManualUpdateCheckOutcome> => {
+      const ota = await client.checkForUpdateAsync();
+      if (!ota.isAvailable) return { kind: 'up-to-date' };
+      // manifest 请求期间用户可能登出撤销同意:下载前再问一次,避免非自建 EAS
+      // 在撤销后继续携带它自己的安装标识。自建线不传本闸门，统一覆盖共享 UUID。
+      if (isConsented && !isConsented()) return { kind: 'ota-unavailable' };
+      onPhase('downloading');
+      const fetched = await client.fetchUpdateAsync();
+      fetchedNewBundle = fetched.isNew;
+      if (!fetched.isNew) return { kind: 'up-to-date' };
+      await client.reloadAsync();
+      return { kind: 'reloading' };
+    };
+    const client: ManualOtaClient = {
+      checkForUpdateAsync: checkOtaUpdate,
+      fetchUpdateAsync: fetchOtaUpdate,
+      reloadAsync: reload,
+    };
+    return withOtaClient
+      ? await withOtaClient(operation)
+      : await operation(client);
   } catch (error) {
     // emergency launch(没有 launchedUpdate)下 reload 必被原生层拒绝,而 bundle 已经落盘、
     // 下次冷启动就会生效:这不是一次失败的检查,报"检查更新失败"只会让用户无从下手。

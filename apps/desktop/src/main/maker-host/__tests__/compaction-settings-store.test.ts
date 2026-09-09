@@ -56,8 +56,11 @@ describe('compaction settings store', () => {
   });
 
   it('does not migrate Pi when Claude still follows the default', () => {
-    expect(readCompactionState().isCustomized).toBe(false);
-    expect(readPiCompactionPct()).toBe(75);
+    expect(readCompactionState()).toMatchObject({
+      isCustomized: false,
+      value: { claudeCodeAutoCompactPct: 90 },
+    });
+    expect(readPiCompactionPct()).toBe(90);
     expect(readPiCompactionState().isCustomized).toBe(false);
     expect(fs.existsSync(path.join(tempRoot, 'pi-compaction-settings.json'))).toBe(false);
   });
@@ -99,9 +102,9 @@ describe('compaction settings store', () => {
     writeCompactionPct(80);
     __testing.resetStores();
     expect(readPiCompactionPct()).toBe(80);
-    expect(resetPiCompactionPct()).toBe(75);
+    expect(resetPiCompactionPct()).toBe(90);
     __testing.resetStores();
-    expect(readPiCompactionPct()).toBe(75);
+    expect(readPiCompactionPct()).toBe(90);
     expect(readPiCompactionState().isCustomized).toBe(false);
     expect(fs.existsSync(path.join(tempRoot, 'pi-compaction-settings.json'))).toBe(false);
     expect(fs.existsSync(path.join(tempRoot, 'pi-compaction-migrated.json'))).toBe(true);

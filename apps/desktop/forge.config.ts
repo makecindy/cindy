@@ -23,6 +23,10 @@ import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import { READ_SHEET_RUNTIME_PACKAGES } from '../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
 import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
+import {
+  validateBundledWindowsUpdaterRuntime,
+  windowsUpdaterRuntimeExtraResourceForTarget,
+} from './src/main/windowsUpdaterPrerequisites';
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
@@ -770,8 +774,13 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/THIRD-PARTY-RESTRICTED.txt',
   ];
 
-  if (targetPlatform === 'win32') {
-    base.unshift(`resources/${UPDATER_EXE}`);
+  const windowsUpdaterRuntimeResource =
+    windowsUpdaterRuntimeExtraResourceForTarget(targetPlatform);
+  if (windowsUpdaterRuntimeResource) {
+    base.unshift(
+      `resources/${UPDATER_EXE}`,
+      windowsUpdaterRuntimeResource,
+    );
   }
 
   if (targetPlatform === 'darwin' || targetPlatform === 'mas') {
@@ -975,6 +984,18 @@ function buildMacIOSSimulatorHelper(platform: ForgePlatform, arch: ForgeArch): v
   }
 }
 
+function compileCObjectForTarget(
+  src: string,
+  dest: string,
+  target: string,
+  extraArgs: string[],
+  label: string,
+): void {
+  const r = spawnSync('clang', ['-c', src, '-target', target, ...extraArgs, '-o', dest], { stdio: 'inherit' });
+  if (r.error) throw new Error(`[forge] clang spawn failed for ${label}: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`[forge] clang failed for ${label} (${target}) with exit code ${r.status}`);
+}
+
 function runSwiftcForTarget(src: string, dest: string, target: string, extraArgs: string[], label: string): void {
   const r = spawnSync('swiftc', ['-target', target, src, ...extraArgs, '-o', dest], { stdio: 'inherit' });
   if (r.error) throw new Error(`[forge] swiftc spawn failed for ${label}: ${r.error.message}`);
@@ -1007,23 +1028,76 @@ function buildSwiftHelperForForgeArch(
   }
 }
 
+function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
+  const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
+  fs.mkdirSync(destDir, { recursive: true });
+  if (process.platform === 'darwin' && isMacForgePlatform(platform)) {
+    const dest = path.join(destDir, 'cindy-macos-desktop-input');
+    buildSwiftHelperForForgeArch(path.join(__dirname, 'native', 'remote-desktop', 'macos-input.swift'), dest, arch, '10.15', [], 'remote desktop input');
+    fs.chmodSync(dest, 0o755);
+    const capture = path.join(destDir, 'cindy-macos-desktop-capture');
+    const captureArch = arch === 'universal' ? ['-arch', 'arm64', '-arch', 'x86_64'] : ['-arch', arch === 'arm64' ? 'arm64' : 'x86_64'];
+    const result = spawnSync('xcrun', ['clang', path.join(__dirname, 'native', 'remote-desktop', 'macos-capture.m'),
+      ...captureArch, '-mmacosx-version-min=10.15', '-fobjc-arc', '-fblocks', '-O2',
+      '-framework', 'Foundation', '-framework', 'AppKit', '-framework', 'CoreGraphics', '-framework', 'CoreImage',
+      '-framework', 'IOSurface', '-framework', 'ImageIO', '-framework', 'IOKit', '-o', capture], { stdio: 'inherit' });
+    if (result.error || result.status !== 0) throw new Error('Remote desktop capture build failed');
+    fs.chmodSync(capture, 0o755);
+  } else if (process.platform === 'win32' && platform === 'win32') {
+    if (arch !== 'x64' && arch !== 'arm64') throw new Error('Unsupported Windows desktop architecture');
+    const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+    for (const helper of ['windows-input', 'windows-host']) {
+      const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const result = spawnSync('cargo', ['build', '--release', '--locked', '--target', target, '--manifest-path', path.join(root, 'Cargo.toml')], { stdio: 'inherit' });
+      if (result.error || result.status !== 0) throw new Error(`Remote desktop ${helper} build failed`);
+      const output = path.join(root, 'target', target, 'release');
+      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
+      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
+      if (helper === 'windows-host') fs.copyFileSync(path.join(output, 'cindy_windows_desktop_host.dll'), path.join(destDir, `${name}.node`));
+    }
+  }
+}
+
 function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
+  const switch2UsbC = path.join(__dirname, 'native', 'xbox-gamepad', 'switch2_usb.c');
+  const switch2UsbH = path.join(__dirname, 'native', 'xbox-gamepad', 'switch2_usb.h');
   const destDir = path.join(__dirname, 'resources', 'tools', 'xbox-gamepad');
   const dest = path.join(destDir, 'cindy-macos-xbox-gamepad-helper');
   if (!fs.existsSync(src)) {
     throw new Error(`[forge] Xbox gamepad helper source missing at ${src}`);
   }
+  if (!fs.existsSync(switch2UsbC) || !fs.existsSync(switch2UsbH)) {
+    throw new Error(`[forge] Switch 2 USB helper source missing at ${switch2UsbC}`);
+  }
   fs.mkdirSync(destDir, { recursive: true });
-  buildSwiftHelperForForgeArch(
-    src,
-    dest,
-    arch,
-    MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET,
-    ['-framework', 'GameController', '-framework', 'IOKit'],
-    'Xbox gamepad helper',
-  );
+  const targets = swiftTargetTriplesForForgeArch(arch, MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET);
+  const compileOne = (output: string, target: string, objectDir: string): void => {
+    const object = path.join(objectDir, `switch2_usb-${target.split('-')[0]}.o`);
+    compileCObjectForTarget(switch2UsbC, object, target, [], 'Xbox gamepad helper C');
+    runSwiftcForTarget(
+      src,
+      output,
+      target,
+      [object, '-import-objc-header', switch2UsbH, '-framework', 'GameController', '-framework', 'IOKit'],
+      'Xbox gamepad helper',
+    );
+  };
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-xbox-gamepad-helper-'));
+  try {
+    if (targets.length === 1) {
+      compileOne(dest, targets[0], tempDir);
+    } else {
+      const outputs = targets.map((target) => path.join(tempDir, `${path.basename(dest)}-${target.split('-')[0]}`));
+      targets.forEach((target, index) => compileOne(outputs[index], target, tempDir));
+      const r = spawnSync('lipo', ['-create', ...outputs, '-output', dest], { stdio: 'inherit' });
+      if (r.error) throw new Error(`[forge] lipo spawn failed for Xbox gamepad helper: ${r.error.message}`);
+      if (r.status !== 0) throw new Error(`[forge] lipo failed for Xbox gamepad helper with exit code ${r.status}`);
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
   fs.chmodSync(dest, 0o755);
 }
 
@@ -1372,6 +1446,7 @@ const config: ForgeConfig = {
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
       NSDesktopFolderUsageDescription:
@@ -1440,6 +1515,7 @@ const config: ForgeConfig = {
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
       NSDocumentsFolderUsageDescription:
@@ -1487,6 +1563,17 @@ const config: ForgeConfig = {
       const targetArch = requestedTargetArch();
       ensureMacIOSSimulatorWdaArchive(platform);
       if (targetPlatform === 'win32') {
+        if (targetArch !== 'x64') {
+          throw new Error(
+            `[forge] Windows updater app-local Runtime is x64-only; unsupported target arch: ${targetArch}`,
+          );
+        }
+        const runtimeManifest = validateBundledWindowsUpdaterRuntime(
+          path.join(__dirname, 'resources'),
+        );
+        console.log(
+          `[forge:prePackage] verified Windows updater app-local Runtime ${runtimeManifest.version} x64`,
+        );
         buildCindyUpdater();
       }
       stageRipgrep(targetPlatform, targetArch);
@@ -1499,6 +1586,7 @@ const config: ForgeConfig = {
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
       buildMacSessionDragReleaseHelper(platform, arch);
+      buildRemoteDesktopInput(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
@@ -1530,6 +1618,13 @@ const config: ForgeConfig = {
           config: 'vite.db-worker.config.ts',
           // 借用 preload target 的 CJS 单文件输出；这里运行时是 Node worker_threads，
           // 不是 Electron preload。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/localDb/dbSlimmingMaintenanceProcess.ts',
+          config: 'vite.db-slimming-worker.config.ts',
+          // DELETE / VACUUM can run for minutes on a large database. An OS-killable
+          // utility process keeps Main responsive and lets users cancel before swap.
           target: 'preload',
         },
         {
@@ -1633,6 +1728,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/preload/desktopCapturePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
           config: 'vite.preload.config.ts',
@@ -1668,6 +1768,7 @@ const config: ForgeConfig = {
         },
       ],
       renderer: [
+        { name: 'desktop_capture', config: 'vite.capture.config.ts' },
         {
           name: 'main_window',
           config: 'vite.renderer.config.ts',

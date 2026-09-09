@@ -1771,11 +1771,24 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   });
 
   it('清某设备期间,另一台设备的写入照常落盘', async () => {
-    const a = cache();
-    const b = cache();
+    // 同代际闸用例:用 rawCache + 清理前显式令牌。withAutoToken 在 writeMessages
+    // 调用时才异步补读,满载 CI 上补读会撞进另一台设备清理的墓碑窗口
+    // (hasPendingClears 不分设备,清理期间一律返回 -1),拿到 -1 的写入在提交时
+    // 与会话计数 0 比对失配被拒 —— 生产令牌在远端请求发起时捕获,早于任何清理,
+    // 这里等价地在清理前捕获。
+    const a = rawCache();
+    const b = rawCache();
+    const cap = await b.readMessagesWithInvalidation('dev-2', 'sess-9');
     await Promise.all([
       a.clearDevice('dev-1'),
-      b.writeMessages('dev-2', 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]),
+      b.writeMessages(
+        'dev-2',
+        'sess-9',
+        [row('m9', '2026-01-01T00:00:00.000Z')],
+        cap.invalidation,
+        cap.ownerRoot,
+        cap.accountCounter,
+      ),
     ]);
     expect((await b.readMessages('dev-2', 'sess-9')).map((m) => m.id)).toEqual(['m9']);
   });

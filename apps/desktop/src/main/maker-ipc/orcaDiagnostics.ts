@@ -27,6 +27,12 @@ export interface OrcaDiagnosticsDeps {
   readActiveTeam(leadSessionId: string): Promise<OrcaDiagnosticTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaDiagnosticWorkerSnapshot[]>;
   getSessionStatus(sessionId: string): string;
+  getWorkerFlowStatus(sessionId: string): Promise<{
+    isWorking: boolean;
+    willQueue: boolean;
+    queuedCount: number;
+    queuePaused: boolean;
+  }>;
   readLatestAssistantMessage(workerSessionId: string): Promise<string>;
 }
 
@@ -42,8 +48,9 @@ function idleMs(worker: OrcaDiagnosticWorkerSnapshot): number | null {
   return Math.max(0, Date.now() - source);
 }
 
-function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnosticWorkerSnapshot) {
+async function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnosticWorkerSnapshot) {
   const sessionStatus = deps.getSessionStatus(worker.sessionId);
+  const flow = await deps.getWorkerFlowStatus(worker.sessionId);
   return {
     worker_id: worker.id,
     session_id: worker.sessionId,
@@ -51,6 +58,10 @@ function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnosticWorker
     session_status: sessionStatus,
     idle_ms: idleMs(worker),
     restored_from_storage: sessionStatus === 'not_running',
+    is_working: flow.isWorking,
+    will_queue: flow.willQueue,
+    queued_count: flow.queuedCount,
+    queue_paused: flow.queuePaused,
     label: worker.label,
     role: worker.role,
     agent_kind: worker.session.agentKind,
@@ -61,14 +72,14 @@ function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnosticWorker
   };
 }
 
-type OrcaWorkerSummary = ReturnType<typeof toWorkerSummary>;
+type OrcaWorkerSummary = Awaited<ReturnType<typeof toWorkerSummary>>;
 
 async function readDiagnosticWorkers(
   deps: OrcaDiagnosticsDeps,
   leadSessionId: string,
 ): Promise<OrcaWorkerSummary[]> {
   const workers = await deps.listWorkersByLead(leadSessionId);
-  return workers.map((worker) => toWorkerSummary(deps, worker));
+  return Promise.all(workers.map((worker) => toWorkerSummary(deps, worker)));
 }
 
 // worker_id 与 session_id 都接受（与 resolveWorkerRef 同语义，只读诊断侧）。

@@ -10,6 +10,8 @@ import {
   MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
   mobileMarkdownInlineImageSize,
   parseMobileMarkdown,
+  parseMobileMarkdownDocument,
+  parseMobileMarkdownIncremental,
   parseMobileMarkdownInlines,
   groupMobileMarkdownSelectableBlocks,
 } from '@/session/messageMarkdown';
@@ -17,6 +19,102 @@ import {
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
+});
+
+describe('incremental mobile Markdown parsing', () => {
+  it('reuses completed blocks after a safe blank-line checkpoint', () => {
+    const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
+    const next = parseMobileMarkdownIncremental(
+      '# title\n\nfirst paragraph\n\nsecond paragraph',
+      first,
+    );
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.incremental).toBe(true);
+    expect(next.reusedBlockCount).toBe(1);
+    expect(next.blocks).toEqual(full.blocks);
+    expect(next.blocks[0]).toBe(first.blocks[0]);
+    expect(next.parsedSourceUtf16Length).toBe('first paragraph\n\nsecond paragraph'.length);
+  });
+
+  it('falls back to a full parse for an edit in the existing prefix', () => {
+    const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
+    const next = parseMobileMarkdownIncremental(
+      '# changed\n\nfirst paragraph\n\nsecond paragraph',
+      first,
+    );
+
+    expect(next.incremental).toBe(false);
+    expect(next.reusedBlockCount).toBe(0);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+  });
+
+  it('keeps fenced code and display math semantics when appending', () => {
+    const codeFirst = parseMobileMarkdownDocument('intro\n\n```ts\nconst x = 1;\n```');
+    const codeNext = parseMobileMarkdownIncremental(
+      `${codeFirst.source}\n\nend`,
+      codeFirst,
+    );
+    expect(codeNext.blocks).toEqual(parseMobileMarkdownDocument(codeNext.source).blocks);
+
+    const mathFirst = parseMobileMarkdownDocument('intro\n\n$$\nx = 1\n$$');
+    const mathNext = parseMobileMarkdownIncremental(
+      `${mathFirst.source}\n\nend`,
+      mathFirst,
+    );
+    expect(mathNext.blocks).toEqual(parseMobileMarkdownDocument(mathNext.source).blocks);
+  });
+
+  it('falls back when an escaped inline math opener is closed by a later flush', () => {
+    const first = parseMobileMarkdownDocument('intro\n\nvalue \\(');
+    const next = parseMobileMarkdownIncremental(`${first.source}x\\)`, first);
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.incremental).toBe(false);
+    expect(next.reusedBlockCount).toBe(0);
+    expect(next.blocks).toEqual(full.blocks);
+  });
+
+  it('keeps line offsets when appending after a closed fence without a trailing newline', () => {
+    const first = parseMobileMarkdownDocument('intro\n\n```ts\nconst x = 1;\n```');
+    const next = parseMobileMarkdownIncremental(`${first.source}\n\nend`, first);
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.blocks).toEqual(full.blocks);
+    expect(next.blocks.at(-1)?.key).toBe(full.blocks.at(-1)?.key);
+  });
+
+  it('does not reuse an EOF checkpoint when an append mutates its last line', () => {
+    const first = parseMobileMarkdownDocument('```ts\nconst x = 1;\n```');
+    const next = parseMobileMarkdownIncremental(`${first.source}continued`, first);
+
+    expect(next.incremental).toBe(false);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+  });
+
+  it('preserves full-parser semantics across character-by-character streaming flushes', () => {
+    const fixtures = [
+      '# heading\n\nplain text\n\n- item\n\nend',
+      'intro\n\n```ts\nconst x = 1;\n```\n\nresult',
+      'intro\n\n$$\nx = 1\n$$\n\nresult',
+      'prefix \\(x + 1\\) suffix\n\nnext',
+      '<!-- hidden\n\ntext -->\n\nvisible',
+    ];
+    for (const fixture of fixtures) {
+      let previous: ReturnType<typeof parseMobileMarkdownDocument> | null = null;
+      for (let end = 1; end <= fixture.length; end += 1) {
+        const source = fixture.slice(0, end);
+        const result = parseMobileMarkdownIncremental(source, previous);
+        expect(result.blocks, `prefix length ${end}`).toEqual(
+          parseMobileMarkdownDocument(source).blocks,
+        );
+        expect(result.ranges, `ranges at prefix length ${end}`).toEqual(
+          parseMobileMarkdownDocument(source).ranges,
+        );
+        previous = result;
+      }
+    }
+  });
 });
 
 describe('messageMarkdown', () => {
@@ -1513,6 +1611,43 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1, 2]);
   });
 
+  it('can bound one native text run by inline fragment count', () => {
+    const blocks = [{
+      type: 'paragraph' as const,
+      key: 'paragraph:0',
+      inlines: Array.from({ length: 7 }, (_, index) => ({
+        type: 'strong' as const,
+        text: String(index),
+      })),
+    }];
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunInlineFragments: 3,
+    });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+    expect(chunks.map((block) => block.inlines.length)).toEqual([3, 3, 1]);
+    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true, true]);
+    expect(chunks.flatMap((block) => block.inlines).map((inline) => (
+      inline.type === 'image' ? inline.alt : inline.text
+    )).join('')).toBe('0123456');
+  });
+
+  it('counts inline fragments across adjacent text blocks', () => {
+    const blocks = Array.from({ length: 5 }, (_, index) => ({
+      type: 'paragraph' as const,
+      key: `paragraph:${index}`,
+      inlines: [{ type: 'text' as const, text: String(index) }],
+    }));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunInlineFragments: 2,
+    });
+
+    expect(groups.map((group) => (
+      group.type === 'text_run' ? group.blocks.length : 0
+    ))).toEqual([2, 2, 1]);
+  });
+
   it('counts rendered block separators when bounding text runs by text length', () => {
     const blocks = parseMobileMarkdown(['aaaa', '', 'bbbb'].join('\n'));
     const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
@@ -1595,6 +1730,7 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     const groups = groupMobileMarkdownSelectableBlocks(blocks, {
       maxTextRunBlocks: 0.5,
       maxTextRunUtf16Length: 0.5,
+      maxTextRunInlineFragments: 0.5,
     });
     expect(groups).toHaveLength(1);
     expect(groups[0].type).toBe('text_run');

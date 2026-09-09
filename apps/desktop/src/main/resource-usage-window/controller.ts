@@ -1,5 +1,5 @@
 /**
- * 资源用量独立窗口的预热、显示和回收状态机。
+ * 资源用量辅助窗口的预热、显示和回收状态机。
  *
  * 窗口在主界面稳定后提前创建。renderer 在隐藏阶段挂载；Windows 的首份采样延迟到用户
  * 主动打开，其他平台保留隐藏快照预热。普通关闭仅隐藏，主窗口真正销毁或退出时才销毁。
@@ -24,7 +24,6 @@ const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
 
 export interface ResourceUsageOwnerWindow {
   isDestroyed(): boolean;
-  isFullScreen(): boolean;
   isMinimized(): boolean;
   isVisible?(): boolean;
   restore(): void;
@@ -33,21 +32,19 @@ export interface ResourceUsageOwnerWindow {
   on?(event: 'hide' | 'minimize' | 'closed', listener: () => void): unknown;
 }
 
-type FullscreenTransition = 'idle' | 'entering' | 'entered' | 'leaving';
-
 export interface ResourceUsageWindowControllerDeps {
   createWindow: () => BrowserWindow;
   isOpenSender: (sender: WebContents) => boolean;
-  /** 打开监视器的那扇应用窗；macOS 全屏时监视器自己进新的 Space，这扇窗留在原 Space。 */
+  /** 打开监视器的那扇应用窗；用于跟随显隐并在关闭监视器后恢复焦点。 */
   getOwnerWindow?: (sender: WebContents) => ResourceUsageOwnerWindow | null;
-  /** 测试注入；默认 process.platform。仅 darwin 会把监视器送进独立全屏 Space。 */
+  /** 测试注入；默认 process.platform。Windows 用于延迟昂贵的进程扫描。 */
   platform?: NodeJS.Platform;
   /** 测试注入；默认走 main i18n 的当前 locale。 */
   resolveNativeTitle?: (locale: SupportedLocale | null) => string;
   openTimeoutMs?: number;
   prewarmTimeoutMs?: number;
   recoveryStabilityMs?: number;
-  /** 测试注入；macOS 退出全屏若迟迟没有 leave-full-screen，到期后强制隐藏。 */
+  /** 测试注入；macOS 退出全屏若没有 leave-full-screen，到期后仍完成隐藏。 */
   leaveTimeoutMs?: number;
 }
 
@@ -68,11 +65,10 @@ export class ResourceUsageWindowController {
   private locale: SupportedLocale | null = null;
   private lastOwner: ResourceUsageOwnerWindow | null = null;
   private ownerHideUnsubscribers: Array<() => void> = [];
-  /** 递增代次：关闭全屏时记下当前值，leave-full-screen 迟到时对照，避免把刚重新打开的窗口藏掉。 */
-  private fullscreenGeneration = 0;
-  private pendingLeaveGeneration: number | null = null;
-  private pendingLeaveRestoresOwner = true;
-  private fullscreenTransition: FullscreenTransition = 'idle';
+  /** macOS 原生全屏动画开始后，isFullScreen() 在 enter-full-screen 前仍可能返回 false。 */
+  private enteringNativeFullscreen = false;
+  /** 关闭全屏与重新打开可能交错；迟到的 leave-full-screen 只能完成原来的隐藏请求。 */
+  private visibilityGeneration = 0;
 
   constructor(private readonly deps: ResourceUsageWindowControllerDeps) {}
 
@@ -185,7 +181,6 @@ export class ResourceUsageWindowController {
   destroyWindow(): void {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
-    this.clearLeaveTimeout();
     this.pendingOpen = false;
     const win = this.winRef;
     if (!win || win.isDestroyed()) {
@@ -236,7 +231,6 @@ export class ResourceUsageWindowController {
     // OS 扫描必须等用户显式 open；其他平台保留既有首份快照预热体验。
     this.samplingActive = this.pendingOpen || this.platform() !== 'win32';
     this.destroyingWindow = false;
-    this.fullscreenTransition = 'idle';
     this.applyNativeTitle(win);
     if (this.locale) this.sendLocale(win, this.locale);
     win.on('close', (event) => {
@@ -249,8 +243,12 @@ export class ResourceUsageWindowController {
     win.on('restore', () => this.onNativeVisibilityChanged(win, true));
     win.on('hide', () => this.onNativeVisibilityChanged(win, false));
     win.on('minimize', () => this.onNativeVisibilityChanged(win, false));
-    win.on('enter-full-screen', () => this.reconcileFullscreenEvent(win, 'entered'));
-    win.on('leave-full-screen', () => this.reconcileFullscreenEvent(win, 'left'));
+    win.on('enter-full-screen', () => {
+      if (win === this.winRef && !win.isDestroyed()) this.enteringNativeFullscreen = false;
+    });
+    win.on('leave-full-screen', () => {
+      if (win === this.winRef && !win.isDestroyed()) this.enteringNativeFullscreen = false;
+    });
     // index.html 的 <title>Cindy</title> 会在每次导航发出 page-title-updated，
     // 不拦截的话 Mission Control / 任务栏会把本地化标题盖回 Cindy。
     win.webContents.on('page-title-updated', (event) => {
@@ -304,92 +302,46 @@ export class ResourceUsageWindowController {
     this.clearPrewarmTimeout();
     this.clearLeaveTimeout();
     this.pendingOpen = false;
-    this.pendingLeaveGeneration = null;
-    this.fullscreenGeneration += 1;
+    if (!win.isVisible()) this.enteringNativeFullscreen = false;
+    this.visibilityGeneration += 1;
     this.setSamplingActive(win, true);
     if (win.isMinimized()) win.restore();
-    // 必须先 show，再 setFullScreen。构造时 fullscreen: true 在已有全屏窗的
-    // 同一块屏幕上会被 Electron 忽略（electron#34367）；show 之后再进全屏，
-    // 才能在 macOS 上单独占一个 Space，Cindy 那扇全屏窗继续留在原 Space。
+    // 打开时只负责显示和聚焦，不再按 owner 状态驱动 setFullScreen。
+    // macOS 沿用本窗口的原生 Space / 全屏呈现；仅关闭时显式退出全屏再隐藏。
     win.show();
     win.focus();
     this.visible = true;
-    this.syncFullscreenWithOwner(win);
   }
 
   private hideWindow(win: BrowserWindow, options: { restoreOwner?: boolean } = {}): void {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
+    this.clearLeaveTimeout();
     this.pendingOpen = false;
     this.setSamplingActive(win, false);
-    if (this.pendingLeaveGeneration !== null) {
-      if (options.restoreOwner === false) this.pendingLeaveRestoresOwner = false;
-      return;
-    }
-    const generation = this.fullscreenGeneration;
-    this.pendingLeaveRestoresOwner = options.restoreOwner !== false;
-    if (this.platform() === 'darwin' && this.needsFullscreenExit(win)) {
-      this.pendingLeaveGeneration = generation;
-      this.fullscreenTransition = 'leaving';
-      win.setFullScreen(false);
-      this.scheduleLeaveFallback(win, generation);
-      return;
-    }
-    this.pendingLeaveGeneration = generation;
-    this.finishHide(win, generation);
-  }
-
-  private needsFullscreenExit(win: BrowserWindow): boolean {
-    return (
-      win.isFullScreen() ||
-      this.fullscreenTransition === 'entering' ||
-      this.fullscreenTransition === 'entered' ||
-      this.fullscreenTransition === 'leaving'
-    );
-  }
-
-  private finishHide(win: BrowserWindow, generation: number): void {
-    if (this.pendingLeaveGeneration !== generation) {
-      if (
-        this.pendingLeaveGeneration === null &&
-        !win.isDestroyed() &&
-        (this.visible || this.pendingOpen)
-      ) {
-        this.syncFullscreenWithOwner(win);
-      }
-      return;
-    }
-    this.clearLeaveTimeout();
-    this.pendingLeaveGeneration = null;
-    const restoreOwner = this.pendingLeaveRestoresOwner;
-    this.pendingLeaveRestoresOwner = true;
-    this.fullscreenTransition = 'idle';
     if (win.isDestroyed()) return;
-    if (win.isVisible()) win.hide();
-    this.visible = false;
-    if (restoreOwner) this.focusOwnerWindow();
-  }
-
-  /**
-   * 全屏事件只描述当前原生状态，不携带请求代次。
-   * 正在关窗时等 leave 或超时；仍可见时按 owner 对账；已隐藏时忽略迟到事件。
-   */
-  private reconcileFullscreenEvent(win: BrowserWindow, event: 'entered' | 'left'): void {
-    if (win !== this.winRef || win.isDestroyed()) return;
-    if (this.pendingLeaveGeneration !== null) {
-      if (event === 'left') {
-        this.finishHide(win, this.pendingLeaveGeneration);
+    const generation = ++this.visibilityGeneration;
+    const finishHide = (): void => {
+      if (generation !== this.visibilityGeneration || win !== this.winRef || win.isDestroyed()) {
         return;
       }
-      this.fullscreenTransition = 'leaving';
+      this.visibilityGeneration += 1;
+      this.clearLeaveTimeout();
+      if (win.isVisible()) win.hide();
+      this.visible = false;
+      if (options.restoreOwner !== false) this.focusOwnerWindow();
+    };
+    if (this.platform() === 'darwin' && (this.enteringNativeFullscreen || win.isFullScreen())) {
+      win.once('leave-full-screen', finishHide);
       win.setFullScreen(false);
-      this.scheduleLeaveFallback(win, this.pendingLeaveGeneration);
+      this.leaveTimeout = setTimeout(
+        finishHide,
+        this.deps.leaveTimeoutMs ?? DEFAULT_LEAVE_TIMEOUT_MS,
+      );
+      this.leaveTimeout.unref?.();
       return;
     }
-    if (!this.visible && !this.pendingOpen) return;
-    if (event === 'entered') this.fullscreenTransition = 'entered';
-    else if (this.fullscreenTransition !== 'entering') this.fullscreenTransition = 'idle';
-    this.syncFullscreenWithOwner(win);
+    finishHide();
   }
 
   private rememberOwner(sender: WebContents): void {
@@ -402,14 +354,30 @@ export class ResourceUsageWindowController {
   private bindOwnerVisibility(owner: ResourceUsageOwnerWindow | null): void {
     if (!owner?.on) return;
     const hide = () => this.hideWithOwner();
-    owner.on('hide', hide);
-    owner.on('minimize', hide);
-    owner.on('closed', hide);
-    this.ownerHideUnsubscribers = [
-      () => this.safeOff(owner, 'hide', hide),
-      () => this.safeOff(owner, 'minimize', hide),
-      () => this.safeOff(owner, 'closed', hide),
-    ];
+    // macOS 切换独立窗口的原生全屏 Space 时，owner 可能短暂发出 hide；把它
+    // 当成“主窗口主动隐藏”会立刻 hide 正在进入全屏的资源窗口。这里把它作为进入动画
+    // 已开始的早期信号，确保 enter-full-screen 尚未到达时关闭也会先取消原生转换。
+    if (this.platform() === 'darwin') {
+      const trackFullscreenEntry = () => this.trackFullscreenEntryFromOwnerHide();
+      owner.on('hide', trackFullscreenEntry);
+      owner.on('minimize', hide);
+      owner.on('closed', hide);
+      this.ownerHideUnsubscribers = [
+        () => this.safeOff(owner, 'hide', trackFullscreenEntry),
+        () => this.safeOff(owner, 'minimize', hide),
+        () => this.safeOff(owner, 'closed', hide),
+      ];
+      return;
+    }
+    const events: Array<'hide' | 'minimize' | 'closed'> = ['hide', 'minimize', 'closed'];
+    for (const event of events) owner.on(event, hide);
+    this.ownerHideUnsubscribers = events.map((event) => () => this.safeOff(owner, event, hide));
+  }
+
+  private trackFullscreenEntryFromOwnerHide(): void {
+    const win = this.winRef;
+    if (!win || win.isDestroyed() || !win.isVisible() || win.isFullScreen()) return;
+    this.enteringNativeFullscreen = true;
   }
 
   private unbindOwnerVisibility(): void {
@@ -441,26 +409,6 @@ export class ResourceUsageWindowController {
 
   private platform(): NodeJS.Platform {
     return this.deps.platform ?? process.platform;
-  }
-
-  /**
-   * macOS 原生全屏是「每扇窗一个 Space」。从全屏 Cindy 打开监视器时，
-   * 监视器自己进全屏（新 Space），Cindy 保持全屏留在原 Space。
-   * 非全屏或非 darwin 只显示普通独立窗口。
-   */
-  private syncFullscreenWithOwner(win: BrowserWindow): void {
-    if (this.platform() !== 'darwin') return;
-    const owner = this.ownerWindow();
-    const shouldBeFullScreen = Boolean(owner?.isFullScreen());
-    if (shouldBeFullScreen) {
-      if (win.isFullScreen() || this.fullscreenTransition === 'entering') return;
-      this.fullscreenTransition = 'entering';
-      win.setFullScreen(true);
-      return;
-    }
-    if (!win.isFullScreen() && this.fullscreenTransition === 'idle') return;
-    this.fullscreenTransition = 'leaving';
-    win.setFullScreen(false);
   }
 
   private focusOwnerWindow(): void {
@@ -509,13 +457,11 @@ export class ResourceUsageWindowController {
     this.pendingOpen = false;
     this.samplingActive = false;
     this.destroyingWindow = false;
+    this.enteringNativeFullscreen = false;
     if (!options.preserveOwner) {
       this.unbindOwnerVisibility();
       this.lastOwner = null;
     }
-    this.pendingLeaveGeneration = null;
-    this.pendingLeaveRestoresOwner = true;
-    this.fullscreenTransition = 'idle';
   }
 
   private clearOpenTimeout(): void {
@@ -542,6 +488,12 @@ export class ResourceUsageWindowController {
     this.prewarmTimeout = null;
   }
 
+  private clearLeaveTimeout(): void {
+    if (!this.leaveTimeout) return;
+    clearTimeout(this.leaveTimeout);
+    this.leaveTimeout = null;
+  }
+
   private scheduleRecoveryStabilityReset(win: BrowserWindow): void {
     this.clearRecoveryStabilityTimeout();
     if (this.automaticRecoveryAttempts === 0) return;
@@ -557,24 +509,6 @@ export class ResourceUsageWindowController {
     if (!this.recoveryStabilityTimeout) return;
     clearTimeout(this.recoveryStabilityTimeout);
     this.recoveryStabilityTimeout = null;
-  }
-
-  private scheduleLeaveFallback(win: BrowserWindow, generation: number): void {
-    this.clearLeaveTimeout();
-    this.leaveTimeout = setTimeout(() => {
-      this.leaveTimeout = null;
-      if (win !== this.winRef || win.isDestroyed()) return;
-      if (this.pendingLeaveGeneration !== generation) return;
-      log.warn('resource-usage fullscreen leave timed out; hiding without leave-full-screen');
-      this.finishHide(win, generation);
-    }, this.deps.leaveTimeoutMs ?? DEFAULT_LEAVE_TIMEOUT_MS);
-    this.leaveTimeout.unref?.();
-  }
-
-  private clearLeaveTimeout(): void {
-    if (!this.leaveTimeout) return;
-    clearTimeout(this.leaveTimeout);
-    this.leaveTimeout = null;
   }
 
   private onRendererReloadStarted(win: BrowserWindow): void {

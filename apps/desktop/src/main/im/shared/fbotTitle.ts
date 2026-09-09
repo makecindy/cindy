@@ -19,7 +19,6 @@
 
 import { desktopSessionStorage } from '../../maker-host/session-storage';
 import { generateMakerSessionTitle } from '../../maker-ipc/title';
-import { readAuxiliaryModelSelection } from '../../utility-model/auxiliary-model-settings-store';
 import { broadcastSessionPatched } from './sessionBroadcast';
 
 export { broadcastSessionPatched } from './sessionBroadcast';
@@ -63,47 +62,13 @@ export async function generateAndPersistFbotTitle(
 
 /**
  * 只生成标题文本(不落库) — 供渠道自定义拼装(飞书话题标题)复用 oneshot 通道。
- * 标题 oneshot 失败(无 title target / 模型输出校验不过)时, 走 utility 链兜底
- * 再试一次 — 标题是展示层, 失败不阻塞, 但兜底能把 [飞书·话题] 0f9b9b 这类
- * 默认名救回正式话题名。
+ * 走共享辅助模型链（generateMakerSessionTitle → requestUtilityText），失败不兜底。
  */
 export async function generateImSessionTitleText(
   sessionId: string,
   seedText: string,
 ): Promise<string | null> {
-  // Preserve the route selected when this title attempt began. If the exact
-  // route fails and Settings changes while it is in flight, falling through
-  // based on the new value would silently send the same prompt to another
-  // provider.
-  const startedWithExplicitRoute = Boolean(
-    readAuxiliaryModelSelection('sessionTitleModel'),
-  );
-  const generated = (await generateMakerSessionTitle(seedText, 'claude-code', sessionId))?.trim();
-  if (generated) return generated;
-  // An explicit auxiliary model is an exact, fail-closed route. Do not hide a
-  // failure by falling through to the legacy utility-model candidate chain.
-  if (startedWithExplicitRoute) return null;
-  try {
-    // 动态 import 保持本模块的静态依赖链不继续膨胀(cindySlot 同款)。
-    const [{ requestUtilityText }, { getMaker }] = await Promise.all([
-      import('../../utility-model/oneShotCandidates.js'),
-      import('../../maker-host/index.js'),
-    ]);
-    const r = await requestUtilityText(
-      getMaker(),
-      `给下面这条消息生成一个不超过 12 个字的会话标题, 只输出标题本身:\n\n${seedText
-        .trim()
-        .slice(0, 300)}`,
-      { maxTokens: 24, timeoutMs: 12_000, reasoningEffort: 'minimal' },
-    );
-    if (r.ok) {
-      const text = r.text.trim().replace(/^["'「『]+|["'」』]+$/g, '').slice(0, 40);
-      if (text) return text;
-    }
-  } catch {
-    /* swallow — 兜底失败保持原样 */
-  }
-  return null;
+  return (await generateMakerSessionTitle(seedText, 'claude-code', sessionId))?.trim() || null;
 }
 
 /** 落库 + 广播一个已拼装好的标题(渠道 composeGeneratedTitle 的产物)。 */

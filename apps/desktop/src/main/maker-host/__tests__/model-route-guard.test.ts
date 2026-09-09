@@ -11,6 +11,7 @@ import { buildRegistry, type Catalog, type CatalogModel, type Provider } from '@
 
 import {
   checkModelRoute,
+  describeModelRouteRejection,
   materializeExclusiveProviderRoute,
   pickEnabledFallbackModel,
   resolveCurrentSetModelProviderId,
@@ -19,6 +20,26 @@ import {
   resolveSetModelGuardProviderId,
   shouldApplyExclusiveProviderReroute,
 } from '../model-route-guard.js';
+
+describe('describeModelRouteRejection', () => {
+  it('exclusive-source-unavailable 说清缺 SuperGrok/自定义源,不再冒充「设置里停用」(#3884)', () => {
+    const text = describeModelRouteRejection('exclusive-source-unavailable', 'grok-4.6', null);
+    expect(text).toContain('requires SuperGrok (xAI) or an explicitly selected custom source');
+    expect(text).not.toContain('disabled in settings');
+  });
+
+  it('其余 reason 保持既有措辞', () => {
+    expect(describeModelRouteRejection('model-disabled', 'm', null)).toBe(
+      'model "m" is disabled in settings',
+    );
+    expect(describeModelRouteRejection('explicit-source-disabled', 'm', 'p')).toBe(
+      'provider "p" is disabled for model "m" in settings',
+    );
+    expect(describeModelRouteRejection('capability-model', 'm', null)).toContain('not an agent chat model');
+    expect(describeModelRouteRejection('model-retired', 'm', null)).toContain('retired from the catalog');
+    expect(describeModelRouteRejection('payment-required', 'm', null)).toContain('requires paid access');
+  });
+});
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -112,6 +133,51 @@ describe('checkModelRoute', () => {
       { xd: false, anthropic: false },
     );
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', null)).toEqual({ kind: 'pass' });
+  });
+
+  it('付费模型实体与刷新失败后 tombstone 都拒绝 XD，且不阻断显式他源', () => {
+    const locked = buildRegistry(
+      {
+        providers: [
+          provider('xd', [model('paid-model', { availability: 'requires_payment' })]),
+          provider('anthropic', [model('paid-model')]),
+        ],
+      } as Catalog,
+      { xd: true, anthropic: true },
+      {},
+    );
+    expect(checkModelRoute(locked, 'claude-code', 'paid-model', 'xd')).toEqual({
+      kind: 'reject',
+      reason: 'payment-required',
+    });
+    expect(checkModelRoute(locked, 'claude-code', 'paid-model', null)).toEqual({
+      kind: 'reroute',
+      providerId: 'anthropic',
+      reason: 'payment-required',
+    });
+
+    const isPaymentRequiredTombstone = (providerId: string | null, modelId: string) =>
+      (providerId === null || providerId === 'xd') && modelId === 'paid-model';
+    const otherSourceOnly = buildRegistry(
+      { providers: [provider('anthropic', [model('paid-model')])] } as Catalog,
+      { anthropic: true },
+      {},
+    );
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'paid-model', 'xd', {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'payment-required' });
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'paid-model', 'anthropic', {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'pass' });
+    expect(
+      checkModelRoute([], 'claude-code', 'paid-model', null, {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'payment-required' });
   });
 
   it('能力模型(图像/视频等分组)⇒ reject capability-model(隐式与显式点名同判)', () => {

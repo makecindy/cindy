@@ -25,12 +25,19 @@ import { createDesktopOnlyConfirmationRequestId } from './desktopOnlyConfirmatio
 
 /**
  * 过户通道:attachments = 媒体文件进总仓;dir = 上行读票据;save_dir = 下行
- * 写票据;fs_write = fs 槽写 workdir 文件(会话 permission 为逐条确认档时,
+ * 写票据;reveal_path = 把 Host 已安全解析的单个媒体仓路径返回给当前 Agent;
+ * fs_write = fs 槽写 workdir 文件(会话 permission 为逐条确认档时,
  * 意识每次写入前弹卡;同目录本会话批一次,记忆在 fsSlot);workspace =
  * workspace 槽在会话 workdir 外的目录下创建/复用会话入口(2026-07-25,
  * 不过户字节,只授权"以此目录为工作区建会话")。
  */
-export type GhostGrantLane = 'attachments' | 'dir' | 'save_dir' | 'fs_write' | 'workspace';
+export type GhostGrantLane =
+  | 'attachments'
+  | 'dir'
+  | 'save_dir'
+  | 'reveal_path'
+  | 'fs_write'
+  | 'workspace';
 
 /** 确认卡上逐条展示的过户对象(路径/大小让用户看清自己在授权什么)。 */
 export interface GhostGrantFileItem {

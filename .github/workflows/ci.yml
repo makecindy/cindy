@@ -57,6 +57,13 @@ jobs:
       - name: Run test runner self-tests
         run: pnpm test:runner
 
+      # No private service checkout or secrets: exercise production clients over real
+      # loopback WebSockets with bounded fault injection. Failure blocks verify.
+      - name: Run Device Link connection integration tests
+        run: |
+          pnpm --filter desktop exec tsc --project ../../scripts/device-link/tsconfig.json
+          pnpm test:device-link
+
       - name: Check endpoint literals
         run: pnpm check:endpoints
 
@@ -140,8 +147,18 @@ jobs:
         run: pnpm install:ripgrep
 
       - name: Run client and package unit test shard
-        # 通过 pnpm 启动 runner，保留当前 pnpm 入口与 workspace 解析语义。
-        run: pnpm exec node scripts/test-workspaces.mjs --tier unit
+        # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。
+        run: pnpm run test:workspaces --tier unit
+
+      # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或两个分片。
+      - name: Run Pi manager integration tests
+        if: matrix.shard == 1
+        run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
+
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
   # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
   verify:
@@ -200,8 +217,20 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
+      # 保留 Windows 路径、进程与锁的自测覆盖，但两个分片只执行一次。
+      - name: Run Windows test runner self-tests
+        if: matrix.shard == 1
+        run: pnpm test:runner
+
       - name: Run client and package unit tests
-        run: pnpm test:unit
+        # 通过 package script 传递
+        # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
+        run: pnpm run test:workspaces --tier unit
+
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
   # 保留稳定的必需检查名，并确保任一分片失败或取消都会阻断汇总门禁。
   windows-unit:

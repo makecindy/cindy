@@ -101,6 +101,17 @@ describe('sent structured reference chips', () => {
       } satisfies AgentInputReference,
     },
     {
+      label: 'Dash Bot',
+      reference: {
+        kind: 'bot',
+        start: 0,
+        end: 5,
+        href: 'cindy://bot/bot-dash-1',
+        botId: 'bot-dash-1',
+        name: 'Dash Bot',
+      } satisfies AgentInputReference,
+    },
+    {
       label: '客户 ACME',
       reference: {
         kind: 'plugin-resource',

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ReviewRunMeta, ReviewRunOwner } from '../../../shared/reviewRun.js';
 import {
-  createRetryableReviewStartup,
+  createRetryableReviewInitialization,
   shouldFailInterruptedReview,
 } from '../reviewRunRecovery.js';
 
@@ -22,7 +22,7 @@ function running(owner?: ReviewRunOwner): ReviewRunMeta {
 }
 
 describe('Review run recovery ownership', () => {
-  it('coalesces startup reconciliation and retries after a transient failure', async () => {
+  it('coalesces on-demand initialization and retries after a transient failure', async () => {
     let rejectFirst!: (error: Error) => void;
     const firstAttempt = new Promise<void>((_resolve, reject) => {
       rejectFirst = reject;
@@ -31,7 +31,7 @@ describe('Review run recovery ownership', () => {
       .fn<() => Promise<void>>()
       .mockImplementationOnce(() => firstAttempt)
       .mockResolvedValue(undefined);
-    const ensureReady = createRetryableReviewStartup(start);
+    const ensureReady = createRetryableReviewInitialization(start);
 
     const first = ensureReady();
     const concurrent = ensureReady();

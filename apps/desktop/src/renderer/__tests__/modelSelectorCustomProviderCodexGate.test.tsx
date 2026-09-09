@@ -154,7 +154,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/state/providerModelMemory', () => ({
+vi.mock('@/state/providerModelMemory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/state/providerModelMemory')>()),
   useProviderModelMemoryVersion: () => 0,
 }));
 
@@ -205,7 +206,7 @@ describe('ModelSelector codex/ key gate scope (#1568)', () => {
       within(row).queryByText('codex/gpt-5.6-sol'),
     );
     expect(customRow).toBeTruthy();
-    expect(customRow?.getAttribute('aria-disabled')).toBe('false');
+    expect(customRow?.hasAttribute('aria-disabled')).toBe(false);
   });
 
   it('still disables XD gateway codex/ models without a saved gateway key', async () => {

@@ -1,0 +1,7 @@
+{
+  "$description": "error fixture: reference aliases a semantic token (wrong direction)",
+  "hex-ffffff": {
+    "$type": "color",
+    "$value": "{surface.surface.light}"
+  }
+}

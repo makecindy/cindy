@@ -9,6 +9,10 @@
 
 默认行为:启动**一个专属、持久、headed 的自动化浏览器**(profile 名 "Cindy"),登录态长期保留,与用户日常 Chrome 互不影响。
 
+工具支持 `browser({action:"setBackend", backend:"rsb-webview"|"external"})`,由 MCP 层调用宿主注入的 `setBackend`,复用设置页的 `setActiveBrowserBackendKind`。这是全局持久选择,影响其他任务,可能中断旧浏览器操作;不迁移 Cookie、标签页或元素引用。`status.data.backend` 明确返回实际模式。切换后重新获取状态和标签页,不能把 `start` 当成切换。非 Desktop 宿主可以不提供此能力,工具会明确返回不支持。
+
+用户可在设置 → 自动操作打开「使用我的浏览器登录态」(默认关)。打开后,host 在 `start` 前把系统 Chrome / Edge / Brave **当前 `profile.last_used`** 的 Cookies / Login Data 等 SQLite 库拷进 `browser-runtime/browser/Cindy-real/user-data/Default`(vendored `--user-data-dir` 是 `…/Cindy-real/user-data`),并把 dest `Local State` 的 `last_used` / `last_active_profiles` / `profiles_order` **改写成 Default**(原样拷贝会让 Chrome 打开空的 `Profile N`,窗口看起来已登出)。Chrome 右上角 chip **始终显示 `Cindy`**:磁盘目录必须叫 `Cindy-real`(不能叠到隔离身份 `Cindy` 上),host 通过 `displayName: "Cindy"` 传给 runtime,`launchOpenClawChrome` 用它 decorate,而不是用 map key。再用**同一只浏览器二进制**启动该目录。不 attach 日常 Chrome(Chrome 136+ 会拒绝调试默认 user-data-dir)。关掉开关即删除 `Cindy-real`,`Cindy` 隔离身份不动。失败必须 fail-closed,禁止启动一个看起来在浏览、其实全是登出的窗口。快照当凭证:不要写进日志正文、backup、device-link 或 worktree;`status` 只暴露 `{ enabled, applied, source }`,不暴露路径。快照实现在 `apps/desktop/src/main/mcp-integrations/browser-real-profile/`;chip 名例外见 `sync.mjs` 对 `chrome.ts` 的 LOCAL_PATCH。
+
 ## 2. 三层架构 + 文件清单
 
 ```
@@ -20,7 +24,7 @@ agent 调 browser 工具
   │  createBrowserMcpServer(deps).deps.getRuntime()
   ▼
 [Layer 3] desktop host          apps/desktop/src/main/mcp-integrations/browser.ts
-  │  单例 runtime = createBrowserControlRuntime({ config: buildManagedConfig() })
+  │  ExternalChromeBackend 串行化 start/stop + 每次 launch 的不可变 route config
   ▼
 [Layer 1] vendored runtime      packages/browser-control-runtime/
   │  runtime.call(request) → _generated/ 里的 vendored dispatcher
@@ -36,7 +40,11 @@ playwright-core → 托管 Chrome(Cindy profile, 持久 user-data-dir)
 
 ## 3. 配置流(以及那个静默 bug)
 
-host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ allowRfc2544BenchmarkRange:true, allowIpv6UniqueLocalRange:true }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。这两个窄开关只豁免 Surge/Clash/sing-box 等代理使用的 fake-IP DNS(`198.18.0.0/15` 与 IPv6 ULA),避免普通公网域名被误拦;localhost、RFC1918、cloud metadata、link-local 与其它 special-use 地址继续由 SSRF guard 阻断。上游 SSRF 层已经支持这两个字段,但 config resolver 尚未透传,所以 `sync.mjs` 用 fail-loud `LOCAL_PATCHES` 保留它们。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
+host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, extraArgs?, ssrfPolicy, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。**`ssrfPolicy` 按 route 分两种**:direct 启动用 `dangerouslyAllowPrivateNetwork:true`——Desktop 浏览器允许访问本机网络可达的所有 HTTP(S) 地址,包括 localhost、RFC1918、cloud metadata、link-local 与代理 fake-IP;这是明确的浏览器产品策略:Agent 的终端和页面内 JS 不受同一 Node guard 控制,不能把浏览器单独拦内网当成完整网络权限边界。proxied 启动改用**唯一**的窄 fake-IP 开关 `allowRfc2544BenchmarkRange` 加 `hostnameAllowlist`:代理路由是「只走这些公网域名、经这个出口」的显式契约,同时放开内网会和调用方刚给的 allowlist 自相矛盾,并让逐请求 DNS 校验变成唯一兜底。`198.18.0.0/15` 是 RFC 2544 基准测试保留段、不存在合法目标服务,所以豁免它只放行 Surge/Clash/sing-box 的 fake-IP DNS,触达不到真实内网。
+
+> ⚠️ **不要恢复 `allowIpv6UniqueLocalRange`。** `fc00::/7` 正是真实内网服务所在,该开关无法把它与 fake IP 区分开;开启后 public-A / private-AAAA 混合记录会先通过 PAC 的 IPv4 `dnsResolve` 检查、再以私有 AAAA 被放行,直接击穿本 route 的「只走公网域名」边界。代价是使用 IPv6 fake-IP 的机器在代理模式下不可用——这类环境请走 direct 模式,安全边界上选 fail-closed。`browser-managed-config.ts` 与 `proxy.ts` 的请求闸门必须转发**同一份**策略,否则两层会对同一 hostname 判定不一致。
+
+上游 SSRF 层已支持这些字段但 config resolver 尚未透传,所以 `sync.mjs` 用 fail-loud `LOCAL_PATCHES` 保留它们。协议校验、浏览器沙箱、网站权限和登录态隔离在两种 route 下都保留。`ExternalChromeBackend` 把 direct/proxied route 当作浏览器进程 launch state:所有外置浏览器调用进入同一串行队列,route 变化时先停旧进程,再用不可变 base config + 新 route 创建 runtime;绝不在无关调用执行中修改共享 config。启动不带 `proxyServer` 是显式 direct,配置不含 proxy flag,生成 launcher 因而保留 `--no-proxy-server`。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
 `getRuntimeConfigSourceSnapshot() ?? getRuntimeConfig()` 再取 `.browser` 拿到它。
 
 > ⚠️ **不变量(踩过的最大的坑):** `src/shim/runtime-config-snapshot.ts` 的 `getRuntimeConfigSourceSnapshot()` **必须返回 `OpenClawConfig | null`**(默认 `return null`)。它一旦返回 `{config, source}` 这种 wrapper,上面的 `?? getRuntimeConfig()` 永远短路、`.browser` 取到 `undefined`,**host 注入的整份 config 被静默丢弃、runtime 跑纯 vendored 默认值**(于是 profile 显示成上游默认名、颜色/目录全不对)。由 `src/__tests__/runtime-config-application.test.ts` 守护——别删那条测试。
@@ -46,13 +54,75 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browse
 | # | 症状 | 根因 | 铁律 |
 |---|---|---|---|
 | 1 | config 不生效 / profile 显示上游默认名 | 见 §3,`getRuntimeConfigSourceSnapshot` 返回了 wrapper | 该 shim 必须返回 `OpenClawConfig \| null` |
-| 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | `CONFIG_DIR` 是 `shim/_local/text-utils.ts` 里**模块加载即求值**的 const,读 `XDT_BROWSER_RUNTIME_DIR` | 必须在 **import runtime 之前**设好 env——靠 `browser.ts` 顶部 `import './browser-runtime-env.js'` 保持**第一行**,别重排 import(无 import-order autofix) |
+| 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | Vite 把 `@cindy/browser-control-runtime` `require()` 进 main 入口 chunk 顶部,`CONFIG_DIR` 在 `index.ts` 设置 `XDT_BROWSER_RUNTIME_DIR` **之前**就求值成 `~/.xdt-maker`。从包入口 barrel 引入刷新函数还会提前求值 `paths.ts`,`DEFAULT_INBOUND_MEDIA_DIR` 冻在旧根,随后 `saveMediaBuffer` 写到刷新后的目录、上传校验按旧 inbound root 拒绝 | `index.ts` 在最后一次 `app.setPath('userData')` 之后 pin env,并从 **`@cindy/browser-control-runtime/config-dir`** 调用 `refreshBrowserRuntimeConfigDir()`(不要从包入口 barrel 引入,那会把 generated `paths.ts` 拉进入口 chunk)。单测 `browserRuntimeDirStartup.test.ts` 锁顺序与 import 路径。`browser.ts` 顶部 `import './browser-runtime-env.js'` 仍是 vitest/非打包路径的兜底,别重排 |
 | 3 | `profile must define cdpPort or cdpUrl` | vendored 只给"名叫上游默认名"的 profile 自动分配 CDP 端口;自定义名的托管 profile 不会 | 自定义托管 profile 必须显式给 `cdpPort`(现用 18800,vendored 端口段起点) |
 | 4 | 明明给了中性/白色,Chrome 工具栏却是浑浊蓝绿 | Chrome 把 profile `color` 当 **Material-You 种子色**生成色板,不是字面色;中性/近黑种子被它和成灰蓝 | 用**高饱和**色做种子(现 `#00D9C5` TapTap teal);想要纯灰度做不到(灰度开关在不可改的 vendored decorate 里) |
-| 5 | 「打开 Agent 专用浏览器」每次开两个标签页 | `start` 本身已带初始标签页,再 `open` 在冷启动时会和它抢 | `openBrowserForLogin` 只 `start` + 尽力 `focus`,**绝不** `open` |
+| 5 | 「打开 Agent 专用浏览器」每次开两个标签页 | `start` 本身已带初始标签页;冷启动 `GET /tabs` 在 CDP 未就绪时返回 empty,再 `open` 就会和 Chrome 自己的第一页抢 | `openBrowserForLogin` 只 `start` + 尽力 `focus`,**绝不** `open`。空 tabs 是「还没连上 CDP」,不是缺窗口 |
 | 6 | profile 没有自定义头像 | Chrome 只认内置头像 / Google 账号头像,不能塞本地图 | 已知限制,接受;别为它改 vendored decorate |
 | 7 | 改了 `browser-workflow.md` 但 agent 还按旧文案 | 这份 md 经 `?raw` 静态打进**进程内** MCP server;且 agent 只在调 `list_tools` 时读 rules | 改完要 **(a) 重启桌面端**(main/package 改动不热更)+ **(b) 开新 agent 会话**(老会话 context 里是旧 rules) |
 | 8 | 远端 Codex 会话里浏览器不可用 | lizi MCP 桥接只对**本地** Codex 生效(见 §7) | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样 |
+| 9 | 代理切换后仍走旧出口 / 并发 start-stop 互相踩配置 | route 被当成普通请求参数、或运行中改共享 config | route 是进程 launch state;所有 external call 串行;不同/未知 route 必须 stop→recreate→start,失败后不得继续服务旧 route |
+| 10 | 认证代理凭据出现在进程参数、日志、结果或数据库 | 曾接受带 userinfo 的 proxy URL | **不支持认证代理**:`parseBrowserProxyServer` 见到 userinfo 直接抛错,凭据因此根本进不来。tool input 跨持久化/UI 边界前仍走同一 parser 验证,不能解析(含带凭据)的整值替换为 `[REDACTED]`。想恢复支持前先读 §4.1 的那条不变量 |
+| 11 | 开了「使用我的浏览器登录态」但窗口仍是登出 | 快照把 `last_used` 的 cookie 放进 dest `Default`,却原样拷了 `Local State`;Chrome 按 `last_used` 打开空的 `Profile N` | 写入 dest `Local State` 时必须把 `last_used` / `last_active_profiles` / `profiles_order` 改成 `Default`,`info_cache` 只留 Default(元数据从源 last_used 挪过来),并删掉 dest 里其它 `Profile N` |
+| 12 | Chrome 右上角 chip 显示 `Cindy-real` / 源 profile 名 | 磁盘 key 必须是 `Cindy-real`;vendored decorate 默认用 `profile.name`(map key)。host 只改 Local State 不够,下次 launch 会盖回去 | `profiles[Cindy-real].displayName = "Cindy"`;`launchOpenClawChrome` 用 `displayName ?? name` decorate。快照写入时也把 `info_cache.Default.name` 写成 `Cindy` |
+| 13 | 已有完全磁盘访问仍弹「需要完全磁盘访问权限」 | 第一次 enable 在 macOS 无条件跑 `guideFullDiskAccessAfterReadDenied` | 同意拷贝之后先 `probeSourceRead`(只 open 源 Local State / Cookies,不拷贝、不回路径);`readable: true` 就跳过。真正快照 `REAL_PROFILE_READ_DENIED` 仍弹。不自动打开系统设置 |
+
+### 4.1 per-start 代理不变量
+
+- `proxyServer` 只允许 `action=start`;MCP 与 neutral runtime 边界都会拒绝其它 action。
+- 支持 Chromium URI 形式的 `http`、`https`、`socks`/`socks5`、`socks4`;禁止 proxy list、`DIRECT` fallback、路径、query、fragment 与命令行注入字符。SOCKS 认证不受 Chromium 支持,带凭据直接拒绝。
+- direct→direct、proxy A→proxy A 幂等;direct↔proxy、proxy A→proxy B 必须停旧进程后重建。无法证明已运行进程 route 时按 unknown 处理并安全重启。
+- proxied 启动**只下发 `--proxy-pac-url`**,代理地址写在 PAC 的 `PROXY`/`SOCKS5` 指令里;PAC 对非 allowlist host 返回 `PROXY 0.0.0.0:0`,没有 `DIRECT` 回退,代理不可达时 Chrome 请求失败,不得回退直连。新 route 启动或认证协调器失败时立即 stop,并保持 route unknown/stopped。
+- status/start 只暴露 `{proxy:{mode,server?}}`;server 无 userinfo/query。任何异常文本进入日志或 tool result 前再走中央 redaction。
+- **认证代理不支持,且这是实测后的有意决定。** 两条路都走不通(Chrome 151 实测):
+  1. **host 侧 CDP 协调器**:Chrome 对同一 target 只把 `Fetch.authRequired` 投给**一个**
+     client;vendored 会话用 `connectOverCDP` 连接并在导航守卫里 `page.route("**")`,
+     必然赢得拦截权,协调器永远收不到挑战(双 client 实测:事件只投给后连接的那个)。
+  2. **Playwright `context.setHTTPCredentials`**:能应答代理挑战,但它是 **context 级、
+     不区分挑战来源**——页面从**自身 origin** 返回 `WWW-Authenticate: Basic` 时 origin 会
+     拿到同一份凭据(实测 origin 收到 `PROXYUSER:PROXYSECRET`)。allowlist 内页面内容不可信,
+     等于把用户的代理凭据交给被访问站点。加 `httpCredentials.origin` 也救不了:该限制对代理
+     挑战同样生效——scope 到代理等于没 scope,scope 到别处则代理 407 无人应答(实测 0 认证)。
+  因此 `parseBrowserProxyServer` **在解析边界直接拒绝带 userinfo 的 URL**:宁可响亮报错,
+  也不要启动一个"看起来配了认证代理、实际认证根本不工作"的浏览器。要恢复支持必须先找到
+  **只对代理挑战生效**的凭据通道(例如让 runtime 自己 launch 浏览器而非 `connectOverCDP`,
+  用 launch 期的 `proxy:{username,password}`),并重新做 origin 泄漏验证。
+- 调用方的原生 Agent transcript 是 host 边界之前的上游记录:Claude/Codex 可能在 Cindy 收到 MCP 请求前已持久化模型生成的原始 tool input。由于本接口现在直接拒绝带 userinfo 的 URL,正常路径下不存在可被上游 transcript 保留的代理凭据;但调用方若**尝试**传入凭据,那次尝试仍可能留在其自身 transcript 里。
+- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 target 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。
+- 后续 target 的认证安装失败要先把 host route 标成 blocked,再尝试 `Browser.close`;即使 CDP 关闭命令失败,普通调用与 `start` 仍须拒绝,直到 `stop` 被验证成功。
+- 认证协调器初始化期间的异步 target 失败不得被最终成功赋值覆盖;认证 CDP WebSocket 意外断开也必须立即把 route 标成 blocked。只有显式 dispose/stop 的主动断开可以忽略。
+- 认证启动返回前必须用 CDP 命令响应作为消息屏障,等待屏障前收到的 auto-attach 认证任务全部完成;屏障内失败时 `start` 必须失败,不能先报告代理可用再异步改成 unknown。
+- app 退出先关闭 `ExternalChromeBackend` 的新调用准入,再通过同一串行队列排空已准入调用并停止浏览器;退出清理开始后到达的 `start` 不得在 stop 后重新拉起 Chrome。
+- backend 切换/退出时只有验证 stop 成功后才能清 route、释放认证协调器并把 runtime 标成未使用;stop 失败或抛错必须保留清理所有权并进入 blocked 状态。
+- 已验证停止的 proxied runtime 不能留给 `open` 等普通动作隐式重启;清理 route 时同步换回 immutable direct runtime。路由幂等 key 必须用无碰撞 tuple 编码,不能用未转义分隔符拼接。
+- 关闭未知继承进程前不能只信任固定 loopback CDP 端口;必须通过 CDP `SystemInfo.getInfo` 同时核对受管 profile 的 `--user-data-dir` 与 `--remote-debugging-port`,身份不符或无法建立时拒绝关闭和重启。
+- **CDP 守卫身份必须跟本次 launch**:`ExternalChromeBackend` 不得把 `cdpHttpUrl` / `managedUserDataDir` 钉死成 `18800` + `browser/Cindy`。「使用我的浏览器登录态」走 `Cindy-real`,18800 被占时还会迁到 18801+。Fetch 门、liveness、adopted-close 与 fail-closed 杀进程必须在 **start 当下** 读取当前 profile 与 `cdpPort`(与 `applyManagedConfig` / `pickManagedCdpPort` 同一份);对不上就 fail closed,不要贴到残留 Chrome。
+- 继承的 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 清理仍由 vendored launcher 保持;CDP loopback 控制连接不经页面代理。
+- **`running` 是 `cdpReady`,不是进程存活。** vendored status 的 `running` 字段等于 CDP
+  readiness(`routes/basic.ts`),忙碌但活着的 Chrome 会报 `running:false`。因此
+  **`'stopped'` 永远不等于「没有进程」**。所有会拆路由、归因隐式启动、或收养陌生进程的判断
+  必须走 `external-chrome-backend.ts` 的 `resolveLiveness()`,它只返回三态:
+  `running` / `gone`(经非破坏性探针独立验证缺席)/ `unproven`。**`unproven` 一律 fail
+  closed**——保留路由并 block,直到一次已验证的 stop;对 direct 路由同样适用(清掉一条还活着的
+  direct 路由,会让下一次 start 把我们自己的浏览器当陌生进程关掉,毁掉用户标签页)。
+  passive 路径(`status`)只能用非破坏性探针,绝不能发 `Browser.close`。
+- 因 `unproven` 设的 block 是**暂时的**,浏览器恢复应答后必须清除(否则除 status/stop 外
+  永久不可用);而认证失败、stop 无法验证、restart 失败设的 block **不是**暂时的——那表示
+  路由本身不可信,只有已验证的 stop 能解除。用 `routeBlockedByUnprovenLiveness` 区分,别把
+  两者混成一个布尔。
+- 代理启动必须带 `--webrtc-ip-handling-policy=disable_non_proxied_udp`:WebRTC 走 UDP,
+  既不经 PAC 也不进 CDP `Fetch`,页面可以在「已代理」状态下用 `RTCPeerConnection` 暴露本机真实
+  IP(Chrome 151 实测:不带该 flag 会吐出 LAN IP host candidate,带上则无 candidate)。
+  注意**没有 `--force-` 前缀**——`--force-webrtc-ip-handling-policy` 会被静默忽略。
+- 代理不改变导航 SSRF 判定;fake-IP 两个既有窄豁免之外的 private/metadata/link-local 阻断不得放宽。
+- `navigate` 与 `click`/`type`/`press`/`select`/`fill`/`evaluate`/`hover`/`drag`/`scrollIntoView`/`wait` 等交互触发的主框架、子框架和延迟导航必须使用同一份 profile proxy mode + SSRF policy;不能只保护显式导航入口——凡可能触发脚本导航的交互（含 `setInputFiles` 直接上传后的 input/change 事件与 `resize` 视口变化，及交互期间经 window.open / target=_blank 打开的新 tab）都要走同一导航守卫。
+- **启动瞬间的下限由 PAC 兜底**:CDP 守卫要等 DevTools 端点起来才能 attach,持久 profile 恢复标签页/拉起 service worker 可能在这个窗口内出网。因此 proxied 启动同时下发 `--proxy-pac-url`(data: URL,base64),PAC 把 allowlist 内的 host 指向代理、其余一律返回不可达指令(**没有 DIRECT 回退**,否则会绕过代理直出);host 模式串必须 JSON 编码后再进 PAC 源码,不能字符串拼接。**不要再叠加 `--proxy-server`**:Chromium 从命令行只取一种代理模式,优先级固定为 `--no-proxy-server` > `--proxy-pac-url` > `--proxy-auto-detect` > `--proxy-server`(`ChromeCommandLinePrefStore::ApplyProxyMode`,Chrome 152 实测同 PAC 生效、fixed 代理不收任何 CONNECT),叠上去只是一条会误导读者的死配置;上游 `browser-proxy-mode.ts` 把 `--proxy-pac-url` 本身就当显式代理路由,导航守卫的 proxied 判定不依赖 `--proxy-server`。PAC 是下限不是上限,attach 之后仍由下面的 CDP 守卫逐请求执行 HTTPS + allowlist。
+- **请求级的终局判据是宿主的 lifetime CDP 守卫**(`apps/desktop/.../proxy-auth.ts`):proxied 启动一律安装,对**每个具备网络能力的** target(page / iframe / service_worker / shared_worker / worker / worklet,含启动时已存在的与 auto-attach 新建的)开 `Fetch`——拦截是 target/session 级的,漏装的 worker 会绕过闸门直出;非网络 target 只 resume 不开闸,并对每条 paused 请求执行 fail-closed 判据——仅 HTTPS 且 hostname 命中本次启动 allowlist 才 `continueRequest`,否则 `failRequest(BlockedByClient)`;无 allowlist 的 proxied 启动一律全拦。判据实现在 `proxy.ts` 的 `isBrowserProxyRequestUrlAllowedAsync`,与导航守卫共用同一套 normalize / 通配语义,两层必须同判。上面的交互级守卫是纵深防御(给调用方同步失败与 quarantine 语义),**不得**因为有请求级守卫就删掉,反之亦然。
+  - **allowlist 只是名字,必须再验 DNS 应答**:命中 allowlist 不等于目标是公网。`isBrowserProxyRequestUrlAllowedAsync` 先跑同步的名字判据(HTTPS + allowlist + 字面私网/内网名),再对通过者跑 `resolvePinnedHostnameWithPolicy`,拦掉「名字公网、解析结果指向内网」这一类(`127.0.0.1.nip.io`、rebinding 应答);解析不出来也一律 fail closed。调用这个解析时**不要**把本次 allowlist 当 `hostnameAllowlist` 传进去——那个字段是精确主机豁免,会跳过这里唯一要做的私网应答检查。判定按 hostname 缓存 30s(无缓存则每条 paused 请求都要查一次 DNS;无上限则 rebinding 应答会被永久钉住),TTL 到期必须重查。
+  - 残留信任:以上验的是**本机**的解析结果。explicit proxy 自己还会再解析一次,所以带 split-horizon DNS 的代理仍可把 allowlist 内的公网名映射到只有它够得到的地址。这是把出网委托给运营者选定代理的固有代价——也正是导航守卫在 proxied 模式下坚持要求显式 allowlist、而不肯只靠解析结果的原因。
+  - 已知边界:CDP `Fetch` **不拦截 WebSocket 握手**,故 WS 出网不由请求级守卫判定,而是由启动 PAC 兜底——Chrome 把 `ws:`/`wss:` 原样交给 PAC(已对 Chrome 151 实测),因此 PAC 必须显式放行 `wss://`(否则 allowlist 内站点的实时功能全断,且没有任何后续层能救回),并继续拦掉明文 `ws://`。改动 PAC 的 scheme 判据时**必须同时想清楚 WS**:这是唯一在管它的地方。
+  - **PAC 必须自己验 DNS 应答**:pre-attach 窗口和 WSS 都看不见 CDP 闸门,所以 PAC 在 hostname 命中 allowlist 之后还要 `dnsResolve` + `isInNet`(Netscape PAC / Chromium 实现,IPv4-only;解析失败 fail closed)。私网/特殊用途 IPv4 与 IPv6 loopback/link-local 字面量一律不可达指令;198.18.0.0/15 豁免以对齐 `allowRfc2544BenchmarkRange`。残留信任与 CDP 层相同:验的是本机解析,explicit proxy 自己还会再解析一次。
+- Settings 的“打开 Agent 专用浏览器”必须先读 `status`:已运行时只聚焦现有标签页,不能用无 `proxyServer` 的 `start` 把调用方选择的代理路由误切成直连;仅在确认 stopped 后才启动直连浏览器。**例外是 `proxy.mode === 'unknown'`**(Cindy 重启后继承了上次启动的 Chrome):此时没有任何已知路由可保护,而 backend 的 unknown-route 闸门会拒掉 `tabs`/`focus`,跳过 `start` 只会让这个按钮"成功返回但什么都没发生"。`start` 是唯一能收养/替换该进程并重装请求守卫的路径,这种情况必须执行。判据只认 `unknown`——`direct` 与 `proxied` 都是已知路由,照旧不得被直连 `start` 顶掉。
 
 ## 5. UI 开关模型(设置 →「自动操作」)
 
@@ -81,7 +151,7 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 ```
 
 - 版本锁:`upstream/browser-runtime.lock.json`(pinned commit + fs-safe 版本 + content hash)。
-- `_generated/**` 整体重生成,**永不手改**;要改行为改 `src/shim/*` 或 `sync.mjs`(vendor 集合 / import 重写)。
+- `_generated/**` 整体重生成,**永不手改**;要改行为改 `src/shim/*` 或 `sync.mjs`(vendor 集合 / import 重写 / `LOCAL_PATCHES`)。chip `displayName` 就是这种 LOCAL_PATCH,下次 sync 会按 `sync.mjs` 重新打上。
 - shim 导出契约在 `upstream/shim-spec.md`;sync 后若多出新的 `openclaw/plugin-sdk/*` import,补对应 shim。
 - 安全:SSRF / 路径包含的**决策逻辑是 vendored 的**,`src/shim/ssrf-runtime.ts` 只重写了组合这些原语的 fetch 外壳;`ssrf-guard.test.ts` 断言拦截 cloud-metadata / 私网 IP 的"牙齿"还在,削弱会挂 CI。
 - 同步后回归一遍 §4 的坑(尤其 #1 配置应用、#3 cdpPort),再跑 `runtime-config-application.test.ts` + @cindy/mcps browser 测试 + desktop `browserAvailability` 测试。

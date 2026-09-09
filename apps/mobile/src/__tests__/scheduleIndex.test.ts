@@ -6,7 +6,9 @@ import {
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
+  invalidateTransientScheduleIndexFailureFor,
   invalidateTransientScheduleIndexFailures,
+  loadLightweightSessionScheduleIndex,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
@@ -424,6 +426,33 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     },
   );
 
+  it('逐 peer 恢复只清目标设备的瞬态负缓存', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const loadA = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const loadB = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+
+    await expect(loadSessionScheduleIndexThrottled('dev-a', loadA, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await expect(loadSessionScheduleIndexThrottled('dev-b', loadB, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await Promise.resolve();
+
+    invalidateTransientScheduleIndexFailureFor('dev-b');
+    await expect(loadSessionScheduleIndexThrottled('dev-a', loadA, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await expect(loadSessionScheduleIndexThrottled('dev-b', loadB, { now })).resolves.toBeInstanceOf(Map);
+    expect(loadA).toHaveBeenCalledTimes(1);
+    expect(loadB).toHaveBeenCalledTimes(2);
+  });
+
   it('DEVICE_OFFLINE 负缓存:仅该设备 presence 恢复时失效,全局重连钩子不碰(review P1)', async () => {
     // DEVICE_OFFLINE 是逐设备状态:若挂在全局重连钩子上,B 设备的任何 rehydrate
     // 都会反复清掉仍离线的 A 设备的 30s 负缓存,请求风暴止损失效。
@@ -593,4 +622,17 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     await loadSessionScheduleIndex(maker);
     expect(maxInFlight).toBe(1);
   });
+});
+
+it('a drawer status read never replaces the full home binding cache', async () => {
+  resetScheduleIndexThrottleForTesting();
+  const full = new Map<string, RemoteSessionScheduleInfo>([['bound-no-run', {
+    scheduleId: 'a', scheduleName: 'a', unreadRunIds: [], unreadCount: 0, running: false, latestRunAt: 0,
+  }]]);
+  await loadSessionScheduleIndexThrottled('device', async () => full);
+  const invoke = vi.fn().mockResolvedValue({ runs: [] });
+  expect((await loadLightweightSessionScheduleIndex('device', invoke)).size).toBe(0);
+  const reload = vi.fn(async () => new Map<string, RemoteSessionScheduleInfo>());
+  expect(await loadSessionScheduleIndexThrottled('device', reload)).toBe(full);
+  expect(reload).not.toHaveBeenCalled();
 });

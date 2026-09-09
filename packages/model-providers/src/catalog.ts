@@ -147,6 +147,9 @@ function validateModel(
 ): void {
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
+  if (m.nativeApi !== undefined && m.nativeApi !== null) {
+    assert(isPiModelApi(m.nativeApi), `model.nativeApi invalid for '${m.id}'`);
+  }
   if (m.piApi !== undefined) {
     assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
   }
@@ -364,11 +367,13 @@ function validateProvider(p: Provider): void {
   }
   // 约束：若声明了 titleModel（标题 oneShot 用的最经济模型），它必须存在于本供应商任一
   // agent 的模型清单里 —— 防把不存在 / 拼错的 id 配进去导致运行时静默起不出标题。
-  // 豁免:动态清单供应商(全部 models 数组为空,清单运行时注入——2026-07-19 统一重构后
-  // 的 anthropic/openai/xd)无静态清单可校验,titleModel 指向的是运行时会出现的 id。
+  // 豁免:Claude/Codex 动态清单供应商在这两个 harness 下都为空时无静态清单可校验；
+  // 独立的 Pi 原生名单不应把它误判为静态 root，也不要求沿用同一 model id 命名空间。
   if (p.titleModel !== undefined) {
     assert(typeof p.titleModel === 'string' && p.titleModel.length > 0, `provider '${p.id}' titleModel must be a non-empty string`);
-    const hasStaticModels = p.agents.some((agent) => (p.models[agent] ?? []).length > 0);
+    const hasStaticModels = p.agents.some(
+      (agent) => agent !== 'pi' && (p.models[agent] ?? []).length > 0,
+    );
     if (hasStaticModels) {
       const known = p.agents.some((agent) => (p.models[agent] ?? []).some((m) => m.id === p.titleModel));
       assert(known, `provider '${p.id}' titleModel '${p.titleModel}' not found in any agent's models`);
@@ -545,6 +550,24 @@ function isValidPreset(v: unknown): v is ProviderPreset {
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
+    if (
+      r.supportsImageGeneration !== undefined &&
+      typeof r.supportsImageGeneration !== 'boolean'
+    ) {
+      return false;
+    }
+    if (r.supportsImageGeneration === true && agent !== 'codex') return false;
+    const defaultWireProtocol = r.wireProtocol ?? (agent === 'codex' ? 'openai-responses' : undefined);
+    const hasResponsesRoute =
+      defaultWireProtocol === 'openai-responses' ||
+      r.models.some((model) => {
+        if (!model || typeof model !== 'object') return false;
+        const route = (model as Record<string, unknown>).route;
+        return route && typeof route === 'object' && !Array.isArray(route)
+          ? (route as Record<string, unknown>).wireProtocol === 'openai-responses'
+          : false;
+      });
+    if (r.supportsImageGeneration === true && !hasResponsesRoute) return false;
     if (r.headers !== undefined) {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
@@ -559,12 +582,12 @@ function isValidPreset(v: unknown): v is ProviderPreset {
   return true;
 }
 
-/** 是否合法 http(s) URL（modelsUrl 归一化用）。 */
+/** 是否为不含内嵌凭据的 http(s) URL（模型发现地址归一化用）。 */
 function isHttpUrl(v: unknown): boolean {
   if (typeof v !== 'string' || v.length === 0) return false;
   try {
     const u = new URL(v);
-    return u.protocol === 'https:' || u.protocol === 'http:';
+    return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password;
   } catch {
     return false;
   }
@@ -605,7 +628,7 @@ function isLegacyAnthropicPiRuntime(
 }
 
 /**
- * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
+ * runtime.modelsUrl 非法（非 http(s) URL 或含内嵌凭据）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
  */
 function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {

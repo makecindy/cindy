@@ -8,7 +8,7 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
 
 /**
  * 聊天列表图片缩略图懒取件的接线断言(源码字符串模式,同 messageContentDesktopFirst):
- * 保证 strip → MediaPreview 的取件回调透传、payload 查看器的 image 关闭即删豁免、
+ * 保证 strip → MediaPreview 的取件回调透传、payload 查看器的 image 关闭逐出豁免、
  * 以及缩略图三态帧不被后续重构悄悄拆掉。
  */
 describe('mobile message media thumbnail wiring', () => {
@@ -66,6 +66,34 @@ describe('mobile message media thumbnail wiring', () => {
     expect(mediaPreview).not.toContain('mediaCaption');
   });
 
+  it('uses delivered media and file renderers above the pending text bubble', () => {
+    const pending = readTextLf(resolve(process.cwd(), 'src/session/PendingSendBubble.tsx'), 'utf8');
+    const pendingBranch = rendererSource.slice(
+      rendererSource.indexOf("case 'pending_send':"),
+      rendererSource.indexOf('const RenderListItemView'),
+    );
+    expect(pendingBranch).toContain('<PendingAttachmentImage');
+    expect(pendingBranch).not.toContain('previewable: true');
+    const pendingImage = rendererSource.slice(
+      rendererSource.indexOf('function PendingAttachmentImage'),
+      rendererSource.indexOf('function MediaPreview'),
+    );
+    // iOS ph:// 必须沿用相册托盘的 Expo 解码器，并从加载结果量尺寸。
+    expect(rendererSource).toContain("import { Image as ExpoImage } from 'expo-image'");
+    expect(pendingImage).toContain('<ExpoImage');
+    expect(pendingImage).toContain('contentFit="contain"');
+    expect(pendingImage).toContain('source: { width, height }');
+    expect(pendingImage).toContain('attachmentImageDisplaySize');
+    expect(pendingImage).toContain('styles.attachmentImageWrap');
+    expect(pendingImage).not.toContain('Image.getSize');
+    expect(pendingBranch).toContain('<FileChip');
+    expect(pendingBranch).toContain('<MarkdownBody');
+    expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody ?'));
+    expect(pending).toContain('item.fileNames.map(renderFile)');
+    expect(pending).not.toContain('height: 72');
+    expect(pending).not.toContain('contentFit="cover"');
+  });
+
   it('exempts images from close-time release in the payload viewer', () => {
     expect(rendererSource).toContain("remoteMedia.kind !== 'image'");
     // 查看器取件插队头;重试按钮显式 forceRefresh 穿透负缓存(挂载取件不传)
@@ -77,15 +105,23 @@ describe('mobile message media thumbnail wiring', () => {
     expect(screenSource).toContain('createRemoteMediaResolveQueue');
     expect(screenSource).toContain('.request(media, opts)');
     expect(screenSource).toContain('releaseAll()');
-    // 切 sessionId(本屏不重挂载)与退屏共用清理:释放 + 补删 + 换新队列实例
-    expect(screenSource).toContain('[sessionId, createRemoteMediaQueue, deleteRemoteMediaObject]');
-    expect(screenSource).toContain('remoteMediaQueueRef.current = createRemoteMediaQueue()');
+    // 切 sessionId(本屏不重挂载)与页面卸载共用最终清理;下次取件懒建新队列。
+    expect(screenSource).toContain('[releaseRemoteMediaQueue, sessionId]');
+    expect(screenSource).toContain('(remoteMediaQueueRef.current ??= createRemoteMediaQueue()).request(media, opts)');
+    const releaseStart = screenSource.indexOf('const releaseRemoteMedia = useCallback');
+    const releaseEnd = screenSource.indexOf('const shareLightboxImage', releaseStart);
+    const releaseBlock = screenSource.slice(releaseStart, releaseEnd);
+    expect(releaseBlock).toContain('remoteMediaQueueRef.current?.evict(sourceUrl)');
+    expect(releaseBlock).not.toContain("method: 'DELETE'");
   });
 
   it('routes image payloads to the fullscreen ImageLightbox instead of the generic modal', () => {
     expect(rendererSource).toContain("payload?.kind === 'media' && payload.media.kind === 'image'");
     expect(rendererSource).toContain('<ImageLightbox');
     expect(rendererSource).toContain('lightboxImagesForPayload(galleryImages, payload)');
+    expect(rendererSource).toContain("const imageLightboxOpen = payload?.kind === 'media' && payload.media.kind === 'image';");
+    expect(rendererSource).toContain('() => (imageLightboxOpen');
+    expect(rendererSource).toContain(': null),');
     // 旧的内嵌缩放查看器与图库箭头已退役
     expect(rendererSource).not.toContain('ZoomablePayloadImage');
     expect(rendererSource).not.toContain('message.imageZoomInButton');
@@ -93,7 +129,30 @@ describe('mobile message media thumbnail wiring', () => {
     const lightboxSource = readTextLf(resolve(process.cwd(), 'src/session/ImageLightbox.tsx'), 'utf8');
     expect(lightboxSource).toContain('message.imageLightbox');
     expect(lightboxSource).toContain('shouldDismissLightbox');
+    expect(lightboxSource).toContain('shouldCloseLightboxOnTap');
     expect(lightboxSource).toContain('Gesture.Pinch()');
+    // 单击关闭必须限制位移:RNGH Tap 默认 maxDist 无限,短拖松手会关 lightbox
+    expect(lightboxSource).toContain('maxDistance(LIGHTBOX_TAP_MAX_DISTANCE)');
+    // 自然尺寸到达后按新 contain 边界立刻重钳位移,不把 letterbox 估算的旧平移留到下次拖动
+    expect(lightboxSource).toContain('reclampLightboxPan(');
+    // 双击 withTiming 未结束时只重钳 saved 目标,不另起 withTiming 跟 scale 抢时长
+    expect(lightboxSource).toContain('if (doubleTapBusy.value)');
+    expect(lightboxSource).toContain('双击动画中只改 saved');
+    const doubleTapReclamp = lightboxSource.slice(
+      lightboxSource.indexOf('双击动画中只改 saved'),
+      lightboxSource.indexOf('const next = reclampLightboxPan(\n      translateX.value'),
+    );
+    expect(doubleTapReclamp).not.toContain('withTiming(');
+    expect(lightboxSource).toContain('if (!finished || !doubleTapBusy.value) return');
+    // 二次捏合:已有缩放时先补偿 origin,不把 origin*(1-scale) 立刻叠进画面
+    expect(lightboxSource).toContain('compensateLightboxOrigin(');
+    // origin≠0 时平移钳的是 bake 后的画面,浏览捏合与标注双指 pan 共用
+    expect(lightboxSource).toContain('clampLightboxVisualPan(');
+    // chrome 显隐走共享 motion token,不在组件里写死毫秒
+    expect(lightboxSource).toContain('duration: motionDuration.instant');
+    expect(lightboxSource).toContain('duration: motionDuration.fast');
+    // 下滑半途改捏合:fail 不走 onEnd,必须在 onFinalize 清掉 dragY/dismissY
+    expect(lightboxSource).toContain('onFinalize((_event, success)');
     // 分享按产品决策走系统分享单;expo-sharing 必须动态 import(旧构建缺原生模块)
     const screenShare = screenSource.includes("await import('expo-sharing')");
     expect(screenShare).toBe(true);

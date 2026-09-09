@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  classifyCodexError,
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
   translateErrorNotification,
@@ -118,11 +119,11 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
         source: 'codex',
       },
     ]);
@@ -165,11 +166,11 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
         source: 'codex',
       },
     ]);
@@ -205,9 +206,9 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hel', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'lo ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hel', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'lo ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
     ]);
   });
 
@@ -243,10 +244,62 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello worxd', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello worxd', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello wonderful', isFinal: true, isFullText: true },
+        data: { text: 'Hello wonderful', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
+        source: 'codex',
+      },
+    ]);
+  });
+
+  it('preserves distinct Codex message identities and completed phases', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+
+    for (const item of [
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-commentary',
+        text: 'Execution preview',
+        phase: 'commentary',
+      },
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-final',
+        text: 'Please confirm.',
+        phase: 'final_answer',
+      },
+    ]) {
+      translateItemNotification(
+        'completed',
+        { threadId: 'thread-1', turnId: 'turn-1', item },
+        q,
+        ctx,
+      );
+    }
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      {
+        type: 'text',
+        data: {
+          text: 'Execution preview',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary',
+          phase: 'commentary',
+        },
+        source: 'codex',
+      },
+      {
+        type: 'text',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
         source: 'codex',
       },
     ]);
@@ -755,6 +808,41 @@ describe('translateErrorNotification', () => {
     expect(events[0]!.data).not.toHaveProperty('reason');
   });
 
+  it('Codex 远端 compact 密文 400 走 context-overflow，交给 host 换窗而不是原样重试', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content", "message": "The encrypted content cind...9ln0 could not be verified." } }',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      reason: 'context-overflow',
+      isTerminal: true,
+    });
+  });
+
+  it('单独的 invalid_encrypted_content 不冒充超限换窗', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).not.toHaveProperty('reason');
+  });
+
   it('上下文超限终止错误带 context-overflow reason(#1429): 原样重试必败, renderer 靠它换恢复动作', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
@@ -772,6 +860,41 @@ describe('translateErrorNotification', () => {
       reason: 'context-overflow',
       isTerminal: true,
     });
+  });
+
+  it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
+    expect(classifyCodexError({
+      message: 'window full',
+      codexErrorInfo: 'contextWindowExceeded',
+    })).toMatchObject({
+      reason: 'context-overflow',
+      errorInfoTag: 'contextWindowExceeded',
+    });
+    expect(classifyCodexError({
+      message: 'The upstream declined this request.',
+      codexErrorInfo: 'serverOverloaded',
+    }).reason).toBe('upstream-overload');
+    expect(classifyCodexError({
+      message: 'stream dropped',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } },
+    }).errorInfoTag).toBe('responseStreamDisconnected');
+    expect(
+      classifyCodexError({
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+      }).reason,
+    ).toBe('context-overflow');
+    expect(
+      classifyCodexError({
+        message: 'Error running remote compact task',
+        additionalDetails: 'code=invalid_encrypted_content',
+      }).reason,
+    ).toBe('context-overflow');
+    expect(
+      classifyCodexError({
+        message: 'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }).reason,
+    ).toBeUndefined();
   });
 
   it('Codex 结构化 contextWindowExceeded tag 不依赖错误文案措辞', async () => {
@@ -1465,6 +1588,67 @@ describe('translateItemNotification commandExecution output normalization', () =
       isError: false,
     });
   });
+
+  // #3793:bwrap 沙箱初始化失败(命令从未执行)的 failed exec 追加宿主归因标注;
+  // 普通失败不受影响。
+  it('annotates a failed exec whose output is pure bwrap init diagnostics', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-sandbox',
+          command: 'ls',
+          status: 'failed',
+          aggregatedOutput: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
+          exitCode: 1,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    const fullText = (full?.data as { fullText?: string }).fullText ?? '';
+    expect(fullText).toContain('Failed RTM_NEWADDR');
+    expect(fullText).toContain('[Cindy] The Codex command sandbox (bubblewrap) failed to initialize');
+    expect(full?.data).toMatchObject({ isError: true });
+  });
+
+  it('does not annotate an ordinary failed exec', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-fail',
+          command: 'tsc',
+          status: 'failed',
+          aggregatedOutput: 'error TS2322: type mismatch\n',
+          exitCode: 2,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect((full?.data as { fullText?: string }).fullText).toBe('error TS2322: type mismatch\n');
+  });
 });
 
 describe('translateItemNotification collabAgentToolCall', () => {
@@ -2048,6 +2232,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(stableCitationBoundary('<|eo')).toBe(0);
     expect(stableCitationBoundary('<')).toBe(0);
     expect(stableCitationBoundary('  <|eos|>')).toBe(0);
+    expect(stableCitationBoundary('<|eos|><|eos|>')).toBe(0);
     expect(stableCitationBoundary('The token is <|eos|>')).toBe('The token is <|eos|>'.length);
   });
 
@@ -2088,6 +2273,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(finalizeCodexCitationText('<')).toBe('<');
     expect(finalizeCodexCitationText('<|eo')).toBe('<|eo');
     expect(finalizeCodexCitationText('<|eos|>')).toBe('');
+    expect(finalizeCodexCitationText('<|eos|><|eos|>')).toBe('');
   });
 
   it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {
@@ -2281,7 +2467,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'text',
-        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true },
+        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true, agentMessageId: 'msg-2' },
       }),
     ]);
   });

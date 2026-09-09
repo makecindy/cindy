@@ -4,6 +4,7 @@ import {
   collectGeneratedFiles,
   extractCommandOutputPathCandidates,
   extractDocumentArtifactMetadata,
+  isExplicitFailedToolResult,
 } from '../lib/generatedFiles';
 
 const WORKDIR = '/work';
@@ -11,6 +12,21 @@ const WORKDIR = '/work';
 function toolUse(toolName: string, toolInput: unknown) {
   return { role: 'tool_use', toolName, toolInput };
 }
+
+describe('isExplicitFailedToolResult', () => {
+  it('fails closed on structured error envelopes', () => {
+    expect(isExplicitFailedToolResult(JSON.stringify({ ok: false }))).toBe(true);
+    expect(isExplicitFailedToolResult(JSON.stringify({ success: false }))).toBe(true);
+    expect(isExplicitFailedToolResult(JSON.stringify({ status: 'error' }))).toBe(true);
+    expect(isExplicitFailedToolResult('<tool_use_error>denied</tool_use_error>')).toBe(true);
+  });
+
+  it('does not treat ordinary success text as a failure', () => {
+    expect(isExplicitFailedToolResult('Wrote a.md')).toBe(false);
+    expect(isExplicitFailedToolResult(JSON.stringify({ ok: true }))).toBe(false);
+    expect(isExplicitFailedToolResult(undefined)).toBe(false);
+  });
+});
 
 describe('collectGeneratedFiles', () => {
   it('turns a top-level cindy docs tool result into artifact metadata', () => {
@@ -136,6 +152,181 @@ describe('collectGeneratedFiles', () => {
     expect(extractDocumentArtifactMetadata('make_docx', input, 'not-json')).toBeUndefined();
     // 历史消息没有保存 tool_result 时仍保留兼容重建。
     expect(extractDocumentArtifactMetadata('make_docx', input)).toBeDefined();
+  });
+
+  it('does not list a file whose tool result is an explicit failure', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w-fail',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'w-fail',
+          content: JSON.stringify({ ok: false, errorCode: 'FILE_EXISTS' }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toEqual([]);
+  });
+
+  it('does not drop a created path when the later delete is wrapped as a tool_use_error', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'new.txt', content: 'hi' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+        {
+          role: 'tool_use',
+          toolName: 'file_change',
+          toolUseId: 'd1',
+          toolInput: {
+            changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'd1',
+          content: '<tool_use_error>delete new.txt</tool_use_error>',
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('drops a created path that the same turn later deletes', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'new.txt', content: 'hi' }),
+        toolUse('file_change', {
+          changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+        }),
+      ],
+      WORKDIR,
+    );
+    expect(files).toEqual([]);
+  });
+
+  it('keeps a path that is deleted and then recreated later in the same turn', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'new.txt', content: 'old' }),
+        toolUse('file_change', {
+          changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-old' }],
+        }),
+        toolUse('Write', { file_path: 'new.txt', content: 'new' }),
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('keeps a confirmed document preview while a second write is still in flight', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'make_xlsx',
+          toolUseId: 'x1',
+          toolInput: {
+            outPath: 'documents/progress.xlsx',
+            sheets: [{ name: '旧表', header: ['A'] }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'x1',
+          content: JSON.stringify({ ok: true }),
+        },
+        {
+          role: 'tool_use',
+          toolName: 'make_xlsx',
+          toolUseId: 'x2',
+          toolInput: {
+            outPath: 'documents/progress.xlsx',
+            sheets: [{ name: '新表', header: ['B'] }],
+          },
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toHaveLength(1);
+    expect(files[0].artifactConfirmed).toBe(true);
+    expect(files[0].ready).not.toBe(false);
+    expect(files[0].artifact?.preview).toMatchObject({
+      kind: 'sheet',
+      hasHeader: true,
+      rows: [['A']],
+    });
+  });
+
+  it('keeps a created path when the later delete result is an explicit failure', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'new.txt', content: 'hi' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+        {
+          role: 'tool_use',
+          toolName: 'file_change',
+          toolUseId: 'd1',
+          toolInput: {
+            changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'd1',
+          content: JSON.stringify({ ok: false, status: 'failed' }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('marks in-flight tool_use files as not ready until the result arrives', () => {
+    const inflight = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+      ],
+      WORKDIR,
+    );
+    expect(inflight).toHaveLength(1);
+    expect(inflight[0].ready).toBe(false);
+
+    const settled = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+      ],
+      WORKDIR,
+    );
+    expect(settled).toHaveLength(1);
+    expect(settled[0].ready).toBeUndefined();
   });
 
   it('collects Write (claude) and write (pi) created files', () => {
@@ -528,5 +719,101 @@ describe('extractCommandOutputPathCandidates', () => {
         "node convert.js 'inputs/source.md' --output='artifacts/result.html'",
       ),
     ).toEqual(['artifacts/result.html']);
+  });
+
+  // 真机场景:PDF 是命令转换出来的,既没有文件工具记录,输出位置也不一定在命令
+  // 文本里字面出现。下面每条转换器语义都配一条「只读输入」的反例。
+  describe('converter and headless-browser write-out semantics', () => {
+    it('takes the Chromium --print-to-pdf / --screenshot switch value', () => {
+      expect(
+        extractCommandOutputPathCandidates(
+          'chrome --headless --print-to-pdf=/work/out/report.pdf file:///work/in.html',
+        ),
+      ).toEqual(['/work/out/report.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          'chromium --headless --print-to-pdf=out/report.pdf file:///work/in.html',
+        ),
+      ).toEqual(['out/report.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless ' +
+            '--screenshot="out/shot 1.png" --window-size=1200,800 file:///work/in.html',
+        ),
+      ).toEqual(['out/shot 1.png']);
+    });
+
+    it('does not invent a Chromium artifact from reads or the unsupported spaced form', () => {
+      expect(
+        extractCommandOutputPathCandidates('chrome --headless --dump-dom file:///work/in.html'),
+      ).toEqual([]);
+      // Chrome 开关只吃 `--switch=value`;空格形态里的路径是位置参数,不会被写出。
+      expect(
+        extractCommandOutputPathCandidates('chrome --headless --print-to-pdf out/report.pdf'),
+      ).toEqual([]);
+    });
+
+    it('derives the LibreOffice --convert-to artifact from the input name', () => {
+      expect(
+        extractCommandOutputPathCandidates(
+          'soffice --headless --convert-to pdf --outdir artifacts docs/plan.docx',
+        ),
+      ).toEqual(['artifacts/plan.pdf']);
+      expect(
+        extractCommandOutputPathCandidates('libreoffice --convert-to pdf docs/plan.docx'),
+      ).toEqual(['plan.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          '/usr/bin/soffice --headless --convert-to=pdf --outdir=/work/out /work/in/plan.pptx',
+        ),
+      ).toEqual(['/work/out/plan.pdf']);
+      // 带过滤器参数的目标格式:冒号前那一段才是扩展名。多输入各出一件。
+      expect(
+        extractCommandOutputPathCandidates(
+          'soffice --headless --convert-to csv:"Text - txt - csv (StarCalc)" --outdir out/ a.xlsx b.xlsx',
+        ),
+      ).toEqual(['out/a.csv', 'out/b.csv']);
+    });
+
+    it('stays silent when LibreOffice only opens or lists a file', () => {
+      expect(extractCommandOutputPathCandidates('soffice --headless docs/plan.docx')).toEqual([]);
+      expect(extractCommandOutputPathCandidates('libreoffice --version')).toEqual([]);
+    });
+
+    it('takes the trailing positional as the wkhtmltopdf / weasyprint artifact', () => {
+      expect(extractCommandOutputPathCandidates('wkhtmltopdf in.html out/report.pdf')).toEqual([
+        'out/report.pdf',
+      ]);
+      expect(
+        extractCommandOutputPathCandidates(
+          'wkhtmltopdf --margin-top 10mm --page-size A4 docs/in.html artifacts/report.pdf',
+        ),
+      ).toEqual(['artifacts/report.pdf']);
+      expect(
+        extractCommandOutputPathCandidates('weasyprint docs/in.html artifacts/report.pdf'),
+      ).toEqual(['artifacts/report.pdf']);
+    });
+
+    it('does not treat a lone wkhtmltopdf / weasyprint input as an artifact', () => {
+      expect(extractCommandOutputPathCandidates('wkhtmltopdf --version')).toEqual([]);
+      expect(extractCommandOutputPathCandidates('weasyprint docs/in.html')).toEqual([]);
+    });
+
+    it('keeps pandoc covered by the -o output option, including the unquoted relative form', () => {
+      expect(
+        extractCommandOutputPathCandidates('pandoc docs/plan.md -o artifacts/plan.pdf'),
+      ).toEqual(['artifacts/plan.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          'pandoc docs/plan.md --output=artifacts/plan.docx --standalone',
+        ),
+      ).toEqual(['artifacts/plan.docx']);
+      // 同一 gap 的另一半:未加引号的重定向目标。
+      expect(extractCommandOutputPathCandidates('node gen.js > out/result.json')).toEqual([
+        'out/result.json',
+      ]);
+      // 反例:pandoc 只读输入,没有 -o 就没有候选。
+      expect(extractCommandOutputPathCandidates('pandoc docs/plan.md --to=html')).toEqual([]);
+    });
   });
 });

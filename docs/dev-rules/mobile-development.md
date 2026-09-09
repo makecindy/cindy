@@ -14,6 +14,17 @@ pnpm mobile:sim:start
 pnpm mobile:sim:whoami
 ```
 
+Windows 下 `mobile:sim:start` 还会复用或启动 `cindy-api36` Android AVD，等待系统启动完成，
+并为 Metro 端口建立 `adb reverse`。中国大陆版的一键入口名称带有明确区域限定：
+
+```bash
+pnpm mobile:sim:start:cn
+```
+
+可用 `-- --avd <name>` 选择其它 AVD；只需 Metro 时传 `-- --no-emulator`。脚本从
+`ANDROID_SDK_ROOT`、`ANDROID_HOME` 或 Windows 标准 Android Studio SDK 目录解析工具，
+不要求把 `adb`、`emulator` 加进 `PATH`。
+
 修改原生依赖、Expo 原生配置，或切换到尚未安装对应开发包的区域时，重新构建：
 
 ```bash
@@ -23,7 +34,8 @@ pnpm mobile:sim:start -- --region=cn
 ```
 
 不传 `--region` 的日常入口默认运行 Cindy（Global）；中国大陆版必须显式传
-`--region=cn`。发布构建继续要求显式指定 region。
+`--region=cn`，或使用名称已明确限定区域的 `mobile:sim:start:cn`。发布构建继续要求显式
+指定 region。
 
 不要用临时 Metro、端口探测或手工修改 `.env` 代替这些脚本。多 worktree、原生构建、
 登录态和日志排查见 `apps/mobile/docs/simulator-debugging.md`。

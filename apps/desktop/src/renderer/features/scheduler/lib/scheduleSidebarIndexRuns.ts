@@ -1,4 +1,4 @@
-import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleRun, SchedulerInflightRunPolicy } from '@cindy/maker-scheduler';
 
 /** Sidebar 聚合索引用的轻量 run wire 形态，由 main 侧 SQLite 查询直接返回。 */
 export interface ScheduleSidebarIndexRun {
@@ -23,10 +23,38 @@ export interface ScheduleSidebarIndexRun {
  * 一致。通知抑制标记的对账必须靠它区分「`runs` 里查不到某条 run」的两种含义:已结束并
  * 被清理,还是自删除场景下 run 行已随 schedule 级联删除、run 却仍在跑
  * (见 `scheduler.listInflightRunIds` 的注释)。
+ *
+ * `inflightPolicies` 是同一批 in-flight run 的展示策略(是否静默、绑了哪个 session)。
+ * hook 晚挂或事件丢失时用它重建从未建成的 silenced / schedulerOwned 标记。
  */
 export interface ScheduleSidebarIndexSnapshot {
   runs: ScheduleSidebarIndexRun[];
   inflightRunIds: string[];
+  inflightPolicies: SchedulerInflightRunPolicy[];
+}
+
+/**
+ * 同一 session 可能同时返回最新映射和更早的未读 run。需要 Automation 归属的入口
+ * 必须按 projection 的 (firedAt, runId) 规则取最新一条，不能依赖数组顺序或 find()。
+ */
+export function findLatestSidebarIndexRunForSession(
+  runs: readonly ScheduleSidebarIndexRun[],
+  sessionId: string,
+): ScheduleSidebarIndexRun | undefined {
+  let latest: ScheduleSidebarIndexRun | undefined;
+  for (const run of runs) {
+    if (run.sessionId !== sessionId) continue;
+    const firedAt = run.firedAt ?? Number.NEGATIVE_INFINITY;
+    const latestFiredAt = latest?.firedAt ?? Number.NEGATIVE_INFINITY;
+    if (
+      latest === undefined ||
+      firedAt > latestFiredAt ||
+      (firedAt === latestFiredAt && run.runId > latest.runId)
+    ) {
+      latest = run;
+    }
+  }
+  return latest;
 }
 
 export async function loadScheduleSidebarIndexSnapshot(): Promise<ScheduleSidebarIndexSnapshot> {
@@ -36,7 +64,11 @@ export async function loadScheduleSidebarIndexSnapshot(): Promise<ScheduleSideba
   const raw = (await window.electronAPI.maker.schedule.listSidebarIndexRuns()) as
     | ScheduleSidebarIndexSnapshot
     | undefined;
-  return { runs: raw?.runs ?? [], inflightRunIds: raw?.inflightRunIds ?? [] };
+  return {
+    runs: raw?.runs ?? [],
+    inflightRunIds: raw?.inflightRunIds ?? [],
+    inflightPolicies: raw?.inflightPolicies ?? [],
+  };
 }
 
 /** 只要 run 列表的调用方(侧栏卡片、未读计数等)继续用这个。 */

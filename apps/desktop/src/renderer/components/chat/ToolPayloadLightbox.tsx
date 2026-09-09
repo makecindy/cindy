@@ -31,6 +31,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 
 import { DiffView } from './DiffView';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
+import type { DiffDetails } from '@/lib/agent-actions/diffStats';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { revealRemoteChatFile } from '@/lib/remoteFileOpen';
@@ -42,6 +43,8 @@ export type ToolDiffSegment =
       oldString: string;
       newString: string;
       label?: string;
+      /** Pair-level analysis shared with the compact row when available. */
+      analysis?: DiffDetails;
     }
   | {
       key: string;
@@ -53,6 +56,9 @@ export interface ToolDiffFile {
   key: string;
   filePath: string;
   diffs: ToolDiffSegment[];
+  /** Full source segments used by Copy; rendering may be bounded separately. */
+  copyDiffs?: ToolDiffSegment[];
+  omittedDiffCount?: number;
 }
 
 export type ToolPayloadMode =
@@ -215,11 +221,12 @@ export function ToolPayloadLightbox({
         text = payload.files
           .map((file) => {
             const fileHead = payload.files.length > 1 ? `--- ${file.filePath} ---\n` : '';
-            const body = file.diffs
+            const copiedDiffs = file.copyDiffs ?? file.diffs;
+            const body = copiedDiffs
               .map((diff, index) => {
                 const diffHead =
-                  file.diffs.length > 1
-                    ? `--- ${diff.label ?? `Edit ${index + 1}/${file.diffs.length}`} ---\n`
+                  copiedDiffs.length > 1
+                    ? `--- ${diff.label ?? `Edit ${index + 1}/${copiedDiffs.length}`} ---\n`
                     : '';
                 if ('rawDiff' in diff) return `${diffHead}${diff.rawDiff}`;
                 return `${diffHead}--- old\n${diff.oldString}\n+++ new\n${diff.newString}`;
@@ -440,11 +447,28 @@ export function ToolPayloadLightbox({
                         {'rawDiff' in diff ? (
                           <MarkdownDiffBlock raw={diff.rawDiff} />
                         ) : (
-                          <DiffView oldString={diff.oldString} newString={diff.newString} />
+                          <DiffView
+                            oldString={diff.oldString}
+                            newString={diff.newString}
+                            analysis={diff.analysis}
+                          />
                         )}
                       </div>
                     ))
                   )}
+                  {file.omittedDiffCount ? (
+                    <span
+                      data-diff-omitted-count={file.omittedDiffCount}
+                      className="text-12 text-[var(--msg-tool-card-chevron)]"
+                      aria-label={t('chat.lightbox.omittedDiffSegments', {
+                        count: file.omittedDiffCount,
+                      })}
+                    >
+                      {t('chat.lightbox.omittedDiffSegments', {
+                        count: file.omittedDiffCount,
+                      })}
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>

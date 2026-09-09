@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 import {
@@ -9,6 +10,21 @@ import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 
 export type InstalledGhostManifestParse =
   | { ok: true; manifest: GhostManifest; legacyManualIgnored: boolean }
+  | { ok: false; reason: string };
+
+export interface InstalledGhostManifestSnapshot {
+  manifest: GhostManifest;
+  legacyManualIgnored: boolean;
+  /** SHA-256 of the exact ghost.json bytes read from disk. */
+  rawManifestSha256: string;
+  /** Exact normalized shape emitted by the released v0.1.61 v2 validator. */
+  releasedLegacyDigestFormat: unknown;
+  /** Historical normalized projections; migration is their only consumer. */
+  legacyDigestFormats: readonly unknown[];
+}
+
+export type InstalledGhostManifestSnapshotRead =
+  | { ok: true; snapshot: InstalledGhostManifestSnapshot }
   | { ok: false; reason: string };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -40,10 +56,44 @@ export function readInstalledGhostManifest(
   dir: string,
   maxBytes: number,
 ): InstalledGhostManifestParse {
+  const result = readInstalledGhostManifestSnapshot(dir, maxBytes);
+  return result.ok
+    ? {
+        ok: true,
+        manifest: result.snapshot.manifest,
+        legacyManualIgnored: result.snapshot.legacyManualIgnored,
+      }
+    : result;
+}
+
+/**
+ * Read the installed ghost.json once and derive every identity projection from
+ * that same Buffer. Consumers must not pair this result with a second manifest
+ * read: doing so would reopen a validate-one-file/use-another TOCTOU window.
+ */
+export function readInstalledGhostManifestSnapshot(
+  dir: string,
+  maxBytes: number,
+): InstalledGhostManifestSnapshotRead {
   try {
     const bytes = readBoundedFileNoFollowSync(path.join(dir, 'ghost.json'), maxBytes);
     if (bytes === null) return { ok: false, reason: 'manifest is not a bounded regular file' };
-    return parseInstalledGhostManifest(JSON.parse(bytes.toString('utf8')) as unknown);
+    const raw = JSON.parse(bytes.toString('utf8')) as unknown;
+    const parsed = parseInstalledGhostManifest(raw);
+    if (!parsed.ok) return parsed;
+    const current = parsed.manifest;
+    const legacy = ghostManifestToLegacyV2DigestFormat(current, raw);
+    return {
+      ok: true,
+      snapshot: {
+        manifest: current,
+        legacyManualIgnored: parsed.legacyManualIgnored,
+        rawManifestSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+        releasedLegacyDigestFormat: legacy,
+        legacyDigestFormats:
+          JSON.stringify(current) === JSON.stringify(legacy) ? [current] : [current, legacy],
+      },
+    };
   } catch {
     return { ok: false, reason: 'manifest could not be read' };
   }
@@ -54,16 +104,6 @@ export function readInstalledGhostManifestDigestFormats(
   dir: string,
   maxBytes: number,
 ): unknown[] {
-  try {
-    const bytes = readBoundedFileNoFollowSync(path.join(dir, 'ghost.json'), maxBytes);
-    if (bytes === null) return [];
-    const raw = JSON.parse(bytes.toString('utf8')) as unknown;
-    const parsed = parseInstalledGhostManifest(raw);
-    if (!parsed.ok) return [];
-    const current = parsed.manifest;
-    const legacy = ghostManifestToLegacyV2DigestFormat(current, raw);
-    return JSON.stringify(current) === JSON.stringify(legacy) ? [current] : [current, legacy];
-  } catch {
-    return [];
-  }
+  const result = readInstalledGhostManifestSnapshot(dir, maxBytes);
+  return result.ok ? [...result.snapshot.legacyDigestFormats] : [];
 }

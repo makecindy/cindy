@@ -5,6 +5,7 @@
  */
 
 import { createLogger } from '../logger';
+import type { SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 const log = createLogger('learn-host:hub-reference');
 const MAX_REFERENCE_FILES = 40;
@@ -33,9 +34,9 @@ interface HubFilesResult {
 }
 
 export interface HubSkillReferenceReader {
-  info(slug: string): Promise<HubInfoResult>;
-  readPublishedFile(params: { name: string; path: string }): Promise<HubFileResult>;
-  getPublishedFiles(params: { name: string }): Promise<HubFilesResult>;
+  info(slug: string, catalogScope?: SkillhubCatalogScope): Promise<HubInfoResult>;
+  readPublishedFile(params: { name: string; path: string; catalogScope?: SkillhubCatalogScope }): Promise<HubFileResult>;
+  getPublishedFiles(params: { name: string; catalogScope?: SkillhubCatalogScope }): Promise<HubFilesResult>;
 }
 
 export interface HubSkillReferenceOmission {
@@ -54,12 +55,13 @@ export interface HubSkillReference {
 export async function fetchHubSkillReference(
   marketService: HubSkillReferenceReader,
   slug: string,
+  catalogScope?: SkillhubCatalogScope,
 ): Promise<HubSkillReference | null> {
-  const infoRes = await marketService.info(slug);
+  const infoRes = await marketService.info(slug, catalogScope);
   if (!('info' in infoRes) || !infoRes.info) return null;
 
   const fileRes = await marketService
-    .readPublishedFile({ name: slug, path: 'SKILL.md' })
+    .readPublishedFile({ name: slug, path: 'SKILL.md', catalogScope })
     .catch(() => null);
   if (!fileRes || fileRes.file.truncated) return null;
   // 主 SKILL.md 同样吃单文件上限(Greptile review):server 未标 truncated 但超
@@ -83,7 +85,7 @@ export async function fetchHubSkillReference(
     }
   };
   try {
-    const listing = await marketService.getPublishedFiles({ name: slug });
+    const listing = await marketService.getPublishedFiles({ name: slug, catalogScope });
     let consideredReferenceFiles = 0;
     for (const meta of listing.files) {
       if (meta.path === 'SKILL.md') continue;
@@ -101,7 +103,7 @@ export async function fetchHubSkillReference(
         continue;
       }
       const one = await marketService
-        .readPublishedFile({ name: slug, path: meta.path })
+        .readPublishedFile({ name: slug, path: meta.path, catalogScope })
         .catch(() => null);
       if (!one) {
         pushOmission(meta.path, 'file read failed');

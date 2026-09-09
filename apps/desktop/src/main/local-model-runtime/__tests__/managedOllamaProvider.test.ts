@@ -75,6 +75,26 @@ describe('managed Ollama model identity', () => {
     expect(saved.runtimes.pi?.models.map((model) => model.id)).not.toContain('gone-local');
   });
 
+  it.each(['Remote catalog name', 'glm-4.7-flash:latest'])(
+    'preserves the resolved name %s through import and projection sync',
+    async (name) => {
+      let existing = providerWith('glm-4.7-flash:latest');
+      vi.mocked(getCustomProvider).mockImplementation(async () => existing);
+      vi.mocked(updateCustomProvider).mockImplementation(async (_id, next) => {
+        existing = next as typeof existing;
+        return next;
+      });
+      await upsertManagedOllamaModel({ id: 'glm-4.7-flash:latest', name });
+      for (const runtime of Object.values(existing.runtimes)) {
+        expect(runtime.models[0].name).toBe(name);
+      }
+      await syncManagedOllamaAgentProjections();
+      for (const runtime of Object.values(existing.runtimes)) {
+        expect(runtime.models[0].name).toBe(name);
+      }
+    },
+  );
+
   it('does not write when the captured owner is no longer active', async () => {
     const existing = providerWith('glm-4.7-flash');
     vi.mocked(getCustomProvider).mockResolvedValue(existing);

@@ -147,6 +147,8 @@ export function SessionBranchTreeDialog({
     const active = tree?.activePathIds.includes(node.id) === true;
     const leaf = tree?.leafId === node.id;
     const branching = node.children.length > 1;
+    // Pi groups the first continuation after a fork once; later single-child
+    // continuations stay aligned. A nested fork adds one level, not both.
     const childBranchDepth = branching
       ? branchDepth + 1
       : justBranched && branchDepth > 0

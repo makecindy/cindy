@@ -198,6 +198,31 @@ describe('terminalErrorText', () => {
     expect(terminalErrorText({})).toBe('[object Object]');
   });
 
+  it('工具循环终态只输出渠道安全文案, 不泄漏内部分类', () => {
+    const text = terminalErrorText({
+      message: 'tool_use_loop_detected: missing_required_field',
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+
+    expect(text).toContain('无效的工具调用');
+    expect(text).toContain('3 次失败');
+    expect(text).not.toContain('tool_use_loop_detected');
+    expect(text).not.toContain('missing_required_field');
+  });
+
+  it('缺失或越界的 toolLoop 详情仍回落到通用安全文案', () => {
+    const text = terminalErrorText({
+      message: 'tool_use_loop_detected: secret_internal_hint',
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'secret_internal_kind', count: 999999999 },
+    });
+
+    expect(text).toContain('重复调用工具次数过多');
+    expect(text).not.toContain('secret_internal_hint');
+    expect(text).not.toContain('secret_internal_kind');
+  });
+
   /**
    * Auto 档审阅器故障同样走非终止 error。渠道侧原来对这类一律静默 —— Slack /
    * Telegram 上的用户只看到工具接连被拒、没有原因(codex P1 of #1574)。

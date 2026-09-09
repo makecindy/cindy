@@ -58,7 +58,9 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   #editor {
     color: var(--text); caret-color: var(--focus);
     font-size: ${COMPOSER_TEXT_FONT_SIZE}px; line-height: ${COMPOSER_TEXT_LINE_HEIGHT}px;
-    min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: var(--max-height);
+    /* The native frame sets the viewport on UI, without a JS config roundtrip.
+       Keep natural content height so scrollHeight still measures short drafts. */
+    min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: min(var(--max-height), 100vh);
     overflow-y: auto; outline: none;
     padding: ${composerTextPadding.top}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px ${composerTextPadding.bottom}px;
     white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text;
@@ -118,6 +120,8 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   applyConfig(config);
 
   let applying = false;
+  let reportUserSelection = false;
+  let documentId = 0;
   let composing = false;
   let lastSignature = '';
   let pasteRequestSequence = 0;
@@ -173,9 +177,25 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     const element = makeNode(node);
     return node.type === 'text' ? [element] : [element, makeCaretAnchor()];
   };
+  const flattenDomNodes = (nodes) => {
+    const elements = [];
+    (nodes || []).forEach((node) => {
+      makeDomNodes(node).forEach((element) => elements.push(element));
+    });
+    return elements;
+  };
   const render = (documentValue, focusAfter) => {
+    // Programmatic DOM replace (inserting a directory chip, applying a draft)
+    // can drop compositionend. If composing stays true, later input is visible
+    // but never posted, so the send button stays disabled.
+    composing = false;
     applying = true;
-    root.replaceChildren(...(documentValue.nodes || []).flatMap(makeDomNodes));
+    reportUserSelection = false;
+    // Android WebView 85 lacks the modern child-replacement API; use legacy DOM primitives.
+    const fragment = document.createDocumentFragment();
+    flattenDomNodes(documentValue.nodes).forEach((node) => fragment.appendChild(node));
+    while (root.firstChild) root.removeChild(root.firstChild);
+    root.appendChild(fragment);
     applying = false;
     lastSignature = JSON.stringify(readDocument());
     reportHeight();
@@ -224,16 +244,80 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     walk(root, nodes);
     return { version: 1, nodes };
   };
-  const reportHeight = () => post({ type: 'height', height: Math.min(config.maxHeight, Math.max(${COMPOSER_SINGLE_LINE_HEIGHT}, root.scrollHeight)) });
+  // Count prefixes without cloning DOM or decoding atom payloads. Native owns
+  // each atom's projected length, including long pasted text and titled links.
+  const prefixAt = (container, offset) => {
+    let textLength = 0, atomCount = 0, lastText = false, stopped = false;
+    const addText = (text, end, rawText) => {
+      let length = end;
+      if (!rawText) for (let at = text.indexOf(CARET_ANCHOR); at >= 0 && at < end; at = text.indexOf(CARET_ANCHOR, at + 1)) length--;
+      textLength += length;
+      if (length) lastText = true;
+    };
+    const visit = (parent, rawText = false) => {
+      const children = parent.childNodes;
+      for (let index = 0; index < children.length; index++) {
+        if (parent === container && index === offset) { stopped = true; return; }
+        const child = children[index];
+        if (child.nodeType === Node.TEXT_NODE) {
+          const text = child.nodeValue || '';
+          addText(text, child === container ? offset : text.length, rawText);
+          if (child === container) { stopped = true; return; }
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          // walk serializes slash spans via textContent, without block/BR separators.
+          if (rawText || child.classList.contains('slash')) {
+            visit(child, true);
+            if (stopped) return;
+            continue;
+          }
+          if (child.classList.contains('atom')) { atomCount++; lastText = false; continue; }
+          if (child.tagName === 'BR') { textLength++; lastText = true; continue; }
+          const beforeText = textLength, beforeAtoms = atomCount;
+          visit(child);
+          if (stopped) return;
+          if (/^(DIV|P|LI)$/.test(child.tagName) && index < children.length - 1
+            && (textLength !== beforeText || atomCount !== beforeAtoms || lastText)) {
+            textLength++; lastText = true;
+          }
+        }
+      }
+      if (parent === container) stopped = true;
+    };
+    visit(root);
+    return { textLength, atomCount };
+  };
+  const reportSelection = () => {
+    if (applying || composing || !reportUserSelection) return;
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return;
+    post({ type: 'selection', documentId,
+      before: prefixAt(range.startContainer, range.startOffset),
+      through: prefixAt(range.endContainer, range.endOffset) });
+  };
+  document.addEventListener('selectionchange', reportSelection);
+  ['touchstart', 'mousedown', 'keydown', 'input'].forEach((name) => {
+    root.addEventListener(name, () => { reportUserSelection = true; });
+  });
+  let lastReportedHeight = null;
+  const reportHeight = () => {
+    const height = Math.min(config.maxHeight, Math.max(${COMPOSER_SINGLE_LINE_HEIGHT}, root.scrollHeight));
+    // Viewport resizing can notify every frame without changing content height.
+    if (height === lastReportedHeight) return;
+    lastReportedHeight = height;
+    post({ type: 'height', height });
+  };
   const notify = () => {
     if (applying || composing) return;
     const value = readDocument();
     const signature = JSON.stringify(value);
     if (signature !== lastSignature) {
       lastSignature = signature;
-      post({ type: 'change', document: value });
+      post(Object.assign({ type: 'change', document: value }, documentId ? { documentId } : {}));
     }
     reportHeight();
+    reportSelection();
   };
   const setCaretAfter = (node, selection) => {
     const range = document.createRange();
@@ -264,6 +348,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     selection.addRange(range);
   };
   const insertAtSelection = (node) => {
+    composing = false;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) placeCaretAtEnd();
     const current = window.getSelection();
@@ -298,7 +383,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     pasteMarkers.delete(requestId);
     const marker = pending && pending.marker;
     if (!marker || !marker.parentNode) return;
-    const inserted = (Array.isArray(nodes) ? nodes : []).flatMap(makeDomNodes);
+    const inserted = flattenDomNodes(Array.isArray(nodes) ? nodes : []);
     inserted.forEach((node) => marker.parentNode.insertBefore(node, marker));
     const selection = window.getSelection();
     const trailing = pending && pending.anchor;
@@ -416,8 +501,9 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   root.addEventListener('input', notify);
   root.addEventListener('compositionstart', () => { composing = true; });
   root.addEventListener('compositionend', () => { composing = false; notify(); });
+  root.addEventListener('compositioncancel', () => { composing = false; notify(); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
-  root.addEventListener('blur', () => post({ type: 'blur' }));
+  root.addEventListener('blur', () => { reportSelection(); post({ type: 'blur' }); });
   root.addEventListener('keydown', (event) => {
     const backward = event.key === 'Backspace';
     if (!backward && event.key !== 'Delete') return;
@@ -485,8 +571,29 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   }, { passive: false });
 
   window.cindyComposer = {
-    applyDocument(value, focusAfter) { render(value, focusAfter === true); },
-    focus() { placeCaretAtEnd(); },
+    applyDocument(value, focusAfter, caret, nextDocumentId) {
+      if (Number.isSafeInteger(nextDocumentId)) documentId = nextDocumentId;
+      render(value, focusAfter === true && !caret);
+      if (!focusAfter || !caret) return;
+      root.focus();
+      const nodes = Array.from(root.childNodes).filter((node) => !isEmptyCaretAnchor(node));
+      const node = nodes[caret.nodeIndex];
+      const selection = window.getSelection();
+      if (!node || !selection) { placeCaretAtEnd(); return; }
+      reportUserSelection = true;
+      if (node.nodeType !== Node.TEXT_NODE && !node.classList.contains('slash')) {
+        setCaretAfter(node, selection);
+      } else {
+        const textNode = node.nodeType === Node.TEXT_NODE ? node : node.firstChild;
+        const range = document.createRange();
+        range.setStart(textNode, Math.min(caret.offset, (textNode.nodeValue || '').length));
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      reportSelection();
+    },
+    focus() { reportUserSelection = true; placeCaretAtEnd(); },
     blur() { root.blur(); },
     insertNode(node) { insertAtSelection(node); },
     commitPaste(requestId, nodes) { commitPaste(requestId, nodes); },

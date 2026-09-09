@@ -361,9 +361,18 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           appVersion: pending.env.appVersion,
           platform: pending.env.platform,
           arch: pending.env.arch,
+          osVersion: pending.env.osVersion,
           uiLanguage: i18n.language,
         })}
       </p>
+      {pending.env.harness && pending.env.modelId && (
+        <p className="mt-1 [overflow-wrap:anywhere] text-12 leading-tight text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.runtimeLine', {
+            harness: pending.env.harness,
+            modelId: pending.env.modelId,
+          })}
+        </p>
+      )}
 
       <label className="mt-3 flex cursor-pointer items-start gap-2 text-12 leading-snug text-[var(--chat-input-text)]">
         <input

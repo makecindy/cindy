@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAKER_EVENT_BATCH_CHANNEL } from '@cindy/device-link';
+import { MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { clampLiveRowCreatedAt } from '@/session/messagePaging';
+import { MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES } from '@/session/messageToolPayloadProjection';
 import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -133,6 +134,36 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  it('releases a large persisted tool input when the matching result is appended', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...message('tool-use', 's1'),
+      role: 'tool_use',
+      toolUseId: 'toolu-1',
+      content: {
+        input: { payload: 'x'.repeat(MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES + 1) },
+        toolName: 'WebFetch',
+        toolUseId: 'toolu-1',
+      },
+    }]);
+    expect(remoteSessionStore.getMessages('s1')[0].mobileToolInputProjection).toBeUndefined();
+
+    remoteSessionStore.appendMessage('s1', {
+      ...message('tool-result', 's1'),
+      role: 'tool_result',
+      toolUseId: 'toolu-1',
+      content: 'finished',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: { input: null, mobilePayloadProjected: true },
+      mobileToolInputProjection: {
+        projected: true,
+        toolUseMessageId: 'tool-use',
+      },
+    });
+  });
 
   it('normalizes same-timestamp messages by host rowid', () => {
     const createdAt = '2026-01-01T00:00:00.000Z';
@@ -648,6 +679,109 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionTaskUpdates('s1').size).toBe(0);
   });
 
+  it('repairs a missing streaming prefix on reopen and keeps subsequent deltas exactly once', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'live-id', ' suffix', false);
+      const snapshot = {
+        sessionId: 's1', persistId: 'live-id',
+        event: { type: 'text', data: { text: 'prefix suffix', isFinal: false, isFullText: true } },
+      };
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, snapshot);
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, snapshot);
+      pushMakerText('s1', 'live-id', ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+        content: 'prefix suffix tail', agentMeta: { isStreaming: true },
+      });
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: { ...message('host-id', 's1'), clientId: 'live-id', content: 'prefix suffix tail final' },
+      });
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, snapshot);
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s1')[0].content).toBe('prefix suffix tail final');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('still accepts a legacy final full-text event after its partial row was persisted', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...message('host-id', 's1'), clientId: 'legacy-id', content: 'partial',
+    }]);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', persistId: 'legacy-id', event: {
+        type: 'text', data: { text: 'partial completed', isFinal: true, isFullText: true },
+      },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      id: 'host-id', content: 'partial completed',
+    });
+  });
+
+  it.each([false, true])('orders the live snapshot by host time when history arrives later (existing=%s)', (existing) => {
+    vi.useFakeTimers();
+    try {
+      const oldTime = '2026-09-05T10:00:00.000Z';
+      const userTime = '2026-09-05T11:00:00.000Z';
+      const blockTime = '2026-09-05T11:00:01.000Z';
+      remoteSessionStore.setMessages('s1', [{ ...message('old', 's1'), createdAt: oldTime }]);
+      if (existing) {
+        pushMakerText('s1', 'live-id', 'suffix', false);
+        vi.runOnlyPendingTimers();
+        remoteSessionStore.mergeMessages('s1', [{ ...message('user', 's1'), role: 'user', createdAt: userTime }]);
+      }
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, {
+        sessionId: 's1', persistId: 'live-id', event: {
+          type: 'text', data: { text: 'whole suffix', isFinal: false, isFullText: true, createdAt: blockTime },
+        },
+      });
+      remoteSessionStore.mergeMessages('s1', [{ ...message('user', 's1'), role: 'user', createdAt: userTime }]);
+      pushMakerText('s1', 'live-id', ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1').map(m => m.id)).toEqual(['old', 'user', 'live-id']);
+      expect(remoteSessionStore.getMessages('s1').at(-1)).toMatchObject({
+        content: 'whole suffix tail', createdAt: blockTime, agentMeta: { isStreaming: true },
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('requests history reconciliation after a dropped push without clearing cached messages', () => {
+    const meta = session('s1', { _count: { messages: 1 } });
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
+    expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
+    // An older in-flight history response commits after the dirty notification.
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    expect(remoteSessionStore.consumePendingRefresh('s1')).toBe(true);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
+  });
+
+  it('retires a provisional time anchor even when the authoritative snapshot is identical', () => {
+    vi.useFakeTimers();
+    try {
+      const blockTime = '2026-09-05T11:00:01.000Z';
+      vi.setSystemTime(new Date(blockTime));
+      pushMakerText('s1', 'live-id', 'whole text', false);
+      vi.runOnlyPendingTimers();
+      const createdAt = remoteSessionStore.getMessages('s1')[0].createdAt;
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, {
+        sessionId: 's1', persistId: 'live-id', event: {
+          type: 'text', data: { text: 'whole text', isFinal: false, isFullText: true, createdAt },
+        },
+      });
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        updatedAt: '2026-09-05T10:00:00.000Z', userSendAt: '2026-09-05T10:00:00.000Z',
+      })]);
+      expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+        createdAt, content: 'whole text', agentMeta: { isStreaming: true },
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
   it('batches maker text deltas into one streaming assistant row', () => {
     vi.useFakeTimers();
     const notify = vi.fn();
@@ -672,6 +806,277 @@ describe('remoteSessionStore', () => {
       expect(notify).toHaveBeenCalledTimes(1);
     } finally {
       unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps message structure and home status stable across ordinary text deltas', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.enterSessionMessageDetail('s1');
+      remoteSessionStore.setMessages('s1', Array.from({ length: 2_000 }, (_, index) => ({
+        ...message(`history-${index}`, 's1'),
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      })));
+      pushMakerText('s1', 'live-tail', 'first', false);
+      vi.runOnlyPendingTimers();
+
+      const firstStructure = remoteSessionStore.getSessionMessageStructureToken('s1');
+      const homeStatusBeforeDelta = remoteSessionStore.getHomeStatusVersion();
+      const reduceSpy = vi.spyOn(Array.prototype, 'reduce');
+      const filterSpy = vi.spyOn(Array.prototype, 'filter');
+      try {
+        pushMakerText('s1', 'live-tail', ' second', false);
+        vi.runOnlyPendingTimers();
+
+        expect(reduceSpy).not.toHaveBeenCalled();
+        expect(filterSpy).not.toHaveBeenCalled();
+      } finally {
+        reduceSpy.mockRestore();
+        filterSpy.mockRestore();
+      }
+
+      expect(remoteSessionStore.getMessages('s1').at(-1)?.content).toBe('first second');
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).toBe(firstStructure);
+      expect(remoteSessionStore.getSessionMessageStructureChangedIndexes('s1')).toEqual(
+        new Set([2_000]),
+      );
+      expect(remoteSessionStore.getHomeStatusVersion()).toBe(homeStatusBeforeDelta);
+      expect(remoteSessionStore.getSessionMessagePreview('s1')).toBe('first second');
+
+      pushMakerText(
+        's1',
+        'live-tail',
+        'first second',
+        true,
+        { isStreaming: false, streaming: false },
+      );
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).not.toBe(firstStructure);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('isolates empty message structure tokens by session', () => {
+    const first = remoteSessionStore.getSessionMessageStructureToken('s1');
+    expect(remoteSessionStore.getSessionMessageStructureToken('s1')).toBe(first);
+    expect(remoteSessionStore.getSessionMessageStructureToken('s2')).not.toBe(first);
+
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    expect(remoteSessionStore.getSessionMessageStructureToken('s1')).not.toBe(first);
+  });
+
+  it('notifies only the changed session preview subscription for text deltas', () => {
+    vi.useFakeTimers();
+    const firstPreview = vi.fn();
+    const secondPreview = vi.fn();
+    const homeStatus = vi.fn();
+    const unsubscribeFirst = remoteSessionStore.subscribeSessionMessagePreview('s1', firstPreview);
+    const unsubscribeSecond = remoteSessionStore.subscribeSessionMessagePreview('s2', secondPreview);
+    const unsubscribeHomeStatus = remoteSessionStore.subscribeHomeStatus(homeStatus);
+    try {
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(32);
+
+      expect(firstPreview).toHaveBeenCalledTimes(1);
+      expect(secondPreview).not.toHaveBeenCalled();
+      expect(homeStatus).not.toHaveBeenCalled();
+    } finally {
+      unsubscribeFirst();
+      unsubscribeSecond();
+      unsubscribeHomeStatus();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the first text flush responsive and batches continuation deltas', () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+    try {
+      remoteSessionStore.enterSessionMessageDetail('s1');
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(31);
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(0);
+      expect(notify).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(notify).toHaveBeenCalledTimes(1);
+      notify.mockClear();
+
+      pushMakerText('s1', 'persist-1', ' second', false);
+      vi.advanceTimersByTime(40);
+      pushMakerText('s1', 'persist-1', ' third', false);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(notify).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(24);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first second third');
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('batches background continuation deltas more aggressively than visible detail', () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+    try {
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(32);
+      notify.mockClear();
+
+      pushMakerText('s1', 'persist-1', ' second', false);
+      vi.advanceTimersByTime(64);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(notify).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(32);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first second');
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a new session first delta accelerate an existing continuation timer', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(32);
+      pushMakerText('s1', 'persist-1', ' continuation', false);
+
+      vi.advanceTimersByTime(20);
+      pushMakerText('s2', 'persist-2', 'new session', false);
+      vi.advanceTimersByTime(31);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(remoteSessionStore.getMessages('s2')).toHaveLength(0);
+
+      vi.advanceTimersByTime(1);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first continuation');
+      expect(remoteSessionStore.getMessages('s2')[0]?.content).toBe('new session');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reuses the identity index when a streaming assistant is not the tail row', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.enterSessionMessageDetail('s1');
+      remoteSessionStore.setMessages('s1', Array.from({ length: 2_000 }, (_, index) => ({
+        ...message(`history-${index}`, 's1'),
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      })));
+      pushMakerText('s1', 'live-before-system-card', 'first', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.appendLocalSystemCard(
+        's1',
+        'context',
+        { context: 'tail card' },
+        new Date('2026-01-02T00:00:00.000Z'),
+      );
+
+      // The first non-tail delta builds the identity index. Its replacement inherits that index.
+      pushMakerText('s1', 'live-before-system-card', ' second', false);
+      vi.runOnlyPendingTimers();
+      const findIndexSpy = vi.spyOn(Array.prototype, 'findIndex');
+      try {
+        pushMakerText('s1', 'live-before-system-card', ' third', false);
+        vi.runOnlyPendingTimers();
+
+        expect(findIndexSpy).not.toHaveBeenCalled();
+        expect(remoteSessionStore.getMessages('s1').find(
+          (item) => item.clientId === 'live-before-system-card',
+        )?.content).toBe('first second third');
+      } finally {
+        findIndexSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears content-only indexes after append, prepend, final, and reset writes', () => {
+    vi.useFakeTimers();
+    let sequence = 0;
+    const establishContentOnlyDelta = (persistId: string): object => {
+      pushMakerText('s1', persistId, 'first', false);
+      vi.runOnlyPendingTimers();
+      const structureToken = remoteSessionStore.getSessionMessageStructureToken('s1');
+      pushMakerText('s1', persistId, ' second', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).toBe(structureToken);
+      expect(remoteSessionStore.getSessionMessageStructureChangedIndexes('s1').size).toBe(1);
+      return structureToken;
+    };
+    const expectStructuralReset = (previousToken: object): void => {
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).not.toBe(previousToken);
+      expect(remoteSessionStore.getSessionMessageStructureChangedIndexes('s1').size).toBe(0);
+    };
+    const nextMessage = (prefix: string, createdAt: string): RemoteMessage => {
+      sequence += 1;
+      return messageAt(`${prefix}-${sequence}`, 's1', createdAt);
+    };
+    try {
+      let previousToken = establishContentOnlyDelta('live-before-append');
+      remoteSessionStore.appendMessage(
+        's1',
+        nextMessage('append', '2026-01-02T00:00:00.000Z'),
+      );
+      expectStructuralReset(previousToken);
+
+      previousToken = establishContentOnlyDelta('live-before-prepend');
+      remoteSessionStore.mergeEarlierMessages(
+        's1',
+        [nextMessage('prepend', '2025-12-31T00:00:00.000Z')],
+      );
+      expectStructuralReset(previousToken);
+
+      previousToken = establishContentOnlyDelta('live-before-final');
+      pushMakerText('s1', 'live-before-final', 'first second', true, {
+        isStreaming: false,
+        streaming: false,
+      });
+      expectStructuralReset(previousToken);
+
+      previousToken = establishContentOnlyDelta('live-before-reset');
+      remoteSessionStore.setMessages(
+        's1',
+        [nextMessage('reset', '2026-01-03T00:00:00.000Z')],
+      );
+      expectStructuralReset(previousToken);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finalizes the previous streaming assistant when the persist id changes', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'commentary-row', 'Inspecting the workspace', false);
+      vi.runOnlyPendingTimers();
+
+      pushMakerText('s1', 'final-answer-row', 'The fix is ready', false);
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([
+        {
+          clientId: 'commentary-row',
+          content: 'Inspecting the workspace',
+          agentMeta: null,
+        },
+        {
+          clientId: 'final-answer-row',
+          content: 'The fix is ready',
+          agentMeta: { isStreaming: true },
+        },
+      ]);
+    } finally {
       vi.useRealTimers();
     }
   });
@@ -1812,6 +2217,47 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('rejects late paging whose anchor was removed by a concurrent latest-window refresh', () => {
+    const old = messageAt('old-anchor', 's1', '2026-01-01T09:00:00.000Z');
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    remoteSessionStore.setMessages('s1', [old]);
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('late-old-page', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { before: old.id })).toBe(false);
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [], { before: old.id })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor']);
+    // Paging again from the surviving anchor fills the actual gap and may extend coverage.
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [old], { before: latest.id })).toBe(true);
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['old-anchor', 'new-anchor']);
+  });
+
+  it('does not join a late disjoint latest response to a newer verified window', () => {
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('stale-latest', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { moreBeyondWindow: true });
+    const tail = messageAt('live-tail', 's1', '2026-01-01T11:00:00.000Z');
+    remoteSessionStore.appendMessage('s1', tail);
+    remoteSessionStore.setLatestMessageWindow('s1', [tail], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor', 'live-tail']);
+  });
+
+  it('does not certify a gap when paging before an unverified older island', () => {
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    const island = messageAt('island', 's1', '2026-01-01T09:00:00.000Z');
+    remoteSessionStore.setMessages('s1', [latest]);
+    remoteSessionStore.mergeMessages('s1', [island]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('old-page', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { before: island.id });
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor']);
+  });
+
   it('用户「加载更早」翻出来的历史在满页重连时保留（已验证连续）', () => {
     // 回归(#1210 review):只凭"最新页满页"就清空更早的行,会把用户一路翻出来的历史与滚动锚点
     // 一起丢掉,而且补齐也不会拉回(裁完窗口里已没有内部跳变可发现)。「加载更早」是沿 before 从
@@ -2791,6 +3237,52 @@ describe('remoteSessionStore', () => {
     });
 
     expect(remoteSessionStore.getSessions()[0].title).toBe('New');
+  });
+
+  it('fences an older whole-list snapshot after created/patched pushes per device', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'Old' })]);
+    const dev1Epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    const dev2Epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-2');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 's1',
+      patch: { title: 'New' },
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', dev1Epoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-2', dev2Epoch)).toBe(true);
+
+    const afterPatch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:created', { sessionId: 's2' });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', afterPatch)).toBe(false);
+
+    const beforeReset = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeReset)).toBe(false);
+  });
+
+  it('fences an older whole-list snapshot after valid session usage pushes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+
+    const beforeSpend = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 1.23,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeSpend)).toBe(false);
+
+    const beforeTokens = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: 45_000,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeTokens)).toBe(false);
+
+    const beforeInvalid = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: -1,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeInvalid)).toBe(true);
   });
 
   it('mirrors goal status pushes per session and clears on null goal', () => {
@@ -4490,6 +4982,21 @@ describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)',
 describe('任务消息内存治理', () => {
   beforeEach(() => remoteSessionStore.clear());
 
+  it('补读结果区分已接受的相同窗口与失效代际或过旧窗口', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const first = remoteSessionStore.enterSessionMessageDetail('s1');
+    const latest = [messageAt('latest', 's1', '2026-09-08T00:00:00.000Z')];
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('old', 's1', '2026-09-07T00:00:00.000Z'),
+    ], { authority: first })).toBe(false);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', first);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['latest']);
+  });
+
   const manyMessages = (sessionId: string, count: number): RemoteMessage[] =>
     Array.from({ length: count }, (_, index) => messageAt(
       `${sessionId}-m-${index}`,
@@ -4687,6 +5194,54 @@ describe('任务消息内存治理', () => {
     expect(total).toBeLessThanOrEqual(800);
     expect(remoteSessionStore.getMessages('s0')).toHaveLength(100);
     expect(sessions.slice(1).some((item) => remoteSessionStore.getMessages(item.id).length === 0)).toBe(true);
+  });
+
+  it('notifies an evicted session preview subscriber when another session exceeds the LRU budget', () => {
+    const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
+    const previewChanged = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribeSessionMessagePreview('s0', previewChanged);
+    try {
+      remoteSessionStore.setMessages('s0', manyMessages('s0', 100));
+      expect(remoteSessionStore.getSessionMessagePreview('s0')).toBeDefined();
+      previewChanged.mockClear();
+
+      for (const item of sessions.slice(1)) {
+        remoteSessionStore.setMessages(item.id, manyMessages(item.id, 100));
+      }
+
+      expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+      expect(previewChanged).toHaveBeenCalledTimes(1);
+      expect(remoteSessionStore.getSessionMessagePreview('s0')).toBeUndefined();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('regular 字节 LRU 会计入深层容器中的大字符串', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s0'), session('s1')]);
+    const currentAuthority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('current', 's1')], { authority: currentAuthority });
+
+    // 同一字符串引用复用四次,避免测试本身额外分配 72 MiB;逻辑 payload 序列化后
+    // 仍会产生四份内容。旧 depth=3 截断会在 chunks 外层直接按 64 bytes 低估。
+    const chunk = 'x'.repeat(9 * 1024 * 1024);
+    const deepPayload = {
+      level1: {
+        level2: {
+          level3: {
+            chunks: [chunk, chunk, chunk, chunk],
+          },
+        },
+      },
+    };
+    remoteSessionStore.setMessages('s0', [{
+      ...message('deep', 's0'),
+      content: deepPayload,
+    }]);
+
+    expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['current']);
   });
 
   it('regular LRU 只淘汰可重取正文，不丢尚未落盘的本地系统卡', () => {

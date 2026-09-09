@@ -19,7 +19,9 @@ import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
-import { usageModelKey, usageRankColor, usageRankOf } from '@/components/new-chat/usagePalette';
+import { usageModelKey, usageRankOf } from '@/components/new-chat/usagePalette';
+
+import { usageHistoryModelColor } from './usageHistoryColors';
 
 const WINDOW_DAYS = 30;
 const CHART_HEIGHT_PX = 96;
@@ -45,6 +47,11 @@ function shiftDayKeyLocal(dayKey: string, deltaDays: number): string {
   return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
+function parseDayKeyLocal(dayKey: string): Date {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1);
+}
+
 /** 与 UsageDailyBars 同一套刻度算法, 保证两张图的刻度密度一致。 */
 function niceTicks(max: number): number[] {
   if (!(max > 0)) return [];
@@ -60,13 +67,29 @@ export function UsageTokenBars({
   modelDaily,
   colorOrder,
   todayKey,
+  selectedDay,
+  highlightRecentWeek = false,
+  onDayClick,
 }: {
   modelDaily: UsageHistoryModelDay[];
   /** 前 N 名模型 key (payload.models 排序), 决定分段与图例配色。 */
   colorOrder: string[];
   todayKey: string;
+  selectedDay?: string | null;
+  /** Visual emphasis only; a multi-day range does not select individual buttons. */
+  highlightRecentWeek?: boolean;
+  onDayClick?: (day: string) => void;
 }): React.JSX.Element {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      }),
+    [i18n.language],
+  );
 
   const bars = useMemo(() => {
     const segsByDay = new Map<string, Map<number, DaySegment>>();
@@ -107,16 +130,17 @@ export function UsageTokenBars({
   }, [modelDaily, colorOrder, todayKey, t]);
 
   const ticks = niceTicks(bars.max);
+  const recentWeekStart = shiftDayKeyLocal(todayKey, -6);
 
   return (
     <div className="flex gap-1.5" style={{ height: CHART_HEIGHT_PX }}>
       {/* Y 轴 token 刻度 (有数据才显示; 宽度固定避免数字位数变化引起布局抖动) */}
       {ticks.length > 0 && (
-        <div className="relative w-[30px] shrink-0">
+        <div className="relative w-[4.5ch] shrink-0 text-11 tabular-nums">
           {ticks.map((v) => (
             <span
               key={v}
-              className="absolute right-0 translate-y-1/2 text-10 leading-none tabular-nums text-[var(--text-tertiary)]"
+              className="absolute right-0 translate-y-1/2 text-11 leading-none tabular-nums text-[var(--text-tertiary)]"
               style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
             >
               {formatCompactTokens(v)}
@@ -133,46 +157,73 @@ export function UsageTokenBars({
             style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
           />
         ))}
-        <div className="absolute inset-0 flex items-end gap-[3px]">
-          {bars.list.map((b) => {
-            const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
-            const height = b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
-            const titleLines = [
-              `${b.day} · ${
+        <div className="absolute inset-0">
+          <div className="usage-token-plot flex h-full items-end gap-[3px]">
+            {bars.list.map((b) => {
+              const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
+              const visualHeight =
+                b.tokens > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
+              const hitHeight = Math.max(24, visualHeight);
+              const usageSummary =
                 b.tokens > 0
                   ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
-                  : t('usageHistory.heatmap.emptyCell')
-              }`,
-              ...b.segments.map(
-                (s) =>
-                  `${s.label}: ${t('usageDashboard.tokensOnly', {
-                    tokens: formatCompactTokens(s.tokens),
-                  })}`,
-              ),
-            ];
-            return (
-              <div
-                key={b.day}
-                title={titleLines.join('\n')}
-                // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                className="flex min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-[2px]"
-                style={{
-                  height,
-                  backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
-                }}
-              >
-                {[...b.segments].reverse().map((s) => (
-                  <div
-                    key={s.rank}
+                  : t('usageHistory.heatmap.emptyCell');
+              const titleLines = [
+                `${b.day} · ${usageSummary}`,
+                ...b.segments.map(
+                  (s) =>
+                    `${s.label}: ${t('usageDashboard.tokensOnly', {
+                      tokens: formatCompactTokens(s.tokens),
+                    })}`,
+                ),
+              ];
+              return (
+                <button
+                  key={b.day}
+                  type="button"
+                  title={titleLines.join('\n')}
+                  aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
+                  aria-pressed={selectedDay === b.day}
+                  data-highlighted={
+                    selectedDay
+                      ? selectedDay === b.day
+                      : highlightRecentWeek && b.day >= recentWeekStart
+                  }
+                  onClick={() => onDayClick?.(b.day)}
+                  disabled={!onDayClick}
+                  // Hit height remains generous without forcing the visible bar width.
+                  // Target sizing remains pending after cancellation of the added date entry.
+                  className="usage-chart-target group relative flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-none border-0 bg-transparent p-0 outline-none"
+                  style={{ height: hitHeight }}
+                >
+                  <span
+                    aria-hidden="true"
+                    data-usage-mark="usage-token-bar"
+                    className="usage-chart-mark pointer-events-none flex shrink-0 flex-col overflow-hidden rounded-[2px]"
                     style={{
-                      height: `${(s.tokens / b.tokens) * 100}%`,
-                      backgroundColor: usageRankColor(s.rank),
+                      height: visualHeight,
+                      width: 'calc(100% + var(--usage-mark-grow, 0px))',
+                      backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
                     }}
+                  >
+                    {[...b.segments].reverse().map((s) => (
+                      <span
+                        key={s.rank}
+                        style={{
+                          height: `${(s.tokens / b.tokens) * 100}%`,
+                          backgroundColor: usageHistoryModelColor(s.rank, colorOrder.length),
+                        }}
+                      />
+                    ))}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="usage-chart-indicator pointer-events-none absolute inset-0 rounded-[2px]"
                   />
-                ))}
-              </div>
-            );
-          })}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

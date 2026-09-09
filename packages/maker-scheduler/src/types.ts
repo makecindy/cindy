@@ -87,6 +87,16 @@ export interface SchedulerRuntimeSnapshot {
 }
 
 /**
+ * 一条 in-flight run 的展示 / 通知策略快照。给 renderer 在事件丢失或 hook 晚挂时
+ * 重建 silenced / schedulerOwned 标记。sessionId 在绑定之前可能为空。
+ */
+export interface SchedulerInflightRunPolicy {
+  runId: string;
+  sessionId?: string;
+  silenced: boolean;
+}
+
+/**
  * script 模式可授予的全量能力目录(单一来源):引擎校验白名单与 UI 能力选择器
  * 都从这里枚举——host 侧新增能力时只改这一处,选择器自动出现新项。
  */
@@ -180,7 +190,7 @@ export interface Schedule {
   jobType?: JobType;
   /** Release-compat tombstone：老 issue-triage 的 JSON 配置；新代码不读不写。 */
   jobConfig?: string;
-  source?: 'user' | 'project';
+  source?: 'user' | 'project' | 'bot';
   projectConfigId?: string;
   kind: ScheduleKind;
   cronExpr: string;
@@ -203,6 +213,8 @@ export interface Schedule {
    */
   intervalMs?: number;
   agentKind: AgentKind;
+  /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
+  modelAgentKind?: AgentKind;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -282,6 +294,8 @@ export interface ScheduleRun {
   costMoney?: ScheduleRunMoney;
   /** 新版区域订阅价值估算；不代表实际账单。 */
   estimatedValueMoney?: ScheduleRunMoney;
+  /** 本次 run 关联 assistant 消息的 Token 用量总和，供无法可靠计价时展示。 */
+  totalTokens?: number;
   /**
    * exact = 已确认费用（可能是实际账单，也可能是 estimate-only）；direct = 费用仅来自
    * 无法挂载消息的直接账本；mixed = 快照同时包含直接账本和消息账本；zero = 已确认零费用；
@@ -333,6 +347,8 @@ export interface CreateScheduleInput {
   /** Interval 语义间隔（毫秒）。详见 Schedule.intervalMs。 */
   intervalMs?: number;
   agentKind: AgentKind;
+  /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
+  modelAgentKind?: AgentKind;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -376,7 +392,7 @@ export interface ListFilter {
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string; silent?: boolean }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string; silenced?: boolean }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
   /**
    * In-flight run 已被标记静默。该事件早于后续 agent done/completed 收口,
    * 消费方用它抑制普通 session completion attention；completed.silenced

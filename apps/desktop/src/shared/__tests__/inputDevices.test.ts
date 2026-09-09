@@ -8,6 +8,7 @@ import {
 import {
   WORKLOUDER_CODEX_COMMAND_IDS,
   WORKLOUDER_CODEX_DEVICE,
+  WORKLOUDER_CREATOR_MICRO_2_DEVICE,
 } from '../workLouderCodex';
 
 describe('input device contract', () => {
@@ -22,5 +23,12 @@ describe('input device contract', () => {
     expect(inputDeviceHasCapability(WORKLOUDER_CODEX_DEVICE, 'task-slots')).toBe(true);
     expect(inputDeviceHasCapability(WORKLOUDER_CODEX_DEVICE, 'voice')).toBe(true);
     expect(inputDeviceHasCapability(WORKLOUDER_CODEX_DEVICE, 'lighting')).toBe(true);
+  });
+
+  it('describes Creator Micro 2 as its own adapter with the same capabilities', () => {
+    expect(WORKLOUDER_CREATOR_MICRO_2_DEVICE.id).toBe('worklouder-creator-micro-2');
+    expect(WORKLOUDER_CREATOR_MICRO_2_DEVICE.label).toBe('Work Louder Creator Micro 2');
+    expect(WORKLOUDER_CREATOR_MICRO_2_DEVICE.capabilities).toBe(WORKLOUDER_CODEX_DEVICE.capabilities);
+    expect(inputDeviceHasCapability(WORKLOUDER_CREATOR_MICRO_2_DEVICE, 'task-slots')).toBe(true);
   });
 });

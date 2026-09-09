@@ -381,6 +381,102 @@ describe('claimLegacyOwnerNamespace', () => {
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
   });
 
+  it('rechecks the canonical registry record when its backup vanishes during exchange', async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242);
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    const backupPath = `${recordPath}.bak`;
+    const recordRaw = await fs.readFile(recordPath, 'utf-8');
+    let canonicalReads = 0;
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(
+        root,
+        { isPidAlive: (pid) => pid === 4242 },
+        {
+          readFile: (file: string) => {
+            if (file === recordPath) {
+              canonicalReads += 1;
+              if (canonicalReads === 1) {
+                return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+              }
+              return Promise.resolve(recordRaw);
+            }
+            if (file === backupPath) {
+              return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+            }
+            return fs.readFile(file, 'utf-8');
+          },
+        },
+      ),
+    );
+
+    expect(canonicalReads).toBeGreaterThanOrEqual(2);
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
+  it.each([
+    ['unparseable', '{not-json'],
+    ['missing pid', '{}'],
+    ['non-numeric pid', JSON.stringify({ pid: '4242' })],
+  ])('fails closed when a registry record payload is %s', async (_label, payload) => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), payload, 'utf-8');
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, { isPidAlive: (pid) => pid === 4242 }),
+    );
+
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+    await expect(
+      fs.readFile(path.join(root, '.dev-instances', '4242.json'), 'utf-8'),
+    ).resolves.toBe(payload);
+  });
+
+  it.each([
+    ['current process', process.pid],
+    ['dead replacement', 9999],
+  ])('uses the registry filename pid when payload names the %s', async (_label, payloadPid) => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '.dev-instances', '4242.json'),
+      JSON.stringify({ schemaVersion: 1, pid: payloadPid, userDataDir: root, passive: false }),
+      'utf-8',
+    );
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, { isPidAlive: (pid) => pid === 4242 }),
+    );
+
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
   it('interrupts mid-claim when an instance registers during the move, then resumes next exclusive start', async () => {
     const root = await tempRoot();
     // LEGACY_PATHS 顺序:ghost-cindy-prefs.json 在 slack-hook.json 之前。
@@ -670,7 +766,6 @@ describe('claimLegacyOwnerNamespace', () => {
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
     await writeDevInstanceRecord(root, 4242); // isPidAlive=false → 已退出的残留
     await writeDevInstanceRecord(root, 5353, '/somewhere/else'); // 异常拷贝进来的他库记录
-    await fs.writeFile(path.join(root, '.dev-instances', 'torn.json'), '{not-json', 'utf-8');
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
@@ -3103,6 +3198,46 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
 
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
+  });
+
+  it.each([
+    ['unparseable', '{not-json'],
+    ['missing pid', '{}'],
+    ['non-numeric pid', JSON.stringify({ pid: '4242' })],
+  ])('fails closed when a shared instance registry payload is %s', async (_label, payload) => {
+    const root = await tempRoot();
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), payload, 'utf-8');
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
+  });
+
+  it.each([
+    ['current process', process.pid],
+    ['dead replacement', 9999],
+  ])('uses the registry filename pid when the shared payload names the %s', async (_label, payloadPid) => {
+    const root = await tempRoot();
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '.dev-instances', '4242.json'),
+      JSON.stringify({ schemaVersion: 1, pid: payloadPid, userDataDir: root, passive: false }),
+      'utf-8',
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
+  });
+
+  it('restores an atomic-write backup before deciding that a live instance vanished', async () => {
+    const root = await tempRoot();
+    await writeDevInstanceRecord(root, 4242);
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    await fs.rename(recordPath, `${recordPath}.bak`);
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    await expect(fs.access(recordPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${recordPath}.bak`)).rejects.toThrow();
   });
 
   it('ignores a registry pid that was reused by another app', async () => {

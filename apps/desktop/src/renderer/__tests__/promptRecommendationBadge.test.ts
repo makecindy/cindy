@@ -15,7 +15,7 @@ describe('prompt recommendation shortcut badge', () => {
     );
     expect(chatInputSource).toContain('className="min-w-0 truncate"');
     expect(chatInputSource).toContain(
-      "'pointer-events-auto ml-1 inline-flex h-4 min-w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-lg border border-current'",
+      "'pointer-events-auto ml-1 inline-flex h-4 min-w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[4px] border border-current'",
     );
     expect(chatInputSource).toContain(
       "'bg-transparent px-0.5 text-11 font-normal leading-none text-inherit'",

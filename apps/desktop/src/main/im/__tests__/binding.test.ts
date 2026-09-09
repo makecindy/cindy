@@ -183,6 +183,28 @@ describe('SqliteBindingStore single-owner reverse index', () => {
     expect(mocks.deleteWhere).not.toHaveBeenCalled();
   });
 
+  it('mirrors an externally committed detach without a second database delete', async () => {
+    const store = new SqliteBindingStore();
+    const events: BindingChangeEvent<string>[] = [];
+    store.onChange((event) => events.push(event));
+    await store.preload();
+    await store.attach(feishuIdentity, 'desktop-session');
+    mocks.deleteWhere.mockClear();
+
+    await expect(
+      store.applyPersistedDetach(feishuIdentity, 'desktop-session'),
+    ).resolves.toBe(true);
+
+    expect(store.get(feishuIdentity)).toBeNull();
+    expect(store.findByTarget('desktop-session')).toBeNull();
+    expect(mocks.deleteWhere).not.toHaveBeenCalled();
+    expect(events.at(-1)).toEqual({
+      identity: feishuIdentity,
+      value: null,
+      prevValue: 'desktop-session',
+    });
+  });
+
   it('repairs persisted duplicate targets by keeping the latest takeover', async () => {
     mocks.rows.push(
       {

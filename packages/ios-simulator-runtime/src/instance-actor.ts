@@ -1408,18 +1408,27 @@ export class IOSSimulatorInstanceActor {
         );
       }
       this.#assertMutationAllowed?.();
-      if (instance.lifecycleState === "ready") {
-        await this.#lifecycle.shutdownExact(
+      const device = await this.#lifecycle.findExact(
+        instance.simulatorUdid,
+        this.#lifecycleExitController.signal,
+      );
+      this.#throwIfLifecycleExitCancelled();
+      // Physical deletion may have succeeded before ownership persistence
+      // failed. A retry must still release that exact Cindy-owned binding.
+      if (device !== null) {
+        if (instance.lifecycleState === "ready") {
+          await this.#lifecycle.shutdownExact(
+            instance.simulatorUdid,
+            this.#lifecycleExitController.signal,
+          );
+          this.#throwIfLifecycleExitCancelled();
+        }
+        await this.#lifecycle.deleteExact(
           instance.simulatorUdid,
           this.#lifecycleExitController.signal,
         );
         this.#throwIfLifecycleExitCancelled();
       }
-      await this.#lifecycle.deleteExact(
-        instance.simulatorUdid,
-        this.#lifecycleExitController.signal,
-      );
-      this.#throwIfLifecycleExitCancelled();
       this.#cancelDetachGrace(instance.instanceId);
       return this.#store.release(instance.instanceId, instance.sessionId);
     });

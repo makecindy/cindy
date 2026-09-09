@@ -111,8 +111,12 @@ export const CLIENT_ENDPOINT_KEYS = [
   'voiceApiBaseUrl',
   // github-server(用户反馈 → 官方仓 GitHub issue 的薄代理)的 API 基址。
   'githubApiBaseUrl',
-  // skillhub-server(SkillHub 技能市场/发布 → XD hub 的 S2S 代理)的 API 基址。
+  // 旧 xd-skillhub-server 的 API 基址。已发布客户端继续消费这个字段，值不得
+  // 改指新服务；新客户端只消费下方 cindySkillHubApiBaseUrl。
   'skillhubApiBaseUrl',
+  // cindy-skill-hub-server 的 API 基址。纯增可选字段，不 bump schemaVersion：
+  // 老客户端按未知字段忽略，新客户端缺失时明确关闭云端 Skill Hub，不回退旧地址。
+  'cindySkillHubApiBaseUrl',
   // plugin-server(Plugin/Skill 市场、组织管理与发布)的 API 基址。
   'pluginApiBaseUrl',
   // 更新/hotfix 链的 CDN base(manifest-*.json / hotfix 包 / agent 二进制)。
@@ -176,6 +180,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   voiceApiBaseUrl: ['https:'],
   githubApiBaseUrl: ['https:'],
   skillhubApiBaseUrl: ['https:'],
+  cindySkillHubApiBaseUrl: ['https:'],
   pluginApiBaseUrl: ['https:'],
   cdnBaseUrl: ['https:'],
   mobileUpdateBaseUrl: ['https:'],

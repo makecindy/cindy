@@ -5,9 +5,12 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { SESSION_SOURCES } from '../../../../shared/sessionSource.js';
 import { buildDbWorkerBundle } from '../../__tests__/dbWorkerTestUtils.js';
+import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import type { DbClient } from '../DbClient.js';
 import { createDbClient } from '../DbClient.js';
+import type { SkillUsageApplyMutationArgs } from '../tx/types.js';
 
 const INIT_SQL = `
 CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -16,6 +19,40 @@ CREATE TABLE migration_history (
   file_name TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   applied_at INTEGER NOT NULL
+);
+CREATE TABLE skill_usage_sources (
+  raw_file_path TEXT PRIMARY KEY,
+  analyzer_version TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  sdk_session_id TEXT NOT NULL,
+  mtime_ms INTEGER NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  last_scanned_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT
+);
+CREATE TABLE skill_usage_exposures (
+  id TEXT PRIMARY KEY,
+  analyzer_version TEXT NOT NULL,
+  raw_file_path TEXT NOT NULL,
+  raw_line_no INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  sdk_session_id TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_path TEXT,
+  skill_document_hash TEXT,
+  exposure_content_hash TEXT NOT NULL,
+  document_hash_source TEXT NOT NULL,
+  source TEXT NOT NULL,
+  tool_use_id TEXT,
+  seen_at INTEGER NOT NULL,
+  tool_call_count INTEGER NOT NULL,
+  repeated_tool_call_count INTEGER NOT NULL,
+  tool_error_count INTEGER NOT NULL,
+  command_call_count INTEGER NOT NULL,
+  command_failure_count INTEGER NOT NULL
 );
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
@@ -40,11 +77,20 @@ CREATE TABLE sessions (
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
+  source TEXT NOT NULL DEFAULT 'desktop',
+  im_bot_context_id TEXT,
+  im_user_id TEXT,
+  remote_host_id TEXT,
+  active_turn_started_at INTEGER,
+  last_turn_ended_at INTEGER,
   workspace_kind TEXT NOT NULL DEFAULT 'project',
   codex_history_has_product_prompt INTEGER,
   codex_plan_json TEXT,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
+  list_preview TEXT,
+  list_preview_role TEXT,
+  list_message_count INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -159,6 +205,7 @@ interface TestSessionRow {
   userSendAt: number | null;
   agentKind: string;
   orcaRole: string | null;
+  source: string;
   workspaceKind: string;
   codexHistoryHasProductPrompt: boolean | null;
   parentSessionId: string | null;
@@ -178,6 +225,290 @@ describe('db worker tx handlers', () => {
       fs.rmSync(workerBundleDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { useInlineWorker: false, status: 'archived' as const },
+    { useInlineWorker: true, status: 'archived' as const },
+    { useInlineWorker: false, status: 'deleted' as const },
+    { useInlineWorker: true, status: 'deleted' as const },
+  ])(
+    'compacts one explicit $status session without scanning history (inline=$useInlineWorker)',
+    async ({ useInlineWorker, status }) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          await seedSession(client, 'historical');
+          await client.exec("UPDATE sessions SET status = 'archived' WHERE id = 'historical'");
+          const largeText = 'x'.repeat(70 * 1024);
+          const jsonText = JSON.stringify('y'.repeat(70 * 1024));
+          await client.exec(
+            `INSERT INTO messages
+              (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at)
+             VALUES
+              ('large', 'large', 's1', 'tool_result', ?, 'tool-1', NULL, 1),
+              ('json-text', 'json-text', 's1', 'tool_result', ?, 'tool-2', NULL, 2),
+              ('small', 'small', 's1', 'tool_result', ?, 'tool-3', NULL, 3),
+              ('structured', 'structured', 's1', 'tool_result', ?, 'tool-4', NULL, 4),
+              ('structured-text', 'structured-text', 's1', 'tool_result', ?, 'tool-5', NULL, 5),
+              ('subagent', 'subagent', 's1', 'tool_result', ?, 'tool-6', ?, 6),
+              ('invalid-meta', 'invalid-meta', 's1', 'tool_result', ?, 'tool-7', '{', 7),
+              ('media-text', 'media-text', 's1', 'tool_result', ?, 'tool-8', NULL, 8),
+              ('agent-task-use', 'agent-task-use', 's1', 'tool_use', ?, 'collab-tool', NULL, 9),
+              ('agent-task-result', 'agent-task-result', 's1', 'tool_result', ?, 'collab-tool', NULL, 10),
+              ('historical-large', 'historical-large', 'historical', 'tool_result', ?, 'tool-historical', NULL, 11)`,
+            [
+              largeText,
+              jsonText,
+              JSON.stringify('small'),
+              JSON.stringify({ type: 'image', data: 'x'.repeat(70 * 1024) }),
+              JSON.stringify(JSON.stringify({ xdt_image_urls: ['x'.repeat(70 * 1024)] })),
+              largeText,
+              JSON.stringify({ parentUuid: 'toolu_123' }),
+              largeText,
+              `![image](cindy-media://blobs/${'a'.repeat(64)}.png)\n${'x'.repeat(70 * 1024)}`,
+              JSON.stringify({ toolUseId: 'collab-tool', toolName: 'collab:wait', input: {} }),
+              largeText,
+              largeText,
+            ],
+          );
+          await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [status, 's1']);
+          const [expected] = await client.query<{ compactedRows: number; originalBytes: number }>(
+            `SELECT COUNT(*) AS compactedRows,
+                    SUM(length(CAST(content AS BLOB))) AS originalBytes
+               FROM messages
+              WHERE session_id = 's1'
+                AND role = 'tool_result'`,
+          );
+          expect(expected.compactedRows).toBe(9);
+
+          const result = await client.tx('toolResults.compactSession', {
+            sessionId: 's1',
+            now: 500,
+          });
+          expect(result).toEqual(expected);
+
+          const rows = await client.query<{ id: string; content: string }>(
+            `SELECT id, content
+               FROM messages WHERE role = 'tool_result' ORDER BY created_at`,
+          );
+          expect(JSON.parse(rows[0].content)).toEqual({
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: Buffer.byteLength(largeText),
+            compactedAt: 500,
+          });
+          expect(JSON.parse(rows[1].content)).toEqual({
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: Buffer.byteLength(jsonText),
+            compactedAt: 500,
+          });
+          expect(
+            rows.filter((row) => row.id !== 'historical-large' && row.content.includes('tool_result_compacted')),
+          ).toHaveLength(9);
+          expect(rows.find((row) => row.id === 'historical-large')?.content).toBe(largeText);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'compacts every tool result without parsing content or resolving its source (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        const largeText = 'x'.repeat(20 * 1024);
+        const imageUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+        const mediaContent = JSON.stringify({
+          ok: true,
+          output: largeText,
+          xdt_image_urls: [imageUrl],
+        });
+        const malformedStructured = `{"xdt_image_urls":["${imageUrl}"],"output":"${largeText}`;
+        const mediaLikePlainText = `source mentions xdt_image_urls but is not structured\n${largeText}`;
+        const markerPrefixCollision = JSON.stringify({
+          type: 'tool_result_compacted',
+          version: 1,
+          note: 'ordinary tool output',
+        });
+        const cases = [
+          ['plain', largeText, 'tool-1'],
+          ['missing-id', largeText, null],
+          ['orphan', largeText, 'missing'],
+          ['structured', JSON.stringify({ ok: true, output: largeText }), 'tool-2'],
+          ['media', mediaContent, 'tool-3'],
+          ['malformed', malformedStructured, 'tool-4'],
+          ['media-like-text', mediaLikePlainText, 'tool-5'],
+          ['data-url', `data:image/png;base64,${largeText}`, 'tool-6'],
+          ['utf8-bytes', '测'.repeat(6 * 1024), 'tool-7'],
+        ] as const;
+        for (const [index, [id, content, toolUseId]] of cases.entries()) {
+          await client.exec(
+            `INSERT INTO messages
+              (id, client_id, session_id, role, content, tool_use_id, created_at)
+             VALUES (?, ?, 's1', 'tool_result', ?, ?, ?)`,
+            [id, id, content, toolUseId, index + 1],
+          );
+        }
+        await client.exec(
+          `INSERT INTO messages
+            (id, client_id, session_id, role, content, tool_use_id, created_at)
+           VALUES
+            ('small', 'small', 's1', 'tool_result', 'small', NULL, 99),
+            ('empty', 'empty', 's1', 'tool_result', '', NULL, 100),
+            ('compacted', 'compacted', 's1', 'tool_result', ?, NULL, 101),
+            ('prefix-collision', 'prefix-collision', 's1', 'tool_result', ?, NULL, 102)`,
+          [
+            JSON.stringify({
+              type: 'tool_result_compacted',
+              version: 1,
+              originalBytes: 123,
+              compactedAt: 100,
+            }),
+            markerPrefixCollision,
+          ],
+        );
+
+        await client.exec("UPDATE sessions SET status = 'archived' WHERE id = 's1'");
+        await expect(
+          client.tx('toolResults.compactSession', {
+            sessionId: 's1',
+            now: 500,
+          }),
+        ).resolves.toEqual({
+          compactedRows: cases.length + 3,
+          originalBytes: cases.map(([, content]) => content)
+            .reduce(
+              (sum, content) => sum + Buffer.byteLength(content),
+              Buffer.byteLength('small') + Buffer.byteLength(markerPrefixCollision),
+            ),
+        });
+
+        const rows = await client.query<{ id: string; content: string }>(
+          "SELECT id, content FROM messages WHERE role = 'tool_result' ORDER BY created_at",
+        );
+        for (const [id, originalContent] of cases) {
+          expect(JSON.parse(rows.find((row) => row.id === id)!.content)).toEqual({
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: Buffer.byteLength(originalContent),
+            compactedAt: 500,
+          });
+        }
+        expect(JSON.parse(rows.find((row) => row.id === 'small')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: Buffer.byteLength('small'),
+          compactedAt: 500,
+        });
+        expect(JSON.parse(rows.find((row) => row.id === 'empty')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 0,
+          compactedAt: 500,
+        });
+        expect(JSON.parse(rows.find((row) => row.id === 'prefix-collision')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: Buffer.byteLength(markerPrefixCollision),
+          compactedAt: 500,
+        });
+        const compactedBeforeRetry = rows.map((row) => row.content);
+        expect(JSON.parse(rows.find((row) => row.id === 'compacted')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 123,
+          compactedAt: 100,
+        });
+
+        await expect(
+          client.tx('toolResults.compactSession', {
+            sessionId: 's1',
+            now: 600,
+          }),
+        ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
+        await expect(
+          client.query<{ content: string }>(
+            "SELECT content FROM messages WHERE role = 'tool_result' ORDER BY created_at",
+          ),
+        ).resolves.toEqual(compactedBeforeRetry.map((content) => ({ content })));
+      }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
+    'compacts SSH sessions and every local source while skipping restored sessions (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        const sourceSessionIds = SESSION_SOURCES.map((source) => `source-${source}`);
+        for (const id of ['ssh', 'orca', 'turn', 'restored', ...sourceSessionIds]) {
+          await seedSession(client, id);
+          await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", [id]);
+          await client.exec(
+            `INSERT INTO messages
+              (id, client_id, session_id, role, content, tool_use_id, created_at)
+             VALUES (?, ?, ?, 'tool_result', ?, ?, 1)`,
+            [
+              `message-${id}`,
+              `client-${id}`,
+              id,
+              JSON.stringify('x'.repeat(70 * 1024)),
+              `tool-${id}`,
+            ],
+          );
+        }
+        await client.exec("UPDATE sessions SET remote_host_id = 'host-1' WHERE id = 'ssh'");
+        for (const source of SESSION_SOURCES) {
+          await client.exec('UPDATE sessions SET source = ? WHERE id = ?', [
+            source,
+            `source-${source}`,
+          ]);
+        }
+        await client.exec("UPDATE sessions SET orca_role = 'lead' WHERE id = 'orca'");
+        await client.exec(
+          "UPDATE sessions SET active_turn_started_at = 10, last_turn_ended_at = 9 WHERE id = 'turn'",
+        );
+        await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'restored'");
+
+        for (const sessionId of ['restored']) {
+          await expect(
+            client.tx('toolResults.compactSession', {
+              sessionId,
+              now: 2,
+            }),
+          ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
+        }
+        for (const sessionId of [...sourceSessionIds, 'ssh', 'orca', 'turn']) {
+          await expect(
+            client.tx('toolResults.compactSession', {
+              sessionId,
+              now: 2,
+            }),
+          ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
+        }
+        const rows = await client.query<{ id: string; content: string }>(
+          'SELECT id, content FROM messages ORDER BY id',
+        );
+        expect(
+          rows.filter((row) => {
+            try {
+              return JSON.parse(row.content)?.type === 'tool_result_compacted';
+            } catch {
+              return false;
+            }
+          }).map((row) => row.id),
+        ).toEqual(
+          [
+            'message-ssh',
+            'message-orca',
+            'message-turn',
+            ...sourceSessionIds.map((id) => `message-${id}`),
+          ].sort(),
+        );
+      }, { useInlineWorker });
+    },
+  );
 
   it('codex.importMessages skips likely local duplicates and upserts imported rows', async () => {
     await withClient(async (client) => {
@@ -428,6 +759,81 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([false, true])(
+    'claude.importMessages does not restore a compacted tool result (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        const marker = JSON.stringify({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 80_000,
+          compactedAt: 500,
+        });
+        await client.exec(
+          `INSERT INTO messages
+            (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at)
+           VALUES
+            (?, ?, ?, 'tool_result', ?, ?, NULL, ?),
+            (?, ?, ?, 'tool_result', ?, ?, NULL, ?)`,
+          [
+            'existing',
+            'claude-import:8-0',
+            's1',
+            marker,
+            'tool-2',
+            3100,
+            'prefix-collision',
+            'claude-import:9-0',
+            's1',
+            '{"type":"tool_result_compacted","version":1,',
+            'tool-3',
+            3200,
+          ],
+        );
+
+        await expect(
+          client.tx('claude.importMessages', {
+            sessionId: 's1',
+            importClientIdPrefix: 'claude-import:',
+            sdkSessionId: 'sdk-1',
+            rows: [
+              {
+                lineNo: 8,
+                partIndex: 0,
+                role: 'tool_result',
+                content: 'restored full body',
+                toolUseId: 'tool-2',
+                agentMeta: null,
+                createdAt: 3100,
+              },
+              {
+                lineNo: 9,
+                partIndex: 0,
+                role: 'tool_result',
+                content: 'replacement full body',
+                toolUseId: 'tool-3',
+                agentMeta: null,
+                createdAt: 3200,
+              },
+            ],
+          }),
+        ).resolves.toEqual({ changed: 1 });
+        await expect(
+          client.queryOne<{ content: string }>(
+            'SELECT content FROM messages WHERE client_id = ?',
+            ['claude-import:8-0'],
+          ),
+        ).resolves.toEqual({ content: marker });
+        const collision = await client.queryOne<{ content: string }>(
+          'SELECT content FROM messages WHERE client_id = ?',
+          ['claude-import:9-0'],
+        );
+        expect(JSON.parse(collision!.content)).toBe('replacement full body');
+      }, { useInlineWorker });
+    },
+  );
+
   it('claude.importMessages caps oversized tool_result content at the persistence limit', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -514,6 +920,176 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([false, true])(
+    'message.insert invalidates list projection in the same transaction (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          const seedCache = () =>
+            client.exec(
+              'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+              ['keep me', 'user', 7, 's1'],
+            );
+          const readCache = () =>
+            client.queryOne(
+              'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+              ['s1'],
+            );
+
+          await seedCache();
+          await expect(
+            client.tx('message.insert', {
+              id: 'm1',
+              clientId: 'c1',
+              sessionId: 's1',
+              role: 'user',
+              content: JSON.stringify({ text: 'hi' }),
+              toolUseId: null,
+              agentMeta: null,
+              agentKind: 'cc',
+              createdAt: 1,
+              guarded: false,
+            }),
+          ).resolves.toEqual({ changes: 1 });
+          await expect(readCache()).resolves.toEqual({
+            list_preview: null,
+            list_preview_role: null,
+            list_message_count: null,
+          });
+
+          await seedCache();
+          await expect(
+            client.tx('message.insert', {
+              id: 'm2',
+              clientId: 'c2',
+              sessionId: 's1',
+              role: 'tool_result',
+              content: '[]',
+              toolUseId: 't1',
+              agentMeta: null,
+              agentKind: 'cc',
+              createdAt: 2,
+              guarded: false,
+            }),
+          ).resolves.toEqual({ changes: 1 });
+          await expect(readCache()).resolves.toEqual({
+            list_preview: 'keep me',
+            list_preview_role: 'user',
+            list_message_count: null,
+          });
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'import and treeRehydrate invalidate list projection only when messages change (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          const seedCache = async () => {
+            await client.exec(
+              'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+              ['stale preview', 'user', 4, 's1'],
+            );
+          };
+          const readCache = () =>
+            client.queryOne(
+              'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+              ['s1'],
+            );
+          const stale = {
+            list_preview: 'stale preview',
+            list_preview_role: 'user',
+            list_message_count: 4,
+          };
+          const cleared = {
+            list_preview: null,
+            list_preview_role: null,
+            list_message_count: null,
+          };
+
+          await seedCache();
+          expect(
+            await client.tx('codex.importMessages', {
+              sessionId: 's1',
+              importClientIdPrefix: 'codex-import:',
+              sdkSessionId: 'thread-1',
+              model: 'gpt-5',
+              rows: [],
+            }),
+          ).toEqual({ changed: 0 });
+          await expect(readCache()).resolves.toEqual(stale);
+
+          expect(
+            await client.tx('codex.importMessages', {
+              sessionId: 's1',
+              importClientIdPrefix: 'codex-import:',
+              sdkSessionId: 'thread-1',
+              model: 'gpt-5',
+              rows: [
+                {
+                  lineNo: 1,
+                  role: 'assistant',
+                  text: 'imported',
+                  content: 'imported',
+                  createdAt: 2000,
+                },
+              ],
+            }),
+          ).toEqual({ changed: 1 });
+          await expect(readCache()).resolves.toEqual(cleared);
+
+          await seedCache();
+          expect(
+            await client.tx('claude.importMessages', {
+              sessionId: 's1',
+              importClientIdPrefix: 'claude-import:',
+              sdkSessionId: 'sdk-1',
+              rows: [
+                {
+                  lineNo: 7,
+                  partIndex: 0,
+                  role: 'assistant',
+                  content: { text: 'hello' },
+                  toolUseId: null,
+                  agentMeta: null,
+                  createdAt: 3000,
+                },
+              ],
+            }),
+          ).toEqual({ changed: 1 });
+          await expect(readCache()).resolves.toEqual(cleared);
+
+          await seedCache();
+          await client.tx('session.treeRehydrate', {
+            sessionId: 's1',
+            now: 4000,
+            contextTokens: 1,
+            contextWindow: 200000,
+            messages: [
+              {
+                id: 'tree-1',
+                clientId: 'tree-1',
+                role: 'assistant',
+                content: JSON.stringify('active branch'),
+                toolUseId: null,
+                agentMeta: null,
+                agentKind: 'pi',
+                createdAt: 2500,
+              },
+            ],
+          });
+          await expect(readCache()).resolves.toEqual(cleared);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it.each([false, true])(
     'rewind.commit soft-deletes messages and resets session context (inline=%s)',
@@ -970,6 +1546,32 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([false, true])(
+    'sessions.setStatus rejects Bot tasks atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 'regular');
+          await seedSession(client, 'bot', { source: 'bot' });
+
+          await expect(
+            client.tx('sessions.setStatus', {
+              sessionIds: ['regular', 'bot'],
+              status: 'archived',
+            }),
+          ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+          await expect(
+            client.query('SELECT id, status FROM sessions ORDER BY id'),
+          ).resolves.toEqual([
+            { id: 'bot', status: 'active' },
+            { id: 'regular', status: 'active' },
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
   it('rewind.commit follows transcript parent links and preserves the prior assistant when timestamps are inverted', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -1088,7 +1690,11 @@ describe('db worker tx handlers', () => {
           'src',
           'assistant',
           'copy',
-          JSON.stringify({ uuid: 'old', parentUuid: 'parent', transcriptParentUuid: 'old-parent' }),
+          JSON.stringify({
+            uuid: 'old',
+            parentUuid: 'parent',
+            transcriptParentUuid: 'old-parent',
+          }),
           'cc',
           100,
           'm2',
@@ -1149,6 +1755,164 @@ describe('db worker tx handlers', () => {
         transcriptParentUuid: 'new-parent',
       });
     });
+  });
+
+  it.each([false, true])('fork.session recovery marker is atomic with the child (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['m1', 'c1', 'src', 'user', 'keep my history', 100]);
+      const args = {
+        sourceSessionId: 'src', targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
+        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest([{ client_id: 'c1', role: 'user', content: 'keep my history', tool_use_id: null, agent_meta: null, agent_kind: null, created_at: 100 }]),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'keep my history' }) },
+      };
+      await expect(client.tx('fork.session', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+      expect(await client.queryOne('SELECT id FROM messages WHERE id = ?', ['copy1'])).toBeUndefined();
+      args.recoveryMarker.id = 'recovery';
+      await client.tx('fork.session', args);
+      expect(await client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['forked'])).toEqual({ sdk_session_id: null });
+      expect(await client.queryOne('SELECT role, rewind_at FROM messages WHERE id = ?', ['recovery'])).toEqual({ role: 'context_rebuild', rewind_at: 300 });
+      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['copy1'])).toEqual({ content: 'keep my history' });
+      const card = await client.queryOne<{ agent_meta: string }>('SELECT agent_meta FROM messages WHERE id = ?', ['recovery:card']);
+      expect(JSON.parse(card!.agent_meta)).toEqual({ contextRebuild: { reason: 'native-session-recovery', handoff: 'keep my history' } });
+      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['m1'])).toEqual({ content: 'keep my history' });
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('recovery fork validates the full ordered prefix despite unchanged count (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      const originalContent = 'prefix\n'.repeat(5_000);
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+        ['m1', 'c1', 'src', 'user', originalContent, 100, 'm2', 'c2', 'src', 'assistant', 'answer', 100],
+      );
+      const readPrefix = () => client.query<ForkSourceMessage>(
+        'SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM messages WHERE session_id = ? AND created_at < 200 ORDER BY created_at, rowid', ['src'],
+      );
+      const originalRows = await readPrefix();
+      const args = {
+        sourceSessionId: 'src', targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }, { id: 'copy2', clientId: 'copy-client2' }],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest(originalRows),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'bounded handoff from original prefix' }) },
+      };
+      const edits: Array<[string, unknown[]]> = [
+        ["UPDATE messages SET content = ? WHERE id = 'm1'", [originalContent + 'edited beyond the handoff limit']],
+        ["UPDATE messages SET client_id = ? WHERE id = 'm1'", ['replacement-client']],
+        ["UPDATE messages SET role = ? WHERE id = 'm1'", ['assistant']],
+        ["UPDATE messages SET tool_use_id = ? WHERE id = 'm1'", ['different-tool']],
+        ["UPDATE messages SET agent_meta = ? WHERE id = 'm1'", ['{"nativeForkAnchor":{"id":"changed"}}']],
+        ["UPDATE messages SET agent_kind = ? WHERE id = 'm1'", ['codex']],
+        ["UPDATE messages SET created_at = ? WHERE id = 'm1'", [101]],
+      ];
+      for (const [sql, params] of edits) {
+        await client.exec(sql, params);
+        const changedRows = await readPrefix();
+        expect(changedRows).toHaveLength(originalRows.length);
+        await expect(client.tx('fork.session', args)).rejects.toThrow('Source history changed');
+        expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+        expect(await client.query('SELECT id FROM messages WHERE session_id = ?', ['forked'])).toEqual([]);
+        expect(await readPrefix()).toEqual(changedRows);
+        await client.exec("UPDATE messages SET client_id = 'c1', role = 'user', content = ?, tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, created_at = 100 WHERE id = 'm1'", [originalContent]);
+      }
+      // Edits outside the selected prefix do not invalidate this fork.
+      await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('tail', 'tail-client', 'src', 'user', 'new tail', 200)");
+      await expect(client.tx('fork.session', args)).resolves.toEqual({ messageCount: 2 });
+      expect(await client.query('SELECT content FROM messages WHERE id IN (?, ?) ORDER BY id', ['copy1', 'copy2']))
+        .toEqual([{ content: originalContent }, { content: 'answer' }]);
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('recovery fork accepts an unchanged empty prefix (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await expect(client.tx('fork.session', {
+        sourceSessionId: 'src', targetCreatedAt: 100,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest([]),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: '' }) },
+      })).resolves.toEqual({ messageCount: 0 });
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toEqual({ id: 'forked' });
+    }, { useInlineWorker });
+  });
+
+  it('fork.session rebinds completed Codex turn anchors to the child thread', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          'm1',
+          'c1',
+          'src',
+          'assistant',
+          'copy',
+          JSON.stringify({
+            turnCompleted: true,
+            nativeForkAnchor: {
+              agentKind: 'codex',
+              sdkSessionId: 'source-thread',
+              kind: 'turn',
+              id: 'turn-1',
+            },
+          }),
+          'codex',
+          100,
+        ],
+      );
+
+      await client.tx('fork.session', {
+        sourceSessionId: 'src',
+        targetCreatedAt: 200,
+        newSession: sessionRow('forked'),
+        uuidMap: [],
+        nativeForkAnchorSessionMap: [['source-thread', 'child-thread']],
+        newMessageIds: [{ id: 'copy-id-1', clientId: 'copy-client-1' }],
+      });
+
+      const copied = await client.queryOne<{ agent_meta: string }>(
+        'SELECT agent_meta FROM messages WHERE session_id = ?',
+        ['forked'],
+      );
+      expect(JSON.parse(copied?.agent_meta ?? '{}')).toEqual({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'child-thread',
+          kind: 'turn',
+          id: 'turn-1',
+        },
+      });
+    });
+  });
+
+  it.each([false, true])('recovery fork rejects a concurrent clear without reviving history (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['m1', 'c1', 'src', 'user', 'cleared content', 100]);
+      await client.exec('UPDATE sessions SET cleared_at = 500 WHERE id = ?', ['src']);
+      await expect(client.tx('fork.session', {
+        sourceSessionId: 'src', sourceClearedAt: null, targetCreatedAt: 200,
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
+        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+          sourceMessagesDigest: computeForkSourceMessagesDigest([{ client_id: 'c1', role: 'user', content: 'cleared content', tool_use_id: null, agent_meta: null, agent_kind: null, created_at: 100 }]),
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'cleared content' }) },
+      })).rejects.toThrow('Source history changed');
+      expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+      expect(await client.query('SELECT id FROM messages ORDER BY id')).toEqual([{ id: 'm1' }]);
+      expect(await client.queryOne('SELECT cleared_at FROM sessions WHERE id = ?', ['src'])).toEqual({ cleared_at: 500 });
+    }, { useInlineWorker });
   });
 
   it('fork.session filters pre-clear/same-ms tail rows and detaches copied parked sessions', async () => {
@@ -1360,10 +2124,45 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
+  it.each([false, true])('context recovery commits route and durable handoff atomically (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-a', 's1']);
+      await seedSession(client, 's1', { contextTokens: 90_000, contextWindow: 272_000 });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
+        ['source-native', 'codex/gpt-5.6-sol', 'xd', 'high', 1, 's1']);
+      const args = {
+        sessionId: 's1', markerId: 'recovery', markerClientId: 'recovery',
+        markerContent: JSON.stringify({ reason: 'native-session-recovery', handoff: 'KEEP_CONTEXT', consumed: false }),
+        markerCreatedAt: 1000, updatedAt: 1000,
+        replacementRoute: { expectedSdkSessionId: 'source-native', model: 'gpt-6-astra', providerId: 'openai', effort: 'low', fastMode: false },
+      };
+      // A competing replacement must not be overwritten, and no marker may leak out.
+      await expect(client.tx('context.rebuild', { ...args, replacementRoute: { ...args.replacementRoute, expectedSdkSessionId: 'stale-native' } })).rejects.toThrow();
+      expect(await client.query('SELECT id FROM messages WHERE client_id = ?', ['recovery'])).toEqual([]);
+      expect(await client.queryOne('SELECT sdk_session_id, model FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'source-native', model: 'codex/gpt-5.6-sol' });
+      await client.tx('context.rebuild', args);
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id, effort, fast_mode, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({
+        sdk_session_id: null, model: 'gpt-6-astra', provider_id: 'openai', effort: 'low', fast_mode: 0, context_tokens: 0,
+      });
+      expect(await client.queryOne('SELECT content FROM messages WHERE client_id = ?', ['recovery'])).toEqual({ content: args.markerContent });
+      // If inserting the durable marker fails, the preceding route update must roll back too.
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ? WHERE id = ?', ['source-native', 'codex/gpt-5.6-sol', 'xd', 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'source-native', model: 'codex/gpt-5.6-sol', provider_id: 'xd' });
+      await client.tx('context.rebuild', {
+        ...args, markerId: 'fixed-effort', markerClientId: 'fixed-effort',
+        replacementRoute: { ...args.replacementRoute, effort: null },
+      });
+      expect(await client.queryOne('SELECT effort, sdk_session_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ effort: 'low', sdk_session_id: null });
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1', { contextTokens: 245_000, contextWindow: 500_000 });
+      await client.exec(
+        'UPDATE sessions SET sdk_session_id = ?, list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        ['native-a', 'keep me', 'user', 9, 's1'],
+      );
       await client.tx('context.rebuild', {
         sessionId: 's1',
         markerId: 'rebuild-1',
@@ -1399,9 +2198,19 @@ describe('db worker tx handlers', () => {
         },
       ]);
       await expect(
-        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
-      ).resolves.toEqual({ sdk_session_id: null, updated_at: 2000 });
-    });
+        client.queryOne(
+          'SELECT sdk_session_id, context_tokens, context_window, updated_at, list_preview, list_message_count FROM sessions WHERE id = ?',
+          ['s1'],
+        ),
+      ).resolves.toEqual({
+        sdk_session_id: null,
+        context_tokens: 0,
+        context_window: 500_000,
+        updated_at: 2000,
+        list_preview: 'keep me',
+        list_message_count: null,
+      });
+    }, { useInlineWorker });
   });
 
   it('session.agentSwitchFallback missing boundary rolls back sdk id clear', async () => {
@@ -1795,6 +2604,109 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('im.rotateSession atomically inserts the new route and retires the previous task', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'telegram-old');
+      await client.exec(
+        `UPDATE sessions
+         SET source = 'telegram', im_bot_context_id = 'bot', im_user_id = 'user'
+         WHERE id = 'telegram-old'`,
+      );
+      await client.exec(
+        `INSERT INTO im_bindings (
+           channel, bot_context_id, user_id, scope_key, target_session_id, attached_at
+         ) VALUES ('telegram', 'bot', 'user', '', 'telegram-old', 100)`,
+      );
+
+      const result = await client.tx('im.rotateSession', {
+        previousSessionId: 'telegram-old',
+        detachBinding: {
+          channel: 'telegram',
+          botContextId: 'bot',
+          userId: 'user',
+          scopeKey: '',
+          targetSessionId: 'telegram-old',
+        },
+        session: {
+          id: 'telegram-new',
+          title: 'TG · New',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          model: 'grok-4.6',
+          effort: 'high',
+          permissionMode: 'bypassPermissions',
+          fastMode: false,
+          agentKind: 'pi',
+          providerId: 'xai',
+          source: 'telegram',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        },
+        now: 500,
+      });
+
+      expect(result).toEqual({ previousStatus: 'active' });
+      await expect(
+        client.query(
+          `SELECT id, status, im_bot_context_id, im_user_id
+           FROM sessions WHERE id IN ('telegram-old', 'telegram-new') ORDER BY id`,
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'telegram-new',
+          status: 'active',
+          im_bot_context_id: 'bot',
+          im_user_id: 'user',
+        },
+        {
+          id: 'telegram-old',
+          status: 'archived',
+          im_bot_context_id: null,
+          im_user_id: null,
+        },
+      ]);
+      await expect(client.query('SELECT * FROM im_bindings')).resolves.toEqual([]);
+    });
+  });
+
+  it('im.rotateSession never revives a concurrently deleted previous task', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'telegram-deleted');
+      await client.exec(
+        `UPDATE sessions
+         SET status = 'deleted', source = 'telegram',
+             im_bot_context_id = 'bot', im_user_id = 'user'
+         WHERE id = 'telegram-deleted'`,
+      );
+
+      const result = await client.tx('im.rotateSession', {
+        previousSessionId: 'telegram-deleted',
+        detachBinding: null,
+        session: {
+          id: 'telegram-after-delete',
+          title: 'TG · New',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          model: 'grok-4.6',
+          effort: 'high',
+          permissionMode: 'bypassPermissions',
+          fastMode: false,
+          agentKind: 'pi',
+          providerId: 'xai',
+          source: 'telegram',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        },
+        now: 600,
+      });
+
+      expect(result).toEqual({ previousStatus: 'deleted' });
+      await expect(
+        client.queryOne('SELECT status FROM sessions WHERE id = ?', ['telegram-deleted']),
+      ).resolves.toEqual({ status: 'deleted' });
+    });
+  });
+
   it('im.deleteBindings rolls back every startup cleanup when a later delete fails', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'desktop-target');
@@ -2000,6 +2912,23 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('embedding.recordFailures terminal=true 整批直接进 failed,不消耗退避尝试 (#3416)', async () => {
+    await withClient(async (client) => {
+      const freshRowid = await insertJob(client, { sourceId: 'fresh', attempts: 0 });
+      const result = await client.tx('embedding.recordFailures', {
+        jobs: [{ rowid: freshRowid, attempts: 0 }],
+        errMsg: '[INVALID_MODEL] Invalid model name',
+        now: 10_000,
+        terminal: true,
+      });
+
+      expect(result).toEqual({ failCount: 1 });
+      await expect(
+        client.query('SELECT rowid, status, attempts FROM embedding_jobs ORDER BY rowid'),
+      ).resolves.toEqual([{ rowid: freshRowid, status: 'failed', attempts: 1 }]);
+    });
+  });
+
   it('embedding.enqueue inserts only new natural-key jobs', async () => {
     await withClient(async (client) => {
       const result = await client.tx('embedding.enqueue', {
@@ -2061,6 +2990,111 @@ describe('db worker tx handlers', () => {
         updated_at: 999,
       });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('applies SkillHub usage mutations atomically through the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(async (client) => {
+      type PersistArgs = Extract<SkillUsageApplyMutationArgs, { kind: 'persist' }>;
+      const source = (rawFilePath: string, analyzerVersion: string, mtimeMs: number): PersistArgs['source'] => ({
+        rawFilePath,
+        analyzerVersion,
+        agentKind: 'codex',
+        sessionId: `session-${rawFilePath}`,
+        sdkSessionId: `sdk-${rawFilePath}`,
+        mtimeMs,
+        sizeBytes: 10,
+        scannedAt: mtimeMs,
+      });
+      const exposure = (
+        id: string,
+        rawFilePath: string,
+        analyzerVersion: string,
+        seenAt: number,
+      ): PersistArgs['exposures'][number] => ({
+        id,
+        rawFilePath,
+        rawLineNo: 1,
+        sessionId: `session-${rawFilePath}`,
+        sdkSessionId: `sdk-${rawFilePath}`,
+        agentKind: 'codex',
+        skillName: 'word-doc',
+        skillPath: null,
+        skillDocumentHash: `doc-${analyzerVersion}`,
+        exposureContentHash: `content-${id}`,
+        documentHashSource: 'transcript_file_read',
+        source: 'codex_skill_file_read',
+        toolUseId: null,
+        seenAt,
+        toolCallCount: 1,
+        repeatedToolCallCount: 0,
+        toolErrorCount: 0,
+        commandCallCount: 0,
+        commandFailureCount: 0,
+      });
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 1),
+        exposures: [exposure('first', 'current.jsonl', '6', 200)],
+      });
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 2),
+        exposures: [exposure('replacement', 'current.jsonl', '6', 201)],
+      });
+      await expect(client.query<{ id: string }>(
+        'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual([{ id: '6:replacement' }]);
+
+      await expect(client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '6', 999),
+        exposures: [
+          exposure('duplicate', 'current.jsonl', '6', 300),
+          exposure('duplicate', 'current.jsonl', '6', 301),
+        ],
+      })).rejects.toThrow();
+      await expect(client.queryOne(
+        'SELECT mtime_ms, status FROM skill_usage_sources WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual({ mtime_ms: 2, status: 'ok' });
+      await expect(client.query<{ id: string }>(
+        'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
+        ['current.jsonl'],
+      )).resolves.toEqual([{ id: '6:replacement' }]);
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('old.jsonl', '6', 10),
+        exposures: [exposure('old', 'old.jsonl', '6', 10)],
+      });
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'deleteBefore',
+        analyzerVersion: '6',
+        recentSince: 100,
+      });
+      await expect(client.queryOne(
+        'SELECT raw_file_path FROM skill_usage_sources WHERE raw_file_path = ?',
+        ['old.jsonl'],
+      )).resolves.toBeUndefined();
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('previous.jsonl', '5', 200),
+        exposures: [exposure('previous', 'previous.jsonl', '5', 200)],
+      });
+      await client.tx('skillUsage.applyMutation', { kind: 'promote', analyzerVersion: '6' });
+      await expect(client.queryOne(
+        "SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'",
+      )).resolves.toEqual({ value: '6' });
+      await expect(client.queryOne(
+        "SELECT id FROM skill_usage_exposures WHERE analyzer_version = '5'",
+      )).resolves.toBeUndefined();
+    }, { useInlineWorker });
   });
 
   it.each([
@@ -2287,15 +3321,18 @@ async function withTwoClients(fn: (clients: [DbClient, DbClient]) => Promise<voi
   const clients: DbClient[] = [];
   try {
     for (let index = 0; index < 2; index += 1) {
-      clients.push(
-        await createDbClient({
-          userId: `test-user-${index}`,
-          dbPath,
-          drizzleDir,
-          betterSqliteModulePath: require.resolve('better-sqlite3'),
-          workerScriptPath,
-        }),
-      );
+      const client = await createDbClient({
+        userId: `test-user-${index}`,
+        dbPath,
+        drizzleDir,
+        betterSqliteModulePath: require.resolve('better-sqlite3'),
+        workerScriptPath,
+      });
+      clients.push(client);
+      // createDbClient starts its Worker lazily. Finish each startup before
+      // opening the next connection so this helper tests transaction
+      // contention rather than concurrent WAL initialization.
+      await client.queryOne('SELECT 1 AS ready');
     }
     await fn(clients as [DbClient, DbClient]);
   } finally {
@@ -2326,8 +3363,8 @@ async function seedSession(
       sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
       context_window, fast_mode, cleared_at, pinned_at, user_send_at,
       agent_kind, orca_role, workspace_kind, parent_session_id, forked_at_message_id,
-      created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      source, created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       s.id,
       s.title,
@@ -2350,6 +3387,7 @@ async function seedSession(
       s.workspaceKind,
       s.parentSessionId,
       s.forkedAtMessageId,
+      s.source,
       s.createdAt,
       s.updatedAt,
     ],
@@ -2377,6 +3415,7 @@ function sessionRow(id: string, overrides: Partial<TestSessionRow> = {}): TestSe
     userSendAt: 1,
     agentKind: 'cc',
     orcaRole: null,
+    source: 'desktop',
     workspaceKind: 'project',
     codexHistoryHasProductPrompt: null,
     parentSessionId: null,

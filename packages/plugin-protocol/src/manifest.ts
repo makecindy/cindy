@@ -1,3 +1,5 @@
+import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
+
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
 
@@ -852,6 +854,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional v3 extension; consumers validate it without changing legacy approval content. */
+  recommendations?: unknown;
   /** v2 仅作存量兼容；新插件使用 v3。 */
   schemaVersion: 2 | typeof GHOST_MANIFEST_SCHEMA_VERSION;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */
@@ -936,6 +940,8 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
+  /** Autonomous publishing of declared events into user-configured routines. */
+  routineEvents?: GhostRoutineEvents;
   /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
@@ -1136,6 +1142,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'routineEvents',
   'schemaVersion',
   'id',
   'name',
@@ -1899,6 +1906,11 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   // 订阅槽详单(卡槽①):与 slots 含 'subscribe' 成对(有详单必有槽;有槽
   // 无详单允许装入但零事件,同 cindy 语义)。硬规则:声明了 hooks(拦截)
   // 必须 launch:'resident'——要挡路就得常驻在场,每条消息等冷启动不可接受。
+  if (raw.routineEvents !== undefined && prepared.schemaVersion !== 3) {
+    return { ok: false, reason: 'routineEvents requires schemaVersion 3' };
+  }
+  const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
+  if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -3815,6 +3827,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(tools !== undefined ? { tools } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
+      ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

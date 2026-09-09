@@ -144,6 +144,9 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
       "copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'))",
     );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "copyFileSync(join(configHome, 'internal-extensions', 'cindy-bridge.ts'), bridgeExtension)",
+    );
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('childConfigHome: childConfigHome');
   });
 

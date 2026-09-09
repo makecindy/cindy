@@ -29,6 +29,8 @@ export interface IssueEnv {
   platform: string;
   arch: string;
   osVersion?: string;
+  harness?: 'Claude Code' | 'Codex' | 'Pi';
+  modelId?: string;
 }
 
 export interface IssueConfirmPayload {
@@ -354,6 +356,8 @@ export function buildIssueConfirmReviewPresentation(input: {
     input.env.platform,
     input.env.arch,
     input.env.osVersion,
+    input.env.harness,
+    input.env.modelId,
     input.uiLanguage,
   ].filter((part): part is string => typeof part === 'string' && part.trim().length > 0);
 
@@ -1065,8 +1069,20 @@ export function normalizeIssueConfirm(request: InteractionRequestLike): IssueCon
       platform: readString(env.platform) ?? 'unknown',
       arch: readString(env.arch) ?? 'unknown',
       osVersion: readString(env.osVersion) ?? undefined,
+      harness: readIssueHarness(env.harness),
+      modelId: normalizeIssueModelId(env.modelId),
     },
   };
+}
+
+function readIssueHarness(value: unknown): IssueEnv['harness'] {
+  return value === 'Claude Code' || value === 'Codex' || value === 'Pi' ? value : undefined;
+}
+
+function normalizeIssueModelId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 200).trim();
+  return normalized || undefined;
 }
 
 export function buildIssueConfirmDecision(

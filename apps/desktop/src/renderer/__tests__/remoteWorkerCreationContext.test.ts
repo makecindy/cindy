@@ -65,7 +65,7 @@ describe('remote Orca Worker creation context', () => {
     expect(selector).toContain(
       'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',
     );
-    expect(selector).toContain('const rowAgentKind = resolveVisibleModelAgentKind({');
+    expect(selector).toContain('const rowAgentKind = rowAgent ?? resolveVisibleModelAgentKind({');
     expect(selector).toContain('providerOffersModel(provider, id, rowAgentKind)');
   });
 });

@@ -56,7 +56,9 @@ describe('主 BrowserWindow 后台节流', () => {
   it('active turn 期间通过 webContents 运行态切换后台节流', () => {
     expect(source).toContain('function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void');
     expect(source).toContain('const nextAllowed = !hasRunningTurn;');
-    expect(source).toContain('win.webContents.setBackgroundThrottling(mainWindowBackgroundThrottlingAllowed);');
+    expect(source).toMatch(/setBackgroundThrottling\(\s*mainWindowBackgroundThrottlingAllowed,?\s*\)/);
+    expect(source).not.toContain('isRemoteDesktopVideoActive');
+    expect(source).toContain('registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);');
     expect(source).toContain('onAnySessionTurnKeepaliveChange: (isRunning) => {');
     expect(source).toContain('setMainWindowBackgroundThrottlingForActiveTurn(isRunning);');
     expect(source).toContain('notifyUpdateAutoRelaunchBusyStateChanged();');
@@ -179,6 +181,10 @@ describe('窗口可见性广播（装饰动画闸门的兜底信号）', () => {
    * 豁免必须显式登记并写明理由——目的是逼一次判断，而不是让人默默跳过。
    */
   const BROADCAST_EXEMPT = new Map<string, string>([
+    [
+      'remote-desktop/captureWindow.ts',
+      '独立捕获页不加载聊天 Renderer 或装饰动画；只在媒体连接期间存在，停止时销毁',
+    ],
     [
       'computer-permission-guide/window.ts',
       // 这两个窗口(guide / backdrop)确实也加载 index.html?view=、也装了闸门，但其视图

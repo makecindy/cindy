@@ -7,6 +7,7 @@
  * 时间相关格式化一律显式传入 nowMs,保证可测试。
  */
 import { formatByteSize, isTextFilePreviewCandidate, remoteFilePreviewKind, type RemoteFilePreviewKind } from './filePreview.js';
+import { presentationDate, presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 /** `file-browser:remote-op` listDir 返回的目录项(桌面 file-browser-core DirEntry 同形)。 */
 export interface FileBrowserRemoteOpEntry {
@@ -82,6 +83,7 @@ export function buildFileBrowserGridItems(
   entries: readonly FileBrowserRemoteOpEntry[],
   sort: FileBrowserSortMode,
   nowMs: number,
+  localizer?: PresentationLocalizer,
 ): FileBrowserGridItem[] {
   const items = entries.map((entry): FileBrowserGridItem => {
     const isDir = entry.type === 'directory';
@@ -94,8 +96,8 @@ export function buildFileBrowserGridItems(
       previewKind,
       thumb: isDir ? 'folder' : fileThumbKind(entry.name),
       metaLabel: isDir
-        ? formatFileBrowserDate(entry.mtimeMs, nowMs)
-        : `${formatByteSize(entry.size)} · ${formatFileBrowserDate(entry.mtimeMs, nowMs)}`,
+        ? formatFileBrowserDate(entry.mtimeMs, nowMs, localizer)
+        : `${formatByteSize(entry.size)} · ${formatFileBrowserDate(entry.mtimeMs, nowMs, localizer)}`,
       sizeBytes: entry.size,
       mtimeMs: entry.mtimeMs,
     };
@@ -118,17 +120,29 @@ export function fileThumbKind(name: string): 'image' | 'doc' | 'generic' {
 }
 
 /** 修改时间的相对化显示:今天/昨天带时分,当年只到月日,跨年带年份。 */
-export function formatFileBrowserDate(mtimeMs: number, nowMs: number): string {
+export function formatFileBrowserDate(
+  mtimeMs: number,
+  nowMs: number,
+  localizer?: PresentationLocalizer,
+): string {
   if (!mtimeMs) return '';
   const d = new Date(mtimeMs);
   const now = new Date(nowMs);
   const dayStart = (v: Date) => new Date(v.getFullYear(), v.getMonth(), v.getDate()).getTime();
   const diffDays = Math.round((dayStart(now) - dayStart(d)) / 86_400_000);
   const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  if (diffDays === 0) return `今天 ${hhmm}`;
-  if (diffDays === 1) return `昨天 ${hhmm}`;
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日`;
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  if (diffDays === 0) {
+    return presentationText(localizer, 'files.presentation.grid.today', `Today ${hhmm}`, { time: hhmm });
+  }
+  if (diffDays === 1) {
+    return presentationText(localizer, 'files.presentation.grid.yesterday', `Yesterday ${hhmm}`, { time: hhmm });
+  }
+  if (localizer?.formatDate) return presentationDate(localizer, d);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() === now.getFullYear()
+    ? `${mm}-${dd}`
+    : `${d.getFullYear()}-${mm}-${dd}`;
 }
 
 /** 底部汇总:「X 个文件夹、Y 个文件」;单一类别时只报一类;空目录固定文案。 */

@@ -22,8 +22,11 @@ import { loginText } from '@/auth/loginMessages';
 import { Text, TextInput } from '@/components/AppText';
 import {
   MainWindowActionButton,
-  ScreenHeader,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+} from '@/platform/chrome';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
@@ -108,8 +111,8 @@ export default function AccountDeletionScreen() {
 
   const available = availability?.available;
   return (
-    <SafeAreaView style={styles.safeArea} testID="accountDeletion.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="accountDeletion.screen">
+      <SimpleStackHeader
         backTestID="accountDeletion.backButton"
         onBack={() => goBackGuarded(router)}
         title={loginText('accountDeletionScreenTitle')}

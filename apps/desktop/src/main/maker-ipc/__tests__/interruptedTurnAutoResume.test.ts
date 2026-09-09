@@ -66,6 +66,15 @@ describe('isInterruptedTurnError', () => {
     ).toBe(true);
   });
 
+  it('rejects oversized-history classification so auto-resume cannot loop', () => {
+    expect(
+      isInterruptedTurnError({
+        reason: 'codex_history_oversized',
+        message: 'Codex remote compaction cannot finish because this thread\'s live history is oversized.',
+      }),
+    ).toBe(false);
+  });
+
   it('accepts the classified empty-response reason (#2320)', () => {
     // translator 只在「发起过 API 调用、零文本、零工具、零 usage 增量」的严格
     // 形态下盖这个 key —— 上游/网关返回退化空响应,与流被切断同属连接层故障,
@@ -146,6 +155,8 @@ describe('isInterruptedTurnError', () => {
       'upstream unreachable',
       '502 Bad Gateway',
       'Service Unavailable',
+      'API Error: upstream stream error: terminated',
+      'upstream stream error: socket reset',
     ]) {
       expect(isInterruptedTurnError({ message }), `${message} 应自动重连`).toBe(true);
     }
@@ -176,6 +187,7 @@ describe('isInterruptedTurnError', () => {
       ['codex thread', { message: 'thread not found' }],
       ['加密内容失效', { message: 'invalid encrypted content' }],
       ['Pi auto-retry 耗尽后交给用户点重试', { reason: 'pi-gateway-drop', message: 'The operation timed out.' }],
+      ['Codex 鉴权会话结束', { message: 'app_session_terminated' }],
     ] as Array<[string, Parameters<typeof isInterruptedTurnError>[0]]>) {
       expect(isInterruptedTurnError(signals), `${label} 不该自动重连`).toBe(false);
     }

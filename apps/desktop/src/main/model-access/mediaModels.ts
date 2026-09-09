@@ -1,7 +1,7 @@
 import {
   isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
-  MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   parseListModelsResponse,
   type MediaCapability,
@@ -25,7 +25,7 @@ const MEDIA_MODEL_REQUEST_TIMEOUT_MS = 20_000;
 const MEDIA_GUIDE_PREFLIGHT_TIMEOUT_MS = 5_000;
 const CINDY_AI_PROVIDER_ID = 'xd';
 const MEDIA_MODELS_PATH =
-  `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}` as const;
+  `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}` as const;
 
 export type MediaGuideCompatibilityErrorCode =
   | 'CLIENT_UPGRADE_REQUIRED'
@@ -70,6 +70,9 @@ export interface ExecutableMediaModelsResult {
 }
 
 export type ExecutableMediaModel = ModelCatalogEntry & { providerId: string };
+type GatewayMediaCatalogEntry = ModelCatalogEntry & {
+  availability?: 'available' | 'requires_payment';
+};
 
 interface ExecutableMediaSnapshot {
   models: ModelCatalogEntry[];
@@ -157,6 +160,7 @@ export function filterEnabledGatewayMediaModels<
   T extends {
     id: string;
     mode?: string;
+    availability?: 'available' | 'requires_payment';
     modalities?: { input: string[]; output: string[] };
   },
 >(
@@ -167,6 +171,7 @@ export function filterEnabledGatewayMediaModels<
   if (isProviderDisabled(access, CINDY_AI_PROVIDER_ID)) return [];
   const candidateModelIds = models.map((model) => model.id);
   return models.filter((model) => {
+    if (model.availability === 'requires_payment') return false;
     if (
       isModelDisabledWithUniqueLegacyBasename(
         access,
@@ -189,7 +194,7 @@ export function filterEnabledGatewayMediaModels<
  * 的实时投影；Gateway mode 决定图片/视频模型类型。Guide 独立按 modelId
  * 懒取，不参与模型发现。
  */
-async function fetchGatewayMediaModels(): Promise<ModelCatalogEntry[]> {
+async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
   const payload = await serverApiFetch<unknown>(MEDIA_MODELS_PATH, {
     baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
     timeoutMs: MEDIA_MODEL_REQUEST_TIMEOUT_MS,
@@ -199,11 +204,11 @@ async function fetchGatewayMediaModels(): Promise<ModelCatalogEntry[]> {
     typeof payload !== 'object' ||
     payload === null ||
     !('schemaVersion' in payload) ||
-    payload.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+    payload.schemaVersion !== MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION
   ) {
     throw new MediaModelCatalogError(
       '媒体模型目录当前不可用，请稍后重试或使用其他工具。',
-      `expected schemaVersion ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+      `expected schemaVersion ${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}`,
     );
   }
   const parsed = parseListModelsResponse(payload);
@@ -365,7 +370,12 @@ function unavailableFromGuideError(modelId: string, error: unknown): Unavailable
 }
 
 async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> {
-  const models = await fetchGatewayMediaModels();
+  // The snapshot is itself an execution authorization source for legacy media
+  // paths, not just a cache behind listExecutableMediaModels. Never record a
+  // v5 paid-only model as executable even when it has a valid invocation Guide.
+  const models = (await fetchGatewayMediaModels()).filter(
+    (model) => model.availability !== 'requires_payment',
+  );
   const batch = await fetchMediaInvocationGuideBatch();
   const capabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
   const guideIdsByModel = new Map<string, string>();

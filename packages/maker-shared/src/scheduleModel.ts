@@ -562,8 +562,20 @@ function formatTimestamp(value: RemoteTimestamp, localizer?: PresentationLocaliz
   return `${month}-${day} ${hour}:${minute}`;
 }
 
+export function isFailedScheduleRun(run: { status: string }): boolean {
+  return run.status === 'failed' || run.status === 'interrupted';
+}
+
+export function isUnreadFailedScheduleRun(run: { status: string; readAt?: unknown }): boolean {
+  return !run.readAt && isFailedScheduleRun(run);
+}
+
+export function isUnreadScheduleRun(run: { status: string; readAt?: unknown }): boolean {
+  return !run.readAt && (run.status === 'success' || isFailedScheduleRun(run));
+}
+
 function isUnreadRun(run: RemoteScheduleRun, now = Date.now()): boolean {
-  if (run.status === 'running') return false;
+  if (!isUnreadScheduleRun(run)) return false;
   const firedAt = toMillis(run.firedAt);
   if (!firedAt || firedAt > now) return false;
   return !toMillis(run.readAt);
@@ -583,4 +595,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readString(value: Record<string, unknown>, key: string): string | null {
   const raw = value[key];
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/** Historical failure notices are independent of read receipts. */
+export interface FailedScheduleRunSnapshot { runId: string; firedAt: number }
+export function compareFailedScheduleRuns(a: FailedScheduleRunSnapshot, b: FailedScheduleRunSnapshot): number {
+  return a.firedAt - b.firedAt || (a.runId > b.runId ? 1 : a.runId < b.runId ? -1 : 0);
+}
+export function shouldShowFailedScheduleNotice(state: {
+  latestFailedRun?: FailedScheduleRunSnapshot | null;
+  readOnly: boolean; tailError: boolean; interrupted: boolean; continuationPending: boolean;
+  error: boolean; credentialWait: boolean; streaming: boolean; running: boolean;
+}): boolean {
+  return !!state.latestFailedRun && !state.readOnly && !state.tailError && !state.interrupted
+    && !state.continuationPending && !state.error && !state.credentialWait && !state.streaming && !state.running;
 }

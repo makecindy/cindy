@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('cindy', {
     return () => listeners.delete(cb);
   },
   send: (payload: unknown): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', payload),
+  recommendations: (items: unknown[]): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { type: 'recommendations-update', items }),
   request: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
@@ -84,6 +86,10 @@ contextBridge.exposeInMainWorld('cindy', {
     // 资格审 / 净化 / 频率钳制 / 限速都在主机 scheduleSlot。
     requestSchedule: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'schedule-request' }),
+  },
+  routines: {
+    request: (req: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'routine-request' }),
   },
   node: {
     request: (req: Record<string, unknown>): Promise<unknown> =>

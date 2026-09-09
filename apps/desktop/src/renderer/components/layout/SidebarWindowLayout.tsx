@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
 
 import { RightSidebarShell } from '@/features/right-sidebar/RightSidebarShell';
+import { ToastContainer } from '@/components/ui/toast';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { onRequestRightSidebarVisibility } from '@/features/right-sidebar/lib/sidebarCommands';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
@@ -338,6 +339,7 @@ export function SidebarWindowLayout() {
           </div>
         )}
       </div>
+      <ToastContainer />
       <GhostMediaLightboxHost
         key={interactiveSessionId ?? 'hidden'}
         sessionId={interactiveSessionId ?? undefined}

@@ -1,3 +1,8 @@
+import {
+  mergeDiscoveredRuntimeModels,
+  validModelMetadata,
+  type DiscoveredModel,
+} from '@cindy/model-providers';
 /**
  * custom-provider-store —— 用户自定义供应商**非凭证配置**的 localDb CRUD。
  *
@@ -86,7 +91,10 @@ function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
 
 function isReasoningEffortForAgent(agent: string, value: unknown): boolean {
   if (agent === 'pi') return isPiReasoningEffort(value);
-  return typeof value === 'string' && (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value)
+  );
 }
 
 function isPiModelApi(value: unknown): value is PiModelApi {
@@ -97,6 +105,7 @@ function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
+  if (model.reasoning === false) return { reasoning: false };
   if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
@@ -190,6 +199,11 @@ function isAllowedWireProtocol(agent: string, value: unknown): value is Provider
   );
 }
 
+/** ProviderPreset.id is an opaque, non-empty string in the catalog contract. */
+function isCatalogPresetId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (!rt || typeof rt !== 'object') return invalid(`runtime '${agent}' must be an object`);
   const r = rt as Record<string, unknown>;
@@ -211,6 +225,12 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
+  if (r.supportsImageGeneration !== undefined && typeof r.supportsImageGeneration !== 'boolean') {
+    return invalid(`runtime '${agent}' supportsImageGeneration must be a boolean`);
+  }
+  if (r.supportsImageGeneration === true && agent !== 'codex') {
+    return invalid(`runtime '${agent}' supportsImageGeneration requires Codex`);
+  }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
   for (const m of r.models) {
     if (!m || typeof m !== 'object') return invalid(`runtime '${agent}' model must be an object`);
@@ -221,6 +241,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (typeof mm.name !== 'string' || mm.name.trim().length === 0) {
       return invalid(`runtime '${agent}' model.name required`);
     }
+    if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
+      return invalid(`runtime '${agent}' discoveredMetadata invalid`);
     if (
       mm.contextWindow !== undefined &&
       (typeof mm.contextWindow !== 'number' ||
@@ -304,6 +326,20 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }
   }
+  const defaultWireProtocol =
+    r.wireProtocol ?? (agent === 'codex' ? 'openai-responses' : undefined);
+  const hasResponsesRoute =
+    defaultWireProtocol === 'openai-responses' ||
+    r.models.some((model) => {
+      if (!model || typeof model !== 'object') return false;
+      const route = (model as Record<string, unknown>).route;
+      return route && typeof route === 'object' && !Array.isArray(route)
+        ? (route as Record<string, unknown>).wireProtocol === 'openai-responses'
+        : false;
+    });
+  if (r.supportsImageGeneration === true && !hasResponsesRoute) {
+    return invalid(`runtime '${agent}' supportsImageGeneration requires OpenAI Responses`);
+  }
   if (r.headers !== undefined) {
     if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) {
       return invalid(`runtime '${agent}' headers must be an object`);
@@ -323,10 +359,15 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       if (u.protocol !== 'http:' && u.protocol !== 'https:') {
         return invalid(`runtime '${agent}' modelsUrl must be http(s)`);
       }
+      if (u.username || u.password) {
+        return invalid(`runtime '${agent}' modelsUrl must not contain embedded credentials`);
+      }
     } catch {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
   }
+  if (r.catalogPresetId !== undefined && !isCatalogPresetId(r.catalogPresetId))
+    return invalid(`runtime '${agent}' catalogPresetId invalid`);
   if (
     r.piCatalogProviderId !== undefined &&
     (agent !== 'pi' ||
@@ -511,6 +552,8 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
+      ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
+      ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.route
         ? {
@@ -523,7 +566,9 @@ function normalizeRuntime(
         : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+      ...(typeof m.supportsImageInput === 'boolean'
+        ? { supportsImageInput: m.supportsImageInput }
+        : {}),
       ...(m.reasoning === true && m.reasoningEfforts?.length
         ? {
             reasoning: true,
@@ -542,8 +587,15 @@ function normalizeRuntime(
       seen.add(m.id);
       return true;
     });
-  const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
+  const out: CustomProviderRuntimeConfig = {
+    baseUrl: rt.baseUrl.trim(),
+    models,
+    ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
+  };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
+  if (agent === 'codex' && rt.supportsImageGeneration === true) {
+    out.supportsImageGeneration = true;
+  }
   if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
   }
@@ -633,35 +685,17 @@ function invalidateEditedPiCatalogMarker(
 export function mergeDiscoveredModelsIntoConfig(
   config: CustomProviderConfig,
   agent: AgentKind,
-  discovered: { id: string; name: string; contextWindow?: number }[],
+  discovered: DiscoveredModel[],
 ): CustomProviderConfig | null {
   const rt = config.runtimes[agent];
   if (!rt) return null;
-  const existing = new Set(rt.models.map((m) => m.id));
-  const fresh = discovered.filter((m) => m.id && m.name && !existing.has(m.id));
-  if (fresh.length === 0) return null;
-  return {
-    ...config,
-    runtimes: {
-      ...config.runtimes,
-      [agent]: {
-        ...rt,
-        models: [
-          ...rt.models,
-          // 端点声明了上下文长度就随发现落盘,缺省则回落保守默认(#386)。
-          ...fresh.map((m) => ({
-            id: m.id,
-            name: m.name,
-            ...(typeof m.contextWindow === 'number' &&
-            Number.isFinite(m.contextWindow) &&
-            m.contextWindow > 0
-              ? { contextWindow: Math.floor(m.contextWindow) }
-              : {}),
-          })),
-        ],
-      },
-    },
-  };
+  const models = mergeDiscoveredRuntimeModels(rt.models, discovered);
+  return JSON.stringify(models) === JSON.stringify(rt.models)
+    ? null
+    : {
+        ...config,
+        runtimes: { ...config.runtimes, [agent]: { ...rt, models } },
+      };
 }
 
 /** 安全解析 auth 列 JSON（坏数据 / 结构不完整兜底为 undefined = API key 历史形态）。 */
@@ -716,19 +750,26 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               name: String(m.name ?? ''),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),
+              ...(validModelMetadata(m.discoveredMetadata)
+                ? { discoveredMetadata: m.discoveredMetadata }
+                : {}),
+              ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
               ...(typeof m.contextWindow === 'number' &&
               Number.isFinite(m.contextWindow) &&
               m.contextWindow > 0
                 ? { contextWindow: m.contextWindow }
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(typeof m.supportsImageInput === 'boolean'
+                ? { supportsImageInput: m.supportsImageInput }
+                : {}),
               ...parseStoredReasoningCapability(agent, m),
               ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
             };
           })
       : [];
     const entry: CustomProviderRuntimeConfig = {
+      ...(isCatalogPresetId(r.catalogPresetId) ? { catalogPresetId: r.catalogPresetId } : {}),
       baseUrl,
       models,
     };
@@ -743,6 +784,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       // 旧版把 Pi 的缺省协议解释为 Chat。新写入口已要求显式 wireProtocol；仅在读取
       // 历史持久化记录时把旧语义物化，避免运行时重新猜测或按供应商穷举兼容。
       entry.wireProtocol = 'openai-chat';
+    }
+    if (agent === 'codex' && r.supportsImageGeneration === true) {
+      entry.supportsImageGeneration = true;
     }
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;

@@ -39,7 +39,13 @@
  *     attachment chip.
  */
 
-import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { Check, ChevronDown, ChevronRight, File as FileIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -58,7 +64,16 @@ import {
   verbLabelKeyForIntent,
   verbLabelKeyForRow,
 } from '@/lib/agent-actions/verbAggregator';
-import { statsForToolCall } from '@/lib/agent-actions/diffStats';
+import {
+  DIFF_MAIN_THREAD_MAX_CHARS,
+  DIFF_MAX_SEGMENTS,
+  diffSourcesForToolCall,
+  getDiffDetailsSync,
+  requestToolDiffDetails,
+  statsForToolCall,
+  type DiffDetails,
+  type ToolDiffDetails,
+} from '@/lib/agent-actions/diffStats';
 import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
 import { toLocalFileUrl, resolveToolFilePath } from '@/lib/localPathResolver';
@@ -79,6 +94,10 @@ import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import {
+  formatToolResultCompactionBytes,
+  parseToolResultCompactionMarker,
+} from '@cindy/maker-shared/tool-result-compaction';
 
 /**
  * 点击走「文件类」交互(diff / 文稿 / 图片 lightbox)的工具:CC 大写 + pi 小写
@@ -552,7 +571,9 @@ type FileChangeDescriptor = Extract<ToolUseDescriptor, { kind: 'fileChange' }>;
 function buildDiffPayload(
   descriptor: ToolUseDescriptor,
   inp: Record<string, unknown> | null,
+  analysis?: ToolDiffDetails | null,
 ): ToolPayloadMode | null {
+  const detailByKey = new Map(analysis?.segments.map((segment) => [segment.key, segment.details]));
   if (descriptor.kind === 'fileChange') {
     return {
       kind: 'diff',
@@ -575,7 +596,9 @@ function buildDiffPayload(
         {
           key: filePath,
           filePath,
-          diffs: [{ key: 'edit:0', oldString: o, newString: n }],
+          diffs: [
+            { key: 'edit:0', oldString: o, newString: n, analysis: detailByKey.get('edit:0') },
+          ],
         },
       ],
     };
@@ -588,7 +611,9 @@ function buildDiffPayload(
         {
           key: filePath,
           filePath,
-          diffs: [{ key: 'write:0', oldString: '', newString: c }],
+          diffs: [
+            { key: 'write:0', oldString: '', newString: c, analysis: detailByKey.get('write:0') },
+          ],
         },
       ],
     };
@@ -596,23 +621,37 @@ function buildDiffPayload(
   // pi edit:声明 schema 的 edits[] 与 legacy 顶层 {oldText,newText} 两种形态,
   // 由共享的 piEditReplacements 归一化(只认一种会让另一种退化成空 diff)。
   if (toolName === 'edit') {
+    const allEdits = piEditReplacements(inp);
+    const visibleEdits = allEdits.slice(0, DIFF_MAX_SEGMENTS);
     return {
       kind: 'diff',
       files: [
         {
           key: filePath,
           filePath,
-          diffs: piEditReplacements(inp).map((edit, index) => ({
+          diffs: visibleEdits.map((edit, index) => ({
             key: `edit:${index}`,
             oldString: edit.oldText,
             newString: edit.newText,
+            analysis: detailByKey.get(`edit:${index}`),
           })),
+          ...(allEdits.length > visibleEdits.length
+            ? {
+                copyDiffs: allEdits.map((edit, index) => ({
+                  key: `edit:${index}`,
+                  oldString: edit.oldText,
+                  newString: edit.newText,
+                })),
+                omittedDiffCount: allEdits.length - visibleEdits.length,
+              }
+            : {}),
         },
       ],
     };
   }
   if (toolName === 'MultiEdit') {
-    const edits = Array.isArray(inp.edits) ? inp.edits : [];
+    const allEdits = Array.isArray(inp.edits) ? inp.edits : [];
+    const edits = allEdits.slice(0, DIFF_MAX_SEGMENTS);
     return {
       kind: 'diff',
       files: [
@@ -623,8 +662,24 @@ function buildDiffPayload(
             const er = e as Record<string, unknown> | null;
             const o = er && typeof er.old_string === 'string' ? er.old_string : '';
             const n = er && typeof er.new_string === 'string' ? er.new_string : '';
-            return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+            return {
+              key: `edit:${index}`,
+              oldString: String(o),
+              newString: String(n),
+              analysis: detailByKey.get(`edit:${index}`),
+            };
           }),
+          ...(allEdits.length > edits.length
+            ? {
+                copyDiffs: allEdits.map((e, index) => {
+                  const er = e as Record<string, unknown> | null;
+                  const o = er && typeof er.old_string === 'string' ? er.old_string : '';
+                  const n = er && typeof er.new_string === 'string' ? er.new_string : '';
+                  return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+                }),
+                omittedDiffCount: allEdits.length - edits.length,
+              }
+            : {}),
         },
       ],
     };
@@ -682,6 +737,12 @@ export function AgentActionRow({
   status = 'done',
 }: AgentActionRowProps) {
   const { t } = useTranslation();
+  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const displayedToolResult = compactedToolResult
+    ? t('chat.toolResultCompacted', {
+        size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
+      })
+    : toolResult;
   // 会话文件来源:remote 时 Read 图片走远程媒体改写、文件打开走远程分流。
   const fileCtx = useChatSessionFile();
   const toolName = message.toolName ?? '';
@@ -750,10 +811,62 @@ export function AgentActionRow({
     descriptor.command
       ? descriptor.command
       : null;
-  const userFacingToolResult = toolResult
-    ? (humanizeDocumentToolResult(toolName, toolResult) ?? toolResult)
+  const userFacingToolResult = displayedToolResult
+    ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
     : null;
-  const stats = useMemo(() => statsForToolCall(toolName, inp), [toolName, inp]);
+  const diffSources = useMemo(() => diffSourcesForToolCall(toolName, inp), [toolName, inp]);
+  const syncDiff = useMemo<ToolDiffDetails | null>(() => {
+    if (!diffSources || diffSources.truncated) return null;
+    // Apply the budget to the complete tool call, not each segment. A
+    // MultiEdit with many individually-small replacements must still stay off
+    // the renderer thread.
+    const totalChars = diffSources.segments.reduce(
+      (total, segment) => total + segment.oldString.length + segment.newString.length,
+      0,
+    );
+    if (totalChars > DIFF_MAIN_THREAD_MAX_CHARS) return null;
+    const segments = diffSources.segments.map((segment) => ({
+      key: segment.key,
+      details: getDiffDetailsSync(segment.oldString, segment.newString),
+    }));
+    if (segments.some((segment) => !segment.details)) return null;
+    const resolvedSegments = segments as Array<{ key: string; details: DiffDetails }>;
+    return {
+      stats: segments.reduce(
+        (total, segment) => ({
+          add: total.add + (segment.details?.stats.add ?? 0),
+          del: total.del + (segment.details?.stats.del ?? 0),
+        }),
+        { add: 0, del: 0 },
+      ),
+      segments: resolvedSegments,
+      truncated: false,
+    };
+  }, [diffSources]);
+  const initialStats = useMemo(
+    () => syncDiff?.stats ?? statsForToolCall(toolName, inp),
+    [inp, syncDiff, toolName],
+  );
+  const [asyncDiff, setAsyncDiff] = useState<ToolDiffDetails | null>(null);
+
+  // Small edits stay synchronous for a stable first paint. Larger edits are
+  // analysed off-thread; the same result is passed to the lightbox on click.
+  useEffect(() => {
+    let active = true;
+    if (!diffSources || syncDiff || initialStats !== null) {
+      setAsyncDiff(null);
+      return () => {
+        active = false;
+      };
+    }
+    void requestToolDiffDetails(toolName, inp).then((result) => {
+      if (active) setAsyncDiff(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [diffSources, initialStats, inp, syncDiff, toolName]);
+  const stats = asyncDiff?.truncated ? null : (asyncDiff?.stats ?? initialStats);
   const isFilePathTool = FILE_PATH_TOOLS.has(toolName);
   const filePath = descriptor.kind === 'file' ? descriptor.filePath : '';
   const singleFileChange =
@@ -774,7 +887,7 @@ export function AgentActionRow({
    *   - Read → 文稿/图片 lightbox
    */
   const onActivate = async (anchor: HTMLElement) => {
-    const diffPayload = buildDiffPayload(descriptor, inp);
+    const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
       setLightbox({ kind: 'payload', payload: diffPayload });

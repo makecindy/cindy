@@ -64,6 +64,21 @@ export interface RequestTransform {
 }
 
 /**
+ * A bounded, request-local compactor used only when the inbound body is over
+ * the normal forwarding limit.  It must be deterministic and must not perform
+ * network or filesystem I/O.  Returning null means that no safe compaction was
+ * possible; the regular transform chain still gets a chance to reduce the
+ * body, after which the hard limit is enforced.
+ */
+export interface OversizedRequestCompactor {
+  (
+    body: unknown,
+    ctx: RequestTransformCtx,
+    targetBytes: number,
+  ): unknown | null | Promise<unknown | null>;
+}
+
+/**
  * 本地 handler —— 路由决策命中 `localHandler` 时,代理**不转发上游**,由 handler 直接消费
  * 请求并把响应写回 `res`(典型:协议翻译,如 Anthropic Messages ↔ OpenAI Responses)。
  *
@@ -113,6 +128,21 @@ export interface RoutingDecision {
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。
    */
   localHandler?: LocalRequestHandler;
+  /**
+   * Request-local dispatch-generation check. The proxy evaluates it after routing/async transforms
+   * and again before a transparent retry. Returning false rejects locally, so a retry can never
+   * reuse an endpoint/header decision after its owner generation changes.
+   *
+   * The callback is deliberately argument-free: it must close over only the host-side generation
+   * state needed for validation and never receives request headers/body or an Error.
+   */
+  dispatchGenerationValid?: () => boolean;
+  /**
+   * Optional request-local forwarding observer created by a trusted routing decision.
+   * It receives no request context or payload; the forwarding layer only supplies fixed terminal
+   * classifications and an HTTP status after the real upstream request starts.
+   */
+  forwardLifecycle?: ForwardLifecycleObserver;
 }
 
 /**
@@ -125,6 +155,28 @@ export type RoutingTransform = (
   body: unknown,
   ctx: RequestTransformCtx,
 ) => RoutingDecision | null | Promise<RoutingDecision | null>;
+
+export type ForwardLifecycleFailure =
+  | 'client-aborted'
+  | 'request-error'
+  | 'request-timeout'
+  | 'response-error'
+  | 'response-aborted'
+  | 'response-closed'
+  | 'retry-rejected'
+  | 'retry-error';
+
+/**
+ * Request-local forwarding lifecycle observer.
+ *
+ * The proxy deliberately exposes only fixed terminal classifications and an HTTP status. Raw
+ * targets, headers, bodies, response bytes, and Error objects stay inside the forwarding layer.
+ */
+export interface ForwardLifecycleObserver {
+  onStart?(): void;
+  onComplete?(status: number): void;
+  onFailure?(failure: ForwardLifecycleFailure, status?: number): void;
+}
 
 export interface ResponseObserverCtx {
   readonly reqId: number;
@@ -186,6 +238,8 @@ export interface RecoveryRule {
   matches: (decodedErrorBodyText: string) => boolean;
   /** 改写请求 body;返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
   strip: (body: Buffer) => Buffer | null;
+  /** Classify a matched terminal rejection from the actual sent body, after safe retries. */
+  unrecoverableCode?: (body: Buffer) => string | null;
   /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
   onRetry?: (threadId: string, model: string) => void;
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
@@ -241,10 +295,40 @@ export interface ProxyOptions {
    */
   transformRequest?: RequestTransform[];
   /**
+   * Optional byte-preservation gate for non-chat endpoints sharing this proxy.
+   * Returning true skips every request-body transform for this request only.
+   */
+  bypassRequestTransforms?: (body: unknown, ctx: RequestTransformCtx) => boolean;
+  /**
+   * Opt selected opaque/non-JSON requests into routing without parsing their body.
+   * The routing transform receives `undefined`; the original bytes remain available
+   * to the forwarding path and can be preserved with `bypassRequestTransforms`.
+   */
+  routeOpaqueRequestBody?: (ctx: RequestTransformCtx) => boolean;
+  /**
    * 可选: per-request 路由 override(按 body.model 等选上游 / 换鉴权 header)。
    * 不传 = 永远走 `upstream` + 透传 headers(字节级行为与不传时完全一致,向后兼容)。
    */
   routingTransform?: RoutingTransform;
+  /**
+   * 可选: 真正 dispatch 前的同步再校验。调用点:
+   *   1. 请求开始、`collectRequestBody` 之前(此时 decision 为 null)—— host 在这里
+   *      按 `ctx` 盖章 owner scope;pending 为真则直接 503,不再等 body / 跑路由;
+   *   2. `routingTransform` 之后一次;
+   *   3. 任何异步 transform / outbound 解析之后、`runLocalHandler` / `forward` 之前;
+   *   4. 可恢复 400/422 透明重试递归 `forward` 之前。
+   * 后续调用传入与 `routingTransform` 相同的 `ctx`,host 对照请求开始时捕获的
+   * owner scope / generation —— pending 布尔值挡不住「切换在 await 里完整完成」,
+   * 盖章若拖到 routingTransform,也挡不住 body 上传期间的完整切换。
+   *
+   * 返回非 null = 替换当前决策(典型:改成 localHandler 503,拒绝带着过期归属的凭证出站);
+   * 返回 null = 保持已解析的路由,包括已经算好的 forward target。不要用它改上游。
+   * 不传 = 不插入检查,与扩展前字节级一致。
+   */
+  revalidateBeforeDispatch?: (
+    decision: RoutingDecision | null,
+    ctx?: RequestTransformCtx,
+  ) => RoutingDecision | null;
   /**
    * 可选响应观察器。默认关闭;开启后只能 tee 响应 chunk 做轻量 metadata 解析,
    * 不能改写响应或阻塞流式 pipe。
@@ -269,6 +353,17 @@ export interface ProxyOptions {
    * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
    */
   maxRequestBodyBytes?: number;
+  /**
+   * Optional compactor for bodies that exceed maxRequestBodyBytes.  Enabling
+   * this also permits a bounded ingress window so the compactor can inspect a
+   * request before the hard limit is applied.  Requests within the normal
+   * limit do not enter this path.  When routing selects a local handler, the
+   * same compaction result is passed to that handler before its hard-limit
+   * check.
+   */
+  oversizedRequestCompactor?: OversizedRequestCompactor;
+  /** Maximum bytes accepted for an oversized request before compaction. */
+  oversizedRequestIngressBytes?: number;
   /**
    * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:
    *   - `http://` 代理地址 = 经该代理转发(https 上游走 CONNECT 隧道、http 上游走绝对形式)

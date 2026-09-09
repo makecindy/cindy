@@ -5,6 +5,8 @@ import {
   cloneXboxGamepadBinding,
   createXboxGamepadDefaultLayout,
   createXboxGamepadDefaultSettings,
+  GAMEPAD_FAMILIES,
+  type GamepadFamily,
   isXboxGamepadBinding,
   isXboxGamepadStickMode,
   XBOX_GAMEPAD_BUTTON_IDS,
@@ -19,8 +21,8 @@ import { xboxGamepadLayoutOverrides } from './layoutOverride.js';
 
 const log = desktopMakerLogger.child('xbox-gamepad-settings-store');
 
-function settingsFilePath(): string {
-  return ownerScopedUserDataPath('xbox-gamepad-settings.json');
+function settingsFileName(family: GamepadFamily): string {
+  return family === 'xbox' ? 'xbox-gamepad-settings.json' : `${family}-gamepad-settings.json`;
 }
 
 function normalizeStick(raw: unknown, fallback: XboxGamepadStickBinding): XboxGamepadStickBinding {
@@ -90,43 +92,61 @@ function normalizeSettings(raw: unknown): XboxGamepadSettings {
   };
 }
 
-const store = createOverrideSettingsFile<XboxGamepadSettings>({
-  filePath: settingsFilePath,
-  defaults: createXboxGamepadDefaultSettings,
-  normalize: normalizeSettings,
-  mergeOverrides: ({ patch, next, defaults, overrides }) => {
-    const nextOverrides = { ...overrides };
-    if ('deviceEnabled' in patch) {
-      if (next.deviceEnabled === defaults.deviceEnabled) delete nextOverrides.deviceEnabled;
-      else nextOverrides.deviceEnabled = next.deviceEnabled;
-    }
-    if ('layout' in patch) {
-      const layout = xboxGamepadLayoutOverrides(next.layout, defaults.layout);
-      if (layout) nextOverrides.layout = layout;
-      else delete nextOverrides.layout;
-    }
-    return nextOverrides;
-  },
-  log,
-  label: 'Xbox gamepad',
-  maxBytes: 64 * 1024,
-});
+function createStore(family: GamepadFamily) {
+  return createOverrideSettingsFile<XboxGamepadSettings>({
+    filePath: () => ownerScopedUserDataPath(settingsFileName(family)),
+    defaults: createXboxGamepadDefaultSettings,
+    normalize: normalizeSettings,
+    mergeOverrides: ({ patch, next, defaults, overrides }) => {
+      const nextOverrides = { ...overrides };
+      if ('deviceEnabled' in patch) {
+        if (next.deviceEnabled === defaults.deviceEnabled) delete nextOverrides.deviceEnabled;
+        else nextOverrides.deviceEnabled = next.deviceEnabled;
+      }
+      if ('layout' in patch) {
+        const layout = xboxGamepadLayoutOverrides(next.layout, defaults.layout);
+        if (layout) nextOverrides.layout = layout;
+        else delete nextOverrides.layout;
+      }
+      return nextOverrides;
+    },
+    log,
+    label: `${family} gamepad`,
+    maxBytes: 64 * 1024,
+  });
+}
 
-export function readXboxGamepadSettings(): XboxGamepadSettings {
+const stores = Object.fromEntries(
+  GAMEPAD_FAMILIES.map((family) => [family, createStore(family)]),
+) as Record<GamepadFamily, ReturnType<typeof createStore>>;
+
+export function readXboxGamepadSettings(family: GamepadFamily = 'xbox'): XboxGamepadSettings {
+  const store = stores[family];
   store.invalidateIfChanged();
   return store.read();
 }
 
-export function writeXboxGamepadSettingsPatch(patch: XboxGamepadSettingsPatch): XboxGamepadSettings {
+export function writeXboxGamepadSettingsPatch(
+  family: GamepadFamily,
+  patch: XboxGamepadSettingsPatch,
+): XboxGamepadSettings {
+  const store = stores[family];
   store.writePatch(patch);
-  log.info('Xbox gamepad settings written', { keys: Object.keys(patch) });
+  log.info('Xbox gamepad settings written', { family, keys: Object.keys(patch) });
   return store.read();
 }
 
-export function resetXboxGamepadSettings(): XboxGamepadSettings {
+export function resetXboxGamepadSettings(family: GamepadFamily = 'xbox'): XboxGamepadSettings {
+  const store = stores[family];
   const keepEnabled = store.read().deviceEnabled;
   store.reset();
-  log.info('Xbox gamepad settings reset');
-  if (keepEnabled) return writeXboxGamepadSettingsPatch({ deviceEnabled: true });
+  log.info('Xbox gamepad settings reset', { family });
+  if (keepEnabled) return writeXboxGamepadSettingsPatch(family, { deviceEnabled: true });
   return store.read();
+}
+
+export function readAllGamepadSettings(): Record<GamepadFamily, XboxGamepadSettings> {
+  return Object.fromEntries(
+    GAMEPAD_FAMILIES.map((family) => [family, readXboxGamepadSettings(family)]),
+  ) as Record<GamepadFamily, XboxGamepadSettings>;
 }

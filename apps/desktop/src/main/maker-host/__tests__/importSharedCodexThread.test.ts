@@ -21,6 +21,7 @@ vi.mock('../../logger.js', () => ({
 import {
   importSharedCodexThread,
   removeSharedCodexThread,
+  reserveCodexForkCleanup,
 } from '../codex-local-sessions';
 
 const THREAD_ID = '019dcd5a-6e54-7960-95e0-aa68117a28f1';
@@ -253,5 +254,32 @@ describe('importSharedCodexThread', () => {
     const db = new Database(stateDbPath, { readonly: true });
     expect(db.prepare('SELECT COUNT(*) AS n FROM thread_dynamic_tools').get()).toEqual({ n: 0 });
     db.close();
+  });
+
+  it('removes only the exact reserved fork rollout and state rows', async () => {
+    const sourceThreadId = '019dcd5a-6e54-7960-95e0-aa68117a28f2';
+    const rolloutPath = path.join(
+      codexHome,
+      'sessions',
+      '2026',
+      '08',
+      '29',
+      `rollout-2026-08-29T00-00-00-${THREAD_ID}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '{"type":"session_meta"}\n');
+    const db = new Database(stateDbPath);
+    db.prepare('INSERT INTO threads (id, rollout_path) VALUES (?, ?)').run(THREAD_ID, rolloutPath);
+    db.prepare('INSERT INTO thread_dynamic_tools (thread_id, tool_name) VALUES (?, ?)')
+      .run(THREAD_ID, 'browser');
+    db.close();
+
+    const reservation = reserveCodexForkCleanup(THREAD_ID, sourceThreadId);
+    expect(reservation).not.toBeNull();
+    await reservation!();
+
+    expect(fs.existsSync(rolloutPath)).toBe(false);
+    expect(desktopThreadExists(THREAD_ID)).toBe(false);
+    expect(reserveCodexForkCleanup(sourceThreadId, sourceThreadId)).toBeNull();
   });
 });

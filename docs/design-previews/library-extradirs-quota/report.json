@@ -1,0 +1,190 @@
+{
+  "ok": true,
+  "partial": false,
+  "toolVersion": "qa-hifi-demo@2026-07-30-component-mode-r14",
+  "demo": "library-extradirs-quota",
+  "inputHashes": {
+    "spec.json": "7e26e8232399f37adb935965140f27ba32b4c08494a9a5dbb2b23497991036cd",
+    "truth.json": "59802b8927a9b3f40b54ae52d4cf244d92f63079cb982782bf21723ee9fa20fa",
+    "index.html": "1b3a36cb5d0c69bc92ca1eebfb7b88bc8a11b1ed2fa3e26f68e090a81c88567c",
+    "baselines": {
+      "declared": [],
+      "files": []
+    }
+  },
+  "statesResult": {
+    "total": 2,
+    "viaReachable": 2,
+    "tabOnly": 0
+  },
+  "truthStats": {
+    "fixtureLeaves": 0
+  },
+  "artifactRoot": "/var/folders/v9/vclyhlmn7c9cv6jb74z_7lyw0000gn/T/qa-hifi-out-lDPl4t",
+  "coverage": {
+    "cases": [
+      {
+        "id": "desk-zh-light",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "desk-en-dark",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      }
+    ]
+  },
+  "gateA": {
+    "name": "真值一致",
+    "pass": true,
+    "detail": "",
+    "provenance": "required",
+    "extractorDrift": "none",
+    "refsOutsideSnapshot": "none",
+    "observeBinding": "bound",
+    "extractorSha256": "bf7827122b627f7676d838815a5b6ba880722f334d0ae8c2af7527e4839ed428",
+    "requestsOutsideSnapshot": "none",
+    "snapshotDrift": "none",
+    "snapshotManifest": {
+      "added": 0,
+      "removed": 0,
+      "changed": 0
+    },
+    "postRunHashRecheck": "ok"
+  },
+  "gateB": {
+    "name": "状态覆盖",
+    "pass": true,
+    "total": 4,
+    "passed": 4,
+    "failures": [],
+    "cases": [
+      {
+        "id": "desk-zh-light",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "passed": 2,
+        "total": 2,
+        "failures": []
+      },
+      {
+        "id": "desk-en-dark",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "passed": 2,
+        "total": 2,
+        "failures": []
+      }
+    ],
+    "entryRenderProof": "n/a"
+  },
+  "gateC": {
+    "name": "交互鲁棒",
+    "pass": true,
+    "checks": [
+      {
+        "id": "no-clip",
+        "pass": true,
+        "failures": []
+      },
+      {
+        "id": "persistence",
+        "pass": true,
+        "failures": []
+      }
+    ],
+    "cases": [
+      {
+        "id": "desk-zh-light",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-en-dark",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        }
+      }
+    ]
+  },
+  "gateD": {
+    "name": "渲染绑定",
+    "pass": true,
+    "total": 4,
+    "passed": 4,
+    "failures": [],
+    "cases": [
+      {
+        "id": "desk-zh-light",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-en-dark",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        }
+      }
+    ]
+  },
+  "gateF": {
+    "name": "适配还原",
+    "pass": true,
+    "total": 0,
+    "passed": 0,
+    "failures": [],
+    "cases": [],
+    "detail": "spec.adaptive 未配置——窗口拉伸行为未验证"
+  },
+  "gateX": {
+    "name": "自定义门",
+    "pass": true,
+    "total": 0,
+    "passed": 0,
+    "failures": [],
+    "gates": [],
+    "detail": "未声明 customGates"
+  },
+  "generatedAt": "2026-09-01T11:43:08.856Z"
+}

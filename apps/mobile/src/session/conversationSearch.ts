@@ -27,6 +27,7 @@ import {
 } from '@cindy/maker-shared/session-list';
 import type { DeviceAccessState } from '@cindy/maker-shared/device-list';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { deviceMirrorCleanupDisposition } from '@/device-link/presenceDevices';
 import type { RemoteSession } from '@/session/types';
@@ -313,6 +314,7 @@ export function toSearchListItem(
     item.contentHit?.preview ?? cached?.preview ?? null,
     null,
     unnamedLabel,
+    mobilePresentationLocalizer,
   );
   const searchFocusClientId = item.contentHit?.messageClientId?.trim();
   return {

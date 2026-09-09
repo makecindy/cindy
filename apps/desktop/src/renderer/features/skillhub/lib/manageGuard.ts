@@ -15,7 +15,7 @@ type ManageRole = 'admin' | 'publisher' | 'viewer';
 /**
  * 判断某个「我的管理」里的 skill 是否因「我在其所属团队只是 viewer」而无写权限。
  *
- * - 个人归属(ownerType !== 'org')→ 永远有权,返回 false。
+ * - 个人归属(ownerType !== 'org' / 'organization')→ 永远有权,返回 false。
  * - 团队归属 → 查我在该团队(owner slug)的角色:
  *   - admin / publisher → 有权,返回 false。
  *   - viewer(含部门派生的只读身份)→ 无权,返回 true。
@@ -26,7 +26,7 @@ export function lacksTeamManagePermission(
   skill: { ownerType?: string; authorId: string },
   myRoleByTeamSlug: Map<string, ManageRole | undefined>,
 ): boolean {
-  if (skill.ownerType !== 'org') return false;
+  if (skill.ownerType !== 'org' && skill.ownerType !== 'organization') return false;
   const role = myRoleByTeamSlug.get(skill.authorId);
   if (role === undefined) return false;
   return role !== 'admin' && role !== 'publisher';

@@ -11,7 +11,7 @@
  *  - subscribe(listener) 接收 sessionId-aware 通知;消费方(RightSidebarShell)通过
  *    React 的 useSyncExternalStore 订阅当前 sessionId 的桶变化。
  *
- * 错误暴露走 caller 的 catch + console.error;Phase 7 加 toast 统一暴露。
+ * 错误暴露走 caller 的 catch + console.error;Phase 7 收尾:添加失败由 Shell 按错误码 toast 统一暴露。
  *
  * 模块单例 → RightSidebar 整树 unmount/remount(session 切换时 MainLayout L553 条件渲染)也不丢数据。
  */
@@ -613,7 +613,8 @@ export async function addTab(
   const activate = opts?.activate !== false;
   const prev = getBucket(sessionId);
   if (prev.tabs.length >= MAX_TABS_PER_SESSION) {
-    throw new Error(
+    throw createIpcError(
+      'RIGHT_SIDEBAR_TOO_MANY_TABS',
       `session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`,
     );
   }

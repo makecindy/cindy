@@ -51,6 +51,8 @@ vi.mock('../outbound-fetch.js', () => ({
 }));
 
 import {
+  CallbackListener,
+  runGrokOAuthLogin,
   getGrokOAuthCredentialGeneration,
   logoutGrok,
   recoverGrokAuthAfterRejection,
@@ -343,4 +345,27 @@ describe('recoverGrokAuthAfterRejection', () => {
     expect(readStored()?.access_token).toBe('rejected-access-token');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+it.each(['boundary', 'policy'] as const)('preserves credentials when %s becomes invalid during token exchange', async (reason) => {
+  seedCredentials();
+  const before = store.get(SECRET_ID);
+  const generation = getGrokOAuthCredentialGeneration();
+  let current = true;
+  vi.spyOn(CallbackListener.prototype, 'start').mockResolvedValue(56121);
+  vi.spyOn(CallbackListener.prototype, 'waitForCode').mockResolvedValue('fake-code');
+  vi.stubGlobal('fetch', vi.fn(async (_input, init) => {
+    if (init?.method === 'POST') {
+      current = false;
+      return tokenResponse(200, { access_token: 'new-fake-access', refresh_token: 'new-fake-refresh' });
+    }
+    return tokenResponse(200, {});
+  }));
+  const result = await runGrokOAuthLogin({
+    assertCurrent: () => { if (reason === 'boundary' && !current) throw new Error('card withdrawn'); },
+    beforeCommit: async () => { if (reason === 'policy' && !current) throw new Error('card withdrawn'); },
+  });
+  expect(result).toMatchObject({ ok: false, reason: 'card withdrawn' });
+  expect(store.get(SECRET_ID)).toBe(before);
+  expect(getGrokOAuthCredentialGeneration()).toBe(generation);
 });

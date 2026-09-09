@@ -26,9 +26,12 @@ import {
   MainWindowOptionButton,
   MainWindowRowButton,
   RemoteListSyncingPlaceholder,
-  ScreenHeader,
   SummaryStrip,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+} from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -61,6 +64,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
+  ScheduleModelSelectionUnsupportedError,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -70,6 +74,7 @@ import {
   localizeScheduleDraftValidation,
   localizeTemplateParamValidation,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
+  resolveMobileScheduleBinding,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
   updateDraftCronExpr,
@@ -429,7 +434,6 @@ export default function AutomationsScreen() {
         return;
       }
     }
-    const input = buildMobileScheduleInput(formDraft);
     const actionKey = formMode === 'edit' ? `edit:${formScheduleId}` : 'create';
     setBusyAction(actionKey);
     setError(null);
@@ -442,22 +446,25 @@ export default function AutomationsScreen() {
         await openLink(deviceId);
         await subscribe(`automations:${deviceId}`, deviceId, ['sessions']);
       });
-      // intervalMs:null 的清空表达只有新 desktop 认识(旧引擎会当成已设间隔立即
-      // 触发),发送前按 host 能力位降级 wire 形态;探测失败按不支持处理
-      // (失败方向的取舍见 applyScheduleWireCompat 注释)。
-      const wireInput = await (async () => {
-        if (input.intervalMs !== null) return input;
-        const caps = await maker.getCapabilities(formDraft.agentKind).catch(() => null);
-        const supportsIntervalNullClear = !!(
-          caps as { supportsScheduleIntervalNullClear?: boolean } | null
-        )?.supportsScheduleIntervalNullClear;
-        return applyScheduleWireCompat(input, { supportsIntervalNullClear });
-      })();
+      const resolvedDraft = await resolveMobileScheduleBinding(formDraft, async (id) =>
+        await maker.getSession(id) as RemoteSession);
+      const input = buildMobileScheduleInput(resolvedDraft);
+      // Negotiate on every save, including numeric intervals and template creation.
+      // Unknown/old hosts must not silently accept an unsupported bound selection.
+      const caps = await maker.getCapabilities(resolvedDraft.agentKind).catch(() => null) as {
+        supportsScheduleIntervalNullClear?: boolean;
+        supportsScheduleModelSelection?: boolean;
+      } | null;
+      const supportsModelSelection = caps?.supportsScheduleModelSelection === true;
+      const wireInput = applyScheduleWireCompat(input, {
+        supportsIntervalNullClear: caps?.supportsScheduleIntervalNullClear === true,
+        supportsModelSelection,
+      });
       const saved = await (async () => {
         if (formMode === 'edit' && formScheduleId) {
           return withTransientRemoteRetry(() => maker.schedule.update(formScheduleId, wireInput));
         }
-        if (selectedTemplate && !templatePromptDirty) {
+        if (selectedTemplate && !templatePromptDirty && supportsModelSelection) {
           return maker.schedule.createFromTemplate({
             templateId: selectedTemplate.id,
             paramValues: templateParamValues,
@@ -477,7 +484,8 @@ export default function AutomationsScreen() {
       }
       await loadSchedules().catch(() => undefined);
     } catch (err) {
-      setFormError(formatRemoteError(err));
+      setFormError(err instanceof ScheduleModelSelectionUnsupportedError
+        ? t('deviceLink.remoteError.channelNotAllowed') : formatRemoteError(err));
     } finally {
       setBusyAction(null);
     }
@@ -496,6 +504,7 @@ export default function AutomationsScreen() {
     syncRuns,
     templateParamValues,
     templatePromptDirty,
+    t,
   ]);
 
   const runScheduleAction = useCallback(async (
@@ -794,8 +803,8 @@ export default function AutomationsScreen() {
   }, [busyAction, deviceId, maker, openLink, subscribe, syncRuns]);
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="automations.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="automations.screen">
+      <SimpleStackHeader
         action={{
           label: t('devices.common.create'),
           onPress: busyAction ? undefined : startCreateSchedule,
@@ -1220,7 +1229,7 @@ function ScheduleFormCard({
                   accessibilityState={{ checked: session.id === boundSessionInputValue.trim() }}
                   disabled={busy}
                   key={session.id}
-                  onPress={() => onChange(updateDraftBoundSessionId(draft, session.id))}
+                  onPress={() => onChange(updateDraftBoundSessionId(draft, session.id, session.agentKind))}
                   selected={session.id === boundSessionInputValue.trim()}
                   style={styles.boundSessionOption}
                   testID="automations.form.boundSessionOption"
@@ -1245,7 +1254,8 @@ function ScheduleFormCard({
           <TextInput
             autoCapitalize="none"
             editable={!busy}
-            onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value))}
+            onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value,
+              sessions.find((session) => session.id === value.trim())?.agentKind))}
             placeholder="session id"
             placeholderTextColor={colors.textTertiary}
             style={styles.input}

@@ -76,7 +76,7 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
   // 通用入口依旧不 patch store(前两条断言不受影响)。
   it('NewMakerDraftRoute mount 时清空 extraDirs(引用目录不跨草稿保留)', () => {
     expect(draftRouteSource).toContain(
-      "if (getDraft().extraDirs.length > 0) patchDraft({ extraDirs: [] });",
+      "if (getDraft().extraDirs.length > 0 || getDraft().writableDirs.length > 0) {",
     );
   });
 });

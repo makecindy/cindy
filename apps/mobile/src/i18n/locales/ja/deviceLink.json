@@ -1,4 +1,13 @@
 {
+  "cachedHistory": {
+    "title": "コンピューター未接続",
+    "hint": "保存済みの内容を表示できます。続きを読み込むには接続が必要です。"
+  },
+  "recovery": {
+    "syncing": "同期中…",
+    "recovered": "復旧しました",
+    "syncingHint": "パソコンの内容を更新しています。"
+  },
   "syncFailed": "同期に失敗しました",
   "resync": "再同期",
   "resyncing": "再同期しています",

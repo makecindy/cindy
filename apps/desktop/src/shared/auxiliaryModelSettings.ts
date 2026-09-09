@@ -1,21 +1,26 @@
 import type { Provider } from '@cindy/model-providers';
 
-import { decodeCatalogModelPin } from './catalogModelPin';
+import {
+  AUXILIARY_MODEL_CHAIN_MAX,
+  isAuxiliaryModelRef,
+  parseAuxiliaryModelRef,
+} from './auxiliaryModelChain.js';
+import { decodeCatalogModelPin } from './catalogModelPin.js';
+import { isUtilityModelProviderKind } from './utilityModelProfiles.js';
 
-/** Main-owned model choices for short, host-generated auxiliary text. */
+/** Main-owned ordered model chain for short, host-generated auxiliary text. */
 export interface AuxiliaryModelSettings {
-  /** null = preserve the existing per-task/session automatic routing. */
-  sessionTitleModel: string | null;
-  /** null = preserve the existing prompt-recommendation automatic routing. */
-  promptRecommendationModel: string | null;
+  /**
+   * Ordered custom models. Empty = follow the current version's automatic chain.
+   * At most three unique refs (catalog pins or lightweight profile keys).
+   */
+  models: string[];
 }
 
-export type AuxiliaryModelSettingsKey = keyof AuxiliaryModelSettings;
 export type AuxiliaryModelSettingsPatch = Partial<AuxiliaryModelSettings>;
 
 export const AUXILIARY_MODEL_SETTINGS_DEFAULTS: AuxiliaryModelSettings = {
-  sessionTitleModel: null,
-  promptRecommendationModel: null,
+  models: [],
 };
 
 export const AUXILIARY_MODEL_PIN_MAX_LENGTH = 768;
@@ -56,24 +61,77 @@ function containsControlCharacter(value: string): boolean {
   return false;
 }
 
-/** Disk normalization: invalid values restore the automatic/default route. */
-export function normalizeAuxiliaryModelPin(value: unknown): string | null {
+/** Disk normalization: invalid values are dropped; empty list restores automatic. */
+export function normalizeAuxiliaryModelRef(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (
-    !trimmed ||
-    trimmed.length > AUXILIARY_MODEL_PIN_MAX_LENGTH ||
-    containsControlCharacter(trimmed) ||
-    !decodeCatalogModelPin(trimmed)
+    !trimmed
+    || trimmed.length > AUXILIARY_MODEL_PIN_MAX_LENGTH
+    || containsControlCharacter(trimmed)
+    || !isAuxiliaryModelRef(trimmed)
   ) {
     return null;
   }
   return trimmed;
 }
 
-/** IPC validation is strict: only null or a canonical, bounded catalog pin. */
-export function isValidAuxiliaryModelPinInput(value: unknown): value is string | null {
-  if (value === null) return true;
+export function normalizeAuxiliaryModelList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const models: string[] = [];
+  for (const entry of value) {
+    const ref = normalizeAuxiliaryModelRef(entry);
+    if (!ref || models.includes(ref)) continue;
+    models.push(ref);
+    if (models.length >= AUXILIARY_MODEL_CHAIN_MAX) break;
+  }
+  return models;
+}
+
+/**
+ * Accept a persisted or IPC value as a canonical auxiliary ref.
+ * Catalog pins must already be trimmed; profile keys must be exact ids.
+ */
+export function isValidAuxiliaryModelRefInput(value: unknown): value is string {
   if (typeof value !== 'string') return false;
-  return normalizeAuxiliaryModelPin(value) === value;
+  return normalizeAuxiliaryModelRef(value) === value;
+}
+
+export function isValidAuxiliaryModelListInput(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false;
+  if (value.length > AUXILIARY_MODEL_CHAIN_MAX) return false;
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (!isValidAuxiliaryModelRefInput(entry) || seen.has(entry)) return false;
+    seen.add(entry);
+  }
+  return true;
+}
+
+/** True when the user has an explicit 1–3 model override. */
+export function isCustomAuxiliaryModelList(models: readonly string[]): boolean {
+  return models.length > 0;
+}
+
+export function describeAuxiliaryModelRef(ref: string): {
+  providerId: string;
+  agentKind: 'codex' | 'claude-code';
+  model: string;
+} | null {
+  const parsed = parseAuxiliaryModelRef(ref);
+  if (!parsed) return null;
+  if (parsed.kind === 'catalog') return parsed.route;
+  return {
+    providerId: parsed.id.startsWith('codex-') ? 'openai' : 'xd',
+    agentKind: 'codex',
+    model: parsed.id,
+  };
+}
+
+export function isCatalogAuxiliaryRef(value: string): boolean {
+  return decodeCatalogModelPin(value) !== null;
+}
+
+export function isProfileAuxiliaryRef(value: string): boolean {
+  return isUtilityModelProviderKind(value);
 }

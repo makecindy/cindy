@@ -364,7 +364,7 @@ export function PinnedSection({
           scrollbar-gutter:stable 预留的 12px(= pl-3,与全局 12px 滚动条等宽)补齐,
           两侧视觉对称。卡片模式原先用 px-[11px],右侧在 gutter 之外又叠了 11px padding,
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
-      {/* 段级收起走 SectionCollapse 高度动画(内容保持挂载)。 */}
+      {/* 段级收起走 SectionCollapse 高度动画,播完卸载子树。 */}
       <SectionCollapse collapsed={collapsed}>
         <div className={cn('flex flex-col gap-0.5', isCardLike ? 'pr-0 pl-3' : 'pt-1 pr-0 pl-3')}>
           {/* 三种显示模式:

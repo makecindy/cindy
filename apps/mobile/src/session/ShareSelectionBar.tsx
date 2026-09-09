@@ -13,7 +13,7 @@ import {
   typeScale,
 } from "@/theme/tokens";
 
-/** 分享选择模式底部只保留关闭、已选数量和分享主按钮。 */
+/** 分享选择模式底部：关闭、标题 + 已选数量（对齐桌面 title/subtitle）、分享主按钮。 */
 export function ShareSelectionBar({
   busy,
   count,
@@ -51,8 +51,11 @@ export function ShareSelectionBar({
     <View
       style={[styles.count, screenshotTriggered && styles.screenshotSafeCount]}
     >
+      <Text ellipsizeMode="tail" numberOfLines={1} style={styles.titleText}>
+        {t("session.shareImage.title")}
+      </Text>
       <Text ellipsizeMode="tail" numberOfLines={1} style={styles.countText}>
-        {t("session.shareImage.selectedCount", { count })}
+        {t("session.shareImage.subtitle", { count })}
       </Text>
     </View>
   );
@@ -112,11 +115,17 @@ const makeStyles = (colors: ThemeColors) =>
       width: 44,
     },
     count: { flex: 1, minWidth: 0 },
-    countText: {
+    titleText: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
       fontWeight: fontWeight.medium,
       lineHeight: lineHeight.body,
+    },
+    countText: {
+      color: colors.textSecondary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      marginTop: spacing.xs,
     },
     screenshotSafeCount: {
       paddingLeft: spacing.xl,

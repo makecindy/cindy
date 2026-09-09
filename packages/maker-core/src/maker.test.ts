@@ -4,19 +4,25 @@ import {
   mkdtempSync,
   promises as fsPromises,
   realpathSync,
+  symlinkSync,
+  unlinkSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { Maker, type CreateSessionOptions } from './maker.js';
+import { snapshotDisabledSkillPaths } from './agents/shared/skill-activation.js';
+import { Maker, type CreateSessionOptions, type SessionStartFailureContext } from './maker.js';
 import { Session } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import {
+  AgentNotAuthenticatedError,
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
-  type BaseAgent,
+  BaseAgent,
 } from './agents/base-agent.js';
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
 import type { AgentKind, PermissionMode } from './types/common.js';
@@ -91,6 +97,19 @@ describe('Maker agent status', () => {
       authReady: false,
     });
   });
+
+  it('registers an optional agent after construction idempotently', () => {
+    const maker = new Maker({
+      agents: {},
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const pi = createAgent(async () => undefined, 'pi');
+
+    expect(maker.registerAgent('pi', pi)).toBe(true);
+    expect(maker.registerAgent('pi', pi)).toBe(false);
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+  });
 });
 
 function createAgent(
@@ -113,11 +132,67 @@ function createAgent(
       extraDirs: { supported: false },
     },
     startSession,
+    filterActiveSkillCommands: (result: unknown) => result,
     async dispose() {},
   } as unknown as BaseAgent;
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s live palettes on their startup Skill snapshot', async (agentKind) => {
+    const source = '/fixture/disabled-skill';
+    let disabled: string[] = [source];
+    const agent = createAgent(async (opts) => ({
+      ...createHandle({ id: opts.sessionId ?? 'fixture', agentKind }),
+      disabledSkillPaths: snapshotDisabledSkillPaths(disabled),
+    }), agentKind);
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [{
+      kind: 'agent-skill' as const, name: 'demo', source: 'skill' as const, path: source,
+    }] }));
+    agent.filterActiveSkillCommands = (result, remoteHostId, snapshot) => BaseAgent.prototype.filterActiveSkillCommands.call(
+      { deps: { getDisabledSkillPaths: () => disabled } } as unknown as BaseAgent, result, remoteHostId, snapshot,
+    );
+    const maker = new Maker({ agents: { [agentKind]: agent }, storage: createStorage(), logger: createLogger() });
+    await maker.createSession({ id: 'disabled-start', agentKind, workingDir: '/repo', model: 'm' });
+    disabled = [];
+    expect((await maker.listAgentSkills(agentKind, { workingDir: '/repo' })).skills).toHaveLength(1);
+    expect((await maker.listAgentSkills(agentKind, { workingDir: '/repo', sessionId: 'disabled-start' })).skills).toEqual([]);
+    await maker.createSession({ id: 'enabled-start', agentKind, workingDir: '/repo', model: 'm' });
+    disabled = [source];
+    expect((await maker.listAgentSkills(agentKind, { workingDir: '/repo' })).skills).toEqual([]);
+    expect((await maker.listAgentSkills(agentKind, { workingDir: '/repo', sessionId: 'enabled-start' })).skills).toHaveLength(1);
+    await maker.shutdown();
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s disabled identities stable after alias retargeting', async (agentKind) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cindy-disabled-snapshot-'));
+    const a = path.join(root, 'a');
+    const b = path.join(root, 'b');
+    const alias = path.join(root, 'alias');
+    mkdirSync(a);
+    mkdirSync(b);
+    symlinkSync(a, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const agent = createAgent(async (opts) => ({
+      ...createHandle({ id: opts.sessionId ?? 'fixture', agentKind }),
+      disabledSkillPaths: snapshotDisabledSkillPaths([alias]),
+    }), agentKind);
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [a, b].map((source) => ({
+      kind: 'agent-skill' as const, name: path.basename(source), source: 'skill' as const, path: source,
+    })) }));
+    agent.filterActiveSkillCommands = (result, remoteHostId, snapshot) => BaseAgent.prototype.filterActiveSkillCommands.call(
+      { deps: { getDisabledSkillPaths: () => [alias] } } as unknown as BaseAgent, result, remoteHostId, snapshot,
+    );
+    const maker = new Maker({ agents: { [agentKind]: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      await maker.createSession({ id: 'stable-disabled', agentKind, workingDir: root, model: 'm' });
+      unlinkSync(alias);
+      symlinkSync(b, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const live = await maker.listAgentSkills(agentKind, { workingDir: root, sessionId: 'stable-disabled' });
+      expect(live.skills.map((skill) => skill.name)).toEqual(['b']);
+      const preview = await maker.listAgentSkills(agentKind, { workingDir: root });
+      expect(preview.skills.map((skill) => skill.name)).toEqual(['a']);
+    } finally { await maker.shutdown(); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('allows package skills only for previews and ordinary local Pi tasks', async () => {
     const storage = createStorage();
     const base = {
@@ -178,7 +253,297 @@ function createDeferred<T = void>(): {
   return { promise, resolve };
 }
 
+describe('Maker local Pi package generation fence', () => {
+  it.each(['disable', 'remove', 'update'])(
+    'closes an in-flight local Pi startup before publish after %s',
+    async () => {
+      const started = createDeferred<AgentSessionHandle>();
+      const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
+      handle.close = vi.fn(async () => undefined);
+      const startSession = vi.fn(async () => started.promise);
+      const storage = createStorage();
+      const maker = new Maker({
+        agents: { pi: createAgent(startSession, 'pi') },
+        storage,
+        logger: createLogger(),
+      });
+      const creating = maker.createSession({
+        id: 'local-pi',
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      });
+      await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+      maker.advanceLocalPiPackageRuntimeGeneration();
+      started.resolve(handle);
+
+      await expect(creating).rejects.toThrow('invalidated by a package change');
+      expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+      expect(maker.listActiveSessions()).toEqual([]);
+      expect(await storage.get('local-pi')).toBeNull();
+    },
+  );
+
+  it('rolls back a task created after package generation changes inside storage.get', async () => {
+    const baseStorage = createStorage();
+    const getEntered = createDeferred();
+    const allowGet = createDeferred();
+    const storage: SessionStorage = {
+      ...baseStorage,
+      async get(id) {
+        getEntered.resolve();
+        await allowGet.promise;
+        return baseStorage.get(id);
+      },
+    };
+    const handle = createHandle({ id: 'pi-thread-get-race', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'get-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await getEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowGet.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(await storage.get('get-race')).toBeNull();
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('rolls back a task created while package generation changes inside storage.create', async () => {
+    const baseStorage = createStorage();
+    const createEntered = createDeferred();
+    const allowCreate = createDeferred();
+    const storage: SessionStorage = {
+      ...baseStorage,
+      async create(meta) {
+        createEntered.resolve();
+        await allowCreate.promise;
+        return baseStorage.create(meta);
+      },
+    };
+    const handle = createHandle({ id: 'pi-thread-created-race', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+
+    const creating = maker.createSession({
+      id: 'created-during-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await createEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowCreate.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(await storage.get('created-during-race')).toBeNull();
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('preserves existing metadata when generation changes inside storage.update', async () => {
+    const baseStorage = createStorage();
+    await baseStorage.create({
+      id: 'updated-during-race',
+      agentKind: 'pi',
+      workDir: '/repo',
+      title: 'Existing Pi task',
+      model: 'pi-model',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    const updateEntered = createDeferred();
+    const allowUpdate = createDeferred();
+    const storage: SessionStorage = {
+      ...baseStorage,
+      async update(id, patch) {
+        updateEntered.resolve();
+        await allowUpdate.promise;
+        return baseStorage.update(id, patch);
+      },
+    };
+    const handle = createHandle({ id: 'pi-thread-replacement', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+
+    const creating = maker.createSession({
+      id: 'updated-during-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      resumeSessionId: 'pi-thread-existing',
+    });
+    await updateEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowUpdate.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(await storage.get('updated-during-race')).toMatchObject({
+      title: 'Existing Pi task',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('rejects a mutation during async onStartSucceeded without closing unpublished task ownership', async () => {
+    const hookEntered = createDeferred();
+    const allowHook = createDeferred();
+    const onClose = vi.fn();
+    const handle = createHandle({ id: 'pi-thread-hook-race', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const storage = createStorage();
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+      lifecycleHooks: {
+        async onStartSucceeded() {
+          hookEntered.resolve();
+          await allowHook.promise;
+        },
+        onClose,
+      },
+    });
+
+    const creating = maker.createSession({
+      id: 'hook-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await hookEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowHook.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await storage.get('hook-race')).toBeNull();
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('publishes a local Pi startup when generation stays unchanged across async hooks', async () => {
+    const allowHook = createDeferred();
+    const handle = createHandle({ id: 'pi-thread-current', agentKind: 'pi' });
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: { onStartSucceeded: async () => allowHook.promise },
+    });
+    const creating = maker.createSession({
+      id: 'current-local-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    allowHook.resolve();
+
+    await expect(creating).resolves.toBeInstanceOf(Session);
+    expect(maker.listActiveSessions()).toHaveLength(1);
+  });
+
+  it('preserves an existing task sdkSessionId when its replacement startup becomes stale', async () => {
+    const storage = createStorage();
+    await storage.create({
+      id: 'existing-local-pi',
+      agentKind: 'pi',
+      workDir: '/repo',
+      title: 'Existing Pi task',
+      model: 'pi-model',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    const started = createDeferred<AgentSessionHandle>();
+    const staleHandle = createHandle({ id: 'pi-thread-stale', agentKind: 'pi' });
+    staleHandle.close = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => started.promise);
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'existing-local-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      resumeSessionId: 'pi-thread-existing',
+    });
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    started.resolve(staleHandle);
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(staleHandle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(await storage.get('existing-local-pi')).toMatchObject({
+      title: 'Existing Pi task',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it.each([
+    ['remote', { remoteHostId: 'ssh-host' }],
+    ['Review', { reviewMode: true as const }],
+  ])('does not fence an in-flight %s Pi startup', async (_label, boundary) => {
+    const started = createDeferred<AgentSessionHandle>();
+    const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => started.promise);
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'excluded-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      ...boundary,
+    });
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    started.resolve(handle);
+
+    await expect(creating).resolves.toBeInstanceOf(Session);
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(maker.listActiveSessions()).toHaveLength(1);
+  });
+});
+
 describe('Maker session creation singleflight', () => {
+  it('reports the effective runtime cwd when recovering an existing task elsewhere', async () => {
+    const storage = createStorage();
+    await storage.create({ id: 'recovered-cwd', agentKind: 'codex', workDir: '/original', title: 'Existing task', model: 'test-model' });
+    const startSession = vi.fn(async () => createHandle({ id: 'recovered-native' }));
+    const maker = new Maker({ agents: { codex: createAgent(startSession) }, storage, logger: createLogger() });
+    const session = await maker.createSession({ id: 'recovered-cwd', agentKind: 'codex', workingDir: '/conversation', model: 'test-model' });
+    expect(startSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/conversation' }));
+    expect(session.workDir).toBe('/conversation');
+    expect((await storage.get('recovered-cwd'))?.workDir).toBe('/original');
+  });
+
   it('binds each rebuilt business session to a fresh runtime instance id', async () => {
     const seenInstanceIds: string[] = [];
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
@@ -232,13 +597,18 @@ describe('Maker session creation singleflight', () => {
       resumeSessionId: 'thread-1',
     };
 
-    const first = maker.createSession(options);
-    const second = maker.createSession({ ...options });
+    const preferences = { userPrompt: 'Original caller prompt', makerMemoryEnabled: true };
+    const first = maker.createSession({ ...options, hostStartupPreferences: preferences });
+    const second = maker.createSession({ ...options, hostStartupPreferences: { makerMemoryEnabled: false } });
 
     expect(startSession).toHaveBeenCalledTimes(1);
     resolveStart(createHandle({ id: 'thread-1' }));
     const [firstSession, secondSession] = await Promise.all([first, second]);
 
+    expect(firstSession.hostStartupPreferences).toEqual(preferences);
+    preferences.makerMemoryEnabled = false;
+    const existingSession = await maker.createSession(options);
+    expect(existingSession.hostStartupPreferences).toMatchObject({ userPrompt: 'Original caller prompt', makerMemoryEnabled: true });
     expect(secondSession).toBe(firstSession);
     expect(maker.listActiveSessions()).toEqual([firstSession]);
     expect(created).toHaveBeenCalledTimes(1);
@@ -896,8 +1266,11 @@ describe('Maker session close events', () => {
     expect(startSession).toHaveBeenCalledTimes(2);
   });
 
-  it('retries a failed crash cleanup before recreating the session', async () => {
-    const crashingHandle = createHandle({ id: 'thread-crashed-close-retry' });
+  it('retries a retained Pi error handle before recreating the session', async () => {
+    const crashingHandle = createHandle({
+      id: 'thread-crashed-close-retry',
+      agentKind: 'pi',
+    });
     crashingHandle.events = () => ({
       [Symbol.asyncIterator]() {
         return {
@@ -912,29 +1285,35 @@ describe('Maker session close events', () => {
       closeAttempts += 1;
       if (closeAttempts === 1) throw new Error('transport close failed');
     });
-    const healthyHandle = createHandle({ id: 'thread-rebuilt-after-close-retry' });
+    const healthyHandle = createHandle({
+      id: 'thread-rebuilt-after-close-retry',
+      agentKind: 'pi',
+    });
     const startSession = vi.fn()
       .mockResolvedValueOnce(crashingHandle)
       .mockResolvedValueOnce(healthyHandle);
     const maker = new Maker({
-      agents: { codex: createAgent(startSession) },
+      agents: { pi: createAgent(startSession, 'pi') },
       storage: createStorage(),
       logger: createLogger(),
     });
     const options: CreateSessionOptions = {
       id: 'session-crash-close-retry',
-      agentKind: 'codex',
+      agentKind: 'pi',
       workingDir: '/repo',
-      model: 'gpt-5.4',
+      model: 'pi-model',
     };
 
     const crashed = await maker.createSession(options);
     await vi.waitFor(() => expect(crashed.getStatus()).toBe('error'));
     expect(maker.getSession('session-crash-close-retry')).toBe(crashed);
+    expect(maker.listActiveSessions()).toEqual([crashed]);
 
     const rebuilt = await maker.createSession(options);
     expect(rebuilt.sdkSessionId).toBe('thread-rebuilt-after-close-retry');
     expect(maker.getSession('session-crash-close-retry')).toBe(rebuilt);
+    expect(maker.listActiveSessions()).toEqual([rebuilt]);
+    expect(maker.listActiveSessions()).not.toContain(crashed);
     expect(closeAttempts).toBe(2);
     expect(startSession).toHaveBeenCalledTimes(2);
   });
@@ -1043,6 +1422,7 @@ describe('Maker start-option lifecycle hooks', () => {
   it('blocks agent startup when start-option preparation fails', async () => {
     const startSession = vi.fn(async () => createHandle({ id: 'thread-1' }));
     const onStartSucceeded = vi.fn();
+    const onStartFailed = vi.fn();
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
       storage: createStorage(),
@@ -1052,6 +1432,7 @@ describe('Maker start-option lifecycle hooks', () => {
           throw new Error('prepare failed');
         },
         onStartSucceeded,
+        onStartFailed,
       },
     });
 
@@ -1063,16 +1444,270 @@ describe('Maker start-option lifecycle hooks', () => {
     })).rejects.toThrow('prepare failed');
     expect(startSession).not.toHaveBeenCalled();
     expect(onStartSucceeded).not.toHaveBeenCalled();
+    expect(onStartFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', stage: 'prepare' }),
+    );
     expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('binds a delayed close and a failed rebuild to their own startup options', async () => {
+    const closeEntered = createDeferred();
+    const allowClose = createDeferred();
+    const prepared: CreateSessionOptions[] = [];
+    const disposed: CreateSessionOptions[] = [];
+    const startSession = vi.fn(async () => createHandle({ id: 'thread-lifecycle' }));
+    const onStartFailed = vi.fn();
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: async (_id, options) => {
+          prepared.push(options);
+          if (prepared.length === 2) {
+            await Promise.resolve();
+            throw new Error('replacement preparation failed');
+          }
+        },
+        onStartFailed,
+        onClose: async (_id, options) => {
+          closeEntered.resolve();
+          await allowClose.promise;
+          disposed.push(options);
+        },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'same-task', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+    };
+    const first = await maker.createSession(options);
+    await first.close();
+    await closeEntered.promise;
+    await expect(maker.createSession(options)).rejects.toThrow('replacement preparation failed');
+    const replacement = await maker.createSession(options);
+    allowClose.resolve();
+    await vi.waitFor(() => expect(disposed).toHaveLength(1));
+    expect(new Set(prepared).size).toBe(3);
+    expect(prepared).not.toContain(options);
+    expect(disposed[0]).toBe(prepared[0]);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      options: prepared[1], stage: 'prepare', runtimeMayBeAlive: false,
+    }));
+    expect(maker.getSession('same-task')).toBe(replacement);
+    await replacement.close();
+    await vi.waitFor(() => expect(disposed).toHaveLength(2));
+    expect(disposed[1]).toBe(prepared[2]);
+  });
+
+  it.each([false, true])('reports whether a failed startup still has a live handle: %s', async (cleanupFails) => {
+    const handle = createHandle({ id: 'failed-storage' });
+    handle.close = vi.fn(async () => {
+      if (cleanupFails) throw new Error('termination unconfirmed');
+    });
+    const storage = createStorage();
+    storage.create = vi.fn().mockRejectedValue(new Error('storage unavailable'));
+    const onStartFailed = vi.fn();
+    const maker = new Maker({
+      agents: { codex: createAgent(async () => handle) },
+      storage, logger: createLogger(), lifecycleHooks: { onStartFailed },
+    });
+    await expect(maker.createSession({
+      id: 'storage-failure', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+    })).rejects.toThrow('storage unavailable');
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'storage', runtimeMayBeAlive: cleanupFails,
+    }));
+  });
+
+  it('runs startup cleanup when a prepared runtime cannot claim its thread', async () => {
+    const threadId = '11111111-1111-4111-8111-111111111111';
+    const startSession = vi.fn(async () => createHandle({ id: threadId }));
+    const onStartFailed = vi.fn();
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed },
+    });
+    const options: CreateSessionOptions = {
+      id: 'thread-owner', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+      resumeSessionId: threadId,
+    };
+    const owner = await maker.createSession(options);
+    await expect(maker.createSession({ ...options, id: 'thread-conflict' })).rejects.toThrow('already active');
+    expect(startSession).toHaveBeenCalledOnce();
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'thread-conflict', stage: 'agent-start', runtimeMayBeAlive: false,
+    }));
+    await owner.close();
+  });
+
+  it('releases deferred failed-start resources without touching the successful replacement', async () => {
+    const cleanupEntered = createDeferred();
+    const allowCleanup = createDeferred();
+    const leased = new Set<CreateSessionOptions>();
+    const prepared: CreateSessionOptions[] = [];
+    const failedHandle = createHandle({ id: 'failed-pi', agentKind: 'pi' });
+    failedHandle.close = vi.fn().mockRejectedValueOnce(new Error('still alive')).mockResolvedValue(undefined);
+    const storage = createStorage();
+    const create = storage.create.bind(storage);
+    storage.create = vi.fn().mockRejectedValueOnce(new Error('storage failed')).mockImplementation(create);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn()
+        .mockResolvedValueOnce(failedHandle)
+        .mockResolvedValueOnce(createHandle({ id: 'replacement-pi', agentKind: 'pi' })), 'pi') },
+      storage, logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: (_id, options) => { prepared.push(options); leased.add(options); },
+        onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+        onStartCleanupSucceeded: async (_id, options) => {
+          cleanupEntered.resolve();
+          await allowCleanup.promise;
+          leased.delete(options);
+        },
+        onClose: (_id, options) => { leased.delete(options); },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'same-failed-task', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    };
+    await expect(maker.createSession(options)).rejects.toThrow('storage failed');
+    expect(leased.size).toBe(1);
+    const replacement = await maker.createSession(options);
+    await cleanupEntered.promise;
+    expect(leased.size).toBe(2);
+    allowCleanup.resolve();
+    await vi.waitFor(() => expect(leased).toEqual(new Set([prepared[1]])));
+    expect(maker.getSession(options.id!)).toBe(replacement);
+    await replacement.close();
+    await vi.waitFor(() => expect(leased.size).toBe(0));
+  });
+
+  it('keeps an adapter-owned unpublished runtime protected until its own close completes', async () => {
+    const stopped = createDeferred();
+    const cleanupEntered = createDeferred();
+    const allowCleanup = createDeferred();
+    const pending = new AgentStartupCleanupPendingError('opaque adapter failure', {
+      cause: new Error('startup RPC failed'), whenStopped: stopped.promise,
+    });
+    const leased = new Set<CreateSessionOptions>();
+    const prepared: CreateSessionOptions[] = [];
+    const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
+      if (!runtimeMayBeAlive) leased.delete(options);
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn().mockRejectedValueOnce(pending)
+        .mockResolvedValueOnce(createHandle({ id: 'recovered-pi', agentKind: 'pi' })), 'pi') },
+      storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: (_id, options) => { prepared.push(options); leased.add(options); },
+        onStartFailed,
+        onStartCleanupSucceeded: async (_id, options) => {
+          cleanupEntered.resolve();
+          await allowCleanup.promise;
+          leased.delete(options);
+        },
+        onClose: (_id, options) => { leased.delete(options); },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'adapter-cleanup', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    };
+    await expect(maker.createSession(options)).rejects.toBe(pending);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'agent-start', runtimeMayBeAlive: true,
+    }));
+    expect(leased).toEqual(new Set([prepared[0]]));
+    stopped.resolve();
+    await cleanupEntered.promise;
+    const replacement = await maker.createSession(options);
+    expect(leased.size).toBe(2);
+    allowCleanup.resolve();
+    await vi.waitFor(() => expect(leased).toEqual(new Set([prepared[1]])));
+    await replacement.close();
+    await vi.waitFor(() => expect(leased.size).toBe(0));
+  });
+
+  it('does not release adapter startup resources when exit confirmation fails', async () => {
+    let rejectStopped!: (error: unknown) => void;
+    const whenStopped = new Promise<void>((_resolve, reject) => { rejectStopped = reject; });
+    const pending = new AgentStartupCleanupPendingError('adapter failed', {
+      cause: new Error('startup RPC failed'), whenStopped,
+    });
+    const logger = createLogger();
+    const onStartFailed = vi.fn();
+    const onStartCleanupSucceeded = vi.fn();
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn().mockRejectedValue(pending), 'pi') },
+      storage: createStorage(), logger,
+      lifecycleHooks: { onStartFailed, onStartCleanupSucceeded },
+    });
+    await expect(maker.createSession({
+      id: 'unconfirmed-exit', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    })).rejects.toBe(pending);
+    rejectStopped(new Error('exit could not be verified'));
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledWith(
+      'adapter startup cleanup remains unconfirmed', expect.objectContaining({ sessionId: 'unconfirmed-exit' }),
+    ));
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({ runtimeMayBeAlive: true }));
+    expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+  });
+
+  it.each([new TypeError('startup RPC failed'), 'non-Error startup failure'])(
+    'releases only the confirmed-stopped startup and preserves its original error: %s', async (startupError) => {
+      const otherStartup = {} as CreateSessionOptions;
+      const leased = new Set<CreateSessionOptions>([otherStartup]);
+      const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
+        if (!runtimeMayBeAlive) leased.delete(options);
+      });
+      const onStartCleanupSucceeded = vi.fn();
+      const maker = new Maker({
+        agents: { pi: createAgent(vi.fn().mockRejectedValue(new AgentStartupStoppedError(startupError)), 'pi') },
+        storage: createStorage(), logger: createLogger(),
+        lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed, onStartCleanupSucceeded,
+        },
+      });
+      await expect(maker.createSession({
+        id: 'confirmed-exit', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+      })).rejects.toBe(startupError);
+      expect(onStartFailed).toHaveBeenCalledOnce();
+      expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+        stage: 'agent-start', error: startupError, runtimeMayBeAlive: false,
+      }));
+      expect(leased).toEqual(new Set([otherStartup]));
+      expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    new Error('ordinary startup failure'),
+    Object.assign(new Error('ordinary startup failure'), { name: 'AgentStartupStoppedError' }),
+  ])('preserves runtime protection for an adapter failure without exit evidence: %s', async (error) => {
+    const onStartFailed = vi.fn();
+    const onStartCleanupSucceeded = vi.fn();
+    const startSession = vi.fn().mockRejectedValue(error);
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed, onStartCleanupSucceeded },
+    });
+    await expect(maker.createSession({
+      id: 'unknown-startup-exit', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+    })).rejects.toThrow('ordinary startup failure');
+    expect(startSession).toHaveBeenCalledOnce();
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'unknown-startup-exit', stage: 'agent-start', runtimeMayBeAlive: true,
+    }));
+    expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
   });
 
   it('does not run the success hook when agent startup fails', async () => {
     const onStartSucceeded = vi.fn();
+    const onStartFailed = vi.fn();
     const maker = new Maker({
       agents: { codex: createAgent(vi.fn().mockRejectedValue(new Error('start failed'))) },
       storage: createStorage(),
       logger: createLogger(),
-      lifecycleHooks: { onStartSucceeded },
+      lifecycleHooks: { onStartSucceeded, onStartFailed },
     });
 
     await expect(maker.createSession({
@@ -1082,6 +1717,57 @@ describe('Maker start-option lifecycle hooks', () => {
       model: 'gpt-5.4',
     })).rejects.toThrow('start failed');
     expect(onStartSucceeded).not.toHaveBeenCalled();
+    expect(onStartFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', stage: 'agent-start' }),
+    );
+  });
+
+  it('releases the startup lease when authentication fails before spawning an agent', async () => {
+    const leased = new Set<CreateSessionOptions>();
+    const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
+      if (!runtimeMayBeAlive) leased.delete(options);
+    });
+    const authError = new AgentNotAuthenticatedError('claude-code', 'not authenticated');
+    const maker = new Maker({
+      agents: { 'claude-code': createAgent(vi.fn().mockRejectedValue(authError), 'claude-code') },
+      storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: (_id, options) => { leased.add(options); },
+        onStartFailed,
+      },
+    });
+    await expect(maker.createSession({
+      id: 'auth-failure', agentKind: 'claude-code', workingDir: '/repo', model: 'claude-model',
+    })).rejects.toBe(authError);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'agent-start', error: authError, runtimeMayBeAlive: false,
+    }));
+    expect(leased).toHaveLength(0);
+  });
+
+  it('preserves the original startup error when the failure hook also fails', async () => {
+    const logger = createLogger();
+    const maker = new Maker({
+      agents: { codex: createAgent(vi.fn().mockRejectedValue(new Error('start failed'))) },
+      storage: createStorage(),
+      logger,
+      lifecycleHooks: {
+        onStartFailed: async () => {
+          throw new Error('audit failed');
+        },
+      },
+    });
+
+    await expect(maker.createSession({
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    })).rejects.toThrow('start failed');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'lifecycleHooks.onStartFailed threw; preserving original startup error',
+      expect.objectContaining({ sessionId: 'session-1', stage: 'agent-start' }),
+    );
   });
 });
 
@@ -1373,12 +2059,14 @@ describe('Maker Pi runtime skill status', () => {
       expect.objectContaining({
         name: 'context-mode-old',
         path: managedPath,
+        origin: 'package',
         runtimeStatus: 'loaded',
         runtimeCommandName: 'skill:context-mode-old',
       }),
       expect.objectContaining({
         name: 'unproven-at-launch',
         runtimeStatus: 'unknown',
+        origin: 'package',
       }),
     ]);
     expect(active.skills.some((skill) => skill.name === 'installed-after-start')).toBe(false);

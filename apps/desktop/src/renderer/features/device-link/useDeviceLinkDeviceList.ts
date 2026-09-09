@@ -1,15 +1,16 @@
 /**
- * useDeviceLinkDeviceList —— 机器切换栏用的「全量同账号设备」共享只读列表(push 驱动,无轮询)。
+ * useDeviceLinkDeviceList —— 机器切换栏用的「全量同账号设备」共享只读列表(push 驱动,失败低频退避)。
  * ---------------------------------------------------------------------------
  * 切换栏要区分「已连接 / 连接中 / 被拒」三态,需要 remoteProjectsStore(只含已同步设备)之外的
- * 全量设备(含在线未同步、离线、被拒)。这里做最小读:listDevices 拉一次,之后靠 push 重拉 ——
- * presence 变化、relay 重连 'online'、关「我控制它」(control-target-changed,改 controlEnabled);
- * relay 'stopped'(登出 / 停服)则清空缓存设备,避免登出后残留上一账号的远程机器。
+ * 全量设备(含在线未同步、离线、被拒)。这里做最小读:listDevices 初始拉取,之后靠 push 重拉；
+ * 失败时按低频退避静默恢复 —— presence 变化、relay 重连 'online'、关「我控制它」
+ * (control-target-changed,改 controlEnabled);relay 'stopped'(登出 / 停服)则清空缓存设备,
+ * 避免登出后残留上一账号的远程机器。
  *
  * **模块级共享单例**:切换栏组件 + CCAgentSidebarUpper 的两个合并点都要读这份列表做归一化,若各挂
  * 一个 hook 就会有 3 次 listDevices + 3 套监听且可能短暂不一致。这里收成一份:首个订阅者触发启动,
  * 之后所有消费者共享同一快照(app 生命周期常驻,与 useDeviceLinkRemoteProjects 同口径:稳态靠 push,
- * 不轮询)。
+ * 失败时仅按低频退避静默重试)。
  *
  * 故意不复用 useDeviceLinkSettings:那是设置页数据层,带 30s 轮询 + 一堆写操作回调,常驻侧边栏太重。
  */
@@ -19,6 +20,8 @@ import { useSyncExternalStore } from 'react';
 let devices: DeviceLinkDeviceView[] | null = null;
 const subs = new Set<() => void>();
 let started = false;
+const DEVICE_LIST_RETRY_BASE_MS = 2_000;
+const DEVICE_LIST_RETRY_MAX_MS = 30_000;
 export type DeviceLinkDeviceListStatus = 'loading' | 'ready' | 'error';
 export interface DeviceLinkDeviceListRequestState {
   status: DeviceLinkDeviceListStatus;
@@ -124,9 +127,9 @@ export function shouldRefreshForPresence(
   requestStatus: DeviceLinkDeviceListStatus,
 ): boolean {
   // 上一次拉取失败(且此前已有快照 → `devices` 仍非空、状态停在 'error')时**一律放行**:
-  // 这条链路 push 驱动、没有轮询兜底,若此时还按「字段没变」把 presence 滤掉,一次瞬时 REST
-  // 失败就会把侧栏钉在错误 / 陈旧目录上,直到 status / control-target 事件或用户手动重试
-  // (review: codex P1)。presence 是这段时间里唯一稳定到达的信号,必须当成重试机会。
+  // 自动退避之外,这条 push 信号也是低延迟恢复机会;若此时还按「字段没变」把 presence 滤掉,
+  // 一次瞬时 REST 失败就会把侧栏钉在错误 / 陈旧目录上,直到下一次退避、status 或
+  // control-target 事件 (review: codex P1)。
   //
   // 'loading' 不放行:那说明已有一笔在飞,`loadGeneration` 会让后到的结果胜出,再叠一次
   // refresh 只是徒增请求;它若失败会落到 'error',下一条 presence 自然接管重试。
@@ -144,6 +147,14 @@ export function shouldRefreshForPresence(
     normalizePlatform(row.platform) !== normalizePlatform(snap.platform) ||
     row.name.trim() !== snap.deviceName.trim()
   );
+}
+
+/** 设备目录静默恢复的退避:持续恢复,但长期故障时不每 2 秒打一次 IPC。 */
+export function nextDeviceListRetryDelay(previousMs: number): number {
+  if (!Number.isFinite(previousMs) || previousMs < DEVICE_LIST_RETRY_BASE_MS) {
+    return DEVICE_LIST_RETRY_BASE_MS;
+  }
+  return Math.min(previousMs * 2, DEVICE_LIST_RETRY_MAX_MS);
 }
 
 /**
@@ -227,6 +238,44 @@ function ensureStarted(): void {
   started = true;
   let linkStatus: 'stopped' | 'connecting' | 'online' | null = null;
   let linkStatusRevision = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelayMs = 0;
+  let backgroundRetryGeneration: number | null = null;
+  let backgroundRetryRefreshPending = false;
+  let backgroundRetryReplayActive = false;
+
+  const finishRefresh = (gen: number, background: boolean): void => {
+    // A foreground refresh can supersede a background retry. In that case the old
+    // retry must not consume a presence queued for the newer operation; the
+    // current operation will replay it when it settles.
+    if (background) {
+      if (backgroundRetryGeneration !== gen) return;
+      backgroundRetryGeneration = null;
+    }
+    if (gen !== loadGeneration) return;
+    const shouldRefresh = backgroundRetryRefreshPending && linkStatus !== 'stopped';
+    backgroundRetryRefreshPending = false;
+    backgroundRetryReplayActive = false;
+    if (shouldRefresh) refresh(false, true);
+  };
+
+  const clearRetryTimer = (): void => {
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  const scheduleRetry = (): void => {
+    if (retryTimer !== null || linkStatus === 'stopped') return;
+    retryDelayMs = nextDeviceListRetryDelay(retryDelayMs);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
+      // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
+      refresh(false, true);
+    }, retryDelayMs);
+  };
 
   const enterLoading = (): void => {
     // 上一轮在尚无设备快照时失败只代表「该次请求已结算」。新的有效拉取开始后要重新
@@ -237,21 +286,34 @@ function ensureStarted(): void {
     if (settledChanged || requestChanged) subs.forEach((fn) => fn());
   };
 
-  const runRefresh = async (probeState: boolean): Promise<void> => {
+  const runRefresh = async (probeState: boolean, background = false): Promise<void> => {
     // getState 与 listDevices 共用同一个 operation generation。stop、状态 push、手动重试或
     // 更晚的 refresh 都会令旧操作失效，迟到的状态快照和目录快照都不得落地。
     loadGeneration += 1;
     const gen = loadGeneration;
     const statusRevisionAtStart = linkStatusRevision;
-    enterLoading();
+    if (background) backgroundRetryGeneration = gen;
+    if (!background) {
+      // The foreground operation owns the current generation now; any pending
+      // presence from a superseded background retry must be replayed after it.
+      if (backgroundRetryGeneration !== null) backgroundRetryReplayActive = true;
+      backgroundRetryGeneration = null;
+      enterLoading();
+    }
 
     if (probeState || linkStatus === null) {
       try {
         const state = await window.electronAPI.deviceLink.getState();
-        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) return;
+        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) {
+          finishRefresh(gen, background);
+          return;
+        }
         linkStatus = state.linkStatus;
       } catch {
-        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) return;
+        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) {
+          finishRefresh(gen, background);
+          return;
+        }
         // getState 本身失败时保留既有 status 判断；未知 / 在线态仍尝试目录请求，让真正的
         // listDevices 结果决定 ready/error。已知 stopped 则不能误打成远程连接失败。
       }
@@ -262,38 +324,70 @@ function ensureStarted(): void {
     // 打成 error；只有 online / connecting 下真实发出的 listDevices 失败才是连接错误。
     if (linkStatus === 'stopped') {
       clearDevices();
+      finishRefresh(gen, background);
       return;
     }
 
     try {
       const result = await window.electronAPI.deviceLink.listDevices();
       // 期间发生过清空(stop / 登出)或更晚的 refresh → 本次响应已陈旧,丢弃。
-      if (gen !== loadGeneration) return;
+      if (gen !== loadGeneration) {
+        finishRefresh(gen, background);
+        return;
+      }
       const list = result?.devices;
       if (!Array.isArray(list) || !list.every(isDeviceLinkDeviceView)) {
         throw new Error('Invalid device list response');
       }
+      clearRetryTimer();
+      retryDelayMs = 0;
       setDevices(list);
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
-      if (gen !== loadGeneration) return;
+      if (gen !== loadGeneration) {
+        finishRefresh(gen, background);
+        return;
+      }
       markRequestFailed(error);
       // 瞬态拉取失败(relay 重连中等)保持当前快照;登出 / relay 停止由下面的 'stopped'
       // 状态事件显式清空,不靠这里的失败兜底(避免一次网络抖动就清掉、闪烁)。但把请求
       // 标成已结算，避免远端 sidebar bootstrap 因 devices 仍为 null 永久显示加载态。
+      scheduleRetry();
     }
+    finishRefresh(gen, background);
   };
 
-  const refresh = (probeState = false): void => {
-    void runRefresh(probeState);
+  const refresh = (probeState = false, background = false): void => {
+    clearRetryTimer();
+    void runRefresh(probeState, background);
   };
   refreshImpl = () => refresh(true);
   // app 生命周期常驻(侧边栏始终有订阅者),不解绑监听。
   // 只有相关 presence 才重拉目录(见 shouldRefreshForPresence):本机 busy 自回声与对端的
   // busy / lastSeenAt 心跳都不改变切换栏内容,却各触发一次全量 listDevices(issue #1726)。
   window.electronAPI.deviceLink.onPresenceChanged((snap) => {
-    if (!shouldRefreshForPresence(devices, snap, requestState.status)) return;
-    refresh();
+    // 后台退避请求在飞时保留 error/settled 快照；不要让 presence 噪音把它升级成前台
+    // refresh，再次触发 loading 并恢复悬空的持久化远端选择。
+    if (backgroundRetryGeneration !== null || backgroundRetryReplayActive) {
+      // 不能丢掉真实的上线 / 改名 / 能力变化:本次 REST 响应可能早于 presence,结束后
+      // 追加一次后台 refresh；同一请求期间的多条 presence 合并成一次。这里按 ready
+      // 语义判断字段变化，避免 error 快速路径把本机 busy / lastSeenAt 噪音也排进补拉；
+      // devices=null 时仍会放行，因为这时无法从快照判断设备是否新出现。
+      if (shouldRefreshForPresence(devices, snap, 'ready')) backgroundRetryRefreshPending = true;
+      return;
+    }
+    // A failed request may already have a backoff timer waiting. Treat presence
+    // as a settled snapshot in that window so busy/lastSeen heartbeats do not
+    // cancel the backoff and reopen the foreground loading state. Relevant
+    // presence can still recover promptly, but stays in the background path.
+    const retryPending = retryTimer !== null;
+    // Without a directory snapshot there is no safe way to distinguish a new
+    // device from this machine's heartbeat. Keep the scheduled backoff as the
+    // recovery source instead of letting every presence cancel it.
+    if (retryPending && devices === null) return;
+    if (!shouldRefreshForPresence(devices, snap, retryPending ? 'ready' : requestState.status))
+      return;
+    refresh(false, retryPending);
   });
   window.electronAPI.deviceLink.onStatusChanged((p) => {
     linkStatusRevision += 1;
@@ -302,7 +396,12 @@ function ensureStarted(): void {
       // 登出 / relay 停止:清掉缓存设备。否则登出后(或同进程换账号)上一账号的远程机器会
       // 一直留在切换栏里被当成可选 / 连接中(listDevices 此时多半失败,catch 又保留旧快照)。
       // 重新登录 → relay 重连到 'online' 时下面重新拉取。
+      clearRetryTimer();
+      retryDelayMs = 0;
       clearDevices();
+      backgroundRetryGeneration = null;
+      backgroundRetryRefreshPending = false;
+      backgroundRetryReplayActive = false;
       return;
     }
     // online / connecting 都是远端目录仍在作用域内的状态：开始新一轮读取。connecting 下
@@ -339,7 +438,7 @@ function getInitialRequestSettledSnapshot(): boolean {
   return initialRequestSettled;
 }
 
-/** 首次设备清单请求是否已结算；失败也算结算，后续 push / online 事件仍会继续 refresh。 */
+/** 首次设备清单请求是否已结算；失败也算结算，后续退避 / push / online 事件仍会继续 refresh。 */
 export function useDeviceLinkDeviceListSettled(): boolean {
   return useSyncExternalStore(subscribe, getInitialRequestSettledSnapshot);
 }
@@ -353,7 +452,7 @@ export function useDeviceLinkDeviceListRequestState(): DeviceLinkDeviceListReque
   return useSyncExternalStore(subscribe, getRequestStateSnapshot);
 }
 
-/** 用户可见错误态的手动重试入口。 */
+/** 兼容现有调用方的显式重试入口；正常失败恢复由上面的静默退避自动完成。 */
 export function retryDeviceLinkDeviceList(): void {
   if (!started) {
     ensureStarted();

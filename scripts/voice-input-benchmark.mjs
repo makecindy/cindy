@@ -1986,6 +1986,66 @@ function parseVoiceInputReport(logPath, latest) {
       continue;
     }
 
+    // Packaged/default logging omits debug timeline rows. The main process
+    // therefore emits one redacted info summary per run; accept that compact
+    // shape so `report` remains useful against real user logs.
+    if (line.includes('[voice-input] latency summary {')) {
+      const { block, nextIndex } = readBraceBlock(lines, i);
+      i = nextIndex;
+      const runId = extractQuoted(block, 'runId');
+      if (!runId) continue;
+      let session = [...sessions].reverse().find((candidate) => candidate.runId === runId);
+      if (!session) {
+        const submittedMs = extractNumber(block, 'submittedMs') ?? extractNumber(block, 'totalMs');
+        session = {
+          runId,
+          startAt: submittedMs === undefined ? ts : ts - submittedMs,
+          shortcutToStartMs: pendingShortcutAt && submittedMs !== undefined
+            ? (ts - submittedMs) - pendingShortcutAt
+            : undefined,
+          mic: pendingMic,
+          timeline: {},
+        };
+        sessions.push(session);
+        pendingMic = {};
+        pendingShortcutAt = undefined;
+      }
+      const summaryFields = [
+        ['asr_connected', 'asrConnectedMs'],
+        ['first_audio_chunk', 'firstAudioChunkMs'],
+        ['first_partial', 'firstPartialMs'],
+        ['stable_received', 'stableReceivedMs'],
+        ['submitted', 'submittedMs'],
+      ];
+      for (const [type, field] of summaryFields) {
+        const elapsedMs = extractNumber(block, field);
+        if (elapsedMs === undefined || session.timeline[type]) continue;
+        session.timeline[type] = {
+          at: session.startAt + elapsedMs,
+          elapsedMs,
+        };
+      }
+      continue;
+    }
+
+    if (line.includes('[voice-input] refinement latency summary {')) {
+      const { block, nextIndex } = readBraceBlock(lines, i);
+      i = nextIndex;
+      const runId = extractQuoted(block, 'runId');
+      const outcome = extractQuoted(block, 'outcome');
+      const session = runId
+        ? [...sessions].reverse().find((candidate) => candidate.runId === runId)
+        : undefined;
+      if (!session || (outcome !== 'accepted' && outcome !== 'rejected')) continue;
+      const type = outcome === 'accepted' ? 'refine_accepted' : 'refine_rejected';
+      const totalMs = extractNumber(block, 'totalMs');
+      session.timeline[type] = {
+        at: totalMs === undefined ? ts : session.startAt + totalMs,
+        elapsedMs: extractNumber(block, 'elapsedMs'),
+      };
+      continue;
+    }
+
     if (line.includes('global background paste started')) {
       const session = sessions[sessions.length - 1];
       if (session) {

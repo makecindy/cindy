@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   },
   capabilitiesLoading: false,
   providersLoading: false,
+  remoteUnsupported: false,
   // 「(providerId, modelId)」被可见性开关隐藏的组合(isModelEnabled mock 消费)。
   hiddenModels: [] as string[],
   // 本地已连接来源目录(narrowProviderSource 走真函数,消费这份最小 ProviderView 形状)。
@@ -110,6 +111,7 @@ vi.mock('@/hooks/useProviders', () => ({
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
   useDeviceProviders: () => ({
+    unsupported: mocks.remoteUnsupported,
     providers: mocks.remoteProviders.map((provider) => ({
       ...provider,
       routing: Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
@@ -132,9 +134,10 @@ vi.mock('react-router-dom', async (importOriginal) => ({
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: {
     modelId: string;
+    onUnifiedSelect?: (selection: { engine: 'cc' | 'codex'; modelId: string; providerId: string; effort: string; fast: boolean; favoriteUid: null }) => void;
     effort?: string;
     currentProviderId?: string | null;
-    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
+    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string, fast?: boolean) => void;
     onEffortChange: (effort: string) => void;
     reselectEmitsChange?: boolean;
     fastMode?: boolean;
@@ -155,10 +158,12 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-effort={props.effort ?? ''}
     >
       {props.modelId}
+      <button data-testid="pick-claude-model" onClick={() => props.onUnifiedSelect?.({ engine: 'cc', modelId: 'claude-sonnet-4-6', providerId: 'anthropic', effort: 'high', fast: false, favoriteUid: null })} />
+      <button data-testid="pick-codex-config" onClick={() => props.onUnifiedSelect?.({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false, favoriteUid: null })} />
       <button
         type="button"
         data-testid="pick-openai-row"
-        onClick={() => props.onProviderChange?.('openai', 'gpt-5.5', 'medium')}
+        onClick={() => props.onProviderChange?.('openai', 'gpt-5.5', 'medium', true)}
       />
       {/* 真组件选行只回传两参(见 ModelSelector.handleRowSelect),记忆恢复走全局预设。 */}
       <button
@@ -231,6 +236,7 @@ describe('CreateWorkerPopover', () => {
     mocks.providersLoading = false;
     mocks.localProviders = [];
     mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
     mocks.hiddenModels = [];
     mocks.sidebarWindow = false;
     mocks.confirm.mockReset();
@@ -243,7 +249,7 @@ describe('CreateWorkerPopover', () => {
     resetProviderModelMemoryForTest();
   });
 
-  it('centers the setup and keeps agent and model on one row without changing its size', () => {
+  it('centers the setup and uses one model picker without a competing Harness control', () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
 
     const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
@@ -254,12 +260,8 @@ describe('CreateWorkerPopover', () => {
     expect(panel?.className).toContain('w-[500px]');
     expect(panel?.className).toContain('p-6');
 
-    const agentSwitcher = screen.getByRole('tablist', {
-      name: 'orca.createWorker.agentLabel',
-    });
-    const pairedFields = agentSwitcher.closest('.grid');
-    expect(pairedFields?.className).toContain('grid-cols-[220px_minmax(0,1fr)]');
-    expect(pairedFields?.contains(screen.getByTestId('model-selector'))).toBe(true);
+    expect(screen.queryByRole('tablist', { name: 'orca.createWorker.agentLabel' })).toBeNull();
+    expect(screen.getByTestId('model-selector').closest('.grid')).toBeTruthy();
 
     const permissionMode = screen.getByTestId('worker-permission-mode');
     expect(permissionMode.textContent).toContain('orca.createWorker.permissionLabel');
@@ -588,7 +590,7 @@ describe('CreateWorkerPopover', () => {
     await waitFor(() =>
       expect(screen.getByTestId('model-selector').textContent).toBe('codex/gpt-5.5'),
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Claude' }));
+    fireEvent.click(screen.getByTestId('pick-claude-model'));
 
     await waitFor(() =>
       expect(screen.getByTestId('model-selector').textContent).toBe('claude-sonnet-4-6'),
@@ -626,7 +628,32 @@ describe('CreateWorkerPopover', () => {
     expect(selector.dataset.navigateWired).toBe('true');
   });
 
-  it('keeps the degraded flat panel for device-link remote creation', async () => {
+  it('uses remote provider routes without local memory for device-link creation', async () => {
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourcesEnabled).toBe('true');
+    expect(selector.dataset.memoryWired).toBe('false');
+  });
+
+  it('persists the remote provider, effort and Fast without modifying local model memory', async () => {
+    mocks.remoteProviders = [{ id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+      models: { codex: [model('gpt-5.5', ['medium', 'high'], 'high')] } }];
+    mocks.modelsByAgent.codex = [model('gpt-5.5', ['medium', 'high'], 'high')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }], hasFastMode: true } as never;
+    const before = getProviderModelChoice('codex', 'openai');
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(await screen.findByTestId('pick-openai-row'));
+    await waitFor(() => expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'gpt-5.5', providerId: 'openai', effort: 'medium', fast: true,
+    })));
+    expect(getProviderModelChoice('codex', 'openai')).toEqual(before);
+  });
+
+  it('retains the capabilities-only fallback for old remote hosts', async () => {
+    mocks.remoteUnsupported = true;
     render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.sourcesEnabled).toBe('false');
@@ -1035,7 +1062,7 @@ describe('CreateWorkerPopover', () => {
     );
   });
 
-  it('keeps live source and effort edits across agent tab switches', async () => {
+  it('saves the complete selected configuration after switching Harness twice', async () => {
     // 切 tab 的恢复读的是 prefs:切走前必须把当前 agent 的 live 编辑快照进内存
     // prefs,否则「选好来源/改好 effort 还没提交就切了个 tab」会被静默回滚到打开
     // 弹窗时的旧值(codex review)。
@@ -1066,6 +1093,8 @@ describe('CreateWorkerPopover', () => {
       { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
     ];
     mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    mocks.modelsByAgent['claude-code'] = [model('claude-sonnet-4-6')];
+    mocks.capabilitiesByAgent['claude-code'] = { availableModels: [{ id: 'claude-sonnet-4-6' }] };
     const onCreate = vi.fn();
 
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
@@ -1074,11 +1103,11 @@ describe('CreateWorkerPopover', () => {
     );
     fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
     fireEvent.click(screen.getByTestId('edit-active-effort'));
-    fireEvent.click(screen.getByRole('tab', { name: 'Claude' }));
+    fireEvent.click(screen.getByTestId('pick-claude-model'));
     await waitFor(() =>
-      expect(screen.getByTestId('model-selector').textContent).toContain('claude-opus-4-7'),
+      expect(screen.getByTestId('model-selector').textContent).toContain('claude-sonnet-4-6'),
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    fireEvent.click(screen.getByTestId('pick-codex-config'));
     await waitFor(() =>
       expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('xd'),
     );

@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
 import {
+  appendPendingSendItems,
   buildMobileMessageListExtraData,
   buildPendingSendItems,
   isPendingSendItemSelected,
@@ -70,6 +71,29 @@ function build(overrides: Partial<Parameters<typeof buildPendingSendItems>[0]> =
     ...overrides,
   });
 }
+
+describe('appendPendingSendItems', () => {
+  it.each(['text', 'image'])('replaces %s pending rows when history arrives before queue reconciliation', (kind) => {
+    const pending = build({ outbox: [outboxItem('sent', kind === 'image' ? {
+      text: '', attachmentCount: 1, uploadedCount: 1,
+      thumbnails: [{ key: 'sent-slot-0', uri: 'file:///image.png', ossRef: null, uploading: false }],
+    } : {}), outboxItem('next')] });
+    const previous = { key: 'message-previous', type: 'message' };
+    const delivered = { key: pendingSendItemKey('sent'), type: 'message' };
+    expect(appendPendingSendItems([previous], pending)).toEqual([previous, ...pending]);
+    // The history snapshot advanced, but raw-store token / pending snapshot did not.
+    const during = appendPendingSendItems([previous, delivered], pending);
+    expect(during).toEqual([previous, delivered, pending[1]]);
+    expect(new Set(during.map((row) => row.key)).size).toBe(during.length);
+    expect(appendPendingSendItems([previous, delivered], pending.slice(1))).toEqual(during);
+  });
+
+  it('retains the rendered list when no optimistic rows remain', () => {
+    const rendered = [{ key: pendingSendItemKey('sent') }];
+    expect(appendPendingSendItems(rendered, [])).toBe(rendered);
+    expect(appendPendingSendItems(rendered, build({ queue: [queued('sent')] }))).toBe(rendered);
+  });
+});
 
 describe('buildPendingSendItems', () => {
   it('shares the message item key so the bubble and the real message land in one place', () => {
@@ -233,14 +257,23 @@ describe('pending_send 渲染接线', () => {
     ).replace(/\r\n/g, '\n');
     expect(bubbleSource).toContain('<SentInlineAtomBody');
     expect(bubbleSource).toContain('interactiveAtoms={false}');
-    expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
-    // 徽标与正文必须属于同一个 Pressable，点击用户直觉中的左侧状态图标也能展开条目。
-    const bubblePressableStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
-    const bubblePressableEnd = bubbleSource.indexOf('\n        </Pressable>', bubblePressableStart);
-    const bubblePressable = bubbleSource.slice(bubblePressableStart, bubblePressableEnd);
-    expect(bubblePressableStart).toBeGreaterThan(-1);
-    expect(bubbleSource.indexOf('testID={`pendingSend.badge.${item.phase}`}')).toBeLessThan(bubblePressableStart);
-    expect(bubblePressable).toContain('hitSlop={{ left: iconSize.xl + spacing.sm }}');
+    expect(bubbleSource).toContain('maxVisibleLines={collapsedLines}');
+    expect(bubbleSource).toContain('LONG_USER_MESSAGE_COLLAPSED_LINES');
+    // 队列操作仅由状态徽标承接，Markdown 横向滚动不嵌套在 Pressable 中。
+    const badgeStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
+    const badgeEnd = bubbleSource.indexOf('\n        </Pressable>', badgeStart);
+    expect(badgeStart).toBeGreaterThan(-1);
+    const badge = bubbleSource.slice(badgeStart, badgeEnd);
+    expect(badge).toContain('testID={`pendingSend.badge.${item.phase}`}');
+    expect(badge).toContain('actions.onSelect(selected ? null : item.clientId)');
+    expect(badge).not.toContain('renderText(');
+    expect(badge).toContain('badgePosition');
+    expect(bubbleSource).toContain('event.nativeEvent.layout.x - 28 - spacing.sm');
+    expect(bubbleSource).toContain('onLayout={hasAttachments ? undefined : measureBadgeAnchor}');
+    expect(bubbleSource.indexOf('testID={`pendingSend.bubble.${item.clientId}`}')).toBeGreaterThan(badgeEnd);
+    expect(bubbleSource).toContain('const collapseLatched = collapseLatchBody === displayBody;');
+    expect(bubbleSource).toContain('if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);');
+    expect(bubbleSource).toContain('(measureBody && collapseLatched) || collapseResolved');
     const actionPillStart = bubbleSource.indexOf('  actionPill: {');
     const actionPillEnd = bubbleSource.indexOf('\n  },', actionPillStart);
     const actionPillStyle = bubbleSource.slice(actionPillStart, actionPillEnd);

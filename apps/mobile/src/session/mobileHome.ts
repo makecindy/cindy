@@ -1,5 +1,6 @@
 import type { RemoteSession } from '@/session/types';
 import { i18n } from '@/i18n';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { localizeRemoteSessionListItem } from '@/session/sessionList';
 import {
   buildMobileHomePresentation as buildMobileHomePresentationShared,
@@ -13,7 +14,7 @@ export * from '@cindy/maker-shared/mobile-home';
 
 export function buildMobileHomePresentation(options: MobileHomeOptions): MobileHomePresentation {
   const now = options.now ?? Date.now();
-  const base = buildMobileHomePresentationShared(options);
+  const base = buildMobileHomePresentationShared({ ...options, localizer: mobilePresentationLocalizer });
   const deviceFilters = base.deviceFilters.map((filter) => ({
     ...filter,
     label: filter.deviceId === null ? i18n.t('devices.presentation.home.allDevices') : filter.label,

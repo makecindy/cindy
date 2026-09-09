@@ -31,6 +31,7 @@ import {
   getGhostManager,
   installOrUpdateMarketGhostPackage,
   rejectReservedGhostIdForCustomMarket,
+  type MarketGhostPackageCommitEvidence,
 } from '../cindy-brain/index.js';
 import type { PluginMarketInstallResult } from '../../shared/pluginMarket.js';
 import { packGhostDirToFile } from '../cindy-brain/forge.js';
@@ -98,6 +99,7 @@ export async function installCustomMarketPlugin(input: {
   afterCommit?: (
     installed: InstalledGhost,
     packagedManifest: GhostManifest,
+    evidence: MarketGhostPackageCommitEvidence,
   ) => Promise<void>;
 }): Promise<PluginMarketInstallResult> {
   // input.pluginDir 是发现层已 realpath、且已校验落在市场根内的规范路径。
@@ -240,8 +242,8 @@ export async function installCustomMarketPlugin(input: {
             : {}),
           ...(input.afterCommit
             ? {
-                afterCommitInLock: (committed) =>
-                  input.afterCommit!(committed, packed.manifest),
+                afterCommitInLock: (committed, evidence) =>
+                  input.afterCommit!(committed, packed.manifest, evidence),
               }
             : {}),
         });

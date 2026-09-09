@@ -53,6 +53,7 @@ import {
 	resolvePnpmInvocation,
 	usablePnpmExecPath,
 } from "../shared/pnpm-invocation.mjs";
+import { findSymlinkPlatformSkips } from "../shared/symlink-test-guard.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -82,6 +83,8 @@ test("parseWorkspacePatterns reads pnpm-workspace.yaml package globs", () => {
 
 test("root unit and all scripts run runner self-tests before workspace sweep", () => {
 	const scripts = readRootScripts();
+	// CI uses the package lifecycle to propagate npm_execpath without duplicating self-tests.
+	assert.equal(scripts["test:workspaces"], "node scripts/test-workspaces.mjs");
 	assert.match(
 		scripts["test:unit"],
 		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --tier unit$/,
@@ -98,6 +101,12 @@ test("root unit and all scripts run runner self-tests before workspace sweep", (
 
 test("root db and guard delegate to the workspace runner", () => {
 	const scripts = readRootScripts();
+	for (const tier of ["integration", "e2e"]) {
+		assert.equal(
+			scripts[`test:${tier}`],
+			`pnpm test:runner && node scripts/test-workspaces.mjs --tier ${tier}`,
+		);
+	}
 	assert.equal(
 		scripts["test:git-integration"],
 		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
@@ -204,11 +213,60 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		...unitTestShardArgs(),
 	]);
 	assert.equal(makerCore.tiers.unit.execution, undefined);
+	assert.deepEqual(makerCore.tiers.unit.exclude, [
+		"**/*.integration.test.ts",
+		"**/*.e2e.test.ts",
+	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
 		args: ["run", "--pool=forks", "--maxWorkers=1", ...unitTestShardArgs()],
 	});
+});
+
+test("real agent integration tests are explicit tiers outside unit", () => {
+	const makerCore = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "packages/maker-core",
+	);
+	const piManager = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "packages/maker-pi-manager",
+	);
+	const desktop = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "apps/desktop",
+	);
+	assert.equal(makerCore.tiers.integration.status, "manual");
+	assert.equal(makerCore.tiers.integration.execution, "exclusive");
+	assert.equal(makerCore.tiers.integration.coverage, "allowlist");
+	assert.deepEqual(makerCore.tiers.integration.include, [
+		"src/agents/codex/*.integration.test.ts",
+		"src/agents/claude-code/__tests__/*.integration.test.ts",
+		"src/agents/pi/__tests__/*.integration.test.ts",
+	]);
+	assert.deepEqual(piManager.tiers.unit.exclude, [
+		"src/__tests__/pi-manager.integration.test.ts",
+	]);
+	assert.deepEqual(piManager.tiers.integration.include, [
+		"src/__tests__/pi-manager.integration.test.ts",
+	]);
+	assert.deepEqual(desktop.tiers.e2e.include, [
+		"src/main/maker-host/__tests__/*.e2e.test.ts",
+	]);
+});
+
+test("Pi RPC lifecycle stays in unit while binary resource discovery stays in integration", () => {
+	const makerCore = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "packages/maker-core",
+	);
+	const testDir = "packages/maker-core/src/agents/pi/__tests__";
+	const files = fs.readdirSync(path.join(ROOT, testDir))
+		.filter((file) => file.startsWith("pi-rpc-"))
+		.map((file) => `${testDir}/${file}`);
+	assert.deepEqual(selectFilesForTier(makerCore, makerCore.tiers.unit, files), [
+		`${testDir}/pi-rpc-harness.test.ts`,
+	]);
+	assert.deepEqual(selectFilesForTier(makerCore, makerCore.tiers.integration, files), [
+		`${testDir}/pi-rpc-resource-discovery.integration.test.ts`,
+	]);
 });
 
 test("unit tier pins an explicit vitest pool, forks only by documented exception", () => {
@@ -419,12 +477,14 @@ test("single-level include pattern matches orca workflow test file", () => {
 	);
 });
 
-test("desktop unit excludes migration, direct db-tier, and source-contract guard tests while keeping normal unit tests", () => {
+test("desktop unit excludes integration, migration, direct db-tier, and source-contract guard tests while keeping normal unit tests", () => {
 	const workspace = { cwd: "apps/desktop", status: "required" };
 	const tier = {
 		status: "required",
 		exclude: [
 			"**/*.git-integration.test.ts",
+			"**/*.integration.test.ts",
+			"**/*.e2e.test.ts",
 			"src/main/localDb/**",
 			"src/main/__tests__/*Migration.test.ts",
 			"src/main/__tests__/schemaDriftRepair.test.ts",
@@ -526,6 +586,65 @@ test("tests never bind a fixed numeric port", () => {
 			for (const match of source.matchAll(pattern)) {
 				if (Number(match[1]) !== 0) violations.push(`${file}:${match[1]}`);
 			}
+		}
+	}
+	assert.deepEqual(violations, []);
+});
+
+test("symlink platform-skip guard detects hard skips without flagging capability probes", () => {
+	assert.deepEqual(
+		findSymlinkPlatformSkips(`
+			it.skipIf(process.platform === "win32")("rejects escape", async () => {
+				await fs.symlink(outside, link);
+			});
+		`),
+		[{ line: 2 }],
+	);
+	assert.deepEqual(
+		findSymlinkPlatformSkips(`
+			it.skipIf(!canCreateSymlink)("rejects escape", async () => {
+				await fs.symlink(outside, link);
+			});
+			it.skipIf(process.platform === "win32")("sends SIGTERM", async () => {
+				await stopProcess();
+			});
+		`),
+		[],
+	);
+	assert.deepEqual(
+		findSymlinkPlatformSkips(`
+			it("rejects escape", async () => {
+				if (process.platform === "win32") return;
+				await fs.symlink(outside, link);
+			});
+		`),
+		[{ line: 3 }],
+	);
+});
+
+test("symlink platform-skip guard requires a concrete POSIX-only exception", () => {
+	const skippedTest = `
+		// symlink-platform-skip: Windows cannot represent non-UTF-8 link target bytes.
+		it.skipIf(process.platform === "win32")("hashes raw link bytes", async () => {
+			await fs.symlink(Buffer.from([0xff]), link);
+		});
+	`;
+	assert.deepEqual(findSymlinkPlatformSkips(skippedTest), []);
+	assert.deepEqual(
+		findSymlinkPlatformSkips(skippedTest.replace(
+			"Windows cannot represent non-UTF-8 link target bytes.",
+			"POSIX only",
+		)),
+		[{ line: 3 }],
+	);
+});
+
+test("symlink tests never skip solely because the host is Windows", () => {
+	const violations = [];
+	for (const file of discoverTestFiles(readAllFiles(ROOT))) {
+		const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+		for (const violation of findSymlinkPlatformSkips(source)) {
+			violations.push(`${file}:${violation.line}`);
 		}
 	}
 	assert.deepEqual(violations, []);
@@ -903,7 +1022,7 @@ test("unit CI shard arguments cover valid halves and reject malformed input", ()
 });
 
 test("test gate lock covers heavy local tiers but skips guard, CI, and explicit bypass", () => {
-	for (const tier of ["unit", "db", "git-integration"]) {
+	for (const tier of ["unit", "db", "git-integration", "integration", "e2e"]) {
 		assert.equal(shouldUseTestGateLock({ tier, env: {} }), true);
 	}
 	assert.equal(shouldUseTestGateLock({ all: true, env: {} }), true);

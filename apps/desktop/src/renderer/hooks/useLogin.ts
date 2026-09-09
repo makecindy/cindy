@@ -10,6 +10,7 @@ interface UseLoginReturn {
   hasAccountDeletionReceipt: boolean;
   getAccountDeletionStatus: ReturnType<typeof useAuth>['getAccountDeletionStatus'];
   clearAccountDeletionReceipt: ReturnType<typeof useAuth>['clearAccountDeletionReceipt'];
+  listAccounts: ReturnType<typeof useAuth>['listAccounts'];
   dispatch: (action: DesktopLoginAction) => Promise<boolean>;
   /**
    * 与 dispatch 同一条链路,但把失败码返回给调用方——captcha 兜底重试需要在
@@ -30,7 +31,7 @@ interface UseLoginReturn {
 }
 
 /** Coordinates presentation state while all credentials and tickets stay in main. */
-export function useLogin(): UseLoginReturn {
+export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseLoginReturn {
   const {
     loginState,
     loadLoginState,
@@ -38,6 +39,7 @@ export function useLogin(): UseLoginReturn {
     hasAccountDeletionReceipt,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
+    listAccounts,
     enterLocalMode,
   } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
@@ -45,7 +47,7 @@ export function useLogin(): UseLoginReturn {
   const loadingRef = useRef(false);
 
   useEffect(() => {
-    if (loginState || loadingRef.current) return;
+    if (!autoLoad || loginState || loadingRef.current) return;
     loadingRef.current = true;
     setIsLoading(true);
     void loadLoginState()
@@ -57,7 +59,7 @@ export function useLogin(): UseLoginReturn {
         loadingRef.current = false;
         setIsLoading(false);
       });
-  }, [loadLoginState, loginState]);
+  }, [autoLoad, loadLoginState, loginState]);
 
   const dispatchWithResult = useCallback(
     async (action: DesktopLoginAction): Promise<{ success: boolean; code: string | null }> => {
@@ -98,6 +100,7 @@ export function useLogin(): UseLoginReturn {
     hasAccountDeletionReceipt,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
+    listAccounts,
     dispatch,
     dispatchWithResult,
     clearError: () => setErrorCode(null),

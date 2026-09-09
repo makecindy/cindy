@@ -26,6 +26,10 @@ describe('isNetworkishErrorMessage', () => {
     'Reconnecting… 3/5 (stream disconnected before completion)',
     'The operation timed out.',
     'OpenAI Responses stream ended before a terminal response event',
+    // Cindy Responses bridge / compat-proxy 中途断流；Claude Code 再包 API Error:
+    'API Error: upstream stream error: terminated',
+    'upstream stream error: socket reset',
+    'upstream stream error: Error: terminated',
   ])('matches networkish message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(true);
   });
@@ -38,6 +42,9 @@ describe('isNetworkishErrorMessage', () => {
     'Wrapped error: API Error: The operation timed out.',
     // 长数字不因包含 502 片段误伤(\b 词边界)
     'order id 15024 rejected',
+    // 裸 terminated 是鉴权终态,不能当传输抖动
+    'app_session_terminated',
+    'Your session has ended. Please log in again. (app_session_terminated)',
   ])('does not match non-network message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(false);
   });

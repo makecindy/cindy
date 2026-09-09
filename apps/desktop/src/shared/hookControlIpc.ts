@@ -326,13 +326,12 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
 /**
  * 单目录会话偏好(与协议 WorkspacePrefsEntry 同形, shared 层独立声明避免
  * 引协议包)。null = 未设置, 跟随桌面端草稿默认(权限默认完全访问)。
- * 数据正本在 slack-hook-server 的 user_prefs 表, 与 Slack /model 卡同源。
+ * 数据正本在本机 hook-workspace-prefs.json; hook server 的 user_prefs 只作
+ * /model 卡镜像。
  */
 /**
- * 工作目录的模型来源偏好条目(纯客户端, 不进 server prefs 表)。
- * server prefs 继续只存 model/effort/agentKind/permissionMode 服务 /model 卡展示;
- * 来源是纯客户端维度(凭证/连接态/目录/派发全在客户端), 按本表与 server 显式
- * model 组合后经 effectiveSourceIdForModel 收窄派发。
+ * 工作目录的模型来源偏好条目(纯客户端)。
+ * 按本表与本机目录 model 组合后经 effectiveSourceIdForModel 收窄派发。
  */
 export interface HookWorkspaceProviderSourceEntry {
   channel: 'slack' | 'telegram' | 'x';
@@ -355,7 +354,7 @@ export interface HookWorkspacePrefs {
   teamId?: string | null;
 }
 
-/** 偏好快照(prefs.state 的 renderer 侧形态)。bound=false 时 prefs 恒空。 */
+/** 偏好快照(设置页读本机正本)。bound 表示该渠道是否已关联账号。 */
 export interface HookPrefsView {
   bound: boolean;
   prefs: HookWorkspacePrefs[];

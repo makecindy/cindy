@@ -4,11 +4,12 @@
  * 顶层路由(不在 (auth) 组)→ 已登录用户可直接访问,auth 守卫不拦。
  *
  * 用法(deeplink):
- *   lizcn://listperf?turns=300&media=1&auto=1&vel=45
+ *   lizcn://listperf?turns=300&media=1&auto=1&vel=45&recycle=1
  *   - turns: 轮数(每轮 1 user + 1 assistant),默认 300
  *   - media: 1=含 mermaid/math(WebView),0=纯文本(隔离 WebView 成本),默认 1
  *   - auto:  1=进入后自动做一次「底→顶」匀速滚动扫描并测帧,默认 0
  *   - vel:   滚动速度 px/帧(模拟 fling),默认 45
+ *   - recycle: 0=关闭 cell 回收做 A/B,默认 1
  */
 import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -17,24 +18,34 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { buildListPerfRenderItems } from '@/debug/listPerfFixture';
 import { runScrollSweep, type FrameStats } from '@/debug/scrollProfiler';
 import { MessageRenderer } from '@/session/MessageRenderer';
+import type { MobileMessageWebViewMetrics } from '@/session/mobileMessageWebViewMetrics';
+import {
+  resetMobileMarkdownRenderMetrics,
+  type MobileMarkdownRenderMetrics,
+} from '@/session/mobileMarkdownRenderMetrics';
 
 type ListApi = {
   scrollTo: (y: number) => void;
   getMetrics: () => { contentHeight: number; offsetY: number; viewportHeight: number };
+  getWebViewMetrics: () => MobileMessageWebViewMetrics;
+  getMarkdownMetrics: () => MobileMarkdownRenderMetrics;
 };
 
 export default function ListPerfHarness() {
-  const params = useLocalSearchParams<{ turns?: string; media?: string; auto?: string; vel?: string; run?: string }>();
+  const params = useLocalSearchParams<{ turns?: string; media?: string; auto?: string; vel?: string; recycle?: string; run?: string }>();
   const turns = Math.max(1, Math.min(2000, Number(params.turns) || 300));
   const media = params.media !== '0';
   const auto = params.auto === '1';
+  const recycle = params.recycle !== '0';
   const pxPerFrame = Math.max(5, Math.min(200, Number(params.vel) || 45));
 
   const items = useMemo(() => buildListPerfRenderItems(turns, { media }), [turns, media]);
-  const runKey = `${turns}|${media ? 1 : 0}|${pxPerFrame}|${params.run ?? '0'}`;
+  const runKey = `${turns}|${media ? 1 : 0}|${pxPerFrame}|${recycle ? 1 : 0}|${params.run ?? '0'}`;
   const apiRef = useRef<ListApi | null>(null);
   const startedKeyRef = useRef<string | null>(null);
   const [stats, setStats] = useState<FrameStats | null>(null);
+  const [webViewMetrics, setWebViewMetrics] = useState<MobileMessageWebViewMetrics | null>(null);
+  const [markdownMetrics, setMarkdownMetrics] = useState<MobileMarkdownRenderMetrics | null>(null);
   const [phase, setPhase] = useState<string>(auto ? 'waiting…' : 'manual');
 
   const devExposeList = useCallback((api: ListApi) => {
@@ -45,6 +56,11 @@ export default function ListPerfHarness() {
     if (!auto || startedKeyRef.current === runKey) return undefined;
     let cancelled = false;
     setStats(null);
+    setWebViewMetrics(null);
+    setMarkdownMetrics(null);
+    // Counters are process-global so repeated A/B deeplinks must start from a
+    // clean window; otherwise B includes all parses performed by A.
+    resetMobileMarkdownRenderMetrics();
     // 轮询等列表布局稳定(contentHeight 被 onContentSizeChange/onScroll 填好),再开扫。
     const waitAndRun = (attempt: number) => {
       if (cancelled) return;
@@ -63,7 +79,7 @@ export default function ListPerfHarness() {
       api!.scrollTo(0);
       setTimeout(() => {
         runScrollSweep({
-          label: `list=Legend turns=${turns} media=${media ? 1 : 0} vel=${pxPerFrame}`,
+          label: `list=Legend turns=${turns} media=${media ? 1 : 0} recycle=${recycle ? 1 : 0} vel=${pxPerFrame}`,
           fromY: 0,
           toY: 1_000_000,
           pxPerFrame,
@@ -72,6 +88,10 @@ export default function ListPerfHarness() {
           onDone: (s) => {
             if (cancelled) return;
             setStats(s);
+            const currentWebViewMetrics = apiRef.current?.getWebViewMetrics();
+            if (currentWebViewMetrics) setWebViewMetrics(currentWebViewMetrics);
+            const currentMarkdownMetrics = apiRef.current?.getMarkdownMetrics();
+            if (currentMarkdownMetrics) setMarkdownMetrics(currentMarkdownMetrics);
             setPhase('done');
             // 打到 Metro 日志,便于抓取。
             // eslint-disable-next-line no-console
@@ -96,17 +116,28 @@ export default function ListPerfHarness() {
     <SafeAreaView style={styles.fill} edges={['top']}>
       <View style={styles.bar}>
         <Text style={styles.barText}>
-          PERF · LegendList · turns={turns} · items={items.length} · media={media ? 1 : 0} · {phase}
+          PERF · LegendList · turns={turns} · items={items.length} · media={media ? 1 : 0} · recycle={recycle ? 1 : 0} · {phase}
         </Text>
         {stats ? (
           <Text style={styles.statText}>
             fps={stats.fps} avg={stats.avgMs}ms p50={stats.p50} p95={stats.p95} p99={stats.p99} max={stats.maxMs} | jank&gt;32={stats.jank32}/{stats.frames} &gt;50={stats.jank50}
           </Text>
         ) : null}
+        {webViewMetrics ? (
+          <Text style={styles.statText}>
+            webview mounted={webViewMetrics.mounted} mermaid={webViewMetrics.mountedByKind.mermaid} math={webViewMetrics.mountedByKind.math} media={webViewMetrics.mountedByKind.media} composer={webViewMetrics.mountedByKind.composer}
+          </Text>
+        ) : null}
+        {markdownMetrics ? (
+          <Text style={styles.statText}>
+            markdown full={markdownMetrics.fullParseCount} incremental={markdownMetrics.incrementalParseCount} reusedBlocks={markdownMetrics.reusedBlockCount} parsedUtf16={markdownMetrics.parsedSourceUtf16Length} parseMs={markdownMetrics.parseDurationMsTotal.toFixed(1)} maxMs={markdownMetrics.parseDurationMsMax.toFixed(1)} renderItems={markdownMetrics.renderItemRebuildCount}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.fill}>
         <MessageRenderer
           items={items}
+          devRecycleItems={recycle}
           testID="perf.list"
           devExposeList={devExposeList}
         />

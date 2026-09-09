@@ -147,6 +147,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(DEVICE_LINK_PUSH.CONTROL_TARGET_CHANGED, cb),
     onResponsivenessChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, cb),
+    onPeerLinkReset: (cb: (payload: unknown) => void): (() => void) =>
+      onPayload(DEVICE_LINK_PUSH.PEER_LINK_RESET, cb),
     mirrorCache: {
       getMessages: (deviceId: string, sessionId: string): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_MESSAGES, { deviceId, sessionId }),
@@ -557,6 +559,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
+      copyScreenshot: (request: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('maker:ios-simulator:copy-screenshot', request),
       setStreamProfile: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:set-stream-profile', request),
       liveTouch: (request: unknown): Promise<unknown> =>

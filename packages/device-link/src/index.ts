@@ -14,3 +14,8 @@ export * from './transport.js';
 export * from './topics.js';
 export * from './attachmentOssRef.js';
 export * from './contactsSyncProtocol.js';
+export * from './remoteResources.js';
+export * from './remoteDesktop.js';
+export * from './remoteDesktopIce.js';
+export * from './remoteClipboard.js';
+export * from './remoteCursor.js';

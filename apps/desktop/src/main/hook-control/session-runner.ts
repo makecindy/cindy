@@ -50,6 +50,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
@@ -97,6 +98,12 @@ import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/i
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
+import {
+  getWorkspacePref,
+  isWorkspacePrefsMigrated,
+  resolveWorkspacePrefOverrides,
+  type HookPrefsChannel,
+} from './workspacePrefsStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
@@ -164,6 +171,19 @@ async function resolveNewSessionConfig(
     );
   }
 
+  const prefsChannel: HookPrefsChannel | null =
+    sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' ? sourceIm : null;
+  const workspaceAlias = workspaceCtx?.alias;
+  const localPref =
+    prefsChannel !== null && workspaceAlias
+      ? getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      : null;
+  const mergedOverrides = resolveWorkspacePrefOverrides(
+    localPref,
+    overrides,
+    prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
+  );
+
   const resolved = resolveHookSessionConfig(
     {
       readDefaults: () =>
@@ -185,7 +205,7 @@ async function resolveNewSessionConfig(
           .permissionModes.map((pm) => pm.id),
       log,
     },
-    overrides,
+    mergedOverrides,
   );
 
   // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
@@ -627,6 +647,52 @@ export function createMakerHookSessionRunner(deps: {
           : {}),
         resumeSessionId,
       };
+      if (req.createOnly) {
+        if (!req.isNew) return fail('create-only requires a new task');
+        try {
+          // `/new` only needs a durable, sidebar-visible task boundary. Do not
+          // start an Agent process here: that turns a local metadata mutation
+          // into a slow websocket RPC and can leave server/client state split
+          // if the response times out. The first real message cold-opens this
+          // same row through the ordinary reuse path.
+          await desktopSessionStorage.create({
+            id: req.sessionId,
+            agentKind: effectiveAgentKind,
+            workDir: workingDir,
+            title: req.title ?? 'New task',
+            model: effectiveModel,
+            ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
+            ...(effort !== undefined ? { effort } : {}),
+            permissionMode,
+          });
+          if (providerId) {
+            setSessionProvider(req.sessionId, providerId);
+            await setSessionProviderIdInDb(req.sessionId, providerId);
+          }
+          if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+            await setSessionSourceInDb(req.sessionId, req.source.im);
+          }
+          await touchUserSendInDb(req.sessionId).catch((err) => {
+            log.warn(
+              `hook create-only touchUserSend failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+          const wtMeta = worktreeStore.get(req.sessionId);
+          if (wtMeta) await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          broadcastSessionCreated(req.sessionId);
+          return {
+            status: 'ok',
+            finalText: '',
+            errorMessage: '',
+            durationMs: Date.now() - startedAt,
+          };
+        } catch (err) {
+          if (worktreeStore.get(req.sessionId)) {
+            void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
+          }
+          return fail(err instanceof Error ? err.message : String(err));
+        }
+      }
       try {
         await prepareUnhealthySessionForSend(req.sessionId);
         session = await maker.createSession(createOpts);

@@ -1152,6 +1152,18 @@ describe("cindy · media MCP 边界", () => {
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
   });
 
+  it("把受管媒体地址交给 Host 按需解析本地路径", async () => {
+    const url = `cindy-media://blobs/${"a".repeat(64)}.png`;
+    const callMedia = vi.fn(async () => ({ ok: true, local_path: "/media/a.png" }));
+    const result = await handleMedia(fakeDeps({ callMedia }), {
+      action: "resolve_local_path",
+      url,
+    });
+
+    expect(callMedia).toHaveBeenCalledWith({ action: "resolve_local_path", url });
+    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: "/media/a.png" });
+  });
+
   it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {
     const callMedia = vi.fn(async () => ({ ok: true }));
     expect(
@@ -1167,6 +1179,13 @@ describe("cindy · media MCP 边界", () => {
         await handleMedia(fakeDeps({ callMedia }), {
           action: "list_models",
           capability: "document.generate" as "image.generate",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "resolve_local_path",
         }),
       ),
     ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
@@ -1938,5 +1957,26 @@ describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () =>
     );
     await handleGhostCall(deps, { ghost_id: "art", tool: "gen_image" });
     expect(callGhostTool.mock.calls[1][0]).not.toHaveProperty("agentToolUseId");
+  });
+});
+
+describe('connect_account transport', () => {
+  it('exposes a Host connection without requiring an installed plugin', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ listAwakeGhosts: async () => [], connectAccount }));
+    const client = new Client({ name: 'test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined });
+      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
+      expect(rejected.isError).toBe(true);
+      expect(connectAccount).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
   });
 });

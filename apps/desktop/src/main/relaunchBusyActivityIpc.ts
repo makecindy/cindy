@@ -22,6 +22,15 @@ export const RELAUNCH_BLOCKING_ACTIVITY_CHANNEL = 'update-relaunch:blocking-acti
 const log = createLogger('relaunch-activity');
 
 /**
+ * 横幅延后轮询会反复问同一条探针,但不能把每次 busy 都打成「manual relaunch」INFO。
+ * Renderer 传入的 payload 不可信:只有精确 `{ silent: true }` 才静默,其余一律按手动查询打日志。
+ */
+function isSilentBusyProbe(payload: unknown): boolean {
+  if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  return (payload as { silent?: unknown }).silent === true;
+}
+
+/**
  * 注册手动更新重启的阻断查询。
  *
  * `sources` 用工厂形态传入(而非直接给值):handler 每次被调用都要拿**当时**的跟踪器,
@@ -38,10 +47,11 @@ export function registerRelaunchBusyActivityIpc(
   // 同一行 —— 结果是 maker 链路永久不可用。先 remove 再 handle,让重复调用总是收敛到
   // 「一个当前有效的 handler」。
   ipcMain.removeHandler(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL);
-  ipcMain.handle(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL, async (event) => {
+  ipcMain.handle(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL, async (event, payload) => {
     assertTrustedAppRendererEvent(event);
+    const silent = isSilentBusyProbe(payload);
     const result = await evaluateRelaunchBusyActivity(resolveSources());
-    if (result.busy) {
+    if (result.busy && !silent) {
       log.info('manual relaunch has live activity', { reasons: result.reasons });
     }
     return result.busy;

@@ -190,6 +190,8 @@ interface UserMessageProps {
    *  edit-last-message: 只有最后一条 user 消息显示编辑入口(编辑 = rewind 到
    *  这条 + 重发,更早的消息编辑会静默丢弃后续轮次,v1 不开放)。 */
   isLastUserMessage?: boolean;
+  /** 伙伴对话使用常显、无 Fork 的轻量消息操作栏。 */
+  simplifiedBotConversation?: boolean;
   /** scheduler 注入的消息来源标记;存在时在气泡上方渲染"由自动化任务发送"标签。 */
   automationOrigin?: MessageAutomationOrigin;
   /** Hook 来源元数据;存在时渲染左对齐 Cindy 署名任务卡片(替代右对齐气泡)。 */
@@ -956,6 +958,7 @@ export function UserMessage({
   delivery,
   isFirstUserMessage,
   isLastUserMessage,
+  simplifiedBotConversation = false,
   automationOrigin,
   hookSource,
   goalBadge,
@@ -1098,8 +1101,8 @@ export function UserMessage({
   // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
   const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
   const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostMentionFulfilled;
-  const ghostChipDisplay = ghostPillForm ? null : ghostCardDisplay;
-  const ghostPillDisplay = ghostPillForm ? ghostDirective : null;
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
+  const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
   const displayBubbleBody = ghostCmdToken ? ghostPromptBody : bubbleBody;
@@ -1774,6 +1777,7 @@ export function UserMessage({
                   copyLinkText={messageDeepLink}
                   align="right"
                   hovered={hovered}
+                  simplifiedBotConversation={simplifiedBotConversation}
                   onFork={!isBlocked && canFork ? handleFork : undefined}
                   onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
                   onShareAsImage={handleShareAsImage}

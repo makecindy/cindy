@@ -175,26 +175,80 @@ export function createRemotePiFileOps(remoteHost: RemoteHost): PiRemoteFileOps {
     },
 
     async stat(file: string): Promise<{ isFile: boolean } | null> {
+      // Shell -f/-e cannot distinguish ENOENT from an unsearchable parent.
+      // Bootstrap can reach this before bundled Node is installed. Use the
+      // platform stat utility (GNU/Linux or BSD/macOS), with C-locale errno
+      // suffixes, and only treat an explicit ENOENT diagnostic as missing.
       // 轮 43 P1(codex-connector):eval 换 H=$(printf) + 参数替换, 无注入风险。
       const script = `
 P=${shellQuote(file)}
 case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\\$HOME}" != "$P" ] && P="\${H}\${P#\\\$HOME}";; esac
-if [ -f "$P" ]; then
-  printf 'FILE\\n'
-elif [ -e "$P" ]; then
-  printf 'DIR\\n'
+if stat -c '%F' / >/dev/null 2>&1; then
+  RESULT=$(LC_ALL=C stat -L -c '%F' -- "$P" 2>&1)
 else
-  printf 'MISSING\\n'
+  RESULT=$(LC_ALL=C stat -L -f '%HT' -- "$P" 2>&1)
+fi
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  case "$RESULT" in
+    *': No such file or directory') printf 'MISSING\\n' ;;
+    *': Permission denied') printf 'EACCES' >&2; exit 1 ;;
+    *) exit 1 ;;
+  esac
+else
+  case "$RESULT" in
+    'regular file'|'regular empty file'|'Regular File') printf 'FILE\\n' ;;
+    # BSD stat -L falls back to lstat only when the link target is missing.
+    'Symbolic Link') printf 'MISSING\\n' ;;
+    *) printf 'DIR\\n' ;;
+  esac
 fi
 `;
       const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
         timeoutMs: 10_000,
         label: 'pi-remote-stat',
       });
-      const kind = result.stdout.trim().split(/\r?\n/).pop() ?? 'MISSING';
+      if (result.exitCode !== 0) {
+        const code = result.stderr.trim();
+        const reason = /^E[A-Z0-9]+$/.test(code) ? `: ${code}` : '';
+        throw new Error(`remote stat failed (exit ${result.exitCode})${reason}`);
+      }
+      const kind = result.stdout.trim();
       if (kind === 'FILE') return { isFile: true };
       if (kind === 'DIR') return { isFile: false };
-      return null;
+      if (kind === 'MISSING') return null;
+      throw new Error('remote stat returned an invalid response');
+    },
+
+    async readFile(file: string, maxBytes = 1_048_576): Promise<string> {
+      const boundedBytes = Math.max(1, Math.min(Math.trunc(maxBytes), 4_194_304));
+      const script = `P=${shellQuote(file)}; case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac; [ -f "$P" ] || exit 44; head -c ${boundedBytes} "$P"`;
+      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+        timeoutMs: 10_000,
+        label: 'agent-remote-read-file',
+      });
+      if (result.exitCode !== 0) {
+        throw new Error(`remote read failed (exit ${result.exitCode})`);
+      }
+      return result.stdout;
+    },
+
+    async sha256File(file: string): Promise<string> {
+      const script = [
+        `P=${shellQuote(file)}`,
+        `case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac`,
+        `[ -f "$P" ] || exit 44`,
+        `if command -v sha256sum >/dev/null 2>&1; then sha256sum "$P" | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$P" | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$P" | awk '{print $NF}'; else exit 45; fi`,
+      ].join('\n');
+      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+        timeoutMs: 30_000,
+        label: 'agent-remote-sha256-file',
+      });
+      const digest = result.stdout.trim().split(/\r?\n/).pop()?.toLowerCase() ?? '';
+      if (result.exitCode !== 0 || !/^[a-f0-9]{64}$/.test(digest)) {
+        throw new Error(`remote sha256 failed (exit ${result.exitCode})`);
+      }
+      return digest;
     },
 
     async rm(fileOrDir: string, opts?: { recursive?: boolean }): Promise<void> {

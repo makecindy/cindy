@@ -76,6 +76,40 @@ describe('Node runtime packaging contract', () => {
     expect(broker).not.toContain("ELECTRON_RUN_AS_NODE: '1'");
   });
 
+  it('启动上下文只做每次 attempt 粗粒度快照，不注册窗口/电源时间线', () => {
+    const bootstrap = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/bootstrap-electron.ts'),
+      'utf8',
+    );
+    const start = bootstrap.indexOf('setGhostNodeRuntimeStartAttemptContextReader(() => {');
+    const end = bootstrap.indexOf('installWindowHiddenBroadcast(mainWindow);', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const contextReader = bootstrap.slice(start, end);
+    for (const state of [
+      'absent',
+      'hidden',
+      'minimized',
+      'visible-unfocused',
+      'focused',
+      'unknown',
+    ]) {
+      expect(contextReader).toContain(`'${state}'`);
+    }
+    expect(contextReader).toContain('powerMonitor.getSystemIdleState(60)');
+    expect(contextReader).toContain('observedScreenState');
+    expect(contextReader).not.toMatch(
+      /\.on\(|getSystemIdleTime|systemIdleSec|msSinceVisibility|title|URL|bounds|windowHidden/,
+    );
+  });
+
+  it('appRunId 在 cindy-brain main singleton 边界生成一次并注入每代 broker', () => {
+    const brain = fs.readFileSync(path.join(desktopRoot, 'src/main/cindy-brain/index.ts'), 'utf8');
+    expect(brain).toContain('const nodeRuntimeAppRunId = (() => {');
+    expect(brain).toContain("randomUUID().replaceAll('-', '')");
+    expect(brain).toContain('appRunId: nodeRuntimeAppRunId');
+  });
+
   it('代启子进程(childSpawn)仍走同一 utilityProcess 通道,worker 侧只暴露窄接口', () => {
     const worker = fs.readFileSync(
       path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),

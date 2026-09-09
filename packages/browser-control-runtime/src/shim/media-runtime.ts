@@ -77,12 +77,15 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
   }
 }
 
-const MEDIA_ROOT = path.join(CONFIG_DIR, 'media');
+function mediaRoot(): string {
+  return path.join(CONFIG_DIR, 'media');
+}
 
 /** Ensure the media scratch root exists. */
 export async function ensureMediaDir(): Promise<string> {
-  await fs.mkdir(MEDIA_ROOT, { recursive: true, mode: 0o700 });
-  return MEDIA_ROOT;
+  const root = mediaRoot();
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  return root;
 }
 
 export interface SavedMedia {
@@ -109,7 +112,7 @@ export async function saveMediaBuffer(
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
   }
-  const dir = path.join(MEDIA_ROOT, subdir);
+  const dir = path.join(mediaRoot(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 16);
   const file = path.join(dir, `${hash}.${extForContentType(contentType)}`);

@@ -8,10 +8,9 @@
  *   - 鼠标悬停时临时展开,移开即收起;点击/Enter 后固定展开,再次触发立即收起。
  *     浮层绝对定位(bottom-full),不改变 composer overlay 的实测高度,
  *     消息流不会因 hover 抖动。
- *   - 浮层行:completed 灰(check 圆圈),in_progress 高亮(实心圆点呼吸,
- *     复用侧栏运行态同款 session-status-breathing;按 DESIGN.md §SVG 常驻
- *     动画红线,呼吸挂 HTML wrapper,SVG 本体静态;reduced-motion 静止),
- *     pending 正常前景色(空心圆圈)。
+ *   - 浮层行:completed 灰(check 圆圈),in_progress 高亮(「正在工作…」同款圆弧
+ *     spinner,半径对齐空心圆 r=10;旋转挂 HTML wrapper、SVG 本体静态;
+ *     reduced-motion 与会话空闲时静止),pending 正常前景色(空心圆圈)。
  *   - 胶囊图标使用静态灰度进度圆环表达当前步骤位置(它表达"第几步",不是
  *     loading 语义,不旋转);进度变化只通过圆环长度的短过渡反馈。
  *
@@ -25,7 +24,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleCheck,
-  CircleDot,
   Circle,
   ListTodo,
   X,
@@ -33,6 +31,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
+import { Spinner, type SpinnerIconComponent } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
@@ -104,6 +103,61 @@ function ProgressRing({
 }
 
 /**
+ * lucide LoaderCircle 是 r=9 的开口弧;计划行 Circle / CircleDot 是 r=10。
+ * 不能 CSS scale(会连线宽一起放大)。保持同一 72° 缺口,把弧径收到 r=10。
+ */
+const PlanLoaderArc: SpinnerIconComponent = function PlanLoaderArc({
+  size = 18,
+  strokeWidth = 1.5,
+  className,
+  ...props
+}) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      data-plan-loader-arc="true"
+      {...props}
+    >
+      <path d="M22 12a10 10 0 1 1-6.91-9.51" />
+    </svg>
+  );
+}
+
+/**
+ * 进行中步骤:「正在工作…」同款圆弧,半径对齐旁边空心圆。
+ * 旋转挂 HTML wrapper,SVG 本体静态(DESIGN.md 常驻动画红线);
+ * 会话空闲或 reduced-motion 时停转,不谎报还在执行。
+ */
+function PlanInProgressIcon({
+  animated,
+  variant,
+}: {
+  animated: boolean;
+  variant: 'flyout' | 'inline';
+}) {
+  return (
+    <Spinner
+      icon={PlanLoaderArc}
+      size={18}
+      strokeWidth={1.5}
+      spinning={animated}
+      className="text-[var(--msg-tool-card-text)]"
+      data-plan-step-active={variant === 'flyout' ? 'true' : undefined}
+      data-inline-plan-step-active={variant === 'inline' ? 'true' : undefined}
+    />
+  );
+}
+
+/**
  * InlinePlanCard —— 计划在聊天时间线里的主呈现。
  *
  * 计划默认留在产生它的消息位置，用户滚回任务经过时能直接看到完整清单；
@@ -115,7 +169,7 @@ export function InlinePlanCard({
   animated = false,
 }: {
   todos: TodoItem[];
-  /** 只有会话确实在跑时，进行中行才呼吸；失败/中断后的历史卡保持静止。 */
+  /** 只有会话确实在跑时，进行中行才慢转；失败/中断后的历史卡保持静止。 */
   animated?: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -189,17 +243,7 @@ export function InlinePlanCard({
                     />
                   )}
                   {todo.status === 'in_progress' && (
-                    <span
-                      data-inline-plan-step-active="true"
-                      data-inline-plan-step-breathing={animated ? 'true' : 'false'}
-                      className={cn('inline-flex shrink-0', animated && 'session-status-breathing')}
-                    >
-                      <CircleDot
-                        size={18}
-                        strokeWidth={1.5}
-                        className="shrink-0 text-[var(--msg-tool-card-text)]"
-                      />
-                    </span>
+                    <PlanInProgressIcon animated={animated} variant="inline" />
                   )}
                   {todo.status === 'pending' && (
                     <Circle
@@ -242,9 +286,9 @@ export function TodoListCard({
 }: {
   todos: TodoItem[];
   /**
-   * 会话是否真的在跑(调用方传 isStreaming)。只有它为真时,in_progress 行才挂
-   * 呼吸动画——计划因停止/失败/中断留在屏幕上时会话已空闲,继续呼吸等于谎报
-   * "这步还在执行"。胶囊上的进度环与其它形态始终静态,不受此参数影响。
+   * 会话是否真的在跑(调用方传 isStreaming)。只有它为真时,in_progress 行才慢转
+   * ——计划因停止/失败/中断留在屏幕上时会话已空闲,继续转等于谎报"这步还在
+   * 执行"。胶囊上的进度环与其它形态始终静态,不受此参数影响。
    */
   animated?: boolean;
   /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
@@ -428,24 +472,7 @@ export function TodoListCard({
                       />
                     )}
                     {todo.status === 'in_progress' && (
-                      // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
-                      // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
-                      // 会话空闲(停止/失败/中断后计划仍留屏)时静止:动画只在
-                      // 确有 running 语义时挂载,否则等于谎报该步骤仍在执行。
-                      <span
-                        data-plan-step-active="true"
-                        data-plan-step-breathing={animated ? 'true' : 'false'}
-                        className={cn(
-                          'inline-flex shrink-0',
-                          animated && 'session-status-breathing',
-                        )}
-                      >
-                        <CircleDot
-                          size={18}
-                          strokeWidth={1.5}
-                          className="shrink-0 text-[var(--msg-tool-card-text)]"
-                        />
-                      </span>
+                      <PlanInProgressIcon animated={animated} variant="flyout" />
                     )}
                     {todo.status === 'pending' && (
                       <Circle

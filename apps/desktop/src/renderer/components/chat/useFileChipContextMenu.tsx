@@ -45,6 +45,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
+import { formatFileLocation, type FileLocation } from '@/lib/fileLocation';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
   DropdownMenu,
@@ -101,12 +102,15 @@ export function useFileChipContextMenu({
   sidebarFileBrowserKind = 'file',
   sidebarOpenSessionId,
   onViewSource,
+  location,
 }: {
   getAbsPath: () => Promise<string> | string;
   canOpenInBrowser?: boolean;
   sidebarFileBrowserKind?: 'file' | 'directory';
   sidebarOpenSessionId?: string;
   onViewSource?: () => void | Promise<void>;
+  /** Only supplied by resolved Markdown references; existing path-copy stays absolute. */
+  location?: FileLocation;
 }): UseFileChipContextMenu {
   const { t } = useTranslation();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -123,6 +127,20 @@ export function useFileChipContextMenu({
   const remoteOrigin = isRemoteFileOrigin(sessionFileCtx.origin) ? sessionFileCtx.origin : null;
   const sidebarFileTargetSessionId = useSidebarTargetSessionId(sessionFileCtx.sessionId);
   const sidebarBrowserTargetSessionId = useSidebarTargetSessionId(sidebarOpenSessionId);
+  const copyLocation = location && sidebarFileBrowserKind === 'file'
+    ? formatFileLocation(sessionFileCtx.workingDir, location)
+    : null;
+
+  async function handleCopyLocation(): Promise<void> {
+    setMenuPos(null);
+    if (!copyLocation) return;
+    try {
+      await navigator.clipboard.writeText(copyLocation);
+      toast.success(t('chat.markdownRenderer.locationCopied'));
+    } catch {
+      toast.error(t('chat.media.copyFailed'));
+    }
+  }
 
   async function handleCopyFile(): Promise<void> {
     setMenuPos(null);
@@ -372,6 +390,12 @@ export function useFileChipContextMenu({
           <ClipboardCopy className="mr-2 h-4 w-4" />
           {t('chat.markdownRenderer.copyFilePath')}
         </DropdownMenuItem>
+        {copyLocation ? (
+          <DropdownMenuItem onClick={handleCopyLocation}>
+            <ClipboardCopy className="mr-2 h-4 w-4" />
+            {t('chat.markdownRenderer.copyLocation')}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onClick={handleReveal}>
           <FolderOpen className="mr-2 h-4 w-4" />
           {remoteOrigin

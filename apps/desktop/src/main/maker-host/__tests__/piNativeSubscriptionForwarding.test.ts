@@ -1,11 +1,23 @@
 import { EventEmitter } from 'node:events';
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 
+const { ownerState } = vi.hoisted(() => ({
+  ownerState: {
+    pending: false,
+    scope: 'cloud:owner-a:1',
+  },
+}));
+
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-pi-native-forwarding-test' },
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  isAppSessionBoundaryPending: () => ownerState.pending,
+  activeOwnerScopeKey: () => ownerState.scope,
 }));
 
 vi.mock('../logger-adapter.js', () => ({
@@ -77,6 +89,11 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 }
 
 describe('PI native subscription forwarding', () => {
+  afterEach(() => {
+    ownerState.pending = false;
+    ownerState.scope = 'cloud:owner-a:1';
+  });
+
   it('forwards Codex Responses bytes unchanged with host-owned ChatGPT auth', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
@@ -802,6 +819,80 @@ describe('PI native subscription forwarding', () => {
         endpoint: 'https://api.x.ai/v1/responses',
         message: 'xAI/Grok upstream request failed: fetch failed',
       },
+    });
+  });
+
+  it('does not fetch after ChatGPT context-profile rewrite if owner scope changed', async () => {
+    const fetchMock = vi.fn(async () => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('openai', 'session-rewrite-scope', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      getChatgptAuth: vi.fn(async () => {
+        const auth = { accessToken: 'token-owner-a', accountId: 'account-1' };
+        ownerState.scope = 'cloud:owner-b:2';
+        return auth;
+      }),
+    }));
+    const compressed = zstdCompressSync(Buffer.from(JSON.stringify({
+      model: 'gpt-5.6-sol[1m]',
+      input: 'hello',
+    })));
+    const res = responseRecorder();
+
+    await handler({
+      rawBody: compressed,
+      parsedBody: undefined,
+      ctx: {
+        reqId: 21,
+        method: 'POST',
+        url: '/codex/responses',
+        headers: {
+          'content-type': 'application/json',
+          'content-encoding': 'zstd',
+        },
+      },
+      res,
+    } as never);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(503);
+    expect(JSON.parse(Buffer.concat(res.chunks).toString('utf8'))).toMatchObject({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('does not fetch xAI after sanitizing the body if owner scope changed', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-sanitize-scope', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      getGrokToken: vi.fn(async () => {
+        ownerState.scope = 'cloud:owner-b:2';
+        return 'token-owner-a';
+      }),
+    }));
+    const res = responseRecorder();
+
+    await handler({
+      rawBody: Buffer.from('{"model":"grok-4.6"}'),
+      parsedBody: { model: 'grok-4.6' },
+      ctx: {
+        reqId: 22,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res,
+    } as never);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(503);
+    expect(JSON.parse(Buffer.concat(res.chunks).toString('utf8'))).toMatchObject({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
     });
   });
 

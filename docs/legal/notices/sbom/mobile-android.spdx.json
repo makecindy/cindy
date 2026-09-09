@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-android",
-  "documentNamespace": "https://cindy.app/spdx/mobile-android/05efd357f74ac207a075699dbbd457afe65ed99fd574ee594be1d4bb651dc49a",
+  "documentNamespace": "https://cindy.app/spdx/mobile-android/279afe096f67e06278533b0141e4ec9be3d49bf89bbd4ecc0eebb430433efbb9",
   "creationInfo": {
-    "created": "2026-08-14T10:29:27Z",
+    "created": "2026-09-02T19:21:04Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -50,23 +50,6 @@
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
       "copyrightText": "NOASSERTION"
-    },
-    {
-      "name": "@adobe/css-tools",
-      "SPDXID": "SPDXRef-Package-10a5c5df7c6ba052",
-      "versionInfo": "4.5.0",
-      "downloadLocation": "https://github.com/adobe/css-tools",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40adobe/css-tools@4.5.0"
-        }
-      ]
     },
     {
       "name": "@babel/code-frame",
@@ -1242,6 +1225,23 @@
       ]
     },
     {
+      "name": "@egjs/hammerjs",
+      "SPDXID": "SPDXRef-Package-cf26df301845f4cf",
+      "versionInfo": "2.0.17",
+      "downloadLocation": "https://github.com/naver/hammer.js",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40egjs/hammerjs@2.0.17"
+        }
+      ]
+    },
+    {
       "name": "@expo-google-fonts/material-symbols",
       "SPDXID": "SPDXRef-Package-396b2918563c1afc",
       "versionInfo": "0.4.40",
@@ -1260,8 +1260,8 @@
     },
     {
       "name": "@expo/cli",
-      "SPDXID": "SPDXRef-Package-6ac0bb956200fdf5",
-      "versionInfo": "56.1.20",
+      "SPDXID": "SPDXRef-Package-20e7a8f375c2feb7",
+      "versionInfo": "57.0.19",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1271,7 +1271,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/cli@56.1.20"
+          "referenceLocator": "pkg:npm/%40expo/cli@57.0.19"
         }
       ]
     },
@@ -1294,8 +1294,8 @@
     },
     {
       "name": "@expo/config",
-      "SPDXID": "SPDXRef-Package-dcc374c8c02d514d",
-      "versionInfo": "56.0.12",
+      "SPDXID": "SPDXRef-Package-1496420660ddf99b",
+      "versionInfo": "57.0.9",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1305,14 +1305,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/config@56.0.12"
+          "referenceLocator": "pkg:npm/%40expo/config@57.0.9"
         }
       ]
     },
     {
       "name": "@expo/config-plugins",
-      "SPDXID": "SPDXRef-Package-cf8f2de11ad0cb5b",
-      "versionInfo": "56.0.13",
+      "SPDXID": "SPDXRef-Package-5b62941641563ebf",
+      "versionInfo": "57.0.9",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1322,14 +1322,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/config-plugins@56.0.13"
+          "referenceLocator": "pkg:npm/%40expo/config-plugins@57.0.9"
         }
       ]
     },
     {
       "name": "@expo/config-types",
-      "SPDXID": "SPDXRef-Package-cdeb690c56a84829",
-      "versionInfo": "56.0.7",
+      "SPDXID": "SPDXRef-Package-772be2704d1edaac",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1339,7 +1339,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/config-types@56.0.7"
+          "referenceLocator": "pkg:npm/%40expo/config-types@57.0.2"
         }
       ]
     },
@@ -1362,8 +1362,8 @@
     },
     {
       "name": "@expo/devtools",
-      "SPDXID": "SPDXRef-Package-43316c9d32c89096",
-      "versionInfo": "56.0.2",
+      "SPDXID": "SPDXRef-Package-13b0840247977fd4",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1373,14 +1373,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/devtools@56.0.2"
+          "referenceLocator": "pkg:npm/%40expo/devtools@57.0.1"
         }
       ]
     },
     {
       "name": "@expo/dom-webview",
-      "SPDXID": "SPDXRef-Package-617dd995820cbb4d",
-      "versionInfo": "56.0.6",
+      "SPDXID": "SPDXRef-Package-4747d19862c6c2b8",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1390,24 +1390,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/dom-webview@56.0.6"
-        }
-      ]
-    },
-    {
-      "name": "@expo/env",
-      "SPDXID": "SPDXRef-Package-af1d891ecc9c652c",
-      "versionInfo": "2.3.1",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/env@2.3.1"
+          "referenceLocator": "pkg:npm/%40expo/dom-webview@57.0.1"
         }
       ]
     },
@@ -1430,8 +1413,8 @@
     },
     {
       "name": "@expo/expo-modules-macros-plugin",
-      "SPDXID": "SPDXRef-Package-f7064e795090188d",
-      "versionInfo": "0.2.2",
+      "SPDXID": "SPDXRef-Package-a9b72b527dd55c2c",
+      "versionInfo": "0.6.1",
       "downloadLocation": "https://github.com/expo/expo-modules-macros-plugin",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1441,14 +1424,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/expo-modules-macros-plugin@0.2.2"
+          "referenceLocator": "pkg:npm/%40expo/expo-modules-macros-plugin@0.6.1"
         }
       ]
     },
     {
       "name": "@expo/fingerprint",
-      "SPDXID": "SPDXRef-Package-5dd3cf74bac21b26",
-      "versionInfo": "0.19.8",
+      "SPDXID": "SPDXRef-Package-cf2499e732152ff1",
+      "versionInfo": "0.20.10",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1458,14 +1441,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/fingerprint@0.19.8"
+          "referenceLocator": "pkg:npm/%40expo/fingerprint@0.20.10"
         }
       ]
     },
     {
       "name": "@expo/image-utils",
-      "SPDXID": "SPDXRef-Package-24cf3edefeb8ede5",
-      "versionInfo": "0.10.3",
+      "SPDXID": "SPDXRef-Package-11cb55c38fa93cd7",
+      "versionInfo": "0.11.5",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1475,31 +1458,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/image-utils@0.10.3"
-        }
-      ]
-    },
-    {
-      "name": "@expo/image-utils",
-      "SPDXID": "SPDXRef-Package-52847b30294715dd",
-      "versionInfo": "0.10.4",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/image-utils@0.10.4"
+          "referenceLocator": "pkg:npm/%40expo/image-utils@0.11.5"
         }
       ]
     },
     {
       "name": "@expo/inline-modules",
-      "SPDXID": "SPDXRef-Package-43d80c1b2da0e96a",
-      "versionInfo": "0.0.14",
+      "SPDXID": "SPDXRef-Package-20bcb76ccf8f4986",
+      "versionInfo": "0.1.7",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1509,24 +1475,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/inline-modules@0.0.14"
-        }
-      ]
-    },
-    {
-      "name": "@expo/json-file",
-      "SPDXID": "SPDXRef-Package-dca50474e69f294b",
-      "versionInfo": "10.2.0",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/json-file@10.2.0"
+          "referenceLocator": "pkg:npm/%40expo/inline-modules@0.1.7"
         }
       ]
     },
@@ -1549,8 +1498,8 @@
     },
     {
       "name": "@expo/local-build-cache-provider",
-      "SPDXID": "SPDXRef-Package-91e14c6d4bc9e3b1",
-      "versionInfo": "56.0.10",
+      "SPDXID": "SPDXRef-Package-7161e8a7d78e0b5d",
+      "versionInfo": "57.0.8",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1560,14 +1509,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/local-build-cache-provider@56.0.10"
+          "referenceLocator": "pkg:npm/%40expo/local-build-cache-provider@57.0.8"
         }
       ]
     },
     {
       "name": "@expo/log-box",
-      "SPDXID": "SPDXRef-Package-18f232e2f8bcfc8d",
-      "versionInfo": "56.0.14",
+      "SPDXID": "SPDXRef-Package-4ab6622b68b7ad20",
+      "versionInfo": "57.0.4",
       "downloadLocation": "https://github.com/expo/expo/tree/main/packages/@expo/log-box",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1577,14 +1526,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/log-box@56.0.14"
+          "referenceLocator": "pkg:npm/%40expo/log-box@57.0.4"
         }
       ]
     },
     {
       "name": "@expo/metro",
-      "SPDXID": "SPDXRef-Package-87d75a8a36e3a905",
-      "versionInfo": "56.0.0",
+      "SPDXID": "SPDXRef-Package-f555a00e5e60bd38",
+      "versionInfo": "56.0.2",
       "downloadLocation": "https://github.com/expo/expo-metro",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1594,14 +1543,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/metro@56.0.0"
+          "referenceLocator": "pkg:npm/%40expo/metro@56.0.2"
         }
       ]
     },
     {
       "name": "@expo/metro-config",
-      "SPDXID": "SPDXRef-Package-fdc1aa5e69b581c1",
-      "versionInfo": "56.0.17",
+      "SPDXID": "SPDXRef-Package-7ba1e9724ad8c5a0",
+      "versionInfo": "57.0.11",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1611,14 +1560,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/metro-config@56.0.17"
+          "referenceLocator": "pkg:npm/%40expo/metro-config@57.0.11"
         }
       ]
     },
     {
       "name": "@expo/metro-file-map",
-      "SPDXID": "SPDXRef-Package-2499d3555c55bdd8",
-      "versionInfo": "56.0.3",
+      "SPDXID": "SPDXRef-Package-9613d6cca786e5b8",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1628,14 +1577,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/metro-file-map@56.0.3"
+          "referenceLocator": "pkg:npm/%40expo/metro-file-map@57.0.2"
         }
       ]
     },
     {
       "name": "@expo/metro-runtime",
-      "SPDXID": "SPDXRef-Package-9ce7cf04e77ca4a6",
-      "versionInfo": "56.0.17",
+      "SPDXID": "SPDXRef-Package-ea9b1f8b52305c58",
+      "versionInfo": "57.0.14",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1645,7 +1594,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/metro-runtime@56.0.17"
+          "referenceLocator": "pkg:npm/%40expo/metro-runtime@57.0.14"
         }
       ]
     },
@@ -1685,8 +1634,8 @@
     },
     {
       "name": "@expo/plist",
-      "SPDXID": "SPDXRef-Package-c954ec0010947377",
-      "versionInfo": "0.7.0",
+      "SPDXID": "SPDXRef-Package-dab0f600a6aac3a5",
+      "versionInfo": "0.8.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1696,14 +1645,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/plist@0.7.0"
+          "referenceLocator": "pkg:npm/%40expo/plist@0.8.1"
         }
       ]
     },
     {
       "name": "@expo/prebuild-config",
-      "SPDXID": "SPDXRef-Package-db0a8a179287852b",
-      "versionInfo": "56.0.20",
+      "SPDXID": "SPDXRef-Package-828ab691dacd318f",
+      "versionInfo": "57.0.15",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1713,14 +1662,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/prebuild-config@56.0.20"
+          "referenceLocator": "pkg:npm/%40expo/prebuild-config@57.0.15"
         }
       ]
     },
     {
       "name": "@expo/require-utils",
-      "SPDXID": "SPDXRef-Package-4c47aeaa005e858a",
-      "versionInfo": "56.1.5",
+      "SPDXID": "SPDXRef-Package-7ef22c29797e4d3d",
+      "versionInfo": "57.0.5",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1730,31 +1679,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/require-utils@56.1.5"
-        }
-      ]
-    },
-    {
-      "name": "@expo/require-utils",
-      "SPDXID": "SPDXRef-Package-a4143b2eec52de2b",
-      "versionInfo": "56.1.6",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/require-utils@56.1.6"
+          "referenceLocator": "pkg:npm/%40expo/require-utils@57.0.5"
         }
       ]
     },
     {
       "name": "@expo/router-server",
-      "SPDXID": "SPDXRef-Package-b1d9220809aa7a64",
-      "versionInfo": "56.0.16",
+      "SPDXID": "SPDXRef-Package-952f3858313b4378",
+      "versionInfo": "57.0.8",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1764,14 +1696,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/router-server@56.0.16"
+          "referenceLocator": "pkg:npm/%40expo/router-server@57.0.8"
         }
       ]
     },
     {
       "name": "@expo/schema-utils",
-      "SPDXID": "SPDXRef-Package-c0bac98925b4634a",
-      "versionInfo": "56.0.2",
+      "SPDXID": "SPDXRef-Package-98e94fcbd54437ff",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1781,7 +1713,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/schema-utils@56.0.2"
+          "referenceLocator": "pkg:npm/%40expo/schema-utils@57.0.2"
         }
       ]
     },
@@ -1838,8 +1770,8 @@
     },
     {
       "name": "@expo/ui",
-      "SPDXID": "SPDXRef-Package-87d88e47cacb464b",
-      "versionInfo": "56.0.22",
+      "SPDXID": "SPDXRef-Package-0acdbde3f99d7b83",
+      "versionInfo": "57.0.14",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -1849,7 +1781,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40expo/ui@56.0.22"
+          "referenceLocator": "pkg:npm/%40expo/ui@57.0.14"
         }
       ]
     },
@@ -2483,10 +2415,10 @@
       ]
     },
     {
-      "name": "@react-native/assets-registry",
-      "SPDXID": "SPDXRef-Package-697edb2f6789d2bf",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "name": "@react-native-menu/menu",
+      "SPDXID": "SPDXRef-Package-21e2f3b9e698d433",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "https://github.com/react-native-menu/menu",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2495,15 +2427,32 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/assets-registry@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native-menu/menu@2.0.0"
+        }
+      ]
+    },
+    {
+      "name": "@react-native/assets-registry",
+      "SPDXID": "SPDXRef-Package-7679de1ca6bac3dc",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40react-native/assets-registry@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/babel-plugin-codegen",
-      "SPDXID": "SPDXRef-Package-39bee8b40a187d72",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-434137ef60694065",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2512,15 +2461,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/babel-plugin-codegen@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/babel-plugin-codegen@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/codegen",
-      "SPDXID": "SPDXRef-Package-319a60e34cc90e53",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-ea25b6a034786450",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2529,15 +2478,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/codegen@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/codegen@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/community-cli-plugin",
-      "SPDXID": "SPDXRef-Package-2246cebc8611d4a9",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-007d6833d0beec2b",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2546,15 +2495,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/community-cli-plugin@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/community-cli-plugin@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/debugger-frontend",
-      "SPDXID": "SPDXRef-Package-73c5e62980816f3b",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-0377a46cabd76d85",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "BSD-3-Clause",
       "licenseDeclared": "BSD-3-Clause",
@@ -2563,15 +2512,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/debugger-frontend@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/debugger-frontend@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/debugger-shell",
-      "SPDXID": "SPDXRef-Package-90829fd85682cb54",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-b2c43839a201485c",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2580,15 +2529,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/debugger-shell@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/debugger-shell@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/dev-middleware",
-      "SPDXID": "SPDXRef-Package-b07732d9e61953dc",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-11f24d26ef45da66",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2597,15 +2546,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/dev-middleware@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/dev-middleware@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/gradle-plugin",
-      "SPDXID": "SPDXRef-Package-2bc8ec6514dca871",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-e472e20c90af8fe4",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2614,15 +2563,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/gradle-plugin@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/gradle-plugin@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/js-polyfills",
-      "SPDXID": "SPDXRef-Package-f790a5dd2c1b424e",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-fc0492cb2625a29f",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2631,7 +2580,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/js-polyfills@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/js-polyfills@0.86.3"
         }
       ]
     },
@@ -2654,9 +2603,9 @@
     },
     {
       "name": "@react-native/normalize-colors",
-      "SPDXID": "SPDXRef-Package-0b5a844e5407336a",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-48ec3746ca63e32d",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2665,15 +2614,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/normalize-colors@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/normalize-colors@0.86.3"
         }
       ]
     },
     {
       "name": "@react-native/virtualized-lists",
-      "SPDXID": "SPDXRef-Package-29f40625ff887dce",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-48adfa4b57db12d0",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2682,7 +2631,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40react-native/virtualized-lists@0.85.3"
+          "referenceLocator": "pkg:npm/%40react-native/virtualized-lists@0.86.3"
         }
       ]
     },
@@ -2704,10 +2653,10 @@
       ]
     },
     {
-      "name": "@testing-library/jest-dom",
-      "SPDXID": "SPDXRef-Package-e6cc8a080e50374e",
-      "versionInfo": "6.9.1",
-      "downloadLocation": "https://github.com/testing-library/jest-dom",
+      "name": "@types/hammerjs",
+      "SPDXID": "SPDXRef-Package-d80edd77c266fce4",
+      "versionInfo": "2.0.46",
+      "downloadLocation": "https://github.com/DefinitelyTyped/DefinitelyTyped",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -2716,24 +2665,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40testing-library/jest-dom@6.9.1"
-        }
-      ]
-    },
-    {
-      "name": "@testing-library/user-event",
-      "SPDXID": "SPDXRef-Package-58f40d3f2ac7f037",
-      "versionInfo": "14.6.1",
-      "downloadLocation": "https://github.com/testing-library/user-event",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40testing-library/user-event@14.6.1"
+          "referenceLocator": "pkg:npm/%40types/hammerjs@2.0.46"
         }
       ]
     },
@@ -3028,9 +2960,9 @@
     },
     {
       "name": "agent-cli-detector",
-      "SPDXID": "SPDXRef-Package-225d9eba44f2c070",
-      "versionInfo": "0.1.2",
-      "downloadLocation": "NOASSERTION",
+      "SPDXID": "SPDXRef-Package-941d66f44d7533af",
+      "versionInfo": "0.1.6",
+      "downloadLocation": "https://github.com/expo/agent-cli-detector",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -3039,7 +2971,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/agent-cli-detector@0.1.2"
+          "referenceLocator": "pkg:npm/agent-cli-detector@0.1.6"
         }
       ]
     },
@@ -3231,23 +3163,6 @@
       ]
     },
     {
-      "name": "aria-query",
-      "SPDXID": "SPDXRef-Package-93e30f698184db06",
-      "versionInfo": "5.3.2",
-      "downloadLocation": "https://github.com/A11yance/aria-query",
-      "filesAnalyzed": false,
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/aria-query@5.3.2"
-        }
-      ]
-    },
-    {
       "name": "asap",
       "SPDXID": "SPDXRef-Package-2a5f02a5b88d90c7",
       "versionInfo": "2.0.6",
@@ -3351,8 +3266,8 @@
     },
     {
       "name": "babel-plugin-syntax-hermes-parser",
-      "SPDXID": "SPDXRef-Package-bdd394dd76daf688",
-      "versionInfo": "0.33.3",
+      "SPDXID": "SPDXRef-Package-001e09a3c95a0f4c",
+      "versionInfo": "0.36.0",
       "downloadLocation": "https://github.com/facebook/hermes",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -3362,7 +3277,24 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/babel-plugin-syntax-hermes-parser@0.33.3"
+          "referenceLocator": "pkg:npm/babel-plugin-syntax-hermes-parser@0.36.0"
+        }
+      ]
+    },
+    {
+      "name": "babel-plugin-syntax-hermes-parser",
+      "SPDXID": "SPDXRef-Package-4bb46f134eb78acd",
+      "versionInfo": "0.36.1",
+      "downloadLocation": "https://github.com/facebook/hermes",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/babel-plugin-syntax-hermes-parser@0.36.1"
         }
       ]
     },
@@ -3385,8 +3317,8 @@
     },
     {
       "name": "babel-preset-expo",
-      "SPDXID": "SPDXRef-Package-2d518b389f6bb837",
-      "versionInfo": "56.0.17",
+      "SPDXID": "SPDXRef-Package-a5b27d8080aa66fa",
+      "versionInfo": "57.0.9",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -3396,7 +3328,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/babel-preset-expo@56.0.17"
+          "referenceLocator": "pkg:npm/babel-preset-expo@57.0.9"
         }
       ]
     },
@@ -4217,23 +4149,6 @@
       ]
     },
     {
-      "name": "css.escape",
-      "SPDXID": "SPDXRef-Package-12f921da792516fb",
-      "versionInfo": "1.5.1",
-      "downloadLocation": "https://github.com/mathiasbynens/CSS.escape",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/css.escape@1.5.1"
-        }
-      ]
-    },
-    {
       "name": "csstype",
       "SPDXID": "SPDXRef-Package-b05903de4c965507",
       "versionInfo": "3.2.3",
@@ -4434,23 +4349,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/dnssd-advertise@1.1.6"
-        }
-      ]
-    },
-    {
-      "name": "dom-accessibility-api",
-      "SPDXID": "SPDXRef-Package-1c3a0e559d0f9ecd",
-      "versionInfo": "0.6.3",
-      "downloadLocation": "https://github.com/eps1lon/dom-accessibility-api",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/dom-accessibility-api@0.6.3"
         }
       ]
     },
@@ -4762,8 +4660,8 @@
     },
     {
       "name": "expo",
-      "SPDXID": "SPDXRef-Package-f904a8f640516fd4",
-      "versionInfo": "56.0.16",
+      "SPDXID": "SPDXRef-Package-a21f8aa8ea316bba",
+      "versionInfo": "57.0.17",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4773,14 +4671,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo@56.0.16"
+          "referenceLocator": "pkg:npm/expo@57.0.17"
         }
       ]
     },
     {
       "name": "expo-apple-authentication",
-      "SPDXID": "SPDXRef-Package-49bdb2df683d4c2b",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-d3e78dcf1fe1fd7f",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4790,14 +4688,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-apple-authentication@56.0.4"
+          "referenceLocator": "pkg:npm/expo-apple-authentication@57.0.1"
         }
       ]
     },
     {
       "name": "expo-application",
-      "SPDXID": "SPDXRef-Package-c0652dfd8ad23fd0",
-      "versionInfo": "56.0.3",
+      "SPDXID": "SPDXRef-Package-96bd055d8952a64a",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4807,14 +4705,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-application@56.0.3"
+          "referenceLocator": "pkg:npm/expo-application@57.0.2"
         }
       ]
     },
     {
       "name": "expo-asset",
-      "SPDXID": "SPDXRef-Package-5244d65f73050017",
-      "versionInfo": "56.0.20",
+      "SPDXID": "SPDXRef-Package-eb081b986ec50ba8",
+      "versionInfo": "57.0.15",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4824,14 +4722,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-asset@56.0.20"
+          "referenceLocator": "pkg:npm/expo-asset@57.0.15"
         }
       ]
     },
     {
       "name": "expo-audio",
-      "SPDXID": "SPDXRef-Package-de023797d4f6beb3",
-      "versionInfo": "56.0.12",
+      "SPDXID": "SPDXRef-Package-33d1161b33e80a74",
+      "versionInfo": "57.0.4",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4841,14 +4739,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-audio@56.0.12"
+          "referenceLocator": "pkg:npm/expo-audio@57.0.4"
         }
       ]
     },
     {
       "name": "expo-auth-session",
-      "SPDXID": "SPDXRef-Package-617b233816b65cd3",
-      "versionInfo": "56.0.15",
+      "SPDXID": "SPDXRef-Package-16721e986d3b9518",
+      "versionInfo": "57.0.10",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4858,14 +4756,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-auth-session@56.0.15"
+          "referenceLocator": "pkg:npm/expo-auth-session@57.0.10"
         }
       ]
     },
     {
       "name": "expo-blur",
-      "SPDXID": "SPDXRef-Package-1f337586ebdeb8f6",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-212df03adf8ed7fe",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4875,14 +4773,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-blur@56.0.4"
+          "referenceLocator": "pkg:npm/expo-blur@57.0.2"
         }
       ]
     },
     {
       "name": "expo-build-properties",
-      "SPDXID": "SPDXRef-Package-4509b3d6d2ad2247",
-      "versionInfo": "56.0.23",
+      "SPDXID": "SPDXRef-Package-db974288258db9d5",
+      "versionInfo": "57.0.15",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4892,14 +4790,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-build-properties@56.0.23"
+          "referenceLocator": "pkg:npm/expo-build-properties@57.0.15"
         }
       ]
     },
     {
       "name": "expo-clipboard",
-      "SPDXID": "SPDXRef-Package-ae73538e6490c31d",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-aa4802bc4df9e75d",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4909,14 +4807,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-clipboard@56.0.4"
+          "referenceLocator": "pkg:npm/expo-clipboard@57.0.1"
         }
       ]
     },
     {
       "name": "expo-constants",
-      "SPDXID": "SPDXRef-Package-2f57860ffb00e84a",
-      "versionInfo": "56.0.21",
+      "SPDXID": "SPDXRef-Package-178ca4d8f21ab312",
+      "versionInfo": "57.0.15",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4926,31 +4824,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-constants@56.0.21"
-        }
-      ]
-    },
-    {
-      "name": "expo-constants",
-      "SPDXID": "SPDXRef-Package-c24f51763a027a0c",
-      "versionInfo": "56.0.22",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-constants@56.0.22"
+          "referenceLocator": "pkg:npm/expo-constants@57.0.15"
         }
       ]
     },
     {
       "name": "expo-crypto",
-      "SPDXID": "SPDXRef-Package-c6f45a0d6c4e5cd4",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-437ab5e1d8c16256",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4960,14 +4841,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-crypto@56.0.4"
+          "referenceLocator": "pkg:npm/expo-crypto@57.0.2"
         }
       ]
     },
     {
       "name": "expo-document-picker",
-      "SPDXID": "SPDXRef-Package-33a951a400f7df59",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-a5bbd96cc10aa769",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4977,14 +4858,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-document-picker@56.0.4"
+          "referenceLocator": "pkg:npm/expo-document-picker@57.0.1"
         }
       ]
     },
     {
       "name": "expo-eas-client",
-      "SPDXID": "SPDXRef-Package-eefa29432c981aa8",
-      "versionInfo": "56.0.1",
+      "SPDXID": "SPDXRef-Package-7db55d7e21b6e61b",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4994,14 +4875,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-eas-client@56.0.1"
+          "referenceLocator": "pkg:npm/expo-eas-client@57.0.2"
         }
       ]
     },
     {
       "name": "expo-file-system",
-      "SPDXID": "SPDXRef-Package-7f4954546c75f805",
-      "versionInfo": "56.0.8",
+      "SPDXID": "SPDXRef-Package-3afcf9f00a2e8de5",
+      "versionInfo": "57.0.6",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5011,14 +4892,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-file-system@56.0.8"
+          "referenceLocator": "pkg:npm/expo-file-system@57.0.6"
         }
       ]
     },
     {
       "name": "expo-font",
-      "SPDXID": "SPDXRef-Package-589614dc8525ab1d",
-      "versionInfo": "56.0.7",
+      "SPDXID": "SPDXRef-Package-ca53585bedabf1bf",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5028,14 +4909,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-font@56.0.7"
+          "referenceLocator": "pkg:npm/expo-font@57.0.1"
         }
       ]
     },
     {
       "name": "expo-glass-effect",
-      "SPDXID": "SPDXRef-Package-c93981ba4220ef5d",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-c383b71921578672",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5045,14 +4926,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-glass-effect@56.0.4"
+          "referenceLocator": "pkg:npm/expo-glass-effect@57.0.1"
         }
       ]
     },
     {
       "name": "expo-image",
-      "SPDXID": "SPDXRef-Package-c395b610c9c83108",
-      "versionInfo": "56.0.11",
+      "SPDXID": "SPDXRef-Package-abb4296acc136edf",
+      "versionInfo": "57.0.3",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5062,14 +4943,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-image@56.0.11"
+          "referenceLocator": "pkg:npm/expo-image@57.0.3"
         }
       ]
     },
     {
       "name": "expo-image-loader",
-      "SPDXID": "SPDXRef-Package-b4a626d8163a8d58",
-      "versionInfo": "56.0.3",
+      "SPDXID": "SPDXRef-Package-1d7cbf079bfa1c79",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5079,14 +4960,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-image-loader@56.0.3"
+          "referenceLocator": "pkg:npm/expo-image-loader@57.0.1"
         }
       ]
     },
     {
       "name": "expo-image-manipulator",
-      "SPDXID": "SPDXRef-Package-d32bd72eb825a363",
-      "versionInfo": "56.0.22",
+      "SPDXID": "SPDXRef-Package-fb9a2dea2b853b2e",
+      "versionInfo": "57.0.14",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5096,14 +4977,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-image-manipulator@56.0.22"
+          "referenceLocator": "pkg:npm/expo-image-manipulator@57.0.14"
         }
       ]
     },
     {
       "name": "expo-image-picker",
-      "SPDXID": "SPDXRef-Package-80cdba93d16a6db7",
-      "versionInfo": "56.0.21",
+      "SPDXID": "SPDXRef-Package-effb76fd2f135e9e",
+      "versionInfo": "57.0.14",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5113,14 +4994,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-image-picker@56.0.21"
+          "referenceLocator": "pkg:npm/expo-image-picker@57.0.14"
         }
       ]
     },
     {
       "name": "expo-json-utils",
-      "SPDXID": "SPDXRef-Package-d311c09601e952de",
-      "versionInfo": "56.0.0",
+      "SPDXID": "SPDXRef-Package-2fa8052f5f4080b3",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5130,14 +5011,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-json-utils@56.0.0"
+          "referenceLocator": "pkg:npm/expo-json-utils@57.0.1"
         }
       ]
     },
     {
       "name": "expo-keep-awake",
-      "SPDXID": "SPDXRef-Package-138291e1c127cad9",
-      "versionInfo": "56.0.3",
+      "SPDXID": "SPDXRef-Package-e5bcaadc6e015d5e",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5147,14 +5028,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-keep-awake@56.0.3"
+          "referenceLocator": "pkg:npm/expo-keep-awake@57.0.1"
         }
       ]
     },
     {
       "name": "expo-linking",
-      "SPDXID": "SPDXRef-Package-489f92d8a30a359c",
-      "versionInfo": "56.0.15",
+      "SPDXID": "SPDXRef-Package-f4802688e73e0a32",
+      "versionInfo": "57.0.8",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5164,14 +5045,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-linking@56.0.15"
+          "referenceLocator": "pkg:npm/expo-linking@57.0.8"
         }
       ]
     },
     {
       "name": "expo-localization",
-      "SPDXID": "SPDXRef-Package-415b21fcb52049d8",
-      "versionInfo": "56.0.6",
+      "SPDXID": "SPDXRef-Package-26b461b3f5de381c",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5181,14 +5062,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-localization@56.0.6"
+          "referenceLocator": "pkg:npm/expo-localization@57.0.1"
         }
       ]
     },
     {
       "name": "expo-manifests",
-      "SPDXID": "SPDXRef-Package-ad9182d6194767d9",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-337b5c07192674f9",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5198,14 +5079,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-manifests@56.0.4"
+          "referenceLocator": "pkg:npm/expo-manifests@57.0.1"
         }
       ]
     },
     {
       "name": "expo-media-library",
-      "SPDXID": "SPDXRef-Package-955b483a28991e94",
-      "versionInfo": "56.0.9",
+      "SPDXID": "SPDXRef-Package-7be8250e4e585882",
+      "versionInfo": "57.0.4",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5215,14 +5096,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-media-library@56.0.9"
+          "referenceLocator": "pkg:npm/expo-media-library@57.0.4"
         }
       ]
     },
     {
       "name": "expo-modules-autolinking",
-      "SPDXID": "SPDXRef-Package-ac1d86a216028819",
-      "versionInfo": "56.0.20",
+      "SPDXID": "SPDXRef-Package-f35e90f38d6ead79",
+      "versionInfo": "57.0.12",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5232,14 +5113,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-modules-autolinking@56.0.20"
+          "referenceLocator": "pkg:npm/expo-modules-autolinking@57.0.12"
         }
       ]
     },
     {
       "name": "expo-modules-core",
-      "SPDXID": "SPDXRef-Package-6416decb6cf4e38f",
-      "versionInfo": "56.0.21",
+      "SPDXID": "SPDXRef-Package-b3b6449f3773b175",
+      "versionInfo": "57.0.14",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5249,14 +5130,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-modules-core@56.0.21"
+          "referenceLocator": "pkg:npm/expo-modules-core@57.0.14"
         }
       ]
     },
     {
       "name": "expo-modules-jsi",
-      "SPDXID": "SPDXRef-Package-598de26019281869",
-      "versionInfo": "56.0.12",
+      "SPDXID": "SPDXRef-Package-bf533b3e2ed3f7f5",
+      "versionInfo": "57.0.6",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5266,14 +5147,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-modules-jsi@56.0.12"
+          "referenceLocator": "pkg:npm/expo-modules-jsi@57.0.6"
         }
       ]
     },
     {
       "name": "expo-notifications",
-      "SPDXID": "SPDXRef-Package-4a45e7754a1432e1",
-      "versionInfo": "56.0.22",
+      "SPDXID": "SPDXRef-Package-3747d33027ed5d3f",
+      "versionInfo": "57.0.15",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5283,7 +5164,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-notifications@56.0.22"
+          "referenceLocator": "pkg:npm/expo-notifications@57.0.15"
         }
       ]
     },
@@ -5306,8 +5187,8 @@
     },
     {
       "name": "expo-router",
-      "SPDXID": "SPDXRef-Package-1d313b59691b3815",
-      "versionInfo": "56.2.15",
+      "SPDXID": "SPDXRef-Package-351d6a4e6ee6dd69",
+      "versionInfo": "57.0.17",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5317,14 +5198,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-router@56.2.15"
+          "referenceLocator": "pkg:npm/expo-router@57.0.17"
         }
       ]
     },
     {
       "name": "expo-secure-store",
-      "SPDXID": "SPDXRef-Package-4943becc52f7c846",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-9d90dc6c6c4be0bb",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5334,14 +5215,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-secure-store@56.0.4"
+          "referenceLocator": "pkg:npm/expo-secure-store@57.0.2"
         }
       ]
     },
     {
       "name": "expo-server",
-      "SPDXID": "SPDXRef-Package-d311b4ab7ff5b00d",
-      "versionInfo": "56.0.5",
+      "SPDXID": "SPDXRef-Package-b4cc7f026fce021b",
+      "versionInfo": "57.0.3",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5351,14 +5232,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-server@56.0.5"
+          "referenceLocator": "pkg:npm/expo-server@57.0.3"
         }
       ]
     },
     {
       "name": "expo-sharing",
-      "SPDXID": "SPDXRef-Package-a76d5fff827e3e52",
-      "versionInfo": "56.0.22",
+      "SPDXID": "SPDXRef-Package-93ef7f8f2d646cf4",
+      "versionInfo": "57.0.16",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5368,14 +5249,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-sharing@56.0.22"
+          "referenceLocator": "pkg:npm/expo-sharing@57.0.16"
         }
       ]
     },
     {
       "name": "expo-splash-screen",
-      "SPDXID": "SPDXRef-Package-e2848901cb956a1c",
-      "versionInfo": "56.0.13",
+      "SPDXID": "SPDXRef-Package-4d6601a85cd39faa",
+      "versionInfo": "57.0.8",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5385,14 +5266,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-splash-screen@56.0.13"
+          "referenceLocator": "pkg:npm/expo-splash-screen@57.0.8"
         }
       ]
     },
     {
       "name": "expo-status-bar",
-      "SPDXID": "SPDXRef-Package-671c72dd56bb579e",
-      "versionInfo": "56.0.4",
+      "SPDXID": "SPDXRef-Package-69cfe19a4ed17459",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5402,14 +5283,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-status-bar@56.0.4"
+          "referenceLocator": "pkg:npm/expo-status-bar@57.0.1"
         }
       ]
     },
     {
       "name": "expo-structured-headers",
-      "SPDXID": "SPDXRef-Package-e1f9f99d647772da",
-      "versionInfo": "56.0.0",
+      "SPDXID": "SPDXRef-Package-aa96b5fa5570dbff",
+      "versionInfo": "57.0.0",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5419,14 +5300,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-structured-headers@56.0.0"
+          "referenceLocator": "pkg:npm/expo-structured-headers@57.0.0"
         }
       ]
     },
     {
       "name": "expo-symbols",
-      "SPDXID": "SPDXRef-Package-abf2a80389832b3e",
-      "versionInfo": "56.0.6",
+      "SPDXID": "SPDXRef-Package-2acfd2fd0fd3ba5f",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5436,14 +5317,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-symbols@56.0.6"
+          "referenceLocator": "pkg:npm/expo-symbols@57.0.2"
         }
       ]
     },
     {
       "name": "expo-updates",
-      "SPDXID": "SPDXRef-Package-bcd7977e03f59a7e",
-      "versionInfo": "56.0.22",
+      "SPDXID": "SPDXRef-Package-39ccab59fc625cd2",
+      "versionInfo": "57.0.18",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5453,14 +5334,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-updates@56.0.22"
+          "referenceLocator": "pkg:npm/expo-updates@57.0.18"
         }
       ]
     },
     {
       "name": "expo-updates-interface",
-      "SPDXID": "SPDXRef-Package-69891146ffd2ac4e",
-      "versionInfo": "56.0.2",
+      "SPDXID": "SPDXRef-Package-8b849016e1749034",
+      "versionInfo": "57.0.1",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5470,14 +5351,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-updates-interface@56.0.2"
+          "referenceLocator": "pkg:npm/expo-updates-interface@57.0.1"
         }
       ]
     },
     {
       "name": "expo-web-browser",
-      "SPDXID": "SPDXRef-Package-cd5fdc34ff05ecda",
-      "versionInfo": "56.0.5",
+      "SPDXID": "SPDXRef-Package-d7af0c7232fa828c",
+      "versionInfo": "57.0.2",
       "downloadLocation": "https://github.com/expo/expo",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5487,7 +5368,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-web-browser@56.0.5"
+          "referenceLocator": "pkg:npm/expo-web-browser@57.0.2"
         }
       ]
     },
@@ -5901,8 +5782,8 @@
     },
     {
       "name": "hermes-compiler",
-      "SPDXID": "SPDXRef-Package-c2badcb682cdf5ce",
-      "versionInfo": "250829098.0.10",
+      "SPDXID": "SPDXRef-Package-3f43a0a8eb764204",
+      "versionInfo": "250829098.0.17",
       "downloadLocation": "https://github.com/facebook/hermes",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5912,24 +5793,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/hermes-compiler@250829098.0.10"
-        }
-      ]
-    },
-    {
-      "name": "hermes-estree",
-      "SPDXID": "SPDXRef-Package-7bb0f392884b6c7b",
-      "versionInfo": "0.33.3",
-      "downloadLocation": "https://github.com/facebook/hermes",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/hermes-estree@0.33.3"
+          "referenceLocator": "pkg:npm/hermes-compiler@250829098.0.17"
         }
       ]
     },
@@ -5951,9 +5815,9 @@
       ]
     },
     {
-      "name": "hermes-parser",
-      "SPDXID": "SPDXRef-Package-fcf18dec3c39a179",
-      "versionInfo": "0.33.3",
+      "name": "hermes-estree",
+      "SPDXID": "SPDXRef-Package-7f10269e26834f74",
+      "versionInfo": "0.36.0",
       "downloadLocation": "https://github.com/facebook/hermes",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5963,7 +5827,24 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/hermes-parser@0.33.3"
+          "referenceLocator": "pkg:npm/hermes-estree@0.36.0"
+        }
+      ]
+    },
+    {
+      "name": "hermes-estree",
+      "SPDXID": "SPDXRef-Package-d2400efb14a646cc",
+      "versionInfo": "0.36.1",
+      "downloadLocation": "https://github.com/facebook/hermes",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/hermes-estree@0.36.1"
         }
       ]
     },
@@ -5981,6 +5862,57 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/hermes-parser@0.35.0"
+        }
+      ]
+    },
+    {
+      "name": "hermes-parser",
+      "SPDXID": "SPDXRef-Package-0c381b6f09221886",
+      "versionInfo": "0.36.0",
+      "downloadLocation": "https://github.com/facebook/hermes",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/hermes-parser@0.36.0"
+        }
+      ]
+    },
+    {
+      "name": "hermes-parser",
+      "SPDXID": "SPDXRef-Package-04a516c568f52201",
+      "versionInfo": "0.36.1",
+      "downloadLocation": "https://github.com/facebook/hermes",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/hermes-parser@0.36.1"
+        }
+      ]
+    },
+    {
+      "name": "hoist-non-react-statics",
+      "SPDXID": "SPDXRef-Package-48959bb6d78ea484",
+      "versionInfo": "3.3.2",
+      "downloadLocation": "https://github.com/mridgway/hoist-non-react-statics",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/hoist-non-react-statics@3.3.2"
         }
       ]
     },
@@ -6117,23 +6049,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/image-size@1.2.1"
-        }
-      ]
-    },
-    {
-      "name": "indent-string",
-      "SPDXID": "SPDXRef-Package-e4c04eafeff49de8",
-      "versionInfo": "4.0.0",
-      "downloadLocation": "https://github.com/sindresorhus/indent-string",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/indent-string@4.0.0"
         }
       ]
     },
@@ -6852,6 +6767,23 @@
       ]
     },
     {
+      "name": "metro",
+      "SPDXID": "SPDXRef-Package-7c676065cfd964ce",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-babel-transformer",
       "SPDXID": "SPDXRef-Package-5b883337a485e777",
       "versionInfo": "0.84.4",
@@ -6865,6 +6797,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-babel-transformer@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-babel-transformer",
+      "SPDXID": "SPDXRef-Package-3acb47578d0e1af3",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-babel-transformer@0.84.5"
         }
       ]
     },
@@ -6886,6 +6835,23 @@
       ]
     },
     {
+      "name": "metro-cache",
+      "SPDXID": "SPDXRef-Package-2345f39952349568",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-cache@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-cache-key",
       "SPDXID": "SPDXRef-Package-9cfa9e8a7af46d4c",
       "versionInfo": "0.84.4",
@@ -6899,6 +6865,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-cache-key@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-cache-key",
+      "SPDXID": "SPDXRef-Package-bb90f134a888e80f",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-cache-key@0.84.5"
         }
       ]
     },
@@ -6920,6 +6903,23 @@
       ]
     },
     {
+      "name": "metro-config",
+      "SPDXID": "SPDXRef-Package-4e0b399ea417d4b3",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-config@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-core",
       "SPDXID": "SPDXRef-Package-a35101b99db7bfa8",
       "versionInfo": "0.84.4",
@@ -6933,6 +6933,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-core@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-core",
+      "SPDXID": "SPDXRef-Package-ab9b3717f29cebf8",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-core@0.84.5"
         }
       ]
     },
@@ -6954,6 +6971,23 @@
       ]
     },
     {
+      "name": "metro-file-map",
+      "SPDXID": "SPDXRef-Package-cb89d27f053a8229",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-file-map@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-minify-terser",
       "SPDXID": "SPDXRef-Package-c169b0b8613d59b6",
       "versionInfo": "0.84.4",
@@ -6967,6 +7001,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-minify-terser@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-minify-terser",
+      "SPDXID": "SPDXRef-Package-70598be7904735a1",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-minify-terser@0.84.5"
         }
       ]
     },
@@ -6988,6 +7039,23 @@
       ]
     },
     {
+      "name": "metro-resolver",
+      "SPDXID": "SPDXRef-Package-98d6596180be67e1",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-resolver@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-runtime",
       "SPDXID": "SPDXRef-Package-5a666c014661c95e",
       "versionInfo": "0.84.4",
@@ -7001,6 +7069,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-runtime@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-runtime",
+      "SPDXID": "SPDXRef-Package-cffe6b9120ab6939",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-runtime@0.84.5"
         }
       ]
     },
@@ -7022,6 +7107,23 @@
       ]
     },
     {
+      "name": "metro-source-map",
+      "SPDXID": "SPDXRef-Package-6aa71406fb83e2b1",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-source-map@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-symbolicate",
       "SPDXID": "SPDXRef-Package-3757547c4c1d5336",
       "versionInfo": "0.84.4",
@@ -7035,6 +7137,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-symbolicate@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-symbolicate",
+      "SPDXID": "SPDXRef-Package-ed7d37aa788ec99a",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-symbolicate@0.84.5"
         }
       ]
     },
@@ -7056,6 +7175,23 @@
       ]
     },
     {
+      "name": "metro-transform-plugins",
+      "SPDXID": "SPDXRef-Package-499b1df7a096af9a",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-transform-plugins@0.84.5"
+        }
+      ]
+    },
+    {
       "name": "metro-transform-worker",
       "SPDXID": "SPDXRef-Package-f9387ad05dce7961",
       "versionInfo": "0.84.4",
@@ -7069,6 +7205,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/metro-transform-worker@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "metro-transform-worker",
+      "SPDXID": "SPDXRef-Package-eb8a00819286064c",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/metro-transform-worker@0.84.5"
         }
       ]
     },
@@ -7192,23 +7345,6 @@
       ]
     },
     {
-      "name": "min-indent",
-      "SPDXID": "SPDXRef-Package-d630fdbec9080dbb",
-      "versionInfo": "1.0.1",
-      "downloadLocation": "https://github.com/thejameskyle/min-indent",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/min-indent@1.0.1"
-        }
-      ]
-    },
-    {
       "name": "minimatch",
       "SPDXID": "SPDXRef-Package-37b2e23b08106590",
       "versionInfo": "10.2.5",
@@ -7295,9 +7431,9 @@
     },
     {
       "name": "multitars",
-      "SPDXID": "SPDXRef-Package-2ed7bbd69b3885e6",
-      "versionInfo": "1.0.0",
-      "downloadLocation": "https://github.com/kitten/multitars",
+      "SPDXID": "SPDXRef-Package-1327b46b9d227040",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "https://github.com/expo/multitars",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -7306,7 +7442,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/multitars@1.0.0"
+          "referenceLocator": "pkg:npm/multitars@1.0.2"
         }
       ]
     },
@@ -7511,6 +7647,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/ob1@0.84.4"
+        }
+      ]
+    },
+    {
+      "name": "ob1",
+      "SPDXID": "SPDXRef-Package-65907f15f40ad75b",
+      "versionInfo": "0.84.5",
+      "downloadLocation": "https://github.com/react/metro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/ob1@0.84.5"
         }
       ]
     },
@@ -8111,6 +8264,23 @@
     },
     {
       "name": "react-is",
+      "SPDXID": "SPDXRef-Package-6a89229fd526bb86",
+      "versionInfo": "16.13.1",
+      "downloadLocation": "https://github.com/facebook/react",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/react-is@16.13.1"
+        }
+      ]
+    },
+    {
+      "name": "react-is",
       "SPDXID": "SPDXRef-Package-3f6a332a26930af4",
       "versionInfo": "18.3.1",
       "downloadLocation": "https://github.com/facebook/react",
@@ -8145,9 +8315,9 @@
     },
     {
       "name": "react-native",
-      "SPDXID": "SPDXRef-Package-320b48b78f68ec78",
-      "versionInfo": "0.85.3",
-      "downloadLocation": "https://github.com/facebook/react-native",
+      "SPDXID": "SPDXRef-Package-d09e24f5425789d2",
+      "versionInfo": "0.86.3",
+      "downloadLocation": "https://github.com/react/react-native",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -8156,7 +8326,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react-native@0.85.3"
+          "referenceLocator": "pkg:npm/react-native@0.86.3"
         }
       ]
     },
@@ -8179,8 +8349,8 @@
     },
     {
       "name": "react-native-gesture-handler",
-      "SPDXID": "SPDXRef-Package-33e808bf5cec693e",
-      "versionInfo": "3.0.2",
+      "SPDXID": "SPDXRef-Package-ff00236a86b22e8e",
+      "versionInfo": "2.32.0",
       "downloadLocation": "https://github.com/software-mansion/react-native-gesture-handler",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -8190,7 +8360,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react-native-gesture-handler@3.0.2"
+          "referenceLocator": "pkg:npm/react-native-gesture-handler@2.32.0"
         }
       ]
     },
@@ -8213,8 +8383,8 @@
     },
     {
       "name": "react-native-reanimated",
-      "SPDXID": "SPDXRef-Package-a9bb914e4ffcb526",
-      "versionInfo": "4.3.1",
+      "SPDXID": "SPDXRef-Package-b7b0ad22ed49b61b",
+      "versionInfo": "4.5.1",
       "downloadLocation": "https://github.com/software-mansion/react-native-reanimated",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -8224,7 +8394,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react-native-reanimated@4.3.1"
+          "referenceLocator": "pkg:npm/react-native-reanimated@4.5.1"
         }
       ]
     },
@@ -8247,8 +8417,8 @@
     },
     {
       "name": "react-native-screens",
-      "SPDXID": "SPDXRef-Package-583495f14e006813",
-      "versionInfo": "4.25.2",
+      "SPDXID": "SPDXRef-Package-b6497d544417df00",
+      "versionInfo": "4.26.2",
       "downloadLocation": "https://github.com/software-mansion/react-native-screens",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -8258,7 +8428,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react-native-screens@4.25.2"
+          "referenceLocator": "pkg:npm/react-native-screens@4.26.2"
         }
       ]
     },
@@ -8332,8 +8502,8 @@
     },
     {
       "name": "react-native-worklets",
-      "SPDXID": "SPDXRef-Package-2729ad6f5e015637",
-      "versionInfo": "0.8.3",
+      "SPDXID": "SPDXRef-Package-48fbbad74c6fdd9c",
+      "versionInfo": "0.10.1",
       "downloadLocation": "https://github.com/software-mansion/react-native-reanimated",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -8343,7 +8513,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react-native-worklets@0.8.3"
+          "referenceLocator": "pkg:npm/react-native-worklets@0.10.1"
         }
       ]
     },
@@ -8412,23 +8582,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/react-style-singleton@2.2.3"
-        }
-      ]
-    },
-    {
-      "name": "redent",
-      "SPDXID": "SPDXRef-Package-9b7210a64fc715b8",
-      "versionInfo": "3.0.0",
-      "downloadLocation": "https://github.com/sindresorhus/redent",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/redent@3.0.0"
         }
       ]
     },
@@ -8650,6 +8803,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/safe-buffer@5.2.1"
+        }
+      ]
+    },
+    {
+      "name": "sandbox-cli-detector",
+      "SPDXID": "SPDXRef-Package-bde20ab5886a590d",
+      "versionInfo": "0.2.0",
+      "downloadLocation": "https://github.com/davidmokos/sandbox-cli-detector",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/sandbox-cli-detector@0.2.0"
         }
       ]
     },
@@ -9245,23 +9415,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/strip-ansi@6.0.1"
-        }
-      ]
-    },
-    {
-      "name": "strip-indent",
-      "SPDXID": "SPDXRef-Package-6b434451ae9a68d6",
-      "versionInfo": "3.0.0",
-      "downloadLocation": "https://github.com/sindresorhus/strip-indent",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/strip-indent@3.0.0"
         }
       ]
     },
@@ -10293,11 +10446,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-10a5c5df7c6ba052"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-59e6d9f0e83e9c3b"
     },
     {
@@ -10643,12 +10791,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-cf26df301845f4cf"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-396b2918563c1afc"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-6ac0bb956200fdf5"
+      "relatedSpdxElement": "SPDXRef-Package-20e7a8f375c2feb7"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -10658,17 +10811,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-dcc374c8c02d514d"
+      "relatedSpdxElement": "SPDXRef-Package-1496420660ddf99b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cf8f2de11ad0cb5b"
+      "relatedSpdxElement": "SPDXRef-Package-5b62941641563ebf"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cdeb690c56a84829"
+      "relatedSpdxElement": "SPDXRef-Package-772be2704d1edaac"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -10678,17 +10831,12 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-43316c9d32c89096"
+      "relatedSpdxElement": "SPDXRef-Package-13b0840247977fd4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-617dd995820cbb4d"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-af1d891ecc9c652c"
+      "relatedSpdxElement": "SPDXRef-Package-4747d19862c6c2b8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -10698,32 +10846,22 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-f7064e795090188d"
+      "relatedSpdxElement": "SPDXRef-Package-a9b72b527dd55c2c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-5dd3cf74bac21b26"
+      "relatedSpdxElement": "SPDXRef-Package-cf2499e732152ff1"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-24cf3edefeb8ede5"
+      "relatedSpdxElement": "SPDXRef-Package-11cb55c38fa93cd7"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-52847b30294715dd"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-43d80c1b2da0e96a"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-dca50474e69f294b"
+      "relatedSpdxElement": "SPDXRef-Package-20bcb76ccf8f4986"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -10733,32 +10871,32 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-91e14c6d4bc9e3b1"
+      "relatedSpdxElement": "SPDXRef-Package-7161e8a7d78e0b5d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-18f232e2f8bcfc8d"
+      "relatedSpdxElement": "SPDXRef-Package-4ab6622b68b7ad20"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-87d75a8a36e3a905"
+      "relatedSpdxElement": "SPDXRef-Package-f555a00e5e60bd38"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-fdc1aa5e69b581c1"
+      "relatedSpdxElement": "SPDXRef-Package-7ba1e9724ad8c5a0"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2499d3555c55bdd8"
+      "relatedSpdxElement": "SPDXRef-Package-9613d6cca786e5b8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-9ce7cf04e77ca4a6"
+      "relatedSpdxElement": "SPDXRef-Package-ea9b1f8b52305c58"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -10773,32 +10911,27 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c954ec0010947377"
+      "relatedSpdxElement": "SPDXRef-Package-dab0f600a6aac3a5"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-db0a8a179287852b"
+      "relatedSpdxElement": "SPDXRef-Package-828ab691dacd318f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4c47aeaa005e858a"
+      "relatedSpdxElement": "SPDXRef-Package-7ef22c29797e4d3d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-a4143b2eec52de2b"
+      "relatedSpdxElement": "SPDXRef-Package-952f3858313b4378"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-b1d9220809aa7a64"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c0bac98925b4634a"
+      "relatedSpdxElement": "SPDXRef-Package-98e94fcbd54437ff"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -10818,7 +10951,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-87d88e47cacb464b"
+      "relatedSpdxElement": "SPDXRef-Package-0acdbde3f99d7b83"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11008,47 +11141,52 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-697edb2f6789d2bf"
+      "relatedSpdxElement": "SPDXRef-Package-21e2f3b9e698d433"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-39bee8b40a187d72"
+      "relatedSpdxElement": "SPDXRef-Package-7679de1ca6bac3dc"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-319a60e34cc90e53"
+      "relatedSpdxElement": "SPDXRef-Package-434137ef60694065"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2246cebc8611d4a9"
+      "relatedSpdxElement": "SPDXRef-Package-ea25b6a034786450"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-73c5e62980816f3b"
+      "relatedSpdxElement": "SPDXRef-Package-007d6833d0beec2b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-90829fd85682cb54"
+      "relatedSpdxElement": "SPDXRef-Package-0377a46cabd76d85"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-b07732d9e61953dc"
+      "relatedSpdxElement": "SPDXRef-Package-b2c43839a201485c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2bc8ec6514dca871"
+      "relatedSpdxElement": "SPDXRef-Package-11f24d26ef45da66"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-f790a5dd2c1b424e"
+      "relatedSpdxElement": "SPDXRef-Package-e472e20c90af8fe4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-fc0492cb2625a29f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11058,12 +11196,12 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-0b5a844e5407336a"
+      "relatedSpdxElement": "SPDXRef-Package-48ec3746ca63e32d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-29f40625ff887dce"
+      "relatedSpdxElement": "SPDXRef-Package-48adfa4b57db12d0"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11073,12 +11211,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e6cc8a080e50374e"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-58f40d3f2ac7f037"
+      "relatedSpdxElement": "SPDXRef-Package-d80edd77c266fce4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11168,7 +11301,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-225d9eba44f2c070"
+      "relatedSpdxElement": "SPDXRef-Package-941d66f44d7533af"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11228,11 +11361,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-93e30f698184db06"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-2a5f02a5b88d90c7"
     },
     {
@@ -11263,7 +11391,12 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-bdd394dd76daf688"
+      "relatedSpdxElement": "SPDXRef-Package-001e09a3c95a0f4c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4bb46f134eb78acd"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11273,7 +11406,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2d518b389f6bb837"
+      "relatedSpdxElement": "SPDXRef-Package-a5b27d8080aa66fa"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11518,11 +11651,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-12f921da792516fb"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-b05903de4c965507"
     },
     {
@@ -11579,11 +11707,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-dd3933b705c729c5"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-1c3a0e559d0f9ecd"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11678,157 +11801,152 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-f904a8f640516fd4"
+      "relatedSpdxElement": "SPDXRef-Package-a21f8aa8ea316bba"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-49bdb2df683d4c2b"
+      "relatedSpdxElement": "SPDXRef-Package-d3e78dcf1fe1fd7f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c0652dfd8ad23fd0"
+      "relatedSpdxElement": "SPDXRef-Package-96bd055d8952a64a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-5244d65f73050017"
+      "relatedSpdxElement": "SPDXRef-Package-eb081b986ec50ba8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-de023797d4f6beb3"
+      "relatedSpdxElement": "SPDXRef-Package-33d1161b33e80a74"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-617b233816b65cd3"
+      "relatedSpdxElement": "SPDXRef-Package-16721e986d3b9518"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-1f337586ebdeb8f6"
+      "relatedSpdxElement": "SPDXRef-Package-212df03adf8ed7fe"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4509b3d6d2ad2247"
+      "relatedSpdxElement": "SPDXRef-Package-db974288258db9d5"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-ae73538e6490c31d"
+      "relatedSpdxElement": "SPDXRef-Package-aa4802bc4df9e75d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2f57860ffb00e84a"
+      "relatedSpdxElement": "SPDXRef-Package-178ca4d8f21ab312"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c24f51763a027a0c"
+      "relatedSpdxElement": "SPDXRef-Package-437ab5e1d8c16256"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c6f45a0d6c4e5cd4"
+      "relatedSpdxElement": "SPDXRef-Package-a5bbd96cc10aa769"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-33a951a400f7df59"
+      "relatedSpdxElement": "SPDXRef-Package-7db55d7e21b6e61b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-eefa29432c981aa8"
+      "relatedSpdxElement": "SPDXRef-Package-3afcf9f00a2e8de5"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-7f4954546c75f805"
+      "relatedSpdxElement": "SPDXRef-Package-ca53585bedabf1bf"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-589614dc8525ab1d"
+      "relatedSpdxElement": "SPDXRef-Package-c383b71921578672"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c93981ba4220ef5d"
+      "relatedSpdxElement": "SPDXRef-Package-abb4296acc136edf"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c395b610c9c83108"
+      "relatedSpdxElement": "SPDXRef-Package-1d7cbf079bfa1c79"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-b4a626d8163a8d58"
+      "relatedSpdxElement": "SPDXRef-Package-fb9a2dea2b853b2e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-d32bd72eb825a363"
+      "relatedSpdxElement": "SPDXRef-Package-effb76fd2f135e9e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-80cdba93d16a6db7"
+      "relatedSpdxElement": "SPDXRef-Package-2fa8052f5f4080b3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-d311c09601e952de"
+      "relatedSpdxElement": "SPDXRef-Package-e5bcaadc6e015d5e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-138291e1c127cad9"
+      "relatedSpdxElement": "SPDXRef-Package-f4802688e73e0a32"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-489f92d8a30a359c"
+      "relatedSpdxElement": "SPDXRef-Package-26b461b3f5de381c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-415b21fcb52049d8"
+      "relatedSpdxElement": "SPDXRef-Package-337b5c07192674f9"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-ad9182d6194767d9"
+      "relatedSpdxElement": "SPDXRef-Package-7be8250e4e585882"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-955b483a28991e94"
+      "relatedSpdxElement": "SPDXRef-Package-f35e90f38d6ead79"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-ac1d86a216028819"
+      "relatedSpdxElement": "SPDXRef-Package-b3b6449f3773b175"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-6416decb6cf4e38f"
+      "relatedSpdxElement": "SPDXRef-Package-bf533b3e2ed3f7f5"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-598de26019281869"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4a45e7754a1432e1"
+      "relatedSpdxElement": "SPDXRef-Package-3747d33027ed5d3f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11838,57 +11956,57 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-1d313b59691b3815"
+      "relatedSpdxElement": "SPDXRef-Package-351d6a4e6ee6dd69"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4943becc52f7c846"
+      "relatedSpdxElement": "SPDXRef-Package-9d90dc6c6c4be0bb"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-d311b4ab7ff5b00d"
+      "relatedSpdxElement": "SPDXRef-Package-b4cc7f026fce021b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-a76d5fff827e3e52"
+      "relatedSpdxElement": "SPDXRef-Package-93ef7f8f2d646cf4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e2848901cb956a1c"
+      "relatedSpdxElement": "SPDXRef-Package-4d6601a85cd39faa"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-671c72dd56bb579e"
+      "relatedSpdxElement": "SPDXRef-Package-69cfe19a4ed17459"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e1f9f99d647772da"
+      "relatedSpdxElement": "SPDXRef-Package-aa96b5fa5570dbff"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-abf2a80389832b3e"
+      "relatedSpdxElement": "SPDXRef-Package-2acfd2fd0fd3ba5f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-bcd7977e03f59a7e"
+      "relatedSpdxElement": "SPDXRef-Package-39ccab59fc625cd2"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-69891146ffd2ac4e"
+      "relatedSpdxElement": "SPDXRef-Package-8b849016e1749034"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cd5fdc34ff05ecda"
+      "relatedSpdxElement": "SPDXRef-Package-d7af0c7232fa828c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12013,12 +12131,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c2badcb682cdf5ce"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-7bb0f392884b6c7b"
+      "relatedSpdxElement": "SPDXRef-Package-3f43a0a8eb764204"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12028,12 +12141,32 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-fcf18dec3c39a179"
+      "relatedSpdxElement": "SPDXRef-Package-7f10269e26834f74"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d2400efb14a646cc"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-535c12cfb084b0a7"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-0c381b6f09221886"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-04a516c568f52201"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-48959bb6d78ea484"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12074,11 +12207,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-41bbec0dae5bac67"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e4c04eafeff49de8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12293,7 +12421,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-7c676065cfd964ce"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5b883337a485e777"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-3acb47578d0e1af3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12303,7 +12441,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-2345f39952349568"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-9cfa9e8a7af46d4c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-bb90f134a888e80f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12313,7 +12461,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4e0b399ea417d4b3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-a35101b99db7bfa8"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ab9b3717f29cebf8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12323,7 +12481,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-cb89d27f053a8229"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-c169b0b8613d59b6"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-70598be7904735a1"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12333,7 +12501,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-98d6596180be67e1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5a666c014661c95e"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-cffe6b9120ab6939"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12343,7 +12521,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6aa71406fb83e2b1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3757547c4c1d5336"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ed7d37aa788ec99a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12353,7 +12541,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-499b1df7a096af9a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-f9387ad05dce7961"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-eb8a00819286064c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12393,11 +12591,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-d630fdbec9080dbb"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-37b2e23b08106590"
     },
     {
@@ -12423,7 +12616,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2ed7bbd69b3885e6"
+      "relatedSpdxElement": "SPDXRef-Package-1327b46b9d227040"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12484,6 +12677,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-32e4716c960d2e4f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-65907f15f40ad75b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12663,6 +12861,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6a89229fd526bb86"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3f6a332a26930af4"
     },
     {
@@ -12673,7 +12876,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-320b48b78f68ec78"
+      "relatedSpdxElement": "SPDXRef-Package-d09e24f5425789d2"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12683,7 +12886,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-33e808bf5cec693e"
+      "relatedSpdxElement": "SPDXRef-Package-ff00236a86b22e8e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12693,7 +12896,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-a9bb914e4ffcb526"
+      "relatedSpdxElement": "SPDXRef-Package-b7b0ad22ed49b61b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12703,7 +12906,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-583495f14e006813"
+      "relatedSpdxElement": "SPDXRef-Package-b6497d544417df00"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12728,7 +12931,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2729ad6f5e015637"
+      "relatedSpdxElement": "SPDXRef-Package-48fbbad74c6fdd9c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12749,11 +12952,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-59285e73b61f5d17"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-9b7210a64fc715b8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12819,6 +13017,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-1708d3e03e05ca06"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-bde20ab5886a590d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12994,11 +13197,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-1f771006a623836a"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-6b434451ae9a68d6"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

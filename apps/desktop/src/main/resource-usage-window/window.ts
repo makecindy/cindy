@@ -1,19 +1,23 @@
 /**
- * createResourceUsageWindow —— 资源监视器独立窗口的 BrowserWindow 工厂。
+ * createResourceUsageWindow —— 资源监视器辅助窗口的 BrowserWindow 工厂。
  *
  * 窗口规格：
- * - macOS：独立顶层窗口。从全屏 Cindy 打开时，由 controller 让监视器自己
- *   进入原生全屏，占用新的 Space；Cindy 那扇全屏窗留在原 Space（#3183）
- * - 非 macOS：仍挂在主窗下面，这样最小化 / 关到托盘时监视器一起消失
+ * - macOS 使用与分离右侧栏相同的独立顶层窗口，避免 parent 子窗进入原生全屏时异常
+ * - controller 不按 owner 驱动全屏；macOS 打开时沿用系统原生 Space / 全屏呈现
+ * - 关闭全屏窗口时先退出原生全屏，等待 leave-full-screen 后再隐藏复用
+ * - 用户可通过原生绿灯正常进入或退出全屏
+ * - Windows / Linux 继续挂在 owner 窗口下面
+ * - owner 最小化或关到托盘时，监视器一起消失
  * - 可独立拖拽、调整大小
  * - 单实例（重复 open = show + focus）
  * - 通过 `resourceUsageWindow=1` 进入独立轻量 renderer 模块图
  */
 
-import { BrowserWindow, app, nativeTheme } from 'electron';
+import { BrowserWindow, app, nativeTheme, screen } from 'electron';
 import path from 'node:path';
 
 import { createLogger } from '../logger.js';
+import { installWindowFullscreenStateBroadcast } from '../mainWindowFullscreenStartup.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
 import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
@@ -62,6 +66,11 @@ export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow
       webviewTag: false,
     },
   });
+  // 辅助窗口拥有自己的原生全屏生命周期；退出动画开始时交通灯已经恢复，需通过
+  // resize 边界兜底提前撤掉 renderer 的全屏标题留白，不能只等待 leave-full-screen。
+  installWindowFullscreenStateBroadcast(win, {
+    getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
   markResourceUsageWebContentsId(win.webContents.id);
   markAppContentWindow(win);
   applyAppearanceToWindow(win);
@@ -80,10 +89,13 @@ export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow
     url.hash = hash;
     loadPromise = win.loadURL(url.toString());
   } else {
-    loadPromise = win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`), {
-      query: { resourceUsageWindow: '1' },
-      hash,
-    });
+    loadPromise = win.loadFile(
+      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
+      {
+        query: { resourceUsageWindow: '1' },
+        hash,
+      },
+    );
   }
   void loadPromise.catch((error: unknown) => {
     log.warn('resource-usage window load rejected', {

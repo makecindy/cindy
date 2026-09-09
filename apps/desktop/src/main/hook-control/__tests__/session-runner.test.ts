@@ -57,6 +57,7 @@ const h = vi.hoisted(() => {
     }),
     setSessionProvider: vi.fn(),
     hydrateSessionProvider: vi.fn(),
+    createSessionRow: vi.fn(async () => undefined),
     peekPendingHandoff: vi.fn(async () => null as string | null),
     consumePendingHandoff: vi.fn(),
     listProviders: vi.fn(async (): Promise<unknown[]> => []),
@@ -102,6 +103,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
+    parseToolLoopErrorDetails: actual.parseToolLoopErrorDetails,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -141,6 +143,9 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
 vi.mock('../../maker-host/session-provider-store.js', () => ({
   setSessionProvider: h.setSessionProvider,
   hydrateSessionProvider: h.hydrateSessionProvider,
+}));
+vi.mock('../../maker-host/session-storage.js', () => ({
+  desktopSessionStorage: { create: h.createSessionRow },
 }));
 vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
   agentHandoffPending: {
@@ -494,6 +499,35 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
 });
 
 describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () => {
+  it('createOnly materializes and broadcasts a task without a synthetic user turn', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ createOnly: true }));
+
+    expect(outcome).toMatchObject({ status: 'ok', finalText: '' });
+    expect(fakeMaker.createSession).not.toHaveBeenCalled();
+    expect(h.createSessionRow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new', model: 'test-model' }),
+    );
+    expect(h.createMessage).not.toHaveBeenCalled();
+    expect(h.calls).toEqual(expect.arrayContaining(['touch:sess-new', 'created:sess-new']));
+    expect(h.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('createOnly keeps the durable task when userSendAt enrichment fails', async () => {
+    h.touchUserSendInDb.mockRejectedValueOnce(new Error('db busy'));
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ createOnly: true }));
+
+    expect(outcome.status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledTimes(1);
+    expect(h.calls).toContain('created:sess-new');
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('create-only touchUserSend failed'),
+    );
+  });
+
   it('isNew: touchUserSendInDb 在 sessions:created 广播之前落库, onAccepted 再 bump 一次', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({}));
@@ -2196,6 +2230,30 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
     // 上游原文不外发到渠道, 只留在本地日志里。
     expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+  });
+
+  it('工具循环终态在官方 bot 也走共享安全文案, 不透出内部分类', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'tool_use_loop_detected: missing_required_field',
+        isTerminal: true,
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('无效的工具调用');
+    expect(outcome.errorMessage).not.toContain('missing_required_field');
+    expect(outcome.errorMessage).not.toContain('tool_use_loop_detected');
   });
 
   it('非过载的终态错误仍原样上报(不误改其它失败的诊断信息)', async () => {

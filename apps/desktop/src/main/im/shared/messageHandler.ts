@@ -65,6 +65,7 @@ export function createMessageHandler(
       return false;
     }
   }
+
   const log = createLogger(`im:${channel}:msg`);
 
   /** Per-user serial lock — same shape as legacy messageRouter.turnLocks. */
@@ -407,12 +408,13 @@ export function createMessageHandler(
       log.error(`runAgentTurn threw: ${msg}`);
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
       // 用内部错误内容收口它, 否则卡永久残留且同话题下一条会 patch 错卡。
+      const errorText = ui.agent.sendInternalError(msg);
       const openerConsumed = event.groupContextLane
-        ? await consumeOpenerWithText(event.senderId, ui.agent.sendInternalError(msg))
+        ? await consumeOpenerWithText(event.senderId, errorText)
         : false;
       if (!openerConsumed) {
         try {
-          await im.sendText(event.senderId, ui.agent.sendInternalError(msg), {
+          await im.sendText(event.senderId, errorText, {
             threadTs: event.scopeKey,
             fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
           });

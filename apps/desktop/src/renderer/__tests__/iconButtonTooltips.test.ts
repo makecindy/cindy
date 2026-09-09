@@ -312,7 +312,7 @@ describe('icon-only button tooltip coverage', () => {
     const source = rendererSource('components/sidebar/UserInfoSection.tsx');
 
     expect(source).toContain("import { Tip } from '@/components/ui/tooltip';");
-    expect(source).toContain('<Tip text={settingsLinkLabel} side="right">');
+    expect(source).toContain('<Tip text={moreLabel} side="right">');
     expect(source).toContain("text={t('sidebar.user.downloadMobile')}");
     expect(source).toMatch(
       /text=\{\s*isFlameReopen\s*\? t\('sidebar\.user\.reopenUpdateBanner'\)\s*: t\('sidebar\.user\.viewReleaseNotes'\)\s*\}/,

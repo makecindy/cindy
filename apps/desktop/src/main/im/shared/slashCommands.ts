@@ -98,7 +98,9 @@ export function createSlashHandlers(
     try {
       if (ctx.consumePendingOpener) {
         try {
-          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) return;
+          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) {
+            return;
+          }
         } catch (err) {
           // patch 失败不吞回复: 认领已完成(卡不会再被误 patch), 回落正常
           // 发送 — 用户至少收到结果。
@@ -127,7 +129,9 @@ export function createSlashHandlers(
     try {
       if (ctx.consumePendingOpener) {
         try {
-          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) return true;
+          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) {
+            return true;
+          }
         } catch (err) {
           // 替换失败回落正常发卡: 认领已完成, 用户至少拿到一张可用卡片。
           const msg = err instanceof Error ? err.message : String(err);
@@ -265,7 +269,36 @@ export function createSlashHandlers(
           );
           return true;
         }
-        // 找到当前 IM 会话行；没有历史会话时按已通过认证的默认值创建一行。
+        if (adapter.sessions.createTaskOnNew) {
+          if (!repo.createFreshSession) {
+            throw new Error(`${channel} session rotation is not available`);
+          }
+          const identity: IdentityKey = {
+            channel,
+            botContextId: ctx.botContextId,
+            userId: ctx.userId,
+          };
+          const attachedTargetSessionId = bindingStore.get(identity);
+          const { previous } = await repo.createFreshSession(
+            ctx.botContextId,
+            ctx.userId,
+            undefined,
+            prepared,
+            attachedTargetSessionId
+              ? { identity, targetSessionId: attachedTargetSessionId }
+              : null,
+          );
+          // Session rotation and the persisted `/ctr` detach commit in one
+          // SQLite transaction. Only mirror that committed deletion in memory;
+          // a newer concurrent takeover is preserved by the expected target.
+          if (attachedTargetSessionId) {
+            await bindingStore.applyPersistedDetach(identity, attachedTargetSessionId);
+          }
+          if (previous) await turnRunner.disposeOneSession(previous.id);
+          await safeSendText(ctx, ui.slash.new);
+          return true;
+        }
+        // Legacy single-row channels keep their established reset semantics.
         const existing = await repo.findActiveSession(ctx.botContextId, ctx.userId);
         const row =
           existing ?? (await repo.createSession(ctx.botContextId, ctx.userId, undefined, prepared));

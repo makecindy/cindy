@@ -22,6 +22,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const translations: Record<string, string> = {
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.xd.title': 'Cindy AI',
+        'settings.providers.xd.accountTier.free': '免费版',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${options?.model ?? ''}`,
         'newChat.modelSelector.trigger.ariaWithEffort': `Select model. Current: ${options?.model ?? ''}, effort: ${options?.effort ?? ''}`,
@@ -157,6 +158,18 @@ vi.mock('@/hooks/useModelPricing', () => ({
   useReferenceModelPricing: () => ({}),
 }));
 
+const modelAccessState = vi.hoisted(() => ({
+  accountTier: null as 'free' | 'paid' | 'not_applicable' | null,
+}));
+vi.mock('@/hooks/useModelAccessStatus', () => ({
+  useModelAccessStatus: () => ({
+    state: 'ok',
+    source: 'server',
+    endpoint: 'https://gateway.example.com',
+    accountTier: modelAccessState.accountTier,
+  }),
+}));
+
 const providersRef = vi.hoisted(() => {
   const DEFAULT_PROVIDERS = [
     {
@@ -264,6 +277,7 @@ beforeEach(() => {
   floatingUiMocks.size.mockClear();
   floatingUiMocks.useFloating.mockClear();
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+  modelAccessState.accountTier = null;
   visibleModelsRef.models = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
@@ -273,6 +287,8 @@ beforeEach(() => {
 function renderSelector(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
   return render(
     React.createElement(ModelSelector, {
+      // Compatibility renderer for capabilities-only remote hosts.
+      unifiedPanel: false,
       modelId: 'claude-opus-4-8',
       effort: 'high',
       onModelChange: vi.fn(),
@@ -359,6 +375,67 @@ async function waitForSearchInputFocus(): Promise<HTMLElement> {
 }
 
 describe('ModelSelector provider groups', () => {
+  it('offers source navigation with only a connected media provider and no chat candidates', async () => {
+    providersRef.providers = [{
+      id: 'gemini', name: 'Gemini', source: 'builtin', connected: true,
+      agents: [], models: {}, auth: { method: 'api-key' },
+    }];
+    const onNavigateToProviders = vi.fn();
+    renderSelector({
+      unifiedPanel: true, unifiedAgents: ['pi', 'codex'],
+      vendorKey: 'pi', modelId: '', currentProviderId: null,
+      onProviderChange: undefined, onUnifiedSelect: vi.fn(), onNavigateToProviders,
+    });
+    await openDropdown();
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.modelSelector.source.connect' }));
+    expect(onNavigateToProviders).toHaveBeenCalledOnce();
+  });
+
+  it('仅在本机经典 Cindy AI 分组旁显示免费版标签', async () => {
+    providersRef.providers = [
+      ...(providersRef.DEFAULT_PROVIDERS as unknown[]),
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'apiKey' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: {
+          'claude-code': [
+            {
+              id: 'cindy-free-model',
+              name: 'Cindy Free Model',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ] as unknown[];
+    modelAccessState.accountTier = 'free';
+
+    const view = renderSelector();
+    await openDropdown();
+    const badge = screen.getByTestId('cindy-ai-model-group-free-tier-badge');
+    expect(badge.textContent).toBe('免费版');
+    expect(badge.classList.contains('ml-auto')).toBe(true);
+
+    view.unmount();
+    modelAccessState.accountTier = 'paid';
+    const paidView = renderSelector();
+    await openDropdown();
+    expect(screen.queryByTestId('cindy-ai-model-group-free-tier-badge')).toBeNull();
+
+    paidView.unmount();
+    modelAccessState.accountTier = 'not_applicable';
+    renderSelector();
+    await openDropdown();
+    expect(screen.queryByTestId('cindy-ai-model-group-free-tier-badge')).toBeNull();
+  });
+
   it('renders a group heading for each provider', async () => {
     renderSelector();
     await openDropdown();

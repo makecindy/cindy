@@ -89,6 +89,22 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect((state as { text: string }).text).toContain('设置 → 模型供应商');
   });
 
+  it('localizes a tool-loop tail from its stable reason and structured details', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', {
+        message: 'internal contract failure: missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'rotation', count: 16 },
+      })],
+    }));
+    expect(state).toMatchObject({
+      kind: 'error-tail',
+      text: i18n.t('session.tail.toolUseLoopDetectedRotationWithCount', { count: 16 }),
+      retryable: true,
+    });
+    expect((state as { text: string }).text).not.toContain('missing_required_field');
+  });
+
   it('disables retry for codex stale-thread and invalid-encrypted tail errors', () => {
     // 对齐桌面 ErrorBanner hide-Retry 门控:这两类重试必撞同一失败循环
     const stale = resolveSessionTailBanner(baseInput({

@@ -38,9 +38,11 @@ import {
 import { getDbClient, tryGetDbClient } from '../client/current.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.js';
+import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import {
   broadcastSessionPatched,
   captureSessionRecycleScope,
+  requestSessionWorktreeRecycle,
   recycleSessionWorktreeForStatusChange,
 } from './sessions.js';
 
@@ -189,7 +191,13 @@ export function registerSessionShareIpc(): void {
         };
         const result = await commitShareImport(
           { draftId, workingDir, draftPrefs, overwrite, useWorktree },
-          { dbClient: importDbClient, assertStillValid, refCompensationScope },
+          {
+            dbClient: importDbClient,
+            assertStillValid,
+            refCompensationScope,
+            requestWorktreeRecycle: (sessionId) =>
+              requestSessionWorktreeRecycle(importDbClient.drizzle, sessionId),
+          },
         );
         // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/资源收尾：
         // - 广播 patched 让 sidebar/会话视图立即移除旧任务；
@@ -199,6 +207,10 @@ export function registerSessionShareIpc(): void {
         for (const replaced of result.replacedSessions) {
           if (!isStillCurrent()) break;
           broadcastSessionPatched(replaced.id, { status: 'deleted' }, recycleScope.ownerScope);
+          void compactSessionToolResultsBestEffort({
+            client: importDbClient,
+            sessionId: replaced.id,
+          });
           await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted', recycleScope);
         }
         if (isStillCurrent()) {

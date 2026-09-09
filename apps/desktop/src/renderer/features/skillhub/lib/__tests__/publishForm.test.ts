@@ -4,7 +4,7 @@ import {
   buildSkillhubPublishParams,
   deptMirrorTeamSlug,
   matchesDeptMirrorTeamSlug,
-  validateRequiredCategory,
+  validatePlatformTagSelection,
   validateVisibilityScope,
   type PublishFormValues,
 } from '../publishForm';
@@ -34,75 +34,74 @@ const baseForm: PublishFormValues = {
   visibleDeptIds: ['od-dept-1'],
   sharedTeamSlugs: ['combat-team'],
   changelog: 'Add tuning checklist.',
-  categoryMode: 'manual',
-  categorySlug: 'engine',
+  categorySlugs: ['engine', 'writing'],
 };
 
-describe('validateRequiredCategory', () => {
+describe('validatePlatformTagSelection', () => {
   it('blocks publishing while Hub categories are still loading', () => {
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: true,
       error: null,
       categories: [],
-      categoryMode: 'manual',
-      selectedSlug: '',
+      selectedSlugs: ['engine'],
     })).toEqual({ ok: false, reason: 'loading' });
   });
 
-  it('allows auto category without loading Hub category options', () => {
-    expect(validateRequiredCategory({
-      loading: true,
-      error: null,
-      categories: [],
-      categoryMode: 'auto',
-      selectedSlug: '',
-    })).toEqual({ ok: true });
-  });
-
   it('blocks publishing when Hub categories fail to load or are empty', () => {
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: 'network failed',
       categories: [],
-      categoryMode: 'manual',
-      selectedSlug: '',
+      selectedSlugs: ['engine'],
     })).toEqual({ ok: false, reason: 'load-error' });
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories: [],
-      categoryMode: 'manual',
-      selectedSlug: '',
+      selectedSlugs: ['engine'],
     })).toEqual({ ok: false, reason: 'empty' });
   });
 
-  it('requires the selected category to exist in the Hub category list', () => {
-    const categories = [{ slug: 'engine', name: 'Engine' }];
+  it('allows no tags and requires selected tags to exist in the Hub category list', () => {
+    const categories = [
+      { slug: 'engine', name: 'Engine' },
+      { slug: 'writing', name: 'Writing' },
+    ];
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
-      categoryMode: 'manual',
-      selectedSlug: '',
-    })).toEqual({ ok: false, reason: 'required' });
+      selectedSlugs: [],
+    })).toEqual({ ok: true });
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
-      categoryMode: 'manual',
-      selectedSlug: 'writing',
+      selectedSlugs: ['missing'],
     })).toEqual({ ok: false, reason: 'invalid' });
 
-    expect(validateRequiredCategory({
+    expect(validatePlatformTagSelection({
       loading: false,
       error: null,
       categories,
-      categoryMode: 'manual',
-      selectedSlug: 'engine',
+      selectedSlugs: ['engine', 'writing'],
     })).toEqual({ ok: true });
+  });
+
+  it('rejects more than 50 Platform tags', () => {
+    const categories = Array.from({ length: 51 }, (_, index) => ({
+      slug: `tag-${index}`,
+      name: `Tag ${index}`,
+    }));
+    expect(validatePlatformTagSelection({
+      loading: false,
+      error: null,
+      categories,
+      selectedSlugs: categories.map((category) => category.slug),
+    })).toEqual({ ok: false, reason: 'invalid' });
   });
 });
 
@@ -145,6 +144,10 @@ describe('buildSkillhubPublishParams', () => {
       publishAbsolutePath: '/tmp/sivi-boss-fighting',
       submitName: 'sivi-boss-fighting',
       isFirstPublish: true,
+      categories: [
+        { slug: 'engine', name: 'Game Engine' },
+        { slug: 'writing', name: 'Writing' },
+      ],
     })).toMatchObject({
       absolutePath: '/tmp/sivi-boss-fighting',
       name: 'sivi-boss-fighting',
@@ -153,7 +156,7 @@ describe('buildSkillhubPublishParams', () => {
       displayName: 'Boss fighting',
       summary: 'Helps structure boss fight encounters.',
       description: 'Helps structure boss fight encounters.',
-      categories: ['engine'],
+      tags: ['engine', 'writing'],
       visibility: 'DEPARTMENT_SCOPED',
       deptTeamSlug: 'od-dept-owner',
       visibleSlugs: ['od-dept-1', 'combat-team'],
@@ -174,20 +177,6 @@ describe('buildSkillhubPublishParams', () => {
     expect(params.deptTeamSlug).toBeUndefined();
   });
 
-  it('uses auto category mode without sending manual category slugs', () => {
-    expect(buildSkillhubPublishParams({
-      form: { ...baseForm, categoryMode: 'auto' },
-      publishAbsolutePath: '/tmp/sivi-boss-fighting',
-      submitName: 'sivi-boss-fighting',
-      isFirstPublish: true,
-    })).toMatchObject({
-      categoryMode: 'auto',
-      categories: [],
-      deptTeamSlug: 'od-dept-owner',
-      visibleSlugs: ['od-dept-1', 'combat-team'],
-    });
-  });
-
   it('maps a regular team publisher to teamSlug instead of deptTeamSlug', () => {
     const params = buildSkillhubPublishParams({
       form: { ...baseForm, ownerTeamSlug: 'combat-team', sharedTeamSlugs: [] },
@@ -198,6 +187,23 @@ describe('buildSkillhubPublishParams', () => {
 
     expect(params).toMatchObject({ teamSlug: 'combat-team' });
     expect(params).not.toHaveProperty('deptTeamSlug');
+  });
+
+  it('omits legacy owner selectors when ownership comes from the authenticated membership', () => {
+    const params = buildSkillhubPublishParams({
+      form: baseForm,
+      publishAbsolutePath: '/tmp/sivi-boss-fighting',
+      submitName: 'sivi-boss-fighting',
+      isFirstPublish: true,
+      ownerType: 'organization',
+    });
+
+    expect(params).not.toHaveProperty('deptTeamSlug');
+    expect(params).not.toHaveProperty('teamSlug');
+    expect(params).toMatchObject({
+      visibility: 'DEPARTMENT_SCOPED',
+      visibleSlugs: [],
+    });
   });
 
   it('sends team publisher for public visibility and omits visibleSlugs', () => {
@@ -228,7 +234,7 @@ describe('buildSkillhubPublishParams', () => {
 
   it('omits category metadata when publishing a new version', () => {
     const params = buildSkillhubPublishParams({
-      form: { ...baseForm, categorySlug: 'writing' },
+      form: { ...baseForm, categorySlugs: ['writing'] },
       publishAbsolutePath: '/tmp/sivi-boss-fighting',
       submitName: 'sivi-boss-fighting',
       isFirstPublish: false,

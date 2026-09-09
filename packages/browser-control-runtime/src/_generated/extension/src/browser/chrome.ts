@@ -449,6 +449,80 @@ function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname
   return lock.pid;
 }
 
+/**
+ * PID of the live Chrome owning this managed profile, or null if none.
+ *
+ * Reads the profile's SingletonLock and confirms the process actually exists,
+ * so callers can distinguish "the process is gone" from "the CDP endpoint went
+ * quiet" — a busy or stalled Chrome produces the latter while still running.
+ */
+export function readManagedProfileOwnerPid(userDataDir: string): number | null {
+  return readCurrentHostSingletonPid(userDataDir);
+}
+
+/**
+ * Whether this exact PID holds the CDP port.
+ *
+ * Positive identity, unlike the lock alone: the lock records a PID that the OS
+ * may since have recycled, so anything destructive must confirm the process it
+ * is about to signal is really the browser. Returns false on platforms with no
+ * probe (Windows), which keeps callers fail-safe rather than fail-destructive.
+ */
+export function managedProfilePidOwnsCdpPort(pid: number, cdpPort: number): boolean {
+  return pidListensOnPort(pid, cdpPort);
+}
+
+/**
+ * Whether this PID is a Chrome launched for exactly this profile and port.
+ *
+ * Identity from the process itself, not inferred from what it happens to hold:
+ * holding a port proves only that something is listening, and a port freed by
+ * an exited Chrome can be taken over by anything. Required before anything
+ * destructive — the command line must carry both our --user-data-dir and our
+ * --remote-debugging-port. Returns false wherever the command line cannot be
+ * read, so callers fail safe rather than fail destructive.
+ */
+export function pidIsManagedChromeForProfile(params: {
+  pid: number;
+  cdpPort: number;
+  userDataDir: string;
+}): boolean {
+  if (!processExists(params.pid)) return false;
+  const command = readManagedProcessCommandLine(params.pid);
+  if (!command) return false;
+  return (
+    managedCommandHasExactArg(command, `--remote-debugging-port=${params.cdpPort}`) &&
+    managedCommandHasExactArg(command, `--user-data-dir=${params.userDataDir}`)
+  );
+}
+
+/**
+ * Exact-argument match for a process command line.
+ *
+ * NOT processCommandHasArg: that falls back to `text.includes` when argv is
+ * unavailable, which it always is on Darwin (ps yields a flat string). A
+ * substring test accepts `--user-data-dir=<dir>-backup` for `<dir>`, and this
+ * result gates SIGTERM/SIGKILL — so an unrelated Chrome could be killed. Where
+ * argv exists the element comparison is already exact; otherwise require a
+ * whitespace or quote delimiter on both sides.
+ */
+function managedCommandHasExactArg(
+  command: { argv: string[] | null; text: string },
+  expected: string,
+): boolean {
+  if (command.argv) {
+    return command.argv.includes(expected);
+  }
+  let offset = command.text.indexOf(expected);
+  while (offset >= 0) {
+    const before = offset === 0 ? "" : command.text[offset - 1];
+    const after = command.text[offset + expected.length] ?? "";
+    if ((!before || /[\s"']/.test(before)) && (!after || /[\s"']/.test(after))) return true;
+    offset = command.text.indexOf(expected, offset + 1);
+  }
+  return false;
+}
+
 function clearChromeSingletonArtifacts(userDataDir: string) {
   for (const basename of CHROME_SINGLETON_LOCK_PATHS) {
     try {
@@ -936,9 +1010,14 @@ export async function launchOpenClawChrome(
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
+  // LOCAL PATCH (Cindy, via sync.mjs): Chrome chip follows host displayName
+  // when set so the disk key (Cindy-real) never leaks into the profile button.
+  const chipName =
+    normalizeOptionalString(resolved.profiles[profile.name]?.displayName) ?? profile.name;
+
   const needsDecorate = !isProfileDecorated(
     userDataDir,
-    profile.name,
+    chipName,
     (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
     DEFAULT_DOWNLOAD_DIR,
   );
@@ -1012,7 +1091,7 @@ export async function launchOpenClawChrome(
   if (needsDecorate) {
     try {
       decorateOpenClawProfile(userDataDir, {
-        name: profile.name,
+        name: chipName,
         color: profile.color,
         downloadDir: DEFAULT_DOWNLOAD_DIR,
       });

@@ -22,7 +22,7 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toContain('handledMessageReloadRevisionRef.current = messageReloadRevision;');
     expect(screen).toContain('const releasePendingRouteFocusLookup = () => {');
     expect(screen).toContain('releasePendingRouteFocusLookup();');
-    expect(screen).toContain('[deviceId, maker, messageReloadRevision, renderItems, routeFocusClientId, routeFocusKey, sessionId]');
+    expect(screen).toContain('[deviceId, maker, messageReloadRevision, renderItems, requestSync, routeFocusClientId, routeFocusKey, sessionId]');
   });
 
   it('首次进入详情在取得 authority 后触发同步，不依赖更早的 mount load', () => {
@@ -40,7 +40,7 @@ describe('任务消息内存治理页面接线', () => {
     expect(firstReload).toBeGreaterThan(firstEnter);
     expect(authorityBlock).not.toContain('shouldReload');
     expect(authorityBlock).not.toContain('lastEnteredMessageSessionRef');
-    expect(authorityBlock).toContain('}, [deviceId, sessionId]),');
+    expect(authorityBlock).toContain('}, [deviceId, notificationResponse, sessionId]),');
 
     const subscriptionStart = screen.indexOf('return startFocusedTopicSubscription({');
     const optimisticOlderStart = screen.indexOf('// 乐观点亮「加载更早」入口', subscriptionStart);
@@ -48,21 +48,43 @@ describe('任务消息内存治理页面接线', () => {
     expect(subscriptionBlock).not.toContain('void load();');
   });
 
+  it('同任务的新通知撤销上次同步与已读资格', () => {
+    expect(screen).toContain('JSON.stringify([deviceId, sessionId, notificationResponse])');
+    const resetStart = screen.indexOf('if (prevReadAckVisitKey !== readAckVisitKey) {');
+    expect(resetStart).toBeGreaterThanOrEqual(0);
+    const reset = screen.slice(resetStart, screen.indexOf('\n  }', resetStart));
+    expect(reset).toContain('setReadAckSyncedKey(null)');
+    expect(reset).toContain('setSessionMetadataSyncedKey(null)');
+    expect(reset).toContain('setContentSyncedKey(null)');
+    expect(reset).toContain('readAckGateGenRef.current += 1');
+  });
+
+  it('同步失败保留页面错误并交给协调器向权威重读调用方传播', () => {
+    const syncStart = screen.indexOf('const syncSession = useCallback');
+    const syncEnd = screen.indexOf('const remoteSyncContextKey', syncStart);
+    const sync = screen.slice(syncStart, syncEnd);
+    expect(sync).toMatch(/latchOutboxTransportHold\(formatted\);[\s\S]*?throw err;/);
+    expect(sync).not.toContain('syncRun.cancel()');
+    expect(screen).toContain("await requestSync({ reason: 'rewind-commit', replaceMessages: true })");
+  });
+
   it('详情读取在请求开始捕获 authority，并在所有消息写入口提交', () => {
     expect(screen).toContain('const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);');
     expect(screen).toContain('remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)');
     expect(screen).toContain('remoteSessionStore.setMessages(sessionId, historyPage, { authority: messageAuthority });');
-    expect(screen).toContain('authority: messageAuthority,\n            moreBeyondWindow,');
+    expect(screen).toMatch(/authority: messageAuthority,\s+moreBeyondWindow,/);
     expect(screen).toContain('{ authority: messageAuthority },\n        );');
-    expect(screen).toContain('remoteSessionStore.mergeEarlierMessages(sessionId, pageList, { authority: messageAuthority });');
+    expect(screen).toMatch(/remoteSessionStore\.mergeEarlierMessages\(sessionId, pageList, \{\s*authority: messageAuthority,\s*before,\s*\}\)/);
     expect(screen).toContain('remoteSessionStore.mergeMessages(sessionIdAtStart, rows, { authority: messageAuthority });');
-    expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(4);
+    // First open and reopen now share the same authority-fenced history read.
+    expect(screen).toContain('syncSessionMessageWindow({');
+    expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(3);
   });
 
   it('schedule 关闭翻历史入口，页面工作租约覆盖发送与附件状态', () => {
     expect(screen).toContain('if (isScheduleDetail) return;');
     expect(screen).toContain('hasOlderMessages && !isScheduleDetail');
-    expect(screen).toContain('canLoadEarlier={hasOlderMessages && messages.length > 0 && !isScheduleDetail}');
+    expect(screen).toContain('canLoadEarlier={(historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0) && !isScheduleDetail}');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, pageHasMessageWork)');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(item.sessionId, true)');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, true)');
@@ -85,8 +107,8 @@ describe('任务消息内存治理页面接线', () => {
     expect(deviceLink).toContain('? remoteSessionStore.captureSessionMessageAuthority(sessionId)');
     expect(deviceLink).toContain('remoteSessionStore.captureUnenteredSessionMessageAuthority(sessionId)');
     expect(deviceLink).toContain('authority: messageAuthorityAtRequestStart');
-    expect(deviceLink).toContain('remoteSessionStore.canCommitUnenteredSessionMessageWindow(\n        unenteredMessageAuthorityAtRequestStart,');
-    expect(deviceLink).toContain('remoteSessionStore.setLatestMessageWindow(sessionId, history.value, windowOptions);');
+    expect(deviceLink).toMatch(/remoteSessionStore.canCommitUnenteredSessionMessageWindow\(\s+unenteredMessageAuthorityAtRequestStart,/);
+    expect(deviceLink).toContain('remoteSessionStore.setLatestMessageWindow(sessionId, value, windowOptions);');
     expect(screen).toContain('remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);');
     expect(screen).not.toContain('remoteSessionStore.setMessages(sessionId, Array.isArray(history.messages)');
   });
@@ -96,5 +118,19 @@ describe('任务消息内存治理页面接线', () => {
     expect(store).toContain('const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);');
     expect(store).toContain('isSessionMessageCacheWriteAuthorityCurrent(cacheAuthority)');
     expect(store).toContain('remoteSessionStore.isSessionMessageAuthorityCurrent(authority)');
+  });
+
+  it('只在任务切换或页面卸载时最终释放媒体队列', () => {
+    const queueStart = screen.indexOf('const releaseRemoteMediaQueue = useCallback');
+    expect(queueStart).toBeGreaterThanOrEqual(0);
+    const queueEnd = screen.indexOf('const backfillRunSeqRef', queueStart);
+    const queueBlock = screen.slice(queueStart, queueEnd);
+    expect(queueBlock).toContain('remoteMediaQueueRef.current?.releaseAll()');
+    expect(queueBlock).toContain('remoteMediaQueueRef.current = null;');
+    expect(queueBlock).toContain('[releaseRemoteMediaQueue, sessionId]');
+    expect(queueBlock).toContain('releaseRemoteMediaQueue();');
+    // 失焦或退后台时组件仍挂载且持有 resolved URL,不能提前 DELETE OSS。
+    expect(queueBlock).not.toContain('useFocusEffect(');
+    expect(queueBlock).not.toContain("AppState.addEventListener('change'");
   });
 });

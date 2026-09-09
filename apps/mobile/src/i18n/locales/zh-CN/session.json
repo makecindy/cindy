@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "此前有定时任务未完成，可查看运行记录。",
+    "dismissTitle": "关闭历史失败提示"
+  },
   "common": {
     "cancel": "取消",
     "delete": "删除",
@@ -174,6 +178,7 @@
     "composerSessionNotSynced": "当前任务还没有同步完成。",
     "composerCreating": "任务创建中，首条消息发出后即可继续发送。",
     "nextAgentSwitch": "下条切到 {{agent}} · {{model}}",
+    "nextModelSelection": "下条 · {{model}}",
     "createFailedTitle": "任务创建失败",
     "createFailedDefault": "任务创建失败。",
     "createFailedNotice": "任务创建失败：{{message}}",
@@ -250,7 +255,8 @@
   },
   "shareImage": {
     "title": "分享对话",
-    "selectedCount": "已选择 {{count}} 条消息",
+    "subtitle_one": "已选 {{count}} 条消息",
+    "subtitle_other": "已选 {{count}} 条消息",
     "selectAll": "全选",
     "clearAll": "取消全选",
     "cancel": "取消分享",
@@ -267,6 +273,14 @@
     "composerPlaceholder": "今天我们做点什么呢~",
     "voiceSelectDeviceFirst": "请选择设备后再使用语音输入。",
     "creatingSession": "正在创建任务",
+    "slowSend": {
+      "preparing": "正在准备发送…",
+      "uploading": "正在上传附件…",
+      "connecting": "正在连接电脑…",
+      "checkingModel": "正在检查模型设置…",
+      "creating": "正在创建任务…",
+      "sending": "正在发送消息…"
+    },
     "createAndSend": "创建任务并发送首条消息",
     "modelAccessibility": "模型：{{model}}",
     "voiceInput": "语音输入",
@@ -322,6 +336,7 @@
     "worktreeBranchSaving": "正在同步所选分支…",
     "worktreeBranchSyncFailed": "无法确认已保存的源分支，请重新选择分支",
     "worktreeSettingsSaving": "正在同步 worktree 设置…",
+    "worktreeSettingsSyncFailed": "无法确认已保存的 worktree 设置，请重试开关",
     "worktreeBranchesRetry": "无法读取分支，点按重试",
     "worktreeDetecting": "检测环境中…",
     "worktreeRecovering": "连接恢复中，正在自动重试…",
@@ -384,6 +399,37 @@
       "system": "系统"
     },
     "usageSection": "用量",
+    "usage": {
+      "quota": "配额",
+      "week": "本周",
+      "hours": "{{count}} 小时",
+      "minutes": "{{count}} 分钟",
+      "remaining": "剩余 {{percent}}%",
+      "resets": "{{time}} 重置",
+      "awaitingRefresh": "等待刷新",
+      "balance": "可用余额",
+      "cycle": "本周期已用",
+      "today": "今日已用",
+      "unavailable": "暂未获取",
+      "quotaUnavailable": "暂未获取账号配额",
+      "accountOnly": "ChatGPT 账号配额，未确认本任务使用此套餐",
+      "lastUpdated": "上次更新 {{time}}",
+      "taskUsage": "本任务用量",
+      "taskValue": "本任务价值",
+      "taskCost": "本任务费用",
+      "actualCost": "实际费用",
+      "estimatedValue": "估算价值",
+      "totalTokens": "累计 Token",
+      "seeDetails": "查看拆分",
+      "valueUnavailable": "部分任务价值暂未获取",
+      "valueExplanation": "价值按用量和参考单价估算，不代表实际扣款。",
+      "source": {
+        "chatgpt": "ChatGPT 订阅",
+        "claude": "Claude 订阅",
+        "xai": "SuperGrok 订阅",
+        "gateway": "Cindy AI"
+      }
+    },
     "refreshContextUsage": "刷新上下文用量",
     "currentSessionSpend": "本次任务",
     "noSessionSpend": "暂无任务用量",
@@ -423,6 +469,11 @@
     "continueTask": "继续任务",
     "retry": "重试",
     "ignore": "忽略",
+    "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetectedConsecutiveWithCount": "模型重复调用同一个工具 {{count}} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
+    "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可 Fork 丢弃协议加密内容后在新任务继续）。"
   },

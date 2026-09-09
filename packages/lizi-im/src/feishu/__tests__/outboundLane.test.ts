@@ -39,7 +39,22 @@ const larkMocks = vi.hoisted(() => {
     function (
       this: unknown,
       payload: { path: unknown },
-    ): Promise<{ data: { items: Array<{ thread_id?: string }> } }> {
+    ): Promise<{
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<{
+          message_id?: string;
+          thread_id?: string;
+          chat_id?: string;
+          msg_type?: string;
+          deleted?: boolean;
+          body?: { content: string };
+          sender?: { sender_type: string; sender_name?: string };
+          mentions?: Array<{ key: string; name?: unknown }>;
+        }>;
+      };
+    }> {
       getOwners.push(this);
       void payload;
       return Promise.resolve({ data: { items: [] } });
@@ -189,6 +204,151 @@ describe('feishu outbound lane routing', () => {
         data: expect.objectContaining({ receive_id: 'ou_dm_user' }),
       }),
     );
+  });
+
+  it('resolves an exact reply message from the same chat', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent',
+            chat_id: 'oc_group1',
+            msg_type: 'text',
+            body: { content: JSON.stringify({ text: 'Omarchy @_user_1 发布了' }) },
+            sender: { sender_type: 'user', sender_name: '张乾' },
+            mentions: [{ key: '@_user_1', name: 'Quattro' }],
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent', 'oc_group1')).resolves.toEqual({
+      replyContext: {
+        author: '张乾',
+        text: 'Omarchy @Quattro 发布了',
+      },
+    });
+    expect(larkMocks.getMessage).toHaveBeenCalledWith({
+      params: { user_id_type: 'open_id', with_sender_name: true },
+      path: { message_id: 'om_parent' },
+    });
+  });
+
+  it('replaces mention placeholders even when name is missing or not a string', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_nameless',
+            chat_id: 'oc_group1',
+            msg_type: 'text',
+            body: { content: JSON.stringify({ text: 'hi @_user_1 @_user_2' }) },
+            sender: { sender_type: 'user', sender_name: 'Alice' },
+            mentions: [{ key: '@_user_1' }, { key: '@_user_2', name: 42 }],
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_nameless', 'oc_group1')).resolves.toEqual({
+      replyContext: { author: 'Alice', text: 'hi @user @user' },
+    });
+  });
+
+  it('renders replied media as context markers without downloading it as trigger attachments', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_image',
+            chat_id: 'oc_group1',
+            msg_type: 'image',
+            body: { content: JSON.stringify({ image_key: 'img_parent' }) },
+            sender: { sender_type: 'user', sender_name: 'Alice' },
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
+      replyContext: { author: 'Alice', text: '[图片]' },
+    });
+  });
+
+  it('extracts markdown from a replied bot v2 interactive card', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_card',
+            chat_id: 'oc_group1',
+            msg_type: 'interactive',
+            body: {
+              content: JSON.stringify({
+                schema: '2.0',
+                config: { update_multi: true },
+                body: {
+                  elements: [{ tag: 'markdown', content: '这是上一条完整答案' }],
+                },
+              }),
+            },
+            sender: { sender_type: 'app', sender_name: 'Cindy' },
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_card', 'oc_group1')).resolves.toEqual({
+      replyContext: {
+        author: 'Cindy',
+        text: '这是上一条完整答案',
+        isBot: true,
+      },
+    });
+  });
+
+  it('returns null for an interactive parent whose card text cannot be recovered', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_template',
+            chat_id: 'oc_group1',
+            msg_type: 'interactive',
+            body: {
+              content: JSON.stringify({ type: 'template', data: { template_id: 'ctp_x' } }),
+            },
+            sender: { sender_type: 'app', sender_name: 'Cindy' },
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_template', 'oc_group1')).resolves.toBeNull();
+  });
+
+  it('drops a reply parent that does not belong to the triggering chat', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent',
+            chat_id: 'oc_other',
+            msg_type: 'text',
+            body: { content: JSON.stringify({ text: '不应带出' }) },
+            sender: { sender_type: 'user', sender_name: 'Other' },
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent', 'oc_group1')).resolves.toBeNull();
   });
 
   it('openThread replies with a patchable card + reply_in_thread + uuid, returns opened', async () => {

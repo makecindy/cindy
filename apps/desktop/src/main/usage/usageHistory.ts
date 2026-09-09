@@ -101,6 +101,10 @@ export interface UsageHistoryModelDay {
   /** 订阅 token 价值估算金额。 */
   subscriptionEstimateMoney: RegionalMoney;
   tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
 }
 
 export interface UsageHistoryPayload {
@@ -119,9 +123,9 @@ export interface UsageHistoryPayload {
   estimatesPending: boolean;
   /** day >= today-windowDays 的日总额 (稀疏, 无消费日无行; renderer 补格)。 */
   days: UsageHistoryDay[];
-  /** 近 30 天每日 × 模型明细 (堆叠柱状图分段用; 表上线前的历史日无行)。 */
+  /** 按 modelDays 窗口返回的每日 × 模型明细 (堆叠柱状图分段用)。 */
   modelDaily: UsageHistoryModelDay[];
-  /** 近 30 天按 (agentKind, model) 聚合, 按可比金额降序。 */
+  /** 按 modelDays 窗口聚合的 (agentKind, model), 按可比金额降序。 */
   models: UsageHistoryModel[];
   streak: { current: number; longest: number };
   totals: {
@@ -265,10 +269,19 @@ function diskCachePath(): string {
   return path.join(app.getPath('userData'), 'cache', DISK_CACHE_FILE);
 }
 
-function optsKey(opts?: { days?: number }): string {
-  const days = Math.min(366, Math.max(1, Math.floor(opts?.days ?? 140)));
+function normalizeWindowDays(value: number | 'all' | undefined, fallback: number): number | 'all' {
+  if (value === 'all') return 'all';
+  return Math.min(366, Math.max(1, Math.floor(value ?? fallback)));
+}
+
+function optsKey(opts?: UsageHistoryReadOptions): string {
+  const days = normalizeWindowDays(opts?.days, 140);
+  const modelDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const userId = getCurrentDbClientUserId() ?? 'anonymous';
-  return `user=${encodeURIComponent(userId)}|days=${days}`;
+  // Keep the pre-window-split key for the default request so existing disk
+  // snapshots remain readable. Non-default model windows get their own key.
+  const modelSuffix = modelDays === MODEL_WINDOW_DAYS ? '' : `|modelDays=${modelDays}`;
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -459,7 +472,9 @@ function isLatestRefreshGeneration(expectedOptsKey: string, generation: number):
 }
 
 export interface UsageHistoryReadOptions {
-  days?: number;
+  days?: number | 'all';
+  /** Model/table aggregation window. `all` is used by Settings → Usage History. */
+  modelDays?: number | 'all';
   /**
    * true = 事件触发的刷新, 需要绕过 10s 内存快返, 立即重新聚合 DB。
    * mount / 展开仍使用 stale-while-refresh 快路径保证首帧速度。
@@ -515,7 +530,8 @@ export async function readUsageHistoryWith(
   deps: UsageHistoryDeps,
   opts?: UsageHistoryReadOptions,
 ): Promise<UsageHistoryPayload> {
-  const windowDays = Math.min(366, Math.max(1, Math.floor(opts?.days ?? 140)));
+  const windowDays = normalizeWindowDays(opts?.days, 140);
+  const modelWindowDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const todayKey = deps.todayKey();
 
   // 历史聚合只有一个金额口径:兼容当前账本币种的金额保留,无法确定换算语义的
@@ -573,28 +589,36 @@ export async function readUsageHistoryWith(
     allDays.map((row) => [row.day, row.money.amount]),
   );
 
-  const heatmapCutoff = shiftDayKey(todayKey, -(windowDays - 1));
-  const modelCutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
+  const heatmapCutoff = windowDays === 'all' ? null : shiftDayKey(todayKey, -(windowDays - 1));
+  const modelCutoff = modelWindowDays === 'all'
+    ? null
+    : shiftDayKey(todayKey, -(modelWindowDays - 1));
   // 一次查询同时服务两个窗口: 热力图 tooltip 的每日 token (heatmap 窗口) 与
   // 模型拆分聚合 (30 天窗口)。取更早的 cutoff (ISO day key 字符串可直接比较)。
-  const usageRowsSince = heatmapCutoff < modelCutoff ? heatmapCutoff : modelCutoff;
+  const usageRowsSince = heatmapCutoff === null || modelCutoff === null
+    ? '0000-01-01'
+    : heatmapCutoff < modelCutoff
+      ? heatmapCutoff
+      : modelCutoff;
   const allModelRows = (await deps.getModelUsageSince(usageRowsSince)).map((row) => ({
     ...row,
     money: keepCompatibleMoney(row.money),
   }));
-  const modelRows = allModelRows.filter((r) => r.day >= modelCutoff);
+  const modelRows = modelCutoff === null
+    ? allModelRows
+    : allModelRows.filter((r) => r.day >= modelCutoff);
 
   // 每日 token 合计 → days 的 tooltip 数据。codex-only 日 daily_spend 无行 ($ 只有
   // Claude 记), 也要并进 days, 否则热力图那天 hover 不到 token。
   const tokensByDay = new Map<string, number>();
   for (const row of allModelRows) {
-    if (row.day < heatmapCutoff) continue;
+    if (heatmapCutoff !== null && row.day < heatmapCutoff) continue;
     const rowTokens = row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens;
     tokensByDay.set(row.day, (tokensByDay.get(row.day) ?? 0) + rowTokens);
   }
   const daysMap = new Map<string, UsageHistoryDay>();
   for (const r of allDays) {
-    if (r.day >= heatmapCutoff && r.money.amount > 0) {
+    if ((heatmapCutoff === null || r.day >= heatmapCutoff) && r.money.amount > 0) {
       daysMap.set(r.day, { day: r.day, money: r.money, tokens: 0 });
     }
   }
@@ -721,6 +745,10 @@ export async function readUsageHistoryWith(
       apiMoney,
       subscriptionEstimateMoney,
       tokens: row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cacheReadTokens: row.cacheReadTokens,
+      cacheCreateTokens: row.cacheCreateTokens,
     };
   });
   // 可比金额 (实报或估算) 降序; 无金额的 token-only 行排最后 (按 token 量降序)
@@ -750,10 +778,9 @@ export async function readUsageHistoryWith(
         heuristicThreshold(ACTIVE_DAY_MIN_USD, row.money.currency),
     )
     .map((row) => row.day);
-  const last30Cutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
   const last30ActualByDay = new Map<string, RegionalMoney>();
   for (const row of allDays) {
-    if (row.day >= last30Cutoff) {
+    if (modelCutoff === null || row.day >= modelCutoff) {
       last30ActualByDay.set(row.day, row.money);
     }
   }

@@ -1,0 +1,493 @@
+{
+  "$description": "DS-3 semantic 层：DESIGN.md §10 Tier-1 surface/border/text/accent + status。取值来自 DS-2b 冻结快照。",
+  "surface": {
+    "surface": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-f8f8f6}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-1f1f1e}"
+      }
+    },
+    "surface-hsl": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-60-12-5pct-97pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-60-2pct-12pct}"
+      }
+    },
+    "surface-elevated": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-2c2c2a}"
+      }
+    },
+    "surface-elevated-soft": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-e5e5e5}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-2c2c2a}"
+      }
+    },
+    "surface-card-ivory": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-faf9f5}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-2c2c2a}"
+      }
+    },
+    "surface-chip": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-e5e5e5}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-3c3c3a}"
+      }
+    },
+    "surface-chip-alt": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-e5e5e5}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-2c2c2a}"
+      }
+    },
+    "surface-hover": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-e5e5e5}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-3c3c3a}"
+      }
+    },
+    "surface-hover-soft": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-f8f8f6}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-3c3c3a}"
+      }
+    },
+    "surface-hover-hsl": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-0-0pct-90pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-60-2pct-17pct}"
+      }
+    },
+    "surface-on-card": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-1f1f1e}"
+      }
+    }
+  },
+  "border": {
+    "border-default": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-d7d7d4}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-3c3c3a}"
+      }
+    },
+    "border-default-hsl": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-60-3pct-84pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-60-2pct-23pct}"
+      }
+    },
+    "border-shadcn-hsl": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-0-0pct-90pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-30-4pct-28pct}"
+      }
+    },
+    "border-transparent-mixed": {
+      "light": {
+        "$type": "color",
+        "$value": "{transparent}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-3c3c3a}"
+      }
+    }
+  },
+  "text": {
+    "text-primary": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-262626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-d4d4d4}"
+      }
+    },
+    "text-primary-hsl": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-0-0pct-9pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-0-0pct-83pct}"
+      }
+    },
+    "text-primary-on-dark": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-262626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      }
+    },
+    "text-primary-emphasis": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-1a1a1a}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-d4d4d4}"
+      }
+    },
+    "text-primary-inv": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-1a1a1a}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      }
+    },
+    "text-primary-body-strong": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-525252}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-d4d4d4}"
+      }
+    },
+    "text-secondary": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      }
+    },
+    "text-secondary-cross": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      }
+    },
+    "text-secondary-mid": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-525252}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      }
+    },
+    "text-tertiary": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      }
+    },
+    "text-tertiary-stone": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      }
+    },
+    "text-tertiary-mid": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-525252}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      }
+    },
+    "text-tertiary-hsl": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-0-0pct-45pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-0-0pct-45pct}"
+      }
+    },
+    "text-disabled": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-d4d4d4}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-525252}"
+      }
+    },
+    "text-disabled-tertiary": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      }
+    },
+    "text-placeholder": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-c4c4c4}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-525252}"
+      }
+    }
+  },
+  "accent": {
+    "accent-cta-bg": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-262626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      }
+    },
+    "accent-cta-bg-pure": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-000000}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      }
+    },
+    "accent-emphasis": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-262626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-d4d4d4}"
+      }
+    },
+    "accent-soft": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-262626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      }
+    },
+    "accent-hover": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-262626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-e5e5e5}"
+      }
+    },
+    "accent-pure-cta-fg": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-ffffff}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-000000}"
+      }
+    },
+    "focus-ring": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-417cdd}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-417cdd}"
+      }
+    },
+    "focus-ring-soft": {
+      "light": {
+        "$type": "color",
+        "$value": "{rgba-65-124-221-0-5}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{rgba-65-124-221-0-5}"
+      }
+    }
+  },
+  "status": {
+    "destructive": {
+      "light": {
+        "$type": "color",
+        "$value": "{hsl-0-84pct-60pct}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hsl-0-72pct-63pct}"
+      }
+    },
+    "error-flat": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-ef4444}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ef4444}"
+      }
+    },
+    "error-bg": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-fef2f2}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-3a2222}"
+      }
+    },
+    "error-border": {
+      "light": {
+        "$type": "color",
+        "$value": "{rgba-220-38-38-0-4}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-7f1d1d}"
+      }
+    },
+    "error-fg": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-dc2626}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-f87171}"
+      }
+    },
+    "error-fg-strong": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-991b1b}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-fca5a5}"
+      }
+    },
+    "warning-accent": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-ea6b17}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-ea6b17}"
+      }
+    },
+    "warning-fg": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-f3a115}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-f3a115}"
+      }
+    },
+    "warning-bg-soft": {
+      "light": {
+        "$type": "color",
+        "$value": "{rgba-234-107-23-0-12}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{rgba-234-107-23-0-18}"
+      }
+    }
+  }
+}

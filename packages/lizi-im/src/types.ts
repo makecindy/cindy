@@ -321,7 +321,9 @@ export interface StreamingTextHandle {
    * text) and append-deltas don't fit naturally.
    */
   replace(fullText: string): void;
-  /** Replace card with `finalText` and stop throttling. */
+  /**
+   * Replace the card with `finalText` and stop throttling.
+   */
   finalize(finalText: string): Promise<void>;
   /** Cancel without finalising (still leaves the last rendered text on screen). */
   close(): void;

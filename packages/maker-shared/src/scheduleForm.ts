@@ -53,6 +53,9 @@ export interface MobileScheduleDraft {
    */
   intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
+  modelAgentKind?: RemoteScheduleAgentKind;
+  /** Form-only baseline; changing the selected model must not overwrite this binding. */
+  boundAgent?: { sessionId: string; agentKind: RemoteScheduleAgentKind };
   model: string;
   providerId: string;
   effort: string;
@@ -168,8 +171,11 @@ export function createMobileScheduleDraft(
     timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
-    agentKind: schedule.agentKind ?? 'claude-code',
-    model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
+    agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',
+    modelAgentKind: schedule.modelAgentKind,
+    boundAgent: schedule.targetSessionId
+      ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
+    model: schedule.model ?? (schedule.targetSessionId ? '' : defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code')),
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
@@ -201,6 +207,7 @@ export function applyTemplateToMobileScheduleDraft(
   paramValues: Record<string, string> = {},
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
+  const model = template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind));
   return {
     ...draft,
     name: template.name || draft.name,
@@ -212,7 +219,9 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     intervalMinutesTouched: true,
     agentKind,
-    model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
+    // A template producing a model is an explicit choice, including a legacy bound draft.
+    ...(model.trim() || draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
+    model,
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
     providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
@@ -391,7 +400,8 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
           && typeof draft.sourceIntervalMs === 'number'
         ? draft.sourceIntervalMs
         : null,
-    agentKind: draft.agentKind,
+    agentKind: draft.executionMode !== 'script' && targetSessionId && draft.boundAgent?.sessionId === targetSessionId
+      ? draft.boundAgent.agentKind : draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
     persistentSession: draft.persistentSession,
@@ -420,11 +430,21 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     };
   }
 
+  // An empty model follows the bound task. Omit the marker so the full-form
+  // device-link normalization can clear an existing explicit selection.
+  if (draft.modelAgentKind && draft.model.trim()) {
+    input.modelAgentKind = draft.agentKind;
+    input.model = draft.model.trim();
+    input.providerId = draft.providerId.trim();
+    input.effort = draft.effort.trim();
+    input.fastMode = draft.fastMode;
+  }
+
   if (targetSessionId) {
     input.useWorktree = false;
-    input.model = draft.model.trim() || undefined;
+    input.model = draft.modelAgentKind ? draft.model.trim() : draft.model.trim() || undefined;
     const effort = draft.effort.trim();
-    input.effort = isMobileScheduleEffort(effort) ? effort : undefined;
+    input.effort = isMobileScheduleEffort(effort) ? effort : draft.modelAgentKind ? '' : undefined;
     return input;
   }
 
@@ -444,8 +464,10 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   return input;
 }
 
+export class ScheduleModelSelectionUnsupportedError extends Error {}
+
 /**
- * 按被控端能力决定 intervalMs 清空的 wire 形态(device-link 两端版本会错位):
+ * 按被控端能力决定 intervalMs 清空与显式模型选择的 wire 形态(device-link 两端版本会错位):
  *
  * - 新 desktop(capabilities.supportsScheduleIntervalNullClear)认识 null,
  *   IPC 入口把它归一化成引擎的「带 key 的 undefined」显式清空;
@@ -458,10 +480,20 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
  */
 export function applyScheduleWireCompat(
   input: RemoteScheduleWriteInput,
-  opts: { supportsIntervalNullClear: boolean },
+  opts: { supportsIntervalNullClear: boolean; supportsModelSelection?: boolean },
 ): RemoteScheduleWriteInput {
-  if (opts.supportsIntervalNullClear || input.intervalMs !== null) return input;
-  const { intervalMs: _legacyDropped, ...legacy } = input;
+  let compatible = input;
+  if (!opts.supportsModelSelection && input.modelAgentKind) {
+    // Old hosts cannot apply an explicit bound selection. Do not report a successful
+    // save when Harness/Fast would be ignored. Fresh creation can use its legacy fields.
+    if (input.targetSessionId) {
+      throw new ScheduleModelSelectionUnsupportedError('Scheduled model selection requires a newer desktop');
+    }
+    const { modelAgentKind, ...legacy } = input;
+    compatible = { ...legacy, agentKind: modelAgentKind };
+  }
+  if (opts.supportsIntervalNullClear || compatible.intervalMs !== null) return compatible;
+  const { intervalMs: _legacyDropped, ...legacy } = compatible;
   return legacy;
 }
 
@@ -473,6 +505,8 @@ export function updateDraftAgentKind(
   return {
     ...draft,
     agentKind,
+    // Selecting another Harness must leave follow mode even on pre-upgrade bindings.
+    ...(draft.modelAgentKind || draft.targetSessionId.trim() ? { modelAgentKind: agentKind } : {}),
     model: defaultModelFor(agentKind),
     providerId: '',
     effort: '',
@@ -588,12 +622,21 @@ export function updateDraftSessionMode(
 export function updateDraftBoundSessionId(
   draft: MobileScheduleDraft,
   targetSessionId: string,
+  targetAgentKind?: RemoteScheduleAgentKind | 'cc',
 ): MobileScheduleDraft {
   const nextTargetSessionId = targetSessionId.trim() || MOBILE_SCHEDULE_PENDING_SESSION_ID;
+  const boundAgent = targetAgentKind && nextTargetSessionId !== MOBILE_SCHEDULE_PENDING_SESSION_ID
+    ? { sessionId: nextTargetSessionId, agentKind: targetAgentKind === 'cc' ? 'claude-code' as const : targetAgentKind }
+    : draft.boundAgent?.sessionId === nextTargetSessionId ? draft.boundAgent : undefined;
+  const agentKind = !draft.modelAgentKind && !draft.model.trim() && boundAgent
+    ? boundAgent.agentKind : draft.agentKind;
   if (
     !draft.persistentSession &&
     draft.targetSessionId === nextTargetSessionId &&
-    !draft.useWorktree
+    !draft.useWorktree &&
+    draft.boundAgent?.sessionId === boundAgent?.sessionId &&
+    draft.boundAgent?.agentKind === boundAgent?.agentKind &&
+    draft.agentKind === agentKind
   ) {
     return draft;
   }
@@ -601,7 +644,24 @@ export function updateDraftBoundSessionId(
     ...draft,
     persistentSession: false,
     targetSessionId: nextTargetSessionId,
+    boundAgent,
+    agentKind,
     useWorktree: false,
+  };
+}
+
+/** Resolve manually entered ids before saving; never infer a new target's Harness from its model override. */
+export async function resolveMobileScheduleBinding(
+  draft: MobileScheduleDraft,
+  getSession: (id: string) => Promise<{ id: string; agentKind: RemoteScheduleAgentKind | 'cc' }>,
+): Promise<MobileScheduleDraft> {
+  if (draft.executionMode === 'script' || !hasMobileScheduleRealBinding(draft)) return draft;
+  const targetSessionId = draft.targetSessionId.trim();
+  if (draft.boundAgent?.sessionId === targetSessionId) return draft;
+  const target = await getSession(targetSessionId);
+  return {
+    ...updateDraftBoundSessionId(draft, targetSessionId, target.agentKind),
+    persistentSession: draft.persistentSession,
   };
 }
 

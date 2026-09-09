@@ -4,6 +4,7 @@ import {
   buildRemoteSessionCardPreview as buildRemoteSessionCardPreviewShared,
   buildRemoteSessionListContext as buildRemoteSessionListContextShared,
   buildRemoteSessionSections as buildRemoteSessionSectionsShared,
+  formatRemoteSessionSidebarTime as formatRemoteSessionSidebarTimeShared,
   type RemoteSessionListContext,
   type RemoteSessionListItem,
   type RemoteSessionListOptions,
@@ -19,7 +20,10 @@ export function buildRemoteSessionSections(
   now = Date.now(),
   options: RemoteSessionListOptions = {},
 ): RemoteSessionSection[] {
-  return buildRemoteSessionSectionsShared(sessions, now, options).map((section) => ({
+  return buildRemoteSessionSectionsShared(sessions, now, {
+    ...options,
+    localizer: mobilePresentationLocalizer,
+  }).map((section) => ({
     ...section,
     title: section.key === 'pinned'
       ? i18n.t('devices.presentation.sessionList.section.pinned')
@@ -129,23 +133,7 @@ export function buildRemoteSessionCardPreview(
 }
 
 export function formatRemoteSessionSidebarTime(iso: string | undefined, now = Date.now()): string {
-  if (!iso) return '';
-  const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return '';
-  const diffMs = Math.max(0, now - ts);
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const week = 7 * day;
-  const month = 30 * day;
-  const year = 365 * day;
-  if (diffMs < minute) return i18n.t('devices.presentation.sessionList.time.justNow');
-  if (diffMs < hour) return i18n.t('devices.presentation.sessionList.time.minutes', { count: Math.max(1, Math.floor(diffMs / minute)) });
-  if (diffMs < day) return i18n.t('devices.presentation.sessionList.time.hours', { count: Math.max(1, Math.floor(diffMs / hour)) });
-  if (diffMs < week) return i18n.t('devices.presentation.sessionList.time.days', { count: Math.max(1, Math.floor(diffMs / day)) });
-  if (diffMs < month) return i18n.t('devices.presentation.sessionList.time.weeks', { count: Math.max(1, Math.floor(diffMs / week)) });
-  if (diffMs < year) return i18n.t('devices.presentation.sessionList.time.months', { count: Math.max(1, Math.floor(diffMs / month)) });
-  return i18n.t('devices.presentation.sessionList.time.years', { count: Math.max(1, Math.floor(diffMs / year)) });
+  return formatRemoteSessionSidebarTimeShared(iso, now, mobilePresentationLocalizer);
 }
 
 export function localizeRemoteSessionListItem(

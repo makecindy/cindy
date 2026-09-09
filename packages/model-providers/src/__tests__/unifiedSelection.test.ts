@@ -515,7 +515,7 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
-  it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
+  it('xai 双 root 推荐 claude-code', () => {
     expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
     expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
   });
@@ -602,6 +602,9 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
       wireModelId: 'claude-opus-5',
+      protocolMode: 'matching',
+      nativeApi: 'anthropic-messages',
+      outboundApi: 'anthropic-messages',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
@@ -920,6 +923,32 @@ describe('unifiedModelEntries', () => {
     expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.candidates).toEqual(['claude-code']);
     expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.capabilities.codex).toBeUndefined();
     expect(find(entries, 'zhipu', 'glm-5.2')?.candidates).toEqual(['claude-code', 'codex']);
+  });
+
+  it('付费模型仅在显式展示模式下进入联合列表，并保留锁定状态', () => {
+    const gated = view({
+      id: 'xd',
+      models: {
+        'claude-code': [
+          m('free-model', { availability: 'available' }),
+          m('paid-model', { availability: 'requires_payment' }),
+        ],
+      },
+    });
+
+    expect(
+      unifiedModelEntries({ providers: [gated], isVisible: alwaysVisible }).map(
+        (entry) => entry.modelId,
+      ),
+    ).toEqual(['free-model']);
+
+    const visible = unifiedModelEntries({
+      providers: [gated],
+      isVisible: alwaysVisible,
+      includePaymentRequired: true,
+    });
+    expect(visible.map((entry) => entry.modelId)).toEqual(['free-model', 'paid-model']);
+    expect(find(visible, 'xd', 'paid-model')?.availability).toBe('requires_payment');
   });
 
   it('选中行豁免(keepModel):停用 / retired 的选中条目仍成行,并带上候选与能力', () => {

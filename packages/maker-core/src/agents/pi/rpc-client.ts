@@ -85,6 +85,18 @@ function redactCredentialText(text: string): string {
   return out;
 }
 
+/**
+ * 帧诊断日志的标签白名单:pi 协议的事件类型 / role / stopReason / 块类型都是短
+ * 标识符。扩展或畸形事件可能把任意正文塞进这些字段 —— 不符合标识符形态的一律
+ * 归一为 '(other)',落实「不落消息内容」的白名单方向(不是靠脱敏兜底)。
+ */
+const FRAME_LABEL_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+function sanitizeFrameLabel(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '(untyped)';
+  return FRAME_LABEL_RE.test(value) ? value : '(other)';
+}
+
 export class PiRpcProcess {
   private readonly transport: PiTransport;
   private nextRequestId = 1;
@@ -105,6 +117,13 @@ export class PiRpcProcess {
    */
   private closePromise: Promise<void> | null = null;
   private readonly logger: Logger;
+  /**
+   * #3696 定界诊断:成功轮的正文可能整帧消失(jsonl 有正文、DB/UI 均无),离线
+   * 无法复现。这里按事件类型计数、在 message_end/agent_settled 落两行元数据日志
+   * (块类型与字符数,不含任何消息内容),让下一次复现能区分「pi 未发出该帧」
+   * 与「Cindy 收到后在下游丢失」。
+   */
+  private readonly eventFrameCounts = new Map<string, number>();
 
   constructor(private readonly opts: PiRpcSpawnOptions) {
     this.logger = opts.logger;
@@ -292,6 +311,7 @@ export class PiRpcProcess {
     }
 
     const event = obj as PiRpcEvent;
+    this.recordEventFrameDiagnostics(event);
     for (const [id, entry] of this.pending) {
       if (!entry.refreshTimeoutOnEvent?.(event)) continue;
       clearTimeout(entry.timer);
@@ -302,6 +322,60 @@ export class PiRpcProcess {
       }, entry.timeoutMs);
     }
     this.opts.onEvent(event);
+  }
+
+  /** 只记帧元数据(类型 / 块类型 / 字符数),绝不落消息正文 —— 日志白名单方向。 */
+  private recordEventFrameDiagnostics(event: PiRpcEvent): void {
+    const type = sanitizeFrameLabel(event.type);
+    // abort / 重试失败 / 进程异常的轮次收不到 agent_settled:计数留到下一轮会把
+    // 「message_end 是否到达」污染成不可归属。新轮 agent_start 先冲刷再清零 ——
+    // 既保住未收口轮的证据,又保证每份直方图只属于一轮。
+    if (type === 'agent_start' && this.eventFrameCounts.size > 0) {
+      this.logger.info('pi rpc turn frame histogram (no agent_settled)', {
+        frames: Object.fromEntries(this.eventFrameCounts),
+      });
+      this.eventFrameCounts.clear();
+    }
+    this.eventFrameCounts.set(type, (this.eventFrameCounts.get(type) ?? 0) + 1);
+    if (type === 'message_end') {
+      const message = event.message as
+        | { role?: unknown; stopReason?: unknown; content?: unknown }
+        | undefined;
+      const blocks = Array.isArray(message?.content) ? message.content : [];
+      const blockTypes: string[] = [];
+      let textChars = 0;
+      let thinkingChars = 0;
+      for (const block of blocks) {
+        if (!block || typeof block !== 'object') {
+          blockTypes.push('(invalid)');
+          continue;
+        }
+        const rec = block as Record<string, unknown>;
+        const blockType = sanitizeFrameLabel(rec.type);
+        blockTypes.push(blockType);
+        if (rec.type === 'text' && typeof rec.text === 'string') textChars += rec.text.length;
+        if (rec.type === 'thinking' && typeof rec.thinking === 'string') {
+          thinkingChars += rec.thinking.length;
+        }
+      }
+      this.logger.info('pi rpc message_end frame', {
+        role: sanitizeFrameLabel(message?.role),
+        stopReason:
+          message?.stopReason === undefined || message?.stopReason === null
+            ? null
+            : sanitizeFrameLabel(message.stopReason),
+        blockTypes,
+        textChars,
+        thinkingChars,
+      });
+      return;
+    }
+    if (type === 'agent_settled') {
+      this.logger.info('pi rpc turn frame histogram', {
+        frames: Object.fromEntries(this.eventFrameCounts),
+      });
+      this.eventFrameCounts.clear();
+    }
   }
 
   private failAllPending(err: Error): void {

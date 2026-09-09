@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,39 +28,88 @@ const invocation = resolvePnpmInvocation([devScript], {
   npmExecPath: usablePnpmExecPath(process.env.npm_execpath, fs.existsSync),
 });
 const { command, args } = invocation;
+const relaunchSignalPath = path.join(
+  os.tmpdir(),
+  `cindy-desktop-dev-relaunch-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+);
+const restartedRequestIds = new Set();
 
-const child = spawn(command, args, {
-  cwd: rootDir,
-  env: { ...process.env, COREPACK_ENABLE_AUTO_PIN: '0', ...(invocation.env ?? {}) },
-  stdio: 'inherit',
-  windowsHide: false,
-  shell: invocation.shell,
-  windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-});
+startChild();
 
-child.once('error', (error) => {
-  writeFailedStatus({ exitCode: null, error: error.message });
-  console.error(`desktop-dev-runner: ${error.message}`);
-  process.exit(1);
-});
+function startChild() {
+  const child = spawn(command, args, {
+    cwd: rootDir,
+    env: {
+      ...process.env,
+      COREPACK_ENABLE_AUTO_PIN: '0',
+      XDT_DESKTOP_DEV_RELAUNCH_SIGNAL_FILE: relaunchSignalPath,
+      ...(invocation.env ?? {}),
+    },
+    stdio: 'inherit',
+    windowsHide: false,
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
 
-child.once('exit', (code, signal) => {
-  const statusPath = process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE;
-  const existing = statusPath ? readStatus(statusPath) : null;
-  if (statusPath) {
-    if (existing?.state === 'ready' || existing?.state === 'abandoned' || !existing) {
-      fs.rmSync(statusPath, { force: true });
-    } else if (existing.state !== 'failed') {
-      writeFailedStatus({ exitCode: code, signal });
+  child.once('error', (error) => {
+    fs.rmSync(relaunchSignalPath, { force: true });
+    writeFailedStatus({ exitCode: null, error: error.message });
+    console.error(`desktop-dev-runner: ${error.message}`);
+    process.exit(1);
+  });
+
+  child.once('exit', (code, signal) => {
+    const relaunchRequest = consumeRelaunchRequest();
+    if (relaunchRequest && !restartedRequestIds.has(relaunchRequest.requestId)) {
+      restartedRequestIds.add(relaunchRequest.requestId);
+      console.log(
+        `desktop-dev-runner: restarting Forge/Vite for database cleanup ${relaunchRequest.requestId}`,
+      );
+      startChild();
+      return;
     }
-  }
+    if (relaunchRequest) {
+      console.error(
+        `desktop-dev-runner: refused repeated database cleanup relaunch ${relaunchRequest.requestId}`,
+      );
+    }
 
-  if (signal && process.platform !== 'win32') {
-    process.kill(process.pid, signal);
-    return;
+    const statusPath = process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE;
+    const existing = statusPath ? readStatus(statusPath) : null;
+    if (statusPath) {
+      if (existing?.state === 'ready' || existing?.state === 'abandoned' || !existing) {
+        fs.rmSync(statusPath, { force: true });
+      } else if (existing.state !== 'failed') {
+        writeFailedStatus({ exitCode: code, signal });
+      }
+    }
+
+    if (signal && process.platform !== 'win32') {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+}
+
+function consumeRelaunchRequest() {
+  try {
+    const value = JSON.parse(fs.readFileSync(relaunchSignalPath, 'utf8'));
+    if (
+      value?.version !== 1 ||
+      typeof value.requestId !== 'string' ||
+      value.requestId.length === 0 ||
+      value.requestId.length > 128
+    ) {
+      return null;
+    }
+    return { requestId: value.requestId };
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(relaunchSignalPath, { force: true });
   }
-  process.exit(code ?? 1);
-});
+}
 
 function readStatus(statusPath) {
   try {

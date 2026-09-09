@@ -11,6 +11,7 @@ import {
 } from '@cindy/maker-shared/system-card';
 import { i18n } from '@/i18n';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
+import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 
 /**
  * 手机端系统卡类型 = 共享 slash 命令卡 + goal 持久记录卡 + silent-stop 自动续跑卡。
@@ -25,6 +26,7 @@ export type MobileSystemCardType =
   | SystemCardType
   | 'goal-complete'
   | 'goal-resumed'
+  | 'context-rebuild'
   | 'auto-resume'
   | 'learn'
   // session-agent-switch 边界卡(desktop 落库 role='agent_switch',读侧派生)。
@@ -100,7 +102,7 @@ export function buildMobileSystemCardData(
 ): Record<string, unknown> {
   // goal / auto-resume / agent-switch 卡的数据由桌面落库行派生,learn 卡的数据由
   // 发送侧 buildLearnCardData 直接组装,都不走本地 slash 命令的数据组装。
-  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch') return {};
+  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch') return {};
   return buildSystemCardData(type, {
     ...options,
     localCommands: MOBILE_LOCAL_SYSTEM_COMMANDS,
@@ -112,6 +114,8 @@ export function formatMobileSystemCard(
   type: MobileSystemCardType,
   data: Record<string, unknown> | undefined,
 ): MobileSystemCardPresentation {
+  if (type === 'compact') return formatCompactCard(data);
+  if (type === 'context-rebuild') return formatContextRebuildCard(data);
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
   if (type === 'goal-resumed') {
     // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
@@ -129,6 +133,41 @@ export function formatMobileSystemCard(
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);
   return formatSystemCard(type, data);
+}
+
+function formatCompactCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
+  const nonNegativeNumber = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const preTokens = nonNegativeNumber(data?.preTokens);
+  const postTokens = nonNegativeNumber(data?.postTokens);
+  const durationMs = nonNegativeNumber(data?.durationMs);
+  const parts = [i18n.t(data?.trigger === 'manual'
+    ? 'message.systemCard.compact.manual'
+    : 'message.systemCard.compact.auto')];
+  if (preTokens !== undefined && postTokens !== undefined && preTokens > postTokens) {
+    parts.push(i18n.t('message.systemCard.compact.savedTokens', { tokens: formatCompactTokens(preTokens - postTokens) }));
+  }
+  if (durationMs) parts.push(`${(durationMs / 1000).toFixed(1)}s`);
+  return { title: parts.join(' · '), rows: [] };
+}
+
+function formatContextRebuildCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
+  const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const titleKey = data?.reason === 'pi-prompt-timeout'
+    ? 'labelTimeout'
+    : data?.reason === 'codex-history-strip' ? 'labelStrip' : 'labelOverflow';
+  // Same terminal marker as desktop: old Chinese handoffs must not be labelled English.
+  const englishSource = handoff.trimEnd().endsWith("; the user's new message follows ==");
+  return {
+    title: i18n.t(`message.systemCard.contextRebuild.${titleKey}`),
+    ...(handoff.trim() ? {
+      subtitle: i18n.t(englishSource
+        ? 'message.systemCard.contextRebuild.handoffTitleEnglishSource'
+        : 'message.systemCard.contextRebuild.handoffTitle'),
+      body: handoff,
+    } : {}),
+    rows: [],
+  };
 }
 
 function formatAutoResumeCard(data: Record<string, unknown> | undefined): SystemCardPresentation {

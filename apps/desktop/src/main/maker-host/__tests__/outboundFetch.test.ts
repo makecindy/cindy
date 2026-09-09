@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Agent as UndiciAgent, Dispatcher, ProxyAgent } from 'undici';
 
 import { Socks5HttpsAgent, TunnelingHttpsAgent } from '@cindy/anthropic-compat-proxy';
@@ -371,6 +373,73 @@ describe('outboundFetch', () => {
     }
   });
 
+  it.each([null, undefined])('handles a pre-connect error with controller %s', async (missing) => {
+    const controller = missing as unknown as Dispatcher.DispatchController;
+    const error = new Error('proxy handshake failed');
+    const responseError = vi.fn();
+    const beforeRetry = vi.fn();
+    const spy = vi
+      .spyOn(ProxyAgent.prototype, 'dispatch')
+      .mockImplementation((_options, handler) => {
+        handler.onResponseError?.(controller, error);
+        return true;
+      });
+    const dispatcher = createPinnedProxyDispatcher(
+      { kind: 'http', url: 'http://127.0.0.1:7890', hostname: '127.0.0.1', port: 7890 },
+      new URL('https://cdn.example.com/file'),
+      ['93.184.216.34', '93.184.216.35'],
+      beforeRetry,
+    );
+    try {
+      dispatcher.dispatch(
+        { origin: 'https://cdn.example.com', path: '/file', method: 'GET' },
+        {
+          onResponseError: responseError,
+        },
+      );
+      await vi.waitFor(() => expect(responseError).toHaveBeenCalledWith(controller, error));
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(beforeRetry).toHaveBeenCalledOnce();
+    } finally {
+      await dispatcher.close();
+      spy.mockRestore();
+    }
+  });
+
+  it('does not retry after cancellation while rechecking a pre-connect failure', async () => {
+    const signalController = new AbortController();
+    const error = new Error('proxy handshake failed');
+    const responseError = vi.fn();
+    const spy = vi
+      .spyOn(ProxyAgent.prototype, 'dispatch')
+      .mockImplementation((_options, handler) => {
+        handler.onResponseError?.(undefined as unknown as Dispatcher.DispatchController, error);
+        return true;
+      });
+    const dispatcher = createPinnedProxyDispatcher(
+      { kind: 'http', url: 'http://127.0.0.1:7890', hostname: '127.0.0.1', port: 7890 },
+      new URL('https://cdn.example.com/file'),
+      ['93.184.216.34', '93.184.216.35'],
+      () => {
+        signalController.abort();
+      },
+      signalController.signal,
+    );
+    try {
+      dispatcher.dispatch(
+        { origin: 'https://cdn.example.com', path: '/file', method: 'GET' },
+        {
+          onResponseError: responseError,
+        },
+      );
+      await vi.waitFor(() => expect(responseError).toHaveBeenCalledOnce());
+      expect(spy).toHaveBeenCalledOnce();
+    } finally {
+      await dispatcher.close();
+      spy.mockRestore();
+    }
+  });
+
   it('does not try another proxy target when retry authorization has expired', async () => {
     const dispatchSpy = vi.spyOn(ProxyAgent.prototype, 'dispatch');
     const controller = {} as Dispatcher.DispatchController;
@@ -444,6 +513,37 @@ describe('outboundFetch', () => {
       'creating outbound proxy dispatcher',
       expect.anything(),
     );
+  });
+
+  it('allows only the explicitly approved network target and keeps manual redirects', async () => {
+    const requests: Array<{ path?: string; method?: string; authorization?: string }> = [];
+    // The shared runtime resolves its own undici version; use a server owned by
+    // this test instead of relying on the Desktop-only fetch mock above.
+    const server = createServer((request, response) => {
+      requests.push({ path: request.url, method: request.method, authorization: request.headers.authorization });
+      response.writeHead(302, { location: '/unapproved' });
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/video`;
+    try {
+      const result = await guardedOutboundFetch(url, { method: 'GET' }, vi.fn(), {
+        targetUrl: url, allowHttp: true, allowPrivateNetwork: true,
+      });
+      try {
+        expect(result.response.status).toBe(302);
+        expect(result.response.headers.get('location')).toBe('/unapproved');
+      } finally {
+        await result.response.body?.cancel();
+        await result.release();
+      }
+      await expect(guardedOutboundFetch(new URL('/unapproved', url).href, { method: 'GET' }, vi.fn(), {
+        targetUrl: url, allowHttp: true, allowPrivateNetwork: true,
+      })).rejects.toThrow('approval target mismatch');
+      expect(requests).toEqual([{ path: '/video', method: 'GET', authorization: undefined }]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it('passes the proxy dispatcher through to undici fetch', async () => {

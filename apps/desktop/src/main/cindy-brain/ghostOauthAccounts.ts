@@ -871,6 +871,11 @@ export class GhostOauthAccountManager {
        * GhostOauthClientConfig.corsDeliveryHosts。
        */
       deliveryHosts?: readonly string[];
+      /** Main-only handoff for reopening the current authorization page. */
+      onAuthorizationUrl?: (url: string) => void;
+      /** Main-only caller boundary, checked inside the credential mutation lock. */
+      assertCurrent?: () => void;
+      beforeCommit?: () => Promise<void>;
     },
   ): Promise<GhostOauthConnectResult> {
     if (decl.tokenBroker !== undefined && !this.isTokenBrokerAuthorized(ghostId)) {
@@ -918,7 +923,7 @@ export class GhostOauthAccountManager {
 
     const flow = await startGhostOauthFlow({
       config,
-      openExternal: this.deps.openExternal,
+      openExternal: (url) => { opts?.onAuthorizationUrl?.(url); return this.deps.openExternal(url); },
       fetchImpl: this.deps.fetchImpl,
       broker: this.deps.broker,
       brandName: this.deps.brandName,
@@ -970,6 +975,8 @@ export class GhostOauthAccountManager {
     }
 
     return this.withMutationLock(ghostId, async () => {
+      await opts?.beforeCommit?.();
+      opts?.assertCurrent?.();
       // Identity/avatar fetches are asynchronous as well. Recheck inside the
       // same strict mutation lock as the first vault read/write so a package
       // update cannot replace the declaration between validation and commit.

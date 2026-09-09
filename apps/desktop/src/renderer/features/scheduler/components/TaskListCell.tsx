@@ -29,7 +29,6 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { Schedule } from '@cindy/maker-scheduler';
-import type { RegionalMoney } from '../../../../shared/regionalMoney';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,15 +38,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
-import { formatTurnCostMoney } from '@/lib/usageFormat';
 
 interface Props {
   schedule: Schedule;
   selected: boolean;
   unreadCount?: number;
-  totalMoney?: RegionalMoney;
-  totalEstimatedValueMoney?: RegionalMoney;
-  hasUnavailableCost?: boolean;
   onSelect: (s: Schedule) => void;
   /** 右键菜单的 Pause/Resume 动作；与 RunHistoryPane ⋯ 菜单同行为。 */
   onTogglePause?: (s: Schedule) => void | Promise<void>;
@@ -88,9 +83,6 @@ export function TaskListCell({
   schedule: s,
   selected,
   unreadCount = 0,
-  totalMoney,
-  totalEstimatedValueMoney,
-  hasUnavailableCost = false,
   onSelect,
   onTogglePause,
   onDelete,
@@ -178,31 +170,8 @@ export function TaskListCell({
   } else {
     subtitle = lastText ?? nextText;
   }
-  const costText =
-    totalMoney == null && !hasUnavailableCost
-      ? null
-      : [
-          totalMoney && totalMoney.amount > 0
-            ? t('scheduler.cell.totalCost', {
-                cost: formatTurnCostMoney(totalMoney),
-              })
-            : null,
-          (totalEstimatedValueMoney?.amount ?? 0) > 0
-            ? t('scheduler.cell.totalValue', {
-                value: formatTurnCostMoney(totalEstimatedValueMoney!),
-              })
-            : null,
-          hasUnavailableCost ? t('scheduler.cell.costUnavailable') : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') ||
-            (totalMoney
-              ? t('scheduler.cell.totalCost', {
-                  cost: formatTurnCostMoney(totalMoney),
-                })
-              : t('scheduler.cell.costUnavailable'));
   // 副标题行是否渲染:决定右下角 Run 按钮的"预留位"落在哪一行(见下方两处 pr-3.5)。
-  const hasMetaRow = Boolean(subtitle || costText);
+  const hasMetaRow = Boolean(subtitle);
 
   // ── Double-click rename（与 SessionItem 完全同款）──
   // - 单击立即选择；双击只额外进入重命名（仅在 onRename 传入时启用）
@@ -417,15 +386,7 @@ export function TaskListCell({
         )}
       </div>
       {hasMetaRow && (
-        <div
-          className={cn(
-            'flex min-w-0 items-center gap-2',
-            // 无 cost 的行,右下角 Run 按钮没有可替换的对象,给副标题常驻预留按钮位,
-            // 避免悬浮时压住文字;预留量与标题行同款(pr-5 = 补齐 14px 侵入 + 6px 间隙)。
-            // 有 cost 的行不预留——按钮悬浮时原位替换 cost(见下方 costText 的淡出)。
-            onRunNow && !costText && 'pr-5',
-          )}
-        >
+        <div className={cn('flex min-w-0 items-center gap-2', onRunNow && 'pr-5')}>
           {subtitle && (
             <span
               className={cn(
@@ -438,25 +399,6 @@ export function TaskListCell({
               )}
             >
               {subtitle}
-            </span>
-          )}
-          {costText && (
-            <span
-              className={cn(
-                'ml-auto shrink-0 text-11',
-                selected
-                  ? 'text-[var(--settings-section-desc)]'
-                  : 'text-[var(--cmd-palette-item-meta)]',
-                // 行悬浮时淡出,让右下角的 Run 按钮原位替换 cost(与侧栏"meta 让位给
-                // 操作按钮"的手法一致);仅 opacity 过渡,宽度保留,副标题不回流。
-                // 键盘可达性:按钮经 Tab 聚焦(focus-visible)显示时 cost 同样让位。
-                // 精确匹配"按钮自身 focus-visible"而非 group-focus-within——行本身也
-                // focusable,点选/Tab 到行时按钮并不显示,不应误藏 cost。
-                onRunNow &&
-                  'transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0',
-              )}
-            >
-              {costText}
             </span>
           )}
         </div>

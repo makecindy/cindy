@@ -14,6 +14,8 @@ const ENV = {
   platform: 'darwin',
   arch: 'arm64',
   osVersion: '25.5.0',
+  harness: 'Claude Code' as const,
+  modelId: 'claude-opus-4-1',
   region: 'cn' as const,
 };
 const PLATFORM_IDENTITY = { kind: 'platform', login: 'cindy-issue' } as const;
@@ -289,7 +291,15 @@ describe('onDesktopOnlyConfirmPending(#926)', () => {
     const p = bridge.request(
       'feishu_bot_ou_1',
       { title: 't', body: 'b', type: 'bug' },
-      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      {
+        appVersion: '0.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '1',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
+        region: 'cn',
+      },
       { platform: { kind: 'platform', login: 'cindy' } },
     );
     expect(onPending).toHaveBeenCalledWith('feishu_bot_ou_1');
@@ -301,7 +311,15 @@ describe('onDesktopOnlyConfirmPending(#926)', () => {
     const decision = await bridge.request(
       's1',
       { title: 't', body: 'b', type: 'bug' },
-      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      {
+        appVersion: '0.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '1',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
+        region: 'cn',
+      },
       {
         platform: PLATFORM_IDENTITY,
         githubUser: { kind: 'github-user', login: 'u' },
@@ -325,7 +343,15 @@ describe('onDesktopOnlyConfirmPending 抛错防护(#1059 review)', () => {
     const decision = await bridge.request(
       's-throw',
       { title: 't', body: 'b', type: 'bug' },
-      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      {
+        appVersion: '0.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '1',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
+        region: 'cn',
+      },
       {
         platform: PLATFORM_IDENTITY,
         githubUser: { kind: 'github-user', login: 'u' },

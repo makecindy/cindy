@@ -32,7 +32,11 @@
  * **不** rebuild (allowRebuild=false 时 pref 变化只沿用旧隧道)。
  */
 
-import type { HostConfig, RemoteHost } from '@cindy/maker-remote-ssh';
+import {
+  effectiveAuthenticationFingerprint,
+  type HostConfig,
+  type RemoteHost,
+} from '@cindy/maker-remote-ssh';
 
 import type { AgentProxyTunnelState } from '../../shared/agentProxyConfig.js';
 import type { SshHostAgentProxyPref } from './ssh-host-prefs-store.js';
@@ -125,8 +129,7 @@ function entryKey(
     cfg.hostname,
     cfg.port,
     cfg.user,
-    cfg.authMethod,
-    cfg.identityFile ?? '',
+    effectiveAuthenticationFingerprint(cfg),
     pref.localHost,
     pref.localPort,
     pref.remotePort,

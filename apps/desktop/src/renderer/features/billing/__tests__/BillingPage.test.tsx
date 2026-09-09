@@ -20,10 +20,17 @@ const uiMocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
 }));
 
+const modelCatalogMocks = vi.hoisted(() => ({
+  refreshBuiltinProviderModels: vi.fn(async () => ({
+    ok: true as const,
+    providerId: 'xd' as const,
+  })),
+}));
+
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
 /**
- * 计费页只用 useSearchParams 消费 `?intent=topup` 深链，不需要真的挂 Router：
+ * 计费页只用 useSearchParams 消费 `?intent=topup|subscribe|plan-change` 深链，不需要真的挂 Router：
  * 用一个可读写的 URLSearchParams 替身，既能驱动深链分支，也能断言参数被摘除。
  */
 const routerState = vi.hoisted(() => ({ search: '' as string }));
@@ -55,6 +62,24 @@ vi.mock('react-i18next', () => ({
         'billing.providers.stripe': 'stripe',
       };
       if (providerLabels[key]) return providerLabels[key];
+      if (key === 'billing.orders.invoice.emailBody') {
+        return [
+          'Hello,',
+          '',
+          'I would like to request an invoice for the following order:',
+          '',
+          '────────────────────',
+          `Order ID: ${params?.orderId ?? ''}`,
+          'Application: Cindy',
+          'Payment method: Scan to pay',
+          'Invoice amount: CN¥33.00',
+          'Invoice title: ',
+          'Contact person: ',
+          'Phone number: ',
+          'Email: ',
+          '────────────────────',
+        ].join('\n');
+      }
       return params ? `${key}:${JSON.stringify(params)}` : key;
     },
   }),
@@ -112,6 +137,7 @@ beforeEach(() => {
   uiMocks.confirm.mockReset().mockResolvedValue(false);
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
+  modelCatalogMocks.refreshBuiltinProviderModels.mockClear();
   authState.dataOwnerId = 'account-fixture';
   routerState.search = '';
 });
@@ -388,6 +414,9 @@ describe('BillingPage remote catalog rendering', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
         openExternal: vi.fn(),
       },
@@ -690,7 +719,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
-  it('refreshes the balance once and shows no recovery action when a top-up succeeds', async () => {
+  it('refreshes the balance and XD models once when a top-up succeeds', async () => {
     const pendingOrder = {
       orderId: 'order_paid',
       productCode: 'credit_topup',
@@ -731,6 +760,42 @@ describe('BillingPage remote catalog rendering', () => {
 
     view.rerender(<BillingPage />);
     expect(getBalance).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-refreshes the XD model catalog once when a subscription becomes active', async () => {
+    const pendingSubscription = {
+      subscriptionId: 'subscription_pending',
+      status: 'INCOMPLETE' as const,
+      currentPeriodStartAt: null,
+      currentPeriodEndAt: null,
+      entitlementValidUntil: null,
+      cancelAtPeriodEnd: false,
+      effectivePlan: null,
+      purchaseAttemptId: 'attempt_subscription',
+      paymentAction: null,
+    };
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: pendingSubscription,
+    });
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(window.electronAPI.billing.getBalance).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, {
+      phase: 'COMPLETED',
+      subscription: { ...pendingSubscription, status: 'ACTIVE' as const },
+    });
+    view.rerender(<BillingPage />);
+
+    await waitFor(() =>
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd'),
+    );
+    view.rerender(<BillingPage />);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('switches to the expired hint once the server stops issuing the payment action', async () => {
@@ -868,6 +933,40 @@ describe('BillingPage remote catalog rendering', () => {
 
     await screen.findByText('billing.settings.topupCard.action');
     expect(screen.queryByText('Configured top-up')).toBeNull();
+  });
+
+  it('深链 ?intent=subscribe 等目录与订阅加载完再打开购买弹窗，并摘掉参数', async () => {
+    routerState.search = 'tab=billing&intent=subscribe';
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Configured subscription')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('深链 ?intent=subscribe 在目录加载失败时保留参数，刷新成功后再打开购买弹窗', async () => {
+    routerState.search = 'tab=billing&intent=subscribe';
+    vi.mocked(window.electronAPI.billing.getCatalog).mockRejectedValueOnce(
+      new Error('catalog unavailable'),
+    );
+
+    render(<BillingPage />);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: 'billing.actions.refreshCatalog' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBe('subscribe');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('Configured subscription')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 
   it('shows server-visible unavailable offers and only enables purchasable offers', async () => {
@@ -1053,9 +1152,8 @@ describe('BillingPage remote catalog rendering', () => {
       currency: 'USD',
     }).format(250);
     expect(
-      within(alternativeOffer).getByText(
-        `billing.credits:{"amount":"${alternativeCredits}"}`,
-      ).className,
+      within(alternativeOffer).getByText(`billing.credits:{"amount":"${alternativeCredits}"}`)
+        .className,
     ).toContain('text-12');
     expect(within(dialog).queryByText('plus_month_more')).toBeNull();
     expect(currentPlan).toHaveProperty('disabled', true);
@@ -1149,9 +1247,7 @@ describe('BillingPage remote catalog rendering', () => {
 
     const dialog = await screen.findByRole('dialog');
     const defaultOffer = within(dialog).getByText('$9.00').closest('button')!;
-    await waitFor(() =>
-      expect(document.activeElement).toBe(defaultOffer),
-    );
+    await waitFor(() => expect(document.activeElement).toBe(defaultOffer));
     const proProduct = within(dialog).getByRole('button', { name: /Pro/ });
     const futureProduct = within(dialog).getByRole('button', { name: /Coming Soon/ });
     expect(proProduct).toHaveProperty('disabled', false);
@@ -1792,7 +1888,13 @@ describe('BillingPage plan change', () => {
   const install = (billing: ReturnType<typeof billingMocks>) => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: { billing, openExternal: vi.fn() },
+      value: {
+        billing,
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
+        },
+        openExternal: vi.fn(),
+      },
     });
     return billing;
   };
@@ -1853,11 +1955,14 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
 
     await act(async () => resolvePortal({ success: true }));
     await act(async () => window.dispatchEvent(new Event('focus')));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes billing after a timed-out Stripe portal launch', async () => {
@@ -1880,7 +1985,9 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('does not show Stripe management in the menu for an Alipay subscription', async () => {
@@ -2186,6 +2293,61 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+  });
+
+  it('深链 ?intent=plan-change 在有更改入口时打开目标弹窗并摘掉参数', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    install(billingMocks());
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('深链 ?intent=plan-change 在没有更改入口时只落地计费页、不弹窗', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: activeSubscription(null, 'YEAR'),
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    await screen.findByText('billing.settings.subscriptionCard.manageAction');
+    expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+  });
+
+  it('深链 ?intent=plan-change 在订阅加载失败时保留参数，刷新成功后再打开目标弹窗', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('subscription status unavailable'))
+      .mockResolvedValueOnce({ subscription: activeSubscription() });
+    install(billing);
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.settings.subscriptionCard.unavailable')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: 'billing.actions.refreshCatalog' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBe('plan-change');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 
   it('quotes the selected same-Product monthly Offer', async () => {
@@ -2772,7 +2934,10 @@ describe('BillingPage order history', () => {
           listOrders,
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
-        openExternal: vi.fn(),
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
+        },
+        openExternal: vi.fn(async () => ({ success: true })),
       },
     });
     return listOrders;
@@ -2803,6 +2968,172 @@ describe('BillingPage order history', () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+  });
+
+  it('opens a static invoice request prompt with the order details and support email', async () => {
+    const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
+    install([
+      order({
+        orderId: fullOrderId,
+        paymentAction: {
+          type: 'QR_CODE',
+          value: 'https://example.invalid/qr',
+          expiresAt: '2026-08-01T14:07:00.000Z',
+        },
+      }),
+    ]);
+
+    render(<BillingPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    const sendButton = screen.getByRole('button', {
+      name: 'billing.orders.invoice.sendAction',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(sendButton));
+    expect(screen.getByText('billing.orders.invoice.title')).toBeTruthy();
+    const supportEmailButton = screen.getByRole('button', { name: 'xd-billing@xd.com' });
+    expect(supportEmailButton.getAttribute('href')).toBeNull();
+    expect(screen.getByText(fullOrderId)).toBeTruthy();
+    expect(
+      within(await screen.findByRole('alertdialog')).getByText(
+        'billing.orders.invoice.notAvailable',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.invoiceTitle')).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.contact')).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.phone')).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.email')).toBeTruthy();
+
+    fireEvent.click(supportEmailButton);
+    await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith('xd-billing@xd.com'));
+    expect(uiMocks.toastSuccess).toHaveBeenCalledWith('billing.orders.invoice.emailCopied');
+
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.invoice.sendAction' }));
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledTimes(1));
+    const mailto = vi.mocked(window.electronAPI.openExternal).mock.calls[0][0] as string;
+    expect(mailto).toMatch(/^mailto:xd-billing@xd\.com\?/);
+    expect(mailto).toContain('%20');
+    expect(mailto).toContain('body=');
+    const mailBody = new URLSearchParams(mailto.split('?')[1]).get('body');
+    expect(mailBody).toContain('I would like to request an invoice for the following order:');
+    expect(mailBody).toContain('────────────────────');
+    expect(mailBody).toContain('\n\n');
+    expect(mailBody).toContain('Invoice title: ');
+  });
+
+  it('opens a prefilled Gmail compose page when the mail app cannot be opened', async () => {
+    install([order({ orderId: 'o-gmail-fallback' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    const gmailUrl = new URL(openExternal.mock.calls[1][0] as string);
+    expect(gmailUrl.origin + gmailUrl.pathname).toBe('https://mail.google.com/mail/');
+    expect(gmailUrl.searchParams.get('view')).toBe('cm');
+    expect(gmailUrl.searchParams.get('fs')).toBe('1');
+    expect(gmailUrl.searchParams.get('to')).toBe('xd-billing@xd.com');
+    expect(gmailUrl.searchParams.get('su')).toContain('o-gmail-fallback');
+    expect(gmailUrl.searchParams.get('body')).toContain('o-gmail-fallback');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(uiMocks.confirm).toHaveBeenCalledWith({
+      title: 'billing.orders.invoice.gmailFallbackTitle',
+      description: 'billing.orders.invoice.gmailFallbackDescription',
+      confirmText: 'billing.orders.invoice.gmailFallbackConfirm',
+      cancelText: 'billing.actions.close',
+      autoFocusConfirm: true,
+    });
+  });
+
+  it('also tries Gmail when opening the mail app rejects', async () => {
+    install([order({ orderId: 'o-gmail-rejected' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal
+      .mockRejectedValueOnce(new Error('no mail handler'))
+      .mockResolvedValueOnce({ success: true });
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    expect(openExternal.mock.calls[1][0]).toContain('https://mail.google.com/mail/?view=cm&fs=1');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('does not open Gmail without explicit consent after the mail app fails', async () => {
+    install([order({ orderId: 'o-gmail-no-consent' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal.mockResolvedValueOnce({ success: false });
+    uiMocks.confirm.mockResolvedValueOnce(false);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(uiMocks.confirm).toHaveBeenCalledTimes(1));
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(uiMocks.toastError).toHaveBeenCalledWith(
+      'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
+    );
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('o-gmail-no-consent')).toBeTruthy();
+  });
+
+  it('ignores repeated send activations while the mail request is pending', async () => {
+    install([order({ orderId: 'o-gmail-double-click' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    let resolveOpenExternal: ((result: { success: boolean }) => void) | undefined;
+    openExternal.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOpenExternal = resolve;
+        }),
+    );
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    const sendButton = await screen.findByRole('button', {
+      name: 'billing.orders.invoice.sendAction',
+    });
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    resolveOpenExternal?.({ success: true });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it('only offers invoice requests for completed orders', async () => {
+    install([
+      order({ orderId: 'o-completed', status: 'SUCCEEDED' }),
+      order({ orderId: 'o-pending', status: 'PENDING' }),
+      order({ orderId: 'o-failed', status: 'FAILED' }),
+    ]);
+
+    render(<BillingPage />);
+
+    await screen.findByText('billing.orders.title');
+    const invoiceButtons = screen.getAllByRole('button', {
+      name: 'billing.orders.invoice.action',
+    });
+    expect(invoiceButtons).toHaveLength(1);
+    expect(invoiceButtons[0].closest('[role="listitem"]')?.textContent).toContain(
+      'o-com****leted',
+    );
   });
 
   it('copies the complete order id from both the id text and copy icon', async () => {

@@ -8,9 +8,8 @@
  * 就地转 JPEG,避免在链路下游变成不可用附件(同 Context 面板相册链路的处理)。
  */
 import { extractRemoteFileExt } from '@/session/attachments';
+import { convertMobileImageToJpegNative } from '@/session/mobileImageAttachment';
 
-/** 与 useContextSheetMediaAssets 同口径:iOS 原生格式,白名单与下游模型接口都不收。 */
-const PASTED_JPEG_COMPRESS = 0.9;
 export const COMPOSER_PASTED_IMAGE_FILE_PREFIX = 'cindy-composer-paste-';
 
 const WHITELISTED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp'] as const;
@@ -83,20 +82,12 @@ export async function resolvePastedImageAsset(
       mimeType: mimeTypeForPastedImageExt(classified.ext),
     };
   }
-  const convert = deps.convertToJpeg ?? convertToJpegNative;
+  const convert = deps.convertToJpeg ?? convertMobileImageToJpegNative;
   return {
     uri: await convert(uri),
     fileName: buildPastedImageFileName(index, 'jpg'),
     mimeType: 'image/jpeg',
   };
-}
-
-/** 默认 JPEG 转换:同 resolveContextSheetMediaAssetForUpload 的 HEIC 处理方式。 */
-async function convertToJpegNative(uri: string): Promise<string> {
-  const { ImageManipulator, SaveFormat } = await import('expo-image-manipulator');
-  const image = await ImageManipulator.manipulate(uri).renderAsync();
-  const saved = await image.saveAsync({ compress: PASTED_JPEG_COMPRESS, format: SaveFormat.JPEG });
-  return saved.uri;
 }
 
 function basenameFromUri(uri: string): string {

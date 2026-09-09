@@ -362,10 +362,11 @@ export interface ResolveSendWindowHandoff {
  * After a local send, leave any historical render window so later assistant /
  * tool items keep auto-following the real tail.
  *
- * An anchored window that still covers the end at send time would otherwise
- * stay anchored; the next appended items flip `windowCoversEnd` to false and
- * the stream treats that as "left the bottom", stopping follow. External
- * injections must not take this handoff (#2194).
+ * An anchored window that still covers the end at send time used to stop
+ * following as soon as the next item moved the real tail past its bound. Local
+ * sends hand off eagerly so the optimistic row is shown at the real tail; the
+ * generic coverage-loss handoff below protects anchors created by auto-fill.
+ * External injections must not take this eager handoff (#2194).
  */
 export function resolveSendWindowHandoff({
   isNewUserSend,
@@ -378,6 +379,38 @@ export function resolveSendWindowHandoff({
     clearWindowAnchor,
     deferPinToNextRender: clearWindowAnchor && !windowCoversEnd,
   };
+}
+
+export type WindowCoverageLossAction = 'none' | 'handoff-to-tail' | 'preserve-anchor';
+
+export interface ResolveWindowCoverageLossArgs {
+  /** The stream is currently showing an anchored (non-default-tail) window. */
+  hasWindowAnchor: boolean;
+  /** The anchored window covered the real session tail before this render. */
+  wasCoveringEnd: boolean;
+  /** The anchored window still covers the real session tail after this render. */
+  windowCoversEnd: boolean;
+  /** Auto-follow intent before the tail item was appended. */
+  wasFollowingTail: boolean;
+}
+
+/**
+ * Decide how an anchored render window should react when an appended item moves
+ * the real session tail beyond its bounded end.
+ *
+ * An automatically expanded window can still be following the tail. In that
+ * case the bounded anchor is only an implementation detail, so hand it back to
+ * the default tail window instead of interpreting the append as user scroll
+ * intent. A user who already left the tail keeps the anchored reading window.
+ */
+export function resolveWindowCoverageLossAction({
+  hasWindowAnchor,
+  wasCoveringEnd,
+  windowCoversEnd,
+  wasFollowingTail,
+}: ResolveWindowCoverageLossArgs): WindowCoverageLossAction {
+  if (!hasWindowAnchor || !wasCoveringEnd || windowCoversEnd) return 'none';
+  return wasFollowingTail ? 'handoff-to-tail' : 'preserve-anchor';
 }
 
 export interface ResolveNearBottomArgs {
@@ -486,16 +519,15 @@ export function bumpSendFollowCancelGeneration(sessionId: string | null | undefi
 export function shouldBumpSendFollowCancelOnScroll({
   wasNearBottom,
   effectiveNearBottom,
-  scrollDelta,
-  directionDeadZonePx,
 }: {
   wasNearBottom: boolean;
   effectiveNearBottom: boolean;
   scrollDelta: number;
   directionDeadZonePx: number;
 }): boolean {
-  if (wasNearBottom && !effectiveNearBottom) return true;
-  return !effectiveNearBottom && scrollDelta < -directionDeadZonePx;
+  // Only leaving the tail cancels a pending follow. Continued up-scroll while
+  // already away is leftover reading inertia and must not void the next send.
+  return wasNearBottom && !effectiveNearBottom;
 }
 
 export function shouldCommitFollowLatestRequest({

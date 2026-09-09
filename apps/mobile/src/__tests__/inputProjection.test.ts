@@ -15,6 +15,7 @@ import {
 import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import { textComposerDocument } from '@/session/composerDocument';
+import { localizeToolLoopError } from '@/session/toolLoopErrorI18n';
 import type { RemoteSession } from '@/session/types';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
@@ -373,6 +374,35 @@ describe('inputProjection', () => {
       errorRetryText: 'retry',
       autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
+  });
+
+  it('keeps bounded live tool-loop details and rejects malformed projection data', () => {
+    expect(normalizeInputProjection({
+      sessionId: 'tool-loop',
+      error: '模型内部错误',
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    })).toMatchObject({
+      error: '模型内部错误',
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+
+    expect(normalizeInputProjection({
+      sessionId: 'tool-loop-invalid',
+      error: '模型内部错误',
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 0 },
+    }).toolLoop).toBeNull();
+  });
+
+  it('localizes live tool-loop errors instead of rendering the host message', () => {
+    const localized = localizeToolLoopError(
+      'tool_use_loop_detected',
+      { kind: 'contract', count: 3 },
+    );
+    expect(localized).toBe(i18n.t('session.tail.toolUseLoopDetectedWithCount', { count: 3 }));
+    expect(localized).not.toContain('模型内部错误');
   });
 
   it('distinguishes supported, legacy, and not-yet-received continuation ownership', () => {

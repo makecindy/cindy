@@ -35,35 +35,46 @@ export type {
   OAuthAuthorizationCodeDescriptor,
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
-} from './types.js';
+} from "./types.js";
 
-export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
 
 export {
   effectivePiWireProtocol,
   preservesPiCatalogModels,
   resolvePiModelRoute,
   resolvePiModelWireProtocol,
-} from './pi-catalog-marker.js';
-export type { ResolvedPiModelRoute } from './pi-catalog-marker.js';
+} from "./pi-catalog-marker.js";
+export type { ResolvedPiModelRoute } from "./pi-catalog-marker.js";
 
-export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
+export { resolveCodexCompatibilityWireProtocol } from "./codexCompatibility.js";
+export { modelProtocolComparison } from "./modelProtocol.js";
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
+export {
+  BUNDLED_CATALOG,
+  BUILTIN_PROVIDERS,
+  parseCatalog,
+  presetDisplayName,
+  sanitizePresets,
+  sortPresetsForRegion,
+} from "./catalog.js";
 
 export {
   buildUserProvider,
   DEFAULT_CUSTOM_CONTEXT_WINDOW,
   LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  projectXaiApiImageModels,
   runtimeCustomProviderId,
   storedCustomProviderId,
-} from './user-provider.js';
+  xaiApiOfficialRuntimeAgents,
+  XAI_API_CUSTOM_PROVIDER_ID,
+} from "./user-provider.js";
 export {
   appendProviderRequestPath,
   isLoopbackProviderUrl,
   isProviderRequestPath,
-} from './provider-url.js';
-export { findReservedOAuthExtraParam } from './provider-oauth.js';
+} from "./provider-url.js";
+export { findReservedOAuthExtraParam } from "./provider-oauth.js";
 
 export {
   CATALOG_API_PATH,
@@ -74,27 +85,28 @@ export {
   mergeWithBundled,
   loadCatalog,
   loadCatalogWithSource,
-} from './source.js';
+} from "./source.js";
 
 export {
   compareModelRegistryRevisions,
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
+  resolveModelNativeApi,
   resolveModelReferencePrice,
-} from './modelRegistry.js';
-export { modelRegistryCanonicalJson } from './modelRegistryCanonical.js';
+} from "./modelRegistry.js";
+export { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
 export {
   isModelCurrency,
   parseListModelsResponse,
   parseModelRegistry,
-} from './modelAccessValidator.js';
+} from "./modelAccessValidator.js";
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
   ModelRegistryRevisionRelation,
   ModelRegistrySnapshotDecision,
-} from './modelRegistry.js';
-export * from './modelAccessBean.js';
+} from "./modelRegistry.js";
+export * from "./modelAccessBean.js";
 export type {
   CatalogSourceConfig,
   CatalogIO,
@@ -102,7 +114,7 @@ export type {
   CatalogXdMediaKind,
   CatalogLoadResult,
   CatalogLoadSource,
-} from './source.js';
+} from "./source.js";
 
 export {
   buildRegistry,
@@ -118,7 +130,7 @@ export {
   resolveRoute,
   modelSupportsFastMode,
   sessionModelSupportsFastMode,
-} from './registry.js';
+} from "./registry.js";
 export type {
   ConnectionState,
   ModelDiscoveryFailureState,
@@ -126,21 +138,35 @@ export type {
   ProviderModelDiscoveryFailureView,
   ProviderView,
   ResolvedRoute,
-} from './registry.js';
+} from "./registry.js";
 
 export {
   modelDisableKey,
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
-} from './disableOverrides.js';
-export type { ModelDisableOverrides } from './disableOverrides.js';
-
-export { isModelVisible, buildProviderSections, visibleModelUnion, resolveModelIconKind } from './sections.js';
-export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js';
+} from "./disableOverrides.js";
+export type { ModelDisableOverrides } from "./disableOverrides.js";
 
 export {
+  isModelVisible,
+  buildProviderSections,
+  visibleModelUnion,
+  resolveModelIconKind,
+} from "./sections.js";
+export type {
+  SectionModel,
+  ProviderSection,
+  ModelIconKind,
+} from "./sections.js";
+
+export {
+  modelDefaultEffort,
+  defaultEffortForCapabilities,
   resolveEffort,
+  resolveRequestedEffort,
+  composeAtomicModelSelection,
+  resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,
   EFFORT_VALUES,
@@ -148,19 +174,20 @@ export {
   lowestEffort,
   nearestSupportedEffort,
   reconcileInvocationEffort,
-} from './effortResolution.js';
+} from "./effortResolution.js";
+export { piSupportedEfforts } from "./piThinkingLevels.mjs";
 
 // ── 模型调用标准(2026-07 统一层)─────────────────────────────────────────────
 // 清单派生 / 分类徽章 / 调用合成的单点语义,desktop renderer+main 与 mobile 的全部
 // 模型消费面分期收口到这里(见 modelList.ts / classification.ts / invocation.ts 头注)。
-export { deriveModelList, deriveModelSections } from './modelList.js';
+export { deriveModelList, deriveModelSections } from "./modelList.js";
 export type {
   ModelSourceMeta,
   ModelListEntry,
   ModelListSection,
   DeriveModelListOptions,
   ProviderScope,
-} from './modelList.js';
+} from "./modelList.js";
 
 export {
   CHATGPT_MODEL_PREFIX,
@@ -182,8 +209,12 @@ export {
   isBudgetModel,
   modelBadges,
   formatContextWindow,
-} from './classification.js';
-export type { ModelCategory, DisplayModel, ModelBadges } from './classification.js';
+} from "./classification.js";
+export type {
+  ModelCategory,
+  DisplayModel,
+  ModelBadges,
+} from "./classification.js";
 
 // 统一模型选择器(模型优先)M1:推荐引擎推导 + 跨引擎联合列表(纯逻辑)。
 // 规格 docs/product-rules/model-selector-unified.md §2.1 / §2.2 / §4。
@@ -202,27 +233,58 @@ export {
   unifiedModelEntries,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
-} from './unifiedSelection.js';
+} from "./unifiedSelection.js";
 export type {
   SourceResolutionScope,
   CandidateAgentsOptions,
   UnifiedAgentCapability,
   UnifiedModelEntry,
   UnifiedModelEntriesOptions,
-} from './unifiedSelection.js';
+} from "./unifiedSelection.js";
 
-export { resolveModelInvocation } from './invocation.js';
+export { resolveModelInvocation } from "./invocation.js";
 export type {
   InvocationPreferences,
   ScenarioDefaults,
   InvocationCatalogContext,
   ResolvedInvocation,
-} from './invocation.js';
+} from "./invocation.js";
 
 export {
   classifyVisionCapability,
   isKnownNoVisionModel,
   isKnownVisionModel,
   normalizeVisionModelId,
-} from './visionCapability.js';
-export type { VisionCapability } from './visionCapability.js';
+} from "./visionCapability.js";
+export type { VisionCapability } from "./visionCapability.js";
+
+export {
+  parseLocalModelCatalog,
+  isLocalModelLibraryName,
+} from "./localModelCatalog.js";
+export type {
+  LocalModelCatalog,
+  LocalCatalogModel,
+  LocalModelVariant,
+} from "./localModelCatalog.js";
+
+export {
+  resolveModelMetadata,
+  findBaseModel,
+  registryEntryDefaults,
+  expandedRegistryEntries,
+  pickModelMetadata,
+  validModelMetadata,
+  mergeModelMetadata,
+} from "./modelMetadataLayers.js";
+export type { ModelMetadata, BaseModel } from "./modelMetadataLayers.js";
+
+export {
+  catalogModelMetadata,
+  applyModelMetadata,
+} from "./modelMetadataLayers.js";
+
+export { mergeDiscoveredRuntimeModels } from "./modelMetadataLayers.js";
+export type { DiscoveredModel } from "./modelMetadataLayers.js";
+
+export { runtimeUserModelMetadata } from "./modelMetadataLayers.js";

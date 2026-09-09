@@ -13,7 +13,13 @@ vi.mock('react-i18next', () => ({
 
 import { buildHunkRows, hunkActionRevealClass, PlainUnifiedDiff } from '../PlainUnifiedDiff';
 import type { FileDiff, Hunk } from '@/lib/gitReview.types';
-import { buildSplitRows, buildUnifiedRows, shouldVirtualizeDiffRows, shouldVirtualizeFileList } from '../diffRows';
+import {
+  buildSplitRows,
+  buildUnifiedRows,
+  countDiffRows,
+  shouldVirtualizeDiffRows,
+  shouldVirtualizeFileList,
+} from '../diffRows';
 import {
   collectHighlightLines,
   HIGHLIGHT_MAX_DIFF_LINES,
@@ -528,6 +534,27 @@ describe('PlainUnifiedDiff performance helpers', () => {
     expect(shouldVirtualizeDiffRows(201)).toBe(true);
     expect(shouldVirtualizeFileList(100)).toBe(false);
     expect(shouldVirtualizeFileList(101)).toBe(true);
+    expect(shouldVirtualizeFileList(13, 200)).toBe(false);
+    expect(shouldVirtualizeFileList(13, 201)).toBe(true);
+  });
+
+  it('virtualizes a small file list when its expanded eager rows exceed the shared budget', () => {
+    expect(shouldVirtualizeFileList(13, 13 * 172)).toBe(true);
+  });
+
+  it('counts unified and paired split rows without building render rows', () => {
+    const sourceHunk = {
+      ...hunk(0, 8, 3),
+      lines: [
+        line(0, 'context', 'before', 8, 8),
+        line(1, 'delete', 'old', 9, null),
+        line(2, 'add', 'new', null, 9),
+        line(3, 'context', 'after', 10, 10),
+      ],
+    };
+
+    expect(countDiffRows([sourceHunk], 'unified')).toBe(5);
+    expect(countDiffRows([sourceHunk], 'split')).toBe(4);
   });
 
   it('virtualizes files shaped like the two-file whole-file rewrite regression', () => {

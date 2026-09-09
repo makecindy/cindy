@@ -19,6 +19,7 @@ function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSes
     id: 's1',
     agentKind: 'cc',
     model: 'claude-fable-5',
+    providerId: 'xd',
     status: 'active',
     remoteHostId: null,
     orcaRole: null,
@@ -75,7 +76,146 @@ const validParams = {
   providerId: null,
 };
 
+describe('same-engine selection at send', () => {
+  function selectionHarness() {
+    const pending = createPendingAgentSwitchRegistry();
+    let row = makeRow({ agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' });
+    const apply = vi.fn(async (intent: PendingAgentSwitchIntent) => {
+      row = { ...row, model: intent.model, providerId: intent.providerId ?? null };
+    });
+    const { deps, calls } = makeDeps({
+      pendingSwitches: pending,
+      getSessionRow: async () => row,
+      selectSameAgentModel: async (id, intent, applyNow) => {
+        if (!applyNow) {
+          pending.set(id, intent);
+          return { deferred: true };
+        }
+        await apply(intent);
+        return { deferred: false };
+      },
+    });
+    return { deps, pending, apply, calls, row: () => row };
+  }
+
+  it('keeps the source thread untouched while selecting away and back, and applies only the final choice on send', async () => {
+    const h = selectionHarness();
+    for (const [model, providerId] of [['gpt-5.6-sol', 'xd'], ['gpt-6-astra', 'openai']]) {
+      expect(await performSessionAgentSwitch(h.deps, {
+        sessionId: 's1', targetAgentKind: 'codex', model, providerId, effort: 'high', fastMode: false,
+      })).toMatchObject({ deferred: true, switched: false });
+    }
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(h.row()).toMatchObject({ model: 'gpt-6-astra', providerId: 'openai', sdkSessionId: 'sdk-old' });
+    expect(h.calls).toEqual([]);
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.apply).toHaveBeenCalledTimes(1);
+    expect(h.apply).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-astra', providerId: 'openai' }));
+    expect(h.pending.get('s1')).toBeUndefined();
+    expect(h.calls).toEqual([]);
+  });
+
+  it('keeps an internal cross-engine apply that already reached its target as a no-op', async () => {
+    const h = selectionHarness();
+    const select = vi.spyOn(h.deps, 'selectSameAgentModel');
+    const result = await performSessionAgentSwitch(h.deps, { ...validParams, applyNow: true });
+    expect(result).toMatchObject({ switched: false, engineReady: true });
+    expect(select).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(h.row()).toMatchObject({ model: 'gpt-6-astra', providerId: 'openai' });
+  });
+
+  it('fails the send on preparation failure and retains the final selection for retry', async () => {
+    const h = selectionHarness();
+    await performSessionAgentSwitch(h.deps, { ...validParams, providerId: 'xd' });
+    h.apply.mockRejectedValueOnce(new Error('target is disconnected'));
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toThrow('target is disconnected');
+    expect(h.pending.get('s1')?.providerId).toBe('xd');
+    expect(h.row().providerId).toBe('openai');
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.row().providerId).toBe('xd');
+  });
+
+  it('does not apply before a running turn settles, or when send has been canceled', async () => {
+    const h = selectionHarness();
+    await performSessionAgentSwitch(h.deps, validParams);
+    h.deps.getLiveSession = () => ({ isTurnRunning: () => true });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.apply).not.toHaveBeenCalled();
+    h.deps.getLiveSession = () => ({ isTurnRunning: () => false });
+    const abort = new AbortController();
+    abort.abort();
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1', { signal: abort.signal })).rejects.toThrow('aborted');
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(h.pending.get('s1')).toBeDefined();
+  });
+
+  it('coalesces concurrent sends and does not clear a newer pending selection', async () => {
+    const h = selectionHarness();
+    await performSessionAgentSwitch(h.deps, validParams);
+    let finish!: () => void;
+    h.apply.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const first = applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    const second = applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    h.pending.set('s1', { targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', sameAgentSelection: true });
+    finish();
+    await Promise.all([first, second]);
+    expect(h.apply).toHaveBeenCalledTimes(1);
+    expect(h.pending.get('s1')?.model).toBe('gpt-6-astra');
+  });
+});
+
 describe('performSessionAgentSwitch', () => {
+  it('cycles Claude → Codex → Pi → Claude → Codex and recovers a broken parked thread once', async () => {
+    let row = makeRow();
+    const parked = new Map<string, string>();
+    const boundaries: Array<{ fromAgentKind: string; fromSdkSessionId: string | null; handoff: string }> = [];
+    let bootstraps = 0;
+    const { deps } = makeDeps({
+      getSessionRow: async () => ({ ...row }),
+      findParkedEngineSession: async (_sessionId, kind) => {
+        const sdkSessionId = parked.get(kind);
+        return sdkSessionId ? { sdkSessionId, watermarkCreatedAt: 0, watermarkRowid: 0 } : null;
+      },
+      applyAgentSwitchToDb: async (_sessionId, patch) => {
+        row = { ...row, ...patch, providerId: patch.providerId ?? null, sdkSessionId: patch.sdkSessionId ?? null };
+      },
+      insertBoundaryMessage: async (_sessionId, boundary) => {
+        if (boundary.fromSdkSessionId) parked.set(boundary.fromAgentKind, boundary.fromSdkSessionId);
+        boundaries.push(boundary);
+        return `boundary-${boundaries.length}`;
+      },
+      bootstrapSwitchedSession: async () => {
+        bootstraps++;
+        if (row.sdkSessionId === 'broken-codex') throw new Error('thread history projection expected ordinal 15, got 3');
+        row.sdkSessionId ??= `native-${row.agentKind}-${bootstraps}`;
+      },
+      applyResumeFallbackAtomically: async (_sessionId, boundaryId, boundary) => {
+        row.sdkSessionId = null;
+        boundaries[Number(boundaryId.split('-')[1]) - 1] = boundary;
+      },
+    });
+    const choices = [
+      { targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: true },
+      { targetAgentKind: 'pi', model: 'grok-4.6', providerId: 'xai', effort: 'high', fastMode: false },
+      { targetAgentKind: 'claude-code', model: 'claude-fable-5', providerId: 'xd', effort: 'medium', fastMode: false },
+      { targetAgentKind: 'codex', model: 'codex/gpt-5.6-sol', providerId: 'xd', effort: 'high', fastMode: false },
+    ];
+    for (const [index, choice] of choices.entries()) {
+      if (index === 3) parked.set('codex', 'broken-codex');
+      const result = await performSessionAgentSwitch(deps, { sessionId: 's1', ...choice, applyNow: true });
+      expect(result).toMatchObject({ switched: true, engineReady: true });
+      expect(row.model).toBe(choice.model);
+      expect(row.providerId).toBe(choice.providerId);
+      expect(boundaries.at(-1)?.handoff).toContain('你好');
+    }
+    expect(bootstraps).toBe(5);
+    expect(boundaries).toHaveLength(4);
+    expect(row.sdkSessionId).toBe('native-codex-5');
+    expect(boundaries.at(-1)).toMatchObject({ resumed: false });
+  });
+
   it('happy path:close → DB 提交 → 边界行 → pending → bootstrap,顺序正确', async () => {
     const { deps, calls } = makeDeps();
     const result = await performSessionAgentSwitch(deps, validParams);
@@ -93,6 +233,8 @@ describe('performSessionAgentSwitch', () => {
     expect(boundary.toAgentKind).toBe('codex');
     expect(boundary.fromModel).toBe('claude-fable-5');
     expect(boundary.toModel).toBe('gpt-5.5');
+    expect(boundary.fromProviderId).toBe('xd');
+    expect(boundary.toProviderId).toBeNull();
     expect(boundary.fromSdkSessionId).toBe('sdk-old');
     expect(boundary.resumed).toBe(false);
     expect(boundary.consumed).toBe(false);
@@ -115,6 +257,8 @@ describe('performSessionAgentSwitch', () => {
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.fromAgentKind).toBe('codex');
     expect(boundary.toAgentKind).toBe('cc');
+    expect(boundary.fromProviderId).toBe('xd');
+    expect(boundary.toProviderId).toBe('xd');
   });
 
   it('codex → pi + OpenAI 关闭旧会话并保持目标 provider route', async () => {

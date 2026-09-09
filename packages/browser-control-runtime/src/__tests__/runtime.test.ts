@@ -30,6 +30,39 @@ describe('createBrowserControlRuntime — request planning + dispatch', () => {
     expect(plan.query).toMatchObject({ targetId: 't1', maxChars: 500, timeoutMs: 9000 });
   });
 
+  it('accepts proxyServer only for start and does not forward it to the vendored route', () => {
+    expect(planDispatch({ action: 'start', proxyServer: 'http://proxy.test:8080' })).toEqual({
+      method: 'POST',
+      path: '/start',
+      body: {},
+    });
+    expect(() => planDispatch({ action: 'status', proxyServer: 'http://proxy.test:8080' }))
+      .toThrow(/only valid for action=start/);
+  });
+
+  it('rejects a credentialed proxyServer at the planning layer', () => {
+    // Authenticated proxies are unsupported; the rejection must happen before
+    // any dispatch is planned, not deeper in the launch path.
+    expect(() => planDispatch({ action: 'start', proxyServer: 'http://u:p@proxy.test:8080' }))
+      .toThrow(/authenticated proxies are not supported/);
+  });
+
+  it('validates and does not forward proxy navigation policy', () => {
+    expect(planDispatch({
+      action: 'start',
+      proxyServer: 'http://proxy.test:8080',
+      proxyAllowedHostnames: ['*.example.com'],
+    })).toEqual({
+      method: 'POST',
+      path: '/start',
+      body: {},
+    });
+    expect(() => planDispatch({
+      action: 'status',
+      proxyAllowedHostnames: ['*.example.com'],
+    })).toThrow(/only valid for action=start/);
+  });
+
   it('forwards act timeoutMs into the /act body (top-level, or nested wins)', () => {
     // The /act normalizer reads body.timeoutMs; a raw act call carries it at the
     // top level and must not be dropped.

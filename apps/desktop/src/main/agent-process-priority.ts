@@ -86,15 +86,18 @@ export interface AgentProcessPriorityWatcher {
 
 /**
  * codex 二进制路径 marker(与 buildClaudePathMarkers 同构):
- * <userData>/codex/<ver>/ 及 dev checkout 的 apps/codex-bin/。
+ * <userData>/codex[-package]/<ver>/ 及 dev checkout 的 apps/codex-package-bin/。
  */
 export function buildCodexPathMarkers(dirNames: readonly string[]): string[] {
   return dirNames.flatMap((dirName) => {
     const dir = dirName.toLowerCase();
     return [
       `appdata\\roaming\\${dir}\\codex\\`,
+      `appdata\\roaming\\${dir}\\codex-package\\`,
       `appdata/roaming/${dir}/codex/`,
+      `appdata/roaming/${dir}/codex-package/`,
       `/library/application support/${dir}/codex/`,
+      `/library/application support/${dir}/codex-package/`,
     ];
   });
 }
@@ -112,8 +115,9 @@ export function buildLinuxPathMarkers(
 ): string[] {
   return dirNames.flatMap((dirName) => {
     const dir = dirName.toLowerCase();
+    const installSubdirs = kind === 'codex' ? ['codex', 'codex-package'] : [kind];
     return [
-      `/.config/${dir}/${kind}/`,
+      ...installSubdirs.map((installSubdir) => `/.config/${dir}/${installSubdir}/`),
       `/.config/${dir}/agent-runtime/${kind}/`,
     ];
   });
@@ -130,6 +134,8 @@ const CODEX_MARKERS = [
   ...buildCodexPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION)),
   ...buildLinuxPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION), 'codex'),
   'apps\\codex-bin\\',
+  'apps\\codex-package-bin\\',
+  'apps/codex-package-bin/',
   'apps/codex-bin/',
 ];
 
@@ -149,9 +155,12 @@ export function registerUserDataMarkers(userDataPath: string): void {
     // 两种形态都登记;非本平台形态的变体永不命中,无害。
     const variants = new Set([lower.replace(/\\/g, '/'), lower.replace(/\//g, '\\')]);
     const out: string[] = [];
+    const installSubdirs = kind === 'codex' ? ['codex', 'codex-package'] : [kind];
     for (const v of variants) {
       const sep = v.includes('\\') ? '\\' : '/';
-      out.push(`${v}${sep}${kind}${sep}`);
+      for (const installSubdir of installSubdirs) {
+        out.push(`${v}${sep}${installSubdir}${sep}`);
+      }
       out.push(`${v}${sep}agent-runtime${sep}${kind}${sep}`);
     }
     return out;

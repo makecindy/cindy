@@ -253,9 +253,20 @@ export const MAKER_INVOKE = {
   MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
   MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
   MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
+  /**
+   * 单模型上下文上限 override(设置 → 模型 → 高级设置)。窗口是自动压缩比例的分母,
+   * 调小它让压缩按用户设的长度提前触发。与价格 override 同一个 (providerId, agent,
+   * modelId) 目标形状。设置类写操作:仅本机主页面可调,**不进 device-link allowlist**
+   * (远程改被控端全局设置越权)。
+   */
+  MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
+  MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
+  // 附加可读写目录；与 SET_EXTRA_DIRS 的只读授权严格分离。
+  SET_WRITABLE_DIRS: 'maker:set-writable-dirs',
   // 未来 MetaAgent 入口（占位）
   RUN: 'maker:run',
   // Chat utility (Stage 2 C1) — 不是 session 级 API,但走 maker.* 命名空间统一管理
@@ -480,7 +491,7 @@ export const MAKER_INVOKE = {
    * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
-  */
+   */
   PROVIDER_LIST: 'maker:provider:list',
   /**
    * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
@@ -592,9 +603,9 @@ export const MAKER_INVOKE = {
   /** 表单「AI 生成」:按自然语言描述生成前置检查脚本并落盘,返回可填入的命令。 */
   SCHEDULE_GENERATE_PRE_RUN_HOOK: 'maker:schedule:generate-pre-run-hook',
   SCHEDULE_LIST_RUNS: 'maker:schedule:list-runs',
-  /** Sidebar 聚合索引：带 sessionId 的 run + 未读终态 run，避免固定 history limit 截断。 */
+  /** Sidebar 聚合索引：每个 session 最新映射 + 全部 running / 未读终态 run。 */
   SCHEDULE_LIST_SIDEBAR_INDEX_RUNS: 'maker:schedule:list-sidebar-index-runs',
-  /** Automation 列表总开销：按 schedule 去重 session 汇总 sessions.total_cost_usd。 */
+  /** 已移除累计费用展示；保留 channel 供旧 device-link 控制端降级为空结果。 */
   SCHEDULE_LIST_COST_SUMMARIES: 'maker:schedule:list-cost-summaries',
   SCHEDULE_DELETE_RUN: 'maker:schedule:delete-run',
   /** Renderer 在 delete/pause 前查这条 schedule 当前有多少个 in-flight run,>0 时弹二次确认。 */
@@ -654,6 +665,9 @@ export const MAKER_INVOKE = {
   ANDROID_SET_DEFAULT_DEVICE: 'maker:android:set-default-device',
   ANDROID_SET_ADB_PATH: 'maker:android:set-adb-path',
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
+  // iOS Simulator presentation preference. Owner-scoped and independent from task grants.
+  IOS_SIMULATOR_GET_PREFERENCES: 'maker:ios-simulator:get-preferences',
+  IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL: 'maker:ios-simulator:set-auto-open-embedded-panel',
   // iOS Simulator pane and Agent discovery. Session id is required and checked in main.
   IOS_SIMULATOR_REQUEST_ACCESS: 'maker:ios-simulator:request-access',
   IOS_SIMULATOR_STATUS: 'maker:ios-simulator:status',
@@ -663,6 +677,7 @@ export const MAKER_INVOKE = {
   IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
   IOS_SIMULATOR_RETRY_NATIVE_ROUTE: 'maker:ios-simulator:retry-native-route',
   IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
+  IOS_SIMULATOR_COPY_SCREENSHOT: 'maker:ios-simulator:copy-screenshot',
   IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
   IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
@@ -741,6 +756,13 @@ export const MAKER_INVOKE = {
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',
+  /** Cindy Bot 父任务列出自己发起的 Bot 间委派。 */
+  BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
+  /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
+  BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
+  /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
+  BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
+  BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 
 /**
@@ -800,6 +822,8 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  /** Runtime agent roster changed after an optional agent recovery. */
+  AGENTS_CHANGED: 'maker:agents:changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
@@ -882,6 +906,13 @@ export const MAKER_PUSH = {
   DESKTOP_COMMAND_TRIGGERED: 'maker:desktop-command-triggered',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
+  /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
+  BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
+  /** Hidden Bot pair conversation accepted another message or reached its limit. */
+  BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
+  /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
+  BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
+  BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。

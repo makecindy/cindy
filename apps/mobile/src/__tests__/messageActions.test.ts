@@ -172,6 +172,18 @@ describe('messageActions', () => {
     expect(formatMessageAbsoluteTime('2026-06-16T09:00:05.000Z')).toContain('2026-06-16');
   });
 
+  it('formats relative message times in English when the app language is English', async () => {
+    const now = new Date('2026-06-16T12:00:00.000Z').getTime();
+    await i18n.changeLanguage('en');
+    try {
+      expect(formatMessageRelativeTime('2026-06-16T11:59:31.000Z', now)).toBe('Just now');
+      expect(formatMessageRelativeTime('2026-06-16T11:42:00.000Z', now)).toBe('18 min ago');
+      expect(formatMessageRelativeTime('2026-06-16T09:00:00.000Z', now)).toBe('3 h ago');
+    } finally {
+      await i18n.changeLanguage('zh-CN');
+    }
+  });
+
   it('formats per-turn cost like the desktop action bar', () => {
     expect(formatMessageTurnCost(money(12.34))).toBe('$12');
     expect(formatMessageTurnCost(money(0.034))).toBe('$0.03');

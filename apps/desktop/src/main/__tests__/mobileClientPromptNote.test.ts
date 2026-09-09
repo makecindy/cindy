@@ -218,7 +218,7 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
       },
       'claude-code',
     )).toBe(true);
-    expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(false);
     expect(shouldPrependMobileClientPromptNote('/compact', 'codex')).toBe(true);
   });
 });
@@ -298,6 +298,11 @@ describe('stampMobileClientOrigin(IPC 边界盖章)', () => {
 describe('stripMainOnlySendOpts(直连路径消毒)', () => {
   it('剥掉客户端自报的 fromMobileClient', () => {
     expect(stripMainOnlySendOpts({ messageUuid: 'u', fromMobileClient: true }))
+      .toEqual({ messageUuid: 'u' });
+  });
+
+  it('剥掉客户端自报的 fromDeviceLinkClient', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', fromDeviceLinkClient: true }))
       .toEqual({ messageUuid: 'u' });
   });
 
@@ -387,9 +392,20 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     expect(register).toContain('isMobileControllerInvoke(),');
   });
 
+  it('device-link provenance is stamped at both queue input boundaries', () => {
+    const stamps = register.match(/stampTrustedDeviceLinkQueuedOrigin\(/g) ?? [];
+    expect(stamps.length).toBe(2);
+    expect(register).toContain('deviceLinkInvoke,');
+  });
+
   it('coordinator 在 drain 与 steer 两处都透传', () => {
     const passes = coordinator.match(/fromMobileClient: true \} : \{\}\)/g) ?? [];
     expect(passes.length).toBe(2);
+  });
+
+  it('coordinator drain carries device-link provenance into the send transaction', () => {
+    expect(coordinator).toContain('fromDeviceLinkClient: true } : {})');
+    expect(transaction).toContain('requestedSendOpts.fromDeviceLinkClient === true');
   });
 
   it('send 事务认 async context 与透传值两个来源', () => {
@@ -416,12 +432,11 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     // 不剥的话传 `{ fromMobileClient: true }` 就能让非手机轮次收到伪造的手机说明
     // (review P1/P2 各报一次)。契约与 maker:send 一致:该字段只由 main 盖章。
     expect(register).toContain(
-      'attachMainOwnedInputBoundary(stripMainOnlySendOpts(sendOpts), boundaryStamp)',
+      'const sanitizedSendOpts = attachMainOwnedInputBoundary(',
     );
+    expect(register).toContain('stripMainOnlySendOpts(sendOpts)');
     // coordinator 的内部调用**不得**被消毒 —— 那条路的 sendOpts 是 main 构造的透传值。
-    expect(register).toContain('steerToAgent: (sessionId, message, sendOpts) =>');
-    expect(register).toMatch(
-      /steerToAgent: \(sessionId, message, sendOpts\) =>\s*\n\s*steerToAgentAccepted\(sessionId, message, sendOpts\),/,
-    );
+    expect(register).toContain('steerToAgent: (sessionId, message, sendOpts) => {');
+    expect(register).toContain('const expectedText = trustedDesktopSteerText.getStore();');
   });
 });

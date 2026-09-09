@@ -390,7 +390,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).toContain('Icon={Info}');
   });
 
-  it('空态 / 远程 loading-error / 连接中占位都挂范围标题(2026-08-13 第 4 轮 P1)', () => {
+  it('空态 / 远程任务 loading-error / 设备目录 loading / 连接中占位都挂范围标题', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
     expect(headerSource).toContain('<MachineSwitcherMenu onOpenDisplaySettings=');
     expect(headerSource).not.toContain('filterActiveBadge');
@@ -398,15 +398,18 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(projectsSectionSource).toContain('<MainListScopeHeader');
     expect(projectsSectionSource).toContain('hasMainListContent');
     expect(projectsSectionSource).not.toMatch(/if \(\s*allProjectKeysForOrder\.length === 0/);
-    // 连接中 / 全屏 loading-error 不再把范围标题一起摘掉。
+    // 连接中 / 全屏 loading-error 不再把范围标题一起摘掉。设备目录 error 不展示
+    // 占位提示，因此不属于这里的标题覆盖分支。
     const connectingIdx = sidebarUpperSource.indexOf('selectedMachineConnecting ?');
     expect(connectingIdx).toBeGreaterThanOrEqual(0);
     expect(sidebarUpperSource.slice(connectingIdx, connectingIdx + 900)).toContain(
       '<MainListScopeHeader',
     );
     expect(sidebarUpperSource).toContain('deviceGroupingAvailable');
-    const placeholderMarkers = [
+    expect(sidebarUpperSource).not.toContain(
       "remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent",
+    );
+    const placeholderMarkers = [
       'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
       "remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent",
       'remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent',

@@ -36,7 +36,10 @@ export interface IndexIdentityBatchLimits {
   maxBatchPaths?: number;
 }
 
-function splitIntoBatches(paths: string[], limits?: IndexIdentityBatchLimits): string[][] {
+export function splitIntoBatches(
+  paths: readonly string[],
+  limits?: IndexIdentityBatchLimits,
+): string[][] {
   const maxBytes = limits?.maxBatchPathspecBytes ?? MAX_BATCH_PATHSPEC_BYTES;
   const maxPaths = limits?.maxBatchPaths ?? MAX_BATCH_PATHS;
   const batches: string[][] = [];

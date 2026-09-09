@@ -37,12 +37,7 @@ import {
   isScheduledSession,
 } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 import { getFocusedScheduleStatusFilter } from '@/features/scheduler/SchedulerPage';
-import {
-  isUnreadFailedScheduleRun,
-  isUnreadScheduleRun,
-} from '@/features/scheduler/lib/runUnread';
-import { formatUsd } from '@/features/scheduler/lib/formatters';
-
+import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
@@ -108,6 +103,8 @@ describe('automation-generated sessions', () => {
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
     // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
+    // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
+    // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
       'desktop',
       'feishu',
@@ -130,6 +127,7 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('bot');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -514,13 +512,13 @@ describe('automation-generated sessions', () => {
     ).toEqual(['ok']);
   });
 
-  it('surfaces unread failed schedule runs as an in-session mark-as-read banner', () => {
+  it('routes historical failures to the seen receipt while keeping retry scoped to one run', () => {
     const sessionViewSource = readTextLf(
       new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
       'utf8',
     );
     const bannerSource = readTextLf(
-      new URL('../components/chat/InterruptedTurnBanner.tsx', import.meta.url),
+      new URL('../components/chat/UnreadFailedScheduleBanner.tsx', import.meta.url),
       'utf8',
     );
     const zh = JSON.parse(
@@ -528,17 +526,18 @@ describe('automation-generated sessions', () => {
     );
 
     expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
-    expect(sessionViewSource).toContain('unreadFailedScheduleRunIds.length > 0');
+    expect(sessionViewSource).toContain('scheduleSessionInfo.hasFailedRun');
+    expect(sessionViewSource).toContain('shouldShowFailedScheduleNotice({');
     expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
     expect(sessionViewSource).toContain('latestUnreadFailedRunId');
-    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
-    expect(sessionViewSource).not.toContain(
-      'void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds)',
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined)');
+    expect(sessionViewSource).toContain(
+      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined)',
     );
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
-    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次定时任务没有完成。');
-    expect(zh.chat.unreadFailedScheduleBanner.markAsRead).toBe('标为已读');
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
+    expect(sessionViewSource).toContain('latestFailedRun={scheduleSessionInfo.latestFailedRun}');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {
@@ -1063,8 +1062,9 @@ describe('automation-generated sessions', () => {
     expect(unreadCountsHookSource).not.toContain('RUNS_PER_SCHEDULE_LIMIT');
     expect(unreadCountsHookSource).not.toContain('listRuns(');
     expect(storageSource).toContain('listSidebarIndexRuns');
+    expect(storageSource).toContain('.from(scheduleSessionLatestRuns)');
     expect(storageSource).toContain('isNotNull(scheduleRuns.sessionId)');
-    expect(storageSource).toContain('UNREAD_TERMINAL_RUN_STATUSES');
+    expect(storageSource).toContain('unreadTerminalRunWhere');
     expect(storageSource).toContain('nextFireAt: schedules.nextFireAt');
     expect(storageSource).toContain('listSchedulesByLegacyKey(db)');
     expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
@@ -1076,15 +1076,12 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain("eq(sessions.source, 'scheduler')");
     expect(storageSource).toContain('listDirectScheduleIdsByLegacyKey');
     expect(storageSource).toContain('directScheduleId && directScheduleId !== row.id');
-    expect(scheduleIndexHookSource).toContain('nextFireAt: run.nextFireAt');
+    expect(scheduleIndexHookSource).toContain('projectScheduleSidebarIndex(runs)');
+    expect(readFileSync(new URL('../features/scheduler/lib/projectScheduleSidebarIndex.ts', import.meta.url), 'utf8')).toContain('nextFireAt: run.nextFireAt');
     expect(preloadSource).toContain('listSidebarIndexRuns');
   });
 
-  it('surfaces total automation task cost from deduped schedule sessions', () => {
-    const storageSource = readTextLf(
-      new URL('../../main/scheduler-host/storage.ts', import.meta.url),
-      'utf8',
-    );
+  it('keeps per-run Automation cost without loading cumulative list cost', () => {
     const schedulePageSource = readTextLf(
       new URL('../features/scheduler/SchedulerPage.tsx', import.meta.url),
       'utf8',
@@ -1105,47 +1102,15 @@ describe('automation-generated sessions', () => {
       new URL('../features/scheduler/components/RunHistoryPane.tsx', import.meta.url),
       'utf8',
     );
-    const hookSource = readTextLf(
-      new URL('../features/scheduler/hooks/useScheduleCostSummaries.ts', import.meta.url),
-      'utf8',
-    );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
     const zh = JSON.parse(
       readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
     );
 
-    expect(formatUsd(0)).toBe('$0.00');
-    expect(formatUsd(0.001)).toBe('<$0.01');
-    expect(formatUsd(1.234)).toBe('$1.23');
-    expect(storageSource).toContain('listCostSummaries');
-    expect(storageSource).toContain('messages.agentMeta');
-    expect(storageSource).toContain('scheduleOriginFromAgentMeta');
-    expect(storageSource).toContain("origin?.kind !== 'scheduler'");
-    expect(storageSource).toContain('turnCostFromAgentMeta');
-    expect(storageSource).toContain('turnCostIsEstimate === true');
-    expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
-    expect(storageSource).toContain("when 'user' then 0 else 1 end");
-    expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
-    expect(storageSource).toContain(
-      'addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency)',
-    );
-    expect(storageSource).toContain('totalMoney');
-    expect(storageSource).toContain('listLegacySessionRuns');
-    expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
-    expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
-    expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
-    expect(storageSource).toContain('listLegacyAliasesForSchedule');
-    expect(storageSource).toContain('inArray(sessions.title, titles)');
-    expect(storageSource).toContain('legacyAliases.has(');
-    expect(storageSource).toContain('directScheduleId && directScheduleId !== schedule.id');
-    expect(preloadSource).toContain('listCostSummaries');
-    expect(hookSource).toContain('onUsageSessionSpendChanged');
-    expect(hookSource).toContain('onUsageMessageTurnCost');
-    expect(hookSource).toContain('maker.schedule.listCostSummaries()');
-    expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
-    expect(taskListPaneSource).toContain('costSummariesLoaded');
-    expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatTurnCostMoney(totalMoney)');
+    expect(preloadSource).not.toContain('listCostSummaries');
+    expect(schedulePageSource).not.toContain('useScheduleCostSummaries');
+    expect(taskListPaneSource).not.toContain('costSummaries');
+    expect(taskListCellSource).not.toContain('scheduler.cell.totalCost');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');
@@ -1154,8 +1119,6 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("!isLegacySessionRun && run.status !== 'running'");
     expect(runHistoryCardSource).toContain('scheduler.runs.runCost');
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
-    expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
-    expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
     expect(zh.scheduler.runs.sessionCost).toBe('任务开销 {{cost}}');
     expect(zh.scheduler.runs.sessionValue).toBe('任务价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
@@ -1187,7 +1150,9 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
     expect(sidebarSource).toContain("if (action === 'mark-read')");
     expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
-    expect(sidebarSource).toContain("t('ccAgent.layout.markedAsRead', { count: processed.length })");
+    expect(sidebarSource).toContain(
+      "t('ccAgent.layout.markedAsRead', { count: processed.length })",
+    );
     expect(sidebarSource).not.toContain(
       "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
     );

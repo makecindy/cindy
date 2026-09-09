@@ -167,6 +167,11 @@ function displayOrderedModels(models: readonly CatalogModel[]): CatalogModel[] {
   );
 }
 
+/** Product-facing provider name for the picker; keep the catalog id stable. */
+function displayProviderName(provider: Provider): string {
+  return provider.id === 'xd' ? 'Cindy AI' : provider.name;
+}
+
 /**
  * 凭证探测(可选):传入时只收当下有可用凭证的 (供应商 × agent)——没配
  * key / 没登录的供应商钉上也只会在执行期 NO_CANDIDATE,不给了没用的选项。
@@ -205,11 +210,12 @@ export function buildTextOneshotPinOptions(
     }
   }
   return entries.map((e) => {
-    const base = `${e.model.name} · ${e.provider.name}`;
+    const providerName = displayProviderName(e.provider);
+    const base = `${e.model.name} · ${providerName}`;
     return {
       id: encodeCatalogPin(e.provider.id, e.agentKind, e.model.id),
       label: `${AGENT_LABEL[e.agentKind]} · ${base}`,
-      group: e.provider.name,
+      group: providerName,
       providerId: e.provider.id,
       agentKind: e.agentKind,
       modelId: e.model.id,

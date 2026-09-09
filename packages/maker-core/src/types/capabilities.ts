@@ -110,6 +110,11 @@ export interface Capabilities {
    */
   extraDirs: CapabilityStatus;
   /**
+   * Session 附加可读写目录。与 extraDirs 的只读授权严格分离；旧会话只含
+   * extraDirs 时不得因此获得写权限。
+   */
+  writableDirs?: CapabilityStatus;
+  /**
    * 会话导出为 HTML —— pi 原生 export_html RPC(自带 export-html 渲染器,离线、无网关)。
    * 支持时 handle 实现 exportSessionHtml;UI 据此决定是否显示「导出 HTML」入口。
    * CC/Codex 无对应能力(缺省视为不支持)。

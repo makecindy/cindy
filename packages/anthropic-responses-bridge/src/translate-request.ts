@@ -19,6 +19,7 @@
  *     (encrypted_content 存在 redacted_thinking.data 里)
  */
 
+import { isStrictCompatibleSchema } from './strict-schema.js';
 import type {
   AnthropicContentBlock,
   AnthropicMessage,
@@ -278,8 +279,8 @@ function resolveToolChoice(
   return choice;
 }
 
-/** Responses 端点接受的 reasoning effort 档(codex / api.x.ai 通用)。 */
-export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+/** Responses reasoning effort 的并集；各通道只接受自身声明的档位。 */
+export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface TranslateRequestOptions {
   /** 发给上游的真实 model id(已 strip 掉 bridge 前缀)。 */
@@ -294,7 +295,7 @@ export interface TranslateRequestOptions {
   maxOutputTokensSupported?: boolean;
   /**
    * reasoning 档控制:
-   *   - 具体档('low'|'medium'|'high'|'xhigh')→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
+   *   - 具体档(由通道能力限定)→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
    *   - `'none'` → **完全不发** reasoning 字段(某些模型如 xAI grok-code-fast 会对 reasoningEffort 报 400);
    *   - 省略(undefined)→ 回退到按 thinking.budget_tokens 推断(默认 medium),与旧行为一致。
    */
@@ -316,6 +317,13 @@ export interface TranslateRequestOptions {
    * 请求本身没有任何 function tool 时也会单独下发(纯服务端工具轮)。
    */
   serverSideTools?: ResponsesServerTool[];
+  /**
+   * provider 级 strict 约束解码开关(bridge 层按 BridgeProviderConfig.strictFunctionTools(model)
+   * 解析后传入)。开启后仍**逐工具**做 strict 子集兼容检查(见 strict-schema.ts):
+   * 不合规工具(如 Edit 的可选 replace_all、复杂 MCP schema)回落 strict:false,不改写 schema。
+   * 省略 / false = 全部 strict:false(所有非启用 provider 的默认行为)。
+   */
+  strictFunctionTools?: boolean;
 }
 
 /**
@@ -339,11 +347,14 @@ export function translateRequest(
   // 显式用 ResponsesFunctionTool(而非放宽后的 ResponsesTool 联合):function tool 的
   // name / parameters 等必填字段要在编译期被校验,别被服务端工具那个 `type: string`
   // 兜底分支放过去。
+  const strictEnabled = opts.strictFunctionTools === true;
   const functionTools: ResponsesFunctionTool[] = (req.tools ?? []).map((t) => ({
     type: 'function',
     name: t.name,
     description: t.description,
-    strict: false,
+    // strict 逐工具判定:provider 开关 × schema 兼容(纯函数,同会话内稳定,前缀不抖)。
+    // 不合规回落 false,避免上游 400 或 optional→nullable 改写造成工具语义漂移。
+    strict: strictEnabled && isStrictCompatibleSchema(t.input_schema),
     parameters: t.input_schema ?? { type: 'object', properties: {} },
   }));
   // 服务端工具的声明**只由 model 决定**,不受任何单轮请求态(含 tool_choice)影响 ——

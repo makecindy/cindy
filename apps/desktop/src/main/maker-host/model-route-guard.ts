@@ -44,7 +44,12 @@ import {
 
 export type ModelRouteVerdict =
   | { kind: 'pass' }
-  | { kind: 'reroute'; providerId: string }
+  | {
+      kind: 'reroute';
+      providerId: string;
+      /** 运行中会话的发送终检只强制付费边界；其它 reroute 保持既有 best-effort 语义。 */
+      reason?: 'payment-required';
+    }
   | {
       kind: 'reject';
       reason:
@@ -52,8 +57,41 @@ export type ModelRouteVerdict =
         | 'explicit-source-disabled'
         | 'capability-model'
         | 'model-retired'
+        | 'payment-required'
         | 'exclusive-source-unavailable';
     };
+
+export type ModelRouteRejectReason = Extract<ModelRouteVerdict, { kind: 'reject' }>['reason'];
+
+/**
+ * 路由拒绝原因 → 一句可行动的说明。会话切模(register)与定时任务触发(runner)共用,
+ * 两个入口不得各自维护一份措辞:定时任务此前把所有 reason 都写成「disabled in settings」,
+ * exclusive grok 未登录 SuperGrok 时用户被引导去设置里找一个并不存在的停用开关(#3884)。
+ */
+export function describeModelRouteRejection(
+  reason: ModelRouteRejectReason,
+  model: string,
+  providerId: string | null | undefined,
+): string {
+  // 穷尽 switch,不设 default:新增 reason 时编译器逼着补文案,不会静默落回
+  // 「disabled in settings」这条本次要消除的误分类。
+  switch (reason) {
+    case 'model-disabled':
+      return `model "${model}" is disabled in settings`;
+    case 'explicit-source-disabled':
+      return `provider "${providerId ?? ''}" is disabled for model "${model}" in settings`;
+    case 'capability-model':
+      return `model "${model}" is not an agent chat model`;
+    case 'model-retired':
+      return `model "${model}" has been retired from the catalog`;
+    case 'payment-required':
+      return `model "${model}" requires paid access`;
+    case 'exclusive-source-unavailable':
+      return `model "${model}" requires SuperGrok (xAI) or an explicitly selected custom source; the default gateway cannot serve it`;
+  }
+  const unreachable: never = reason;
+  return `model "${model}" is unavailable (${String(unreachable)})`;
+}
 
 export type ExclusiveProviderRoute =
   | { kind: 'keep' }
@@ -156,6 +194,12 @@ export function shouldApplyExclusiveProviderReroute(
 export interface ModelRouteGuardOptions {
   /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
   isRetiredTombstone?: (providerId: string | null, modelId: string, agent: AgentKind) => boolean;
+  /** 刷新失败后已从展示目录移除、但最近一次成功 v5 明确拒绝的 XD 路由。 */
+  isPaymentRequiredTombstone?: (
+    providerId: string | null,
+    modelId: string,
+    agent: AgentKind,
+  ) => boolean;
 }
 
 /** 该来源下这份 (model, agent) 拷贝是否被停用(含供应商级)。 */
@@ -177,6 +221,10 @@ function copySelectableForNewRoute(p: ProviderView, modelId: string, agent: Agen
 
 function copyRetired(p: ProviderView, modelId: string, agent: AgentKind): boolean {
   return getModel(p, modelId, agent)?.status === 'retired';
+}
+
+function copyPaymentRequired(p: ProviderView, modelId: string, agent: AgentKind): boolean {
+  return getModel(p, modelId, agent)?.availability === 'requires_payment';
 }
 
 function applyExclusiveRoute(
@@ -216,7 +264,17 @@ function checkDisableAxisRoute(
   if (providerId && !explicit && options.isRetiredTombstone?.(providerId, modelId, agent)) {
     return { kind: 'reject', reason: 'model-retired' };
   }
+  if (
+    providerId &&
+    !explicit &&
+    options.isPaymentRequiredTombstone?.(providerId, modelId, agent)
+  ) {
+    return { kind: 'reject', reason: 'payment-required' };
+  }
   if (offering.length === 0) {
+    if (options.isPaymentRequiredTombstone?.(null, modelId, agent)) {
+      return { kind: 'reject', reason: 'payment-required' };
+    }
     return options.isRetiredTombstone?.(null, modelId, agent)
       ? { kind: 'reject', reason: 'model-retired' }
       : { kind: 'pass' };
@@ -231,6 +289,9 @@ function checkDisableAxisRoute(
 
   if (providerId) {
     if (explicit) {
+      if (copyPaymentRequired(explicit, modelId, agent)) {
+        return { kind: 'reject', reason: 'payment-required' };
+      }
       if (copyRetired(explicit, modelId, agent)) {
         return { kind: 'reject', reason: 'model-retired' };
       }
@@ -257,6 +318,13 @@ function checkDisableAxisRoute(
   if (!wouldRouteId) return { kind: 'pass' };
   const wouldRoute = preDisableRail.find((p) => p.id === wouldRouteId);
   if (!wouldRoute) return { kind: 'pass' };
+  if (copyPaymentRequired(wouldRoute, modelId, agent)) {
+    const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
+    const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
+    return alternative && alternativeProvider && !copyPaymentRequired(alternativeProvider, modelId, agent)
+      ? { kind: 'reroute', providerId: alternative, reason: 'payment-required' }
+      : { kind: 'reject', reason: 'payment-required' };
+  }
   if (copyRetired(wouldRoute, modelId, agent)) {
     const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
     const alternativeProvider = alternative

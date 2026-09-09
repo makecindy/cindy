@@ -56,6 +56,17 @@ const treeData = {
 };
 
 describe('pi session tree adapter', () => {
+  it('restores gateway calls using the same tool contract as live events', () => {
+    const data = structuredClone(treeData);
+    const block = data.tree[0].children[0].entry.message.content[2];
+    Object.assign(block, { name: 'cindy_mcp_call_tool', arguments: {
+      server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo', tool: 'show' },
+    } });
+    const history = activePiHistoryFromTree(data, normalizePiSessionTree(data));
+    expect(history.find(m => m.role === 'tool_use')?.content).toEqual({
+      toolUseId: 'call-1', toolName: 'mcp:cindy:ghost_call', input: { ghost_id: 'demo', tool: 'show' },
+    });
+  });
   it('normalizes branches and derives the active root-to-leaf path', () => {
     const snapshot = normalizePiSessionTree(treeData);
     expect(snapshot.leafId).toBe('tool-result');

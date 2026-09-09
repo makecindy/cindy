@@ -5,10 +5,11 @@ import {
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
   accountMembershipSchema,
+  accountTokenPairSchema,
   authRegionSchema,
   desktopAuthorizationPollSchema,
-  loginMethodSchema,
   loginOutcomeSchema,
+  recognizeLoginMethods,
   meResponseSchema,
   providerConfigSchema,
   ssoOrgDiscoverySchema,
@@ -18,6 +19,7 @@ import {
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
   type AccountMembership,
+  type AccountTokenPair,
   type AuthMe,
   type AuthTokenPair,
   type AuthRegion,
@@ -114,10 +116,28 @@ export class CindyAuthClient {
   async discover(email: string): Promise<LoginMethod[]> {
     const result = await this.request(
       "/api/auth/discovery",
-      z.object({ methods: z.array(loginMethodSchema) }),
+      z.object({ methods: z.array(z.unknown()) }),
       { email },
     );
-    return result.methods;
+    let methods: LoginMethod[];
+    try {
+      methods = recognizeLoginMethods(result.methods);
+    } catch {
+      throw new AuthApiError(
+        "INVALID_RESPONSE",
+        200,
+        "Authentication server returned a malformed known login method",
+      );
+    }
+    // 列表非空却没有一项能识别：仍按契约漂移失败，避免空 method-choice 假成功。
+    if (result.methods.length > 0 && methods.length === 0) {
+      throw new AuthApiError(
+        "INVALID_RESPONSE",
+        200,
+        "Authentication server returned no recognized login methods",
+      );
+    }
+    return methods;
   }
 
   /** 企业 SSO 入口：组织 ID、slug 或已验证域名 → 已启用的 SSO 连接。 */
@@ -317,6 +337,24 @@ export class CindyAuthClient {
       "/api/auth/account/exchange",
       tokenPairSchema,
       { membershipId },
+      { token: accountToken },
+    );
+  }
+
+  refreshAccount(accountRefreshToken: string): Promise<AccountTokenPair> {
+    return this.request(
+      "/api/auth/account/refresh",
+      accountTokenPairSchema,
+      { accountRefreshToken, deviceId: this.options.deviceId },
+      { timeoutMs: 0 },
+    );
+  }
+
+  async logoutAccount(accountToken: string): Promise<void> {
+    await this.request(
+      "/api/auth/account/logout",
+      z.object({ status: z.literal("ok") }),
+      {},
       { token: accountToken },
     );
   }

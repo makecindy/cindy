@@ -230,7 +230,9 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     timezone: s.timezone,
     recurring: s.recurring,
     manual: s.manual,
-    agentKind: s.agentKind,
+    agentKind: s.modelAgentKind ?? s.agentKind,
+    modelAgentKind: s.modelAgentKind,
+    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
     model: s.model ?? '',
     providerId: s.providerId ?? '',
     effort: s.effort && isEffortValue(s.effort) ? s.effort : '',
@@ -257,6 +259,10 @@ export type Destination = 'local' | 'worktree' | 'thread';
 
 export interface UseScheduleFormResult {
   form: ScheduleFormState;
+  selectModelConfiguration: (
+    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> | null,
+    followedAgentKind?: ScheduleFormState['agentKind'],
+  ) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
   /** 改 destination 时同步改 useWorktree / targetSessionId 三态互斥。 */
   setDestination: (d: Destination) => void;
@@ -302,20 +308,41 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     [],
   );
 
+  const selectModelConfiguration: UseScheduleFormResult['selectModelConfiguration'] = useCallback((selection, followedAgentKind) => {
+    setForm((form) => {
+      if (selection) {
+        const boundAgent = form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
+          form.boundAgent?.sessionId !== form.targetSessionId
+          ? { sessionId: form.targetSessionId, agentKind: form.agentKind } : form.boundAgent;
+        return { ...form, ...selection, boundAgent, modelAgentKind: selection.agentKind };
+      }
+      const agentKind = followedAgentKind ??
+        (form.boundAgent?.sessionId === form.targetSessionId
+          ? form.boundAgent.agentKind : form.agentKind);
+      const boundAgent = followedAgentKind && form.targetSessionId
+        ? { sessionId: form.targetSessionId, agentKind } : form.boundAgent;
+      return { ...form, agentKind, boundAgent, model: '', providerId: '', effort: '', fastMode: false, modelAgentKind: undefined };
+    });
+  }, []);
+
   const reset = useCallback((s: Schedule | null = null, overrides?: Partial<ScheduleFormState>) => {
     const next = { ...makeFormFromSchedule(s), ...overrides };
+    if (next.targetSessionId && next.boundAgent?.sessionId !== next.targetSessionId) {
+      next.boundAgent = { sessionId: next.targetSessionId, agentKind: s?.agentKind ?? next.agentKind };
+    }
     lastBindingRef.current = captureBinding(next);
     setForm(next);
   }, []);
 
   const applyTemplateAgentFields = useCallback((template: ScheduleTemplate) => {
-    setForm((f) => ({
-      ...f,
-      ...resolveTemplateAgentFields(f, template, {
+    setForm((f) => {
+      const selection = resolveTemplateAgentFields(f, template, {
         getDefaultModel: getScheduleDefaultModel,
         getAgentPrefs: getScheduleAgentPrefs,
-      }),
-    }));
+      });
+      // A template that supplies a model is an explicit selection, even while following a bound task.
+      return { ...f, ...selection, modelAgentKind: selection.model.trim() ? selection.agentKind : undefined };
+    });
   }, []);
 
   /**
@@ -364,7 +391,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         ...f,
         targetSessionId: session.id,
         agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind),
+        boundAgent: { sessionId: session.id, agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind) },
         model: '',
+        modelAgentKind: undefined,
         // 绑定会话 = 跟随其模型/来源,providerId 一并清空(与 model/effort 同语义)。
         providerId: '',
         effort: '',
@@ -416,5 +445,5 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   // heartbeat 分支 model/effort 恒带 key(空值 undefined → update patch 清列 = 跟随会话)。
   const toInput = useCallback((): CreateScheduleInput => buildScheduleInput(form), [form]);
 
-  return { form, setField, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
+  return { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
 }

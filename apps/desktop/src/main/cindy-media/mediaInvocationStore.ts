@@ -93,7 +93,8 @@ export async function pruneMediaInvocations(
     `DELETE FROM media_invocations
      WHERE owner = ? AND (
        (state = 'prepared' AND created_at < ?)
-       OR (state IN ('pending', 'complete', 'failed', 'unknown') AND updated_at < ?)
+       OR (state IN ('pending', 'complete', 'failed', 'unknown') AND updated_at < ?
+           AND NOT (state = 'pending' AND response_json IS NOT NULL))
      )`,
     [input.owner, input.preparedBefore, input.terminalBefore],
   );
@@ -106,7 +107,8 @@ export async function countMediaInvocations(
   const row = await db.queryOne<{ count: number }>(
     `SELECT COUNT(*) AS count
      FROM media_invocations
-     WHERE owner = ? AND state IN ('prepared', 'submitting', 'pending')`,
+     WHERE owner = ? AND (state IN ('prepared', 'submitting')
+       OR (state = 'pending' AND response_json IS NULL))`,
     [owner],
   );
   return Number(row?.count ?? 0);

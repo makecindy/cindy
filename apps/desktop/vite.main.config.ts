@@ -25,8 +25,8 @@ export default defineConfig(({ mode }) => {
   const readMainEnv = (key: string): string => allEnv[key] || process.env[key] || '';
   const readMainEnvPreservingEmpty = (key: string): string =>
     Object.prototype.hasOwnProperty.call(process.env, key)
-      ? process.env[key] ?? ''
-      : allEnv[key] ?? '';
+      ? (process.env[key] ?? '')
+      : (allEnv[key] ?? '');
   return {
     resolve: {
       // 仅 fixtures 生产排除条件(v6.17 允许范围):production 构建把
@@ -135,6 +135,13 @@ export default defineConfig(({ mode }) => {
           // Electron's unpatched filesystem implementation. The legacy userData
           // migration needs physical .asar files to remain ordinary files.
           'original-fs',
+          // node:sqlite is a Node 24 / Electron 41 builtin. The Vite process that
+          // bundles main may still be Node 22, whose builtinModules list does not
+          // include sqlite, so Vite stubs the specifier as
+          // `__vite-browser-external`. Named imports like `backup` then fail and
+          // a cold dev start never reaches ready-to-show.
+          'sqlite',
+          'node:sqlite',
           'bufferutil',
           'utf-8-validate',
           'better-sqlite3',

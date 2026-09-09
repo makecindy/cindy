@@ -33,7 +33,7 @@ import { FolderX, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
+import { useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { addSessionAttention } from '@/lib/sessionAttentionStore';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
@@ -66,7 +66,7 @@ export function WorktreeRestoreBanner({
   style?: React.CSSProperties;
 }) {
   const { t } = useTranslation();
-  const refreshWorktrees = useRefreshWorktrees();
+  const refreshWorktreeForSession = useRefreshWorktreeForSession();
   const [phase, setPhase] = useState<BannerPhase>('hidden');
   const [variant, setVariant] = useState<BannerVariant>('missing');
   /** 本组件给哪个会话打过红点 —— 清点只清自己打的,不误伤 live error 等其它来源。 */
@@ -152,7 +152,7 @@ export function WorktreeRestoreBanner({
           // 恢复成功 = 告警消失,清**发起时那个会话**的红点(过期完成会被忽略)。
           clearOwnAttentionFor(target);
         }
-        void refreshWorktrees();
+        void refreshWorktreeForSession(target);
       } else {
         toast.error(
           t('chat.worktreeRestoreBanner.failed', {
@@ -169,7 +169,7 @@ export function WorktreeRestoreBanner({
       );
       setPhase('restorable');
     }
-  }, [clearOwnAttentionFor, refreshWorktrees, sessionId, t]);
+  }, [clearOwnAttentionFor, refreshWorktreeForSession, sessionId, t]);
 
   if (phase === 'hidden') return null;
   const restoring = phase === 'restoring';

@@ -29,12 +29,14 @@ describe('Forge OIDC install entry wiring', () => {
     expect(beforeMutation).not.toContain('updateLocalGhostPackageLocked(');
   });
 
-  it('新装与原位更新都只在本次企业身份下传 agent-forge', () => {
+  it('个人与企业身份的新装和原位更新都传 agent-forge', () => {
     const body = forgeInstallBody();
     expect(body).toContain("const membershipKind = user?.membershipKind ?? 'personal';");
     expect(body).toContain('const installOrigin = forgeInstallOriginForMembership(membershipKind);');
     expect(body).toContain('...(installOrigin ? { installOrigin } : {})');
-    expect(body).toContain('getActiveAppSession(),\n        installOrigin,');
+    expect(body).toContain(
+      'ghostInstallApprovalToken(installed.approval),\n        installOrigin,',
+    );
     expect(body).not.toContain("installOrigin: 'agent-forge'");
   });
 

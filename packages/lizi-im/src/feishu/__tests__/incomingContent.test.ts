@@ -105,4 +105,70 @@ describe('parseIncoming', () => {
     const r = parseIncoming('text', '{not-json');
     expect(r).toEqual({ text: '', attachments: [], unsupported: [] });
   });
+
+  it('interactive v2 markdown card → extracts content for reply context', () => {
+    const r = parseIncoming(
+      'interactive',
+      JSON.stringify({
+        schema: '2.0',
+        config: { update_multi: true },
+        body: {
+          elements: [{ tag: 'markdown', content: 'Omarchy Quattro 发布了' }],
+        },
+      }),
+    );
+    expect(r).toEqual({
+      text: 'Omarchy Quattro 发布了',
+      attachments: [],
+      unsupported: [],
+    });
+  });
+
+  it('interactive v2 mixed markdown + img → text and [图片] marker', () => {
+    const r = parseIncoming(
+      'interactive',
+      JSON.stringify({
+        schema: '2.0',
+        body: {
+          elements: [
+            { tag: 'markdown', content: '见图' },
+            {
+              tag: 'img',
+              img_key: 'img_k',
+              alt: { tag: 'plain_text', content: '截图' },
+            },
+          ],
+        },
+      }),
+    );
+    expect(r.text).toBe('见图\n[图片]');
+    expect(r.attachments).toEqual([]);
+    expect(r.unsupported).toEqual([]);
+  });
+
+  it('interactive v1 lark_md card → extracts title and body, skips buttons', () => {
+    const r = parseIncoming(
+      'interactive',
+      JSON.stringify({
+        config: { wide_screen_mode: true, update_multi: true },
+        elements: [
+          { tag: 'div', text: { tag: 'lark_md', content: '**授权**' } },
+          { tag: 'div', text: { tag: 'lark_md', content: '要执行危险操作' } },
+          {
+            tag: 'action',
+            actions: [{ tag: 'button', text: { tag: 'plain_text', content: '允许' } }],
+          },
+        ],
+      }),
+    );
+    expect(r.text).toBe('**授权**\n要执行危险操作');
+  });
+
+  it('interactive template / empty card → empty so reply path can fall back', () => {
+    const r = parseIncoming(
+      'interactive',
+      JSON.stringify({ type: 'template', data: { template_id: 'ctp_x' } }),
+    );
+    expect(r).toEqual({ text: '', attachments: [], unsupported: [] });
+  });
 });
