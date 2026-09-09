@@ -1757,6 +1757,87 @@ describe('makerChatStore text delta batching', () => {
     ]));
   });
 
+  it('merges current stream metadata from a remote full-text snapshot and preserves it when absent', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const pushText = (channel: string, text: string, agentMeta?: Record<string, unknown>) => {
+      onRemotePush?.({
+        deviceId: 'device-1', channel,
+        payload: {
+          sessionId: SESSION_ID, persistId: 'assistant-1',
+          event: {
+            type: 'text', source: 'codex', agentMeta,
+            data: { text, isFinal: false, isFullText: channel === 'maker:session-sync' },
+          },
+        },
+      });
+    };
+    pushText('maker:event', 'prefix');
+    vi.advanceTimersByTime(32);
+    // Leave a delta queued so the snapshot also exercises the batching boundary.
+    pushText('maker:event', ' queued');
+    pushText('maker:session-sync', 'complete snapshot', { model: 'old-model', botPrivateReply: true });
+    const agentMeta = {
+      model: 'updated-model', parentUuid: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+    };
+    // Metadata can change even when the authoritative text is identical.
+    pushText('maker:session-sync', 'complete snapshot', agentMeta);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingClientId: 'assistant-1', streamingText: 'complete snapshot', lastAgentMeta: agentMeta,
+      messages: [expect.objectContaining({
+        clientId: 'assistant-1', content: 'complete snapshot', isStreaming: true,
+        model: 'updated-model', parentToolUseId: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+      })],
+    });
+
+    pushText('maker:session-sync', 'complete snapshot without metadata');
+    pushText('maker:event', ' tail');
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingText: 'complete snapshot without metadata tail', lastAgentMeta: agentMeta,
+      messages: [expect.objectContaining({
+        content: 'complete snapshot without metadata tail', model: 'updated-model',
+        parentToolUseId: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+      })],
+    });
+  });
+
+  it('keeps a newer stream metadata intact when a remote snapshot repairs an older item', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const pushText = (persistId: string, text: string, agentMeta: Record<string, unknown>, isFinal: boolean) => {
+      onRemotePush?.({
+        deviceId: 'device-1', channel: isFinal ? 'maker:event' : 'maker:session-sync',
+        payload: {
+          sessionId: SESSION_ID, persistId,
+          event: {
+            type: 'text', source: 'codex', agentMeta,
+            data: { text, isFinal, isFullText: true },
+          },
+        },
+      });
+    };
+    pushText('assistant-1', 'old answer', { model: 'old-model' }, true);
+    const currentMeta = { model: 'current-model', parentUuid: 'current-parent', botPrivateReply: false };
+    pushText('assistant-2', 'new answer', currentMeta, false);
+    pushText('assistant-2', 'new answer complete', currentMeta, false);
+    pushText('assistant-1', 'repaired old answer', {
+      model: 'repaired-model', parentUuid: 'old-parent', turnCompleted: true, botPrivateReply: true,
+    }, false);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingClientId: 'assistant-2', streamingText: 'new answer complete', lastAgentMeta: currentMeta,
+      messages: [
+        expect.objectContaining({
+          clientId: 'assistant-1', content: 'repaired old answer', isStreaming: false,
+          model: 'repaired-model', parentToolUseId: 'old-parent', turnCompleted: true, botPrivateReply: true,
+        }),
+        expect.objectContaining({
+          clientId: 'assistant-2', content: 'new answer complete', isStreaming: true,
+          model: 'current-model', parentToolUseId: 'current-parent', botPrivateReply: false,
+        }),
+      ],
+    });
+  });
+
   it('does not reset or duplicate thinking on a repeated start, including after its DB echo', () => {
     const start = {
       sessionId: SESSION_ID,

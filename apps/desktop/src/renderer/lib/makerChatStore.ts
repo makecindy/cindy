@@ -5304,10 +5304,11 @@ export function handleStreamEvent(
         return {
           ...state,
           streamingText: text,
+          lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
           messages: replaceMessage(
             state.messages,
             (message) => message.clientId === id,
-            (message) => ({ ...message, content: text }),
+            (message) => ({ ...message, content: text, ...assistantMetaFields }),
           ),
         };
       }
