@@ -774,6 +774,28 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     } finally { await handle.close(); }
   });
 
+  it.each([['ask', 'send', '--self'], ['auto', 'send', '--all'], ['ask', 'steer', '--self'], ['auto', 'steer', '--all']] as const)('routes exact IM updates through channel confirmation in %s/%s/%s', async (permissionMode, method, target) => {
+    const deps = buildDeps(vi.fn(async () => ({ verdict: 'allow' as const })));
+    deps.mutatePiManagedPackage = vi.fn(async () => ({ kind: 'self', nativeSucceeded: true }));
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'exact-im-' + permissionMode, workingDir: cwd, model: 'm', permissionMode });
+    const forceConfirmToolCall = vi.fn(() => true);
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'deny' as const }));
+    handle.setInteractionResolver?.(resolver);
+    try {
+      await handle[method]({ type: 'user', content: `pi update ${target}` }, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: `pi update ${target}` },
+        turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall },
+      });
+      expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(forceConfirmToolCall).toHaveBeenCalledWith('cindy_pi_command', { args: ['update', target] });
+      captured.onEvent?.({ type: 'extension_ui_request', id: 'exact-im-tool', method: 'input',
+        title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update', target], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+      expect(JSON.parse(String((await waitForResponse('exact-im-tool')).value))).toMatchObject({ ok: false });
+      expect(resolver).toHaveBeenCalled();
+      expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
   it('retains channel-required confirmation for a core command even when Auto allows it', async () => {
     const deps = buildDeps(vi.fn(async () => ({ verdict: 'allow' as const })));
     deps.mutatePiManagedPackage = vi.fn();

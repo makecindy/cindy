@@ -5049,6 +5049,21 @@ export class PiAgent extends BaseAgent {
       if (!directDesktopCommand && !authenticatedImCommand) return { text, accepted: false };
       const commandText = mainOwnedContext.rawChannelText;
       const parsed = commandText === undefined ? undefined : parsePiManagementText(commandText);
+      if (authenticatedImCommand && parsed && !('error' in parsed) && activeTurnPermissionPolicy) {
+        const command = parsed.action === 'command' ? parsed.command : undefined;
+        const args = !command ? [parsed.action, 'source' in parsed ? parsed.source : '']
+          : command.kind === 'help' ? [...(command.topic ? [command.topic] : []), '--help']
+          : command.kind === 'version' ? ['--version']
+          : command.kind === 'list' ? ['list']
+          : ['update', `--${command.kind}`, ...('force' in command && command.force ? ['--force'] : [])];
+        try {
+          if (activeTurnPermissionPolicy.forceConfirmToolCall('cindy_pi_command', { args })) {
+            return { text, accepted: false };
+          }
+        } catch {
+          return { text, accepted: false };
+        }
+      }
       if (parsed && ('error' in parsed || parsed.action === 'command')) {
         let receipt: Record<string, unknown>;
         try {
@@ -6214,6 +6229,16 @@ export class PiAgent extends BaseAgent {
         rejectIfCancelled(sendOpts, 'steer');
         assertImageInputSupported(images);
         setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        // A steered channel message can add confirmation requirements to the
+        // running turn, but must not remove the current sender's restrictions.
+        if (sendOpts?.turnPermissionPolicy) {
+          const incomingPolicy = sendOpts.turnPermissionPolicy;
+          const priorPolicy = activeTurnPermissionPolicy;
+          activeTurnPermissionPolicy = priorPolicy && priorPolicy !== incomingPolicy
+            ? { ...incomingPolicy, forceConfirmToolCall: (name, input) =>
+                priorPolicy.forceConfirmToolCall(name, input) || incomingPolicy.forceConfirmToolCall(name, input) }
+            : incomingPolicy;
+        }
         const managedPackageRoute = await routeManagedPackageCommand(
           text,
           images.length,
