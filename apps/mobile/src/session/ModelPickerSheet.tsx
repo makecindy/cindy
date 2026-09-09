@@ -43,6 +43,7 @@ import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import {
+  canUseFlatModelFallback,
   filterFlatModelOptions,
   findOptionsTarget,
   modelPickerSheetTitle,
@@ -77,6 +78,8 @@ export interface ModelPickerSheetProps {
   /** 被控端「模型显示/隐藏」override 快照(useDeviceProviders 透传);undefined = 不过滤。 */
   modelVisibilityOverrides?: Record<string, boolean>;
   flatOptions: readonly MobileModelOption[];
+  /** A successfully loaded empty catalog must not revive cached capability rows. */
+  providersReady?: boolean;
   agentKind: AgentKind;
   /** 已建会话可选：先浏览 Agent，再选模型登记下一条消息的切换意图。 */
   agentSwitch?: {
@@ -127,6 +130,7 @@ export function ModelPickerSheet({
   providers,
   modelVisibilityOverrides,
   flatOptions,
+  providersReady = false,
   agentKind,
   agentSwitch,
   capabilities,
@@ -228,15 +232,13 @@ export function ModelPickerSheet({
     () => filterFlatModelOptions(flatOptions, query),
     [flatOptions, query],
   );
-  // flat 回退只在「0 个已连接供应商」时启用;provider-aware 模式下搜索/可见性把 providerRows
-  // 清空时必须显示「没有匹配的模型」,不能漏到 capabilities 扁平列表(绕过可见性过滤且选行丢来源)。
-  const providerAware = sections.connected.length > 0;
   const browsingOtherAgent = !!agentSwitch
     && agentSwitch.browsingAgentKind !== agentSwitch.currentAgentKind;
-  // 跨 Agent 浏览只列已连接来源；不能从 capabilities flat 回退里选到无路由模型。
-  const effectiveFlatOptions = providerAware || browsingOtherAgent
-    ? EMPTY_FLAT_OPTIONS
-    : filteredFlatOptions;
+  // Disconnected/disabled routes and an authoritative empty catalog must stay empty.
+  // Only hosts without a provider catalog retain the capabilities fallback.
+  const allowFlatFallback = canUseFlatModelFallback({ providers, providersReady, browsingOtherAgent, loading });
+  const availableFlatOptions = allowFlatFallback ? flatOptions : EMPTY_FLAT_OPTIONS;
+  const effectiveFlatOptions = allowFlatFallback ? filteredFlatOptions : EMPTY_FLAT_OPTIONS;
 
   const hasQuery = query.trim().length > 0;
   const noResults = hasQuery && providerRows.length === 0 && effectiveFlatOptions.length === 0;
@@ -291,8 +293,8 @@ export function ModelPickerSheet({
 
   // options 目标行现查:providers 目录热更新后目标消失 → 自动回一级,绝不渲染悬空数据。
   const optionsTarget = useMemo(
-    () => findOptionsTarget(view, allRows, flatOptions),
-    [view, allRows, flatOptions],
+    () => findOptionsTarget(view, allRows, availableFlatOptions),
+    [view, allRows, availableFlatOptions],
   );
   useEffect(() => {
     if (view.kind === 'options' && !optionsTarget) backToModels();
@@ -317,7 +319,7 @@ export function ModelPickerSheet({
     [hasQuery],
   );
 
-  const secondaryTitle = modelPickerSheetTitle(view, allRows, flatOptions);
+  const secondaryTitle = modelPickerSheetTitle(view, allRows, availableFlatOptions);
   // 权限行文案:已知模式用 permissionPresentation 的中文标签(与二级权限列表一致),
   // 未知模式回退被控端 capabilities 给的 label(presentation 内部兜底)。
   const permission = permissionPresentation(

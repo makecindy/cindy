@@ -69,6 +69,46 @@ describe('shared scheduler event projection', () => {
     expect(projectScheduleEvent({ type: 'deferred', scheduleId: 'sched-1', runId: 'run-1' }).runPatch.status).toBe('deferred');
   });
 
+  it('projects optional failed sessionId without requiring it', () => {
+    expect(normalizeSchedulerEvent({
+      type: 'failed',
+      scheduleId: 's1',
+      runId: 'r1',
+      error: 'boom',
+    })).toEqual({
+      type: 'failed',
+      scheduleId: 's1',
+      runId: 'r1',
+      error: 'boom',
+    });
+    expect(normalizeSchedulerEvent({
+      type: 'failed',
+      scheduleId: 's1',
+      runId: 'r1',
+      error: 'boom',
+      sessionId: 'chat-1',
+    })).toEqual({
+      type: 'failed',
+      scheduleId: 's1',
+      runId: 'r1',
+      error: 'boom',
+      sessionId: 'chat-1',
+    });
+    expect(projectScheduleEvent({
+      type: 'failed',
+      scheduleId: 'sched-1',
+      runId: 'run-1',
+      error: 'boom',
+      sessionId: 'chat-1',
+    }).runPatch.sessionId).toBe('chat-1');
+    expect(projectScheduleEvent({
+      type: 'failed',
+      scheduleId: 'sched-1',
+      runId: 'run-1',
+      error: 'boom',
+    }).runPatch.sessionId).toBeNull();
+  });
+
   it('routes skipped (pre-run hook) events without touching unread badges', () => {
     expect(normalizeSchedulerEvent({ type: 'skipped', scheduleId: 's1', runId: 'r1', sessionId: 'trace-1' })).toEqual({
       type: 'skipped',

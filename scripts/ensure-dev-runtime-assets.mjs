@@ -21,6 +21,7 @@ import {
   ensureBinary,
   currentPlatformKey,
   SUPPORTED_BINARY_KINDS,
+  updateScriptForKind,
 } from './ensure-agent-binaries.mjs';
 import { fixNodePtyExecutables } from './fix-node-pty-perms.mjs';
 
@@ -156,7 +157,7 @@ async function ensureAgentBinaries() {
       await ensureBinary(kind, platform);
     } catch (e) {
       err(`无法准备 ${kind} 的 dev 二进制（${platform}）：${e.message}`);
-      err(`请检查网络 / 上游可用性，或手动运行 "pnpm update:${kind}"。`);
+      err(`请检查网络 / 上游可用性，或手动运行 "pnpm update:${updateScriptForKind(kind)}"。`);
       process.exit(1);
     }
   }

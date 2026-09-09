@@ -151,7 +151,7 @@ export function SessionStatusIcon({
       )}
       {showDraftIndicator && (
         <span
-          className="absolute -bottom-0.5 -right-0.5 text-[var(--text-secondary)]"
+          className="absolute -bottom-0.5 -right-0.5 text-[var(--sidebar-draft-indicator)]"
           aria-label={draftIndicatorLabel}
           title={draftIndicatorLabel}
           role="img"

@@ -8,6 +8,7 @@
     "emptyDefault": "暂无可用模型",
     "loadingDefault": "正在加载模型…",
     "subscriptionBadge": "订阅",
+    "subscriptionBadgeCompact": "订阅",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "选择模型后，下一条消息将切换到 {{agent}}",
     "crossAgentEmptyHint": "请先在被控设备连接 {{agent}} 的模型来源",
@@ -17,6 +18,9 @@
     "configureAccessibility": "配置 {{model}}",
     "budgetDisabledHint": "该模型需先在被控设备配置 API key 才能使用",
     "priceLine": "输入 {{input}} · 输出 {{output}} / 百万 token",
+    "priceTitle": "每百万 token",
+    "priceAmounts": "输入 {{input}} · 输出 {{output}}",
+    "discountedVsStandard": "折扣中，较标准价省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
     "fastTag": "快速"
   },
@@ -24,7 +28,24 @@
     "fastMode": "快速模式",
     "fastModeAccessibility": "快速模式 {{model}}",
     "reasoningEffort": "推理强度",
-    "reasoningEffortAccessibility": "推理强度 {{label}}"
+    "reasoningEffortAccessibility": "推理强度 {{label}}",
+    "effortLevels": {
+      "minimal": "最小",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高",
+      "ultra": "极致"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "这个模型装不下当前对话",
+    "remoteTitle": "当前远程任务无法安全切换模型",
+    "description": "当前对话已使用 {{used}}，超过新模型可容纳的 {{total}}（约 {{pct}}%）。继续切换时，Cindy 会先生成简短摘要再继续；对话记录仍会保留，但不会再逐字传给新模型。",
+    "remoteDescription": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
+    "cancel": "保留当前模型",
+    "confirm": "切换并继续"
   },
   "agentSwitch": {
     "browseAccessibility": "浏览 {{agent}} 模型",

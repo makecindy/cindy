@@ -13,6 +13,7 @@
  */
 
 import { ArrowUp } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 
@@ -36,11 +37,12 @@ export function PrevMessageJumpChip({
   preview,
   onClick,
 }: PrevMessageJumpChipProps) {
+  const { t } = useTranslation();
   // 显隐由调用方决定:不需要时不挂载本组件。chip 在 TopRightChipStack 的
   // flex 栈里占一行,所以不能像旧 absolute 定位那样靠 opacity 隐身,否则
   // 会在 DiffToggle 下留一个空 28px 槽位。出场动画用 tailwindcss-animate
   // 的 mount-only 动画,符合"出现就动一下、消失瞬时"的预期。
-  const label = `跳到上一条提问:${preview}`;
+  const label = t('chat.prevMessageJump', { preview });
 
   return (
     <button

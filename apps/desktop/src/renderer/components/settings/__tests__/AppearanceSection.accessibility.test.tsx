@@ -41,6 +41,7 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
 
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: 'text', setMode: vi.fn() }),
+  useSidebarMainViewMode: () => ({ mode: 'list', setMode: vi.fn() }),
 }));
 
 vi.mock('@/themes/local-themes', () => ({

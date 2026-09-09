@@ -1,6 +1,8 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import type { DingTalkIM } from '@cindy/im';
 
+import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+
 export function handleDingTalkTextInteraction(
   im: DingTalkIM,
   userId: string,
@@ -32,7 +34,12 @@ async function answerQuestions(
 
 function formatInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
-    return [`需要确认操作：${request.toolName}`, '回复“允许”继续，或回复“拒绝”取消。'].join('\n');
+    const unavailable = autoReviewUnavailablePromptLine(request);
+    return [
+      `需要确认操作：${request.toolName}`,
+      ...(unavailable ? [unavailable] : []),
+      '回复“允许”继续，或回复“拒绝”取消。',
+    ].join('\n');
   }
   if (request.kind === 'plan_review') {
     return ['计划已准备好。', '回复“批准”继续，或回复“拒绝”取消。'].join('\n');

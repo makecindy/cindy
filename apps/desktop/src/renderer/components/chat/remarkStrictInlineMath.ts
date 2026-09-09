@@ -9,6 +9,8 @@
  * matcher 保持一致**(apps/mobile messageMarkdown.ts),两端语义对齐:
  *
  * - 内容首/尾是空白 → 降级(「$5 和 $」这类货币配对)。
+ * - 内容含换行 → 降级。mobile 的 inline matcher 只接受单行公式,跨行内容
+ *   是正文边界误配,不能交给 KaTeX 变成跨行排版或错误色文本。
  * - 内容含反引号 → 降级(合法 LaTeX 无 backtick,必是跨 code span 误判)。
  * - 闭合 $ 后紧跟数字 → 降级(「$5和$10」CJK 无空格形态)。
  *
@@ -42,7 +44,7 @@ const remarkStrictInlineMath: Plugin<[], Root> = () => {
       const inner = raw.replace(/^\$+/, '').replace(/\$+$/, '');
       const nextChar = source[end] ?? '';
       const loose =
-        /^\s|\s$/.test(inner) || inner.includes('`') || /^\d/.test(nextChar);
+        /^\s|\s$/.test(inner) || inner.includes('\n') || inner.includes('`') || /^\d/.test(nextChar);
       if (!loose) return;
       const text: Text = { type: 'text', value: raw };
       parent.children[index] = text;

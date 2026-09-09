@@ -266,4 +266,87 @@ describe('MacModifierShortcutListener start race', () => {
     await expect(starting).resolves.toMatchObject({ ok: false, superseded: true });
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
+
+  it('maps bare function-key snapshots to start/tap and releases an active press on helper exit', async () => {
+    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
+    const onTrigger = vi.fn();
+    const listener = new MacModifierShortcutListener({ onTrigger });
+    const shortcut = {
+      trigger: 'keyboard',
+      code: 'F24',
+      key: 'F24',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    } as const;
+
+    const starting = listener.setShortcut(shortcut);
+    await flush();
+    mocks.pendingCompilations[0]();
+    await flush();
+    mocks.stdoutDataHandlers[0]?.('{"type":"ready"}\n');
+    await expect(starting).resolves.toMatchObject({ ok: true });
+
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":[]}\n');
+    expect(onTrigger.mock.calls.map(([phase]) => phase)).toEqual(['start', 'tap']);
+
+    onTrigger.mockClear();
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24","ShiftLeft"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":[]}\n');
+    expect(onTrigger.mock.calls.map(([phase]) => phase)).toEqual(['start', 'end']);
+
+    onTrigger.mockClear();
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["ShiftLeft"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["ShiftLeft","Function:F24"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24"]}\n');
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":[]}\n');
+    expect(onTrigger).not.toHaveBeenCalled();
+
+    onTrigger.mockClear();
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24"]}\n');
+    mocks.spawnedChildren[0].get('exit')?.(1, null);
+    expect(onTrigger.mock.calls.map(([phase]) => phase)).toEqual(['start', 'end']);
+    listener.stop();
+  });
+
+  it('ends a held function key once and replaces the helper on a system release', async () => {
+    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
+    const onTrigger = vi.fn();
+    const listener = new MacModifierShortcutListener({ onTrigger });
+    const shortcut = {
+      trigger: 'keyboard',
+      code: 'F24',
+      key: 'F24',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    } as const;
+
+    const starting = listener.setShortcut(shortcut);
+    await flush();
+    mocks.pendingCompilations[0]();
+    await flush();
+    mocks.stdoutDataHandlers[0]?.('{"type":"ready"}\n');
+    await expect(starting).resolves.toMatchObject({ ok: true });
+
+    mocks.stdoutDataHandlers[0]?.('{"type":"keys","keys":["Function:F24"]}\n');
+    listener.releaseActiveTrigger();
+
+    expect(onTrigger.mock.calls.map(([phase]) => phase)).toEqual(['start', 'end']);
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(mocks.pendingCompilations).toHaveLength(2);
+    mocks.pendingCompilations[1]();
+    await flush();
+    expect(mocks.spawnedChildren).toHaveLength(2);
+    mocks.stdoutDataHandlers[1]?.('{"type":"ready"}\n');
+    await flush();
+    expect(listener.isReady()).toBe(true);
+
+    // The old process may report exit after its replacement is already live.
+    // It must neither end the activation twice nor schedule another restart.
+    mocks.spawnedChildren[0].get('exit')?.(null, 'SIGTERM');
+    expect(onTrigger.mock.calls.map(([phase]) => phase)).toEqual(['start', 'end']);
+    expect(mocks.pendingCompilations).toHaveLength(2);
+    listener.stop();
+  });
 });

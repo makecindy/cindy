@@ -133,12 +133,19 @@ async function hiddenHandler(payload: unknown): Promise<boolean> {
   return (await handler?.({}, payload)) as boolean;
 }
 
+async function mainViewHiddenHandler(payload: unknown): Promise<string[]> {
+  const handler = harness.handlers.get('sidebar-settings:set-main-view-hidden');
+  expect(handler).toBeDefined();
+  return (await handler?.({}, payload)) as string[];
+}
+
 function loadSnapshot(): {
   dataOwnerId: string | null;
   ownerGeneration: number;
   pinnedOrderIsAuthoritative: boolean;
   pinnedOrder: string[];
   hiddenProjectKeys: string[];
+  hiddenMainViewGhostIds: string[];
 } {
   const listener = harness.listeners.get('sidebar-settings:load-snapshot-sync');
   const event: { returnValue?: ReturnType<typeof loadSnapshot> } = {};
@@ -202,10 +209,12 @@ describe('sidebarSettingsStore', () => {
       }),
     );
     await hiddenHandler(request({ projectKey: 'C:\\workspace\\alpha\\', hidden: true }));
+    await mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: true }));
     expect(loadSnapshot()).toMatchObject({
       dataOwnerId: 'owner-a',
       pinnedOrder: ['project:local:/workspace/a', 'session-a'],
       hiddenProjectKeys: ['local:C:/workspace/alpha'],
+      hiddenMainViewGhostIds: ['xd-sites'],
     });
 
     setSession('cloud', 'owner-b');
@@ -214,6 +223,7 @@ describe('sidebarSettingsStore', () => {
       dataOwnerId: 'owner-b',
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     });
     await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['session-b'] } }));
 
@@ -223,6 +233,7 @@ describe('sidebarSettingsStore', () => {
       dataOwnerId: 'owner-a',
       pinnedOrder: ['project:local:/workspace/a', 'session-a'],
       hiddenProjectKeys: ['local:C:/workspace/alpha'],
+      hiddenMainViewGhostIds: ['xd-sites'],
     });
     expect(JSON.parse(fs.readFileSync(ownerFile('owner-b'), 'utf-8'))).toMatchObject({
       pinnedOrder: ['session-b'],
@@ -575,6 +586,87 @@ describe('sidebarSettingsStore', () => {
       ['local:/workspace/alpha', 'local:/workspace/beta'],
       { dataOwnerId: 'owner-a', ownerGeneration: 1 },
     );
+  });
+
+  it('merges main-view visibility writes and broadcasts the durable snapshot', async () => {
+    await expect(
+      mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: true })),
+    ).resolves.toEqual(['xd-sites']);
+    await expect(
+      mainViewHiddenHandler(request({ ghostId: 'workspace-tools', hidden: true })),
+    ).resolves.toEqual(['xd-sites', 'workspace-tools']);
+
+    expect(loadSnapshot().hiddenMainViewGhostIds).toEqual(['xd-sites', 'workspace-tools']);
+    const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    expect(harness.send).toHaveBeenLastCalledWith(
+      'sidebar-settings:hidden-main-view-ghost-ids-changed',
+      ['xd-sites', 'workspace-tools'],
+      stamp,
+    );
+    expect(harness.sendSecond).toHaveBeenLastCalledWith(
+      'sidebar-settings:hidden-main-view-ghost-ids-changed',
+      ['xd-sites', 'workspace-tools'],
+      stamp,
+    );
+    expect(harness.untrustedSend).not.toHaveBeenCalled();
+    expect(harness.destroyedSend).not.toHaveBeenCalled();
+  });
+
+  it('removes the hidden main-view override while preserving the scoped tombstone', async () => {
+    await mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: true }));
+    harness.send.mockClear();
+    harness.sendSecond.mockClear();
+
+    await expect(
+      mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: false })),
+    ).resolves.toEqual([]);
+    expect(loadSnapshot().hiddenMainViewGhostIds).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8'))).toMatchObject({
+      hiddenMainViewGhostIds: [],
+    });
+    expect(harness.send).toHaveBeenCalledWith(
+      'sidebar-settings:hidden-main-view-ghost-ids-changed',
+      [],
+      { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+    );
+  });
+
+  it('rejects malformed and stale main-view visibility mutations', async () => {
+    await expect(
+      mainViewHiddenHandler(request({ ghostId: 'XD Sites', hidden: true })),
+    ).rejects.toThrow('[INVALID_PARAMS] invalid main-view plugin id');
+    await expect(
+      mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: 'yes' })),
+    ).rejects.toThrow('[INVALID_PARAMS] invalid main-view hidden state');
+
+    const staleRequest = request({ ghostId: 'xd-sites', hidden: true });
+    setSession('cloud', 'owner-b');
+    await expect(mainViewHiddenHandler(staleRequest)).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(fs.existsSync(ownerFile('owner-a'))).toBe(false);
+    expect(fs.existsSync(ownerFile('owner-b'))).toBe(false);
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  it('drops a queued main-view write when the same owner advances generation', async () => {
+    const file = ownerFile('owner-a');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      `${file}.lock`,
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
+      'utf-8',
+    );
+
+    const writing = mainViewHiddenHandler(
+      request({ ghostId: 'xd-sites', hidden: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    setSession('cloud', 'owner-a');
+    fs.unlinkSync(`${file}.lock`);
+
+    await expect(writing).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(fs.readFileSync(file, 'utf-8')).toBe('{}');
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
   });
 
   it('merges concurrent promote intents against the latest pinned order', async () => {

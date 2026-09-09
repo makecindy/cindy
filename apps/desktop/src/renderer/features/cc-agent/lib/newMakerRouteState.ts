@@ -6,12 +6,18 @@ export interface NewMakerDialogueTargetRequest {
   deviceName: string | null;
 }
 
+export interface NewMakerFolderPickerRequest {
+  requestId: string;
+}
+
 export interface NewMakerRouteState {
   workspacePrompt: 'generic' | 'dialogue';
   dialogueTargetRequest?: NewMakerDialogueTargetRequest;
+  folderPickerRequest?: NewMakerFolderPickerRequest;
 }
 
 let dialogueTargetRequestSequence = 0;
+let folderPickerRequestSequence = 0;
 
 /**
  * “对话”分组每次点击都生成新 requestId。同路由重复 navigate 不会 remount 创建页，
@@ -29,6 +35,32 @@ export function makeDialogueNewMakerRouteState(
       deviceName: target?.deviceName ?? null,
     },
   };
+}
+
+export function makeFolderPickerNewMakerRouteState(): NewMakerRouteState {
+  folderPickerRequestSequence += 1;
+  return {
+    workspacePrompt: 'generic',
+    folderPickerRequest: {
+      requestId: `${Date.now()}-${folderPickerRequestSequence}`,
+    },
+  };
+}
+
+export function readNewMakerFolderPickerRequest(state: unknown): NewMakerFolderPickerRequest | null {
+  if (!state || typeof state !== 'object') return null;
+  const request = (state as Record<string, unknown>).folderPickerRequest;
+  if (!request || typeof request !== 'object') return null;
+  const requestId = (request as Record<string, unknown>).requestId;
+  if (typeof requestId !== 'string' || requestId.length === 0) return null;
+  return { requestId };
+}
+
+export function consumeNewMakerFolderPickerRequest(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.prototype.hasOwnProperty.call(state, 'folderPickerRequest')) return state;
+  const { folderPickerRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  return remainingState;
 }
 
 export function readNewMakerDialogueTargetRequest(

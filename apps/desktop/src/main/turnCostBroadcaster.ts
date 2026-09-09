@@ -432,7 +432,7 @@ export async function recordSchedulerTurnCost(
 
 /**
  * Codex done.data.usage → computeGatewayTurnCost 的 TurnTokenDeltas 入参映射。
- * Codex translator 已把 reasoning 合并进 completionTokens, 这里不再重复相加。
+ * Provider 的 completionTokens 已包含 reasoning 子集，这里不再重复相加。
  * Codex 无 cache 写入概念, cacheCreateTokens 恒 0。
  */
 export function codexUsageToTokens(usage: {

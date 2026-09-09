@@ -33,6 +33,7 @@ vi.mock('../../logger.js', () => ({
 }));
 
 import {
+  onVoiceInputDictionaryChanged,
   registerVoiceInputDataStoreIpc,
   voiceInputDataStore,
   VoiceInputDataStore,
@@ -51,6 +52,21 @@ describe('VoiceInputDataStore persistence', () => {
   afterEach(() => {
     fs.rmSync(dataDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it('关闭同步开关也会立刻广播,让在线手机清掉旧词典', () => {
+    const store = new VoiceInputDataStore();
+    const listener = vi.fn();
+    const unsubscribe = onVoiceInputDictionaryChanged(listener);
+    try {
+      store.updateSettings({ dictionarySyncEnabled: false });
+      expect(listener).toHaveBeenCalledWith({ immediate: true });
+      listener.mockClear();
+      store.updateSettings({ dictionarySyncEnabled: true });
+      expect(listener).toHaveBeenCalledWith({ immediate: true });
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('writes the candidate before committing state and broadcasting it', () => {

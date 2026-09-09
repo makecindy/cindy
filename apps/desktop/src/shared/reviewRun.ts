@@ -19,10 +19,23 @@ export type ReviewFailureCode = (typeof REVIEW_FAILURE_CODES)[number];
 
 const REVIEW_FAILURE_CODE_SET = new Set<string>(REVIEW_FAILURE_CODES);
 
+const STALE_REVIEW_FAILURE_CODE_SET = new Set<ReviewFailureCode>([
+  'source-workspace-changed',
+  'source-conversation-changed',
+  'source-files-changed',
+  'artifact-changed',
+]);
+
 export function readReviewFailureCode(value: unknown): ReviewFailureCode | null {
   return typeof value === 'string' && REVIEW_FAILURE_CODE_SET.has(value)
     ? (value as ReviewFailureCode)
     : null;
+}
+
+export function isStaleReviewFailureCode(
+  value: ReviewFailureCode | null,
+): value is ReviewFailureCode {
+  return value !== null && STALE_REVIEW_FAILURE_CODE_SET.has(value);
 }
 
 const LEGACY_REVIEW_FAILURE_CODE_BY_ERROR = new Map<string, ReviewFailureCode>([

@@ -729,6 +729,39 @@ describe('billing response projection', () => {
     });
     expect(projected.subscription).not.toHaveProperty('mandate');
   });
+
+  it('passes resumable through when the server sends it and omits it otherwise', () => {
+    const withResumable = projectBillingCurrentSubscription({
+      subscription: {
+        subscriptionId: 'subscription_1',
+        status: 'ACTIVE',
+        currentPeriodStartAt: null,
+        currentPeriodEndAt: null,
+        entitlementValidUntil: null,
+        cancelAtPeriodEnd: true,
+        resumable: true,
+        effectivePlan: null,
+        purchaseAttemptId: null,
+        paymentAction: null,
+      },
+    });
+    expect(withResumable.subscription).toMatchObject({ resumable: true });
+
+    const withoutResumable = projectBillingCurrentSubscription({
+      subscription: {
+        subscriptionId: 'subscription_1',
+        status: 'ACTIVE',
+        currentPeriodStartAt: null,
+        currentPeriodEndAt: null,
+        entitlementValidUntil: null,
+        cancelAtPeriodEnd: true,
+        effectivePlan: null,
+        purchaseAttemptId: null,
+        paymentAction: null,
+      },
+    });
+    expect(withoutResumable.subscription).not.toHaveProperty('resumable');
+  });
 });
 
 describe('plan change projection', () => {

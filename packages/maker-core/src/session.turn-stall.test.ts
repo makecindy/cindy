@@ -12,7 +12,7 @@ import {
   STALL_ABORT_RECOVERY_GRACE_MS,
   Session,
 } from './session.js';
-import type { AgentEvent, SendOrigin } from './types/events.js';
+import type { AgentEvent, InteractionDecision, SendOrigin } from './types/events.js';
 import type { AgentSessionHandle, BackgroundTaskSnapshot } from './agents/base-agent.js';
 
 type LoggedError = { msg: string; meta?: Record<string, unknown> };
@@ -219,6 +219,25 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
+  it('Host 下载审批等待时挂起看门狗，结束后恢复', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      await session.send('generate');
+      let answer!: (decision: InteractionDecision) => void;
+      const pending = session.runHostInteraction({
+        kind: 'permission', requestId: 'download-1', toolName: 'cindy.media.download', input: {},
+      }, () => new Promise((resolve) => { answer = resolve; }));
+      await vi.advanceTimersByTimeAsync(STALL_MS * 3);
+      expect(stub.abort).not.toHaveBeenCalled();
+      answer({ kind: 'permission', behavior: 'allow' });
+      await pending;
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('有后台任务在跑时不计时(后台 Bash / subagent 期间安静是正常的)', async () => {
     vi.useFakeTimers();
     try {
@@ -255,6 +274,33 @@ describe('Session turn stall watchdog', () => {
 
       expect(seen.some((ev) => ev.type === 'error')).toBe(false);
       expect(stub.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stamps dequeued terminals with the queued generation and Session instance', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('first');
+      expect(session.getTurnGeneration()).toBe(1);
+      stub.endTurn();
+      await session.send('second');
+      expect(session.getTurnGeneration()).toBe(2);
+      stub.endTurn();
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const done = seen.find((ev) => ev.type === 'done');
+      // The constructor wait starts at generation 0; the send that is current
+      // when that wait finally dequeues owns the event.
+      expect(done?.sessionTurnGeneration).toBe(2);
+      expect(done?.sessionInstanceId).toBe(session.instanceId);
     } finally {
       vi.useRealTimers();
     }

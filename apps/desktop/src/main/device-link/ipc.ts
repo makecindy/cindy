@@ -41,6 +41,14 @@ import {
   restoreController,
   broadcast,
   deviceLinkApiBase,
+  applyControllerDisplayNameListSnapshot,
+  applyControllerPresenceListSnapshot,
+  beginControllerDisplayNameDirectoryRefresh,
+  captureControllerDisplayNameRequestEpoch,
+  captureControllerPresenceRequestEpoch,
+  isLatestControllerDisplayNameDirectoryRefresh,
+  readControllerDisplayNameFreshnessSince,
+  waitForNewerControllerDisplayNameDirectoryRefresh,
 } from './index';
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia } from './outboundMedia';
@@ -50,7 +58,9 @@ import {
   stripOutboundSessionReferenceSideChannels,
 } from './outboundSessionReferences';
 import {
+  forgetLastKnownDeviceName,
   isPlaceholderDeviceName,
+  normalizeCachedDeviceName,
   readDeviceLinkSettings,
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
@@ -58,7 +68,9 @@ import {
 } from './settings-store';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
+  coerceCachedSession,
   getMirrorCache,
+  MAX_CACHED_TEXT_CHARS,
   MirrorCachePurgeError,
   type CachedDeviceSessions,
   type MirrorCache,
@@ -106,6 +118,24 @@ export interface DeviceLinkIpcDeps {
   broadcast(channel: string, payload: unknown): void;
   readLastKnownDeviceNames(): Record<string, string>;
   rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean>;
+  forgetLastKnownDeviceName(deviceId: string): Promise<boolean>;
+  applyControllerDisplayNameListSnapshot(
+    devices: readonly DeviceLinkServerDeviceView[],
+    requestEpoch: number,
+  ): void;
+  applyControllerPresenceListSnapshot(
+    devices: readonly DeviceLinkServerDeviceView[],
+    requestEpoch: number,
+  ): void;
+  beginControllerDisplayNameDirectoryRefresh(): number;
+  isLatestControllerDisplayNameDirectoryRefresh(sequence: number): boolean;
+  waitForNewerControllerDisplayNameDirectoryRefresh(sequence: number): Promise<void>;
+  captureControllerDisplayNameRequestEpoch(): number;
+  captureControllerPresenceRequestEpoch(): number;
+  readControllerDisplayNameFreshnessSince(
+    deviceId: string,
+    requestEpoch: number,
+  ): { changedAfterRequest: boolean; authoritativeName: string | null };
   /**
    * 出方向附件改写:把消息里的本机附件上传 OSS、替换成引用串(仅 send/steer/enqueue 生效)。
    * 可选 —— 测试可不注入(跳过改写,行为同旧版纯透传)。
@@ -134,7 +164,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     apiFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
-    openLink: openRemoteLink,
+    openLink: (deviceId: string) => openRemoteLink(deviceId),
     closeLink: closeRemoteLink,
     invoke: (...args) => {
       requireDeviceLinkCapability();
@@ -150,6 +180,15 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     broadcast,
     readLastKnownDeviceNames,
     rememberLastKnownDeviceName,
+    forgetLastKnownDeviceName,
+    applyControllerDisplayNameListSnapshot,
+    applyControllerPresenceListSnapshot,
+    beginControllerDisplayNameDirectoryRefresh,
+    captureControllerDisplayNameRequestEpoch,
+    captureControllerPresenceRequestEpoch,
+    isLatestControllerDisplayNameDirectoryRefresh,
+    readControllerDisplayNameFreshnessSince,
+    waitForNewerControllerDisplayNameDirectoryRefresh,
     rewriteOutboundMedia,
     rewriteOutboundSessionReferences,
   };
@@ -289,40 +328,109 @@ export async function handleSetDeviceControlEnabled(
   return { deviceId: normalizedDeviceId, enabled, disabledControlDeviceIds };
 }
 
-export async function handleListDevices(
+type DeviceListResult = { devices: DeviceLinkDeviceView[] };
+
+/**
+ * 所有 renderer 的设备列表入口最终都汇到本 handler。代次刻意跨状态变化与 teardown
+ * 单调递增：后发请求代表更新的目录意图，先发请求即使更晚返回也只能跟随最新 promise，
+ * 不能进入 reconcile 写回旧名称/空值，也不能把旧列表重新交给 UI。
+ */
+let deviceListRequestSequence = 0;
+let latestDeviceListRequest: { sequence: number; promise: Promise<DeviceListResult> } | null = null;
+
+export function handleListDevices(
   deps: DeviceLinkIpcDeps,
-): Promise<{ devices: DeviceLinkDeviceView[] }> {
-  try {
-    const result = await deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
-      '/api/device-link/devices',
-    );
-    return reconcileDeviceNames(result, deps);
-  } catch (err) {
-    rethrowServerError(err);
-  }
+): Promise<DeviceListResult> {
+  const sequence = ++deviceListRequestSequence;
+  const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
+  const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
+  const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
+  let request!: Promise<DeviceListResult>;
+  request = deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
+    '/api/device-link/devices',
+  ).then(
+    async (result) => {
+      let latest = latestDeviceListRequest;
+      if (latest && latest.sequence > sequence) return latest.promise;
+      const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
+        directoryRequestSequence,
+      );
+      if (isLatestDirectorySnapshot) {
+        deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
+        deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch);
+      } else {
+        await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
+        latest = latestDeviceListRequest;
+        if (latest && latest.sequence > sequence) return latest.promise;
+      }
+      return reconcileDeviceNames(
+        result,
+        deps,
+        requestEpoch,
+        isLatestDirectorySnapshot,
+        !isLatestDirectorySnapshot,
+      );
+    },
+    (err: unknown) => {
+      const latest = latestDeviceListRequest;
+      if (latest && latest.sequence > sequence) return latest.promise;
+      rethrowServerError(err);
+    },
+  );
+  latestDeviceListRequest = { sequence, promise: request };
+  return request;
 }
 
 function reconcileDeviceNames(
   result: { devices: DeviceLinkServerDeviceView[] },
   deps: Pick<
     DeviceLinkIpcDeps,
-    'getState' | 'readLastKnownDeviceNames' | 'rememberLastKnownDeviceName'
+    | 'getState'
+    | 'readLastKnownDeviceNames'
+    | 'rememberLastKnownDeviceName'
+    | 'forgetLastKnownDeviceName'
+    | 'readControllerDisplayNameFreshnessSince'
   >,
+  requestEpoch: number,
+  writeCache: boolean = true,
+  preferCurrentAuthoritativeName: boolean = false,
 ): { devices: DeviceLinkDeviceView[] } {
   const cachedNames = deps.readLastKnownDeviceNames();
   const disabledControlDeviceIds = new Set(deps.getState().disabledControlDeviceIds ?? []);
 
   const devices = result.devices.map<DeviceLinkDeviceView>((device) => {
     let name = device.name;
+    const selfName = typeof device.selfName === 'string'
+      ? normalizeCachedDeviceName(device.selfName)
+      : null;
+    const freshness = deps.readControllerDisplayNameFreshnessSince(
+      device.deviceId,
+      requestEpoch,
+    );
+    if (freshness.changedAfterRequest || preferCurrentAuthoritativeName) {
+      name = freshness.authoritativeName ?? selfName ?? device.deviceId.slice(0, 8);
+      const controlEnabled = !disabledControlDeviceIds.has(device.deviceId);
+      return { ...device, name, controlEnabled };
+    }
+
     const trimmedName = device.name.trim();
     const hasDisplayName = !!trimmedName && !isPlaceholderDeviceName(trimmedName);
     if (hasDisplayName) {
-      void deps.rememberLastKnownDeviceName(device.deviceId, trimmedName); // best-effort,不阻塞列表返回
+      if (writeCache) {
+        void deps.rememberLastKnownDeviceName(device.deviceId, trimmedName); // best-effort,不阻塞列表返回
+      }
       if (device.name !== trimmedName) {
         name = trimmedName;
       }
+    } else if (!trimmedName) {
+      if (writeCache) {
+        void deps.forgetLastKnownDeviceName(device.deviceId); // 显式清空与后台目录刷新保持同义
+      }
+      name = selfName ?? device.deviceId.slice(0, 8);
     } else if (cachedNames[device.deviceId]) {
       name = cachedNames[device.deviceId];
+    } else {
+      name = selfName ?? device.deviceId.slice(0, 8);
     }
 
     const controlEnabled = !disabledControlDeviceIds.has(device.deviceId);
@@ -994,16 +1102,29 @@ export async function handleMirrorCachePutSessionList(
   // 已经吃进去了。截断之后才是「设备数不多但某台带着几十万个 session」这一层(review: codex P1)。
   // 逐台**只挑需要的三个字段**,不做对象展开:一台设备对象可以带上几十万个自有属性,
   // 展开会让 main 先枚举 + 复制整份,结构 / 字节预算要等 boundedItems 才生效(review: codex P1)。
-  // main 侧的 normalizeDeviceSessions 也只消费这三个字段,别的原本就会被白名单丢掉。
+  // session 先经过与落盘侧相同的白名单投影;否则完整 session 上的 summary / extra
+  // 字段会在投影前触发预算,把本可缓存的会话误判成 oversized(review: codex P1)。
   const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
     if (!device || typeof device !== 'object') return device;
     const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    const sessions: Record<string, unknown>[] = [];
+    if (Array.isArray(source.sessions)) {
+      for (
+        const rawSession of source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
+      ) {
+        const session = coerceCachedSession(rawSession);
+        if (session) sessions.push(session);
+      }
+    }
     return {
-      deviceId: source.deviceId,
-      deviceName: source.deviceName,
-      sessions: Array.isArray(source.sessions)
-        ? source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
-        : [],
+      deviceId: typeof source.deviceId === 'string'
+        && source.deviceId.length <= MIRROR_CACHE_MAX_ID_LENGTH
+        ? source.deviceId
+        : undefined,
+      deviceName: typeof source.deviceName === 'string'
+        ? source.deviceName.slice(0, MAX_CACHED_TEXT_CHARS)
+        : undefined,
+      sessions,
     };
   });
   const ownerRootAtHandler = ownerScopedUserDataPath('device-link-mirror-cache');
@@ -1129,13 +1250,18 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   // Keep the local keep-awake setting available without a Cindy account. The
   // setting is local-only and does not expose any remote-control capability.
   ipcMain.handle(DEVICE_LINK_INVOKE.GET_STATE, () => handleGetState(deps));
-  ipcMain.handle(DEVICE_LINK_INVOKE.SET_ENABLED, (_e, enabled: unknown) =>
-    gated(handleSetEnabled)(deps, enabled),
-  );
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_ENABLED, (e, enabled: unknown) => {
+    // Account capability does not identify the local page making a grant.
+    // This rejects foreign frames; it is not proof of a human click within
+    // a compromised app renderer.
+    assertTrustedAppRendererEvent(e);
+    return gated(handleSetEnabled)(deps, enabled);
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.SET_KEEP_AWAKE, (_e, enabled: unknown) =>
     handleSetKeepAwake(deps, enabled),
   );
-  ipcMain.handle(DEVICE_LINK_INVOKE.SET_DEVICE_CONTROL_ENABLED, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_DEVICE_CONTROL_ENABLED, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
@@ -1198,17 +1324,20 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
     return handleUnsubscribe(deps, p.deviceId, p.topics, e.sender.id);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.DISCONNECT_ALL, () => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.DISCONNECT_ALL, (e) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     resetSubscriptionRefcount(); // 整体断开 → 清空引用,后续重连各窗口重订阅
     return handleDisconnectAll(deps);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.REVOKE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.REVOKE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRevoke(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRestore(deps, p.deviceId);

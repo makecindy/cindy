@@ -87,6 +87,13 @@ describe('PanelChrome · 撑满系统按钮', () => {
     expect(hole.style.width).toBe(`${CHROME_ACTIONS_GEOMETRY.clusterWidth}px`);
   });
 
+  it('纵向 Grid 非首行可关闭窗口拖拽带，只保留面板标题栏', () => {
+    render(<PanelChrome title="测试面板" showWindowSpacer={false} />);
+    expect(screen.queryByTestId('panel-chrome-window-spacer')).toBeNull();
+    expect(screen.queryByTestId('panel-chrome-actions-hit-hole')).toBeNull();
+    expect(document.querySelector('[data-panel-drag-handle]')).not.toBeNull();
+  });
+
   it('传 onMinimize → 长出气泡最小化按钮并触发回调;三按钮 DOM 顺序 minimize→detach→maximize', () => {
     const onMinimize = vi.fn();
     render(

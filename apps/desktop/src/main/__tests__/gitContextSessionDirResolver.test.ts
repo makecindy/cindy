@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import type { GitHeadInfo } from '../git-context/headReader';
 import {
   extractDirCandidate,
+  findLiveLinkedWorktree,
   posixDriveToWin32,
   resolveSessionGitDir,
   type ResolveSessionGitDirDeps,
@@ -186,5 +187,71 @@ describe('resolveSessionGitDir', () => {
       deps({ contents: [], gitDirs: {} }),
     );
     expect(res).toEqual({ workdir: null, head: null, source: null });
+  });
+});
+
+describe('findLiveLinkedWorktree', () => {
+  it('skips the latest main checkout and keeps an older live linked worktree', async () => {
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/main' }),
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' }),
+      ],
+      resolveLinkedWorktreeRoot: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? path.resolve('/Users/x/wt-a') : null,
+      probeGitDir: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : branchHead('main'),
+    });
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-a'),
+      branch: 'feat/a',
+    });
+  });
+
+  it('canonicalizes a nested telemetry cwd to the worktree root', async () => {
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a/src' }),
+      ],
+      resolveLinkedWorktreeRoot: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a/src') ? path.resolve('/Users/x/wt-a') : null,
+      probeGitDir: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : null,
+    });
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-a'),
+      branch: 'feat/a',
+    });
+  });
+
+  it('looks past many recent checkout dirs to find an older live worktree', async () => {
+    const recent = Array.from({ length: 21 }, (_, i) =>
+      toolUse('exec', { command: 'git status', cwd: `/Users/x/main/pkg-${i}` }),
+    );
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        ...recent,
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' }),
+      ],
+      resolveLinkedWorktreeRoot: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? path.resolve('/Users/x/wt-a') : null,
+      probeGitDir: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : branchHead('main'),
+    });
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-a'),
+      branch: 'feat/a',
+    });
+  });
+
+  it('clears the candidate when every telemetry worktree is gone', async () => {
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-gone' }),
+      ],
+      resolveLinkedWorktreeRoot: async () => null,
+      probeGitDir: async () => null,
+    });
+    expect(res).toBeNull();
   });
 });

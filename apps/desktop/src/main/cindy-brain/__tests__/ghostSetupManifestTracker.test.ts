@@ -19,7 +19,6 @@ function ghost(
       version: '1',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['tool'],
       tools: (options.tools ?? ['run']).map((name) => ({
         name,
         description: name,

@@ -128,14 +128,20 @@ export async function getModelUsageSince(sinceDayKey: string): Promise<DailyMode
     .where(sql`${dailyModelUsage.day} >= ${sinceDayKey}`)
     .all();
   return rows.map((row) => {
+    const isSubscriptionValue = row.model.endsWith('#billing=subscription');
+    const isExplicitUnpricedSubscription =
+      isSubscriptionValue && row.costAmount === 0 && Boolean(row.costIsApproximate);
     const legacy = legacyUsdMoney(row.costUsd);
     const current =
-      row.costCurrency && row.costAmount > 0
+      row.costCurrency && (row.costAmount > 0 || isExplicitUnpricedSubscription)
         ? normalizeRegionalMoney({
             amount: row.costAmount,
             currency: row.costCurrency,
-            approximate: row.costIsApproximate,
-            kind: 'actual-cost',
+            approximate: isSubscriptionValue || row.costIsApproximate,
+            kind: isSubscriptionValue ? 'value-estimate' : 'actual-cost',
+            ...(isSubscriptionValue
+              ? { estimateReasons: ['subscription-value', 'reference-price'] }
+              : {}),
           })
         : undefined;
     return {

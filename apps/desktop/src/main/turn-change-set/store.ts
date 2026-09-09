@@ -30,6 +30,10 @@ import { detectSensitivePath } from '../security/sensitivePath.js';
 import * as broadcastTap from '../device-link/broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
+import {
+  turnChangeSetSessionDirectory,
+  turnChangeSetStorageRoot,
+} from './storagePaths';
 
 const log = createLogger('turn-change-set');
 const MAX_LIST_ROWS = 100;
@@ -162,12 +166,11 @@ function assertSafeSegment(value: string, label: string): void {
 }
 
 function storageRoot(): string {
-  return path.join(app.getPath('userData'), 'turn-change-sets');
+  return turnChangeSetStorageRoot(app.getPath('userData'));
 }
 
 function sessionDir(sessionId: string): string {
-  assertSafeSegment(sessionId, 'session id');
-  return path.join(storageRoot(), sessionId);
+  return turnChangeSetSessionDirectory(app.getPath('userData'), sessionId);
 }
 
 function detailPath(sessionId: string, id: string): string {

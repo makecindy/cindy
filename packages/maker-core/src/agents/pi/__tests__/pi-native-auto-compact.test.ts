@@ -1,0 +1,680 @@
+/**
+ * Pi owns automatic threshold and overflow compaction. Cindy observes the native
+ * events and only latches deterministic failures for the next-send rollover.
+ */
+
+import { mkdtempSync, mkdirSync, renameSync, symlinkSync, unlinkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const knobs = vi.hoisted(() => ({
+  compactCalls: [] as Array<Record<string, unknown>>,
+  compactHold: null as null | Promise<void>,
+  rpcCalls: [] as Array<Record<string, unknown>>,
+  switchSessionSuccess: true,
+  autoCompactionSuccess: true,
+  runtimeProvider: "cindy",
+  runtimeModel: "m",
+  runtimeContextWindow: 200_000,
+  targetRuntimeContextWindow: 100_000,
+  setModelReportsContextWindow: true,
+  verifiedContextWindows: [] as number[],
+  closeCalls: 0,
+  stateModelOverride: null as null | string,
+  onEvent: null as
+    null | ((event: { type: string; [key: string]: unknown }) => void),
+}));
+
+vi.mock("../transport.js", () => ({
+  createPiStdioTransport: (opts: {
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
+vi.mock("../rpc-client.js", () => ({
+  PiRpcProcess: class {
+    isClosed = false;
+    constructor(opts: {
+      onEvent?: (event: { type: string; [key: string]: unknown }) => void;
+    }) {
+      knobs.onEvent = opts.onEvent ?? null;
+    }
+    async request(cmd: Record<string, unknown>): Promise<{
+      success: boolean;
+      data?: unknown;
+      error?: string;
+    }> {
+      knobs.rpcCalls.push(cmd);
+      if (cmd.type === "get_state") {
+        return {
+          success: true,
+          data: {
+            sessionFile: "/mock/s.jsonl",
+            model: {
+              provider: knobs.runtimeProvider,
+              id: knobs.stateModelOverride ?? knobs.runtimeModel,
+              contextWindow: knobs.verifiedContextWindows.shift() ?? knobs.runtimeContextWindow,
+            },
+          },
+        };
+      }
+      if (cmd.type === "compact") {
+        knobs.compactCalls.push(cmd);
+        if (knobs.compactHold) await knobs.compactHold;
+        return { success: true, data: {} };
+      }
+      if (cmd.type === "set_auto_compaction") {
+        return knobs.autoCompactionSuccess
+          ? { success: true, data: {} }
+          : { success: false, error: "runtime rejected" };
+      }
+      if (cmd.type === "set_model") {
+        knobs.runtimeProvider = String(cmd.provider);
+        knobs.runtimeModel = String(cmd.modelId);
+        knobs.runtimeContextWindow = knobs.runtimeModel === "n"
+          ? knobs.targetRuntimeContextWindow
+          : 200_000;
+        return {
+          success: true,
+          data: knobs.setModelReportsContextWindow
+            ? { contextWindow: knobs.runtimeContextWindow }
+            : {},
+        };
+      }
+      if (cmd.type === "switch_session") {
+        if (!knobs.switchSessionSuccess) {
+          return { success: false, error: "reload denied" };
+        }
+        // Real Pi reconstructs from the process' original CLI route.
+        knobs.runtimeProvider = "cindy";
+        knobs.runtimeModel = "m";
+        knobs.runtimeContextWindow = 200_000;
+        return { success: true, data: {} };
+      }
+      return { success: true, data: { entries: [] } };
+    }
+    send(): void {}
+    async close(): Promise<void> {
+      knobs.closeCalls += 1;
+      this.isClosed = true;
+    }
+  },
+}));
+
+import { buildPiSettingsJsonContent, PiAgent } from "../index.js";
+import type { AgentDeps, AgentSessionHandle } from "../../base-agent.js";
+import type { Logger } from "../../../interfaces/logger.js";
+
+const noopLogger: Logger = {
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  fatal: () => {},
+  child: () => noopLogger,
+};
+
+describe("Pi native settings", () => {
+  it("maps the configured percentage to Pi reserve tokens", () => {
+    const retry = {
+      enabled: true,
+      maxRetries: 6,
+      baseDelayMs: 2000,
+      provider: { maxRetries: 0 },
+    };
+    expect(JSON.parse(buildPiSettingsJsonContent(128_000, 75))).toEqual({
+      transport: "sse",
+      retry,
+      compaction: { reserveTokens: 32_000 },
+    });
+    expect(JSON.parse(buildPiSettingsJsonContent(200_000, 75))).toEqual({
+      transport: "sse",
+      retry,
+      compaction: { reserveTokens: 50_000 },
+    });
+    expect(JSON.parse(buildPiSettingsJsonContent(100_000, 75))).toEqual({
+      transport: "sse",
+      retry,
+      compaction: { reserveTokens: 25_000 },
+    });
+    expect(JSON.parse(buildPiSettingsJsonContent(128_000))).toEqual({ transport: "sse", retry });
+  });
+});
+
+describe("PiAgent native auto-compaction ownership", () => {
+  let agentHome = "";
+  let cwd = "";
+
+  beforeEach(() => {
+    knobs.compactCalls = [];
+    knobs.compactHold = null;
+    knobs.rpcCalls = [];
+    knobs.switchSessionSuccess = true;
+    knobs.autoCompactionSuccess = true;
+    knobs.runtimeProvider = "cindy";
+    knobs.runtimeModel = "m";
+    knobs.runtimeContextWindow = 200_000;
+    knobs.targetRuntimeContextWindow = 100_000;
+    knobs.setModelReportsContextWindow = true;
+    knobs.verifiedContextWindows = [];
+    knobs.closeCalls = 0;
+    knobs.stateModelOverride = null;
+    knobs.onEvent = null;
+    agentHome = mkdtempSync(path.join(tmpdir(), "pi-native-ac-home-"));
+    cwd = mkdtempSync(path.join(tmpdir(), "pi-native-ac-cwd-"));
+  });
+
+  afterEach(() => {
+    rmSync(agentHome, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {
+    let window = 200_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => window;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'context-alias', workingDir: cwd, model: 'm', providerId });
+    try {
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(false);
+      }
+      window = 100_000;
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(true);
+      }
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'other-source' })).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('n', { providerId: 'xd' })).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  function buildDeps(): AgentDeps {
+    return {
+      auth: {
+        getState: async () => ({
+          authenticated: true,
+          identity: "t",
+          authSource: "api-key" as const,
+        }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      // Keep a host threshold here to prove PiAgent no longer consumes it.
+      runtimeConfig: {
+        endpoint: "http://127.0.0.1:9",
+        autoCompactThresholdPct: 75,
+        piAutoCompactThresholdPct: 75,
+      },
+      binaryPath: path.join(agentHome, "pi"),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: "m",
+            displayName: "M",
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+          {
+            id: "n",
+            displayName: "N",
+            contextWindow: 100_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiGatewayModelApi: () => "openai-responses",
+      resolvePiAgentHome: () => agentHome,
+    };
+  }
+
+  async function start(): Promise<AgentSessionHandle> {
+    return new PiAgent(buildDeps()).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+  }
+
+  function settleWithUsage(input: number): void {
+    knobs.onEvent?.({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input, cacheRead: 0, cacheWrite: 0, output: 8 },
+      },
+    });
+    knobs.onEvent?.({ type: "agent_settled" });
+  }
+
+  it("enables Pi native auto-compaction during startup", async () => {
+    const handle = await start();
+    expect(knobs.rpcCalls).toContainEqual({
+      type: "set_auto_compaction",
+      enabled: true,
+    });
+    await handle.close();
+  });
+
+  it("refuses to start when native auto-compaction cannot be enabled", async () => {
+    knobs.autoCompactionSuccess = false;
+    await expect(start()).rejects.toThrow(/refusing to start without native auto-compaction/);
+  });
+
+  it("does not issue host compact RPCs at the shared threshold or a full window", async () => {
+    const handle = await start();
+    settleWithUsage(160_000);
+    settleWithUsage(200_000);
+    await Promise.resolve();
+    expect(knobs.compactCalls).toEqual([]);
+    await handle.close();
+  });
+
+  it("accepts a successful native threshold boundary and updates context usage", async () => {
+    const handle = await start();
+    settleWithUsage(200_000);
+    knobs.onEvent?.({ type: "compaction_start", reason: "threshold" });
+    knobs.onEvent?.({
+      type: "compaction_end",
+      reason: "threshold",
+      result: { tokensBefore: 200_000, estimatedTokensAfter: 20_000 },
+      aborted: false,
+    });
+    expect(handle.getUsageSnapshot()).toMatchObject({
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+    expect(knobs.compactCalls).toEqual([]);
+    await handle.close();
+  });
+
+  it.each(["threshold", "overflow"])(
+    "latches a deterministic native %s compaction failure for local rollover",
+    async (reason) => {
+      const handle = await start();
+      settleWithUsage(190_000);
+      knobs.onEvent?.({
+        type: "compaction_end",
+        reason,
+        result: null,
+        aborted: false,
+        errorMessage: "summarization produced empty response",
+      });
+      expect(handle.getUsageSnapshot().needsRollover).toBe(true);
+      expect(knobs.compactCalls).toEqual([]);
+      await handle.close();
+    },
+  );
+
+  it("does not latch manual, aborted, or transient native compaction failures", async () => {
+    const cases = [
+      {
+        reason: "manual",
+        aborted: false,
+        errorMessage: "summarization produced empty response",
+      },
+      {
+        reason: "threshold",
+        aborted: true,
+        errorMessage: "summarization produced empty response",
+      },
+      { reason: "threshold", aborted: false, errorMessage: "gateway 500" },
+    ];
+    for (const testCase of cases) {
+      const handle = await start();
+      settleWithUsage(190_000);
+      knobs.onEvent?.({ type: "compaction_end", result: null, ...testCase });
+      expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+      await handle.close();
+    }
+  });
+
+  async function startHeldManualCompact(handle: AgentSessionHandle): Promise<{
+    release: () => void;
+    compactDone: Promise<unknown>;
+  }> {
+    let release!: () => void;
+    knobs.compactHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const compactDone = handle.compactSession!();
+    await vi.waitFor(() => expect(knobs.compactCalls).toHaveLength(1));
+    return { release, compactDone };
+  }
+
+  it("keeps manual compact serialized before model controls", async () => {
+    const handle = await start();
+    const { release, compactDone } = await startHeldManualCompact(handle);
+    const setModelDone = handle.setModel!("n");
+    await Promise.resolve();
+    expect(knobs.rpcCalls.some((call) => call.type === "set_model")).toBe(
+      false,
+    );
+    release();
+    await Promise.all([compactDone, setModelDone]);
+    const types = knobs.rpcCalls.map((call) => call.type);
+    expect(types.lastIndexOf("set_model")).toBeGreaterThan(
+      types.lastIndexOf("compact"),
+    );
+    await handle.close();
+  });
+
+  it.each([
+    [
+      "prompt",
+      (handle: AgentSessionHandle) =>
+        handle.send({
+          type: "user",
+          content: "hi",
+        }),
+    ],
+    [
+      "steer",
+      (handle: AgentSessionHandle) =>
+        handle.steer!({
+          type: "user",
+          content: "steer now",
+        }),
+    ],
+  ] as const)(
+    "keeps manual compact serialized before %s",
+    async (rpcType, run) => {
+      const handle = await start();
+      const { release, compactDone } = await startHeldManualCompact(handle);
+      const controlDone = run(handle);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(knobs.rpcCalls.some((call) => call.type === rpcType)).toBe(false);
+      release();
+      await Promise.all([compactDone, controlDone]);
+      const types = knobs.rpcCalls.map((call) => call.type);
+      expect(types.lastIndexOf(rpcType)).toBeGreaterThan(
+        types.lastIndexOf("compact"),
+      );
+      await handle.close();
+    },
+  );
+
+  function readLatestPiSettings(): { compaction?: { reserveTokens?: number }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "settings.json") files.push(next);
+      }
+    };
+    walk(agentHome);
+    expect(files.length).toBeGreaterThan(0);
+    return JSON.parse(readFileSync(files[files.length - 1]!, "utf8")) as {
+      compaction?: { reserveTokens?: number };
+    };
+  }
+
+  it("writes the local override into the native model file and compression reserve", async () => {
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = (_provider, model) => model === "m" ? 500_000 : null;
+    const handle = await new PiAgent(deps).startSession({ sessionId: "budget", workingDir: cwd, model: "m" });
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "models.json") files.push(next);
+      }
+    };
+    walk(agentHome);
+    const models = files.flatMap((file) => {
+      const data = JSON.parse(readFileSync(file, "utf8")) as { providers: Record<string, { models?: Array<{ id: string; contextWindow: number }> }> };
+      return Object.values(data.providers).flatMap((provider) => provider.models ?? []);
+    });
+    expect(models.find((model) => model.id === "m")?.contextWindow).toBe(500_000);
+    expect(models.find((model) => model.id === "n")?.contextWindow).toBe(100_000);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(125_000);
+    await handle.close();
+  });
+
+  it("rewrites native reserve tokens when the model window changes", async () => {
+    const handle = await start();
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);
+    await handle.setModel!("n");
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
+    const switchIndex = knobs.rpcCalls.findIndex((call) => call.type === "switch_session");
+    const setModelIndexes = knobs.rpcCalls
+      .map((call, index) => (call.type === "set_model" ? index : -1))
+      .filter((index) => index >= 0);
+    const verifyIndex = knobs.rpcCalls.findLastIndex((call) => call.type === "get_state");
+    expect(setModelIndexes).toHaveLength(2);
+    expect(setModelIndexes[0]).toBeLessThan(switchIndex);
+    expect(setModelIndexes[1]).toBeGreaterThan(switchIndex);
+    expect(verifyIndex).toBeGreaterThan(setModelIndexes[1]!);
+    expect(knobs.runtimeProvider).toBe("cindy");
+    expect(knobs.runtimeModel).toBe("n");
+    expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+    await handle.close();
+  });
+
+  it("recomputes reserve tokens from the final verified runtime window", async () => {
+    const deps = buildDeps();
+    deps.runtimeConfig = {
+      ...deps.runtimeConfig,
+      autoCompactThresholdPct: 90,
+      piAutoCompactThresholdPct: 90,
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(20_000);
+
+    knobs.targetRuntimeContextWindow = 1_000_000;
+    knobs.setModelReportsContextWindow = false;
+    knobs.rpcCalls = [];
+    await handle.setModel!("n");
+
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(100_000);
+    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(3);
+    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(2);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+    await handle.close();
+  });
+
+  it("verifies a missing set_model window even when the catalog estimate is unchanged", async () => {
+    const deps = buildDeps();
+    deps.runtimeConfig = {
+      ...deps.runtimeConfig,
+      autoCompactThresholdPct: 90,
+      piAutoCompactThresholdPct: 90,
+    };
+    deps.capabilityAdditions = {
+      availableModels: deps.capabilityAdditions!.availableModels!.map((model) =>
+        model.id === "n" ? { ...model, contextWindow: 200_000 } : model,
+      ),
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(20_000);
+
+    knobs.setModelReportsContextWindow = false;
+    knobs.rpcCalls = [];
+    await handle.setModel!("n");
+
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(10_000);
+    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(3);
+    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(2);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+    await handle.close();
+  });
+
+  it("terminates when the runtime window changes again during settings verification", async () => {
+    const handle = await start();
+    knobs.targetRuntimeContextWindow = 1_000_000;
+    knobs.setModelReportsContextWindow = false;
+    knobs.verifiedContextWindows = [1_000_000, 500_000];
+
+    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    expect(knobs.closeCalls).toBe(1);
+    await handle.close();
+  });
+
+  it("terminates the session when the reloaded runtime does not confirm the target model", async () => {
+    const handle = await start();
+    knobs.stateModelOverride = "m";
+    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    await handle.close();
+  });
+
+  it("applies stable-root user shellPath to a brand-new session (#3643 cross-start)", async () => {
+    // 用户在稳定根(pi-agent-home/settings.json)配置逃生门;本地 configHome 是
+    // 每会话随机目录,新会话必须能从稳定根拿到配置。
+    writeFileSync(
+      path.join(agentHome, "settings.json"),
+      JSON.stringify({ shellPath: "C:/cygwin64/bin/bash.exe" }, null, 2),
+    );
+    const handle = await start();
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "settings.json") files.push(next);
+      }
+    };
+    walk(path.join(agentHome, "run-tmp"));
+    expect(files.length).toBeGreaterThan(0);
+    const written = JSON.parse(readFileSync(files[files.length - 1]!, "utf8")) as {
+      shellPath?: string;
+      transport?: string;
+    };
+    expect(written.shellPath).toBe("C:/cygwin64/bin/bash.exe");
+    expect(written.transport).toBe("sse");
+    await handle.close();
+  });
+
+  it("preserves user shellPath across settings.json rewrites (#3643)", async () => {
+    const handle = await start();
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "settings.json") files.push(next);
+      }
+    };
+    walk(agentHome);
+    expect(files.length).toBeGreaterThan(0);
+    const settingsPath = files[files.length - 1]!;
+    // 用户在会话间隙按 pi docs/windows.md 配置 shell 逃生门。
+    const current = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ ...current, shellPath: "C:/cygwin64/bin/bash.exe" }, null, 2),
+    );
+    await handle.setModel!("n");
+    const rewritten = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+      shellPath?: string;
+      compaction?: { reserveTokens?: number };
+    };
+    expect(rewritten.shellPath).toBe("C:/cygwin64/bin/bash.exe");
+    expect(rewritten.compaction?.reserveTokens).toBe(25_000);
+    await handle.close();
+  });
+
+  it.each(["unchanged", "alias", "physical", "startup"])("keeps frozen Skill exclusions across both settings rewrites (%s)", async (change) => {
+    const a = path.join(cwd, "a");
+    const b = path.join(cwd, "b");
+    const alias = path.join(cwd, "alias");
+    mkdirSync(a);
+    mkdirSync(b);
+    writeFileSync(path.join(a, "SKILL.md"), "fixture a");
+    writeFileSync(path.join(b, "SKILL.md"), "fixture b");
+    symlinkSync(a, alias, process.platform === "win32" ? "junction" : "dir");
+    const deps = buildDeps();
+    deps.getDisabledSkillPaths = () => [a];
+    deps.resolvePiNativePackagePaths = async () => [{ source: cwd, skills: ["**/*"] }];
+    deps.resolvePiManagedPackageResources = async () => {
+      if (change === "startup") {
+        renameSync(a, `${a}-moved`);
+        symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
+      }
+      return { extensions: [], skills: [{ name: "alias", path: alias }], promptTemplates: [], packageRoots: [cwd] };
+    };
+    const handle = await new PiAgent(deps).startSession({ sessionId: "frozen-skills", workingDir: cwd, model: "m" });
+    try {
+      if (change === "startup") expect(readLatestPiSettings().skills ?? []).not.toContain(`-${a}`);
+      else expect(readLatestPiSettings().skills).toContain(`-${alias}`);
+      if (change === "alias") {
+        unlinkSync(alias);
+        symlinkSync(b, alias, process.platform === "win32" ? "junction" : "dir");
+      } else if (change === "physical") {
+        renameSync(a, `${a}-moved`);
+        symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
+      }
+      knobs.targetRuntimeContextWindow = 1_000_000;
+      knobs.setModelReportsContextWindow = false;
+      knobs.rpcCalls = [];
+      await handle.setModel!("n");
+      const rewritten = readLatestPiSettings();
+      expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+      expect(rewritten.packages?.[0]?.source).toBe(cwd);
+      expect(rewritten.skills ?? []).not.toContain(`-${b}`);
+      expect(rewritten.packages?.[0]?.skills ?? []).not.toContain("-b");
+      if (change === "unchanged") expect(rewritten.skills).toContain(`-${alias}`);
+      else expect(rewritten.skills ?? []).not.toContain(`-${alias}`);
+      if (change === "physical" || change === "startup") expect(rewritten.skills ?? []).not.toContain(`-${a}`);
+    } finally { await handle.close(); }
+  });
+
+  it("terminates the session when compaction settings reload fails after a window change", async () => {
+    const handle = await start();
+    knobs.switchSessionSuccess = false;
+    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    await handle.close();
+  });
+
+  it("keeps the startup Pi percentage after the live setting changes", async () => {
+    const runtimeConfig = {
+      endpoint: "http://127.0.0.1:9",
+      autoCompactThresholdPct: 75,
+      piAutoCompactThresholdPct: 75,
+    };
+    const handle = await new PiAgent({
+      ...buildDeps(),
+      runtimeConfig,
+    }).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);
+    runtimeConfig.piAutoCompactThresholdPct = 50;
+    await handle.setModel!("n");
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
+    await handle.close();
+  });
+});

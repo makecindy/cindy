@@ -118,7 +118,7 @@ const SEARCH_FILES_CAP = 20000;
 export default function RemoteFileBrowserScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -260,7 +260,7 @@ export default function RemoteFileBrowserScreen() {
   useEffect(() => {
     sortModeRef.current = sortMode;
     setItems(buildFileBrowserGridItems(rawEntriesRef.current, sortMode, Date.now()));
-  }, [sortMode]);
+  }, [i18nInstance.language, sortMode]);
 
   // 熔断恢复:目录静默刷新(缓存保留不清列表,规则 7)。首次 listDir 撞上
   // 熔断快速失败、或 open 期间目录停更时,恢复不会有任何文件事件来救——

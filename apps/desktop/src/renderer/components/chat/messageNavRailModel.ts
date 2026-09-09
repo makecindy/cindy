@@ -34,9 +34,10 @@ export interface NavRailEntry {
    */
   attachmentsOnly?: number;
   /**
-   * 该轮回答开头的摘要(已压平空白、截断)。agent 对话里大量提问是
+   * 该轮最终回答的摘要(已压平空白、截断)。agent 对话里大量提问是
    * "继续 / 不对,重来"这类不含识别信息的短指令,回答摘要才是用户认出
    * "这根刻度是哪一轮"的主载体 — 它是识别的必需品,不是装饰。
+   * 取本轮最后一条非空 assistant 正文:前面的开工叙述会随最终回答覆盖。
    * 回答尚未产生(流式中 / 被打断)时为 undefined,预览卡只显示提问行。
    */
   answerExcerpt?: string;
@@ -123,9 +124,10 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  * - isSyntheticTrigger:合成指令行渲染 null,没有可滚动的锚点;
  * - systemCardType:user 位次上的系统卡(compact / learn …),不是用户提问。
  *
- * 回答摘要取该提问之后第一条非空 assistant 正文的开头(thinking / tool 行
- * 不算正文):它可能是开工叙述而非最终结论,但作为"这一轮在干什么"的识别
- * 线索足够,且流式期间就有值。
+ * 回答摘要只属于最近一根可见刻度。一根刻度下可以有多个 SDK turn:
+ * 封轮(turnCompleted / 费用 / 用量,含空 wrap-up)提交当前候选;封轮后的
+ * 未收尾进度只暂存,要等下一次封轮才提交。合成续跑 / 系统卡 user 行结束
+ * 整根刻度归属;steer 插话不是边界。
  *
  * 注意输入是全量已加载 messages 而非 visibleRenderItems —— 导航条要覆盖
  * 整段已加载历史,渲染窗口外的目标由跳转侧扩窗解决(见 MessageStream 的
@@ -134,13 +136,51 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  */
 export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailEntry[] {
   const entries: NavRailEntry[] = [];
+  let lastOwnsAnswers = false;
+  let lastExcerptSealed = false;
+  let pendingAnswers: ChatMessage[] = [];
+  let committedExcerpt: string | null = null;
+
+  const excerptFromPending = (): string | null => {
+    for (let i = pendingAnswers.length - 1; i >= 0; i--) {
+      const excerpt = normalizeExcerpt(pendingAnswers[i].content);
+      if (excerpt) return excerpt;
+    }
+    return null;
+  };
+
+  const commitPendingIfAny = () => {
+    const excerpt = excerptFromPending();
+    if (excerpt) committedExcerpt = excerpt;
+    pendingAnswers = [];
+  };
+
+  const applyToLastEntry = () => {
+    const last = entries[entries.length - 1];
+    if (last) {
+      const live = lastExcerptSealed ? null : excerptFromPending();
+      const excerpt = live ?? committedExcerpt;
+      if (excerpt) last.answerExcerpt = excerpt;
+    }
+    pendingAnswers = [];
+    committedExcerpt = null;
+  };
+
+  const closeAnswerTurn = () => {
+    applyToLastEntry();
+    lastOwnsAnswers = false;
+    lastExcerptSealed = false;
+  };
+
   for (const m of messages) {
     if (m.role === 'user') {
-      if (m.isSyntheticTrigger) continue;
-      if (m.systemCardType) continue;
       // 运行中插话(steer)不是新一轮问答:MessageStream 的轮次语义也不把
       // 它当边界,算成刻度会把进行中的回答错挂到插话名下(PR #830 review)。
       if (m.delivery === 'steer') continue;
+      if (m.isSyntheticTrigger || m.systemCardType) {
+        closeAnswerTurn();
+        continue;
+      }
       // 预览来源按序:显示文本(hook 消息取 userText / 剥 <thread_context>,
       // Orca 通信行解包 JSON,与 UserMessage 气泡正文同源,见
       // userMessageDisplayText.ts;PR #830 review)→ ChatMessage 顶层
@@ -156,27 +196,51 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       if (!preview) preview = attachmentNames.join(' · ');
       const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
       if (preview) {
+        closeAnswerTurn();
         entries.push({ id: m.clientId, preview, isAutomation: Boolean(m.automationOrigin) });
+        lastOwnsAnswers = true;
       } else if (attachmentCount > 0) {
         // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
         // 预览文案由组件按 attachmentsOnly 用 i18n 兜底。
+        closeAnswerTurn();
         entries.push({
           id: m.clientId,
           preview: '',
           attachmentsOnly: attachmentCount,
           isAutomation: Boolean(m.automationOrigin),
         });
+        lastOwnsAnswers = true;
+      } else {
+        // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
+        closeAnswerTurn();
       }
-      // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
       continue;
     }
-    if (m.role !== 'assistant') continue;
-    const last = entries[entries.length - 1];
-    if (!last || last.answerExcerpt !== undefined) continue;
-    const excerpt = normalizeExcerpt(m.content);
-    if (excerpt) last.answerExcerpt = excerpt;
+    if (!lastOwnsAnswers) continue;
+    if (m.role !== 'assistant' || m.systemCardType) continue;
+    const sealed = isSealedAssistantAnswer(m);
+    if (m.content.trim().length > 0) pendingAnswers.push(m);
+    if (sealed) {
+      commitPendingIfAny();
+      lastExcerptSealed = true;
+    }
   }
+  applyToLastEntry();
   return entries;
+}
+
+/**
+ * 与 latestMessageText.logic.isTitleTurnCompleted 同口径:
+ * 显式 turnCompleted=false 是失败,不能被费用/用量兜底当成封轮。
+ */
+function isSealedAssistantAnswer(message: ChatMessage): boolean {
+  if (message.turnCompleted === false) return false;
+  if (message.turnCompleted === true) return true;
+  return (
+    (message.turnMoney?.amount ?? 0) > 0 ||
+    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
+    message.turnUsageDetails !== undefined
+  );
 }
 
 /**

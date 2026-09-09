@@ -98,6 +98,10 @@ function makeHandlers(overrides?: {
   queueTexts?: string[];
   snapshotPayloads?: string[];
   registeredDraftUrls?: string[];
+  openLegacyImagesDir?: () => Promise<boolean>;
+  clearLegacyImagesDir?: () => Promise<void>;
+  openChatAttachmentsDir?: () => Promise<boolean>;
+  clearChatAttachmentsDir?: () => Promise<void>;
 }) {
   return createStorageIpcHandlers({
     getQueueScanTexts: () => overrides?.queueTexts ?? [],
@@ -105,6 +109,10 @@ function makeHandlers(overrides?: {
     getRegisteredDraftUrls: () => overrides?.registeredDraftUrls ?? [],
     db,
     legacyRootDir: legacyRoot,
+    openLegacyImagesDir: overrides?.openLegacyImagesDir ?? (async () => false),
+    clearLegacyImagesDir: overrides?.clearLegacyImagesDir ?? (async () => undefined),
+    openChatAttachmentsDir: overrides?.openChatAttachmentsDir ?? (async () => false),
+    clearChatAttachmentsDir: overrides?.clearChatAttachmentsDir ?? (async () => undefined),
   });
 }
 
@@ -120,7 +128,7 @@ describe('stats(占用总览)', () => {
     expect(res.blobs.totalCount).toBe(2);
     expect(res.blobs.totalBytes).toBe(a.bytes + c.bytes);
     expect(res.blobs.cacheBytes).toBe(c.bytes);
-    expect(res.legacy.bytes).toBe(6); // 'legacy'
+    expect(res.legacy.bytes).toBe(0); // Settings mount never walks the legacy image root.
     expect(res.deadDirs).toHaveLength(3);
   });
 });
@@ -217,5 +225,60 @@ describe('reconcile(体检只报不删)', () => {
     expect(res.missingSamples).toEqual([`${missing.hash}${missing.ext}`]);
     // 账本行仍在(只报不删)。
     expect(await ledger.getBlobInfo(missing.hash, db)).not.toBeNull();
+  });
+});
+
+describe('fixed cache directories', () => {
+  it('opens only through the fixed-purpose main dependency', async () => {
+    const openLegacyImagesDir = vi.fn(async () => true);
+    const result = await makeHandlers({ openLegacyImagesDir }).openLegacyImagesDir();
+
+    expect(result).toEqual({ opened: true });
+    expect(openLegacyImagesDir).toHaveBeenCalledWith();
+  });
+
+  it('opens the chat attachment root only through its fixed-purpose main dependency', async () => {
+    const openChatAttachmentsDir = vi.fn(async () => true);
+    const result = await makeHandlers({ openChatAttachmentsDir }).openChatAttachmentsDir();
+
+    expect(result).toEqual({ opened: true });
+    expect(openChatAttachmentsDir).toHaveBeenCalledWith();
+  });
+
+  it('clears both roots without collecting live refs or reading storage data', async () => {
+    const getQueueScanTexts = vi.fn(() => {
+      throw new Error('fixed directory cleanup must not collect queue refs');
+    });
+    const loadSnapshotPayloads = vi.fn(async () => {
+      throw new Error('fixed directory cleanup must not load snapshots');
+    });
+    const clearLegacyImagesDir = vi.fn(async () => undefined);
+    const clearChatAttachmentsDir = vi.fn(async () => undefined);
+    const handlers = createStorageIpcHandlers({
+      getQueueScanTexts,
+      loadSnapshotPayloads,
+      clearLegacyImagesDir,
+      clearChatAttachmentsDir,
+    });
+
+    await expect(handlers.clearLegacyImagesDir()).resolves.toBeUndefined();
+    await expect(handlers.clearChatAttachmentsDir()).resolves.toBeUndefined();
+
+    expect(clearLegacyImagesDir).toHaveBeenCalledWith();
+    expect(clearChatAttachmentsDir).toHaveBeenCalledWith();
+    expect(getQueueScanTexts).not.toHaveBeenCalled();
+    expect(loadSnapshotPayloads).not.toHaveBeenCalled();
+  });
+
+  it('returns an IPC-safe error when a fixed directory cleanup fails', async () => {
+    const handlers = makeHandlers({
+      clearLegacyImagesDir: async () => {
+        throw new Error('C:\\sensitive\\image-cache is locked');
+      },
+    });
+
+    await expect(handlers.clearLegacyImagesDir()).rejects.toThrow(
+      /\[INTERNAL\] failed to clear legacy image directory/,
+    );
   });
 });

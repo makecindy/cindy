@@ -14,7 +14,7 @@
  * 完整设备名 + 远程控制逻辑说明。
  */
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Eye, MonitorOff, X } from 'lucide-react';
@@ -122,7 +122,7 @@ export function useControlledBy(): Controller[] {
  */
 interface ControlledBannerProps {
   placement?: 'floating' | 'inline' | 'composer';
-  maxWidth?: number;
+  maxWidth?: CSSProperties['maxWidth'];
   /** composer placement 的任务 ID,用于隔离完整 / 呼吸灯折叠态。 */
   sessionId?: string | null;
 }

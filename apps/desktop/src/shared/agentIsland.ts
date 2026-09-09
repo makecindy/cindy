@@ -1,4 +1,5 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 export type AgentIslandSessionPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
@@ -48,12 +49,12 @@ export interface AgentIslandPermissionActionSnapshot {
  * 让卡片在任务执行中显示与灵动岛同源的逐步活动 + 等待交互态。只取卡片要的字段
  * (不含 activityLines 多行,控体积)。
  */
-export interface AgentIslandSessionActivity {
-  sessionId: string;
+export interface AgentIslandSessionActivity
+  extends Omit<SessionActivitySnapshot, 'phase' | 'interactionKind'> {
   phase: AgentIslandSessionPhase;
-  compactDetail: string;
   interactionKind?: AgentIslandInteractionKind;
-  attention: boolean;
+  /** Compatibility/display alias; canonical probe field is currentActionSummary. */
+  compactDetail: string;
 }
 
 export type AgentIslandDisplayMode = 'compact' | 'expanded';

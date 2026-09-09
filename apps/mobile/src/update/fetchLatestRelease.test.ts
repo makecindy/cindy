@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchLatestRelease } from './fetchLatestRelease';
+import { fetchLatestRelease, probeBetaChannel } from './fetchLatestRelease';
 
 const BASE = 'https://ota.example.com';
 const resp = (status: number, json?: unknown) => ({
@@ -40,12 +40,15 @@ describe('fetchLatestRelease —— 区分"无更新"与"连不上"', () => {
     expectCacheBustedUrl(url, `${BASE}/latest?platform=ios`);
   });
 
-  it('canary 显式追加 channel，stable URL 保持旧契约', async () => {
+  it('canary/beta 显式追加 channel，release URL 保持旧契约', async () => {
     const fetchMock = vi.fn(async () => resp(200, { runtimeVersion: 'rtv1' }));
     vi.stubGlobal('fetch', fetchMock);
-    await fetchLatestRelease('android', 8000, BASE, true);
-    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    await fetchLatestRelease('android', 8000, BASE, 'canary');
+    let [url] = fetchMock.mock.calls[0] as unknown as [string];
     expectCacheBustedUrl(url, `${BASE}/latest?platform=android&channel=canary`);
+    await fetchLatestRelease('android', 8000, BASE, 'beta');
+    [url] = fetchMock.mock.calls[1] as unknown as [string];
+    expectCacheBustedUrl(url, `${BASE}/latest?platform=android&channel=beta`);
   });
 
   it('一律绕缓存:每次请求都带 cache-buster + no-cache 头', async () => {
@@ -74,5 +77,28 @@ describe('fetchLatestRelease —— 区分"无更新"与"连不上"', () => {
   it('网络错误 → 抛错', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
     await expect(fetchLatestRelease('ios', 8000, BASE)).rejects.toThrow(/Network request failed/);
+  });
+});
+
+describe('probeBetaChannel —— 打开 beta 前的可用性探测', () => {
+  it('404(无 beta 记录)视为不可达——「未部署」与「未发版本」不可区分,都不该开', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resp(404)));
+    await expect(probeBetaChannel('ios', 8000, BASE)).resolves.toBe(false);
+  });
+
+  it('200 返回记录视为可达', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resp(200, { runtimeVersion: 'rtv1' })));
+    await expect(probeBetaChannel('android', 8000, BASE)).resolves.toBe(true);
+  });
+
+  it('5xx / 网络失败视为不可达', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resp(500)));
+    await expect(probeBetaChannel('ios', 8000, BASE)).resolves.toBe(false);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await expect(probeBetaChannel('ios', 8000, BASE)).resolves.toBe(false);
+  });
+
+  it('非自建变体(baseUrl 为空)不可达', async () => {
+    await expect(probeBetaChannel('ios', 8000, '')).resolves.toBe(false);
   });
 });

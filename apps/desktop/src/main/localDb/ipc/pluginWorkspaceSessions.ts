@@ -69,6 +69,8 @@ export async function createPluginDraftSession(params: {
   dirAbs: string;
   title: string | null;
   ghostId: string;
+  /** Existing originating-call predicate; checked before bootstrap and DB submission. */
+  shouldContinue?: () => boolean;
   /**
    * 会话默认值(register 侧从 New Maker 面板缓存解析;缓存未就绪时为空,
    * 由 mapper 兜底)——让插件建的 draft 跟随用户当前的模型/强度选择。
@@ -85,7 +87,8 @@ export async function createPluginDraftSession(params: {
    * fire-and-forget,失败不阻断创建)。
    */
   notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
-}): Promise<string> {
+}): Promise<string | null> {
+  if (params.shouldContinue && !params.shouldContinue()) return null;
   const db = getDbClient().drizzle;
   const now = Date.now();
   const id = randomUUID();
@@ -121,7 +124,10 @@ export async function createPluginDraftSession(params: {
     autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
     source: 'plugin-workspace-session',
   });
-  await db.insert(sessions).values(insertRow);
+  if (params.shouldContinue && !params.shouldContinue()) return null;
+  // Explicit run() submits the async DB request in this synchronous segment.
+  // The worker may queue it; cancellation cannot retract an already submitted write.
+  await db.insert(sessions).values(insertRow).run();
   if (insertRow.workingDir) {
     // 用户刚为这个目录做过授权动作(亲选/确认卡),进"最近项目"列表合理;
     // 失败仅日志,不阻断创建流程(与既有 create 同纪律)。

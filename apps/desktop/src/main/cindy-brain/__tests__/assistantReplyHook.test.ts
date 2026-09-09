@@ -6,7 +6,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { runAssistantReplyHook, type AssistantReplyHookDeps } from '../assistantReplyHook';
+import {
+  isSuccessfulAssistantReplyDoneData,
+  runAssistantReplyHook,
+  type AssistantReplyHookDeps,
+} from '../assistantReplyHook';
 import type { GhostAssistantScreenResult } from '../subscriptionGateway';
 
 function makeDeps(overrides: Partial<AssistantReplyHookDeps> = {}) {
@@ -28,6 +32,19 @@ function makeDeps(overrides: Partial<AssistantReplyHookDeps> = {}) {
   };
   return { deps, calls };
 }
+
+describe('isSuccessfulAssistantReplyDoneData', () => {
+  it.each([
+    [{ status: 'completed', result: 'answer' }, true],
+    [{ result: 'legacy answer' }, true],
+    [{ status: 'failed', result: 'partial' }, false],
+    [{ status: 'cancelled', result: 'partial' }, false],
+    [{ status: 'interrupted', result: 'partial' }, false],
+    [{ is_error: true, result: 'provider failure' }, false],
+  ])('classifies %j as %s', (data, expected) => {
+    expect(isSuccessfulAssistantReplyDoneData(data)).toBe(expected);
+  });
+});
 
 describe('runAssistantReplyHook', () => {
   it('no-hook 快路径:不查资格、不 screen、不动 pending', async () => {

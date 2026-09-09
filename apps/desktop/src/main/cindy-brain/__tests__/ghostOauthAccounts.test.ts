@@ -304,6 +304,50 @@ describe('插件 OAuth clientId 迁移', () => {
     });
   });
 
+  it('reports a retry when crash recovery cannot persist the restored account state', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@b.com',
+            status: 'expired',
+            expiredReason: 'oauth_client_changed',
+            expiredFromClientId: 'old-client',
+            expiredForClientId: 'new-client',
+            createdAt: 1,
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault: { ...vault, store: () => false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifestWithResult(oauthManifest('old-client')))
+      .toEqual({ restored: 0, retryPending: true });
+  });
+
+  it('reports a retry when crash recovery cannot strictly read the account manifest', () => {
+    const vault = memoryVault();
+    const mgr = new GhostOauthAccountManager({
+      vault: {
+        ...vault,
+        readStrict: () => {
+          throw new Error('keychain temporarily unavailable');
+        },
+      },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifestWithResult(oauthManifest('old-client')))
+      .toEqual({ restored: 0, retryPending: true });
+  });
+
   it('插件切回签发 client 时只在 commit 后复活旧 token，不误复活新 client 账号', () => {
     const vault = memoryVault({
       [`${KEY}-accounts`]: JSON.stringify({
@@ -709,6 +753,27 @@ describe('missingAuthScopes(快照推断)', () => {
 });
 
 describe('connectAccount', () => {
+  it.each(['boundary', 'policy'] as const)('does not commit OAuth tokens when %s becomes invalid during identity lookup', async (reason) => {
+    const vault = memoryVault({ [`${KEY}-client-id`]: 'cid' });
+    const before = new Map(vault.data);
+    let current = true;
+    const mgr = new GhostOauthAccountManager({
+      vault, openExternal: autoBrowser(),
+      fetchImpl: (async (input) => {
+        if (String(input) === DECL.tokenUrl)
+          return jsonResponse({ access_token: 'fake-access', refresh_token: 'fake-refresh', expires_in: 3600 });
+        current = false;
+        return jsonResponse({ email: 'test@example.com' });
+      }) as typeof fetch,
+    });
+    await expect(mgr.connectAccount(GHOST, KEY, DECL, {
+      assertCurrent: () => { if (reason === 'boundary' && !current) throw new Error('card withdrawn'); },
+      beforeCommit: async () => { if (reason === 'policy' && !current) throw new Error('card withdrawn'); },
+    })).rejects.toThrow('card withdrawn');
+    expect(vault.data).toEqual(before);
+    expect(mgr.listAccounts(GHOST, KEY)).toHaveLength(0);
+  });
+
   it('端口回收器只对第一方官方意识放行(第三方 redirectPort 不许借刀杀进程)', async () => {
     const blocker = http.createServer();
     const heldPort = await new Promise<number>((resolve) => {
@@ -1794,6 +1859,64 @@ describe('tokenBroker 模式', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(vault.read(GHOST, `${KEY}-rt-acc-1`)).toBeNull();
     expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+  });
+
+  it('getFreshAccessToken refuses a cached broker token after eligibility is withdrawn', async () => {
+    const releaseSha256 = 'a'.repeat(64);
+    let approvedPackageSha256 = releaseSha256;
+    const vault = seededVault();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      broker: {
+        exchange: vi.fn(),
+        refresh: vi.fn(async () => ({
+          ok: true as const,
+          bundle: {
+            accessToken: 'at-cached',
+            refreshToken: 'rt-seed',
+            expiresAt: Date.now() + 60_000,
+            grantedScope: null,
+          },
+        })),
+      },
+      sleep: instantSleep,
+      isTokenBrokerAuthorized: () => approvedPackageSha256 === releaseSha256,
+    });
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: true,
+      accessToken: 'at-cached',
+    });
+    // Simulate an unchanged manifest with different approved package bytes.
+    // Authorization is checked before the token cache, so fixing only the
+    // connect path cannot leak the already-cached Broker token.
+    approvedPackageSha256 = 'b'.repeat(64);
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+  });
+
+  it('connectAccount refuses before opening the browser when byte-bound eligibility is false', async () => {
+    const releaseSha256 = 'a'.repeat(64);
+    const approvedPackageSha256 = 'b'.repeat(64);
+    const openExternal = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault: memoryVault(),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal,
+      broker: { exchange: vi.fn(), refresh: vi.fn() },
+      isTokenBrokerAuthorized: () => approvedPackageSha256 === releaseSha256,
+    });
+
+    await expect(mgr.connectAccount(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+    expect(approvedPackageSha256).not.toBe(releaseSha256);
+    // This kills an implementation that adds the SHA check only to token refresh.
+    expect(openExternal).not.toHaveBeenCalled();
   });
 });
 

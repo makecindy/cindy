@@ -2,10 +2,9 @@
  * TOC renderer + writer.
  *
  * Generates `.cindy/project-knowledge/TOC.md`, a pre-rendered index of all
- * module/concern knowledge files plus per-entry short summaries. Consumers
- * (currently apps/desktop) inject this verbatim into agent system prompts at
- * session-create time, replacing the older "read every .md and extract summary
- * on the fly" path.
+ * module/concern knowledge files plus per-entry short summaries. Consumers use
+ * it as the stable on-demand entrypoint; Cindy Desktop injects only its path at
+ * session-create time instead of preloading the full body.
  *
  * Why pre-render (vs. dynamic extraction in the consumer):
  *   - Knowledge files are themselves CI-generated artifacts (update / refresh
@@ -14,7 +13,7 @@
  *     distributed to users via pull. No drift, no per-user IO at session start.
  *   - PR review surfaces summary regressions (e.g. agent leaking meta-narration
  *     into "是什么") in the TOC.md diff, before users see bad data.
- *   - Consumers stay trivial: `fs.readFile(TOC.md)` + a wrapper tag.
+ *   - Consumers stay trivial: confirm TOC.md exists, then expose its stable path.
  *
  * Source of truth for each summary is the FIRST PARAGRAPH of the `## 是什么` H2
  * section in the module's .md. If that section is missing or empty, the entry

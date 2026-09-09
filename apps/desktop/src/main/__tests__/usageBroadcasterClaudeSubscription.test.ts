@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
   exec: vi.fn(async () => undefined),
-  getCurrentUserId: vi.fn(() => 'user-1'),
+  getCurrentDbClientUserId: vi.fn(() => 'user-1'),
 }));
 
 vi.mock('electron', () => ({
@@ -28,9 +28,7 @@ vi.mock('../localDb/dailyModelUsage', () => ({
 }));
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} }),
-}));
-vi.mock('../localDb/index', () => ({
-  getCurrentUserId: mocks.getCurrentUserId,
+  getCurrentDbClientUserId: mocks.getCurrentDbClientUserId,
 }));
 
 function deferred<T>() {
@@ -44,7 +42,7 @@ describe('claude subscription snapshot hydration race', () => {
     vi.resetModules();
     mocks.queryOne.mockReset();
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
   });
 
   it('does not drop the very first snapshot after main start (owner init is not invalidation)', async () => {
@@ -156,7 +154,7 @@ describe('claude subscription snapshot hydration race', () => {
   // 否则会被外层赋值写回, 之后永远复用这个已 resolve 的 Promise, 再也不查库。
   it('reads the database once the owner becomes available', async () => {
     const broadcaster = await import('../usageBroadcaster');
-    mocks.getCurrentUserId.mockReturnValue(null as unknown as string);
+    mocks.getCurrentDbClientUserId.mockReturnValue(null as unknown as string);
 
     await broadcaster.recordClaudeSubscriptionUsageSnapshot({
       fiveHour: { utilization: 10 }, source: 'unified-headers', updatedAt: 1,
@@ -166,7 +164,7 @@ describe('claude subscription snapshot hydration race', () => {
 
     // 登录后必须重新查库。跨 owner 变化的那一笔按既有世代语义会被丢弃(它属于换号前
     // 的上下文), 下一笔恢复正常落库。
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.queryOne.mockResolvedValue(null);
     await broadcaster.recordClaudeSubscriptionUsageSnapshot({
       fiveHour: { utilization: 20 }, source: 'unified-headers', updatedAt: 2,

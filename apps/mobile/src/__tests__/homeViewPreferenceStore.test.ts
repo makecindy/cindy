@@ -14,6 +14,16 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+const defaultPrefs = {
+  groupByProject: true,
+  groupDialogue: false,
+  selectedDevice: null,
+  sortBy: 'recency',
+  statusFilter: 'active',
+  projectOrder: 'activity',
+  manualProjectOrder: [],
+} as const;
+
 describe('homeViewPreferenceStore', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -23,7 +33,7 @@ describe('homeViewPreferenceStore', () => {
     store.clear();
   });
 
-  it('stores the selected device filter and group-by-project toggle', async () => {
+  it('stores the selected device filter and display-menu toggles', async () => {
     const {
       __testing,
       readHomeViewPreferences,
@@ -33,14 +43,31 @@ describe('homeViewPreferenceStore', () => {
     await saveHomeViewPreferences({
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
     });
-    await saveHomeViewPreferences({ groupByProject: true });
+    await saveHomeViewPreferences({
+      groupByProject: true,
+      groupDialogue: true,
+      sortBy: 'priority',
+      statusFilter: 'archived',
+      projectOrder: 'custom',
+      manualProjectOrder: ['proj-b', 'proj-a'],
+    });
 
     await expect(readHomeViewPreferences()).resolves.toEqual({
       groupByProject: true,
+      groupDialogue: true,
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
+      sortBy: 'priority',
+      statusFilter: 'archived',
+      projectOrder: 'custom',
+      manualProjectOrder: ['proj-b', 'proj-a'],
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
       groupByProject: true,
+      groupDialogue: true,
+      sortBy: 'priority',
+      statusFilter: 'archived',
+      projectOrder: 'custom',
+      manualProjectOrder: ['proj-b', 'proj-a'],
       deviceId: 'devA',
       deviceName: 'Mac A',
     });
@@ -57,7 +84,7 @@ describe('homeViewPreferenceStore', () => {
     await saveHomeViewPreferences({ selectedDevice: null });
 
     await expect(readHomeViewPreferences()).resolves.toEqual({
-      groupByProject: true,
+      ...defaultPrefs,
       selectedDevice: null,
     });
   });
@@ -73,12 +100,12 @@ describe('homeViewPreferenceStore', () => {
     ]);
 
     await expect(readHomeViewPreferences()).resolves.toEqual({
-      groupByProject: true,
+      ...defaultPrefs,
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
     });
   });
 
-  it('normalizes invalid or stale persisted data without blocking the page', async () => {
+  it('keeps old-blob defaults: project on, dialogue group off, time sort, active', async () => {
     const { __testing, readHomeViewPreferences } =
       await import('@/session/homeViewPreferenceStore');
 
@@ -89,14 +116,11 @@ describe('homeViewPreferenceStore', () => {
     }));
 
     await expect(readHomeViewPreferences()).resolves.toEqual({
-      groupByProject: true,
+      ...defaultPrefs,
       selectedDevice: { deviceId: 'devB', name: 'devB' },
     });
 
     store.set(__testing.storageKey, 'not-json');
-    await expect(readHomeViewPreferences()).resolves.toEqual({
-      groupByProject: true,
-      selectedDevice: null,
-    });
+    await expect(readHomeViewPreferences()).resolves.toEqual({ ...defaultPrefs });
   });
 });

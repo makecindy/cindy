@@ -139,6 +139,7 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
       ...(errorCode ? { errorCode } : {}),
       source: deps.store.getSource(),
       endpoint: deps.store.getServerEndpoint(),
+      accountTier: null,
     };
   }
 

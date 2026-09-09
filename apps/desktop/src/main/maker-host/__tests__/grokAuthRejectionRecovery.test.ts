@@ -51,6 +51,9 @@ vi.mock('../outbound-fetch.js', () => ({
 }));
 
 import {
+  CallbackListener,
+  runGrokOAuthLogin,
+  getGrokOAuthCredentialGeneration,
   logoutGrok,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
@@ -100,8 +103,22 @@ afterEach(() => {
 });
 
 describe('recoverGrokAuthAfterRejection', () => {
+  it('凭证边界代际单调推进,重复清理或登出不会复活旧任务', () => {
+    const initial = getGrokOAuthCredentialGeneration();
+    resetGrokOAuthMemoryCache();
+    const afterReset = getGrokOAuthCredentialGeneration();
+    logoutGrok();
+    const afterLogout = getGrokOAuthCredentialGeneration();
+    logoutGrok();
+
+    expect(afterReset).toBeGreaterThan(initial);
+    expect(afterLogout).toBeGreaterThan(afterReset);
+    expect(getGrokOAuthCredentialGeneration()).toBeGreaterThan(afterLogout);
+  });
+
   it('刷新成功即自愈,凭证换成新 token 且不登出', async () => {
     seedCredentials();
+    const generation = getGrokOAuthCredentialGeneration();
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -115,6 +132,7 @@ describe('recoverGrokAuthAfterRejection', () => {
 
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('refreshed');
     expect(readStored()?.access_token).toBe('fresh-access-token');
+    expect(getGrokOAuthCredentialGeneration()).toBe(generation);
   });
 
   it('refresh_token 被服务端作废时清空凭证', async () => {
@@ -327,4 +345,27 @@ describe('recoverGrokAuthAfterRejection', () => {
     expect(readStored()?.access_token).toBe('rejected-access-token');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+it.each(['boundary', 'policy'] as const)('preserves credentials when %s becomes invalid during token exchange', async (reason) => {
+  seedCredentials();
+  const before = store.get(SECRET_ID);
+  const generation = getGrokOAuthCredentialGeneration();
+  let current = true;
+  vi.spyOn(CallbackListener.prototype, 'start').mockResolvedValue(56121);
+  vi.spyOn(CallbackListener.prototype, 'waitForCode').mockResolvedValue('fake-code');
+  vi.stubGlobal('fetch', vi.fn(async (_input, init) => {
+    if (init?.method === 'POST') {
+      current = false;
+      return tokenResponse(200, { access_token: 'new-fake-access', refresh_token: 'new-fake-refresh' });
+    }
+    return tokenResponse(200, {});
+  }));
+  const result = await runGrokOAuthLogin({
+    assertCurrent: () => { if (reason === 'boundary' && !current) throw new Error('card withdrawn'); },
+    beforeCommit: async () => { if (reason === 'policy' && !current) throw new Error('card withdrawn'); },
+  });
+  expect(result).toMatchObject({ ok: false, reason: 'card withdrawn' });
+  expect(store.get(SECRET_ID)).toBe(before);
+  expect(getGrokOAuthCredentialGeneration()).toBe(generation);
 });

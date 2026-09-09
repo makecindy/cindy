@@ -8,7 +8,12 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { deriveCindyMediaConfig, type CindyMediaProviderSlice } from '../cindyMediaCatalog';
+import {
+  deriveCindyMediaConfig,
+  filterLegacyCindyMediaConfig,
+  selectExecutableCoreMediaModels,
+  type CindyMediaProviderSlice,
+} from '../cindyMediaCatalog';
 
 const XD: CindyMediaProviderSlice = {
   id: 'xd',
@@ -34,6 +39,61 @@ const XD: CindyMediaProviderSlice = {
     best: 'voyage/voyage-4-large',
   },
 };
+
+describe('selectExecutableCoreMediaModels', () => {
+  it('保留 Core 可执行但没有 legacy alias 的视频模型', () => {
+    const models = [
+      { id: 'legacy-video', mode: 'video_generation', coreExecutable: false },
+      { id: 'minimax/minimax-h3', mode: 'video_generation', coreExecutable: true },
+      { id: 'image-only', mode: 'image_generation', coreExecutable: true },
+    ];
+
+    expect(
+      selectExecutableCoreMediaModels(models, 'video', (model) => model.coreExecutable),
+    ).toEqual([{ id: 'minimax/minimax-h3', mode: 'video_generation', coreExecutable: true }]);
+  });
+});
+
+describe('filterLegacyCindyMediaConfig', () => {
+  const models = [
+    {
+      id: 'media:xd:core-video', modelId: 'core-video', providerId: 'xd',
+      label: 'Core', supportsEdit: true,
+    },
+    {
+      id: 'media:xd:shared-video', modelId: 'shared-video', providerId: 'xd',
+      label: 'Gateway', supportsEdit: true,
+    },
+    {
+      id: 'media:local:shared-video', modelId: 'shared-video', providerId: 'local',
+      label: 'Local', supportsEdit: true,
+    },
+  ];
+  const config = {
+    models,
+    defaults: { standard: models[0]!.id, draft: models[0]!.id, best: models[0]!.id },
+  };
+
+  it('旧通道按完整来源筛选并恢复失效默认，不缩减 Core 原目录', () => {
+    const legacy = filterLegacyCindyMediaConfig(
+      config,
+      (model) => model.providerId === 'local' && model.modelId === 'shared-video',
+    );
+    expect(legacy.models).toEqual([models[2]]);
+    expect(legacy.defaults).toEqual({
+      standard: models[2]!.id,
+      draft: models[2]!.id,
+      best: models[2]!.id,
+    });
+    expect(config.models).toHaveLength(3);
+    expect(config.defaults.standard).toBe(models[0]!.id);
+  });
+
+  it('保留仍可执行的默认；没有旧通道候选时不伪造选型', () => {
+    expect(filterLegacyCindyMediaConfig(config, () => true)).toEqual(config);
+    expect(filterLegacyCindyMediaConfig(config, () => false)).toEqual({ models: [], defaults: null });
+  });
+});
 
 describe('deriveCindyMediaConfig — 正常目录', () => {
   it('清单按目录序、label 取 name、providerId 记归属;draft/best 缺省回落 standard', () => {
@@ -104,6 +164,38 @@ describe('deriveCindyMediaConfig — 正常目录', () => {
       standard: 'v1',
       draft: 'v1',
       best: 'v1',
+    });
+  });
+
+  it('xAI 动态发现的两个视频模型原样进入候选并保留 provider 归属', () => {
+    const xai: CindyMediaProviderSlice = {
+      id: 'xai',
+      videoModels: [
+        { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+        { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+      ],
+    };
+
+    expect(deriveCindyMediaConfig([xai], 'video')).toEqual({
+      models: [
+        {
+          id: 'xai/grok-imagine-video',
+          label: 'Grok Imagine Video',
+          providerId: 'xai',
+          supportsEdit: true,
+        },
+        {
+          id: 'xai/grok-imagine-video-1.5',
+          label: 'Grok Imagine Video 1.5',
+          providerId: 'xai',
+          supportsEdit: true,
+        },
+      ],
+      defaults: {
+        standard: 'xai/grok-imagine-video',
+        draft: 'xai/grok-imagine-video',
+        best: 'xai/grok-imagine-video',
+      },
     });
   });
 });

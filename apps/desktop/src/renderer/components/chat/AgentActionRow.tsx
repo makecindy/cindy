@@ -39,7 +39,13 @@
  *     attachment chip.
  */
 
-import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { Check, ChevronDown, ChevronRight, File as FileIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -53,8 +59,21 @@ import {
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
-import { verbForTool, verbLabelKeyForIntent, verbLabelKeyForRow } from '@/lib/agent-actions/verbAggregator';
-import { statsForToolCall } from '@/lib/agent-actions/diffStats';
+import {
+  verbForTool,
+  verbLabelKeyForIntent,
+  verbLabelKeyForRow,
+} from '@/lib/agent-actions/verbAggregator';
+import {
+  DIFF_MAIN_THREAD_MAX_CHARS,
+  DIFF_MAX_SEGMENTS,
+  diffSourcesForToolCall,
+  getDiffDetailsSync,
+  requestToolDiffDetails,
+  statsForToolCall,
+  type DiffDetails,
+  type ToolDiffDetails,
+} from '@/lib/agent-actions/diffStats';
 import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
 import { toLocalFileUrl, resolveToolFilePath } from '@/lib/localPathResolver';
@@ -65,10 +84,20 @@ import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
+} from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import {
+  formatToolResultCompactionBytes,
+  parseToolResultCompactionMarker,
+} from '@cindy/maker-shared/tool-result-compaction';
 
 /**
  * 点击走「文件类」交互(diff / 文稿 / 图片 lightbox)的工具:CC 大写 + pi 小写
@@ -224,8 +253,7 @@ function parseAudioTracks(raw: unknown): ToolAudioTrack[] {
         : undefined;
     // kind 字段是新增 — 老版本 server / 历史 message 没带,默认按 'music' 渲染保
     // 持兼容(那条路径自带 cover placeholder,不会因 missing kind 走崩)。
-    const kind: 'music' | 'sound_effect' =
-      obj.kind === 'sound_effect' ? 'sound_effect' : 'music';
+    const kind: 'music' | 'sound_effect' = obj.kind === 'sound_effect' ? 'sound_effect' : 'music';
     out.push({
       kind,
       audioUrl,
@@ -339,10 +367,7 @@ export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
     // 提取层只打标不裁决,压不压基座由 MessageStream 验证锚卡真含对应图片
     // 后决定(验证不过照常渲染,图片永不消失)。手机端提取器不认该令牌。
     const imagesInCard = parsed.xdt_images_in_card === true;
-    if (
-      typeof parsed.xdt_image_url === 'string' &&
-      isToolImageUrl(parsed.xdt_image_url)
-    ) {
+    if (typeof parsed.xdt_image_url === 'string' && isToolImageUrl(parsed.xdt_image_url)) {
       const modelFile = nextModelFile();
       items.push({
         kind: 'image',
@@ -366,10 +391,7 @@ export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
     }
     // 协议白名单与图卡同款双世界:老 xdt-video://(遗产只读)+ 新
     // cindy-media://(意识 gen_video 等新链路产物)。
-    if (
-      typeof parsed.xdt_video_url === 'string' &&
-      isToolVideoUrl(parsed.xdt_video_url)
-    ) {
+    if (typeof parsed.xdt_video_url === 'string' && isToolVideoUrl(parsed.xdt_video_url)) {
       items.push({
         kind: 'video',
         url: parsed.xdt_video_url,
@@ -449,16 +471,38 @@ export function extractToolResultImageUrls(toolResult: string): string[] {
     .map((m) => m.url);
 }
 
+/** 文档工具失败时优先展示可执行的 hint，避免把内部 JSON 直接甩给普通用户。 */
+export function humanizeDocumentToolResult(toolName: string, toolResult: string): string | null {
+  const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
+  const documentTool = normalized.split(':').at(-1) ?? normalized;
+  if (!/^(make_docx|make_pptx|make_xlsx|render_pdf|read_sheet|inspect_pdf)$/.test(documentTool)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(toolResult) as {
+      ok?: unknown;
+      data?: { hint?: unknown; message?: unknown };
+    };
+    if (parsed.ok !== false) return null;
+    if (typeof parsed.data?.hint === 'string' && parsed.data.hint.trim()) {
+      return parsed.data.hint.trim();
+    }
+    if (typeof parsed.data?.message === 'string' && parsed.data.message.trim()) {
+      return parsed.data.message.trim();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function commandDisplayText(inp: Record<string, unknown>): string {
   if (typeof inp.displayCommand === 'string') return inp.displayCommand;
   if (typeof inp.command !== 'string') return '';
   return normalizeDisplayCommand(inp.command) ?? inp.command;
 }
 
-function formatInlineInput(
-  toolName: string,
-  inp: Record<string, unknown> | null,
-): string {
+function formatInlineInput(toolName: string, inp: Record<string, unknown> | null): string {
   if (!inp) return '';
   switch (toolName) {
     case 'Bash':
@@ -527,7 +571,9 @@ type FileChangeDescriptor = Extract<ToolUseDescriptor, { kind: 'fileChange' }>;
 function buildDiffPayload(
   descriptor: ToolUseDescriptor,
   inp: Record<string, unknown> | null,
+  analysis?: ToolDiffDetails | null,
 ): ToolPayloadMode | null {
+  const detailByKey = new Map(analysis?.segments.map((segment) => [segment.key, segment.details]));
   if (descriptor.kind === 'fileChange') {
     return {
       kind: 'diff',
@@ -550,7 +596,9 @@ function buildDiffPayload(
         {
           key: filePath,
           filePath,
-          diffs: [{ key: 'edit:0', oldString: o, newString: n }],
+          diffs: [
+            { key: 'edit:0', oldString: o, newString: n, analysis: detailByKey.get('edit:0') },
+          ],
         },
       ],
     };
@@ -563,7 +611,9 @@ function buildDiffPayload(
         {
           key: filePath,
           filePath,
-          diffs: [{ key: 'write:0', oldString: '', newString: c }],
+          diffs: [
+            { key: 'write:0', oldString: '', newString: c, analysis: detailByKey.get('write:0') },
+          ],
         },
       ],
     };
@@ -571,23 +621,37 @@ function buildDiffPayload(
   // pi edit:声明 schema 的 edits[] 与 legacy 顶层 {oldText,newText} 两种形态,
   // 由共享的 piEditReplacements 归一化(只认一种会让另一种退化成空 diff)。
   if (toolName === 'edit') {
+    const allEdits = piEditReplacements(inp);
+    const visibleEdits = allEdits.slice(0, DIFF_MAX_SEGMENTS);
     return {
       kind: 'diff',
       files: [
         {
           key: filePath,
           filePath,
-          diffs: piEditReplacements(inp).map((edit, index) => ({
+          diffs: visibleEdits.map((edit, index) => ({
             key: `edit:${index}`,
             oldString: edit.oldText,
             newString: edit.newText,
+            analysis: detailByKey.get(`edit:${index}`),
           })),
+          ...(allEdits.length > visibleEdits.length
+            ? {
+                copyDiffs: allEdits.map((edit, index) => ({
+                  key: `edit:${index}`,
+                  oldString: edit.oldText,
+                  newString: edit.newText,
+                })),
+                omittedDiffCount: allEdits.length - visibleEdits.length,
+              }
+            : {}),
         },
       ],
     };
   }
   if (toolName === 'MultiEdit') {
-    const edits = Array.isArray(inp.edits) ? inp.edits : [];
+    const allEdits = Array.isArray(inp.edits) ? inp.edits : [];
+    const edits = allEdits.slice(0, DIFF_MAX_SEGMENTS);
     return {
       kind: 'diff',
       files: [
@@ -598,8 +662,24 @@ function buildDiffPayload(
             const er = e as Record<string, unknown> | null;
             const o = er && typeof er.old_string === 'string' ? er.old_string : '';
             const n = er && typeof er.new_string === 'string' ? er.new_string : '';
-            return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+            return {
+              key: `edit:${index}`,
+              oldString: String(o),
+              newString: String(n),
+              analysis: detailByKey.get(`edit:${index}`),
+            };
           }),
+          ...(allEdits.length > edits.length
+            ? {
+                copyDiffs: allEdits.map((e, index) => {
+                  const er = e as Record<string, unknown> | null;
+                  const o = er && typeof er.old_string === 'string' ? er.old_string : '';
+                  const n = er && typeof er.new_string === 'string' ? er.new_string : '';
+                  return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+                }),
+                omittedDiffCount: allEdits.length - edits.length,
+              }
+            : {}),
         },
       ],
     };
@@ -657,6 +737,12 @@ export function AgentActionRow({
   status = 'done',
 }: AgentActionRowProps) {
   const { t } = useTranslation();
+  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const displayedToolResult = compactedToolResult
+    ? t('chat.toolResultCompacted', {
+        size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
+      })
+    : toolResult;
   // 会话文件来源:remote 时 Read 图片走远程媒体改写、文件打开走远程分流。
   const fileCtx = useChatSessionFile();
   const toolName = message.toolName ?? '';
@@ -694,7 +780,10 @@ export function AgentActionRow({
       ? descriptor.intent?.action
       : undefined;
   const isRawCommandFallback =
-    descriptor.kind === 'command' && !descriptor.description && !descriptor.intent && showRawCommand;
+    descriptor.kind === 'command' &&
+    !descriptor.description &&
+    !descriptor.intent &&
+    showRawCommand;
   const verbLabel = t(
     intentAction
       ? verbLabelKeyForIntent(intentAction)
@@ -710,9 +799,10 @@ export function AgentActionRow({
     () => extractDisplayParam(descriptor, { hideRawCommandFallback: showRawCommand }),
     [descriptor, showRawCommand],
   );
-  const fileChangeCountText = isFileChange && descriptor.changes.length > 1
-    ? t('chat.agentActionRow.fileChange.files', { count: descriptor.changes.length })
-    : null;
+  const fileChangeCountText =
+    isFileChange && descriptor.changes.length > 1
+      ? t('chat.agentActionRow.fileChange.files', { count: descriptor.changes.length })
+      : null;
   const rawCommand =
     showRawCommand &&
     descriptor.kind === 'command' &&
@@ -721,10 +811,62 @@ export function AgentActionRow({
     descriptor.command
       ? descriptor.command
       : null;
-  const stats = useMemo(
-    () => statsForToolCall(toolName, inp),
-    [toolName, inp],
+  const userFacingToolResult = displayedToolResult
+    ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
+    : null;
+  const diffSources = useMemo(() => diffSourcesForToolCall(toolName, inp), [toolName, inp]);
+  const syncDiff = useMemo<ToolDiffDetails | null>(() => {
+    if (!diffSources || diffSources.truncated) return null;
+    // Apply the budget to the complete tool call, not each segment. A
+    // MultiEdit with many individually-small replacements must still stay off
+    // the renderer thread.
+    const totalChars = diffSources.segments.reduce(
+      (total, segment) => total + segment.oldString.length + segment.newString.length,
+      0,
+    );
+    if (totalChars > DIFF_MAIN_THREAD_MAX_CHARS) return null;
+    const segments = diffSources.segments.map((segment) => ({
+      key: segment.key,
+      details: getDiffDetailsSync(segment.oldString, segment.newString),
+    }));
+    if (segments.some((segment) => !segment.details)) return null;
+    const resolvedSegments = segments as Array<{ key: string; details: DiffDetails }>;
+    return {
+      stats: segments.reduce(
+        (total, segment) => ({
+          add: total.add + (segment.details?.stats.add ?? 0),
+          del: total.del + (segment.details?.stats.del ?? 0),
+        }),
+        { add: 0, del: 0 },
+      ),
+      segments: resolvedSegments,
+      truncated: false,
+    };
+  }, [diffSources]);
+  const initialStats = useMemo(
+    () => syncDiff?.stats ?? statsForToolCall(toolName, inp),
+    [inp, syncDiff, toolName],
   );
+  const [asyncDiff, setAsyncDiff] = useState<ToolDiffDetails | null>(null);
+
+  // Small edits stay synchronous for a stable first paint. Larger edits are
+  // analysed off-thread; the same result is passed to the lightbox on click.
+  useEffect(() => {
+    let active = true;
+    if (!diffSources || syncDiff || initialStats !== null) {
+      setAsyncDiff(null);
+      return () => {
+        active = false;
+      };
+    }
+    void requestToolDiffDetails(toolName, inp).then((result) => {
+      if (active) setAsyncDiff(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [diffSources, initialStats, inp, syncDiff, toolName]);
+  const stats = asyncDiff?.truncated ? null : (asyncDiff?.stats ?? initialStats);
   const isFilePathTool = FILE_PATH_TOOLS.has(toolName);
   const filePath = descriptor.kind === 'file' ? descriptor.filePath : '';
   const singleFileChange =
@@ -745,7 +887,7 @@ export function AgentActionRow({
    *   - Read → 文稿/图片 lightbox
    */
   const onActivate = async (anchor: HTMLElement) => {
-    const diffPayload = buildDiffPayload(descriptor, inp);
+    const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
       setLightbox({ kind: 'payload', payload: diffPayload });
@@ -876,7 +1018,7 @@ export function AgentActionRow({
   };
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" data-message-client-id={message.clientId}>
       <button
         type="button"
         onClick={(e) => void onActivate(e.currentTarget)}
@@ -888,14 +1030,16 @@ export function AgentActionRow({
             ? `${rowVerbLabel} ${ghostInfo.name} ${ghostInfo.tool}`
             : displayParam || fileChangeCountText
               ? hideVerb
-                ? displayParam?.text ?? fileChangeCountText ?? ''
+                ? (displayParam?.text ?? fileChangeCountText ?? '')
                 : `${rowVerbLabel} ${displayParam?.text ?? fileChangeCountText ?? ''}`
               : rowVerbLabel
         }
         className={cn(
           'group flex w-full items-center gap-[6px]',
-          'rounded-[6px] px-2 py-[3px]',
-          'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
+          ACTIVITY_ROW_RADIUS_CLASS,
+          'px-2 py-[3px]',
+          ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+          ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
           'focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
           'text-left',
@@ -913,11 +1057,7 @@ export function AgentActionRow({
           }
           className="inline-flex h-[18px] w-4 items-center justify-center shrink-0 text-[var(--msg-tool-card-chevron)]"
         >
-          {status === 'running' ? (
-            <Spinner size={13} />
-          ) : (
-            <Check size={13} />
-          )}
+          {status === 'running' ? <Spinner size={13} /> : <Check size={13} />}
         </span>
         {!hideVerb && (
           <span className="text-14 text-[var(--msg-tool-card-chevron)] shrink-0">
@@ -934,19 +1074,8 @@ export function AgentActionRow({
         )}
         {/* v9: 移除 chevron 上的"查看详情" Tooltip。整行 button 已经是
             统一激活目标，末尾 chevron 只保留视觉提示。 */}
-        <span
-          aria-hidden="true"
-          className={cn(
-            'flex h-[18px] w-[18px] items-center justify-center rounded-[4px] shrink-0',
-            'text-[var(--msg-tool-card-chevron)]',
-            'group-hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-          )}
-        >
-          {isInlineExpand && expanded ? (
-            <ChevronDown size={13} />
-          ) : (
-            <ChevronRight size={13} />
-          )}
+        <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+          {isInlineExpand && expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
       </button>
       {rawCommand && !expanded && (
@@ -980,22 +1109,22 @@ export function AgentActionRow({
           )}
         >
           {inlineInputText && (
-            <pre className="whitespace-pre-wrap break-words m-0">
-              {inlineInputText}
-            </pre>
+            <pre className="whitespace-pre-wrap break-words m-0">{inlineInputText}</pre>
           )}
-          {toolResult && (
+          {userFacingToolResult && (
             <>
               {inlineInputText && (
                 <div className="my-2 h-px bg-[var(--msg-tool-card-chevron)]/20" />
               )}
               <pre className="whitespace-pre-wrap break-words m-0 text-[var(--msg-tool-card-chevron)]">
-                {toolResult}
+                {userFacingToolResult}
               </pre>
             </>
           )}
-          {!inlineInputText && !toolResult && (
-            <span className="text-[var(--msg-tool-card-chevron)]">{t('chat.agentActionRow.noContent')}</span>
+          {!inlineInputText && !userFacingToolResult && (
+            <span className="text-[var(--msg-tool-card-chevron)]">
+              {t('chat.agentActionRow.noContent')}
+            </span>
           )}
         </div>
       )}
@@ -1016,9 +1145,7 @@ export function AgentActionRow({
           onClose={closeLightbox}
         />
       )}
-      {lightbox.kind === 'image' && (
-        <ImageLightbox src={lightbox.src} onClose={closeLightbox} />
-      )}
+      {lightbox.kind === 'image' && <ImageLightbox src={lightbox.src} onClose={closeLightbox} />}
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}

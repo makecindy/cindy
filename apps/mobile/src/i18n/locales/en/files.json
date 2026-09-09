@@ -46,6 +46,34 @@
     "a11yPreviewName": "Preview {{name}}",
     "a11yPreviewNameLine": "Preview {{name}} line {{line}}"
   },
+  "presentation": {
+    "grid": {
+      "today": "Today {{time}}", "yesterday": "Yesterday {{time}}", "empty": "Folder is empty",
+      "summaryMixed": "{{dirs}} folders, {{files}} files", "summaryDirs": "{{count}} folders", "summaryFiles": "{{count}} files", "workdir": "Working directory"
+    },
+    "preview": {
+      "nonText": {
+        "pdf": "PDF files can't be previewed inline on mobile yet. Copy the path and open it on desktop or in a system PDF reader.",
+        "drawio": "Draw.io files can't be previewed inline on mobile yet. Copy the path and continue viewing or editing on desktop.",
+        "office": "Office files can't be previewed inline on mobile yet. Copy the path and open it on desktop or in a system app.",
+        "binary": "This isn't a text file, so mobile won't read its contents. Copy the path to open it on desktop.",
+        "unknown": "The file type can't be determined, so mobile won't read its contents. Copy the path to open it on desktop.",
+        "text": "Text preview is available on demand."
+      },
+      "pathOnly": "Only the file path is available; the preview can't be read from the remote computer.",
+      "loading": "Reading the text preview from the remote computer",
+      "ready": "Text preview loaded · {{size}}",
+      "idle": "The remote text preview is loaded on demand; file contents aren't fetched in bulk in the message list.",
+      "failure": {
+        "oversize": "File exceeds the remote preview limit · {{limit}} · Current size {{size}}",
+        "forbidden": "The controlled computer denied access to this path.",
+        "notFound": "The file wasn't found on the controlled computer.",
+        "readFailed": "Read failed.",
+        "readFailedWithError": "Read failed: {{error}}",
+        "default": "This file can't be previewed."
+      }
+    }
+  },
   "preview": {
     "done": "Done",
     "a11yShare": "Export and share",

@@ -155,6 +155,9 @@ describe('maker session CREATE_SESSION IPC handler', () => {
     ['[REMOTE_PROVIDER_UPDATING] provider "p" credentials are being updated; retry in a moment', 'REMOTE_PROVIDER_UPDATING'],
     ['[REMOTE_PROVIDER_UNSUPPORTED] provider "p" has no claude-code route on this desktop', 'REMOTE_PROVIDER_UNSUPPORTED'],
     ['[REMOTE_NATIVE_OAUTH_UNAVAILABLE] Anthropic subscription is not connected on this desktop', 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'],
+    // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway 未就绪 —— 必须映射
+    // 到 IPC code, renderer 走 5 语言可行动文案, 不显示 raw 英文。
+    ['[REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE] Remote Pi sessions need the XD gateway endpoint issued after sign-in (runtimeConfig.remoteEndpoint is empty)', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'],
   ])('maps remote route error %s to %s', async (message, code) => {
     const harness = new IpcHarness();
     const deps = createDeps({

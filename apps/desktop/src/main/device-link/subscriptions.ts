@@ -48,6 +48,47 @@ const rememberedTopicsByController = new Map<string, Set<StoredTopic>>();
  * 新控制端误判成 legacy，否则 set-model 的显式 provider null 会被当成占位。
  */
 const rememberedCapabilitiesByController = new Map<string, Set<string>>();
+const historyViewsByController = new Map<string, Map<string, { ready: boolean; liveKeys: readonly string[]; expanded: Set<string> }>>();
+
+/** Capture this subscription before reading; only its successful result may enable filtering. */
+export function prepareHistoryView(deviceId: string, sessionId: string) {
+  if (!controllerHasTopic(deviceId, `session:${sessionId}`)) return undefined;
+  const views = historyViewsByController.get(deviceId) ?? new Map();
+  const view = views.get(sessionId) ?? { ready: false, liveKeys: [], expanded: new Set<string>() };
+  views.set(sessionId, view);
+  historyViewsByController.set(deviceId, views);
+  const isCurrent = () => historyViewsByController.get(deviceId)?.get(sessionId) === view;
+  return {
+    disable(): void {
+      if (isCurrent()) views.delete(sessionId);
+    },
+    update(liveKeys: readonly string[]): void {
+      if (!isCurrent()) return;
+      view.liveKeys = [...liveKeys];
+      view.ready = true;
+    },
+    setExpanded(keys: readonly string[]): void {
+      // Intent alone cannot opt a peer in or revive an old link/subscription.
+      if (!isCurrent() || !view.ready) return;
+      view.expanded = new Set(keys);
+    },
+  };
+}
+
+/** History opt-in belongs to one accepted link, unlike remembered routing topics. */
+export function clearHistoryViews(deviceId: string): void {
+  historyViewsByController.delete(deviceId);
+}
+
+export function hasHistoryView(deviceId: string, sessionId: string, includePending = false): boolean {
+  const view = historyViewsByController.get(deviceId)?.get(sessionId);
+  return !!view && (includePending || view.ready);
+}
+
+export function projectsHistoryDetails(deviceId: string, sessionId: string): boolean {
+  const view = historyViewsByController.get(deviceId)?.get(sessionId);
+  return !!view?.ready && !view.liveKeys.some((key) => view.expanded.has(key));
+}
 
 /**
  * topic 生命周期监听(fs-watch 档消费:订阅驱动被控端文件 watch 启停)。
@@ -142,7 +183,7 @@ export function updateControllerMetadata(
   deviceId: string,
   name: string,
   capabilities?: readonly string[],
-): void {
+): boolean {
   const e = registry.get(deviceId);
   if (capabilities) {
     const normalized = normalizeCapabilities(capabilities);
@@ -151,7 +192,9 @@ export function updateControllerMetadata(
   }
   // Do not recreate a topic entry during link-open; modern controllers must still
   // replay subscribe before their remembered topics become active.
-  if (e) e.name = name;
+  if (!e || e.name === name) return false;
+  e.name = name;
+  return true;
 }
 
 export function controllerHasTopic(deviceId: string, topic: string): boolean {
@@ -160,6 +203,10 @@ export function controllerHasTopic(deviceId: string, topic: string): boolean {
 
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
 export function unsubscribe(deviceId: string, topics: readonly string[]): void {
+  for (const topic of topics) {
+    if (topic.startsWith('session:')) historyViewsByController.get(deviceId)?.delete(topic.slice(8));
+  }
+  if (historyViewsByController.get(deviceId)?.size === 0) historyViewsByController.delete(deviceId);
   const e = registry.get(deviceId);
   const remembered = rememberedTopicsByController.get(deviceId);
   if (!e && !remembered) return;
@@ -179,6 +226,7 @@ export function unsubscribe(deviceId: string, topics: readonly string[]): void {
 
 /** 整条移除某控制端(link-close / presence-offline 兜底)。返回是否确实移除。 */
 export function clearController(deviceId: string): boolean {
+  clearHistoryViews(deviceId);
   const e = registry.get(deviceId);
   if (!e) return false;
   const held = [...e.topics];
@@ -197,6 +245,7 @@ export function forgetKnownController(deviceId: string): void {
 
 /** 清空所有订阅(登出 / 关被控 / 退出)。 */
 export function clearAll(): void {
+  historyViewsByController.clear();
   const held = new Set<StoredTopic>();
   for (const e of registry.values()) for (const t of e.topics) held.add(t);
   registry.clear();
@@ -288,6 +337,7 @@ export function getUpdateRelaunchControllers(): ActiveController[] {
 
 export const __testing = {
   reset(): void {
+    historyViewsByController.clear();
     registry.clear();
     knownControllerIds.clear();
     rememberedTopicsByController.clear();

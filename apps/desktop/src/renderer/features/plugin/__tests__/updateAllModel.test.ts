@@ -80,16 +80,14 @@ describe('batch transitions', () => {
     expect(next[1].status).toBe('pending');
   });
 
-  it('finishes only after every row reaches a terminal state, including needs-confirm', () => {
+  it('finishes only after every row reaches a terminal state', () => {
     let next = updateRow(rows, 'p1', { status: 'done' });
     next = updateRow(next, 'p2', { status: 'installing' });
-    expect(isBatchFinished(next)).toBe(false);
-
-    next = updateRow(next, 'p2', { status: 'needs-confirm' });
-    expect(isBatchSettled(next)).toBe(true);
+    expect(isBatchSettled(next)).toBe(false);
     expect(isBatchFinished(next)).toBe(false);
 
     next = updateRow(next, 'p2', { status: 'skipped' });
+    expect(isBatchSettled(next)).toBe(true);
     expect(isBatchFinished(next)).toBe(true);
     expect(batchSummary(next)).toEqual({ done: 1, skipped: 1, failed: 0 });
   });

@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UpdateBanner } from '@/components/sidebar/UpdateBanner';
+import { resetUpdateBannerDismissStoreForTests } from '@/hooks/useUpdateBannerDismiss';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -50,6 +51,7 @@ const { anyActivityBlockingRelaunch, relaunchToUpdate } = vi.hoisted(() => ({
 }));
 
 beforeEach(() => {
+  resetUpdateBannerDismissStoreForTests();
   updateStatus.current = { status: 'ready', version: '1.4.2' };
   fetchReleaseNotes.mockReset();
   fetchReleaseNotes.mockResolvedValue(NOTES);
@@ -91,6 +93,8 @@ describe('UpdateBanner release-notes link', () => {
   });
 
   it('hides the link while the busy-turn interruption warning is showing', async () => {
+    // 自动弹出探针先给 idle,让完整横幅出来;点入口再报 busy,才进中断警告。
+    anyActivityBlockingRelaunch.mockResolvedValueOnce(false);
     anyActivityBlockingRelaunch.mockResolvedValue(true);
     render(<UpdateBanner isCollapsed={false} onOpenVersionNotice={vi.fn()} />);
     await screen.findByText(LINK);

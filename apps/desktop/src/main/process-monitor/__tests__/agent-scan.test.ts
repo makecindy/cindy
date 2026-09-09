@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 
@@ -9,6 +9,7 @@ import {
   buildPosixProcessScanEnv,
   classifyMonitoredAgentCommandLine,
   collectDescendantPids,
+  createWindowsProcessScanner,
   parsePosixProcessTable,
   parseWindowsProcessTable,
   registerPiUserDataMarkers,
@@ -72,6 +73,28 @@ describe('parseWindowsProcessTable', () => {
 
   it('有输出但全不可解析时返回空(格式漂移由上层日志暴露)', () => {
     expect(parseWindowsProcessTable('ProcessId ParentProcessId\n123 456')).toEqual([]);
+  });
+});
+
+describe('createWindowsProcessScanner', () => {
+  it('失败后熔断 30s，期间返回空快照且不重复拉起 worker', async () => {
+    let nowMs = 1_000;
+    const runWorker = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))
+      .mockResolvedValue('4321|100|1024|0|638901092960000000|C:\\bin\\claude.exe');
+    const scan = createWindowsProcessScanner({ runWorker, now: () => nowMs });
+
+    await expect(scan()).rejects.toMatchObject({ code: 'ENOTCONN' });
+    expect(runWorker).toHaveBeenCalledOnce();
+
+    nowMs += 29_999;
+    await expect(scan()).resolves.toEqual({ rows: [], childrenByParent: new Map() });
+    expect(runWorker).toHaveBeenCalledOnce();
+
+    nowMs += 1;
+    await expect(scan()).resolves.toMatchObject({ rows: [expect.objectContaining({ pid: 4321 })] });
+    expect(runWorker).toHaveBeenCalledTimes(2);
   });
 });
 

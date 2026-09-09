@@ -1,5 +1,6 @@
 import type { Theme } from '../types';
 import cindyLogoLight from '../../assets/cindy-logo-light.png';
+import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
 
 /*
  * CINDY Light — 品牌红 CTA + 暖象牙底(#F2F2ED)+ AA 正文。
@@ -136,7 +137,7 @@ const overrides = {
   'sidebar-search-bg': '60.0 12.8% 92.4%', // 侧栏搜索区: 同侧栏面
   'sidebar-search-input-bg': 'rgba(255, 255, 250, 0.55)', // 暖化
   'sidebar-muted': '60.0 2.1% 52.4%', // 侧栏灰字: 同上
-  'surface-translucent-sidebar': 'rgba(238, 238, 233, 0.90)', // 侧栏面: 独立压暗一档+90% 遮盖(用户调参 2026-08-13/14)
+  'surface-translucent-sidebar': CINDY_ACRYLIC_WINDOW_BACKING.light, // 侧栏面: 独立压暗一档+85% 遮盖(用户调参 2026-08-17, 与深色对齐)
   'surface-translucent-main': '#F2F2ED', // 直映: 页底(暖象牙)
   'surface-translucent-overlay': 'rgba(251, 251, 246, 0.90)', // 浮层玻璃: 暖化
   'composer-pill-bg': '#FFFFFA', // 近白档

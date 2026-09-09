@@ -1,15 +1,19 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
+import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
+import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 import * as schema from '../schema.js';
 
 const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   notifyAgentIslandSessionPatch: vi.fn(),
+  runtimeCleanup: vi.fn(),
+  compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
 }));
 
 vi.mock('electron', () => ({
@@ -24,12 +28,22 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 vi.mock('../agentIslandSessionPatch.js', () => ({
   notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch,
 }));
+vi.mock('../toolResultCompaction.js', () => ({
+  compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
+}));
 
 describe('orcaTeamStore', () => {
   let currentClient: DbClient | null = null;
   let rawDb: Database.Database | null = null;
 
+  beforeEach(() => {
+    setSessionRuntimeCleanup(h.runtimeCleanup);
+    setSessionRouteLockImplementation(null);
+  });
+
   afterEach(async () => {
+    setSessionRuntimeCleanup(null);
+    setSessionRouteLockImplementation(null);
     vi.clearAllMocks();
     if (currentClient) {
       clearCurrentDbClient(currentClient);
@@ -104,6 +118,18 @@ describe('orcaTeamStore', () => {
     expect(h.notifyAgentIslandSessionPatch).toHaveBeenCalledWith('worker-session-2', {
       status: 'archived',
     });
+    expect(h.runtimeCleanup).toHaveBeenCalledTimes(2);
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-2');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledTimes(2);
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-2',
+    });
   });
 
   it('never archives or broadcasts a worker task that is already deleted', async () => {
@@ -127,6 +153,8 @@ describe('orcaTeamStore', () => {
       sessionId: 'worker-session-2',
       patch: { status: 'archived' },
     });
+    expect(h.runtimeCleanup).not.toHaveBeenCalledWith('worker-session-2');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles only still-active workers from inactive teams', async () => {
@@ -153,6 +181,82 @@ describe('orcaTeamStore', () => {
       { id: 'worker-session-1', status: 'archived' },
       { id: 'worker-session-2', status: 'deleted' },
     ]);
+    expect(h.runtimeCleanup).toHaveBeenCalledTimes(1);
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
+  });
+
+  it('cleans archived worker runtime state before releasing route locks and broadcasting', async () => {
+    const { archiveWorkersByTeam } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    const events: string[] = [];
+    setSessionRuntimeCleanup((sessionId) => events.push(`cleanup:${sessionId}`));
+    setSessionRouteLockImplementation(async (sessionId, task) => {
+      events.push(`lock:${sessionId}:start`);
+      const result = await task();
+      events.push(`lock:${sessionId}:end`);
+      return result;
+    });
+    h.tapWindowBroadcast.mockImplementation(() => {
+      events.push('broadcast');
+    });
+
+    await archiveWorkersByTeam('team-1');
+
+    expect(events).toEqual([
+      'lock:worker-session-1:start',
+      'lock:worker-session-2:start',
+      'cleanup:worker-session-1',
+      'cleanup:worker-session-2',
+      'lock:worker-session-2:end',
+      'lock:worker-session-1:end',
+      'broadcast',
+      'broadcast',
+    ]);
+  });
+
+  it('cleans runtime state when a single worker is archived and skips deleted workers', async () => {
+    const { archiveSingleWorkerSession } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    await archiveSingleWorkerSession('worker-session-1');
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
+
+    h.runtimeCleanup.mockClear();
+    h.compactSessionToolResultsBestEffort.mockClear();
+    await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [
+      'deleted',
+      'worker-session-2',
+    ]);
+    await archiveSingleWorkerSession('worker-session-2');
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
+  });
+
+  it('compacts a worker task after removeWorker archives it', async () => {
+    const { removeWorker } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    await removeWorker('worker-1');
+
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
   });
 
   it('preserves Pi worker identity in Orca projections', async () => {
@@ -227,6 +331,46 @@ describe('orcaTeamStore', () => {
     ]);
   });
 
+  it('isOrphanedTeamInit:零 worker 且无存活 reservation 判孤儿;活租约或任意 worker 行则不判 (#3555)', async () => {
+    const { isOrphanedTeamInit } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    const now = Date.now();
+    // 年龄地板(review 反馈):刚创建的 team 可能仍在别处初始化,不判孤儿。
+    const staleCreatedAt = now - 120_000;
+    await client.exec(
+      'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['team-young', 'lead-1', 'active', now, now],
+    );
+    await expect(isOrphanedTeamInit('team-young')).resolves.toBe(false);
+    await client.exec(
+      'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['team-orphan', 'lead-1', 'active', staleCreatedAt, staleCreatedAt],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(true);
+
+    await client.exec(
+      'INSERT INTO orca_worker_creation_reservations (id, team_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+      ['resv-1', 'team-orphan', 'dev', now, now + 60_000],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(false);
+    await client.exec(
+      'UPDATE orca_worker_creation_reservations SET expires_at = ? WHERE id = ?',
+      [now - 1, 'resv-1'],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(true);
+
+    await client.exec(
+      'INSERT INTO sessions (id, status, created_at, updated_at) VALUES (?, ?, ?, ?)',
+      ['ws-1', 'archived', now, now],
+    );
+    await client.exec(
+      'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['worker-1', 'team-orphan', 'ws-1', now, now],
+    );
+    await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(false);
+  });
+
   function createTestDbClient(): DbClient {
     const dbHandle = new Database(':memory:');
     rawDb = dbHandle;
@@ -266,16 +410,28 @@ describe('orcaTeamStore', () => {
         im_user_id TEXT,
         used_project_context INTEGER NOT NULL DEFAULT 0,
         codex_history_has_product_prompt INTEGER,
+        codex_plan_json TEXT,
         extra_dirs TEXT NOT NULL DEFAULT '[]',
+        writable_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
         provider_id TEXT,
         active_turn_started_at INTEGER,
         active_turn_pid INTEGER,
         last_turn_ended_at INTEGER,
+        list_preview TEXT,
+        list_preview_role TEXT,
+        list_message_count INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
 
+      CREATE TABLE orca_worker_creation_reservations (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
       CREATE TABLE orca_teams (
         id TEXT PRIMARY KEY,
         lead_session_id TEXT NOT NULL,

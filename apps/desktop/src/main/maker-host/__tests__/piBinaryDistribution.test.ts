@@ -43,6 +43,16 @@ describe('Pi binary distribution contract', () => {
     expect(binaries).toContain('signal: opts.signal');
   });
 
+  it('preserves a locally self-updated Pi when its real version is not below the manifest', () => {
+    const binaries = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/agent-binaries/index.ts'),
+      'utf8',
+    );
+
+    expect(binaries).toContain('preserveLocalVersion: true');
+    expect(binaries).toContain('localVersionResolver: cfg.preserveLocalVersion');
+  });
+
   it('does not expose an old Pi cache through the binary-version IPC', () => {
     const binaryVersion = fs.readFileSync(
       path.join(desktopRoot, 'src/main/maker-ipc/binary-version.ts'),
@@ -52,14 +62,23 @@ describe('Pi binary distribution contract', () => {
     expect(binaryVersion).toContain("if (kind === 'pi') return null;");
   });
 
-  it('keeps a failed Pi disabled when check-environment is retried', () => {
+  it('schedules Pi recovery after a failed optional prepare', () => {
     const bootstrap = fs.readFileSync(
       path.join(desktopRoot, 'src/main/bootstrap-electron.ts'),
       'utf8',
     );
 
-    expect(bootstrap).toContain('let piDisabledForLaunch = false;');
-    expect(bootstrap).toContain('if (piDisabledForLaunch)');
-    expect(bootstrap).toContain('piDisabledForLaunch = true;');
+    expect(bootstrap).toContain('createPiRuntimeRecovery');
+    expect(bootstrap).toContain('piRuntimeRecovery.markUnavailable');
+    expect(bootstrap).toContain('registerPiAgentIfAvailable');
+  });
+
+  it('does not override Pi memory when the runtime recovers', () => {
+    const host = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/maker-host/index.ts'),
+      'utf8',
+    );
+
+    expect(host).not.toContain("syncNativeAgentsOff(['pi'])");
   });
 });

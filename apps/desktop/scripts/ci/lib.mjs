@@ -261,11 +261,13 @@ export function createInitialManifest(version, options = {}) {
 }
 
 /**
- * Linux first release is installer/manual-download only.
- * Reuse this helper anywhere we mint a Linux manifest so `app.hotfix` and
- * `app.requireRelogin` can never leak back in through copy/paste drift.
+ * Linux in-app update downloads `app.installer` (.deb) and applies it with
+ * pkexec. Reuse this helper anywhere we mint a Linux manifest so `app.hotfix`
+ * and `app.requireRelogin` can never leak back in through copy/paste drift.
+ * Callers that have a real .deb must pass `installer`; omitting it keeps the
+ * installer-only shape without inventing a fake asset.
  */
-export function createLinuxFirstReleaseManifest(version, baseManifest) {
+export function createLinuxFirstReleaseManifest(version, baseManifest, installer) {
   const releaseNotes = baseManifest?.app?.releaseNotes;
   const manifest = baseManifest
     ? JSON.parse(JSON.stringify(baseManifest))
@@ -276,8 +278,16 @@ export function createLinuxFirstReleaseManifest(version, baseManifest) {
   };
   delete manifest.app.hotfix;
   delete manifest.app.requireRelogin;
-  delete manifest.app.installer;
   delete manifest.installer;
+  if (installer?.file && installer.sha256) {
+    manifest.app.installer = {
+      file: installer.file,
+      sha256: installer.sha256,
+      size: typeof installer.size === 'number' ? installer.size : 0,
+    };
+  } else {
+    delete manifest.app.installer;
+  }
   // Packaged Linux resolves Claude/Codex from a compatible system install,
   // migrates the legacy local cache, or downloads the pinned official asset.
   // Ripgrep remains bundled in the .deb by forge and needs no manifest entry.

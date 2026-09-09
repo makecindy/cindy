@@ -31,6 +31,8 @@ enum HelperError: Error, CustomStringConvertible {
 struct Options {
   var command = "capture-target"
   var text = ""
+  var key = ""
+  var scrollDeltaY = 0
   var targetPid: pid_t?
   var targetBundleId = ""
   var targetName = ""
@@ -148,6 +150,14 @@ func parseOptions() throws -> Options {
       options.targetName = value
     case "--with-focused-frame":
       options.withFocusedFrame = true
+    case "--key":
+      guard let value = iterator.next() else { throw HelperError.missingValue(arg) }
+      options.key = value
+    case "--scroll-delta-y":
+      guard let value = iterator.next(), let intValue = Int(value) else {
+        throw HelperError.invalidArgument("Invalid --scroll-delta-y value")
+      }
+      options.scrollDeltaY = intValue
     default:
       throw HelperError.invalidArgument("Unknown argument: \(arg)")
     }
@@ -411,6 +421,119 @@ func postCommandV() throws {
   keyDown.post(tap: .cghidEventTap)
   waitWithRunLoop(for: 0.02)
   keyUp.post(tap: .cghidEventTap)
+}
+
+func virtualKey(for name: String) throws -> CGKeyCode {
+  switch name {
+  case "return", "enter":
+    return 36
+  case "up":
+    return 126
+  case "down":
+    return 125
+  default:
+    throw HelperError.invalidArgument("Unknown key: \(name)")
+  }
+}
+
+func requireAccessibilityTrusted() throws {
+  guard AXIsProcessTrusted() else {
+    throw HelperError.accessibilityNotTrusted
+  }
+}
+
+func postHardwareKey(name: String) throws {
+  try requireAccessibilityTrusted()
+  let virtualKey = try virtualKey(for: name)
+  guard let source = CGEventSource(stateID: .privateState),
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false) else {
+    throw HelperError.commandFailed("Could not create \(name) keyboard event")
+  }
+  keyDown.post(tap: .cghidEventTap)
+  waitWithRunLoop(for: 0.02)
+  keyUp.post(tap: .cghidEventTap)
+}
+
+func postScroll(deltaY: Int) throws {
+  guard deltaY != 0 else { return }
+  let wheel1 = Int32(clamping: deltaY)
+  guard let source = CGEventSource(stateID: .privateState),
+        let event = CGEvent(
+          scrollWheelEvent2Source: source,
+          units: .pixel,
+          wheelCount: 1,
+          wheel1: wheel1,
+          wheel2: 0,
+          wheel3: 0
+        ) else {
+    throw HelperError.commandFailed("Could not create scroll event")
+  }
+  event.post(tap: .cghidEventTap)
+}
+
+func keyEventPayload(options: Options) throws -> [String: Any] {
+  let name = options.key.isEmpty ? "return" : options.key
+  try postHardwareKey(name: name)
+  return [
+    "ok": true,
+    "status": "ok",
+    "outcome": "verified_success",
+    "method": "post-key",
+    "key": name,
+  ]
+}
+
+func scrollEventPayload(options: Options) throws -> [String: Any] {
+  try requireAccessibilityTrusted()
+  try postScroll(deltaY: options.scrollDeltaY)
+  return [
+    "ok": true,
+    "status": "ok",
+    "outcome": "verified_success",
+    "method": "post-scroll",
+    "scrollDeltaY": options.scrollDeltaY,
+  ]
+}
+
+/// Stay alive and post wheel events until stdin says stop. The parent writes
+/// signed pixels/second; we own the 16ms clock so a held stick keeps scrolling
+/// even when the device stops sending move events.
+func runHoldScroll() throws {
+  try requireAccessibilityTrusted()
+  let lock = NSLock()
+  var velocity = 0
+  var stopped = false
+  DispatchQueue.global(qos: .userInteractive).async {
+    while let line = readLine() {
+      let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+      if trimmed == "stop" { break }
+      if let next = Int(trimmed) {
+        lock.lock()
+        velocity = next
+        lock.unlock()
+      }
+    }
+    lock.lock()
+    stopped = true
+    lock.unlock()
+  }
+  var last = Date()
+  while true {
+    waitWithRunLoop(for: 0.016)
+    lock.lock()
+    let current = velocity
+    let done = stopped
+    lock.unlock()
+    if done { break }
+    let now = Date()
+    let dt = min(0.1, now.timeIntervalSince(last))
+    last = now
+    let delta = Int((Double(current) * dt).rounded())
+    if delta != 0 {
+      try postScroll(deltaY: delta)
+    }
+  }
 }
 
 func waitWithRunLoop(for interval: TimeInterval) {
@@ -1436,6 +1559,18 @@ do {
     emit(captureTargetPayload(withFocusedFrame: options.withFocusedFrame))
   case "paste-verified":
     emit(pasteVerifiedPayload(options: options))
+  case "post-key":
+    emit(try keyEventPayload(options: options))
+  case "post-scroll":
+    emit(try scrollEventPayload(options: options))
+  case "hold-scroll":
+    try runHoldScroll()
+    emit([
+      "ok": true,
+      "status": "ok",
+      "outcome": "verified_success",
+      "method": "hold-scroll",
+    ])
   default:
     throw HelperError.invalidArgument("Unknown command: \(options.command)")
   }

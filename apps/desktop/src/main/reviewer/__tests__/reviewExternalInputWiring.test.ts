@@ -26,6 +26,27 @@ describe('Review external input wiring', () => {
     }
   });
 
+  it('allows only local Stop through the Review input guard', () => {
+    expect(registerSource).toMatch(
+      /if \(intent !== 'stop' \|\| remote\) await assertReviewExternalInputAllowed\(sid\);/,
+    );
+    const stopHandlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.INPUT_STOP',
+    );
+    const stopHandlerEnd = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.INPUT_RESUME',
+      stopHandlerStart,
+    );
+    const stopHandler = registerSource.slice(stopHandlerStart, stopHandlerEnd);
+    expect(stopHandler).toContain('const remote = isDeviceLinkInvoke();');
+    expect(stopHandler).toContain(
+      "await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');",
+    );
+    expect(stopHandler).toContain(
+      'if (!remote) reviewRunControl.noteReviewerStopRequested(sid);',
+    );
+  });
+
   it('also rejects local cross-task and Orca delivery into Review tasks', () => {
     expect(registerSource).toMatch(
       /async function sendToSessionInternal[\s\S]*?await assertReviewExternalInputAllowed\(targetSessionId\);/,
@@ -127,18 +148,47 @@ describe('Review external input wiring', () => {
     );
   });
 
-  it('retries failed startup reconciliation before admitting another Review', () => {
-    expect(registerSource.match(/createRetryableReviewStartup\(/g)).toHaveLength(2);
-    expect(registerSource).toContain('void ensureReviewStartupReady().catch(() => {});');
-    expect(registerSource).toMatch(
-      /waitUntilReady: async \(\) => \{\s+await ensureReviewStartupReady\(\);\s+[\s\S]*?await reconcileInterruptedReviews\(\);/,
+  it('prepares Review on demand and reconciles only the requested source task', () => {
+    expect(registerSource.match(/createRetryableReviewInitialization\(/g)).toHaveLength(2);
+    expect(registerSource).not.toContain('void ensureReviewRuntimeReady().catch(() => {});');
+    expect(registerSource).not.toContain('reconcileStaleLeases');
+    expect(registerSource).not.toContain(`LIKE '%"reviewRun"%'`);
+    expect(registerSource).toContain(
+      'await sessionTurnLeaseTracker.refreshActiveLeaseOwners();',
     );
-    const reconcileStart = registerSource.indexOf('const reconcileInterruptedReviews');
+    expect(registerSource).toContain(
+      'void cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }).catch',
+    );
+    const wireSessionStart = registerSource.indexOf('export function wireSessionToIpc');
+    const wireSessionEnd = registerSource.indexOf(
+      'export const wireSessionToIpcExternal',
+      wireSessionStart,
+    );
+    expect(registerSource.slice(wireSessionStart, wireSessionEnd)).not.toContain(
+      'ensureReviewOwnerLivenessReady()',
+    );
+    expect(reviewStartSource.indexOf('const request = readStartReviewRequest(raw);')).toBeLessThan(
+      reviewStartSource.indexOf('await deps.waitUntilReady(request.sourceSessionId);'),
+    );
+    expect(registerSource).toMatch(
+      /waitUntilReady: async \(sourceSessionId\) => \{\s+await ensureReviewRuntimeReady\(\);\s+[\s\S]*?await reconcileReviewForSource\(sourceSessionId\);/,
+    );
+    const sourceReadStart = registerSource.indexOf('const readSourceReviewCards');
+    const sourceReadEnd = registerSource.indexOf('const reconcileReviewForSource', sourceReadStart);
+    const sourceRead = registerSource.slice(sourceReadStart, sourceReadEnd);
+    expect(sourceRead).toContain('eq(messages.sessionId, sourceSessionId)');
+    expect(sourceRead).toContain("gte(messages.clientId, 'review:')");
+    expect(sourceRead).toContain("lt(messages.clientId, 'review;')");
+
+    const reconcileStart = registerSource.indexOf('const reconcileReviewForSource');
     const reconcileEnd = registerSource.indexOf(
       'const sourceHasPersistedRunningReview',
       reconcileStart,
     );
     const reconcileSource = registerSource.slice(reconcileStart, reconcileEnd);
+    expect(reconcileSource).toContain(
+      'readPersistedReviewSourceLease(dbClient, sourceSessionId)',
+    );
     expect(reconcileSource.indexOf('patchMessageAgentMeta')).toBeLessThan(
       reconcileSource.indexOf('releaseReviewSourceLease'),
     );

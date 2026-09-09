@@ -122,10 +122,12 @@ describe('commitEditAndResend', () => {
 
   it('happy path:rewindCommit → emitPatch → drop → send 顺序执行,send 用 session 行的设置', async () => {
     const { deps, calls } = makeDeps();
-    await commitEditAndResend(
-      { sessionId: SESSION_ID, clientId: CLIENT_ID, text: 'edited text', fallbackWorkingDir: '/repo-fallback' },
-      deps,
-    );
+    await expect(
+      commitEditAndResend(
+        { sessionId: SESSION_ID, clientId: CLIENT_ID, text: 'edited text', fallbackWorkingDir: '/repo-fallback' },
+        deps,
+      ),
+    ).resolves.toBe(true);
 
     expect(calls).toEqual(['rewindCommit', 'emitPatch', 'drop', 'send']);
     expect(deps.rewindCommit).toHaveBeenCalledWith(SESSION_ID, CLIENT_ID);
@@ -346,10 +348,12 @@ describe('commitEditAndResend', () => {
 
   it('非 quoted 消息重发失败:兜底不注入 quotes(第 4 参 undefined)', async () => {
     const { deps } = makeDeps(fakeSession(), { dispatchResult: false });
-    await commitEditAndResend(
-      { sessionId: SESSION_ID, clientId: CLIENT_ID, text: '> manual md\n\nbody', fallbackWorkingDir: '/repo' },
-      deps,
-    );
+    await expect(
+      commitEditAndResend(
+        { sessionId: SESSION_ID, clientId: CLIENT_ID, text: '> manual md\n\nbody', fallbackWorkingDir: '/repo' },
+        deps,
+      ),
+    ).resolves.toBe(false);
     const args = (deps.saveDraftFallback as unknown as Mock).mock.calls[0];
     expect(args[1]).toEqual({ type: 'doc', text: '> manual md\n\nbody' });
     expect(args).toHaveLength(3);

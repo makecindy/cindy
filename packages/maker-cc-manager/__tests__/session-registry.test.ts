@@ -245,6 +245,50 @@ describe('SessionRegistry', () => {
     ).resolves.toEqual({ continue: true });
   });
 
+  it('enforces subagent model access in remote Full access sessions', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    let accessStatus: 'denied' | 'unknown' = 'denied';
+    const onSubagentModelAccessRequest = vi.fn(async () => ({ status: accessStatus }));
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+      onSubagentModelAccessRequest,
+    });
+    registry.create({
+      sessionId: 's-subagent-model',
+      cwd: '/x',
+      model: 'codex/gpt-5.6-sol',
+      env: {},
+      permissionMode: 'bypassPermissions',
+    });
+
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    await expect(preToolUse!({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'sonnet', run_in_background: true },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('sonnet'),
+      },
+    });
+    expect(onSubagentModelAccessRequest).toHaveBeenCalledWith(
+      's-subagent-model',
+      { sessionId: 's-subagent-model', model: 'sonnet' },
+    );
+    accessStatus = 'unknown';
+    await expect(preToolUse!({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Task',
+      tool_input: { model: 'haiku' },
+    })).resolves.toEqual({ continue: true });
+  });
+
   it('allows the exact Orca report tool for the root and denies nested Claude agents', async () => {
     const { factory: baseFactory } = buildFakeFactory();
     let captured: SdkQueryFactoryOptions | undefined;
@@ -284,6 +328,42 @@ describe('SessionRegistry', () => {
       tool_name: 'mcp__orca_worker_bridge__read_lead',
       agent_id: 'child-1',
     })).resolves.toEqual({ continue: true });
+  });
+
+  it('allows AskUserQuestion for the root and denies it for nested Claude agents', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+    });
+    registry.create({
+      sessionId: 's-ask-user-question-root-only',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [{
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage: 'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED',
+      }],
+    });
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    const call = {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+    };
+    await expect(preToolUse!(call)).resolves.toEqual({ continue: true });
+    await expect(preToolUse!({ ...call, agent_id: 'child-1' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED',
+      },
+    });
   });
 
   it('keeps explicit selection across accepted same-turn steering inputs', async () => {

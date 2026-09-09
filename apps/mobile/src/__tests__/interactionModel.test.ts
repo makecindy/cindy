@@ -164,6 +164,7 @@ describe('interactionModel', () => {
     });
 
     expect(presentation).toEqual({
+      autoReviewUnavailable: false,
       canAlwaysAllow: false,
       code: 'pnpm --filter mobile test',
       description: 'Run the requested test command.',
@@ -175,6 +176,24 @@ describe('interactionModel', () => {
       title: '允许使用 Shell?',
       toolName: 'Bash',
     });
+  });
+
+  it('localizes auto-review unavailable confirmation copy instead of the English fallback', () => {
+    const presentation = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-unavailable',
+      toolName: 'Bash',
+      description: 'Automatic review could not finish, so this action needs your confirmation.',
+      metadata: { autoReviewUnavailable: true },
+      input: { command: 'npx tsc --noEmit' },
+    });
+    expect(presentation.autoReviewUnavailable).toBe(true);
+
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+    expect(interactionPanelSource).toContain("t('interaction.permission.autoReviewUnavailable')");
+    expect(i18n.t('interaction.permission.autoReviewUnavailable')).not.toBe(
+      'interaction.permission.autoReviewUnavailable',
+    );
   });
 
   it('projects ask question review presentation through the shared mobile model', () => {
@@ -223,14 +242,16 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).not.toContain('optionCheckboxMark');
   });
 
-  it('keeps issue confirmation unsupported in the mobile adapter and panel', () => {
+  it('keeps every Host-owned confirmation read-only in the mobile adapter and panel', () => {
     const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
 
     expect('buildIssueConfirmReviewPresentation' in mobileInteractionModel).toBe(false);
     expect('buildIssueConfirmDecision' in mobileInteractionModel).toBe(false);
     expect('normalizeIssueConfirm' in mobileInteractionModel).toBe(false);
-    expect(interactionPanelSource).toContain("if (kind === 'issue_confirm')");
-    expect(interactionPanelSource).toContain("t('interaction.panel.issueConfirmUnsupported')");
+    expect(interactionPanelSource).toContain(
+      "kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'",
+    );
+    expect(interactionPanelSource).toContain("t('interaction.panel.desktopConfirmUnsupported')");
     expect(interactionPanelSource).not.toContain('buildIssueConfirmReviewPresentation');
   });
 

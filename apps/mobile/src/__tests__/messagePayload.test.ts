@@ -219,10 +219,10 @@ describe('messagePayload', () => {
 
     expect(formatMediaActionNotice(media)).toBe([
       '桌面端为这个媒体提供了后续操作。',
-      '可用操作: U1 / V2',
-      '手机版 V1 只安全展示这些操作,暂不远程触发。请回到电脑端点击。',
+      '可用操作：U1 / V2',
+      '手机版 V1 只安全展示这些操作，暂不远程触发。请回到电脑端点击。',
     ].join('\n'));
-    expect(buildMediaPayload(media, 'a.png').body).toContain('可用操作: U1 / V2');
+    expect(buildMediaPayload(media, 'a.png').body).toContain('可用操作：U1 / V2');
   });
 
   it('builds full Mermaid source payloads', () => {

@@ -12,7 +12,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  SESSION_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
@@ -61,8 +64,10 @@ import {
   __testing,
   flushMakerEventBatchesOnReconnect,
   handleControllerOffline,
+  setSessionTextSnapshotReader,
 } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 
 /** 微批窗口与退避间隔(dispatch 内部常量);推进定时器用。 */
 const WINDOW_MS = 120;
@@ -102,6 +107,22 @@ function batchesIn(sent: SentPush[]): MakerEventBatchPayload[] {
     .map((s) => s.payload as MakerEventBatchPayload);
 }
 
+it('projects large tool results before batch admission, preserving ordering with terminal pushes', () => {
+  const { client, sent } = mkClient();
+  __testing.setActiveClient(client as never);
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [
+    CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  ]);
+  const fullText = 'log'.repeat(100_000);
+  __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'p', resolvedContent: fullText,
+    event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText } } });
+  expect(sent).toHaveLength(0);
+  __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'idle' });
+  expect(sent.map((push) => push.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, 'maker:status-changed']);
+  expect(JSON.stringify(sent[0].payload).length).toBeLessThan(10_000);
+  expect(JSON.stringify(sent[0].payload)).not.toContain('resolvedContent');
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
   deviceLinkSettings.value = { remoteControlEnabled: true, revokedControllers: [] };
@@ -115,6 +136,45 @@ afterEach(() => {
 });
 
 describe('[1] 能力协商', () => {
+  it('coalesces task patches even for legacy list subscribers and cancels offline peers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    subscriptions.subscribe('mobile', ['sessions'], 'mobile');
+    for (let i = 0; i < 2026; i++) {
+      __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: String(i) } });
+    }
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { extraDirs: [] } });
+    handleControllerOffline('mobile');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([{ dst: 'legacy', channel: 'local-db:sessions:patched',
+      payload: { sessionId: 's1', patch: { title: '2025', extraDirs: [] } }, ownerStamp: undefined }]);
+  });
+
+  it('keeps engine switch and deletion barriers before subsequent events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: 'new' } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { agentKind: 'codex' } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { type: 'text', data: { text: 'new engine' } } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { status: 'deleted' } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent.map((item) => item.channel)).toEqual(['local-db:sessions:patched', 'maker:event', 'local-db:sessions:patched']);
+    expect(h.sent[0].payload).toEqual({ sessionId: 's1', patch: { title: 'new', agentKind: 'codex' } });
+  });
+
+  it('drops queued global metadata when legacy subscription narrows to one task', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('peer', ['*'], 'peer');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'other', patch: { title: 'private' } });
+    subscriptions.subscribe('peer', ['session:s1'], 'peer');
+    subscriptions.unsubscribe('peer', ['*']);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent).toEqual([]);
+  });
+
   it('声明能力的控制端:窗口内多条事件合并成一帧批,不再每事件一帧', () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -631,6 +691,238 @@ describe('[9] 字节估算按 UTF-8(review 首轮)', () => {
     }
     vi.advanceTimersByTime(WINDOW_MS);
     expect(batchesIn(h.sent).reduce((n, b) => n + b.events.length, 0)).toBe(9);
+  });
+});
+
+describe('running session recovery on slow links', () => {
+  const capabilities = [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1];
+  const delta = (text: string, persistId = 'p1') => ({
+    sessionId: 's1', persistId,
+    event: { type: 'text', source: 'codex', data: { text, isFinal: false } },
+  });
+  const snapshot = { ...delta('whole prefix'), event: {
+    type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
+  } };
+
+  it('replays only the requested current block after old deltas and before new deltas', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader((sid) => sid === 's1' ? snapshot : null);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    subscribeBatchController('old', ['session:s1']);
+    __testing.forwardPush('maker:event', delta('old suffix'));
+    const result = __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    expect(result.ok).toBe(true);
+    __testing.forwardPush('maker:event', delta('new suffix'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    const phone = h.sent.filter(p => p.dst === 'phone');
+    expect(phone.map(p => p.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
+    expect(phone[1].payload).toEqual(snapshot);
+    expect(h.sent.filter(p => p.dst === 'old').every(p => p.channel === MAKER_EVENT_BATCH_CHANNEL)).toBe(true);
+  });
+
+  it('retries the final activity update when the async authorization queue is full', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    subscriptions.subscribe('phone', ['sessions']);
+    for (let index = 0; index < 65; index++) {
+      __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: `s${index}`, phase: 'completed' });
+    }
+    expect(h.sent).toHaveLength(0);
+    finish();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.sent).toHaveLength(65);
+    expect(h.sent.at(-1)?.payload).toEqual({ sessionId: 's64', phase: 'completed' });
+  });
+
+  it('keeps old deltas, snapshot and new deltas ordered through the async DB gate', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setRemoteBotSessionLookup(async () => 'visible');
+    setSessionTextSnapshotReader(() => snapshot);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    __testing.forwardPush('maker:event', delta('old suffix'));
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    __testing.forwardPush('maker:event', delta('new suffix'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL,
+    ]);
+    expect(h.sent[1].payload).toEqual(snapshot);
+  });
+
+  it.each(['subscribe', 'congestion'] as const)('blocks hidden companion snapshots during %s', async (path) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    setRemoteBotSessionLookup(async () => 'hidden');
+    if (path === 'subscribe') {
+      __testing.handleSubscriptionFrame('phone', {
+        channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+      });
+    } else {
+      subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+      h.client.getReliableSendQueueDepth.mockReturnValue(16);
+      __testing.forwardPush('maker:event', delta('hidden body'));
+      await vi.advanceTimersByTimeAsync(WINDOW_MS);
+      h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('repairs snapshot admission failure after async authorization', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setRemoteBotSessionLookup(async () => 'visible');
+    setSessionTextSnapshotReader(() => snapshot);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: true }, ownerStamp: undefined },
+    ]);
+  });
+
+  it('fails subscription when the snapshot cannot enter the reliable window', () => {
+    const h = mkClient({ sendPush: vi.fn(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); }) });
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    expect(__testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    })).toMatchObject({ ok: false, error: { code: 'BACKPRESSURE' } });
+  });
+
+  it('coalesces only adjacent same-identity deltas without crossing a tool or final boundary', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('phone', ['session:s1']);
+    for (const p of [delta('a'), delta('b'), delta('c', 'p2'),
+      { sessionId: 's1', event: { type: 'tool_use', data: { toolUseId: 't1' } } }, delta('d')]) {
+      __testing.forwardPush('maker:event', p);
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent)[0].events).toEqual([
+      delta('ab'), delta('c', 'p2'),
+      { sessionId: 's1', event: { type: 'tool_use', data: { toolUseId: 't1' } } }, delta('d'),
+    ]);
+  });
+
+  it('bounds one congested peer, repairs its dropped final row, and leaves a healthy peer flowing', () => {
+    const h = mkClient();
+    let congested = true;
+    h.client.getReliableSendQueueDepth = vi.fn((dst: string) => dst === 'slow' && congested ? 16 : 0) as never;
+    __testing.setActiveClient(h.client as never);
+    for (const dst of ['slow', 'healthy']) subscriptions.subscribe(dst, ['session:s1'], dst, capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    for (let i = 0; i < 10; i++) {
+      __testing.forwardPush('maker:event', delta(`part-${i}`));
+      vi.advanceTimersByTime(WINDOW_MS);
+    }
+    expect(h.sent.filter(p => p.dst === 'slow')).toHaveLength(0);
+    expect(h.sent.filter(p => p.dst === 'healthy')).toHaveLength(10);
+    // A durable final row can fail admission too; it must leave a repair signal.
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'final' } });
+    setSessionTextSnapshotReader(() => null);
+    congested = false;
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.filter(p => p.dst === 'slow')).toEqual([
+      { dst: 'slow', channel: SESSION_SYNC_CHANNEL, payload: { sessionId: 's1', resyncRequired: true }, ownerStamp: undefined },
+    ]);
+    expect(h.sent.filter(p => p.dst === 'healthy' && p.channel === SESSION_SYNC_CHANNEL)).toHaveLength(0);
+  });
+
+  it('does not deliver a pending repair after the session is unsubscribed', () => {
+    const h = mkClient();
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    __testing.forwardPush('maker:event', delta('text'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('holds deltas and snapshot repair while a known peer is down, then repairs before resuming', () => {
+    const h = mkClient();
+    const canSendPush = vi.fn(() => false);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    canSendPush.mockReturnValue(true);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    __testing.forwardPush('maker:event', delta('after repair'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
+  });
+
+  it('repairs text-only loss without repeatedly requesting a large unchanged history page', () => {
+    const h = mkClient();
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: false }, ownerStamp: undefined },
+    ]);
+  });
+
+  it('holds later deltas after the window drains until the missing prefix is repaired', () => {
+    const h = mkClient();
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed prefix'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    __testing.forwardPush('maker:event', delta('later suffix'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    __testing.forwardPush('maker:event', delta('x'.repeat(300_000)));
+    expect(h.sent).toHaveLength(0);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    expect(h.sent[0].payload).toEqual({ ...snapshot, resyncRequired: false });
+    __testing.forwardPush('maker:event', delta('after snapshot'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
+    expect(batchesIn(h.sent)[0].events).toEqual([delta('after snapshot')]);
+  });
+
+  it('repairs an oversized event when its compact retry also fails admission', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'large'); });
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.forwardPush('maker:event', {
+      sessionId: 's1', event: { type: 'tool_result', data: { text: 'x'.repeat(300_000) } },
+    });
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: true }, ownerStamp: undefined },
+    ]);
   });
 });
 

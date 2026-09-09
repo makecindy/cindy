@@ -62,6 +62,9 @@ function throwBillingFetchError(error: unknown): never {
     if (error.code === 'PLAN_CHANGE_NOT_AVAILABLE') {
       throwIpcError('PLAN_CHANGE_NOT_AVAILABLE', 'target plan is not available');
     }
+    if (error.code === 'RESUME_NOT_AVAILABLE') {
+      throwIpcError('RESUME_NOT_AVAILABLE', 'subscription is not resumable');
+    }
     if (error.statusCode === 400) {
       throwIpcError('INVALID_PARAMS', 'billing request was rejected');
     }
@@ -362,6 +365,18 @@ export function createBillingHandlers(
       }
       return projectResponse(
         await invoke<unknown>('/api/billing/subscription', { method: 'DELETE' }),
+        projectBillingSubscription,
+      );
+    }),
+    [BILLING_INVOKE.RESUME_CURRENT_SUBSCRIPTION]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'subscription resume does not accept a payload');
+      }
+      return projectResponse(
+        await invoke<unknown>('/api/billing/subscription/resume', {
+          method: 'POST',
+          allowedRedactedErrorCodes: ['RESUME_NOT_AVAILABLE'],
+        }),
         projectBillingSubscription,
       );
     }),

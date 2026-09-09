@@ -1,11 +1,5 @@
 import { registerColor } from './color-registry';
-
-function createNotAllowedCursor(stroke: string): string {
-  const encodedStroke = stroke.startsWith('#')
-    ? `%23${stroke.slice(1)}`
-    : encodeURIComponent(stroke);
-  return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='${encodedStroke}' stroke-width='2.6'/%3E%3Cpath d='M9.2 22.8 22.8 9.2' fill='none' stroke='${encodedStroke}' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E") 16 16, not-allowed`;
-}
+import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from './effortTierColors';
 
 /* === P3.2: Semantic slot tokens === */
 registerColor('surface', {
@@ -189,10 +183,6 @@ registerColor('text-placeholder', {
   light: '#c4c4c4',
   dark: '#525252',
 }, 'Placeholder 文字 — 必须读着像空(比 tertiary 更淡);统一 slot,各输入面 placeholder alias 均收口于此');
-registerColor('cursor-not-allowed', {
-  light: createNotAllowedCursor('#373737'),
-  dark: createNotAllowedCursor('#d4d4d4'),
-}, 'Windows disabled cursor SVG (完整 cursor 值,可由主题覆盖)');
 registerColor('accent-cta-bg', {
   light: '#262626',
   dark: '#ffffff',
@@ -251,6 +241,33 @@ registerColor('process-utility-icon', {
   light: '#059669',
   dark: '#34D399',
 }, '资源用量表：Utility 服务进程图标');
+// Usage History colors: owner-approved 2026-09-08 reference refinement.
+// Chart-specific category hues; process/status colors and heatmap blue stay unchanged.
+registerColor('usage-heatmap-high', {
+  light: 'var(--process-agent-task-icon)',
+  dark: 'var(--process-agent-task-icon)',
+}, '用量历史图表：usage-heatmap-high（09-08 登记的配色引用）');
+registerColor('usage-model-1', {
+  light: '#14B8A6',
+  dark: '#2DD4BF',
+}, '用量历史图表：模型类别 1（09-08 参考图配色裁决）');
+registerColor('usage-model-2', {
+  light: '#F43F5E',
+  dark: '#FB7185',
+}, '用量历史图表：模型类别 2（09-08 参考图配色裁决）');
+registerColor('usage-model-3', {
+  light: '#8B5CF6',
+  dark: '#A78BFA',
+}, '用量历史图表：模型类别 3（09-08 参考图配色裁决）');
+registerColor('usage-model-4', {
+  light: '#6366F1',
+  dark: '#818CF8',
+}, '用量历史图表：模型类别 4（09-08 参考图配色裁决）');
+registerColor('usage-model-5', {
+  light: '#F59E0B',
+  dark: '#FBBF24',
+}, '用量历史图表：模型类别 5（09-08 参考图配色裁决）');
+
 registerColor('shadow-soft-panel', {
   light: '0 4px 12px rgb(0 0 0 / 0.08)',
   dark: '0 4px 12px rgb(0 0 0 / 0.3)',
@@ -907,6 +924,61 @@ registerColor('file-badge-fg', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
 }, '文件类型角标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
+// Bot 头像底色族(DESIGN.md §2 / §10 登记的窄作用域彩色例外,双模式各一档):
+// 颜色跟「这是哪个 Bot」绑定,是身份识别线索而不是状态/健康信号 —— 与文件类型角标
+// 同性质。Light 用柔和浅 tint、Dark 用同色相深 tint,两侧都保证 emoji 与首字母兜底
+// (恒用 --text-primary)清晰可读:浅 tint × #262626 ≥ 10:1,深 tint × #d4d4d4 ≥ 7:1。
+// 作用域严格限定为 Bot 头像填充,不得外溢到状态点、徽标、行背景或任何其它表面。
+registerColor('bot-avatar-red-bg', {
+  light: '#f7ded9',
+  dark: '#4a2e2a',
+}, 'Bot 头像底色 — red(登记例外族)');
+registerColor('bot-avatar-orange-bg', {
+  light: '#f9e3d2',
+  dark: '#4a3527',
+}, 'Bot 头像底色 — orange(登记例外族)');
+registerColor('bot-avatar-amber-bg', {
+  light: '#f6ebcd',
+  dark: '#473a22',
+}, 'Bot 头像底色 — amber(登记例外族)');
+registerColor('bot-avatar-green-bg', {
+  light: '#dceedd',
+  dark: '#26402a',
+}, 'Bot 头像底色 — green(登记例外族)');
+registerColor('bot-avatar-teal-bg', {
+  light: '#d6ebea',
+  dark: '#21403e',
+}, 'Bot 头像底色 — teal(登记例外族)');
+registerColor('bot-avatar-blue-bg', {
+  light: '#dce6f5',
+  dark: '#263449',
+}, 'Bot 头像底色 — blue(登记例外族)');
+registerColor('bot-avatar-violet-bg', {
+  light: '#e3ddf3',
+  dark: '#322b48',
+}, 'Bot 头像底色 — violet(登记例外族)');
+registerColor('bot-avatar-pink-bg', {
+  light: '#f6deea',
+  dark: '#452b39',
+}, 'Bot 头像底色 — pink(登记例外族)');
+registerColor('bot-avatar-graphite-bg', {
+  light: '#e5e5e5',
+  dark: '#3c3c3a',
+}, 'Bot 头像底色 — graphite 中性档(旧 graphite 数据映射到这里)');
+// 伙伴列表未读徽标(DESIGN.md §10 登记的窄作用域例外,双模式同值):
+// 「有新消息」在 IM 里是一个所有人都认得的蓝色药丸,不是一个反相的 CTA。反相白底
+// 药丸落在浅灰选中态上会和选中态互相抢焦点 —— 一行里最亮的东西应该是「有几条没看」,
+// 不是「你现在站在这一行」。值与 focus-ring / Auto Approval / Toast info 同族 #417CDD,
+// 前景恒白(--accent-pure-cta-fg 在 Dark 会翻成黑,不能借)。
+// 作用域严格限定为伙伴列表的未读徽标与待办点,不得外溢到别的徽标、状态点或表面。
+registerColor('bot-unread-bg', {
+  light: '#417CDD',
+  dark: '#417CDD',
+}, '伙伴列表未读徽标底色 — IM 未读语义(登记例外,theme-invariant;× bot-unread-fg = 4.53:1)');
+registerColor('bot-unread-fg', {
+  light: '#FFFFFF',
+  dark: '#FFFFFF',
+}, '伙伴列表未读徽标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
 registerColor('chat-input-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',
@@ -1063,6 +1135,53 @@ registerColor('model-section-label', {
   light: 'var(--text-secondary)',
   dark: 'var(--text-secondary)',
 }, 'Stone — "Effort" header');
+// 统一模型选择器(model-selector-unified §1.3 / §1.5)
+registerColor('favorite-star', {
+  light: '#d99a06',
+  dark: '#e8b425',
+}, 'Gold — 收藏 ☆ 点亮态');
+// 推理强度档位绝对色:同一档在 Light / Dark 下必须是同一个颜色(档色表达「这一档有多强」,
+// 不表达界面明暗层次),故 light === dark。数值正本在 themes/effortTierColors.ts —— 滑杆拖动
+// 要在相邻档色之间逐帧插值,必须拿到数值 hex,故那份表是源、这里从它注册,两处不可能漂移。
+for (const [tier, hex] of Object.entries(EFFORT_TIER_COLORS)) {
+  registerColor(`effort-tier-${tier}`, { light: hex, dark: hex }, `推理强度档位色 — ${tier}`);
+}
+// 价格档($ 串)三档色:同为跨主题固定功能色(价格档表达「贵不贵」,不随明暗主题变),
+// 数值正本同在 themes/effortTierColors.ts。
+for (const [tier, hex] of Object.entries(PRICE_TIER_COLORS)) {
+  registerColor(`price-tier-${tier}`, { light: hex, dark: hex }, `价格档位色 — ${tier}`);
+}
+// Fast(插队加速)开启态的强调蓝 —— 与档位色 / 价格档色同一类**跨主题固定功能色**
+// (DESIGN.md §10 语义豁免):它表达的是「这一格开着 Fast」这个功能态,不表达界面明暗层次,
+// 两种模式给同一个值是**有意决策**,不是漏配 dark。配置浮层里的按钮底色由组件用 color-mix
+// 从同一个 var 派生,不另存第二份数值。只在浮层内部用(外侧闪电保持中性色,规格 §1.3)。
+registerColor('fast-accent', {
+  light: '#3B9EFF',
+  dark: '#3B9EFF',
+}, 'Fast 开启态强调蓝(light/dark 同值,跨主题固定功能色)');
+// 引擎徽标(badge 列表样式的行首 22px 标识)的品牌标识色 —— 与档位色 / 价格档色 /
+// Fast 强调蓝同一类**跨主题固定功能色**(DESIGN.md §10 语义豁免):它表达的是「这一行
+// 现在挂在哪个引擎上」这个身份,不表达界面明暗层次,**light / dark 同值是有意决策**,
+// 不是漏配 dark —— 同一个引擎在两种主题下换个颜色,用户会以为自己换了引擎。
+// 各自来源:
+//   · cc    = Anthropic 陶土橙,与 ClaudeMark 的 brand variant 同一支色;
+//   · codex = Codex 官方渐变的中段蓝(CodexMark brand 的 0.5 stop);
+//   · pi    = 上游无官方品牌色,取一支与前两者可区分的紫(统一选择器设计稿 v7)。
+// 徽标底色(14%)与描边(30%)由组件用 color-mix 从**同一个 var** 派生,PiMark 的
+// currentColor 也接同一个 var —— TS 侧不再持有这三个 hex,不会出现「组件拿常量、
+// 主题拿 token」两条路各画各的。
+registerColor('engine-badge-cc', {
+  light: '#d97757',
+  dark: '#d97757',
+}, 'Claude Code 引擎徽标色 — Anthropic 陶土橙(light/dark 同值)');
+registerColor('engine-badge-codex', {
+  light: '#7a9dff',
+  dark: '#7a9dff',
+}, 'Codex 引擎徽标色 — 官方渐变中段蓝(light/dark 同值)');
+registerColor('engine-badge-pi', {
+  light: '#a78bfa',
+  dark: '#a78bfa',
+}, 'Pi 引擎徽标色 — 自选紫,上游无官方品牌色(light/dark 同值)');
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',
@@ -1296,6 +1415,14 @@ registerColor('diff-add-fg', {
   light: '#22863a',
   dark: '#7ee787',
 }, 'GitHub Diff Green (Light)');
+registerColor('pr-open-on-light', {
+  light: '#2EA043',
+  dark: '#2EA043',
+}, 'Sidebar PR open green on light surfaces (unselected Light / selected Dark pill)');
+registerColor('pr-open-on-dark', {
+  light: '#3FB950',
+  dark: '#3FB950',
+}, 'Sidebar PR open green on dark surfaces (unselected Dark / selected Light pill)');
 registerColor('diff-add-bg', {
   light: '#f0fff4',
   dark: '#033a16',
@@ -1712,6 +1839,10 @@ registerColor('card-status-awaiting', {
   light: '#19D2C1',
   dark: '#19D2C1',
 }, '状态点 — 待用户回复/选择 (设计定稿 2026-07-17 #19D2C1,取代 #00D9C5 冻结红线;light/dark 同值)');
+registerColor('sidebar-draft-indicator', {
+  light: '#0B726B',
+  dark: 'var(--card-status-awaiting)',
+}, '侧边栏草稿/暂停队列铅笔 — light 深青保证透明侧栏上的小图形对比度,dark 复用 awaiting 青色');
 registerColor('card-status-error', {
   light: '#D91F37',
   dark: '#D91F37',
@@ -2014,6 +2145,12 @@ registerColor('text-selection-bg', {
   light: 'var(--focus-ring-soft)',
   dark: 'var(--focus-ring-soft)',
 }, '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
+// 小胶囊(引擎选择、rail 格)的选中「浮起」阴影 —— 比 shadow-menu 轻一个量级:
+// 26px 高的 chip 套 4px/16px 的菜单阴影会糊成一团灰。Dark 下加深,否则在深底上看不见。
+registerColor('shadow-chip-raised', {
+  light: '0 1px 2px rgba(0, 0, 0, 0.12)',
+  dark: '0 1px 2px rgba(0, 0, 0, 0.4)',
+}, '小胶囊选中态的浮起 shadow');
 registerColor('shadow-menu', {
   light: '0 4px 16px rgba(0, 0, 0, 0.15)',
   dark: '0 4px 16px rgba(0, 0, 0, 0.5)',
@@ -2072,6 +2209,38 @@ registerColor('warning-fg', {
   light: '#F3A115',
   dark: '#F3A115',
 }, '警示强调文字/图标(设计定稿 2026-07-17 #F3A115;与 Toast amber #F59E0B 解耦——Toast 维持 B 组现状,本 token 走定稿前景)');
+// 伙伴(Bot)界面的状态语义四件套。
+//
+// 这四个 token 此前被 Bot 各面(设置页错误文案、自动化状态点、健康态勾、
+// 委派进行中指示器)裸引用却从未注册,:root 读不到值 → `color` / `background-color`
+// 声明在计算值阶段整条作废:错误文字继承成正文色(报错看着不像报错)、成功勾和
+// 状态点直接没颜色。属于 tokenRegistry.test.ts 里写明的「幽灵 token」,按该文件
+// 的规矩补注册,不在消费点撒 fallback。
+//
+// 三个走 alias:错误族直接复用既有 error-* 语义槽,info 复用 info-700
+// 与任务状态的既有 fallback 同源,这样非默认
+// 主题对 error-* / info-700 的 override 能自动流下来,不会有一族颜色脱队。
+registerColor('text-danger', {
+  light: 'var(--error-fg)',
+  dark: 'var(--error-fg)',
+}, '伙伴界面 danger 前景 — alias 到 error-fg(错误文案 / 删除类动作 hover)');
+registerColor('danger-bg-soft', {
+  light: 'var(--error-bg)',
+  dark: 'var(--error-bg)',
+}, '伙伴界面 danger 软背景 — alias 到 error-bg(危险区块底 / destructive 按钮 hover)');
+registerColor('status-info', {
+  light: 'var(--info-700)',
+  dark: 'var(--info-700)',
+}, '伙伴界面「进行中」状态色 — alias 到 info-700');
+// success 不 alias 到状态点 card-status-done:那颗绿(#2AAE5B)是按**非文字** 3:1
+// 选的,而本 token 同时被当正文色用(健康态标签、自动化「已启用」),压在 Light 的
+// surface 上只有 2.56:1。故 Light 取同色相压深的 #177C3C(surface 4.69 /
+// elevated 5.17 / chip 4.53,三种底都过 4.5),Dark 维持定稿 #2AAE5B(5.73~6.18)。
+// 深浅两侧一深一浅的走法与 error-fg(#dc2626 / #f87171)一致。
+registerColor('status-success', {
+  light: '#177C3C',
+  dark: '#2AAE5B',
+}, '伙伴界面「成功 / 健康 / 已启用」状态色(Light 压深至文字可读档,Dark 用状态族定稿绿)');
 // cc-mgr 远端升级 banner (UpgradeBanner.tsx) — amber warning 语义,跨主题统一、语义豁免
 // (规则 15:warning/amber 在豁免范围,不被非默认主题 override,但仍走 token)。
 registerColor('upgrade-banner-bg', {
@@ -2244,3 +2413,43 @@ registerColor('caret-accent', {
   light: 'var(--accent-cta-bg)',
   dark: 'var(--accent-cta-bg)',
 }, 'Editable caret accent; CINDY overrides to focus blue #417CDD per user decision 2026-07-18(撤红改蓝)');
+
+// DS-4 Button 状态矩阵（G2 hover 换色 / G3 pressed）。拍板人 = 用户/设计师，2026-09-03。
+//
+// 为什么 hover / pressed 是 color-mix 派生值而不是 alias 到既有 slot：
+// 暗色下 `--surface-hover` 与 `--surface-chip` 本就同值（default-dark / cindy-dark /
+// one-dark-pro / monokai-pro 实测），primary rest 与 hover 会撞成同色 —— 悬停零反馈，
+// 违反 DESIGN.md §10 双模式交付门槛「状态不可区分即真实缺陷」。secondary 的
+// `--surface-hover-soft` 同样在 atom-one-light / cindy-dark / eclipse / github-dark
+// 贴着 `--surface-elevated`（CINDY 暗色只差 2/255）。
+// 因此改为「从本变体的 rest 底色朝本变体的前景色推一档」：hover 8%、pressed 再 10%。
+// 这套派生按主题自动跟随（rest 与前景都是被 override 的 token），11 个内置主题实测
+// 每一级 ΔRGB ≥ 8；也不再引入不跟主题的字面量。运行期派生值按治理合同 §3.4
+// 留在代码中、只登记不进 DTCG 影子层（classification 里为
+// runtime-derived-or-protected）。
+registerColor('button-primary-hover', {
+  light: 'color-mix(in srgb, var(--surface-chip) 92%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--surface-chip) 92%, var(--text-primary))',
+}, 'DS-4 button/primary hover — rest 底色朝 text-primary 推 8%');
+registerColor('button-primary-pressed', {
+  light: 'color-mix(in srgb, var(--button-primary-hover) 90%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--button-primary-hover) 90%, var(--text-primary))',
+}, 'DS-4 button/primary pressed — 自 hover 再推 10%，保证梯子单调');
+registerColor('button-secondary-hover', {
+  light: 'color-mix(in srgb, var(--surface-elevated) 92%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--surface-elevated) 92%, var(--text-primary))',
+}, 'DS-4 button/secondary hover — rest 底色朝 text-primary 推 8%');
+registerColor('button-secondary-pressed', {
+  light: 'color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))',
+  dark: 'color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))',
+}, 'DS-4 button/secondary pressed — 自 hover 再推 10%');
+// cta hover 沿用 §4 既有规定的 --accent-hover（其注释本写明 "CTA pressed/hover"），
+// 只给 Button 一个组件级名字，便于 DS-8 生成 component 层时落回 semantic。
+registerColor('button-cta-hover', {
+  light: 'var(--accent-hover)',
+  dark: 'var(--accent-hover)',
+}, 'DS-4 button/cta hover — 沿用 --accent-hover（DESIGN.md §4）');
+registerColor('button-cta-pressed', {
+  light: 'color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))',
+  dark: 'color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))',
+}, 'DS-4 button/cta pressed — 自 cta hover 朝 CTA 前景再推 10%');

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // =============================================================================
-// build-android.mjs —— Android 纯构建(本机出自签 APK,不含任何上传 / 分发 / 发布)
+// build-android.mjs —— Android 纯构建(本机出自签 APK / AAB,不含上传 / 分发 / 发布)
 //
 // 流程(--execute):git 闸门 → expo prebuild(注入 versionCode)→ patch build.gradle 用自有
-//       keystore 自签 → gradlew assembleRelease → app-release.apk
-//       → 从 APK 回读内嵌 runtimeVersion(assets/fingerprint,仅报告)
-//       → aapt2 本地校验 package/versionCode(找不到 aapt2 时降级 warn)
-//       → 产物留在 gradle 输出目录并打印路径(--out 可另拷一份)。
+//       keystore 自签 → 按地区 / --artifacts 执行 assembleRelease / bundleRelease
+//       → 从 APK / AAB 回读内嵌 runtimeVersion并交叉核对
+//       → 本地校验 package/versionCode/签名 → 打印全部产物路径(--out 可另拷一份)。
 // dry-run 纯本地:校验配置 + 打印计划,git 闸门(含 origin/main 远端比对)只在
 // --execute 时执行,分支/离线环境也能直接看计划。
 //
@@ -15,8 +14,8 @@
 // (经 env 注入,不写盘)。
 //
 // 用法:
-//   node scripts/build-android.mjs --region cn                 # dry-run:校验 + 打印计划
-//   node scripts/build-android.mjs --region cn --execute       # 真正构建(需 Android SDK + JDK 17)
+//   node scripts/build-android.mjs --region cn                 # 默认 APK
+//   node scripts/build-android.mjs --region global --execute   # 默认 APK + AAB
 //
 // 参数:
 //   --region cn|global|dev     必填。从 scripts/self-host-regions.json 取应用身份
@@ -32,11 +31,13 @@
 //                              并把 cdnBaseUrl 换成实际的无凭据 HTTPS 基址
 //                              (example 里的 localhost 占位过不了加载校验)。
 //   --execute                  真正构建;缺省 dry-run 只打印计划。
+//   --artifacts <csv>          可选:apk / aab / apk,aab。缺省按 region 选择:
+//                              cn/dev=apk,global=apk,aab;AAB 仅允许 global。
 //   --version-code <n>         可选。覆盖 android-version.json 的 versionCode
-//                              (只影响本次构建,不写盘)。
+//                              (只影响本次构建,不写盘;APK/AAB 始终共用同一值)。
 //   --desktop-version x.y.z    可选。配对的桌面产品线版本号(设置页展示用),
 //                              不传则不注入、设置页不显示该行。
-//   --out <dir>                可选。构建完把 .apk 另拷到该目录。
+//   --out <dir>                可选。构建完把本次所有 .apk/.aab 另拷到该目录。
 //   --skip-git-gate            跳过 --execute 的 main/clean/HEAD 校验(仅本地迭代用;
 //                              dry-run 本就不校验)。
 //
@@ -44,6 +45,9 @@
 //   self-host-regions.json 的 <region>.androidSigning:keystorePath / keyAlias
 //   口令走环境变量(按 region 大写后缀,cn 可省略后缀回落):
 //     XDT_ANDROID_KEYSTORE_PASSWORD_<REGION> / XDT_ANDROID_KEY_PASSWORD_<REGION>
+//   Global AAB 还必须独立 pin Play Console「上传密钥证书」的公开 SHA-256(不要填
+//   「应用签名密钥证书」;不得从当前 JKS 动态计算,否则配错 JKS 时无法拦截):
+//     XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL
 //   keystore 本体在仓库外目录,不入仓。
 // =============================================================================
 
@@ -59,15 +63,26 @@ import {
   formatBakedEnvLines,
 } from './release-lib.mjs';
 import {
+  assertAndroidUploadCertificateSha256,
   readAndroidVersionCode,
+  readAndroidCertificateSha256FromPemOutput,
+  resolveAndroidArtifactKinds,
+  resolveAndroidUploadCertificateSha256,
+  androidGradleTasksForArtifacts,
   resolveAndroidSigningEnv,
   patchBuildGradleSigning,
   patchGradlePropertiesMemory,
 } from './lib/android-local.mjs';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import { clearBundlerCache } from './lib/bundler-cache.mjs';
-import { readEmbeddedRuntimeVersionFromApk } from './lib/embedded-runtime.mjs';
-import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import {
+  readEmbeddedRuntimeVersionFromAab,
+  readEmbeddedRuntimeVersionFromApk,
+} from './lib/embedded-runtime.mjs';
+import {
+  mobileClientBundleEnv,
+  mobileClientBundleProcessEnv,
+} from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { SELF_HOST_REGIONS, loadSelfHostRegions, missingSelfHostBakeFields, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
 
 const MOBILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,11 +90,51 @@ const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 function log(msg) { console.error(msg); }
 
+const ANDROID_BUILD_FAILURE_STAGE = Object.freeze({
+  arguments: 'arguments',
+  regionConfig: 'region-config',
+  buildPlan: 'build-plan',
+  preflight: 'preflight',
+  toolchain: 'toolchain',
+  artifactValidation: 'artifact-validation',
+  output: 'output',
+});
+
+let androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.arguments;
+
+// 只按脚本控制的阶段输出固定诊断，不打印异常消息或环境变量值。
+function reportAndroidBuildFailure() {
+  switch (androidBuildFailureStage) {
+    case ANDROID_BUILD_FAILURE_STAGE.arguments:
+      console.error('Android 构建失败（参数检查）：请确认已传 --region cn|global|dev，且 --artifacts、--version-code 等参数合法。');
+      break;
+    case ANDROID_BUILD_FAILURE_STAGE.regionConfig:
+      console.error('Android 构建失败（区域配置）：请检查 apps/mobile/scripts/self-host-regions.json 及对应 endpoint 配置是否存在且有效。');
+      break;
+    case ANDROID_BUILD_FAILURE_STAGE.buildPlan:
+      console.error('Android 构建失败（构建计划）：请检查 apps/mobile/app.json、android-version.json 与区域产物配置。');
+      break;
+    case ANDROID_BUILD_FAILURE_STAGE.preflight:
+      console.error('Android 构建失败（构建前检查）：请检查 Git 门禁、签名配置、JDK 17+ 与必需的 EXPO_PUBLIC_* 配置。');
+      break;
+    case ANDROID_BUILD_FAILURE_STAGE.toolchain:
+      console.error('Android 构建失败（工具链）：请查看上方 Expo/Gradle 输出；若无输出，请检查 npx、JDK 17+、Android SDK 与 Gradle wrapper。');
+      break;
+    case ANDROID_BUILD_FAILURE_STAGE.artifactValidation:
+      console.error('Android 构建失败（产物校验）：请检查 APK/AAB 路径、包名、versionCode、runtimeVersion 与签名证书配置。');
+      break;
+    case ANDROID_BUILD_FAILURE_STAGE.output:
+      console.error('Android 构建失败（复制产物）：请检查 --out 目录权限与磁盘空间。');
+      break;
+    default:
+      console.error('Android 构建失败；未能确定失败阶段。');
+  }
+}
+
 // self-host 变体的构建环境(与原发布线同源),注入 versionCode。
 function selfhostEnv(region, versionCode, desktopVersion) {
   const env = {
-    ...process.env,
-    ...mobileClientBundleEnv({ authRegion: region.authRegion }),
+    ...mobileClientBundleProcessEnv({ authRegion: region.authRegion }),
     EXPO_PUBLIC_XDT_OTA_SELFHOST: '1',
     XDT_ANDROID_VERSION_CODE: String(versionCode),
   };
@@ -128,7 +183,17 @@ function patchGradleProps() {
   log('  ✓ 已 patch android/gradle.properties(bump heap/metaspace)');
 }
 
-function buildApk(env, region) {
+function findSingleArtifact(dir, extension, taskName) {
+  const matches = existsSync(dir)
+    ? readdirSync(dir).filter((file) => file.endsWith(extension)).sort()
+    : [];
+  if (matches.length !== 1) {
+    throw new Error(`${taskName} 期望唯一 ${extension} 产物,实际 ${matches.length} 个:${dir}`);
+  }
+  return join(dir, matches[0]);
+}
+
+function buildAndroidArtifacts(env, region, artifactKinds) {
   // 签名配置:路径/alias 来自 region JSON,口令来自 env;prebuild 前先强制解析
   // (fail-fast,缺配置不白跑数分钟 prebuild)。
   const signEnv = resolveAndroidSigningEnv(region, env);
@@ -141,20 +206,34 @@ function buildApk(env, region) {
   // Metro/Babel 缓存,确保 EXPO_PUBLIC_ 变更被重新内联,不吃旧缓存。
   clearBundlerCache({ mobileDir: MOBILE_DIR, log });
 
-  // gradlew assembleRelease:需 JDK 17 + keystore 签名 env。
+  // assembleRelease / bundleRelease 共用同一次 prebuild、同一个 release signingConfig
+  // 与同一份 env,保证 APK / AAB 的身份、versionCode、runtimeVersion 和签名源一致。
   const javaEnv = resolveJavaRuntimeEnv({ ...env, ...signEnv });
   // 不把 javaEnv 传进被日志的函数:它由 process.env + 签名口令(signEnv)派生,
   // CodeQL 会将「机密 env 流入日志」判为泄漏(即便 javaRuntimeDetail 只读版本 /
   // JAVA_HOME)。这里只报静态信息;JDK 由 resolveJavaRuntimeEnv 确定性选 17+。
-  log('  → gradle assembleRelease(已解析 JDK 17+ 运行时)');
+  const tasks = androidGradleTasksForArtifacts(artifactKinds);
+  log(`  → gradle ${tasks.join(' ')}(已解析 JDK 17+ 运行时)`);
   const androidDir = resolve(MOBILE_DIR, 'android');
   const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
-  run(gradlew, ['assembleRelease'], { cwd: androidDir, env: javaEnv });
+  run(gradlew, tasks, { cwd: androidDir, env: javaEnv });
 
-  const apkDir = join(androidDir, 'app/build/outputs/apk/release');
-  const apk = existsSync(apkDir) ? readdirSync(apkDir).find((f) => f.endsWith('.apk')) : null;
-  if (!apk) throw new Error(`assembleRelease 未产出 .apk:${apkDir}`);
-  return join(apkDir, apk);
+  const artifacts = {};
+  if (artifactKinds.includes('apk')) {
+    artifacts.apk = findSingleArtifact(
+      join(androidDir, 'app/build/outputs/apk/release'),
+      '.apk',
+      'assembleRelease',
+    );
+  }
+  if (artifactKinds.includes('aab')) {
+    artifacts.aab = findSingleArtifact(
+      join(androidDir, 'app/build/outputs/bundle/release'),
+      '.aab',
+      'bundleRelease',
+    );
+  }
+  return { androidDir, artifacts, javaEnv };
 }
 
 // 定位 aapt2(Android SDK build-tools)。优先 ANDROID_HOME / ANDROID_SDK_ROOT 下最高
@@ -195,7 +274,95 @@ function validateApkMetadata(apkPath, expectPackage, expectVersionCode) {
   log(`  ✓ APK manifest 校验通过(package=${expectPackage}, versionCode=${expectVersionCode})`);
 }
 
+function readJsonFile(filePath, label) {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    throw new Error(`${label}读取/解析失败(${filePath}):${err?.message ?? err}`);
+  }
+}
+
+// AAB 的 manifest 是 protobuf,不能用 aapt2 dump badging。这里读取同一 bundleRelease
+// 构建产生的 AGP metadata:bundle model 钉 applicationId / 输出文件,merged manifest metadata
+// 钉 versionCode / versionName。任一文件缺失或结构漂移都 fail closed,不把未核验包交给上传侧。
+function validateAabMetadata(aabPath, androidDir, expectPackage, expectVersionCode, expectVersionName) {
+  const bundleMetadataPath = join(
+    androidDir,
+    'app/build/intermediates/bundle_ide_model/release/produceReleaseBundleIdeListingFile/output-metadata.json',
+  );
+  const manifestMetadataPath = join(
+    androidDir,
+    'app/build/intermediates/merged_manifests/release/processReleaseManifest/output-metadata.json',
+  );
+  const bundle = readJsonFile(bundleMetadataPath, 'AAB bundle metadata');
+  const manifest = readJsonFile(manifestMetadataPath, 'AAB manifest metadata');
+  const bundleElement = Array.isArray(bundle?.elements) && bundle.elements.length === 1
+    ? bundle.elements[0]
+    : null;
+  const manifestElement = Array.isArray(manifest?.elements) && manifest.elements.length === 1
+    ? manifest.elements[0]
+    : null;
+  if (bundle?.artifactType?.type !== 'BUNDLE' || !bundleElement) {
+    throw new Error('AAB bundle metadata 结构无效(期望 artifactType=BUNDLE 且唯一 element)');
+  }
+  if (!manifestElement) {
+    throw new Error('AAB manifest metadata 结构无效(期望唯一 element)');
+  }
+  if (bundle.applicationId !== expectPackage || manifest.applicationId !== expectPackage) {
+    throw new Error(
+      `AAB package 不符:期望 ${expectPackage},bundle=${bundle.applicationId ?? '(空)'},manifest=${manifest.applicationId ?? '(空)'}`,
+    );
+  }
+  if (basename(String(bundleElement.outputFile ?? '')) !== basename(aabPath)) {
+    throw new Error(
+      `AAB metadata 输出文件不符:期望 ${basename(aabPath)},实际 ${String(bundleElement.outputFile ?? '(空)')}`,
+    );
+  }
+  if (String(manifestElement.versionCode) !== String(expectVersionCode)) {
+    throw new Error(
+      `AAB versionCode 不符:期望 ${expectVersionCode},实际 ${String(manifestElement.versionCode ?? '(空)')}`,
+    );
+  }
+  if (String(manifestElement.versionName ?? '') !== String(expectVersionName ?? '')) {
+    throw new Error(
+      `AAB versionName 不符:期望 ${expectVersionName},实际 ${String(manifestElement.versionName ?? '(空)')}`,
+    );
+  }
+  log(`  ✓ AAB metadata 校验通过(package=${expectPackage}, version=${expectVersionName}, versionCode=${expectVersionCode})`);
+}
+
+function validateAabSignature(aabPath, javaEnv, expectedCertificateSha256) {
+  const r = spawnSync('jarsigner', ['-verify', aabPath], { encoding: 'utf8', env: javaEnv });
+  if (r.error?.code === 'ENOENT') {
+    throw new Error('未找到 jarsigner(JDK 17+ 应自带),无法确认 AAB 已使用 release keystore 签名');
+  }
+  if (r.status !== 0) {
+    throw new Error(`AAB jarsigner 校验失败:${r.stderr || r.stdout || `exit ${r.status}`}`);
+  }
+
+  // jarsigner 对“未签名 JAR”也可能打印警告后退出 0,因此不能把上面的零退出码当作
+  // 已签名证据。keytool 的 RFC 输出必须包含实际 signer 证书,再与独立 Play upload cert
+  // pin 比对；这样既拒绝未签名 AAB,也拒绝由错误 JKS 产生的结构合法签名。
+  const cert = spawnSync('keytool', ['-printcert', '-jarfile', aabPath, '-rfc'], {
+    encoding: 'utf8',
+    env: javaEnv,
+  });
+  if (cert.error?.code === 'ENOENT') {
+    throw new Error('未找到 keytool(JDK 17+ 应自带),无法读取 AAB 签名证书');
+  }
+  if (cert.status !== 0) {
+    throw new Error(`AAB 签名证书读取失败:${cert.stderr || cert.stdout || `exit ${cert.status}`}`);
+  }
+  const actualCertificateSha256 = readAndroidCertificateSha256FromPemOutput(
+    cert.stdout,
+    'AAB 实际签名证书',
+  );
+  assertAndroidUploadCertificateSha256(actualCertificateSha256, expectedCertificateSha256);
+  log('  ✓ AAB 签名完整且与已 pin 的 Google Play 上传证书一致');
+}
+
 async function main() {
+  androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.arguments;
   const args = parseArgs(process.argv.slice(2));
   // --region 必填(cn|global|dev):选出本次出包身份 + 签名配置(见 lib/self-host-region.mjs)。
   // 不走 resolveSelfHostRegion:它对 dev 强校验发布专用的 npkgExpectBundle,与纯构建
@@ -209,10 +376,13 @@ async function main() {
   if (!SELF_HOST_REGIONS.includes(rawRegion)) {
     throw new Error(`--region 只能是 ${SELF_HOST_REGIONS.join(' 或 ')},收到: ${rawRegion}`);
   }
+  androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.regionConfig;
   const region = loadSelfHostRegions({ mode: 'local' })[rawRegion];
   if (!region.androidPackage?.trim()) {
     throw new Error(`self-host-regions.json 的 ${region.authRegion}.androidPackage 未填(构建必需)`);
   }
+  androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.buildPlan;
+  const artifactKinds = resolveAndroidArtifactKinds(region.authRegion, args.artifacts);
   const appJson = readAppJson();
   const version = appJson?.expo?.version ?? '';
   // --version-code 覆盖须是正整数且不超 Android 平台上限 2100000000:app.config.js
@@ -231,7 +401,9 @@ async function main() {
   const missingBake = missingSelfHostBakeFields(region);
 
   // git 闸门只管真构建:dry-run 纯本地(不做 origin/main 远端比对,分支/离线可跑)。
+  let expectedUploadCertificateSha256 = null;
   if (args.execute) {
+    androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.preflight;
     if (!args.skipGitGate) assertProductionGitGate();
     else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
     if (missingBake.length) {
@@ -242,6 +414,12 @@ async function main() {
     }
     // 签名配置预检:缺配置尽早暴露,不白跑数分钟 prebuild(取用值在 buildApk 内再解析一次)。
     resolveAndroidSigningEnv(region, process.env);
+    if (artifactKinds.includes('aab')) {
+      expectedUploadCertificateSha256 = resolveAndroidUploadCertificateSha256(
+        region.authRegion,
+        process.env,
+      );
+    }
   }
 
   // env 必须在 versionCode 决定之后构建:经 XDT_ANDROID_VERSION_CODE 注入 prebuild。
@@ -250,12 +428,17 @@ async function main() {
   // 计划打印
   console.log('');
   console.log(`target: Android 纯构建(region=${region.authRegion}, ${region.androidPackage})`);
+  console.log(`artifacts: ${artifactKinds.join(' + ')}${args.artifacts == null ? ' (按 region 默认)' : ' (--artifacts 覆盖)'}`);
   console.log(`version / versionCode: ${version} / ${versionCode}${args.versionCode != null ? ' (--version-code 覆盖)' : ' (取 android-version.json 现值)'}`);
   const suffix = String(region.authRegion).toUpperCase();
   const aSign = region.androidSigning ?? {};
   const pwPreview = (base) => (process.env[`${base}_${suffix}`]?.trim() || (suffix === 'CN' ? process.env[base]?.trim() : '')) ? 'set' : '未设';
-  console.log(`sign: 自有 keystore 自签,path=${aSign.keystorePath || '(JSON 未填)'} alias=${aSign.keyAlias || '(JSON 未填)'} storePw(env ${suffix})=${pwPreview('XDT_ANDROID_KEYSTORE_PASSWORD')} keyPw(env ${suffix})=${pwPreview('XDT_ANDROID_KEY_PASSWORD')}`);
-  console.log('steps: prebuild → patch build.gradle 签名 → gradlew assembleRelease → 从 APK 回读 runtimeVersion → aapt2 本地校验(仅构建,无上传/发布)');
+  const uploadCertPreview = artifactKinds.includes('aab')
+    ? pwPreview('XDT_ANDROID_UPLOAD_CERT_SHA256')
+    : '不适用';
+  console.log(`sign: 自有 keystore 自签,path=${aSign.keystorePath || '(JSON 未填)'} alias=${aSign.keyAlias || '(JSON 未填)'} storePw(env ${suffix})=${pwPreview('XDT_ANDROID_KEYSTORE_PASSWORD')} keyPw(env ${suffix})=${pwPreview('XDT_ANDROID_KEY_PASSWORD')} uploadCertSha256(env ${suffix})=${uploadCertPreview}`);
+  const gradleTasks = androidGradleTasksForArtifacts(artifactKinds);
+  console.log(`steps: prebuild → patch build.gradle 签名 → gradlew ${gradleTasks.join(' ')} → 回读/核对 runtimeVersion → metadata/签名校验(仅构建,无上传/发布)`);
   if (missingBake.length) {
     console.log(`selfhost 必填缺失: ${missingBake.join(', ')}(--execute 前须在 self-host-regions.json 补齐;prebuild 期 app.config.js 硬校验)`);
   }
@@ -271,52 +454,70 @@ async function main() {
     return;
   }
 
+  androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.preflight;
   // region / endpoint manifest 自举基址必须齐全(读仓内 config/endpoint*.json,离线可用)。
   assertPublicEnv(env, { variant: 'production', requiredKeys: SELF_HOST_PUBLIC_ENV_KEYS });
 
-  const apkPath = buildApk(env, region);
-  log(`  ✓ apk: ${apkPath}`);
+  androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.toolchain;
+  const built = buildAndroidArtifacts(env, region, artifactKinds);
+  for (const kind of artifactKinds) log(`  ✓ ${kind}: ${built.artifacts[kind]}`);
 
-  // 权威 runtimeVersion = 真正烤进 APK 的 assets/fingerprint(仅报告,供发布侧比对)。
-  const runtimeVersion = readEmbeddedRuntimeVersionFromApk(apkPath);
-  log(`  ✓ runtimeVersion(读自 APK 内嵌 assets/fingerprint): ${runtimeVersion}`);
+  androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.artifactValidation;
+  // 权威 runtimeVersion 始终从真正烤进产物的 fingerprint 回读。双产物必须一致,
+  // 否则同一个 versionCode 会出现两条不兼容 OTA runtime,直接中止。
+  const runtimeVersions = {};
+  if (built.artifacts.apk) {
+    runtimeVersions.apk = readEmbeddedRuntimeVersionFromApk(built.artifacts.apk);
+    log(`  ✓ runtimeVersion(APK assets/fingerprint): ${runtimeVersions.apk}`);
+    validateApkMetadata(built.artifacts.apk, region.androidPackage, versionCode);
+  }
+  if (built.artifacts.aab) {
+    runtimeVersions.aab = readEmbeddedRuntimeVersionFromAab(built.artifacts.aab);
+    log(`  ✓ runtimeVersion(AAB base/assets/fingerprint): ${runtimeVersions.aab}`);
+    validateAabMetadata(
+      built.artifacts.aab,
+      built.androidDir,
+      region.androidPackage,
+      versionCode,
+      version,
+    );
+    validateAabSignature(
+      built.artifacts.aab,
+      built.javaEnv,
+      expectedUploadCertificateSha256,
+    );
+  }
+  const uniqueRuntimeVersions = [...new Set(Object.values(runtimeVersions))];
+  if (uniqueRuntimeVersions.length !== 1) {
+    throw new Error(`APK/AAB runtimeVersion 不一致:${JSON.stringify(runtimeVersions)}`);
+  }
+  const runtimeVersion = uniqueRuntimeVersions[0];
 
-  validateApkMetadata(apkPath, region.androidPackage, versionCode);
-
-  let finalPath = apkPath;
+  const finalArtifacts = { ...built.artifacts };
   if (typeof args.out === 'string' && args.out) {
+    androidBuildFailureStage = ANDROID_BUILD_FAILURE_STAGE.output;
     const outDir = resolve(String(args.out));
     if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
-    finalPath = join(outDir, basename(apkPath));
-    copyFileSync(apkPath, finalPath);
+    for (const kind of artifactKinds) {
+      const source = built.artifacts[kind];
+      const destination = join(outDir, basename(source));
+      copyFileSync(source, destination);
+      finalArtifacts[kind] = destination;
+    }
   }
 
   console.log('');
   console.log('==================== Android 构建完成 ====================');
-  console.log(`  apk            : ${finalPath}`);
+  for (const kind of artifactKinds) {
+    console.log(`  ${kind.padEnd(14)} : ${finalArtifacts[kind]}`);
+  }
   console.log(`  version        : ${version} (${versionCode})`);
   console.log(`  runtimeVersion : ${runtimeVersion}`);
-  console.log('  注意:本脚本只构建;APK 为本机 keystore 自签,分发/发布由发布方流程另行处理。');
+  console.log('  注意:本脚本只构建;APK/AAB 使用同一 release keystore,分发/商店上传由发布方流程另行处理。');
   console.log('==========================================================');
 }
 
-// 兜底脱敏:错误文案若意外携带签名口令等秘密类 env 值,输出前抹掉。
-// 用 IIFE 构建正则——RegExp 对象切断 CodeQL 对 env 值的 taint 追踪链。
-const _secretScrubRe = (() => {
-  const pats = [];
-  for (const [name, value] of Object.entries(process.env)) {
-    if (!value || value.length < 6 || value.length > 512 || value.includes("\n")) continue;
-    if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
-      pats.push(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    }
-  }
-  pats.sort((a, b) => b.length - a.length);
-  return pats.length > 0 ? new RegExp(pats.join('|'), 'g') : null;
-})();
-
-function scrubSecretsFromText(text) {
-  const s = String(text ?? '');
-  return _secretScrubRe ? s.replace(_secretScrubRe, '***') : s;
-}
-
-main().catch((err) => { console.error(scrubSecretsFromText(err?.message)); process.exit(1); }); // lgtm[js/clear-text-logging]
+main().catch(() => {
+  reportAndroidBuildFailure();
+  process.exit(1);
+});

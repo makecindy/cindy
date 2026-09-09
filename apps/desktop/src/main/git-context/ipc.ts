@@ -14,8 +14,8 @@
  *   git-context:pr-refs-changed { sessionId }
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
- * 本来就靠 gh,凭证天然就有;未登录时降级 no-token,UI 提示让 agent 跑一次
- * gh auth login 即可。不做 app 级 PAT 绑定(设计收敛,见 PR #94 讨论)。
+ * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
+ * 徽标点击引导 agent 安装或登录。不做 app 级 PAT 绑定(设计收敛,见 PR #94 讨论)。
  */
 
 import { BrowserWindow, ipcMain } from 'electron';
@@ -30,6 +30,7 @@ import { optionalNullableString, requireString, throwIpcError } from '../utils/i
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { GitContextService } from './GitContextService.js';
 import {
+  findLiveLinkedWorktreeLive,
   getSessionGitTelemetryCandidateLive,
   resolveSessionGitDirLive,
 } from './sessionDirResolver.js';
@@ -60,6 +61,7 @@ const log = createLogger('git-context/ipc');
 export const GIT_CONTEXT_INVOKE = {
   GET: 'git-context:get',
   GET_FOR_SESSION: 'git-context:get-for-session',
+  FIND_LINKED_WORKTREE: 'git-context:find-linked-worktree',
   WATCH: 'git-context:watch',
   UNWATCH: 'git-context:unwatch',
   PR_REFS_LIST: 'git-context:pr-refs:list',
@@ -86,8 +88,8 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
 /** gh CLI 登录态来源(进程内共享单例,内置 5min 正 / 30s 负缓存)。 */
 const ghCliTokenSource = getSharedGhCliTokenSource();
 
-async function readGithubToken(): Promise<string | null> {
-  return ghCliTokenSource.readToken();
+async function readGithubToken() {
+  return ghCliTokenSource.readTokenDetailed();
 }
 
 /** GraphQL 查未解决 review thread 数(REST 不暴露 isResolved)。上限 100。 */
@@ -112,7 +114,12 @@ async function fetchUnresolvedCount(client: GithubClient, q: PrStatusQuery): Pro
 
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
   // fetchImpl:api.github.com 是境外端点,走吃系统代理的通道(见 maker-host/outbound-fetch)。
-  const client = new GithubClient({ token, owner: q.owner, repo: q.repo, fetchImpl: outboundFetch });
+  const client = new GithubClient({
+    token,
+    owner: q.owner,
+    repo: q.repo,
+    fetchImpl: outboundFetch,
+  });
   // 核心状态走 REST(所有 token 类型通用);未解决数走 GraphQL 增强信号,
   // 失败(老 fine-grained PAT 不支持 GraphQL 等)降级 null,不拖垮整条状态。
   const [pr, unresolved] = await Promise.all([
@@ -238,6 +245,16 @@ export function registerGitContextIpc(): void {
     return resolveSessionGitDirLive({ sessionId, fallbackWorktreePath, fallbackWorkingDir });
   });
 
+  // 侧栏任务信息 worktree 徽标:本机 Desktop 专用。扫遥测里仍活着的 linked worktree,
+  // 不跟 get-for-session 的「只看最近一次」语义。device-link / SSH 不走这条。
+  ipcMain.handle(GIT_CONTEXT_INVOKE.FIND_LINKED_WORKTREE, async (event, payload: unknown) => {
+    if (isDeviceLinkInvoke()) return null;
+    assertTrustedAppRendererEvent(event);
+    const obj = payload as { sessionId?: unknown };
+    const sessionId = requireString(obj?.sessionId, 'sessionId');
+    return findLiveLinkedWorktreeLive(sessionId);
+  });
+
   ipcMain.handle(GIT_CONTEXT_INVOKE.WATCH, async (_e, workdir: unknown) => {
     const dir = requireString(workdir, 'workdir');
     await gitContextService!.watch(dir);
@@ -306,7 +323,7 @@ export function registerGitContextIpc(): void {
         return [];
       }
     }
-    return prStatusService!.getStatuses(parsed);
+    return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
   });
 }
 

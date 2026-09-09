@@ -19,11 +19,16 @@
 import type { SessionSearchOptions, SessionSearchHit, SessionSearchFn } from '@cindy/mcps';
 
 import { getDbClient } from '../localDb/client/current.js';
+import {
+  buildMessagesFtsMatch,
+  extractMessagesFtsTokens,
+} from '../localDb/chatHistorySearch.pure.js';
+import { buildSnippetFromContent, SNIPPET_SOURCE_MAX_CHARS } from '../localDb/cjkSeg.js';
 import { createLogger } from '../logger.js';
+import { resolveBotHistoryScope } from '../localDb/botHistoryScope.js';
 
 const log = createLogger('session-search');
 const TABLE = 'messages_fts';
-const SNIPPET_TOKEN_RADIUS = 8;
 const DEFAULT_LIMIT = 10;
 
 export const searchSessionsFn: SessionSearchFn = async (
@@ -32,7 +37,8 @@ export const searchSessionsFn: SessionSearchFn = async (
 ): Promise<SessionSearchHit[]> => {
   if (!query || query.trim().length === 0) return [];
   const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, 50));
-  const escapedQuery = `"${query.trim().replace(/"/g, '""')}"`;
+  const escapedQuery = buildMessagesFtsMatch(query, 'AND');
+  if (!escapedQuery) return [];
 
   try {
     getDbClient();
@@ -41,23 +47,41 @@ export const searchSessionsFn: SessionSearchFn = async (
     throw new Error('DbClient not ready');
   }
 
-  // messages_fts 表自带 message_id / session_id / role / content; ts 走 messages 表 join
+  // snippet 从原文 m.content 重建，不用索引侧文本（见 buildSnippetFromContent 注释）。
+  const queryTokens = extractMessagesFtsTokens(query);
+
+  const callerScope = await resolveBotHistoryScope(
+    opts.callerSessionId,
+    opts.callerMemoryScopeKey,
+  );
+  if (callerScope.kind === 'denied') return [];
   let sql = `
     SELECT m.id AS messageId,
            m.session_id AS sessionId,
            m.role AS role,
            m.created_at AS ts,
-           snippet(${TABLE}, -1, '<mark>', '</mark>', '…', ${SNIPPET_TOKEN_RADIUS}) AS snippet,
+           substr(m.content, 1, ?) AS content,
            bm25(${TABLE}) AS score
     FROM ${TABLE}
     JOIN messages m ON m.id = ${TABLE}.message_id
     WHERE ${TABLE} MATCH ?
       AND m.rewind_at IS NULL
   `;
-  const params: unknown[] = [escapedQuery];
+  const params: unknown[] = [SNIPPET_SOURCE_MAX_CHARS, escapedQuery];
   if (opts.sessionId) {
     sql += ` AND m.session_id = ?`;
     params.push(opts.sessionId);
+  }
+  if (callerScope.kind === 'bot') {
+    // Bot ownership is resolved from the current runtime Session. The model can
+    // optionally narrow within that set, but cannot widen it by supplying an
+    // arbitrary sessionId.
+    sql += ` AND m.session_id IN (
+      SELECT scoped.session_id
+        FROM bot_session_links scoped
+       WHERE scoped.bot_id = ?
+    )`;
+    params.push(callerScope.botId);
   }
   if (opts.role) {
     sql += ` AND m.role = ?`;
@@ -72,7 +96,7 @@ export const searchSessionsFn: SessionSearchFn = async (
       sessionId: string;
       role: string;
       ts: number;
-      snippet: string;
+      content: string;
       score: number;
     }>(sql, params);
     return rows.map((r) => ({
@@ -80,7 +104,7 @@ export const searchSessionsFn: SessionSearchFn = async (
       sessionId: r.sessionId,
       role: r.role,
       ts: r.ts,
-      snippet: r.snippet,
+      snippet: buildSnippetFromContent(r.content, queryTokens),
       score: r.score,
     }));
   } catch (e) {

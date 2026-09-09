@@ -1,31 +1,47 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+/**
+ * SubagentsBody — data orchestration for the durable Subagent workspace tab.
+ *
+ * This file owns *only* reads, writes and ownership fencing; every pixel lives
+ * in `RunList.tsx` / `DetailView.tsx` and their children.
+ *
+ * Invariants that must not be weakened:
+ *  - `subagentReadScopeKey` remounts the stateful reader at every ownership
+ *    boundary, so data from a previous task/account is never painted while the
+ *    replacement IPC request is in flight.
+ *  - Every response is dropped unless `isCurrentSubagentReadOwner` still holds
+ *    for the generation that issued it, and change pushes are filtered through
+ *    `isCurrentSubagentRunsChange`.
+ *  - All four reads/writes (list / detail / transcript / control) have a
+ *    device-link branch: a sticky remote task must read from the data-owning
+ *    device, and remote PI stop goes through the PI-only control channel.
+ *
+ * Transcript loading: the conversation is the primary content now, so the
+ * transcript is paged in eagerly on entering a detail (loop `nextCursor` up to
+ * a page bound), and every later change event resumes from `tailCursor` and
+ * appends only what was written since. That keeps the 1s remote poll from
+ * re-reading a record that may grow to the 50MB storage cap.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
-import {
-  AlertCircle,
-  ArrowLeft,
-  Bot,
-  CheckCircle2,
-  CircleStop,
-  LoaderCircle,
-  RefreshCw,
-  type LucideIcon,
-} from 'lucide-react';
+import { AlertCircle, Bot, LoaderCircle, RefreshCw } from 'lucide-react';
 import type {
-  SubagentActivityEntry,
   SubagentProvider,
   SubagentRun,
   SubagentRunDetail,
+  SubagentRunDetailResponse,
+  SubagentRunsListResponse,
+  SubagentTranscriptEntry,
+  SubagentTranscriptPageResponse,
 } from '@cindy/maker-shared/subagent-workspace';
 
-import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
-import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { cn } from '@/lib/utils';
-import { formatCompactTokens } from '@/lib/usageFormat';
 import type { TabKindHostContext } from '../../types';
 import type { SubagentsState } from './index';
+import { DetailView, type SubagentControlIntent } from './DetailView';
+import { RunList } from './RunList';
+import { CenteredState } from './SubagentChrome';
+import { runMatchesSelection } from './subagentFormat';
 import {
   isCurrentSubagentReadOwner,
   isCurrentSubagentRunsChange,
@@ -34,292 +50,28 @@ import {
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error';
 
-function statusIcon(status: SubagentRun['status']): LucideIcon {
-  if (status === 'completed') return CheckCircle2;
-  if (status === 'failed') return AlertCircle;
-  if (status === 'stopped') return CircleStop;
-  return LoaderCircle;
-}
+/** Remote polling cadence; each tick is fenced behind the previous round. */
+const REMOTE_POLL_INTERVAL_MS = 1_000;
 
-function formatDuration(ms: number | undefined): string | undefined {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
-  const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
-}
+/**
+ * Local fallback cadence, only while something is unfinished.
+ *
+ * The local view is push-driven, and the push dies with the root Pi process:
+ * `onExit` ends the event queue, so a detached run that finishes *after* its
+ * parent exited emits no `agent_task_update` and no change push. The row then
+ * reads `running` until the panel is remounted. Deliberately much slower than
+ * the remote cadence — this is a backstop for a window that only opens after the
+ * parent is gone, not a substitute for the push.
+ */
+const LOCAL_UNFINISHED_POLL_INTERVAL_MS = 4_000;
 
-function providerLabel(provider: SubagentProvider): string {
-  if (provider === 'claude-code') return 'Claude Code';
-  if (provider === 'codex') return 'Codex';
-  return 'PI';
-}
-
-function runTitle(run: SubagentRun, fallback: string): string {
-  return run.title?.trim() || run.description?.trim() || fallback;
-}
-
-function metadata(run: SubagentRun, t: TFunction): string[] {
-  const parts = [providerLabel(run.provider)];
-  if (run.model) parts.push(run.model);
-  const duration = formatDuration(run.usage?.durationMs);
-  if (duration) parts.push(duration);
-  if (typeof run.usage?.totalTokens === 'number') {
-    parts.push(
-      t('rightSidebar.subagents.tokens', {
-        value: formatCompactTokens(run.usage.totalTokens),
-      }),
-    );
-  }
-  return parts;
-}
-
-function StatusGlyph({ status, label }: { status: SubagentRun['status']; label: string }) {
-  const Icon = statusIcon(status);
-  return (
-    <Spinner
-      icon={Icon}
-      size={14}
-      spinning={status === 'running'}
-      aria-label={label}
-      title={label}
-      className={cn('text-[var(--text-tertiary)]', status === 'failed' && 'text-[var(--error-fg)]')}
-    />
-  );
-}
-
-function RunRow({ run, onOpen }: { run: SubagentRun; onOpen: (run: SubagentRun) => void }) {
-  const { t } = useTranslation();
-  const title = runTitle(run, t('rightSidebar.subagents.untitled'));
-  const statusLabel = t(`chat.agentTask.status.${run.status}`);
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(run)}
-      className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-    >
-      <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)]">
-        <StatusGlyph status={run.status} label={statusLabel} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
-          {title}
-        </span>
-        <span className="mt-0.5 block truncate text-11 leading-4 text-[var(--text-tertiary)]">
-          {metadata(run, t).join(' · ')}
-        </span>
-        {run.summary ? (
-          <span className="mt-0.5 block line-clamp-2 text-12 leading-4 text-[var(--text-secondary)]">
-            {run.summary}
-          </span>
-        ) : null}
-      </span>
-    </button>
-  );
-}
-
-function ActivityRow({ entry }: { entry: SubagentActivityEntry }) {
-  const { t } = useTranslation();
-  const label = t(`rightSidebar.subagents.activityKinds.${entry.kind}`);
-  return (
-    <div className="relative flex gap-2 pb-3 pl-1 last:pb-0">
-      <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[var(--border-strong)]" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-12 font-medium text-[var(--text-secondary)]">{label}</span>
-          <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
-            {new Date(entry.occurredAt).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </span>
-        </div>
-        {entry.summary ? (
-          <p className="mt-0.5 whitespace-pre-wrap text-12 leading-4 text-[var(--text-tertiary)]">
-            {entry.summary}
-          </p>
-        ) : null}
-        {entry.lastToolName ? (
-          <p className="mt-0.5 truncate text-11 text-[var(--text-tertiary)]">
-            {t('rightSidebar.subagents.lastTool', { tool: entry.lastToolName })}
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function DetailView({
-  detail,
-  loading,
-  workdir,
-  allowPrivilegedLinks,
-  onBack,
-}: {
-  detail: SubagentRunDetail | null;
-  loading: boolean;
-  workdir: string;
-  allowPrivilegedLinks: boolean;
-  onBack: () => void;
-}) {
-  const { t } = useTranslation();
-  if (loading && !detail) {
-    return (
-      <CenteredState icon={LoaderCircle} spinning label={t('rightSidebar.subagents.loading')} />
-    );
-  }
-  if (!detail) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <HeaderBack onBack={onBack} title={t('rightSidebar.subagents.notFound')} />
-      </div>
-    );
-  }
-  const title = runTitle(detail, t('rightSidebar.subagents.untitled'));
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <HeaderBack onBack={onBack} title={title} status={detail.status} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-3">
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-12">
-          <dt className="text-[var(--text-tertiary)]">{t('rightSidebar.subagents.harness')}</dt>
-          <dd className="truncate text-[var(--text-secondary)]">
-            {providerLabel(detail.provider)}
-          </dd>
-          {detail.model ? (
-            <>
-              <dt className="text-[var(--text-tertiary)]">{t('rightSidebar.subagents.model')}</dt>
-              <dd className="truncate text-[var(--text-secondary)]">{detail.model}</dd>
-            </>
-          ) : null}
-          <dt className="text-[var(--text-tertiary)]">{t('rightSidebar.subagents.context')}</dt>
-          <dd className="text-[var(--text-secondary)]">
-            {t(`rightSidebar.subagents.contextValues.${detail.capabilities.parentContext}`)}
-          </dd>
-        </dl>
-
-        {detail.description ? (
-          <section className="mt-5">
-            <SectionTitle>{t('rightSidebar.subagents.assignment')}</SectionTitle>
-            <p className="whitespace-pre-wrap text-12 leading-5 text-[var(--text-secondary)]">
-              {detail.description}
-            </p>
-          </section>
-        ) : null}
-
-        {detail.capabilities.viewReturnedResult && detail.returnedResult ? (
-          <section className="mt-5">
-            <SectionTitle>{t('rightSidebar.subagents.returnedResult')}</SectionTitle>
-            <div className="text-13 leading-5 text-[var(--text-primary)]">
-              <MarkdownRenderer
-                workingDir={workdir}
-                content={detail.returnedResult}
-                allowPrivilegedLinks={allowPrivilegedLinks}
-              />
-            </div>
-            {detail.returnedResultTruncated ? (
-              <p className="mt-2 text-11 text-[var(--text-tertiary)]">
-                {t('rightSidebar.subagents.resultTruncated')}
-              </p>
-            ) : null}
-          </section>
-        ) : detail.summary ? (
-          <section className="mt-5">
-            <SectionTitle>{t('rightSidebar.subagents.latestUpdate')}</SectionTitle>
-            <p className="whitespace-pre-wrap text-12 leading-5 text-[var(--text-secondary)]">
-              {detail.summary}
-            </p>
-          </section>
-        ) : null}
-
-        {detail.capabilities.viewActivity ? (
-          <section className="mt-5">
-            <SectionTitle>{t('rightSidebar.subagents.activity')}</SectionTitle>
-            {detail.activity.length > 0 ? (
-              <div className="mt-1">
-                {detail.activity.map((entry) => (
-                  <ActivityRow key={entry.sequence} entry={entry} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-12 text-[var(--text-tertiary)]">
-                {t('rightSidebar.subagents.noActivity')}
-              </p>
-            )}
-          </section>
-        ) : null}
-
-        {!detail.capabilities.viewFullTranscript ? (
-          <p className="mt-5 rounded-lg bg-[var(--surface-subtle)] px-3 py-2 text-11 leading-4 text-[var(--text-tertiary)]">
-            {t('rightSidebar.subagents.transcriptUnavailable')}
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function HeaderBack({
-  onBack,
-  title,
-  status,
-}: {
-  onBack: () => void;
-  title: string;
-  status?: SubagentRun['status'];
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3">
-      <button
-        type="button"
-        onClick={onBack}
-        title={t('rightSidebar.subagents.back')}
-        aria-label={t('rightSidebar.subagents.back')}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      >
-        <ArrowLeft size={15} aria-hidden="true" />
-      </button>
-      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
-        {title}
-      </span>
-      {status ? <StatusGlyph status={status} label={t(`chat.agentTask.status.${status}`)} /> : null}
-    </div>
-  );
-}
-
-function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h3 className="mb-2 text-11 font-semibold uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
-      {children}
-    </h3>
-  );
-}
-
-function CenteredState({
-  icon: Icon,
-  label,
-  detail,
-  spinning = false,
-  action,
-}: {
-  icon: LucideIcon;
-  label: string;
-  detail?: string;
-  spinning?: boolean;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
-      <Spinner icon={Icon} spinning={spinning} size={20} className="text-[var(--text-tertiary)]" />
-      <p className="mt-3 text-13 font-medium text-[var(--text-secondary)]">{label}</p>
-      {detail ? (
-        <p className="mt-1 text-12 leading-5 text-[var(--text-tertiary)]">{detail}</p>
-      ) : null}
-      {action}
-    </div>
-  );
-}
+/** Host clamps the page size; 200 is its maximum. */
+const TRANSCRIPT_PAGE_SIZE = 200;
+/**
+ * Bound on the eager paging loop. A record long enough to exceed this keeps its
+ * `nextCursor`, so the technical-details "load more" button stays available.
+ */
+const MAX_TRANSCRIPT_PAGES = 100;
 
 interface SubagentsBodyProps {
   state: SubagentsState;
@@ -357,48 +109,57 @@ function ScopedSubagentsBody({
   const [detail, setDetail] = useState<SubagentRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRefreshVersion, setDetailRefreshVersion] = useState(0);
-  const selectedRunAlias = state.selectedRunId ?? null;
-  const selectedProviderHint = state.selectedProvider ?? null;
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<SubagentTranscriptEntry[]>([]);
+  const [transcriptCursor, setTranscriptCursor] = useState<string | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptForRunId, setTranscriptForRunId] = useState<string | null>(null);
+  const [transcriptRefreshVersion, setTranscriptRefreshVersion] = useState(0);
+  const transcriptTargetRef = useRef<string | null>(null);
+  /** Byte offset the last read stopped at; the resume point for tail reads. */
+  const transcriptTailRef = useRef<string | null>(null);
+  /** Refresh version already consumed, so one push causes exactly one read. */
+  const transcriptSyncedVersionRef = useRef<number>(-1);
+  /**
+   * Outstanding dependent reads for the remote poll's single-flight fence.
+   *
+   * A remote round is list + detail + transcript, and the latter two are driven
+   * by their own effects off the version bumps. `setInterval` did not wait for
+   * any of it: a device-link invoke defaults to ~30s and the breaker only trips
+   * after that, so one slow detail page could stack ~90 in-flight invokes before
+   * the first failure — starving the reliable-transport queue that the user's
+   * stop/steer controls share.
+   */
+  const detailReadsInFlightRef = useRef(0);
+  const transcriptReadsInFlightRef = useRef(0);
+  const selectedProviderHint = state.selectedProvider === 'pi' ? 'pi' : null;
+  const selectedRunAlias = state.selectedProvider && state.selectedProvider !== 'pi'
+    ? null
+    : (state.selectedRunId ?? null);
   const remoteDevice = ctx.deviceLinkDeviceId !== null;
 
-  // New focus entrances always carry the harness. Old persisted tab state may
-  // not; infer it only when the loaded page identifies one unambiguous
-  // provider. Alias-to-run resolution itself remains host-owned and scoped by
-  // (session, provider, alias), so a same-named run in another harness cannot
-  // win because it happened to update later.
-  const selectedProvider = useMemo(() => {
-    if (!selectedRunAlias) return null;
-    if (selectedProviderHint) return selectedProviderHint;
-    const exact = runs.find((run) => run.id === selectedRunAlias);
-    if (exact) return exact.provider;
-    const matches = runs.filter(
-      (run) =>
-        run.logicalAgentId === selectedRunAlias ||
-        run.parentToolUseId === selectedRunAlias ||
-        run.identityAliases.includes(selectedRunAlias) ||
-        run.providerRunIds.includes(selectedRunAlias),
-    );
-    const providers = new Set(matches.map((run) => run.provider));
-    return providers.size === 1 ? matches[0]?.provider ?? null : null;
-  }, [runs, selectedProviderHint, selectedRunAlias]);
+  // Product surface is Pi-only. Claude Code/Codex collection remains an
+  // internal compatibility layer and never participates in UI selection.
+  const selectedProvider: SubagentProvider | null = selectedRunAlias ? 'pi' : null;
+  const selectedDetail = detail && runMatchesSelection(detail, selectedProvider, selectedRunAlias)
+    ? detail
+    : null;
 
   const loadRuns = useCallback(
     async (cursor?: string) => {
       const append = Boolean(cursor);
       const requestOwner = getDataOwnerGeneration();
-      if (remoteDevice) {
-        setLoadState('unsupported');
-        setRuns([]);
-        setNextCursor(null);
-        return;
-      }
       if (append) setLoadingMore(true);
       else setLoadState((current) => (current === 'ready' ? current : 'loading'));
       try {
-        const response = await window.electronAPI.localDb.subagentRuns.list({
-          sessionId: ctx.sessionId,
-          ...(cursor ? { cursor } : {}),
-        });
+        const input = { sessionId: ctx.sessionId, ...(cursor ? { cursor } : {}) };
+        const response = remoteDevice
+          ? await window.electronAPI.deviceLink.invoke(
+              ctx.deviceLinkDeviceId!,
+              'local-db:subagent-runs:list',
+              [input],
+            ) as SubagentRunsListResponse
+          : await window.electronAPI.localDb.subagentRuns.list(input);
         if (!isCurrentSubagentReadOwner(requestOwner)) return;
         if (!response.supported) {
           setRuns([]);
@@ -406,10 +167,11 @@ function ScopedSubagentsBody({
           setLoadState('unsupported');
           return;
         }
+        const visibleRuns = response.runs.filter((run) => run.provider === 'pi');
         setRuns((current) => {
-          if (!append) return response.runs;
+          if (!append) return visibleRuns;
           const byId = new Map(current.map((run) => [run.id, run]));
-          for (const run of response.runs) byId.set(run.id, run);
+          for (const run of visibleRuns) byId.set(run.id, run);
           return [...byId.values()];
         });
         setNextCursor(response.nextCursor ?? null);
@@ -420,11 +182,51 @@ function ScopedSubagentsBody({
         if (isCurrentSubagentReadOwner(requestOwner) && append) setLoadingMore(false);
       }
     },
-    [ctx.sessionId, remoteDevice],
+    [ctx.deviceLinkDeviceId, ctx.sessionId, remoteDevice],
   );
 
   useEffect(() => {
     if (!visible) return;
+    if (remoteDevice) {
+      // Chained scheduling, not setInterval: the next round is only armed once
+      // this one's list read has settled, and it is skipped entirely while the
+      // previous round's detail/transcript reads are still outstanding. Slow or
+      // failing device-link responses therefore stretch the cadence instead of
+      // stacking requests. Failure still schedules — `loadRuns` swallows its own
+      // errors, and the guard below re-arms regardless.
+      //
+      // Only the polled reads are fenced; stop/steer go through
+      // `controlPiSubagent`, which never passes through here.
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const armNextRound = (): void => {
+        if (cancelled) return;
+        timer = setTimeout(() => void runRound(), REMOTE_POLL_INTERVAL_MS);
+      };
+      const runRound = async (): Promise<void> => {
+        if (cancelled) return;
+        if (detailReadsInFlightRef.current > 0 || transcriptReadsInFlightRef.current > 0) {
+          armNextRound();
+          return;
+        }
+        try {
+          await loadRuns();
+        } finally {
+          if (!cancelled) {
+            setDetailRefreshVersion((version) => version + 1);
+            setTranscriptRefreshVersion((version) => version + 1);
+            armNextRound();
+          }
+        }
+      };
+      // The first round runs immediately and the chain arms the rest, so the
+      // opening read is inside the fence too rather than racing the first tick.
+      void runRound();
+      return () => {
+        cancelled = true;
+        if (timer) clearTimeout(timer);
+      };
+    }
     void loadRuns();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
@@ -433,16 +235,71 @@ function ScopedSubagentsBody({
       timer = setTimeout(() => {
         void loadRuns();
         setDetailRefreshVersion((version) => version + 1);
+        setTranscriptRefreshVersion((version) => version + 1);
       }, 50);
     });
     return () => {
       if (timer) clearTimeout(timer);
       unsubscribe();
     };
-  }, [ctx.sessionId, loadRuns, visible]);
+  }, [ctx.sessionId, loadRuns, remoteDevice, visible]);
+
+  /**
+   * Anything still open in the local list. `queued` is projected as `running`
+   * by the time it reaches here, so the terminal set is the whole vocabulary.
+   */
+  const hasUnfinishedLocalRun = useMemo(
+    () => !remoteDevice && runs.some((run) => (
+      run.status !== 'completed' && run.status !== 'failed' && run.status !== 'stopped'
+    )),
+    [remoteDevice, runs],
+  );
 
   useEffect(() => {
-    if (!visible || !selectedRunAlias || !selectedProvider || loadState === 'unsupported') {
+    if (!visible || !hasUnfinishedLocalRun) return;
+    // Chained, single-flight, and it stops arming as soon as the list has
+    // nothing unfinished left (this effect simply tears down). The local list
+    // read reconciles durable status on the Host side, so a round settles the
+    // database row and the view together.
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const armNextRound = (): void => {
+      if (cancelled) return;
+      timer = setTimeout(() => void runRound(), LOCAL_UNFINISHED_POLL_INTERVAL_MS);
+    };
+    const runRound = async (): Promise<void> => {
+      if (cancelled) return;
+      try {
+        await loadRuns();
+      } finally {
+        if (!cancelled) {
+          setDetailRefreshVersion((version) => version + 1);
+          // The transcript needs the same bump. This poll exists precisely
+          // because the push channel went quiet — the root Pi exited, so the
+          // runner's later tool frames and replies arrive with nobody to
+          // announce them. Refreshing only the detail left the conversation
+          // frozen on the snapshot taken before the exit, and a stale
+          // assistant line in it went on suppressing the durable result the
+          // resumed generation had just produced.
+          setTranscriptRefreshVersion((version) => version + 1);
+          armNextRound();
+        }
+      }
+    };
+    armNextRound();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [hasUnfinishedLocalRun, loadRuns, visible]);
+
+  useEffect(() => {
+    if (
+      !visible
+      || !selectedRunAlias
+      || !selectedProvider
+      || loadState === 'unsupported'
+    ) {
       setDetail(null);
       setDetailLoading(false);
       return;
@@ -450,13 +307,20 @@ function ScopedSubagentsBody({
     let disposed = false;
     const requestOwner = getDataOwnerGeneration();
     setDetailLoading(true);
-    void window.electronAPI.localDb.subagentRuns
-      .detail({
-        sessionId: ctx.sessionId,
-        provider: selectedProvider,
-        runIdOrAlias: selectedRunAlias,
-      })
-      .then((response) => {
+    detailReadsInFlightRef.current += 1;
+    const input = {
+      sessionId: ctx.sessionId,
+      provider: selectedProvider,
+      runIdOrAlias: selectedRunAlias,
+    };
+    const request = remoteDevice
+      ? window.electronAPI.deviceLink.invoke(
+          ctx.deviceLinkDeviceId!,
+          'local-db:subagent-runs:detail',
+          [input],
+        ) as Promise<SubagentRunDetailResponse>
+      : window.electronAPI.localDb.subagentRuns.detail(input);
+    void request.then((response) => {
         if (disposed || !isCurrentSubagentReadOwner(requestOwner)) return;
         setDetail(response.supported ? response.run : null);
         if (
@@ -473,6 +337,7 @@ function ScopedSubagentsBody({
         if (!disposed && isCurrentSubagentReadOwner(requestOwner)) setDetail(null);
       })
       .finally(() => {
+        detailReadsInFlightRef.current = Math.max(0, detailReadsInFlightRef.current - 1);
         if (!disposed && isCurrentSubagentReadOwner(requestOwner)) setDetailLoading(false);
       });
     return () => {
@@ -485,16 +350,127 @@ function ScopedSubagentsBody({
     selectedProvider,
     selectedProviderHint,
     selectedRunAlias,
+    remoteDevice,
     visible,
   ]);
 
-  const grouped = useMemo(
-    () => ({
-      running: runs.filter((run) => run.status === 'running'),
-      finished: runs.filter((run) => run.status !== 'running'),
-    }),
-    [runs],
+  const fetchTranscriptPage = useCallback(
+    async (run: SubagentRunDetail, cursor?: string): Promise<SubagentTranscriptPageResponse> => {
+      const input = {
+        sessionId: ctx.sessionId,
+        provider: run.provider,
+        runIdOrAlias: run.id,
+        limit: TRANSCRIPT_PAGE_SIZE,
+        ...(cursor ? { cursor } : {}),
+      };
+      return remoteDevice
+        ? await window.electronAPI.deviceLink.invoke(
+            ctx.deviceLinkDeviceId!,
+            'local-db:subagent-runs:transcript',
+            [input],
+          ) as SubagentTranscriptPageResponse
+        : await window.electronAPI.localDb.subagentRuns.transcript(input);
+    },
+    [ctx.deviceLinkDeviceId, ctx.sessionId, remoteDevice],
   );
+
+  /**
+   * Read the transcript for `run`. Without a cursor this is a full read that
+   * replaces the current entries; with one it is an append-only tail read.
+   * Entries are merged by id so an overlapping page can never duplicate a row.
+   */
+  const loadTranscript = useCallback(
+    async (run: SubagentRunDetail, fromCursor?: string) => {
+      const requestOwner = getDataOwnerGeneration();
+      const targetRunId = run.id;
+      const append = fromCursor !== undefined;
+      transcriptTargetRef.current = targetRunId;
+      setTranscriptLoading(true);
+      transcriptReadsInFlightRef.current += 1;
+      try {
+        let cursor = fromCursor;
+        let tail: string | null = append ? fromCursor ?? null : null;
+        const collected: SubagentTranscriptEntry[] = [];
+        for (let page = 0; page < MAX_TRANSCRIPT_PAGES; page += 1) {
+          const response = await fetchTranscriptPage(run, cursor);
+          if (
+            !isCurrentSubagentReadOwner(requestOwner)
+            || transcriptTargetRef.current !== targetRunId
+          ) return;
+          if (!response.supported) {
+            if (!append) {
+              setTranscript([]);
+              setTranscriptCursor(null);
+              transcriptTailRef.current = null;
+            }
+            return;
+          }
+          collected.push(...response.entries);
+          tail = response.tailCursor ?? response.nextCursor ?? tail;
+          cursor = response.nextCursor;
+          if (!cursor) break;
+        }
+        transcriptTailRef.current = tail;
+        setTranscriptCursor(cursor ?? null);
+        setTranscript((current) => {
+          if (!append) return collected;
+          if (collected.length === 0) return current;
+          const seen = new Set(current.map((entry) => entry.id));
+          const added = collected.filter((entry) => !seen.has(entry.id));
+          return added.length > 0 ? [...current, ...added] : current;
+        });
+      } catch {
+        if (
+          !isCurrentSubagentReadOwner(requestOwner)
+          || transcriptTargetRef.current !== targetRunId
+        ) return;
+        // A tail read can fail on a cursor the host now rejects (the record was
+        // rewritten, so the offset is past its end). Drop the cursor instead of
+        // keeping it: the refresh version is already consumed, so retrying the
+        // same bad cursor on every later change would silently freeze the
+        // conversation. Clearing it makes the next change do a full read.
+        transcriptTailRef.current = null;
+        if (!append) {
+          setTranscript([]);
+          setTranscriptCursor(null);
+        }
+      } finally {
+        transcriptReadsInFlightRef.current = Math.max(0, transcriptReadsInFlightRef.current - 1);
+        if (
+          isCurrentSubagentReadOwner(requestOwner)
+          && transcriptTargetRef.current === targetRunId
+        ) setTranscriptLoading(false);
+      }
+    },
+    [fetchTranscriptPage],
+  );
+
+  useEffect(() => {
+    if (!visible || !detail?.capabilities.viewFullTranscript) {
+      transcriptTargetRef.current = null;
+      transcriptTailRef.current = null;
+      setTranscript([]);
+      setTranscriptCursor(null);
+      setTranscriptForRunId(null);
+      setTranscriptLoading(false);
+      return;
+    }
+    if (transcriptForRunId !== detail.id) {
+      // Entering a detail (or re-reading after a control landed): full page-in.
+      transcriptTailRef.current = null;
+      transcriptSyncedVersionRef.current = transcriptRefreshVersion;
+      setTranscript([]);
+      setTranscriptCursor(null);
+      setTranscriptForRunId(detail.id);
+      void loadTranscript(detail);
+      return;
+    }
+    if (transcriptSyncedVersionRef.current === transcriptRefreshVersion) return;
+    transcriptSyncedVersionRef.current = transcriptRefreshVersion;
+    // A durable change landed. Resume from the byte we stopped at when the host
+    // reported one; older hosts omit `tailCursor`, so fall back to a full read.
+    void loadTranscript(detail, transcriptTailRef.current ?? undefined);
+  }, [detail, loadTranscript, transcriptForRunId, transcriptRefreshVersion, visible]);
 
   const openRun = useCallback(
     (run: SubagentRun) => ctx.patchState({
@@ -506,6 +482,93 @@ function ScopedSubagentsBody({
   const back = useCallback(
     () => ctx.patchState({ selectedRunId: null, selectedProvider: null }),
     [ctx],
+  );
+  const controlRun = useCallback(
+    async (
+      run: SubagentRunDetail,
+      action: SubagentControlIntent,
+      message: string,
+      childId?: string,
+    ): Promise<boolean> => {
+      const api = window.electronAPI?.maker;
+      const allowed = action === 'resume'
+        ? run.capabilities.resume && run.status !== 'running'
+        : run.capabilities.steer && run.status === 'running';
+      if (run.provider !== 'pi' || !allowed || !api?.controlPiSubagent) return false;
+      const taskId = run.parentToolUseId ?? run.logicalAgentId;
+      const input = {
+        sessionId: ctx.sessionId,
+        taskId,
+        action,
+        message,
+        ...(childId ? { childId } : {}),
+      };
+      try {
+        const result = remoteDevice
+          ? await window.electronAPI.deviceLink.invoke(
+              ctx.deviceLinkDeviceId!,
+              'maker:pi-subagent:control',
+              [input],
+            ) as { ok: boolean; controlled: number }
+          : await api.controlPiSubagent(input);
+        if (result.ok) {
+          setTranscriptForRunId(null);
+          setDetailRefreshVersion((version) => version + 1);
+        }
+        return result.ok;
+      } catch {
+        return false;
+      }
+    },
+    [ctx.deviceLinkDeviceId, ctx.sessionId, remoteDevice],
+  );
+
+  const stopRun = useCallback(
+    (run: SubagentRunDetail, childId?: string) => {
+      const api = window.electronAPI?.maker;
+      if (!run.capabilities.stop || run.status !== 'running' || !api?.stopAgentTask) return;
+      const controlTaskId = run.provider === 'pi'
+        ? run.parentToolUseId ?? run.logicalAgentId
+        : run.logicalAgentId;
+      setStoppingRunId(run.id);
+      const request = remoteDevice
+        ? run.provider === 'pi'
+          ? window.electronAPI.deviceLink.invoke(
+              ctx.deviceLinkDeviceId!,
+              'maker:pi-subagent:control',
+              [{
+                sessionId: ctx.sessionId,
+                taskId: controlTaskId,
+                action: 'stop',
+                ...(childId ? { childId } : {}),
+              }],
+            )
+          : Promise.reject(new Error('Remote stop is only supported for PI Subagents'))
+        : childId && run.provider === 'pi' && api.controlPiSubagent
+          ? api.controlPiSubagent({
+              sessionId: ctx.sessionId,
+              taskId: controlTaskId,
+              action: 'stop',
+              childId,
+            })
+          : api.stopAgentTask(ctx.sessionId, controlTaskId);
+      void request
+        .catch(() => {
+          // Keep the durable status as the source of truth. A failed request
+          // leaves the run visible and retryable instead of painting it stopped.
+        })
+        .finally(() => setStoppingRunId((current) => (current === run.id ? null : current)));
+    },
+    [ctx.deviceLinkDeviceId, ctx.sessionId, remoteDevice],
+  );
+
+  const loadMoreTranscript = useCallback(() => {
+    if (selectedDetail && transcriptCursor) void loadTranscript(selectedDetail, transcriptCursor);
+  }, [loadTranscript, selectedDetail, transcriptCursor]);
+
+  const detailKey = useMemo(
+    () => `${selectedDetail?.provider ?? selectedProvider ?? 'unknown'}:${selectedDetail?.id ?? selectedRunAlias}`,
+    [selectedDetail, selectedProvider, selectedRunAlias],
   );
 
   if (loadState === 'idle' || loadState === 'loading') {
@@ -525,11 +588,19 @@ function ScopedSubagentsBody({
   if (selectedRunAlias) {
     return (
       <DetailView
-        detail={detail}
-        loading={detailLoading}
+        key={detailKey}
+        detail={selectedDetail}
+        loading={detailLoading || selectedDetail === null}
         workdir={ctx.workdir}
         allowPrivilegedLinks={ctx.deviceLinkDeviceId === null && !ctx.remoteHostId}
+        stopping={selectedDetail !== null && stoppingRunId === selectedDetail.id}
+        transcript={transcript}
+        transcriptLoading={transcriptLoading}
+        transcriptCursor={transcriptCursor}
+        onLoadMoreTranscript={loadMoreTranscript}
         onBack={back}
+        onStop={stopRun}
+        onControl={controlRun}
       />
     );
   }
@@ -542,7 +613,7 @@ function ScopedSubagentsBody({
           <button
             type="button"
             onClick={() => void loadRuns()}
-            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             <RefreshCw size={13} aria-hidden="true" />
             {t('rightSidebar.subagents.retry')}
@@ -562,47 +633,14 @@ function ScopedSubagentsBody({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-4">
-        <Bot size={15} className="text-[var(--text-secondary)]" aria-hidden="true" />
-        <h2 className="text-13 font-medium text-[var(--text-primary)]">
-          {t('rightSidebar.tabs.kinds.subagents')}
-        </h2>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {grouped.running.length > 0 ? (
-          <section>
-            <div className="px-2 pb-1 pt-1 text-10 font-semibold uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
-              {t('rightSidebar.subagents.running')}
-            </div>
-            {grouped.running.map((run) => (
-              <RunRow key={run.id} run={run} onOpen={openRun} />
-            ))}
-          </section>
-        ) : null}
-        {grouped.finished.length > 0 ? (
-          <section className={grouped.running.length > 0 ? 'mt-3' : undefined}>
-            <div className="px-2 pb-1 pt-1 text-10 font-semibold uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
-              {t('rightSidebar.subagents.finished')}
-            </div>
-            {grouped.finished.map((run) => (
-              <RunRow key={run.id} run={run} onOpen={openRun} />
-            ))}
-          </section>
-        ) : null}
-        {nextCursor ? (
-          <button
-            type="button"
-            disabled={loadingMore}
-            onClick={() => void loadRuns(nextCursor)}
-            className="mx-2 mt-3 flex h-8 items-center justify-center rounded-lg border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          >
-            {loadingMore
-              ? t('rightSidebar.subagents.loading')
-              : t('rightSidebar.subagents.loadEarlier')}
-          </button>
-        ) : null}
-      </div>
-    </div>
+    <RunList
+      runs={runs}
+      nextCursor={nextCursor}
+      loadingMore={loadingMore}
+      onOpen={openRun}
+      onLoadMore={() => {
+        if (nextCursor) void loadRuns(nextCursor);
+      }}
+    />
   );
 }

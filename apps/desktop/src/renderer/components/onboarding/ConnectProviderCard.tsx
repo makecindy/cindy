@@ -20,6 +20,7 @@ import { ChevronDown, ChevronRight, KeyRound } from 'lucide-react';
 
 import { presetDisplayName } from '@cindy/model-providers';
 
+import { localCliDisplayName } from '../../../shared/localCliDetect';
 import { cn } from '@/lib/utils';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { providerMonogram } from '@/lib/providerModels';
@@ -35,11 +36,14 @@ function rowIcon(id: string, name: string, routing?: ProviderLogoRouting): React
   return <span className="text-13 font-semibold leading-none">{providerMonogram(name)}</span>;
 }
 
-export function ConnectProviderCard({ className }: { className?: string }) {
+export function ConnectProviderCard({ className, dismissible = true }: {
+  className?: string;
+  dismissible?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const signInToCindy = useSignInToCindy();
-  const onboarding = useProviderOnboarding({ loadPresets: true });
+  const onboarding = useProviderOnboarding({ loadPresets: true, dismissible });
   const [othersOpen, setOthersOpen] = useState(false);
 
   if (!onboarding.visible) return null;
@@ -91,7 +95,7 @@ export function ConnectProviderCard({ className }: { className?: string }) {
         {/* 本机 CLI 检测行置顶(hook 已保证 installed && loggedIn):本机有登录态
             凭证 = 一键授权大概率直接成功,是最低摩擦路径,优先于推荐行。 */}
         {detectedRows.map(({ provider, detection }) => {
-          const cliName = detection.cli === 'claude-cli' ? 'Claude Code CLI' : 'Codex CLI';
+          const cliName = localCliDisplayName(detection.cli);
           return (
             <ProviderRow
               key={`detected-${provider.id}`}
@@ -148,14 +152,16 @@ export function ConnectProviderCard({ className }: { className?: string }) {
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onboarding.dismiss}
-          className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-        >
-          {t('onboarding.connectProvider.dismiss')}
-        </button>
+      <div className={cn('mt-4 flex items-center', dismissible ? 'justify-between' : 'justify-end')}>
+        {dismissible ? (
+          <button
+            type="button"
+            onClick={onboarding.dismiss}
+            className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          >
+            {t('onboarding.connectProvider.dismiss')}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => navigate('/settings?tab=providers&wizard=1')}

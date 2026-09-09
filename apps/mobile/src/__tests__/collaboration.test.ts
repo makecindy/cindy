@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   isCollaborationSession,
   sessionCollaborationComposerReadOnlyReason,
@@ -7,6 +8,10 @@ import {
   sessionCollaborationReadOnlyReason,
 } from '@/session/collaboration';
 import type { RemoteSession } from '@/session/types';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function session(patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -34,16 +39,16 @@ describe('mobile collaboration session fallback', () => {
     const lead = session({ orcaRole: 'lead' });
     const worker = session({ orcaRole: 'worker' });
 
-    expect(sessionCollaborationLabel(lead)).toBe('协作 Lead');
-    expect(sessionCollaborationLabel(worker)).toBe('协作 Worker');
+    expect(sessionCollaborationLabel(lead)).toBe('协同 Lead');
+    expect(sessionCollaborationLabel(worker)).toBe('协同 Worker');
     // Lead 文案:可以发消息聊天,只有编排操作留在电脑端(不再说"暂不提供发送消息")。
-    expect(sessionCollaborationNotice(lead)).toContain('发消息聊天');
-    expect(sessionCollaborationNotice(lead)).toContain('创建 worker');
+    expect(sessionCollaborationNotice(lead)).toContain('继续发消息');
+    expect(sessionCollaborationNotice(lead)).toContain('创建 Worker');
     expect(sessionCollaborationNotice(lead)).not.toContain('暂不提供');
     expect(sessionCollaborationNotice(worker)).toContain('发送消息');
-    expect(sessionCollaborationNotice(worker)).toContain('worker focus');
+    expect(sessionCollaborationNotice(worker)).toContain('切换 Worker 焦点');
     expect(isCollaborationSession(lead)).toBe(true);
-    expect(sessionCollaborationReadOnlyReason(worker)).toContain('只读安全降级');
+    expect(sessionCollaborationReadOnlyReason(worker)).toContain('只读');
   });
 
   it('lets Lead compose messages while keeping worker composer read-only', () => {
@@ -64,9 +69,9 @@ describe('mobile collaboration session fallback', () => {
   it('keeps unknown collaboration roles readable but generic', () => {
     const custom = session({ orcaRole: 'reviewer' });
 
-    expect(sessionCollaborationLabel(custom)).toBe('协作 reviewer');
-    expect(sessionCollaborationNotice(custom)).toContain('协作编排操作请先在电脑端完成');
-    expect(sessionCollaborationReadOnlyReason(custom)).toContain('任务写操作请先在电脑端完成');
+    expect(sessionCollaborationLabel(custom)).toBe('协同 reviewer');
+    expect(sessionCollaborationNotice(custom)).toContain('协同编排操作请在电脑端完成');
+    expect(sessionCollaborationReadOnlyReason(custom)).toContain('任务修改请在电脑端完成');
     expect(sessionCollaborationLabel(session({ orcaRole: null }))).toBeNull();
     expect(isCollaborationSession(session({ orcaRole: null }))).toBe(false);
     expect(sessionCollaborationReadOnlyReason(session({ orcaRole: null }))).toBeNull();

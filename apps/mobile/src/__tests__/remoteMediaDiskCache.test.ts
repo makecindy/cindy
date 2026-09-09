@@ -36,6 +36,18 @@ const URL_B = 'xdt-image://cache/b.png';
 const URL_C = 'xdt-image://cache/c.png';
 
 describe('remoteMediaDiskCache', () => {
+  it('retains files above the old 150 MiB quota by default across restarts', async () => {
+    const h = memoryIO();
+    const size = 200 * 1024 * 1024;
+    h.io.download = vi.fn(async (_url, name) => { h.files.set(name, size); return size; });
+    const cache = createRemoteMediaDiskCache(h.io);
+    expect(await cache.store(URL_A, 'https://example.com/a', 'image/png', size)).toBe(true);
+    expect(await cache.store(URL_B, 'https://example.com/b', 'image/png', size)).toBe(true);
+    const restarted = createRemoteMediaDiskCache(h.io);
+    expect(await restarted.lookup(URL_A)).toMatchObject({ size });
+    expect(await restarted.lookup(URL_B)).toMatchObject({ size });
+    expect(h.io.deleteFile).not.toHaveBeenCalled();
+  });
   it('misses before store, hits with file uri after store, and persists the index', async () => {
     const { io, getIndexText } = memoryIO();
     const cache = createRemoteMediaDiskCache(io);

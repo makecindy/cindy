@@ -61,6 +61,8 @@ export type {
   ApprovalRequestResult,
   OAuthRefreshParams,
   OAuthRefreshResult,
+  SubagentModelAccessParams,
+  SubagentModelAccessResult,
   QueryEventNotification,
   SessionClosedNotification,
   ClientReplacedNotification,

@@ -45,8 +45,8 @@ describe('remote Orca Worker creation context', () => {
     );
 
     expect(sessionView).toContain('deviceId={remoteDeviceId}');
-    expect(workerPanel).toContain('deviceId={deviceId}');
-    expect(workersTabBody).toContain('deviceId: leadSession?.deviceLinkDeviceId');
+    expect(workerPanel).toContain('deviceId={deviceId ?? undefined}');
+    expect(workersTabBody).toContain('deviceId: ctx.deviceLinkDeviceId');
   });
 
   it('never uses the controller API key to gate a remote model row', () => {
@@ -65,7 +65,7 @@ describe('remote Orca Worker creation context', () => {
     expect(selector).toContain(
       'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',
     );
-    expect(selector).toContain('const rowAgentKind = resolveVisibleModelAgentKind({');
+    expect(selector).toContain('const rowAgentKind = rowAgent ?? resolveVisibleModelAgentKind({');
     expect(selector).toContain('providerOffersModel(provider, id, rowAgentKind)');
   });
 });

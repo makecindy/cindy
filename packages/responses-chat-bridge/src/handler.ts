@@ -1,11 +1,17 @@
 import type { ServerResponse } from 'node:http';
 
 import { ChatSseTranslator } from './chat-sse-translator.js';
-import { translateResponsesRequestWithContext } from './translate-request.js';
+import {
+  overrideHeadersCaseInsensitive,
+  resolveConversationSessionHeaders,
+  withChatBridgeUserAgent,
+} from './session-header.js';
+import { coalesceLeadingSystemMessages, translateResponsesRequestWithContext } from './translate-request.js';
 import {
   UnsupportedResponsesFeatureError,
   type ChatBridgeLogger,
   type ChatBridgeProviderConfig,
+  type ChatMessage,
   type ResponsesChatBridgeHandler,
   type ResponsesRequest,
 } from './types.js';
@@ -16,6 +22,38 @@ const MAX_SSE_BUFFER_CHARS = 1024 * 1024;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function classifyUpstreamErrorBody(text: string): 'empty' | 'json' | 'text' {
+  if (!text.trim()) return 'empty';
+  try {
+    JSON.parse(text);
+    return 'json';
+  } catch {
+    return 'text';
+  }
+}
+
+function isSystemMessageOrderError(status: number, text: string): boolean {
+  if (status !== 400) return false;
+  try {
+    const body: unknown = JSON.parse(text);
+    return isPlainObject(body)
+      && isPlainObject(body.error)
+      && typeof body.error.message === 'string'
+      && /^system message must be at the beginning\.?$/i.test(body.error.message.trim());
+  } catch {
+    return false;
+  }
+}
+
+/** Only retry a prefix merge; moving later instructions across a turn changes their scope. */
+function hasConsecutiveSystemPrefix(messages: ChatMessage[]): boolean {
+  let prefixLength = 0;
+  while (messages[prefixLength]?.role === 'system') prefixLength += 1;
+  return prefixLength > 1 && messages.every((message, index) => (
+    index < prefixLength || (message.role !== 'system' && message.role !== 'developer')
+  ));
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -152,7 +190,7 @@ export function createResponsesChatHandler(
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   return {
-    async handle({ parsedBody, res }): Promise<void> {
+    async handle({ parsedBody, res, requestHeaders }): Promise<void> {
       if (!isPlainObject(parsedBody) || typeof parsedBody.model !== 'string') {
         writeJson(res, 400, responsesError(400, 'invalid_request', 'invalid Responses request body'));
         return;
@@ -225,17 +263,50 @@ export function createResponsesChatHandler(
       const abortUpstream = (): void => abort.abort();
       res.once('close', abortUpstream);
       let upstream: Response;
+      let upstreamErrorText: string | undefined;
       try {
-        upstream = await fetchImpl(upstreamUrl, {
+        // 出站头 = 供应商凭证/自定义头(缺 UA 时补 bridge 标识)+ 稳定会话头 + 协议头。
+        // 会话头按每个对话从入站 thread-id 映射,优先于供应商静态配置里同名的固定值
+        // (整机共用一个 ID 达不到上游「每个对话稳定」的要求,见 #4073);其余入站头不出网。
+        // 覆盖按头名大小写不敏感进行,否则 `X-OpenCode-Session` 与 `x-opencode-session`
+        // 会被 fetch 合并成一个非法复合值。
+        const sessionHeaders = resolveConversationSessionHeaders(requestHeaders);
+        const send = (): Promise<Response> => fetchImpl(upstreamUrl, {
           method: 'POST',
           headers: {
-            ...providerHeaders,
+            ...overrideHeadersCaseInsensitive(withChatBridgeUserAgent(providerHeaders), sessionHeaders),
             'content-type': 'application/json',
             accept: 'text/event-stream',
           },
           body: JSON.stringify(chatRequest),
           signal: abort.signal,
         });
+        upstream = await send();
+        if (!upstream.ok) {
+          upstreamErrorText = await readErrorText(upstream);
+          // Qwen can reject instructions + developer even before the first user (#3583).
+          // Retry only a precise pre-generation rejection, once and within this request.
+          // Explicit policies and native developer-role semantics remain authoritative.
+          if (
+            provider.capabilities?.systemMessagePolicy === undefined
+            && provider.capabilities?.developerRole !== 'developer'
+            && isSystemMessageOrderError(upstream.status, upstreamErrorText)
+            && !abort.signal.aborted
+            && hasConsecutiveSystemPrefix(chatRequest.messages)
+          ) {
+            const coalesced = coalesceLeadingSystemMessages(chatRequest.messages);
+            if (coalesced !== chatRequest.messages) {
+              chatRequest.messages = coalesced;
+              upstream = await send();
+              upstreamErrorText = upstream.ok ? undefined : await readErrorText(upstream);
+            }
+          }
+        }
+        if (abort.signal.aborted) {
+          res.off('close', abortUpstream);
+          void upstream.body?.cancel().catch(() => {});
+          return;
+        }
       } catch (error) {
         res.off('close', abortUpstream);
         if (abort.signal.aborted) return;
@@ -261,7 +332,12 @@ export function createResponsesChatHandler(
       };
 
       if (!upstream.ok || !upstream.body) {
-        const text = await readErrorText(upstream);
+        const text = upstreamErrorText ?? await readErrorText(upstream);
+        log.warn?.('responses-chat bridge upstream error', {
+          model: request.model,
+          status: upstream.status,
+          errorKind: classifyUpstreamErrorBody(text),
+        });
         await reportUpstreamError(upstream.status, text);
         res.off('close', abortUpstream);
         writeJson(
@@ -368,11 +444,14 @@ export function createResponsesChatHandler(
         }
         writeSse(res, output, seq++);
       };
-      const parseDataPayload = (payload: string): void => {
-        if (!payload) return;
+      // 返回 true = 该帧是流内终态 provider error(已发出 response.failed):
+      // 上游可能在错误事件后保持连接不关,继续等 EOF 会让请求、上游连接与
+      // 相关会话资源一直挂着 —— 调用侧应立即停读并取消上游 reader(#2839)。
+      const parseDataPayload = (payload: string): boolean => {
+        if (!payload) return false;
         if (payload === '[DONE]') {
           translator.markTerminal();
-          return;
+          return false;
         }
         let event: unknown;
         try {
@@ -392,12 +471,14 @@ export function createResponsesChatHandler(
             JSON.stringify(streamedError).slice(0, MAX_ERROR_BODY_CHARS),
           );
           for (const output of translator.fail(message)) emit(output);
-          return;
+          return true;
         }
         for (const output of translator.push(event)) emit(output);
+        return false;
       };
+      let upstreamErrored = false;
       try {
-        for (;;) {
+        readLoop: for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -407,17 +488,34 @@ export function createResponsesChatHandler(
             const line = buffer.slice(start, newline).replace(/\r$/, '');
             start = newline + 1;
             if (!line.startsWith('data:')) continue;
-            parseDataPayload(line.slice(5).trim());
+            if (parseDataPayload(line.slice(5).trim())) {
+              upstreamErrored = true;
+              break readLoop;
+            }
           }
           if (start > 0) buffer = buffer.slice(start);
           if (buffer.length > MAX_SSE_BUFFER_CHARS) {
             throw new Error('upstream SSE line exceeds 1 MiB');
           }
         }
-        buffer += decoder.decode();
-        if (buffer.trim()) {
-          for (const line of buffer.split(/\r?\n/)) {
-            if (line.startsWith('data:')) parseDataPayload(line.slice(5).trim());
+        if (upstreamErrored) {
+          // 终态错误之后:当前 chunk 剩余帧不再解析,取消上游 reader 释放
+          // 连接。不 await:注入的 fetchImpl 可能给出取消长期 pending 的流,
+          // 挂起的取消不能阻塞下游收口。
+          try {
+            reader.cancel().catch(() => {
+              // 取消失败不影响下游收口。
+            });
+          } catch {
+            // 同步抛出的取消失败同样不影响下游收口。
+          }
+        } else {
+          buffer += decoder.decode();
+          if (buffer.trim()) {
+            for (const line of buffer.split(/\r?\n/)) {
+              if (!line.startsWith('data:')) continue;
+              if (parseDataPayload(line.slice(5).trim())) break;
+            }
           }
         }
       } catch (error) {

@@ -67,6 +67,8 @@ interface RightSidebarProps {
   remoteHostId: string | null;
   /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
   deviceLinkDeviceId?: string | null;
+  /** Pi-only product gate for the Subagents tab and detail surface. */
+  subagentsAvailable?: boolean;
   /** Maximize 态(Phase 6):RSB 撑满整个非左栏区,主区 hidden。本组件用来隐藏
    *  resize handle(maximize 不允许拖宽)+ 把 TabBar maximize 按钮图标切到"还原"。 */
   isMaximized?: boolean;
@@ -99,6 +101,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     workdir,
     remoteHostId,
     deviceLinkDeviceId,
+    subagentsAvailable,
     onDetach,
     panelSide,
     onAllTabsClosed,
@@ -121,7 +124,9 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
   // 造成"追不上窗口边缘"的橡皮筋滞后。
   const [displayCollapsed, setDisplayCollapsed] = useState(isCollapsed);
   const [animating, setAnimating] = useState(false);
-  const [animationWidthSnapshot, setAnimationWidthSnapshot] = useState<number | null>(null);
+  const [animationWidthSnapshot, setAnimationWidthSnapshot] = useState<
+    CSSProperties['width'] | null
+  >(null);
   const animateNextRef = useRef(false);
   const asideRef = useRef<HTMLElement | null>(null);
   // 宽度优先取引擎实时值(拖引擎缝把手逐帧跟手),未接管回落 prop。
@@ -192,9 +197,8 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
         animating &&
           'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
         // maximize 态:用 flex-1 撑满 row 内 sidebar 之后的剩余空间,不传 fixed
-        // width —— 否则 MainLayout 的 rightAvailableWidth(基于 main rect)在 main
-        // hidden 后算成"窗口宽"漏算 sidebar,RSB 被算多一个 sidebar 宽度,推 tree
-        // pane 出视口(2026-07-01 用户实测 bug:maximize 后文件树消失)。
+        // width —— 否则普通态的引擎 pane width 在 main hidden 后仍会留下固定宽,
+        // 无法接管全部剩余空间(2026-07-01 用户实测 bug:maximize 后文件树消失)。
         // 非 maximize:width prop 只作为 preferred width。允许 flex shrink,配合 main
         // 的 min-w-[400px] 让极窄窗口下 RSB 温和变窄,避免 280px 目标宽硬顶出窗口。
         isMaximized ? 'flex-1' : 'shrink',
@@ -261,6 +265,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           workdir={workdir}
           remoteHostId={remoteHostId}
           deviceLinkDeviceId={deviceLinkDeviceId}
+          subagentsAvailable={subagentsAvailable}
           shellVisible={!displayCollapsed}
           isMac={isMac}
           unifiedTopbar={isMac}

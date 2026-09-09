@@ -40,38 +40,129 @@ describe('classifyGhostPanelNavigation', () => {
 
 describe('GhostExternalLinkGate(设置区/面板「前往控制台」外链闸)', () => {
   const DECLARED = 'https://example.com/settings/keys';
-  const makeGate = (opts?: { urls?: string[]; now?: () => number }) =>
+  const makeGate = (opts?: { urls?: string[] | null; now?: () => number }) =>
     new GhostExternalLinkGate({
-      declaredExternalUrls: (ghostId) => (ghostId === 'art' ? (opts?.urls ?? [DECLARED]) : []),
+      declaredExternalUrls: (ghostId) => {
+        if (ghostId !== 'art') return null;
+        return opts && 'urls' in opts ? (opts.urls ?? null) : [DECLARED];
+      },
       now: opts?.now,
     });
   const focused = () => true;
 
-  it('身份卡声明过的地址 + 持焦点 → 放行原样 URL', () => {
+  it('身份卡声明过的地址 + 持焦点 → 直接打开原样 URL', () => {
     expect(makeGate().request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused })).toEqual({
-      ok: true,
+      action: 'direct-open',
       url: DECLARED,
     });
   });
 
-  it('声明之外的地址拒(逐字比对,不做归一化:尾斜杠/大小写都不认)', () => {
-    let t = 1000;
-    const gate = makeGate({ now: () => t });
-    expect(gate.request({ ghostId: 'art', url: 'https://evil.example/', isPanelFocused: focused })).toEqual({
-      ok: false,
-      reason: 'not-declared',
-    });
-    t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
-    expect(gate.request({ ghostId: 'art', url: `${DECLARED}/`, isPanelFocused: focused })).toEqual({
-      ok: false,
-      reason: 'not-declared',
+  it.each([
+    'https://xd.com/',
+    'https://www.xd.com/path',
+    'https://deep.console.xd.com/path',
+    'https://xd.cn/',
+    'https://www.xd.cn/path',
+    'https://deep.console.xd.cn/path',
+    'https://workers.xd.team/workspace/published',
+  ])('固定授信主机直接打开：%s', (url) => {
+    expect(
+      makeGate({ urls: [] }).request({ ghostId: 'art', url, isPanelFocused: focused }),
+    ).toEqual({
+      action: 'direct-open',
+      url,
     });
   });
 
-  it('查无此意识(已卸下/沉睡)= 空白名单 → not-declared', () => {
-    expect(makeGate().request({ ghostId: 'other', url: DECLARED, isPanelFocused: focused })).toEqual({
-      ok: false,
-      reason: 'not-declared',
+  it.each([
+    'https://evilxd.com/',
+    'https://xd.com.evil.com/',
+    'https://notxd.cn/',
+    'https://xd.cn.evil.com/',
+    'https://sub.workers.xd.team/',
+    'https://workers-xd.team/',
+    'https://example.com/path',
+  ])('近似主机或普通 HTTPS 不自动授信，而是请求确认：%s', (url) => {
+    expect(
+      makeGate({ urls: [] }).request({ ghostId: 'art', url, isPanelFocused: focused }),
+    ).toEqual({
+      action: 'confirm',
+      url,
+    });
+  });
+
+  it('合法 HTTPS 在判定前规范化，并仅以规范化后的 hostname 判断授信', () => {
+    expect(
+      makeGate({ urls: [] }).request({
+        ghostId: 'art',
+        url: 'https://XD.COM:443/workspace/./published',
+        isPanelFocused: focused,
+      }),
+    ).toEqual({ action: 'direct-open', url: 'https://xd.com/workspace/published' });
+  });
+
+  it('现有声明地址仍优先逐字命中；非逐字版本作为普通 HTTPS 进入确认', () => {
+    let t = 1000;
+    const gate = makeGate({ now: () => t });
+    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused })).toEqual({
+      action: 'direct-open',
+      url: DECLARED,
+    });
+    t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
+    expect(gate.request({ ghostId: 'art', url: `${DECLARED}/`, isPanelFocused: focused })).toEqual({
+      action: 'confirm',
+      url: `${DECLARED}/`,
+    });
+  });
+
+  it.each([
+    ['固定授信地址', 'https://workers.xd.team/workspace/published'],
+    ['普通 HTTPS', 'https://example.com/workspace'],
+  ])('查无此意识或已停用时拒绝%s，不保留旧 guest 的宿主能力', (_label, url) => {
+    expect(
+      makeGate().request({ ghostId: 'other', url, isPanelFocused: focused }),
+    ).toEqual({
+      action: 'reject',
+      reason: 'ghost-unavailable',
+    });
+  });
+
+  it('有效意识的空声明列表与不可用意识保持可区分', () => {
+    expect(
+      makeGate({ urls: [] }).request({
+        ghostId: 'art',
+        url: 'https://example.com/workspace',
+        isPanelFocused: focused,
+      }),
+    ).toEqual({
+      action: 'confirm',
+      url: 'https://example.com/workspace',
+    });
+    expect(
+      makeGate({ urls: null }).request({
+        ghostId: 'art',
+        url: 'https://example.com/workspace',
+        isPanelFocused: focused,
+      }),
+    ).toEqual({
+      action: 'reject',
+      reason: 'ghost-unavailable',
+    });
+  });
+
+  it.each([
+    'http://xd.com/',
+    'ftp://xd.com/',
+    'file:///etc/passwd',
+    'custom://xd.com/path',
+    'https://user@xd.com/',
+    'https://user:password@xd.com/',
+    'not-a-url',
+    'https://[invalid',
+  ])('非 HTTPS、带凭证或畸形 URL 拒绝：%s', (url) => {
+    expect(makeGate().request({ ghostId: 'art', url, isPanelFocused: focused })).toEqual({
+      action: 'reject',
+      reason: 'bad-url',
     });
   });
 
@@ -79,33 +170,39 @@ describe('GhostExternalLinkGate(设置区/面板「前往控制台」外链闸)'
     let t = 1000;
     const gate = makeGate({ now: () => t });
     expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: () => false })).toEqual({
-      ok: false,
+      action: 'reject',
       reason: 'not-focused',
     });
     // 失焦拒绝不占限速窗口:随后用户真点击立即可放行。
     t += 1;
-    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).ok).toBe(true);
+    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).action).toBe(
+      'direct-open',
+    );
   });
 
   it('限速按尝试记账:窗口内重试被拒且顺延窗口,连续 spam 闸整体关死', () => {
     let t = 1000;
     const gate = makeGate({ now: () => t });
-    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).ok).toBe(true);
+    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).action).toBe(
+      'direct-open',
+    );
     // 999ms 后重试:拒,且这次尝试本身顺延了窗口。
     t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS - 1;
     expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused })).toEqual({
-      ok: false,
+      action: 'reject',
       reason: 'rate-limited',
     });
     // 距首次放行已 1s,但距上次「尝试」只差 1ms:仍拒(spam 关死语义)。
     t += 1;
     expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused })).toEqual({
-      ok: false,
+      action: 'reject',
       reason: 'rate-limited',
     });
     // 距上次尝试满 1s:恢复。
     t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
-    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).ok).toBe(true);
+    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).action).toBe(
+      'direct-open',
+    );
   });
 
   it('限速罩住声明比对:窗口内的垃圾导航不触发白名单查询(不给刷磁盘 IO)', () => {
@@ -118,17 +215,71 @@ describe('GhostExternalLinkGate(设置区/面板「前往控制台」外链闸)'
       },
       now: () => t,
     });
-    expect(gate.request({ ghostId: 'art', url: 'https://evil.example/', isPanelFocused: focused }).ok).toBe(false);
+    expect(
+      gate.request({ ghostId: 'art', url: 'https://evil.example/', isPanelFocused: focused })
+        .action,
+    ).toBe('confirm');
     expect(lookups).toBe(1);
     // 窗口内连环垃圾导航:rate-limited 提前拦下,白名单查询一次都不该发生。
     for (let i = 0; i < 10; i += 1) {
       t += 10;
-      expect(gate.request({ ghostId: 'art', url: 'https://evil.example/', isPanelFocused: focused })).toEqual({
-        ok: false,
+      expect(
+        gate.request({ ghostId: 'art', url: 'https://evil.example/', isPanelFocused: focused }),
+      ).toEqual({
+        action: 'reject',
         reason: 'rate-limited',
       });
     }
     expect(lookups).toBe(1);
+  });
+
+  it('同一 ghost 确认进行中拒绝新的尝试，释放后可再次确认', () => {
+    let t = 1000;
+    const gate = makeGate({ urls: [], now: () => t });
+    const first = gate.request({
+      ghostId: 'art',
+      url: 'https://example.com/first',
+      isPanelFocused: focused,
+    });
+    expect(first).toEqual({ action: 'confirm', url: 'https://example.com/first' });
+    t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
+    expect(
+      gate.request({ ghostId: 'art', url: 'https://example.com/second', isPanelFocused: focused }),
+    ).toEqual({
+      action: 'reject',
+      reason: 'confirmation-pending',
+    });
+
+    gate.releaseConfirmation('art');
+    t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
+    expect(
+      gate.request({ ghostId: 'art', url: 'https://example.com/second', isPanelFocused: focused }),
+    ).toEqual({
+      action: 'confirm',
+      url: 'https://example.com/second',
+    });
+  });
+
+  it('direct-open 与 reject 不占确认状态', () => {
+    let t = 1000;
+    const gate = makeGate({ now: () => t });
+    expect(gate.request({ ghostId: 'art', url: DECLARED, isPanelFocused: focused }).action).toBe(
+      'direct-open',
+    );
+    t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
+    expect(
+      gate.request({ ghostId: 'art', url: 'http://example.com/', isPanelFocused: focused }),
+    ).toEqual({
+      action: 'reject',
+      reason: 'bad-url',
+    });
+    t += GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS;
+    expect(
+      gate.request({ ghostId: 'art', url: 'https://example.com/confirm', isPanelFocused: focused }),
+    ).toEqual({
+      action: 'confirm',
+      url: 'https://example.com/confirm',
+    });
   });
 });
 

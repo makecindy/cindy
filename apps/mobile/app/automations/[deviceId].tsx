@@ -12,6 +12,8 @@ import {
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { ConnectionBanner } from '@/components/ConnectionBanner';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -24,9 +26,12 @@ import {
   MainWindowOptionButton,
   MainWindowRowButton,
   RemoteListSyncingPlaceholder,
-  ScreenHeader,
   SummaryStrip,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+} from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -59,13 +64,17 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
+  ScheduleModelSelectionUnsupportedError,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
   createTemplateParamDefaults,
   deriveMobileScheduleSessionMode,
   hasMobileScheduleRealBinding,
+  localizeScheduleDraftValidation,
+  localizeTemplateParamValidation,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
+  resolveMobileScheduleBinding,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
   updateDraftCronExpr,
@@ -77,8 +86,14 @@ import {
   validateTemplateParamValues,
   validateMobileScheduleDraft,
   type MobileScheduleDraft,
+  type ScheduleDraftValidation,
+  type TemplateParamValidation,
 } from '@/scheduler/scheduleFormModel';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
+import {
+  buildMobileTemplateOverrides,
+  isLocalizedBuiltinTemplate,
+} from '@/scheduler/scheduleTemplateLocalization';
 import type {
   RemoteSchedule,
   RemoteScheduleRun,
@@ -145,7 +160,9 @@ export default function AutomationsScreen() {
   const [formMode, setFormMode] = useState<'create' | 'edit' | null>(null);
   const [formDraft, setFormDraft] = useState<MobileScheduleDraft | null>(null);
   const [formScheduleId, setFormScheduleId] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<
+    string | ScheduleDraftValidation | TemplateParamValidation | null
+  >(null);
   const [templates, setTemplates] = useState<RemoteScheduleTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
@@ -167,6 +184,26 @@ export default function AutomationsScreen() {
     () => summarizeAutomationOverview(schedules, runsBySchedule),
     [runsBySchedule, schedules],
   );
+  const selectedTemplatePresentation = useMemo(
+    () => selectedTemplate
+      ? localizeBuiltinTemplate(
+          templates.find((template) => template.id === selectedTemplate.id) ?? selectedTemplate,
+          t,
+        )
+      : null,
+    [selectedTemplate, t, templates],
+  );
+  const formErrorText = typeof formError === 'string'
+    ? formError
+    : formError
+      ? 'parameterKey' in formError && selectedTemplatePresentation
+        ? localizeTemplateParamValidation(
+            formError,
+            selectedTemplatePresentation,
+            mobilePresentationLocalizer,
+          )
+        : localizeScheduleDraftValidation(formError, mobilePresentationLocalizer)
+      : null;
   const bindableSessions = useMemo(
     () => selectBindableSessions(remoteSessions, deviceId),
     [deviceId, remoteSessions],
@@ -381,19 +418,22 @@ export default function AutomationsScreen() {
 
   const submitScheduleForm = useCallback(async () => {
     if (!formDraft || busyAction) return;
-    const validation = validateMobileScheduleDraft(formDraft);
+    const validation = validateMobileScheduleDraft(formDraft, mobilePresentationLocalizer);
     if (validation) {
-      setFormError(validation.message);
+      setFormError(validation);
       return;
     }
     if (formMode === 'create' && selectedTemplate && !templatePromptDirty) {
-      const paramError = validateTemplateParamValues(selectedTemplate, templateParamValues);
+      const paramError = validateTemplateParamValues(
+        selectedTemplate,
+        templateParamValues,
+        mobilePresentationLocalizer,
+      );
       if (paramError) {
         setFormError(paramError);
         return;
       }
     }
-    const input = buildMobileScheduleInput(formDraft);
     const actionKey = formMode === 'edit' ? `edit:${formScheduleId}` : 'create';
     setBusyAction(actionKey);
     setError(null);
@@ -406,27 +446,29 @@ export default function AutomationsScreen() {
         await openLink(deviceId);
         await subscribe(`automations:${deviceId}`, deviceId, ['sessions']);
       });
-      // intervalMs:null 的清空表达只有新 desktop 认识(旧引擎会当成已设间隔立即
-      // 触发),发送前按 host 能力位降级 wire 形态;探测失败按不支持处理
-      // (失败方向的取舍见 applyScheduleWireCompat 注释)。
-      const wireInput = await (async () => {
-        if (input.intervalMs !== null) return input;
-        const caps = await maker.getCapabilities(formDraft.agentKind).catch(() => null);
-        const supportsIntervalNullClear = !!(
-          caps as { supportsScheduleIntervalNullClear?: boolean } | null
-        )?.supportsScheduleIntervalNullClear;
-        return applyScheduleWireCompat(input, { supportsIntervalNullClear });
-      })();
+      const resolvedDraft = await resolveMobileScheduleBinding(formDraft, async (id) =>
+        await maker.getSession(id) as RemoteSession);
+      const input = buildMobileScheduleInput(resolvedDraft);
+      // Negotiate on every save, including numeric intervals and template creation.
+      // Unknown/old hosts must not silently accept an unsupported bound selection.
+      const caps = await maker.getCapabilities(resolvedDraft.agentKind).catch(() => null) as {
+        supportsScheduleIntervalNullClear?: boolean;
+        supportsScheduleModelSelection?: boolean;
+      } | null;
+      const supportsModelSelection = caps?.supportsScheduleModelSelection === true;
+      const wireInput = applyScheduleWireCompat(input, {
+        supportsIntervalNullClear: caps?.supportsScheduleIntervalNullClear === true,
+        supportsModelSelection,
+      });
       const saved = await (async () => {
         if (formMode === 'edit' && formScheduleId) {
           return withTransientRemoteRetry(() => maker.schedule.update(formScheduleId, wireInput));
         }
-        if (selectedTemplate && !templatePromptDirty) {
-          const { prompt: _templatePrompt, ...overrides } = wireInput;
+        if (selectedTemplate && !templatePromptDirty && supportsModelSelection) {
           return maker.schedule.createFromTemplate({
             templateId: selectedTemplate.id,
             paramValues: templateParamValues,
-            overrides,
+            overrides: buildMobileTemplateOverrides(wireInput, selectedTemplate),
           });
         }
         return maker.schedule.create(wireInput);
@@ -442,7 +484,8 @@ export default function AutomationsScreen() {
       }
       await loadSchedules().catch(() => undefined);
     } catch (err) {
-      setFormError(formatRemoteError(err));
+      setFormError(err instanceof ScheduleModelSelectionUnsupportedError
+        ? t('deviceLink.remoteError.channelNotAllowed') : formatRemoteError(err));
     } finally {
       setBusyAction(null);
     }
@@ -461,6 +504,7 @@ export default function AutomationsScreen() {
     syncRuns,
     templateParamValues,
     templatePromptDirty,
+    t,
   ]);
 
   const runScheduleAction = useCallback(async (
@@ -759,8 +803,8 @@ export default function AutomationsScreen() {
   }, [busyAction, deviceId, maker, openLink, subscribe, syncRuns]);
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="automations.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="automations.screen">
+      <SimpleStackHeader
         action={{
           label: t('devices.common.create'),
           onPress: busyAction ? undefined : startCreateSchedule,
@@ -837,7 +881,7 @@ export default function AutomationsScreen() {
           <ScheduleFormCard
             busy={busyAction === 'create' || busyAction === `edit:${formScheduleId}`}
             draft={formDraft}
-            error={formError}
+            error={formErrorText}
             mode={formMode ?? 'create'}
             onCancel={closeScheduleForm}
             onChange={setFormDraft}
@@ -964,7 +1008,9 @@ export default function AutomationsScreen() {
                 </View>
                 {displayedRuns.length === 0 ? (
                   <MainWindowEmptyState
-                    copy={t('devices.automations.runs.emptyCopy')}
+                    copy={t('devices.automations.runs.emptyCopy', {
+                      runNow: t('devices.automations.runNow'),
+                    })}
                     style={styles.emptyInline}
                     title={t('devices.automations.runs.emptyTitle')}
                   />
@@ -1061,7 +1107,6 @@ function ScheduleFormCard({
     <View style={styles.formCard} testID="automations.form">
       <View style={styles.formHeader}>
         <View>
-          <Text style={styles.sectionTitle}>{mode === 'edit' ? 'Edit Automation' : 'New Automation'}</Text>
           <Text style={styles.formTitle}>{mode === 'edit' ? t('devices.automations.form.title.edit') : t('devices.automations.form.title.create')}</Text>
         </View>
         {busy ? <ActivityIndicator color={colors.textSecondary} /> : null}
@@ -1184,7 +1229,7 @@ function ScheduleFormCard({
                   accessibilityState={{ checked: session.id === boundSessionInputValue.trim() }}
                   disabled={busy}
                   key={session.id}
-                  onPress={() => onChange(updateDraftBoundSessionId(draft, session.id))}
+                  onPress={() => onChange(updateDraftBoundSessionId(draft, session.id, session.agentKind))}
                   selected={session.id === boundSessionInputValue.trim()}
                   style={styles.boundSessionOption}
                   testID="automations.form.boundSessionOption"
@@ -1196,7 +1241,10 @@ function ScheduleFormCard({
                         || session.workingDir || session.id}
                     </Text>
                     <Text style={styles.boundSessionMeta} numberOfLines={1}>
-                      {formatSessionOptionMeta(session)}
+                      {formatSessionOptionMeta(
+                        session,
+                        t('devices.automations.form.workspace.dialogue'),
+                      )}
                     </Text>
                   </View>
                 </MainWindowRowButton>
@@ -1206,7 +1254,8 @@ function ScheduleFormCard({
           <TextInput
             autoCapitalize="none"
             editable={!busy}
-            onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value))}
+            onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value,
+              sessions.find((session) => session.id === value.trim())?.agentKind))}
             placeholder="session id"
             placeholderTextColor={colors.textTertiary}
             style={styles.input}
@@ -1441,7 +1490,7 @@ function ScheduleDeleteCard({
         sessionIds: state.sessionIds ?? [],
         sessionCount: state.sessionIds?.length ?? 0,
         inflightCount: state.inflightCount ?? 0,
-      });
+      }, mobilePresentationLocalizer);
   const confirmText = state.disposition === 'delete'
     ? t('devices.automations.delete.confirmDeleteBoth')
     : state.disposition === 'archive'
@@ -1452,7 +1501,7 @@ function ScheduleDeleteCard({
     <View style={styles.deleteCard} testID="automations.deleteDialog">
       <View style={styles.deleteHeader}>
         <View style={styles.deleteHeaderText}>
-          <Text style={styles.sectionTitle}>Delete Automation</Text>
+          <Text style={styles.sectionTitle}>{t('devices.automations.heading.delete')}</Text>
           <Text style={styles.deleteTitle} numberOfLines={2}>{t('devices.automations.delete.title', { name: state.schedule.name })}</Text>
         </View>
         {state.loading || busy ? <ActivityIndicator color={colors.textSecondary} /> : null}
@@ -1533,12 +1582,16 @@ function SchedulePauseCard({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const confirmation = buildSchedulePauseConfirmation(state.schedule, state.inflightCount);
+  const confirmation = buildSchedulePauseConfirmation(
+    state.schedule,
+    state.inflightCount,
+    mobilePresentationLocalizer,
+  );
   return (
     <View style={styles.pauseCard} testID="automations.pauseDialog">
       <View style={styles.deleteHeader}>
         <View style={styles.deleteHeaderText}>
-          <Text style={styles.sectionTitle}>Pause Automation</Text>
+          <Text style={styles.sectionTitle}>{t('devices.automations.heading.pause')}</Text>
           <Text style={styles.deleteTitle} numberOfLines={2}>
             {confirmation?.title ?? t('devices.automations.pause.title', { name: state.schedule.name || state.schedule.id })}
           </Text>
@@ -1590,12 +1643,12 @@ function RunDeleteCard({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const summary = summarizeRun(state.run);
+  const summary = summarizeRun(state.run, Date.now(), mobilePresentationLocalizer);
   return (
     <View style={styles.pauseCard} testID="automations.runDeleteDialog">
       <View style={styles.deleteHeader}>
         <View style={styles.deleteHeaderText}>
-          <Text style={styles.sectionTitle}>Delete Run</Text>
+          <Text style={styles.sectionTitle}>{t('devices.automations.heading.deleteRun')}</Text>
           <Text style={styles.deleteTitle} numberOfLines={2}>
             {t('devices.automations.runDelete.title')}
           </Text>
@@ -1694,7 +1747,11 @@ function TemplatePicker({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const selected = templates.find((template) => template.id === selectedTemplateId) ?? null;
+  const localizedTemplates = useMemo(
+    () => templates.map((template) => localizeBuiltinTemplate(template, t)),
+    [t, templates],
+  );
+  const selected = localizedTemplates.find((template) => template.id === selectedTemplateId) ?? null;
   return (
     <View style={styles.templateSection} testID="automations.templateSection">
       <View style={styles.templateHeader}>
@@ -1718,7 +1775,7 @@ function TemplatePicker({
         contentContainerStyle={styles.templateList}
         testID="automations.templateList"
       >
-        {templates.map((template) => (
+        {localizedTemplates.map((template) => (
           <TemplateCard
             key={template.id}
             disabled={busy}
@@ -1913,7 +1970,7 @@ function ScheduleRow({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const summary = summarizeSchedule(schedule, runs);
+  const summary = summarizeSchedule(schedule, runs, Date.now(), mobilePresentationLocalizer);
   return (
     <MainWindowRowButton
       accessibilityLabel={t('devices.automations.scheduleRowA11y', { title: summary.title })}
@@ -1959,7 +2016,7 @@ function ScheduleDetail({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const summary = summarizeSchedule(schedule, runs);
+  const summary = summarizeSchedule(schedule, runs, Date.now(), mobilePresentationLocalizer);
   const paused = schedule.status === 'paused';
   const actionBusy = !!busyAction || runsLoading;
   const pauseDisabled = actionBusy || schedule.status === 'expired';
@@ -1987,7 +2044,9 @@ function ScheduleDetail({
         primaryActions={[{
           accessibilityLabel: t('devices.automations.detail.runNowA11y'),
           disabled: actionBusy,
-          label: busyAction === `run:${schedule.id}` ? t('devices.automations.detail.running') : 'Run now',
+          label: busyAction === `run:${schedule.id}`
+            ? t('devices.automations.detail.running')
+            : t('devices.automations.runNow'),
           onPress: onRunNow,
           testID: 'automations.runNowButton',
           tone: 'primary',
@@ -2032,7 +2091,7 @@ function RunRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const summary = summarizeRun(run);
+  const summary = summarizeRun(run, Date.now(), mobilePresentationLocalizer);
   const actionBusy = !!busyAction || opening;
   const hasActions = summary.canOpenSession || summary.canRestart || summary.canMarkRead || summary.canDelete;
   return (
@@ -2135,6 +2194,32 @@ const TEMPLATE_CATEGORY_RANK: Record<string, number> = {
   'office-docs': 3,
 };
 
+function localizeBuiltinTemplate(
+  template: RemoteScheduleTemplate,
+  t: TFunction,
+): RemoteScheduleTemplate {
+  if (!isLocalizedBuiltinTemplate(template)) return template;
+  const prefix = `devices.automations.template.builtin.${template.id}`;
+  const templateVariables = Object.fromEntries(
+    (template.parameters ?? []).map((parameter) => [parameter.key, `{{${parameter.key}}}`]),
+  );
+  return {
+    ...template,
+    name: t(`${prefix}.name`, { defaultValue: template.name }),
+    description: t(`${prefix}.description`, { defaultValue: template.description }),
+    prompt: template.prompt
+      ? t(`${prefix}.prompt`, { defaultValue: template.prompt, ...templateVariables })
+      : template.prompt,
+    parameters: template.parameters?.map((parameter) => ({
+      ...parameter,
+      label: t(`${prefix}.params.${parameter.key}.label`, { defaultValue: parameter.label }),
+      placeholder: parameter.placeholder
+        ? t(`${prefix}.params.${parameter.key}.placeholder`, { defaultValue: parameter.placeholder })
+        : parameter.placeholder,
+    })),
+  };
+}
+
 function sortTemplatesForMobile(
   list: readonly RemoteScheduleTemplate[],
 ): RemoteScheduleTemplate[] {
@@ -2168,9 +2253,9 @@ function buildBoundSessionOptions(
   return [selected, ...options.slice(0, 5)];
 }
 
-function formatSessionOptionMeta(session: RemoteSession): string {
+function formatSessionOptionMeta(session: RemoteSession, dialogueLabel: string): string {
   const agent = mobileAgentLabelFromUnknown(session.agentKind);
-  const workspace = session.workingDir ? lastPathSegment(session.workingDir) : 'Dialogue';
+  const workspace = session.workingDir ? lastPathSegment(session.workingDir) : dialogueLabel;
   return `${agent} · ${workspace} · ${session.id.slice(0, 8)}`;
 }
 

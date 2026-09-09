@@ -18,7 +18,7 @@
  * 按 sessionId 的稳定引用精准订阅(条目对象未替换时快照引用不变),禁止整表订阅。
  */
 
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 
 export type RemoteSessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
@@ -82,6 +82,34 @@ export function useRemoteSessionActivity(sessionId: string): RemoteSessionActivi
   );
 }
 
+/** Hook —— 一组 sessionId 的 phase 子映射(无远程活动条目的不进结果)。
+ *  给"折叠容器按同一份判据汇总整组"的场景用(定时任务分组头,组内可能含
+ *  device-link 远程运行)。快照是序列化 key(primitive),Map 由 useMemo 派生:
+ *  组外条目变化、以及组内 detail 类变化都不会触发重渲染 —— 别改成整表 revision
+ *  逐行用(会退化成整表订阅,违反文件头的性能不变量)。 */
+export function useRemoteSessionsPhaseMap(
+  sessionIds: readonly string[],
+): ReadonlyMap<string, RemoteSessionActivityPhase> {
+  const getSnapshot = (): string => {
+    let key = '';
+    for (const id of sessionIds) {
+      const phase = activityMap.get(id)?.phase;
+      if (phase) key += `${id}:${phase}|`;
+    }
+    return key;
+  };
+  const key = useSyncExternalStore(subscribeRemoteSessionActivity, getSnapshot, getSnapshot);
+  return useMemo(() => {
+    const map = new Map<string, RemoteSessionActivityPhase>();
+    for (const pair of key.split('|')) {
+      if (!pair) continue;
+      const sep = pair.lastIndexOf(':');
+      map.set(pair.slice(0, sep), pair.slice(sep + 1) as RemoteSessionActivityPhase);
+    }
+    return map;
+  }, [key]);
+}
+
 function getRevision(): number {
   return revision;
 }
@@ -118,6 +146,14 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
   if (current && sameActivity(current, next)) return;
   activityMap.set(sessionId, next);
   emit();
+}
+
+/** 刚发送时丢掉上一轮 completed/error 镜像。running / needs-interaction 是本轮活档,保留。 */
+export function dropStaleRemoteTerminalActivity(sessionId: string): void {
+  const activity = activityMap.get(sessionId);
+  if (!activity) return;
+  if (activity.phase !== 'completed' && activity.phase !== 'error') return;
+  removeRemoteSessionActivityEntry(sessionId);
 }
 
 /** 单会话清除(被控端删除 / 归档该会话时由 sessions:patched 路由调用)。 */

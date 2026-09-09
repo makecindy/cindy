@@ -64,7 +64,8 @@ vi.mock('@/lib/makerTransport', () => ({
   // useSessionEstimatedValue 的历史初值入口:本套测试全部按本机会话走,直接委托给
   // 下方 messageService mock(既有用例继续用它驱动/断言调用次数)。
   estimatedSessionValueFor: vi.fn(async (sessionId: string) =>
-    (await import('@/lib/messageService')).estimatedSessionValue(sessionId)),
+    (await import('@/lib/messageService')).estimatedSessionValue(sessionId),
+  ),
 }));
 
 vi.mock('@/lib/messageService', () => ({
@@ -114,7 +115,10 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { useSessionEstimatedValue } from '@/hooks/useSessionEstimatedValue';
-import { ChatDisplaySnapshotProvider, type ChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
+import {
+  ChatDisplaySnapshotProvider,
+  type ChatDisplaySnapshot,
+} from '@/components/chat/ChatDisplaySnapshotContext';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
 import { buildTurnUsageDetails } from '../../../shared/turnUsageDetails';
@@ -176,7 +180,9 @@ function assistantCostMessage(clientId: string, costUsd: number): ChatMessage {
 function displaySnapshot(
   sessionId: string,
   messages: ChatMessage[],
-  options: Partial<Pick<ChatDisplaySnapshot, 'chatRealtime' | 'historyLoaded' | 'hasMoreMessages'>> = {},
+  options: Partial<
+    Pick<ChatDisplaySnapshot, 'chatRealtime' | 'historyLoaded' | 'hasMoreMessages'>
+  > = {},
 ): ChatDisplaySnapshot {
   return {
     sessionId,
@@ -192,7 +198,10 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
   let turnCostListener: TurnCostListener | null = null;
 
   beforeEach(() => {
-    vi.mocked(messageService.estimatedSessionValue).mockResolvedValue({ totalValueUsd: 0, entries: [] });
+    vi.mocked(messageService.estimatedSessionValue).mockResolvedValue({
+      totalValueUsd: 0,
+      entries: [],
+    });
   });
 
   afterEach(() => {
@@ -213,8 +222,7 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     const loadOlder = vi.spyOn(makerChatStore, 'loadOlderMessages');
 
     const { result, rerender } = renderHook(
-      ({ live }: { live: boolean }) =>
-        useCCAgentChat(sessionId, undefined, { chatRealtime: live }),
+      ({ live }: { live: boolean }) => useCCAgentChat(sessionId, undefined, { chatRealtime: live }),
       { initialProps: { live: true } },
     );
 
@@ -267,17 +275,21 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     expect(sessionViewSource).toContain('key={sessionId}');
     expect(messageStreamSource).toContain('if (isNearBottomRef.current) {');
     expect(messageStreamSource).toContain('pinToBottom();');
-    expect(messageStreamSource).toContain('if (!programmaticScrollRef.current) {');
+    expect(messageStreamSource).toContain(
+      'if (!programmaticScrollRef.current || draggingScrollbar) {',
+    );
   });
 
   it('keeps session value consumers on the frozen display snapshot while hidden', async () => {
     const sessionId = sid('hidden-consumers');
     sessionIds.push(sessionId);
-    (window as unknown as {
-      electronAPI: {
-        onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
-      };
-    }).electronAPI = {
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
       onUsageMessageTurnCost: (cb: TurnCostListener) => {
         turnCostListener = cb;
         return () => {
@@ -286,7 +298,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
       },
     };
     const renderCounts = { estimated: 0 };
-    const initialSnapshot = displaySnapshot(sessionId, [assistantCostMessage('visible-cost', 1.23)]);
+    const initialSnapshot = displaySnapshot(sessionId, [
+      assistantCostMessage('visible-cost', 1.23),
+    ]);
     const latestSnapshot = displaySnapshot(sessionId, [
       assistantCostMessage('visible-cost', 1.23),
       assistantCostMessage('restored-cost', 4.56),
@@ -295,7 +309,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     function EstimatedValueProbe() {
       renderCounts.estimated += 1;
       const value = useSessionEstimatedValue(sessionId, true);
-      return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
+      return (
+        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+      );
     }
 
     function TestTree({ snapshot }: { snapshot: ChatDisplaySnapshot }) {
@@ -332,11 +348,13 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
   it('keeps direct turn-cost events live when a realtime display provider is present', async () => {
     const sessionId = sid('visible-provider');
     sessionIds.push(sessionId);
-    (window as unknown as {
-      electronAPI: {
-        onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
-      };
-    }).electronAPI = {
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
       onUsageMessageTurnCost: (cb: TurnCostListener) => {
         turnCostListener = cb;
         return () => {
@@ -344,11 +362,16 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
         };
       },
     };
-    vi.mocked(messageService.estimatedSessionValue).mockResolvedValue({ totalValueUsd: 0, entries: [] });
+    vi.mocked(messageService.estimatedSessionValue).mockResolvedValue({
+      totalValueUsd: 0,
+      entries: [],
+    });
 
     function EstimatedValueProbe() {
       const value = useSessionEstimatedValue(sessionId, true);
-      return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
+      return (
+        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+      );
     }
 
     render(
@@ -382,11 +405,13 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
   it('pauses direct turn-cost events while frozen and refreshes once when realtime resumes', async () => {
     const sessionId = sid('frozen-provider');
     sessionIds.push(sessionId);
-    (window as unknown as {
-      electronAPI: {
-        onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
-      };
-    }).electronAPI = {
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
       onUsageMessageTurnCost: (cb: TurnCostListener) => {
         turnCostListener = cb;
         return () => {
@@ -395,21 +420,24 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
       },
     };
     const renderCounts = { estimated: 0 };
-    vi.mocked(messageService.estimatedSessionValue)
-      .mockResolvedValueOnce({
-        totalValueMoney: usdEstimate(4.56),
-        totalValueUsd: 4.56,
-        entries: [{
+    vi.mocked(messageService.estimatedSessionValue).mockResolvedValueOnce({
+      totalValueMoney: usdEstimate(4.56),
+      totalValueUsd: 4.56,
+      entries: [
+        {
           clientId: 'hidden-cost',
           money: usdEstimate(4.56),
           costUsd: 4.56,
-        }],
-      });
+        },
+      ],
+    });
 
     function EstimatedValueProbe({ sessionId: currentSessionId }: { sessionId: string }) {
       renderCounts.estimated += 1;
       const value = useSessionEstimatedValue(currentSessionId, true);
-      return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
+      return (
+        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+      );
     }
 
     const { rerender } = render(
@@ -473,16 +501,19 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     const nextSessionId = sid('next-provider');
     sessionIds.push(clearedSessionId, staleSessionId, nextSessionId);
     const pendingQueries = new Map<string, (value: EstimatedValueSnapshot) => void>();
-    vi.mocked(messageService.estimatedSessionValue).mockImplementation((sessionId: string) =>
-      new Promise((resolveQuery) => {
-        pendingQueries.set(sessionId, resolveQuery);
-      }),
+    vi.mocked(messageService.estimatedSessionValue).mockImplementation(
+      (sessionId: string) =>
+        new Promise((resolveQuery) => {
+          pendingQueries.set(sessionId, resolveQuery);
+        }),
     );
-    (window as unknown as {
-      electronAPI: {
-        onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
-      };
-    }).electronAPI = {
+    (
+      window as unknown as {
+        electronAPI: {
+          onUsageMessageTurnCost: (cb: TurnCostListener) => () => void;
+        };
+      }
+    ).electronAPI = {
       onUsageMessageTurnCost: (cb: TurnCostListener) => {
         turnCostListener = cb;
         return () => {
@@ -493,7 +524,9 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
 
     function EstimatedValueProbe({ sessionId: currentSessionId }: { sessionId: string }) {
       const value = useSessionEstimatedValue(currentSessionId, true);
-      return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
+      return (
+        <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>
+      );
     }
 
     const { rerender } = render(
@@ -548,11 +581,13 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
       pendingQueries.get(staleSessionId)?.({
         totalValueMoney: usdEstimate(7.77),
         totalValueUsd: 7.77,
-        entries: [{
-          clientId: 'stale-entry',
-          money: usdEstimate(7.77),
-          costUsd: 7.77,
-        }],
+        entries: [
+          {
+            clientId: 'stale-entry',
+            money: usdEstimate(7.77),
+            costUsd: 7.77,
+          },
+        ],
       });
     });
     expect(screen.getByTestId('estimated-value').textContent).toBe('');
@@ -561,11 +596,13 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
       pendingQueries.get(nextSessionId)?.({
         totalValueMoney: usdEstimate(3.21),
         totalValueUsd: 3.21,
-        entries: [{
-          clientId: 'next-entry',
-          money: usdEstimate(3.21),
-          costUsd: 3.21,
-        }],
+        entries: [
+          {
+            clientId: 'next-entry',
+            money: usdEstimate(3.21),
+            costUsd: 3.21,
+          },
+        ],
       });
     });
 

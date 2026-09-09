@@ -25,9 +25,9 @@ export type HelpTabId =
   | 'connections'
   | 'im-bot'
   | 'about'
-  // 'ghosts' (Plugins page) and 'remote-control' (Remote & device control)
-  // are real deep-link targets. 'ghosts' redirects to /plugins in SettingsView,
-  // same as the retained 'api-keys' / 'connections' aliases.
+  // 'ghosts' (Plugins settings tab) and 'remote-control' (Remote & device control)
+  // are real deep-link targets. 'api-keys' / 'connections' remain aliases that
+  // SettingsView rewrites to the Plugins tab.
   | 'ghosts'
   | 'remote-control';
 

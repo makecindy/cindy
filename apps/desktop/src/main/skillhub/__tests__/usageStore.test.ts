@@ -1,8 +1,10 @@
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { DbClient } from '../../localDb/client/DbClient';
 import * as usageStore from '../usageStore';
 import {
   deleteSkillUsageRecordsBefore,
+  getSkillUsageDiagnosisContextFromDb,
   getSkillUsageSummaryFromDb,
   markSkillUsageSourceFailed,
   persistSkillUsageAnalysis,
@@ -47,8 +49,21 @@ function createDb(): Database.Database {
       command_failure_count INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (raw_file_path) REFERENCES skill_usage_sources(raw_file_path) ON DELETE CASCADE
     );
+    CREATE INDEX idx_skill_usage_exposures_skill_recent
+      ON skill_usage_exposures (skill_name, analyzer_version, seen_at);
+    CREATE INDEX idx_skill_usage_exposures_skill_recent_any_version
+      ON skill_usage_exposures (skill_name, seen_at);
+    CREATE INDEX idx_skill_usage_exposures_analyzer_recent_source
+      ON skill_usage_exposures (analyzer_version, seen_at, raw_file_path);
   `);
   return db;
+}
+
+function createQueryClient(db: Database.Database): DbClient {
+  return {
+    query: async <T>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
+    queryOne: async <T>(sql: string, params: unknown[] = []) => db.prepare(sql).get(...params) as T | undefined,
+  } as DbClient;
 }
 
 type DiagnosisContextGetter = (
@@ -165,6 +180,134 @@ const fixtureNowMs = 10_000;
 const dayMs = 24 * 60 * 60 * 1000;
 
 describe('skill usage store', () => {
+  it.each([
+    { analyzerVersion: '6', suffix: 'AND analyzer_version = ?' },
+    { analyzerVersion: null, suffix: '' },
+  ])('uses the recent-skill index when analyzerVersion is $analyzerVersion', ({ analyzerVersion, suffix }) => {
+    const db = createDb();
+    try {
+      const plan = db.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT COUNT(*)
+        FROM skill_usage_exposures
+        WHERE skill_name = ?
+          ${suffix}
+          AND seen_at >= ?
+      `).all(...(analyzerVersion === null
+        ? ['word-doc', 0]
+        : ['word-doc', analyzerVersion, 0])) as Array<{ detail: string }>;
+
+      expect(plan.map((row) => row.detail).join('\n')).toContain(
+        analyzerVersion === null
+          ? 'idx_skill_usage_exposures_skill_recent_any_version'
+          : 'idx_skill_usage_exposures_skill_recent',
+      );
+      expect(plan.some((row) => /^SCAN skill_usage_exposures\b/.test(row.detail))).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('uses the analyzer and recent-time prefix for transcript source discovery', () => {
+    const db = createDb();
+    try {
+      const plan = db.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT raw_file_path
+        FROM skill_usage_exposures
+        WHERE analyzer_version = ?
+          AND seen_at >= ?
+        GROUP BY raw_file_path
+        ORDER BY MAX(seen_at) DESC
+      `).all('6', 0) as Array<{ detail: string }>;
+
+      expect(plan.map((row) => row.detail).join('\n')).toContain(
+        'idx_skill_usage_exposures_analyzer_recent_source',
+      );
+      expect(plan.some((row) => /^SCAN skill_usage_exposures\b/.test(row.detail))).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('returns the same summary through the asynchronous DbClient path', async () => {
+    const db = createDb();
+    try {
+      persistExposure(db, {
+        id: 'async-summary',
+        rawFilePath: 'async-summary.jsonl',
+        rawLineNo: 1,
+        sessionId: 'codex-async-summary',
+        sdkSessionId: 'async-summary',
+        skillDocumentHash: 'doc-current',
+        seenAt: fixtureNowMs,
+        analyzerVersion: '6',
+        toolCallCount: 3,
+      });
+      const params = {
+        skillName: 'word-doc',
+        currentDocumentHash: 'doc-current',
+        currentDocumentContent: '# Word doc',
+        analyzerVersion: '6',
+        nowMs: fixtureNowMs,
+      };
+
+      const syncSummary = getSkillUsageSummaryFromDb(db, params);
+      const asyncSummary = await usageStore.getSkillUsageSummaryFromClient(createQueryClient(db), params);
+
+      expect(asyncSummary).toEqual(syncSummary);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('reads diagnosis summary and evidence from one asynchronous snapshot query', async () => {
+    const db = createDb();
+    try {
+      persistExposure(db, {
+        id: 'async-diagnosis-read',
+        rawFilePath: 'async-diagnosis-read.jsonl',
+        rawLineNo: 1,
+        sessionId: 'codex-async-diagnosis-read',
+        sdkSessionId: 'async-diagnosis-read',
+        skillDocumentHash: 'doc-current',
+        seenAt: fixtureNowMs,
+        analyzerVersion: '6',
+      });
+      persistExposure(db, {
+        id: 'async-diagnosis-failure',
+        rawFilePath: 'async-diagnosis-failure.jsonl',
+        rawLineNo: 2,
+        sessionId: 'codex-async-diagnosis-failure',
+        sdkSessionId: 'async-diagnosis-failure',
+        skillDocumentHash: 'doc-current',
+        seenAt: fixtureNowMs - 1,
+        analyzerVersion: '6',
+        source: 'codex_skill_tool',
+        toolErrorCount: 2,
+      });
+      const params = {
+        skillName: 'word-doc',
+        currentDocumentHash: 'doc-current',
+        currentDocumentContent: '# Word doc',
+        analyzerVersion: '6',
+        skillPath: '/skills/word-doc/SKILL.md',
+        nowMs: fixtureNowMs,
+      };
+      const client = createQueryClient(db);
+      const querySpy = vi.spyOn(client, 'query');
+
+      const syncContext = getSkillUsageDiagnosisContextFromDb(db, params);
+      const asyncContext = await usageStore.getSkillUsageDiagnosisContextFromClient(client, params);
+
+      expect(asyncContext).toEqual(syncContext);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(String(querySpy.mock.calls[0]?.[0])).toContain('MATERIALIZED');
+    } finally {
+      db.close();
+    }
+  });
+
   it('persists document and exposure hashes without token metrics', () => {
     const db = createDb();
     try {

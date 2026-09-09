@@ -8,9 +8,13 @@ import { IssueConfirmCard } from '../IssueConfirmCard';
 import { clearIssueConfirmDraftsForSession } from '@/lib/issueConfirmDraftStore';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 
+const { tMock } = vi.hoisted(() => ({
+  tMock: vi.fn((key: string) => key),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: tMock,
     i18n: { language: 'zh-CN' },
   }),
 }));
@@ -27,6 +31,8 @@ const initialPending: PendingIssueConfirm = {
     platform: 'win32',
     arch: 'x64',
     osVersion: '10.0',
+    harness: 'Codex',
+    modelId: 'gpt-5.6',
   },
   submissionIdentity: {
     kind: 'platform',
@@ -64,10 +70,57 @@ function Harness() {
   );
 }
 
+function confirmPublicContent() {
+  fireEvent.click(screen.getByRole('checkbox', { name: 'issueAgent.confirm.privacyConfirm' }));
+}
+
 afterEach(() => {
   cleanup();
+  tMock.mockClear();
   clearIssueConfirmDraftsForSession('session-a');
   clearIssueConfirmDraftsForSession('session-b');
+});
+
+describe('IssueConfirmCard environment metadata', () => {
+  it('把完整 OS 版本、Harness 和 Model ID 交给确认卡文案', () => {
+    render(<IssueConfirmCard sessionId="session-a" pending={initialPending} onRespond={vi.fn()} />);
+
+    expect(tMock).toHaveBeenCalledWith('issueAgent.confirm.envLine', {
+      appVersion: '0.1.18',
+      platform: 'win32',
+      arch: 'x64',
+      osVersion: '10.0',
+      uiLanguage: 'zh-CN',
+    });
+    expect(tMock).toHaveBeenCalledWith('issueAgent.confirm.runtimeLine', {
+      harness: 'Codex',
+      modelId: 'gpt-5.6',
+    });
+    expect(screen.getByText('issueAgent.confirm.runtimeLine').className).toContain(
+      '[overflow-wrap:anywhere]',
+    );
+  });
+
+  it('兼容旧 Main 未提供 runtime metadata 的确认卡', () => {
+    render(
+      <IssueConfirmCard
+        sessionId="session-a"
+        pending={{
+          ...initialPending,
+          requestId: 'issue-request-old-main',
+          env: {
+            appVersion: '0.1.18',
+            platform: 'win32',
+            arch: 'x64',
+            osVersion: '10.0',
+          },
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(tMock).not.toHaveBeenCalledWith('issueAgent.confirm.runtimeLine', expect.anything());
+  });
 });
 
 describe('IssueConfirmCard draft persistence', () => {
@@ -197,6 +250,7 @@ describe('IssueConfirmCard submission identity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'issueAgent.confirm.identityGithubUser' }));
     expect(screen.getByText('issueAgent.confirm.identityGithubUserHint')).not.toBeNull();
     expect(screen.queryByLabelText('issueAgent.confirm.publicNameLabel')).toBeNull();
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -239,6 +293,7 @@ describe('IssueConfirmCard submission identity', () => {
     expect(screen.getByText('issueAgent.confirm.identityGithubUserHint')).not.toBeNull();
     expect(screen.queryByLabelText('issueAgent.confirm.publicNameLabel')).toBeNull();
 
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith({
       confirmed: true,
@@ -258,6 +313,7 @@ describe('IssueConfirmCard submission identity', () => {
     const input = screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement;
     expect(input.value).toBe('当前昵称');
     fireEvent.change(input, { target: { value: '  公开昵称  ' } });
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -281,6 +337,7 @@ describe('IssueConfirmCard submission identity', () => {
     expect(
       (screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement).value,
     ).toBe('issueAgent.confirm.anonymous');
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -305,5 +362,32 @@ describe('IssueConfirmCard submission identity', () => {
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     expect((input as HTMLInputElement).type).toBe('text');
     expect((input as HTMLInputElement).maxLength).toBe(100);
+  });
+
+  it('requires explicit public-content confirmation and resets it after edits', () => {
+    const onRespond = vi.fn();
+    render(
+      <IssueConfirmCard sessionId="session-a" pending={platformPending} onRespond={onRespond} />,
+    );
+
+    const submit = screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ });
+    const confirmation = screen.getByRole('checkbox', {
+      name: 'issueAgent.confirm.privacyConfirm',
+    });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect((confirmation as HTMLInputElement).checked).toBe(false);
+
+    confirmPublicContent();
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.bodyLabel'), {
+      target: { value: '重新编辑后的正文' },
+    });
+    expect((confirmation as HTMLInputElement).checked).toBe(false);
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+
+    confirmPublicContent();
+    fireEvent.click(submit);
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ body: '重新编辑后的正文' }));
   });
 });

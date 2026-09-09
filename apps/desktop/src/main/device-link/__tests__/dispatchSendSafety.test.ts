@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SUBSCRIBE_CHANNEL,
   MAX_FRAME_BYTES,
@@ -41,7 +42,11 @@ vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing } from '../dispatch';
+import { __testing, runInvoke, wireInboundDispatch } from '../dispatch';
+import { __testing as registry } from '../invoke-registry';
+import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
+import { getDeviceLinkInvokeContext } from '../invoke-context';
+import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import * as subscriptions from '../subscriptions';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
@@ -75,6 +80,220 @@ beforeEach(() => {
     revokedControllers: [],
   };
   __testing.reset();
+});
+
+it('strips Desktop credential links from authorization history and live metadata pushes', () => {
+  const card = { v: 1, sessionId: 's1', createdAt: 1, target: { kind: 'plugin', id: 'p' },
+    snapshot: { kind: 'plugin_setup', requestId: 'r', revision: 1, ghost: { id: 'p', name: 'Plugin' },
+      steps: [{ id: 'step', groupId: 'group', groupMode: 'any_of', title: 'Key', description: '', phase: 'pending',
+        action: { id: 'inline', kind: 'inline_form', form: { fields: [{ id: 'value', type: 'secret', label: 'Key',
+          required: true, maxLength: 4096, externalLink: { url: 'https://example.com/keys' } }] } } }] } };
+  const row = { id: 'm', clientId: 'm', sessionId: 's1', role: 'assistant', content: 'Configure key', agentMeta: { botAuthorization: card } };
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', []);
+  const client = mkClient();
+  __testing.setActiveClient(client as never);
+  __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: row });
+  const push = client.sendPush.mock.calls.find((c) => c[1] === 'local-db:messages:created')![2];
+  expect(push.message.agentMeta.botAuthorization.snapshot.steps[0].action.kind).toBe('inline_form');
+  expect(JSON.stringify(push)).not.toContain('externalLink');
+  for (const channel of ['local-db:messages:list', 'local-db:messages:around']) {
+    __testing.sendInvokeResultSafe(client as never, 'mobile', channel, { ok: true, result: [row] }, channel);
+  }
+  for (const call of client.sendInvokeResult.mock.calls) {
+    expect(call[2].result[0].agentMeta.botAuthorization).toBeDefined();
+    expect(JSON.stringify(call[2])).not.toContain('externalLink');
+  }
+  for (const channel of ['local-db:messages:view', 'local-db:messages:work-details']) {
+    __testing.sendInvokeResultSafe(client as never, 'mobile', channel, { ok: true,
+      result: { messages: [row], items: [{ type: 'messages', key: 'auth', messages: [row] }] } }, channel);
+    const result = client.sendInvokeResult.mock.calls.at(-1)![2].result;
+    expect(result.messages[0].agentMeta.botAuthorization).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain('externalLink');
+  }
+  expect(row.agentMeta.botAuthorization.snapshot.steps[0].action.form.fields[0].externalLink.url).toBe('https://example.com/keys');
+});
+
+describe('negotiated mobile tool projection', () => {
+  const input = { command: 'echo ' + 'x'.repeat(40_000) };
+  const row = { id: 'row', clientId: 'persist', sessionId: 's1', role: 'tool_use',
+    content: { toolUseId: 'use', toolName: 'Bash', input } };
+  function subscribe() {
+    subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1]);
+    subscriptions.subscribe('legacy', ['session:s1'], 'legacy', []);
+  }
+
+  it('projects new Mobile list reads but leaves old clients and radius-0 details intact', () => {
+    subscribe();
+    const client = mkClient();
+    for (const [dst, channel] of [['mobile', 'local-db:messages:list'], ['legacy', 'local-db:messages:list'],
+      ['mobile', 'local-db:messages:around']]) {
+      __testing.sendInvokeResultSafe(client as never, dst, channel, { ok: true, result: [row] }, channel);
+    }
+    expect(client.sendInvokeResult.mock.calls[0][2].result[0]).toHaveProperty('mobileToolInputProjection');
+    expect(client.sendInvokeResult.mock.calls[1][2].result[0]).toEqual(row);
+    expect(client.sendInvokeResult.mock.calls[2][2].result[0]).toEqual(row);
+  });
+
+  it('projects single live/created pushes per peer without changing the host broadcast', () => {
+    subscribe();
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const text = 'result'.repeat(30_000);
+    const payload = { sessionId: 's1', persistId: 'p', resolvedContent: text,
+      event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText: text, isError: false } } };
+    __testing.forwardPush('maker:event', payload);
+    const calls = client.sendPush.mock.calls;
+    expect(calls.find((c) => c[0] === 'mobile')![2]).not.toHaveProperty('resolvedContent');
+    expect(calls.find((c) => c[0] === 'legacy')![2]).toEqual(payload);
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: row });
+    expect(client.sendPush.mock.calls.find((c) => c[0] === 'mobile' && c[1] === 'local-db:messages:created')![2].message)
+      .toHaveProperty('mobileToolInputProjection');
+    expect(payload.resolvedContent).toBe(text);
+    expect(row.content.input).toBe(input);
+  });
+});
+
+describe('history detail interest', () => {
+  it('sanitizes and bounds nested history prose without mutating the Host rows', () => {
+    const message = { id: 'prose', clientId: 'prose', role: 'assistant', createdAt: '2026-09-08T00:00:00Z',
+      content: 'x'.repeat(MAX_FRAME_BYTES * 2), agentMeta: { recoveryCheckpoint: { secret: 'local-only' }, turnCompleted: false } };
+    const page = { version: 1, items: [{ type: 'work', key: 'outer', summary: {}, children: [
+      { type: 'messages', key: 'prose', messages: [message] },
+    ] }], hasMore: false, nextCursor: null };
+    const client = mkClient();
+    client.sendInvokeResult.mockImplementation((dst, requestId, payload) => {
+      if (invokeResultFrameBytes(dst, requestId, payload) > MAX_FRAME_BYTES) throw tooLarge();
+    });
+    __testing.sendInvokeResultSafe(client as never, 'ctrl', 'nested-history', { ok: true, result: page }, 'local-db:messages:view');
+    const payload = client.sendInvokeResult.mock.calls.at(-1)![2];
+    expect(payload.ok).toBe(true);
+    expect(JSON.stringify(payload)).not.toContain('local-only');
+    expect(invokeResultFrameBytes('ctrl', 'nested-history', payload)).toBeLessThan(MAX_FRAME_BYTES);
+    expect(message.agentMeta.recoveryCheckpoint.secret).toBe('local-only');
+    expect(message.content.length).toBe(MAX_FRAME_BYTES * 2);
+  });
+
+  it.each(['local-db:messages:view', 'local-db:messages:view-intent'])('binds %s before asynchronous authorization', async (channel) => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'ordinary'; });
+    subscriptions.subscribe('ctrl', ['session:s1']);
+    subscriptions.prepareHistoryView('ctrl', 's1')!.update(['work']);
+    registry.register(channel, () => {
+      const view = getDeviceLinkInvokeContext()?.historyView;
+      if (channel.endsWith(':view')) view?.update(['stale']);
+      else view?.setExpanded(['new']);
+      return {};
+    });
+    const request = runInvoke('ctrl', { channel, args: ['s1'] });
+    subscriptions.clearHistoryViews('ctrl');
+    const current = subscriptions.prepareHistoryView('ctrl', 's1')!;
+    current.update(['new']);
+    finish();
+    expect(await request).toMatchObject({ ok: true });
+    expect(subscriptions.projectsHistoryDetails('ctrl', 's1')).toBe(true);
+    current.setExpanded(['new']);
+    expect(subscriptions.projectsHistoryDetails('ctrl', 's1')).toBe(false);
+  });
+  it('does not clear working history when link acceptance fails', () => {
+    const client = mkClient();
+    subscriptions.subscribe('ctrl', ['session:s1']);
+    subscriptions.prepareHistoryView('ctrl', 's1')!.update(['work']);
+    client.sendLinkAccept.mockImplementation(() => { throw new Error('backpressure'); });
+    __testing.handleLinkOpen(client as never, 'ctrl', 'failed-open', undefined);
+    expect(subscriptions.hasHistoryView('ctrl', 's1')).toBe(true);
+    __testing.reset();
+  });
+  it.each([false, true])('restores full pushes on a replacement link (offline first=%s)', (offline) => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    for (const peer of ['changed', 'untouched']) {
+      subscriptions.subscribe(peer, ['session:s1']);
+      subscriptions.prepareHistoryView(peer, 's1')!.update(['work']);
+    }
+    const old = subscriptions.prepareHistoryView('changed', 's1')!;
+    if (offline) subscriptions.clearController('changed');
+    __testing.handleLinkOpen(client as never, 'changed', 'new-link', undefined);
+    subscriptions.subscribe('changed', ['session:s1']);
+    old.update(['work']);
+    old.setExpanded(['work']);
+    client.sendPush.mockClear();
+    const payload = { sessionId: 's1', event: { type: 'thinking', data: { stage: 'delta', text: 'full detail' } } };
+    __testing.forwardPush('maker:event', payload);
+    expect(client.sendPush).toHaveBeenCalledWith('changed', 'maker:event', payload);
+    expect(client.sendPush.mock.calls.some(([peer]) => peer === 'untouched')).toBe(false);
+    subscriptions.prepareHistoryView('changed', 's1')!.update(['work']);
+    client.sendPush.mockClear();
+    __testing.forwardPush('maker:event', payload);
+    expect(client.sendPush.mock.calls.some(([peer]) => peer === 'changed')).toBe(false);
+  });
+  it.each([false, true])('invalidates a sampled pending view even when notice precedes its result: %s', async (finishBeforeNotice) => {
+    vi.useFakeTimers();
+    const page: HistoryViewPage<HistoryMessageSource> = { version: 1, items: [], hasMore: false, nextCursor: null };
+    let finish!: (value: typeof page) => void;
+    const read = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue(page);
+    const view = new HistoryViewController<HistoryMessageSource>({ page: read,
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined });
+    try {
+      const client = mkClient();
+      client.sendPush.mockImplementation((peer, channel) => {
+        if (peer === 'pending' && channel === 'maker:history-view-changed') view.invalidate();
+      });
+      __testing.setActiveClient(client as never);
+      for (const peer of ['pending', 'legacy']) subscriptions.subscribe(peer, ['session:s1']);
+      const captured = subscriptions.prepareHistoryView('pending', 's1')!;
+      const request = view.refresh();
+      const payload = { sessionId: 's1', event: { type: 'thinking', data: { stage: 'delta', blockId: 'b', text: 'new' } } };
+      for (let n = 0; n < 10; n++) __testing.forwardPush('maker:event', payload);
+      expect(client.sendPush.mock.calls.filter(([peer, channel]) => peer === 'pending' && channel === 'maker:event')).toHaveLength(10);
+      if (!finishBeforeNotice) {
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(read).toHaveBeenCalledTimes(1);
+      }
+      captured.update(['work']);
+      finish(page);
+      await request;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(client.sendPush.mock.calls.filter(([, channel]) => channel === 'maker:history-view-changed'))
+        .toEqual([['pending', 'maker:history-view-changed', { sessionId: 's1' }]]);
+      client.sendPush.mockClear();
+      __testing.forwardPush('maker:event', payload);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(client.sendPush.mock.calls).toEqual([['legacy', 'maker:event', payload]]);
+    } finally {
+      view.setActive(false);
+      __testing.reset();
+      vi.useRealTimers();
+    }
+  });
+  it.each(['first', 'second'])('sends full thinking to peers with %s streaming group expanded and coalesces folded summaries', async (expandedKey) => {
+    vi.useFakeTimers();
+    try {
+      const client = mkClient();
+      __testing.setActiveClient(client as never);
+      for (const peer of ['folded', 'expanded', 'legacy']) subscriptions.subscribe(peer, ['session:s1']);
+      for (const peer of ['folded', 'expanded']) subscriptions.prepareHistoryView(peer, 's1')!.update(['first', 'second']);
+      subscriptions.prepareHistoryView('expanded', 's1')!.setExpanded([expandedKey]);
+      const push = (stage: string) => ({ sessionId: 's1', event: { type: 'thinking', data: { stage, blockId: 'b', text: 'private detail' } } });
+      __testing.forwardPush('maker:event', push('start'));
+      for (let n = 0; n < 100; n++) __testing.forwardPush('maker:event', push('delta'));
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'folded')).toHaveLength(0);
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'expanded' && call[1] === 'maker:event')).toHaveLength(101);
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'legacy')).toHaveLength(101);
+      await vi.advanceTimersByTimeAsync(500);
+      const folded = client.sendPush.mock.calls.filter((call) => call[0] === 'folded');
+      expect(folded).toEqual([['folded', 'maker:history-view-changed', { sessionId: 's1' }]]);
+      for (let n = 0; n < 100; n++) __testing.forwardPush('maker:event', push('delta'));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'folded')).toHaveLength(1);
+    } finally {
+      __testing.reset();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
@@ -530,6 +749,21 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
   });
 
+  it('revoked 控制端反复 link-open 不重复 closeLink,但仍每次 purge 订阅', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    deviceLinkSettings.value.revokedControllers = ['ctrl-revoked'];
+
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
+    subscriptions.subscribe('ctrl-revoked', ['session:s1']);
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-2', undefined);
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-3', undefined);
+
+    expect(client.closeLink).toHaveBeenCalledTimes(1);
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
+  });
+
   it('legacy link-open restores wildcard behavior and replays wildcard backlog', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);
@@ -585,5 +819,130 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
       'local-db:messages:created',
       { sessionId: 's1', id: 'm1' },
     );
+  });
+});
+
+
+describe('remote companion Session visibility at the device-link boundary', () => {
+  it.each([
+    ['local-db:sessions:get', ['s1']],
+    ['local-db:messages:list', ['s1', {}]],
+    ['local-db:messages:around', ['s1', 'm1']],
+    ['local-db:messages:around-client-id', ['s1', 'm1']],
+    ['maker:send', ['s1', { text: 'hello' }]],
+    ['maker:steer', ['s1', 'hello']],
+  ])('rejects %s before its local handler receives a hidden task', async (channel, args) => {
+    const handler = vi.fn();
+    registry.register(channel as string, handler);
+    setRemoteBotSessionLookup(async (id) => id === 's1' ? 'hidden' : 'ordinary');
+    expect(await runInvoke('ctrl-1', { channel, args } as never)).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each(['hidden', 'missing'] as const)('rejects a private thread when the viewer Bot is %s, using Bot identity rather than the opaque thread ID', async (access) => {
+    const handler = vi.fn(() => ({ ok: true, thread: { messages: [{ content: 'private' }] } }));
+    registry.register('maker:bot-direct-message-thread:get', handler);
+    const lookup = vi.fn(async (id: string, kind?: 'session' | 'bot') =>
+      kind === 'bot' && id === 'viewer-bot' ? access : 'ordinary' as const);
+    setRemoteBotSessionLookup(lookup);
+    expect(await runInvoke('ctrl-1', { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] }))
+      .toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).not.toHaveBeenCalled();
+    expect(lookup).toHaveBeenCalledWith('viewer-bot', 'bot');
+  });
+
+  it('allows a visible private-thread viewer and rechecks that viewer before cached delivery', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async (id, kind) => kind === 'bot' && id === 'viewer-bot'
+      ? hidden ? 'hidden' : 'visible' : 'ordinary');
+    const handler = vi.fn(() => ({ ok: true, thread: { id: 'opaque-thread', messages: [{ content: 'private' }] } }));
+    registry.register('maker:bot-direct-message-thread:get', handler);
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const frame = client.onFrame.mock.calls[0][0];
+    const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-thread', payload: { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] } };
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+    expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: true, result: { ok: true } });
+    hidden = true;
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks visibility after an in-flight read and filters active task discovery', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+    registry.register('local-db:sessions:get', () => { hidden = true; return { id: 's1' }; });
+    expect(await runInvoke('ctrl-1', { channel: 'local-db:sessions:get', args: ['s1'] })).toMatchObject({ ok: false });
+    registry.register('maker:list-active', () => [{ sessionId: 's1' }]);
+    expect(await runInvoke('ctrl-1', { channel: 'maker:list-active', args: [] })).toEqual({ ok: true, result: [] });
+  });
+
+  it('checks buffered pushes at delivery and preserves peer order and failure isolation', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    let hidden = false;
+    setRemoteBotSessionLookup(async (id) => { await pending; return id === 's1' && hidden ? 'hidden' : 'visible'; });
+    const client = mkClient({ sendPush: vi.fn((dst) => { if (dst === 'ctrl-1') throw new Error('peer gone'); }) });
+    __testing.setActiveClient(client as never);
+    for (const peer of ['ctrl-1', 'ctrl-2']) subscriptions.subscribe(peer, ['session:s1', 'session:s2']);
+    __testing.forwardPush('maker:event', { sessionId: 's1', seq: 0 });
+    __testing.forwardPush('maker:event', { sessionId: 's2', seq: 1 });
+    __testing.forwardPush('maker:event', { sessionId: 's2', seq: 2 });
+    hidden = true;
+    finish();
+    await vi.waitFor(() => expect(client.sendPush.mock.calls.filter(([dst]) => dst === 'ctrl-2')).toHaveLength(2));
+    expect(client.sendPush.mock.calls.filter(([dst]) => dst === 'ctrl-2').map((call) => call[2])).toEqual([
+      { sessionId: 's2', seq: 1 }, { sessionId: 's2', seq: 2 },
+    ]);
+    expect(client.sendPush.mock.calls.every((call) => call[2].sessionId !== 's1')).toBe(true);
+  });
+
+  it('revalidates cached replies without repeating the local handler', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+    const handler = vi.fn(() => ({ id: 's1', source: 'bot', workingDir: '/workspace' }));
+    registry.register('local-db:sessions:get', handler);
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const frame = client.onFrame.mock.calls[0][0];
+    const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-read', payload: { channel: 'local-db:sessions:get', args: ['s1'] } };
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+    expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: true, result: { workingDir: '/workspace' } });
+    hidden = true;
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates a queued reply after the companion becomes hidden', async () => {
+    const client = mkClient({ sendInvokeResult: vi.fn().mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); }) });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'queued-read', { ok: true, result: [{ content: 'private reply' }] }, 'local-db:messages:list', ['s1']);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    setRemoteBotSessionLookup(async () => 'hidden');
+    __testing.flushRemoteInvokeResultOutbox();
+    await vi.waitFor(() => expect(__testing.remoteInvokeResultOutboxSize()).toBe(0));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+  });
+
+  it('drops pending authorization after the transport is replaced', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    const oldClient = mkClient();
+    __testing.setActiveClient(oldClient as never);
+    subscriptions.subscribe('ctrl-1', ['session:s1']);
+    __testing.forwardPush('maker:event', { sessionId: 's1' });
+    const newClient = mkClient();
+    __testing.setActiveClient(newClient as never);
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(oldClient.sendPush).not.toHaveBeenCalled();
+    expect(newClient.sendPush).not.toHaveBeenCalled();
   });
 });

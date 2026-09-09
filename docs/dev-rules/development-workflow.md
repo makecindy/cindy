@@ -58,19 +58,28 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   - 漏签不要重新造一份提交：用 `git commit --amend -s --no-edit` 或
     `git rebase --signoff <base>` 补签后 `git push --force-with-lease`。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
-  仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
-  `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
+  仓库根 `pnpm test:unit:related`（只跑这次改动能影响到的单测），并对本次改动涉及的每个
+  package 跑 `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
   `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
   script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
   必须先修复。worktree 会话内的 commit 同样适用。唯一例外是**防丢数据的兜底保存**：
   宿主删除／归档会话时自动存的内容快照（见第 1 节），以及会话必须收尾、测试却来不及
   修好时的收尾 commit——后者 commit message 必须标注 `WIP`，且在门禁通过前不得
   push、不得提 PR。
-  - **完整单测的外层超时**：`pnpm test:unit` 是全仓完整门禁，正常执行可能超过数分钟。
-    调用它的 agent／自动化工具不得使用 120 秒或更短的绝对超时；未知当前耗时时，外层
-    兜底超时至少设为 15 分钟。工具支持后台运行或 yielded process handle 时优先使用该
-    模式并短轮询进度，不要因为调用端停止等待就误判失败、杀掉仍在正常运行的测试或重复
-    启动一轮。Vitest 的单测试例超时仍由各 package 配置控制，不受这条外层约束影响。
+  - **相关单测怎么选**：`test:unit:related` 看相对 `main` 的已提交、已暂存、未暂存和未跟踪
+    文件。同一包里用 Vitest `related` 只跑会引用这些文件的测试；改了会被别的包依赖的公共
+    包源码时，依赖方跑该包自己的整包单测。只改文档等非代码文件则跳过 workspace 单测。
+    改到测试调度（`scripts/test-workspaces*`、`scripts/test-related.mjs`、
+    `scripts/test-gate-lock.mjs`）、`package.json`、`pnpm-lock.yaml`、
+    `pnpm-workspace.yaml`、各包 `vitest.config.*`、单测 CI 工作流，或算不出 git 基准时，
+    打印原因并退回全量 `pnpm test:unit`。批量改产品术语仍须全量，因为有测试直接锁中文文案。
+    GitHub CI 不受此影响，仍跑完整 `pnpm test:unit`。
+  - **完整单测的外层超时**：默认相关门禁通常比全仓短，但一旦退回全量，`pnpm test:unit`
+    正常执行仍可能超过数分钟。调用全量门禁的 agent／自动化工具不得使用 120 秒或更短的
+    绝对超时；未知当前耗时时，外层兜底超时至少设为 15 分钟。工具支持后台运行或 yielded
+    process handle 时优先使用该模式并短轮询进度，不要因为调用端停止等待就误判失败、杀掉
+    仍在正常运行的测试或重复启动一轮。Vitest 的单测试例超时仍由各 package 配置控制，不受
+    这条外层约束影响。
   - **workspace 有界并行**：`test-workspaces.mjs` 默认最多并行
     `min(4, os.availableParallelism())` 个普通 workspace；每个普通 Vitest workspace 只使用
     1 个 worker。Mobile 使用完整的 4-worker 配额；Desktop 使用基准验证过的单池最多

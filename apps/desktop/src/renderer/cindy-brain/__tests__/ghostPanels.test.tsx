@@ -45,7 +45,6 @@ function ghost(id: string, panel?: GhostManifest['panel'] | null, enabled = true
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: panel === null ? ['tool'] : ['panel'],
     ...(panel === null ? {} : { panel: panel ?? { title: id, html: 'panel.html' } }),
   };
   return {

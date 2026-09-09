@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +12,7 @@ vi.mock('../client/current', () => ({
 import {
   AgentInputQueueSnapshotTooLargeError,
   awaitAgentInputQueueSnapshotPersistence,
+  loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
 } from '../agentInputQueueSnapshots.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -122,5 +124,118 @@ describe('agent input queue snapshot durability boundary', () => {
       sessionId: 'snapshot-oversize',
     });
     expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('counts selected snapshots in SQLite without returning payload bodies', async () => {
+    const query = vi.fn().mockResolvedValue([{ sessionId: 'session-1', itemCount: 2 }]);
+    mocks.getDbClient.mockReturnValue({ query } as never);
+
+    await expect(
+      loadAgentInputQueueSnapshotCounts(['session-1', 'session-2', 'session-1']),
+    ).resolves.toEqual({ 'session-1': 2, 'session-2': 0 });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('json_each(snapshot.payload)'), [
+      'session-1',
+      'session-2',
+    ]);
+    expect(query.mock.calls[0]?.[0]).not.toContain('SELECT payload');
+  });
+
+  it('matches restore de-duplication and clear-boundary filtering for cold queued counts', async () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        cleared_at INTEGER
+      );
+      CREATE TABLE agent_input_queue_snapshots (
+        session_id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        UNIQUE(session_id, client_id)
+      );
+    `);
+    const accepted = {
+      ...queued('accepted', 'client-accepted'),
+      hostAcceptedAtMs: 301,
+    };
+    const beforeClear = {
+      ...queued('before clear', 'client-before-clear'),
+      hostAcceptedAtMs: 299,
+    };
+    const missingReceipt = queued('missing receipt', 'client-missing-receipt');
+    const waiting = {
+      ...queued('waiting', 'client-waiting'),
+      hostAcceptedAtMs: 301,
+    };
+    const staleScheduler = {
+      ...queued('stale scheduler', 'client-stale-scheduler'),
+      hostAcceptedAtMs: 301,
+      origin: {
+        kind: 'scheduler' as const,
+        scheduleId: 'schedule-legacy',
+        scheduleName: 'Legacy heartbeat',
+      },
+    };
+    db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run(
+      'session-crash-window',
+      300,
+    );
+    db.prepare(
+      'INSERT INTO agent_input_queue_snapshots (session_id, payload, updated_at) VALUES (?, ?, ?)',
+    ).run(
+      'session-crash-window',
+      JSON.stringify([
+        accepted,
+        beforeClear,
+        missingReceipt,
+        waiting,
+        staleScheduler,
+        'malformed legacy row',
+      ]),
+      Date.now(),
+    );
+    db.prepare('INSERT INTO messages (session_id, client_id) VALUES (?, ?)').run(
+      'session-crash-window',
+      accepted.clientId,
+    );
+    const query = vi.fn(async <T = unknown>(sql: string, params: unknown[] = []) =>
+      db.prepare(sql).all(...params) as T[]);
+    mocks.getDbClient.mockReturnValue({ query } as never);
+
+    try {
+      await expect(
+        loadAgentInputQueueSnapshotCounts(['session-crash-window']),
+      ).resolves.toEqual({ 'session-crash-window': 1 });
+      expect(query.mock.calls[0]?.[0]).toContain('NOT EXISTS');
+      expect(query.mock.calls[0]?.[0]).toContain('FROM messages');
+      expect(query.mock.calls[0]?.[0]).toContain('session.cleared_at');
+      expect(query.mock.calls[0]?.[0]).toContain('$.hostAcceptedAtMs');
+      expect(query.mock.calls[0]?.[0]).toContain('$.origin.kind');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('isolates corrupt snapshots while preserving database read failures', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { sessionId: 'corrupt', itemCount: null },
+        { sessionId: 'healthy', itemCount: 2 },
+      ])
+      .mockRejectedValueOnce(new Error('db unavailable'));
+    mocks.getDbClient.mockReturnValue({ query } as never);
+
+    await expect(loadAgentInputQueueSnapshotCounts(['corrupt', 'healthy'])).resolves.toEqual({
+      corrupt: 0,
+      healthy: 2,
+    });
+    await expect(loadAgentInputQueueSnapshotCounts(['unavailable'])).rejects.toThrow(
+      'db unavailable',
+    );
   });
 });

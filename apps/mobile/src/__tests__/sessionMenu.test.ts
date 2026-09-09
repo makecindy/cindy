@@ -83,7 +83,7 @@ describe('sessionMenu header', () => {
       orcaRole: 'lead',
     }), { readOnlyReason: '协作只读' });
     expect(header.chips.map((chip) => chip.id)).toEqual(['pinned', 'archived', 'readonly', 'collab']);
-    expect(header.chips[3]?.label).toBe('协作 Lead');
+    expect(header.chips[3]?.label).toBe('协同 Lead');
   });
 
   it('hides the usage summary when no cost and no context data exist', () => {

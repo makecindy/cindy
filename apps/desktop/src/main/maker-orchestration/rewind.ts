@@ -647,9 +647,17 @@ export async function commitRewindAtMessage(
         'target 之后已有更新的 user 消息,编辑重发拒绝执行(防止误删新轮次)',
       );
     }
-    log.warn(
-      `DB transaction after marking pendingRewindTo failed for ${sessionId}:`,
+    // 轮 40-w4-t13 HIGH:一般 DB 事务失败(SQLite 锁/IO 等)同样必须上抛 ——
+    // SDK 侧 rewind 已把 Pi 运行态切到新 session/sdkSessionId, 若 DB 停在旧
+    // 身份, 调用方误以为 rewind 成功, 重启后会恢复错分支(运行态与持久化
+    // 分叉)。fail-closed: 显式报错, 不把旧 row 当成功结果返回。
+    log.error(
+      `[rewind commit] sid=${sessionId.slice(0, 8)} DB 事务失败——SDK 已切新身份但持久化未落, rewind 状态分叉`,
       err,
+    );
+    throw rewindError(
+      'REWIND_GIT_FAILED',
+      `rewind 持久化失败(运行态已切换但 DB 未提交): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

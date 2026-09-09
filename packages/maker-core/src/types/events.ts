@@ -11,7 +11,17 @@
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
+import {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+} from '@cindy/maker-shared/tool-loop-error';
 import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
+
+export {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+  type ToolLoopErrorKind,
+} from '@cindy/maker-shared/tool-loop-error';
 
 export type AgentEventType =
   | 'text'                  // 流式文本输出（增量或完整）
@@ -59,6 +69,8 @@ export interface AgentErrorEventData {
   willRetry?: boolean;
   sdkError?: string;
   reason?: string;
+  /** Structured details for reason='tool_use_loop_detected'. */
+  toolLoop?: ToolLoopErrorDetails;
   [key: string]: unknown;
 }
 
@@ -68,6 +80,7 @@ export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
 }
 
 export interface AgentTaskUpdateEventData {
@@ -83,10 +96,17 @@ export interface AgentTaskUpdateEventData {
   description?: string;
   /** Provider summary or final subagent answer. */
   summary?: string;
+  /** Host-only complete terminal return; stripped before renderer/device-link broadcast. */
+  returnedResult?: string;
+  /** Distinguishes an explicit empty terminal return from an omitted field. */
+  returnedResultEmpty?: boolean;
+  /** The durable runner bounded the complete terminal return. */
+  returnedResultTruncated?: boolean;
   outputFile?: string;
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
    * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
@@ -94,6 +114,8 @@ export interface AgentTaskUpdateEventData {
    */
   model?: string | null;
   reasoningEffort?: string;
+  createdAt?: string;
+  updatedAt?: string;
   receiverThreadIds?: string[];
   /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
   subagentObservation?: SubagentObservation;
@@ -158,6 +180,14 @@ export interface AgentEvent {
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
   /**
+   * Session.turnGeneration captured when runEventLoop started the next() that
+   * dequeued this event. Adoption of a later generation must not overwrite it,
+   * so a leftover terminal keeps the older value after the next send. Host-only.
+   */
+  sessionTurnGeneration?: number;
+  /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
+  sessionInstanceId?: string;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later
@@ -217,10 +247,15 @@ export interface AskUserQuestionItem {
   multiSelect?: boolean;
 }
 
+type InteractionRequestBase = {
+  requestId: string;
+  /** Provider tool/item id that owns this interaction; distinct from transport request ids. */
+  toolUseId?: string;
+};
+
 export type InteractionRequest =
-  | {
+  | (InteractionRequestBase & {
       kind: 'permission';
-      requestId: string;
       toolName: string;
       input: Record<string, unknown>;
       title?: string;
@@ -228,18 +263,16 @@ export type InteractionRequest =
       description?: string;
       suggestions?: unknown[];
       metadata?: Record<string, unknown>;
-    }
-  | {
+    })
+  | (InteractionRequestBase & {
       kind: 'ask_user_question';
-      requestId: string;
       questions: AskUserQuestionItem[];
-    }
-  | {
+    })
+  | (InteractionRequestBase & {
       kind: 'plan_review';
-      requestId: string;
       plan: string;
       planFilePath?: string;
-    };
+    });
 
 export type InteractionDecision =
   | {
@@ -273,6 +306,11 @@ export type InteractionDecision =
       kind: 'ask_user_question';
       /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
       answers: Record<string, string>;
+      /**
+       * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
+       * 不是用户 Skip。Codex detached continuation 据此不发起续跑 turn。
+       */
+      dismissed?: boolean;
     }
   | {
       kind: 'plan_review';
@@ -320,6 +358,19 @@ export interface UsageSnapshot {
   contextTokens: number;
   contextWindow: number;
   costUsd: number;
+  /** Turn-cumulative output tokens (includes reasoning). */
+  outputTokens?: number;
+  /** Generation-only milliseconds for this turn, including any open interval. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn (renderer may tick locally). */
+  generationActive?: boolean;
+  /** False when live TPS must be hidden. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
+  /**
+   * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
+   * 只由 Claude Code / Pi 的 AutoCompactController 锁存。
+   */
+  needsRollover?: boolean;
 }
 
 /**
@@ -394,15 +445,32 @@ export interface ForkSdkSessionOptions {
   upToMessageId: string | undefined;
   /**
    * Fork 后从新 session 尾部移除多少个完整 turn。
-   * Codex 精确 fork 使用 thread/rollback 实现；Claude 路径不消费此字段。
+   * Codex 旧 daemon 使用 thread/rollback；分页 daemon 先查询原生边界。
+   * Claude 路径不消费此字段。
    */
   tailTurnsToDrop?: number;
+  /**
+   * Codex only: provider-native turn boundary for a direct thread/fork.
+   * Old/failed messages can resolve it through native turn metadata instead.
+   */
+  lastTurnId?: string;
+  /**
+   * Codex only: timestamp of the last copied event in the requested native turn.
+   * Used to resolve old/failed history without counting soft-deleted UI retries.
+   */
+  forkAtTimestampMs?: number;
   /** 新 session title (可选, 仅给 SDK 写入 jsonl 头)。 */
   title?: string;
   /** workingDir — 用于定位 Claude SDK project JSONL 并修复 fork 后的 uuid 引用。 */
   workingDir?: string;
   /** Codex only: fork from a rollout copy with reasoning response items removed. */
   stripEncryptedReasoning?: boolean;
+  /**
+   * 源 session 的 remoteHostId(fork 编排层从 DB 源 session 取, 透传给 agent)。
+   * Pi 用它做 fork 守卫判定 —— 不用 agent 实例级 lastRemoteHostId(并发会话
+   * 覆盖会误判, R4 竞态 #1)。
+   */
+  remoteHostId?: string | null;
 }
 
 export interface ForkSdkSessionResult {
@@ -419,6 +487,8 @@ export interface ForkSdkSessionResult {
    * upToMessageId 锚点能在新 jsonl 里查到。
    */
   uuidMap: Map<string, string>;
+  /** Codex only: copied native turn ids remain valid in the returned child thread. */
+  usedNativeForkAnchor?: boolean;
   /** Pi-only runtime command catalog captured from the forked runtime, if available. */
   runtimeCapabilities?: PiRuntimeCapabilityManifest;
 }

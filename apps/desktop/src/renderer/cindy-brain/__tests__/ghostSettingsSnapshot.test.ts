@@ -39,33 +39,50 @@ beforeEach(() => {
 describe('存取往返', () => {
   it('save 后 load 返回同一内容,且写进了 localStorage', () => {
     const snap = makeSnapshot();
-    saveGhostSettingsSnapshot('g1', snap);
+    saveGhostSettingsSnapshot('owner-a', 'g1', snap);
     __resetGhostSettingsSnapshotCacheForTest();
-    expect(loadGhostSettingsSnapshot('g1')).toEqual(snap);
-    expect(localStorage.getItem('ghostSettings.snapshot.g1')).toBeTruthy();
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toEqual(snap);
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:g1')).toBeTruthy();
   });
 
   it('不同意识 id 互不串台', () => {
-    saveGhostSettingsSnapshot('g1', makeSnapshot({ version: '1.0.0' }));
-    saveGhostSettingsSnapshot('g2', makeSnapshot({ version: '2.0.0' }));
-    expect(loadGhostSettingsSnapshot('g1')?.version).toBe('1.0.0');
-    expect(loadGhostSettingsSnapshot('g2')?.version).toBe('2.0.0');
+    saveGhostSettingsSnapshot('owner-a', 'g1', makeSnapshot({ version: '1.0.0' }));
+    saveGhostSettingsSnapshot('owner-a', 'g2', makeSnapshot({ version: '2.0.0' }));
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')?.version).toBe('1.0.0');
+    expect(loadGhostSettingsSnapshot('owner-a', 'g2')?.version).toBe('2.0.0');
+  });
+
+  it('不同 owner 的同 ghostId 互不读取，旧的无 owner 快照不自动认领', () => {
+    const ownerASnapshot = makeSnapshot({ version: 'owner-a-version' });
+    saveGhostSettingsSnapshot('owner-a', 'shared-ghost', ownerASnapshot);
+    localStorage.setItem(
+      'ghostSettings.snapshot.shared-ghost',
+      JSON.stringify(makeSnapshot({ version: 'legacy-unowned' })),
+    );
+
+    expect(loadGhostSettingsSnapshot('owner-a', 'shared-ghost')).toEqual(ownerASnapshot);
+    expect(loadGhostSettingsSnapshot('owner-b', 'shared-ghost')).toBeNull();
+
+    const ownerBSnapshot = makeSnapshot({ version: 'owner-b-version' });
+    saveGhostSettingsSnapshot('owner-b', 'shared-ghost', ownerBSnapshot);
+    expect(loadGhostSettingsSnapshot('owner-b', 'shared-ghost')).toEqual(ownerBSnapshot);
+    expect(loadGhostSettingsSnapshot('owner-a', 'shared-ghost')).toEqual(ownerASnapshot);
   });
 
   it('没有存量时返回 null', () => {
-    expect(loadGhostSettingsSnapshot('nope')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-a', 'nope')).toBeNull();
   });
 });
 
 describe('容错', () => {
   it('localStorage 里是坏 JSON 时按没有处理', () => {
-    localStorage.setItem('ghostSettings.snapshot.g1', '{oops');
-    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
+    localStorage.setItem('ghostSettings.snapshot.v2.owner-a:g1', '{oops');
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toBeNull();
   });
 
   it('形不对(缺字段 / 类型错 / 非图片 dataUrl)按没有处理', () => {
     localStorage.setItem(
-      'ghostSettings.snapshot.g1',
+      'ghostSettings.snapshot.v2.owner-a:g1',
       JSON.stringify({
         dataUrl: 'javascript:alert(1)',
         width: 1,
@@ -76,25 +93,25 @@ describe('容错', () => {
         capturedAt: Date.now(),
       }),
     );
-    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toBeNull();
     __resetGhostSettingsSnapshotCacheForTest();
     localStorage.setItem(
-      'ghostSettings.snapshot.g1',
+      'ghostSettings.snapshot.v2.owner-a:g1',
       JSON.stringify({ ...makeSnapshot(), width: 'wide' }),
     );
-    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toBeNull();
     __resetGhostSettingsSnapshotCacheForTest();
     // 老格式(缺 capturedAt)同样作废。
     const legacy: Partial<GhostSettingsSnapshot> = { ...makeSnapshot() };
     delete legacy.capturedAt;
-    localStorage.setItem('ghostSettings.snapshot.g1', JSON.stringify(legacy));
-    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
+    localStorage.setItem('ghostSettings.snapshot.v2.owner-a:g1', JSON.stringify(legacy));
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toBeNull();
 
     __resetGhostSettingsSnapshotCacheForTest();
     const preLayoutRevision: Partial<GhostSettingsSnapshot> = { ...makeSnapshot() };
     delete preLayoutRevision.layoutRevision;
-    localStorage.setItem('ghostSettings.snapshot.g1', JSON.stringify(preLayoutRevision));
-    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
+    localStorage.setItem('ghostSettings.snapshot.v2.owner-a:g1', JSON.stringify(preLayoutRevision));
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toBeNull();
   });
 
   it('localStorage 写失败(配额满)时静默降级为仅内存缓存', () => {
@@ -103,9 +120,9 @@ describe('容错', () => {
     });
     try {
       const snap = makeSnapshot();
-      expect(() => saveGhostSettingsSnapshot('g1', snap)).not.toThrow();
+      expect(() => saveGhostSettingsSnapshot('owner-a', 'g1', snap)).not.toThrow();
       // 本会话内存缓存仍可读。
-      expect(loadGhostSettingsSnapshot('g1')).toEqual(snap);
+      expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toEqual(snap);
     } finally {
       spy.mockRestore();
     }
@@ -114,47 +131,57 @@ describe('容错', () => {
 
 describe('存储预算', () => {
   it('单条超大位图只存内存不落 localStorage,并清掉同 id 旧持久快照', () => {
-    saveGhostSettingsSnapshot('g1', makeSnapshot());
-    expect(localStorage.getItem('ghostSettings.snapshot.g1')).toBeTruthy();
+    saveGhostSettingsSnapshot('owner-a', 'g1', makeSnapshot());
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:g1')).toBeTruthy();
     const snap = makeSnapshot({ dataUrl: `data:image/png;base64,${'a'.repeat(500_000)}` });
-    saveGhostSettingsSnapshot('g1', snap);
-    expect(localStorage.getItem('ghostSettings.snapshot.g1')).toBeNull();
-    expect(loadGhostSettingsSnapshot('g1')).toEqual(snap);
+    saveGhostSettingsSnapshot('owner-a', 'g1', snap);
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:g1')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toEqual(snap);
   });
 
   it('总量超预算时按拍摄时间淘汰最旧的其它快照', () => {
     const big = (tag: string) => `data:image/png;base64,${tag.repeat(390_000)}`;
     // 5 条 ~390k 快照(总预算 2M):写第 6 条时应从最旧开始腾位。
     for (let i = 0; i < 5; i++) {
-      saveGhostSettingsSnapshot(`g${i}`, makeSnapshot({ dataUrl: big('a'), capturedAt: 1000 + i }));
+      saveGhostSettingsSnapshot('owner-a', `g${i}`, makeSnapshot({ dataUrl: big('a'), capturedAt: 1000 + i }));
     }
-    saveGhostSettingsSnapshot('gNew', makeSnapshot({ dataUrl: big('b'), capturedAt: 9999 }));
+    saveGhostSettingsSnapshot('owner-a', 'gNew', makeSnapshot({ dataUrl: big('b'), capturedAt: 9999 }));
     // 最新的必须在;最旧的 g0(至少)被淘汰;总量回到预算内。
-    expect(localStorage.getItem('ghostSettings.snapshot.gNew')).toBeTruthy();
-    expect(localStorage.getItem('ghostSettings.snapshot.g0')).toBeNull();
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:gNew')).toBeTruthy();
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:g0')).toBeNull();
     let total = 0;
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)!;
-      if (key.startsWith('ghostSettings.snapshot.')) total += localStorage.getItem(key)!.length;
+      if (key.startsWith('ghostSettings.snapshot.v2.owner-a:')) total += localStorage.getItem(key)!.length;
     }
     expect(total).toBeLessThanOrEqual(2_000_000);
   });
 
   it('TTL 过期的快照按没有处理并顺手清盘', () => {
     const stale = makeSnapshot({ capturedAt: Date.now() - 15 * 24 * 60 * 60 * 1000 });
-    localStorage.setItem('ghostSettings.snapshot.g1', JSON.stringify(stale));
-    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
-    expect(localStorage.getItem('ghostSettings.snapshot.g1')).toBeNull();
+    localStorage.setItem('ghostSettings.snapshot.v2.owner-a:g1', JSON.stringify(stale));
+    expect(loadGhostSettingsSnapshot('owner-a', 'g1')).toBeNull();
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:g1')).toBeNull();
   });
 
   it('prune 按已装清单清孤儿(含内存缓存),在装的不动', () => {
-    saveGhostSettingsSnapshot('keep', makeSnapshot());
-    saveGhostSettingsSnapshot('orphan', makeSnapshot());
-    pruneGhostSettingsSnapshots(['keep', 'not-yet-snapshotted']);
-    expect(localStorage.getItem('ghostSettings.snapshot.keep')).toBeTruthy();
-    expect(localStorage.getItem('ghostSettings.snapshot.orphan')).toBeNull();
-    expect(loadGhostSettingsSnapshot('orphan')).toBeNull();
-    expect(loadGhostSettingsSnapshot('keep')).toBeTruthy();
+    saveGhostSettingsSnapshot('owner-a', 'keep', makeSnapshot());
+    saveGhostSettingsSnapshot('owner-a', 'orphan', makeSnapshot());
+    pruneGhostSettingsSnapshots('owner-a', ['keep', 'not-yet-snapshotted']);
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:keep')).toBeTruthy();
+    expect(localStorage.getItem('ghostSettings.snapshot.v2.owner-a:orphan')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-a', 'orphan')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-a', 'keep')).toBeTruthy();
+  });
+
+  it('prune 只清当前 owner，不触碰其他 owner 的同名快照', () => {
+    saveGhostSettingsSnapshot('owner-a', 'orphan', makeSnapshot({ version: 'a' }));
+    saveGhostSettingsSnapshot('owner-b', 'orphan', makeSnapshot({ version: 'b' }));
+
+    pruneGhostSettingsSnapshots('owner-a', []);
+
+    expect(loadGhostSettingsSnapshot('owner-a', 'orphan')).toBeNull();
+    expect(loadGhostSettingsSnapshot('owner-b', 'orphan')?.version).toBe('b');
   });
 });
 

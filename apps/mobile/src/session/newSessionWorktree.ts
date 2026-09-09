@@ -247,6 +247,24 @@ export function worktreeEligibilityFromError(error: unknown): NewSessionWorktree
 }
 
 /**
+ * 探测 effect 的**起始**状态(#4046):
+ *  - 设备或目录还没选全 → probing(探测尚未开始,UI 不暴露该行);
+ *  - 设备与目录都在、但链路不在 online → recovering(「连接恢复中,正在自动重试…」)。
+ *    完全断网时 effect 会在发请求前直接返回,永远进不了 catch,若仍停在 probing 就是
+ *    永久的「检测环境中…」;online / connectionEpoch / presenceVersion 变化即重探。
+ *  - 三者齐备 → probing,随后由请求结果 / 抛错归并覆盖。
+ * 创建门禁不变:probing / recovering 都 fail-closed(shouldBlockNewSessionCreateForWorktree)。
+ */
+export function initialWorktreeProbeEligibility(input: {
+  hasDevice: boolean;
+  hasWorkingDir: boolean;
+  online: boolean;
+}): NewSessionWorktreeEligibility {
+  if (input.hasDevice && input.hasWorkingDir && !input.online) return { status: 'recovering' };
+  return { status: 'probing' };
+}
+
+/**
  * 读取工作端 get-new-maker-defaults 的明确偏好。缺字段/形状异常返回 null，
  * 由控制端保留当前镜像；全新设备的镜像自身默认未勾选。
  */

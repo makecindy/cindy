@@ -11,9 +11,14 @@ import {
   LEGACY_GITLAB_TOKEN_FILE,
   LEGACY_GITLAB_CONNECTION_FILE,
   migrateGitlabAccounts,
+  migrateGitlabAccountsWithResult,
   type GitlabAccountsMigrationDeps,
   type GitlabAccountsMigrationManager,
 } from '../gitlabAccountsMigration.js';
+
+const available = <T>(value: T) => ({ status: 'available' as const, value });
+const missing = { status: 'missing' as const };
+const retryableFailure = { status: 'retryable-failure' as const };
 
 interface FakeRow {
   id: string;
@@ -64,10 +69,10 @@ function memoryManager(seedRows?: FakeRow[]): GitlabAccountsMigrationManager & {
 
 function makeDeps(overrides?: Partial<GitlabAccountsMigrationDeps>): GitlabAccountsMigrationDeps {
   return {
-    readLegacyToken: () => 'glpat_legacy_token',
+    readLegacyToken: () => available('glpat_legacy_token'),
     // 缺省与 readLegacyToken 一致地"在场";幂等留痕用例单独覆盖两种取值。
     legacyTokenExists: () => true,
-    readLegacyConnection: () => ({ baseUrl: 'https://gitlab.example.com', username: 'devuser' }),
+    readLegacyConnection: () => available({ baseUrl: 'https://gitlab.example.com', username: 'devuser' }),
     manager: memoryManager(),
     ...overrides,
   };
@@ -102,7 +107,7 @@ describe('migrateGitlabAccounts', () => {
           manager,
           readLegacyToken: () => {
             legacyReads += 1;
-            return 'glpat_legacy_token';
+            return available('glpat_legacy_token');
           },
         }),
       ),
@@ -133,13 +138,13 @@ describe('migrateGitlabAccounts', () => {
 
   it('无老 token(未连接过 / 解密失败)→ no-op', () => {
     const manager = memoryManager();
-    expect(migrateGitlabAccounts(makeDeps({ manager, readLegacyToken: () => null }))).toBe(0);
+    expect(migrateGitlabAccounts(makeDeps({ manager, readLegacyToken: () => missing }))).toBe(0);
     expect(manager.rows).toHaveLength(0);
   });
 
   it('connection.json 缺失(半身位残留)→ 保守不迁,不写库', () => {
     const manager = memoryManager();
-    expect(migrateGitlabAccounts(makeDeps({ manager, readLegacyConnection: () => null }))).toBe(0);
+    expect(migrateGitlabAccounts(makeDeps({ manager, readLegacyConnection: () => missing }))).toBe(0);
     expect(manager.rows).toHaveLength(0);
   });
 
@@ -149,7 +154,7 @@ describe('migrateGitlabAccounts', () => {
       migrateGitlabAccounts(
         makeDeps({
           manager,
-          readLegacyConnection: () => ({ baseUrl: 'http://gitlab.internal.example', username: 'devuser' }),
+          readLegacyConnection: () => available({ baseUrl: 'http://gitlab.internal.example', username: 'devuser' }),
         }),
       ),
     ).toBe(0);
@@ -162,7 +167,7 @@ describe('migrateGitlabAccounts', () => {
       migrateGitlabAccounts(
         makeDeps({
           manager,
-          readLegacyConnection: () => ({ baseUrl: 'https://git.example.com:8443', username: 'devuser' }),
+          readLegacyConnection: () => available({ baseUrl: 'https://git.example.com:8443', username: 'devuser' }),
         }),
       ),
     ).toBe(0);
@@ -175,7 +180,7 @@ describe('migrateGitlabAccounts', () => {
       migrateGitlabAccounts(
         makeDeps({
           manager,
-          readLegacyConnection: () => ({ baseUrl: 'HTTPS://Git.X.com/', username: 'devuser' }),
+          readLegacyConnection: () => available({ baseUrl: 'HTTPS://Git.X.com/', username: 'devuser' }),
         }),
       ),
     ).toBe(1);
@@ -189,11 +194,20 @@ describe('migrateGitlabAccounts', () => {
       migrateGitlabAccounts(
         makeDeps({
           manager,
-          readLegacyConnection: () => ({ baseUrl: 'https://gitlab.example.com', username: null }),
+          readLegacyConnection: () => available({ baseUrl: 'https://gitlab.example.com', username: null }),
         }),
       ),
     ).toBe(1);
     expect(manager.rows[0].label).toBeNull();
+  });
+
+  it('旧 token 或连接读取暂时失败 → 不写目标并保留重试', () => {
+    expect(
+      migrateGitlabAccountsWithResult(makeDeps({ readLegacyToken: () => retryableFailure })),
+    ).toEqual({ migrated: 0, retryPending: true });
+    expect(
+      migrateGitlabAccountsWithResult(makeDeps({ readLegacyConnection: () => retryableFailure })),
+    ).toEqual({ migrated: 0, retryPending: true });
   });
 
   it('manager.upsert 写失败(safeStorage 不可用)→ 返回 0,下次启动可重试', () => {
@@ -204,6 +218,10 @@ describe('migrateGitlabAccounts', () => {
       setDefault: manager.setDefault,
     };
     expect(migrateGitlabAccounts(makeDeps({ manager: failingManager }))).toBe(0);
+    expect(migrateGitlabAccountsWithResult(makeDeps({ manager: failingManager }))).toEqual({
+      migrated: 0,
+      retryPending: true,
+    });
     // 假体的 rows 只经真 upsert 写入,失败路径不落任何行,保持"没迁过"状态。
     expect(manager.rows).toHaveLength(0);
   });

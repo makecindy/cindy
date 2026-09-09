@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '@/i18n';
@@ -17,6 +17,18 @@ afterEach(async () => {
 });
 
 describe('PermissionPrompt i18n', () => {
+  it('asks through the companion identity while retaining the exact operation and decision', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt companion={{ id: 'writer', name: '阿橘' }}
+      permission={{ requestId: 'writer-permission', toolName: 'Bash', input: { command: 'git push origin draft' } }}
+      onRespond={onRespond} />);
+    expect(screen.getByText('阿橘 想请你确认一下')).toBeTruthy();
+    expect(screen.getByText('git push origin draft')).toBeTruthy();
+    expect(screen.queryByText('本任务总是允许')).toBeNull();
+    fireEvent.click(screen.getByText('允许一次'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
+  });
+
   it('uses the selected UI language for Cindy-owned permission copy', () => {
     render(
       <PermissionPrompt
@@ -89,5 +101,24 @@ describe('PermissionPrompt i18n', () => {
     );
 
     expect(screen.getByText('Always allow for this session')).toBeTruthy();
+  });
+
+  it('explains that auto-review failed and this click only confirms the current action', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-unavailable',
+          toolName: 'exec',
+          input: { command: 'npx tsc --noEmit' },
+          title: 'Allow Codex to run this command?',
+          description: 'Automatic review could not finish, so this action needs your confirmation.',
+          autoReviewUnavailable: true,
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('自动审批没完成，请确认要不要允许这次操作。')).toBeTruthy();
+    expect(screen.queryByText('Automatic review could not finish, so this action needs your confirmation.')).toBeNull();
   });
 });

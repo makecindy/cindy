@@ -21,6 +21,8 @@
  * 依赖注入(规则 14):老存储读取 / 意识保险库全经 deps,单测内存假体零 Electron。
  */
 
+import type { LegacyMigrationRead } from './legacyMigrationRead.js';
+
 /** cindy-github 意识与其 user 凭证槽(与 ghost.json 声明一致,搬账目的地)。 */
 export const CINDY_GITHUB_GHOST_ID = 'cindy-github';
 export const CINDY_GITHUB_SECRET_KEY = 'github_pat';
@@ -40,41 +42,60 @@ export interface GithubAccountsMigrationVault {
 }
 
 export interface GithubAccountsMigrationDeps {
-  /** 读老 PAT 明文(safeStorage 解密 github_token.enc;不存在 / 解密失败回 null)。 */
-  readLegacyToken(): string | null;
-  /** 读老连接信息(github_connection.json;只消费 host,坏形态回 null)。 */
-  readLegacyConnection(): { host?: string | null } | null;
+  /** 读老 PAT 明文，并区分确实缺失与可重试读取失败。 */
+  readLegacyToken(): LegacyMigrationRead<string>;
+  /** 读老连接信息，并区分确实缺失与可重试读取失败。 */
+  readLegacyConnection(): LegacyMigrationRead<{ host?: string | null }>;
   vault: GithubAccountsMigrationVault;
   log?: { info(msg: string, meta?: Record<string, unknown>): void; warn(msg: string, meta?: Record<string, unknown>): void };
+}
+
+export interface GithubAccountsMigrationResult {
+  migrated: number;
+  retryPending: boolean;
 }
 
 /**
  * 执行一次搬账。返回迁移的账号数(老集成是单账号形态,只会是 0 或 1)。
  * 在内置意识对账完成后、确认 cindy-github 已装入时调用(见 index.ts 启动序列)。
  */
-export function migrateGithubAccounts(deps: GithubAccountsMigrationDeps): number {
+export function migrateGithubAccountsWithResult(
+  deps: GithubAccountsMigrationDeps,
+): GithubAccountsMigrationResult {
   const { readLegacyToken, readLegacyConnection, vault, log } = deps;
 
   // 意识侧已有值(用户手动填过 / 上次已迁)→ 不碰,防覆盖。
-  if (vault.read(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY) !== null) return 0;
+  if (vault.read(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY) !== null) {
+    return { migrated: 0, retryPending: false };
+  }
 
   const token = readLegacyToken();
-  if (!token) return 0;
+  if (token.status === 'retryable-failure') return { migrated: 0, retryPending: true };
+  if (token.status === 'missing') return { migrated: 0, retryPending: false };
 
   // 老集成 addAccount 必写 connection.json;读不到 = 半身位残留,保守不迁。
   const connection = readLegacyConnection();
-  const host = typeof connection?.host === 'string' ? connection.host.trim().toLowerCase() : '';
+  if (connection.status === 'retryable-failure') return { migrated: 0, retryPending: true };
+  const host =
+    connection.status === 'available' && typeof connection.value.host === 'string'
+      ? connection.value.host.trim().toLowerCase()
+      : '';
   if (host !== 'github.com') {
     log?.info('cindy-github 搬账跳过:老连接不是 github.com(意识只支持 github.com)', {
-      hasConnection: connection !== null,
+      hasConnection: connection.status === 'available',
     });
-    return 0;
+    return { migrated: 0, retryPending: false };
   }
 
-  if (!vault.store(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY, token)) {
+  if (!vault.store(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY, token.value)) {
     log?.warn('cindy-github 搬账:PAT 写入失败,放弃本轮(下次启动重试)');
-    return 0;
+    return { migrated: 0, retryPending: true };
   }
   log?.info('cindy-github 搬账完成:老 GitHub 集成账号已迁入意识');
-  return 1;
+  return { migrated: 1, retryPending: false };
+}
+
+/** Compatibility wrapper for callers that only need the migrated count. */
+export function migrateGithubAccounts(deps: GithubAccountsMigrationDeps): number {
+  return migrateGithubAccountsWithResult(deps).migrated;
 }

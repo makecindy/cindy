@@ -19,7 +19,6 @@ const zhCommon = JSON.parse(
     ghosts: {
       disabledTag: string;
       enableAria: string;
-      toast: { installedAsleep: string };
       detail: { customSlotAsleep: string; disabledLabel: string };
     };
   };
@@ -31,7 +30,8 @@ describe('Ghost Plugin lifecycle wording', () => {
     expect(zhCommon.settings.ghosts.disabledTag).toBe('已停用');
     expect(zhCommon.settings.ghosts.detail.disabledLabel).toBe('已停用');
     expect(zhCommon.settings.ghosts.enableAria).toContain('启用');
-    expect(zhCommon.settings.ghosts.toast.installedAsleep).toContain('可随时在此启用');
+    // 原先还钉 toast.installedAsleep(「已装入但沉睡」)。新装的「立即开启」勾选框
+    // 去掉后一律装入即生效,那条 toast 与其文案 key 一起删了,故不再断言。
     expect(zhCommon.settings.ghosts.detail.customSlotAsleep).toContain('启用后');
   });
 });

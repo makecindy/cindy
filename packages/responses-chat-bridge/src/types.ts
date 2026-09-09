@@ -324,6 +324,11 @@ export interface ChatBridgeCapabilities {
   googleThoughtSignaturePlaceholder?: boolean;
   /** 缺少上游 usage 时仍生成 Responses 要求的完整零值 usage 结构。默认开启。 */
   zeroUsageOnMissing?: boolean;
+  /**
+   * Ollama/Qwen Chat 模板要求 system 只能出现在消息列表开头。
+   * `coalesce-leading` 把所有 system/developer 按原顺序合并成唯一的首条 system。
+   */
+  systemMessagePolicy?: 'preserve' | 'coalesce-leading';
 }
 
 export interface ChatBridgeLogger {
@@ -354,6 +359,11 @@ export interface ChatBridgeProviderConfig {
 export interface ChatBridgeHandleArgs {
   parsedBody: unknown;
   res: ServerResponse;
+  /**
+   * 经本地代理验证过的入站请求头快照(#4073)。bridge **不**透传它们,只从中解析稳定会话
+   * 标识映射为出站 `x-opencode-session`(见 session-header.ts);省略 = 不附加会话头。
+   */
+  requestHeaders?: Readonly<Record<string, string>>;
 }
 
 export interface ResponsesChatBridgeHandler {

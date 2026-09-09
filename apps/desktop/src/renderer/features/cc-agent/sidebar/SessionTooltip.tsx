@@ -21,17 +21,21 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import { prStatusKey, MAX_STATUS_QUERIES } from '@/hooks/useSessionGitContext';
+import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON } from '../gitContextPrVisuals';
+import { PR_STATUS_COLOR, PR_STATUS_ICON, prFailureCopyKey } from '../gitContextPrVisuals';
 import { formatSidebarFutureTime } from '../lib/formatSidebarTime';
-import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
-import type { ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  findLatestSidebarIndexRunForSession,
+  loadScheduleSidebarIndexRuns,
+  type ScheduleSidebarIndexRun,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 
 const CONTENT_SURFACE_CLASS = cn(
   'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
-  // base Tooltip.Content 有 dark:border-transparent,tailwind-merge 不会被无 variant
-  // 的 border-[...] 覆盖,需要显式 dark: override 才能让 dark 模式下浮层边框可见。
+  // base Tooltip.Content 默认 border-transparent（深底气泡不要浅描边）。
+  // tailwind-merge 不会被无 variant 的 border-[...] 单独覆盖 dark 态，需要显式
+  // dark: override 才能让这个浅色浮层在两模式下都看得到边框。
   'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
 );
 
@@ -43,11 +47,16 @@ export interface SessionTooltipProps {
   sourceLabel?: string;
   /**
    * 单独渲染的 automation-generated 会话(未被 AutomationSessionGroupItem 吸走)
-   * 需要展示「下次运行倒计时 + 累计运行次数」浮层,和分组头 rowTooltip 语义一致。
+   * 需要展示下次运行或停止状态浮层。
    * 优先级:PR > automation > sourceLabel(PR 承载工程上下文最重,automation 承载
    * 计划信息次之,sourceLabel 只是「来自哪个项目」的静态标签)。
    */
   isAutomationSession?: boolean;
+  /**
+   * 受控开关。普通任务行在指针进入内嵌动作时传 false，避免行级详情与动作 Tip 重叠。
+   * 未提供时保持各变体原有的 Radix 非受控行为。
+   */
+  controlledOpen?: boolean;
   children: ReactNode;
 }
 
@@ -56,20 +65,29 @@ export function SessionTooltip({
   prRefs,
   sourceLabel,
   isAutomationSession,
+  controlledOpen,
   children,
 }: SessionTooltipProps) {
   if (prRefs.length > 0) {
     return (
-      <PrTooltip sessionId={sessionId} prRefs={prRefs}>
+      <PrTooltip sessionId={sessionId} prRefs={prRefs} controlledOpen={controlledOpen}>
         {children}
       </PrTooltip>
     );
   }
   if (isAutomationSession) {
-    return <AutomationTooltip sessionId={sessionId}>{children}</AutomationTooltip>;
+    return (
+      <AutomationTooltip sessionId={sessionId} controlledOpen={controlledOpen}>
+        {children}
+      </AutomationTooltip>
+    );
   }
   if (sourceLabel) {
-    return <SourceTooltip sourceLabel={sourceLabel}>{children}</SourceTooltip>;
+    return (
+      <SourceTooltip sourceLabel={sourceLabel} controlledOpen={controlledOpen}>
+        {children}
+      </SourceTooltip>
+    );
   }
   return <>{children}</>;
 }
@@ -77,70 +95,78 @@ export function SessionTooltip({
 function PrTooltip({
   sessionId,
   prRefs,
+  controlledOpen,
   children,
 }: {
   sessionId: string;
   prRefs: readonly SessionPrRef[];
+  controlledOpen?: boolean;
   children: ReactNode;
 }) {
-  const { statuses, fetchStatusesForSession } = usePrStatuses();
+  const { statuses, fetchStatusesForSession } = usePrStatuses(sessionId);
+
+  useEffect(() => {
+    if (controlledOpen) fetchStatusesForSession(sessionId);
+  }, [controlledOpen, fetchStatusesForSession, sessionId]);
 
   return (
     // 独立 Provider + delayDuration=0:hover 立即弹出,不吃 sidebar 顶层 Provider
     // 的 500ms 默认延迟。skipDelayDuration 也归零,行间移动同样无跳变。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-    <Tooltip.Root
-      onOpenChange={(open) => {
-        if (open) fetchStatusesForSession(sessionId);
-      }}
-    >
-      <Tooltip.Trigger
-        asChild
-        // PR tip 是 sidebar 密集列表里的 hover-only 信息。SessionItem 本身可聚焦,
-        // 窗口重新 focus 时浏览器会把焦点还给它;阻止 Radix 的 focus-open,避免无 hover 复活。
-        onFocus={(event) => event.preventDefault()}
+      <Tooltip.Root
+        open={controlledOpen}
+        onOpenChange={(open) => {
+          if (open && controlledOpen === undefined) fetchStatusesForSession(sessionId);
+        }}
       >
-        {children}
-      </Tooltip.Trigger>
-      <Tooltip.Content
-        side="right"
-        align="start"
-        sideOffset={8}
-        variant="mono"
-        className={CONTENT_SURFACE_CLASS}
-      >
-        <div className="flex flex-col gap-1">
-          {prRefs.slice(0, MAX_STATUS_QUERIES).map((ref) => (
-            <PrLine key={ref.id} prRef={ref} status={statuses.get(prStatusKey(ref))} />
-          ))}
-        </div>
-      </Tooltip.Content>
-    </Tooltip.Root>
+        <Tooltip.Trigger
+          asChild
+          // PR tip 是 sidebar 密集列表里的 hover-only 信息。SessionItem 本身可聚焦,
+          // 窗口重新 focus 时浏览器会把焦点还给它;阻止 Radix 的 focus-open,避免无 hover 复活。
+          onFocus={(event) => event.preventDefault()}
+        >
+          {children}
+        </Tooltip.Trigger>
+        <Tooltip.Content
+          side="right"
+          align="start"
+          sideOffset={8}
+          variant="mono"
+          className={CONTENT_SURFACE_CLASS}
+        >
+          <div className="flex flex-col gap-1">
+            {prRefs.slice(0, MAX_STATUS_QUERIES).map((ref) => (
+              <PrLine key={ref.id} prRef={ref} status={statuses.get(prStatusKey(ref))} />
+            ))}
+          </div>
+        </Tooltip.Content>
+      </Tooltip.Root>
     </Tooltip.Provider>
   );
 }
 
 /**
- * 单独 automation-generated 会话行的 hover 浮层 —— 显示「下次运行剩余时间 + 累计运行
- * 次数」,和 AutomationSessionGroupItem 的 rowTooltip 语义一致。数据源和 Timer chip
- * 点击复用同一套 loadScheduleSidebarIndexRuns:runs 里每条自带 nextFireAt /
- * scheduleStatus,同 scheduleId 的条数即为总运行次数。tooltip 打开时才发起一次拉取
+ * 单独 automation-generated 会话行的 hover 浮层 —— 显示下次运行剩余时间或停止状态。
+ * 数据源和 Timer chip 点击复用同一套 loadScheduleSidebarIndexRuns；tooltip 打开时才发起一次拉取
  * (与 PrTooltip 的 fetchStatusesForSession 同风格,不在密集渲染路径上常驻拉数据);
  * 拉到的 nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
  * (tooltip 通常只停留几秒,静态文案够用)。
  */
 function AutomationTooltip({
   sessionId,
+  controlledOpen,
   children,
 }: {
   sessionId: string;
+  controlledOpen?: boolean;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const effectiveOpen = controlledOpen ?? open;
   const [runs, setRuns] = useState<ScheduleSidebarIndexRun[] | null>(null);
   useEffect(() => {
-    if (!open || runs !== null) return;
+    if (!effectiveOpen || runs !== null) return;
     let cancelled = false;
     loadScheduleSidebarIndexRuns()
       .then((next) => {
@@ -152,23 +178,20 @@ function AutomationTooltip({
     return () => {
       cancelled = true;
     };
-  }, [open, runs]);
+  }, [effectiveOpen, runs]);
 
-  const hit = runs?.find((r) => r.sessionId === sessionId) ?? null;
-  const countdownText = hit && hit.scheduleStatus === 'active' && typeof hit.nextFireAt === 'number'
-    ? formatSidebarFutureTime(hit.nextFireAt, t)
-    : '';
+  const hit = runs ? (findLatestSidebarIndexRunForSession(runs, sessionId) ?? null) : null;
+  const countdownText =
+    hit && hit.scheduleStatus === 'active' && typeof hit.nextFireAt === 'number'
+      ? formatSidebarFutureTime(hit.nextFireAt, t)
+      : '';
   const isStopped = hit?.scheduleStatus === 'paused' || hit?.scheduleStatus === 'expired';
   const stoppedText = isStopped ? t('ccAgent.sidebar.automationGroup.stopped') : '';
-  const runCount = hit ? runs!.filter((r) => r.scheduleId === hit.scheduleId).length : 0;
-  const runCountText = runCount > 0
-    ? t('ccAgent.sidebar.automationGroup.runCount', { count: runCount })
-    : '';
-  const hasContent = countdownText || stoppedText || runCountText;
+  const hasContent = countdownText || stoppedText;
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root onOpenChange={setOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={setOpen}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
@@ -177,7 +200,6 @@ function AutomationTooltip({
             <div className="flex flex-col gap-0.5">
               {countdownText && <span>{countdownText}</span>}
               {stoppedText && <span>{stoppedText}</span>}
-              {runCountText && <span>{runCountText}</span>}
             </div>
           </Tooltip.Content>
         )}
@@ -188,15 +210,17 @@ function AutomationTooltip({
 
 function SourceTooltip({
   sourceLabel,
+  controlledOpen,
   children,
 }: {
   sourceLabel: string;
+  controlledOpen?: boolean;
   children: ReactNode;
 }) {
   return (
     // 独立 Provider + delayDuration=0:与 PrTooltip 同规,hover 立即弹出。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root>
+      <Tooltip.Root open={controlledOpen}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
@@ -214,6 +238,9 @@ function PrLine({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
   const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
   const unresolved = status?.ok && status.unresolvedCount ? status.unresolvedCount : 0;
+  // 失败态与顶栏徽标同一句原因(gh 未登录 / 未安装 / 404 …),不再静默。
+  // 侧栏行本身不承担引导动作,所以只说原因,不说"点击"。
+  const failureCopyKey = prFailureCopyKey(status);
 
   return (
     <div className="flex min-w-0 max-w-80 items-center gap-1.5">
@@ -225,6 +252,9 @@ function PrLine({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
         <span className="shrink-0 whitespace-nowrap">
           · {t(`ccAgent.gitContext.pr.status.${kind}`)}
         </span>
+      )}
+      {!kind && failureCopyKey && (
+        <span className="min-w-0 truncate text-[var(--text-tertiary)]">· {t(failureCopyKey)}</span>
       )}
       {unresolved > 0 && (
         <span

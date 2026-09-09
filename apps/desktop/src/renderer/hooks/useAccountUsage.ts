@@ -198,9 +198,23 @@ export function mergeCodexAccountUsageSnapshot(
     previous.source === 'openai-web'
     && incoming.source !== 'openai-web'
     && (isCodexZeroWindowFallback(incoming) || isCodexWindowlessFallback(incoming));
+  const incomingHasPrimary = Object.prototype.hasOwnProperty.call(incoming, 'primary');
+  const incomingHasSecondary = Object.prototype.hasOwnProperty.call(incoming, 'secondary');
   const keepPreviousWindows =
     keepPreviousWebFields
-    || (hasCodexUsageWindow(previous) && isCodexWindowlessFallback(incoming));
+    || (
+      hasCodexUsageWindow(previous)
+      && isCodexWindowlessFallback(incoming)
+      && (incomingHasPrimary === incomingHasSecondary)
+    );
+  // 裸 account_usage 是 app-server 的稀疏滚动通知:只带 primary 时 secondary
+  // 不是被删除,只是本次没携带(反之亦然)。逐窗保留,避免 renderer 在 main 的
+  // 权威组合 payload 到达前先把另一段额度闪没。WHAM 是全量读取,仍允许清窗;
+  // reached marker 则是权威清空信号。
+  const preserveMissingAppServerWindows =
+    previous.source !== 'openai-web'
+    && incoming.source !== 'openai-web'
+    && !hasCodexRateLimitReached(incoming);
 
   const incomingCredits = incoming.credits;
   const previousCredits = previous.credits ?? null;
@@ -220,8 +234,12 @@ export function mergeCodexAccountUsageSnapshot(
 
   return {
     ...incoming,
-    primary: keepPreviousWindows ? previous.primary : incoming.primary,
-    secondary: keepPreviousWindows ? previous.secondary : incoming.secondary,
+    primary: keepPreviousWindows || (preserveMissingAppServerWindows && !incomingHasPrimary)
+      ? previous.primary
+      : incoming.primary,
+    secondary: keepPreviousWindows || (preserveMissingAppServerWindows && !incomingHasSecondary)
+      ? previous.secondary
+      : incoming.secondary,
     planType: keepPreviousWebFields ? previous.planType : incoming.planType ?? previous.planType,
     credits,
     source: keepPreviousWebFields ? previous.source : incoming.source ?? 'codex-app-server',

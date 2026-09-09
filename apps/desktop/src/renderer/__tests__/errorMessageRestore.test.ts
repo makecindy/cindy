@@ -43,6 +43,12 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps force-retired errors to location-neutral copy for persisted rows', () => {
+    expect(ERROR_REASON_I18N_KEYS['app-server-force-retired']).toBe(
+      'chat.errorBanner.codexAppServerRetired',
+    );
+  });
+
   it('maps upstream overload to the same copy the tail banner uses', () => {
     // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
     // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
@@ -55,6 +61,15 @@ describe('mapServerMessages — persisted terminal error rows', () => {
   it('maps Codex reconnect stalls to the existing upstream timeout copy', () => {
     expect(ERROR_REASON_I18N_KEYS.codex_reconnect_stalled).toBe(
       'logic.errors.upstreamResponseIdleTimeout',
+    );
+  });
+
+  it('maps oversized Codex history to its own copy, not the reconnect timeout', () => {
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).toBe(
+      'logic.errors.codexHistoryOversized',
+    );
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).not.toBe(
+      ERROR_REASON_I18N_KEYS.codex_reconnect_stalled,
     );
   });
 
@@ -92,6 +107,21 @@ describe('mapServerMessages — persisted terminal error rows', () => {
       content: '任务执行失败（模型未返回错误详情）。',
       errorReason: 'turn-failed',
       isStreaming: false,
+    });
+  });
+
+  it('restores bounded tool-loop details for localized history rendering', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('e-tool-loop', {
+        message: '内部熔断详情：missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      }),
+    ]);
+
+    expect(mapped[0]).toMatchObject({
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
     });
   });
 

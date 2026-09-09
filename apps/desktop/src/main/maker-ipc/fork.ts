@@ -12,12 +12,12 @@
  * fork 点支持 user / assistant 消息 (语义区别见 forkSessionAtMessage doc)。
  */
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { forkSessionAtMessage, forkSessionStripEncrypted } from '../maker-orchestration/fork.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 
 import { MAKER_INVOKE } from './channels.js';
 
@@ -25,20 +25,10 @@ const log = createLogger('maker-ipc/fork');
 
 /**
  * 广播「新会话已建」给所有窗口 + device-link tap(转发给订阅 `sessions` topic 的控制端)。
- * 与 register.ts / cardActionHandler.ts / maker-host 同款(跨 module 提取不在本次范围,沿用副本)。
- * fork 出的会话过去**没有**走这条 → 在被控端自己窗口 / 其它控制端侧边栏凭空消失,只有发起方
- * 靠手动重拉能看到;这里补上,使所有端收敛。
+ * 统一走 emitSessionCreated，避免 fork 会话在被控端 / 其它控制端侧边栏凭空消失。
  */
 function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
-    } catch {
-      // best-effort UI refresh
-    }
-  }
+  emitSessionCreated(sessionId);
 }
 
 export function registerMakerForkIpc(): void {

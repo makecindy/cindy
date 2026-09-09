@@ -25,7 +25,7 @@ describe('RightSidebarToggle', () => {
       const button = screen.getByRole('button', {
         name: 'rightSidebar.tabs.controls.showAria',
       });
-      expect(button.getAttribute('title')).toBe('rightSidebar.tabs.controls.showAria');
+      expect(button.getAttribute('title')).toBeNull();
       fireEvent.click(button);
       expect(onToggle).toHaveBeenCalledOnce();
     },

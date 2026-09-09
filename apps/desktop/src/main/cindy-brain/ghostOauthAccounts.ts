@@ -46,7 +46,8 @@ import {
 } from './ghostOauthFlow.js';
 import {
   changedBuiltinOauthClientSecretKeys,
-  isOfficialGhostId,
+  isBrokerEligibleGhostId,
+  isFirstPartyHostPrivilegeGhostId,
   type GhostManifest,
   type GhostSecretOauthDecl,
 } from '../../shared/ghost.js';
@@ -101,6 +102,8 @@ export interface GhostOauthAccountView {
 /** 保险库最小面(providerSecretStore 在接线处适配;测试喂内存假体)。 */
 export interface GhostOauthVault {
   read(ghostId: string, storageKey: string): string | null;
+  /** Optional strict read used only by durable reconciliation. */
+  readStrict?(ghostId: string, storageKey: string): string | null;
   /** 返回 false = 写失败(safeStorage 不可用等),调用方折叠结构化错误。 */
   store(ghostId: string, storageKey: string, value: string): boolean;
   remove(ghostId: string, storageKey: string): void;
@@ -154,6 +157,11 @@ export interface GhostOauthAccountManagerDeps {
   withMutationLock?: <T>(ghostId: string, task: () => Promise<T> | T) => Promise<T>;
   /** 延时器(仅 invalid_grant 轮换探测用;测试注入即时假体,生产缺省 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * tokenBroker 资格复核。官方前缀命中照今天放行；否则问 first-party 判据。
+   * 缺省只认静态官方前缀，存量单测零行为变化。
+   */
+  isTokenBrokerAuthorized?: (ghostId: string) => boolean;
 }
 
 /**
@@ -170,7 +178,12 @@ export type GhostOauthConnectResult =
   | { ok: true; account: GhostOauthAccountView }
   | {
       ok: false;
-      error: 'NO_CLIENT_CONFIG' | 'ACCOUNT_LIMIT' | 'VAULT_WRITE_FAILED' | GhostOauthFlowError;
+      error:
+        | 'NO_CLIENT_CONFIG'
+        | 'ACCOUNT_LIMIT'
+        | 'VAULT_WRITE_FAILED'
+        | 'BROKER_FORBIDDEN'
+        | GhostOauthFlowError;
       detail?: string;
     };
 
@@ -183,7 +196,13 @@ export type GhostOauthAccessTokenResult =
        * 或指定账号不存在);AUTH_EXPIRED = refresh token 失效需重新授权;
        * REFRESH_FAILED / NETWORK = 瞬时失败可重试。
        */
-      error: 'NO_CLIENT_CONFIG' | 'NO_ACCOUNT' | 'AUTH_EXPIRED' | 'REFRESH_FAILED' | 'NETWORK';
+      error:
+        | 'NO_CLIENT_CONFIG'
+        | 'NO_ACCOUNT'
+        | 'AUTH_EXPIRED'
+        | 'REFRESH_FAILED'
+        | 'NETWORK'
+        | 'BROKER_FORBIDDEN';
       detail?: string;
     };
 
@@ -607,15 +626,33 @@ export class GhostOauthAccountManager {
    * the update-crash half state and incorrectly reusing that token for a third
    * client introduced by a later update.
    */
-  reconcileAccountsForInstalledManifest(currentManifest: GhostManifest): number {
+  reconcileAccountsForInstalledManifestWithResult(currentManifest: GhostManifest): {
+    restored: number;
+    retryPending: boolean;
+  } {
     const ghostId = currentManifest.id;
     let restoredCount = 0;
+    let retryPending = false;
     for (const secret of currentManifest.network?.secrets ?? []) {
       if (secret.source !== 'oauth' || secret.oauth?.tokenBroker) continue;
       if (this.clientCustomized(ghostId, secret.key)) continue;
       const currentClientId = secret.oauth?.clientId?.trim();
       if (!currentClientId) continue;
-      const beforeRaw = this.deps.vault.read(ghostId, accountsKey(secret.key));
+      let beforeRaw: string | null;
+      try {
+        beforeRaw = (this.deps.vault.readStrict ?? this.deps.vault.read)(
+          ghostId,
+          accountsKey(secret.key),
+        );
+      } catch (error) {
+        retryPending = true;
+        this.deps.logger?.warn?.('ghost oauth client migration recovery read failed', {
+          ghostId,
+          secretKey: secret.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
       if (beforeRaw === null) continue;
       const manifest = parseManifest(beforeRaw);
       let changed = 0;
@@ -636,6 +673,7 @@ export class GhostOauthAccountManager {
       }
       if (changed === 0) continue;
       if (!this.deps.vault.store(ghostId, accountsKey(secret.key), JSON.stringify(manifest))) {
+        retryPending = true;
         this.deps.logger?.warn?.('ghost oauth client migration recovery write failed', {
           ghostId,
           secretKey: secret.key,
@@ -646,7 +684,12 @@ export class GhostOauthAccountManager {
       this.clearCachedTokens(ghostId, secret.key);
       this.notifyStatusChanged(ghostId, secret.key, 'connected');
     }
-    return restoredCount;
+    return { restored: restoredCount, retryPending };
+  }
+
+  /** Compatibility wrapper for callers that only need the restored count. */
+  reconcileAccountsForInstalledManifest(currentManifest: GhostManifest): number {
+    return this.reconcileAccountsForInstalledManifestWithResult(currentManifest).restored;
   }
 
   /** 返回仍未完成重新授权的 clientId 迁移账号数；普通撤销授权不计入。 */
@@ -802,6 +845,10 @@ export class GhostOauthAccountManager {
    * 多行)。标签为 null(未声明 identity / 拉取失败)时无从判定,保持追加。
    * client 凭证未填直接拒;授权流程失败原样透传结构化错误(设置页据此提示)。
    */
+  private isTokenBrokerAuthorized(ghostId: string): boolean {
+    return this.deps.isTokenBrokerAuthorized?.(ghostId) ?? isBrokerEligibleGhostId(ghostId);
+  }
+
   async connectAccount(
     ghostId: string,
     secretKey: string,
@@ -824,8 +871,20 @@ export class GhostOauthAccountManager {
        * GhostOauthClientConfig.corsDeliveryHosts。
        */
       deliveryHosts?: readonly string[];
+      /** Main-only handoff for reopening the current authorization page. */
+      onAuthorizationUrl?: (url: string) => void;
+      /** Main-only caller boundary, checked inside the credential mutation lock. */
+      assertCurrent?: () => void;
+      beforeCommit?: () => Promise<void>;
     },
   ): Promise<GhostOauthConnectResult> {
+    if (decl.tokenBroker !== undefined && !this.isTokenBrokerAuthorized(ghostId)) {
+      return {
+        ok: false,
+        error: 'BROKER_FORBIDDEN',
+        detail: '当前安装来源或组织身份无权使用授权 broker',
+      };
+    }
     if (opts?.clientId !== undefined) {
       const allowedClientIds = [decl.clientId, ...(decl.clientIdAlternatives ?? [])];
       if (!decl.tokenBroker || !allowedClientIds.includes(opts.clientId)) {
@@ -864,16 +923,16 @@ export class GhostOauthAccountManager {
 
     const flow = await startGhostOauthFlow({
       config,
-      openExternal: this.deps.openExternal,
+      openExternal: (url) => { opts?.onAuthorizationUrl?.(url); return this.deps.openExternal(url); },
       fetchImpl: this.deps.fetchImpl,
       broker: this.deps.broker,
       brandName: this.deps.brandName,
       logger: this.deps.logger,
-      // 端口回收器只对第一方官方意识放行(与 tokenBroker 连接闸同口径):
+      // 端口回收器只对第一方官方意识放行:
       // 回收 = 强杀占用进程,而"杀谁"由 redirectPort 决定——第三方 manifest
       // 可声明任意端口(如 5432),放开等于让任意意识借「连接账号」之手
       // 强杀用户本地服务(Postgres 等),故第三方一律回落"占用即报错"。
-      reclaimPort: isOfficialGhostId(ghostId) ? this.deps.reclaimPort : undefined,
+      reclaimPort: isFirstPartyHostPrivilegeGhostId(ghostId) ? this.deps.reclaimPort : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
     if (this.deps.isConnectTargetCurrent?.(ghostId, secretKey, decl) === false) {
@@ -903,11 +962,11 @@ export class GhostOauthAccountManager {
       });
       label = identity.label;
       display = identity.display;
-      // 头像下载只对第一方官方意识放行(与 tokenBroker / 端口回收同口径):
+      // 头像下载只对第一方官方意识放行:
       // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束——放开
       // 等于给第三方意识一个"主机代发 GET + 小图字节回沙箱"的 SSRF 读原语。
       // 下载本身不带任何凭证(CDN 域名不在注入白名单);失败降级无头像。
-      if (identity.avatarUrl !== null && isOfficialGhostId(ghostId)) {
+      if (identity.avatarUrl !== null && isFirstPartyHostPrivilegeGhostId(ghostId)) {
         avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
           fetchImpl: this.deps.fetchImpl,
@@ -916,6 +975,8 @@ export class GhostOauthAccountManager {
     }
 
     return this.withMutationLock(ghostId, async () => {
+      await opts?.beforeCommit?.();
+      opts?.assertCurrent?.();
       // Identity/avatar fetches are asynchronous as well. Recheck inside the
       // same strict mutation lock as the first vault read/write so a package
       // update cannot replace the declaration between validation and commit.
@@ -1108,6 +1169,9 @@ export class GhostOauthAccountManager {
     decl: GhostOauthDecl,
     accountId?: string,
   ): Promise<GhostOauthAccessTokenResult> {
+    if (decl.tokenBroker !== undefined && !this.isTokenBrokerAuthorized(ghostId)) {
+      return { ok: false, error: 'BROKER_FORBIDDEN' };
+    }
     const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
     const resolvedId = accountId ?? manifest.defaultAccountId;
     if (!resolvedId) return { ok: false, error: 'NO_ACCOUNT' };
@@ -1303,7 +1367,7 @@ export class GhostOauthAccountManager {
       // 头像回填同样只对第一方官方意识放行(connectAccount 处的 SSRF 口径)。
       const needAvatar =
         decl.identity.avatarPath !== undefined &&
-        isOfficialGhostId(ghostId) &&
+        isFirstPartyHostPrivilegeGhostId(ghostId) &&
         this.readAvatar(ghostId, secretKey, accountId) === null;
       if (!needDisplay && !needAvatar) return;
       const identity = await fetchGhostOauthIdentity({

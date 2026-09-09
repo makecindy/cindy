@@ -7,6 +7,8 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
+
 import type {
   AgentEvent,
   InteractionDecision,
@@ -62,6 +64,7 @@ import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,
   DynamicToolSpec,
+  ReasoningEffort,
 } from './codex/app-server/protocol.js';
 import type {
   ScanAtResourcesOptions,
@@ -77,7 +80,9 @@ import type {
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
 import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
-import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
+import type { AutoReviewDelegate, AutoReviewDecision, AutoReviewRequest } from './shared/auto-review-decision.js';
+import type { ReviewableAction } from './shared/auto-review.js';
+import type { ClaudeSubagentModelAccessResult } from './claude-code/subagent-model-access.js';
 
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
@@ -95,6 +100,10 @@ export interface CodexMcpThreadContextArgs {
   /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
   sessionInstanceId?: string;
   workingDir: string;
+  /** Host-owned memory namespace override shared with prompt injection and MCP tools. */
+  memoryScopeKey?: string;
+  /** Whether this concrete Session should receive the memory bridge server. */
+  memoryEnabled?: boolean;
   /**
    * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
    * 「远端路径」与「本地同名路径」(buildMemoryScopeKey), 缺省 = 本地会话。
@@ -163,6 +172,8 @@ export interface PiExtraSpawnConfig {
   mcpBridge?: {
     token: string;
     servers: PiMcpServerRef[];
+    /** Bot-scoped memory is exposed as one typed Pi tool instead of nested discovery. */
+    botMemoryFacade?: boolean;
   } | null;
   /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
   mcpEnv?: Record<string, string>;
@@ -178,21 +189,85 @@ export type PiNativeApi =
   | 'anthropic-messages'
   | 'openai-responses'
   | 'openai-completions'
-  | 'google-generative-ai';
+  | 'google-generative-ai'
+  /** PI's native ChatGPT subscription adapter; not a portable BYOM protocol. */
+  | 'openai-codex-responses';
 
-export type PiNativeThinkingLevel = Exclude<Effort, 'ultra'>;
+export type PiNativeThinkingLevel = 'off' | Exclude<Effort, 'ultra'>;
+
+export interface PiNativeModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: Array<{
+    inputTokensAbove: number;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  }>;
+}
 
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
+  /** Cindy/public model id used by provider-aware routing and the UI. */
   id: string;
+  /** PI provider's native model id; omitted when it is identical to id. */
+  wireId?: string;
+  /** Sparse models.json override/addition; absent means retain PI's bundled model entry. */
+  api?: PiNativeApi;
+  /** Per-model native endpoint retained from PI's bundled provider table. */
+  baseUrl?: string;
+  /** Add a model missing from PI's bundled catalog while inheriting the provider's bundled API. */
+  catalogAddition?: boolean;
   name?: string;
+  /** Per-model request headers from the authoritative Pi catalog. */
+  headers?: Record<string, string>;
   reasoning?: boolean;
   /** Pi models.json 的 provider-specific thinking level 映射；null 明确禁用该档。 */
   thinkingLevelMap?: Partial<Record<PiNativeThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
+  /** Preserve bundled accounting metadata when a protocol correction replaces a model entry. */
+  cost?: PiNativeModelCost;
+  /** Preserve model-specific request metadata on a required full-entry replacement. */
+  compat?: Record<string, unknown>;
+  samplingParams?: Record<string, unknown>;
 }
+
+/**
+ * 远端 pi agentHome 的文件操作原语(host 经 SSH 实现)。
+ *
+ * 只暴露 pi 会话真正需要的子集:
+ *   - mkdirp / writeFile(agentHome 内文件:models.json、bridge/subagent 扩展、perm、
+ *     subagent 快照、受管 rg)
+ *   - stat(文件存在性:resume session 预检、plan-mode 扩展存在性)
+ *   - rm(清理:configHome / perm / subagent / forkHome)
+ * 所有路径都是远端机器上的绝对路径(与 pi 进程 cwd 一致)。
+ */
+export interface RemoteAgentFileOps {
+  stat(file: string): Promise<{ isFile: boolean } | null>;
+  /** Missing/unreadable directories return an empty array. */
+  listDir(dir: string): Promise<string[]>;
+  /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
+  readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Hash the complete remote file without transferring its contents to the client. */
+  sha256File(file: string): Promise<string>;
+}
+
+export interface PiRemoteFileOps extends RemoteAgentFileOps {
+  mkdirp(dir: string): Promise<void>;
+  writeFile(file: string, content: string, mode?: number): Promise<void>;
+  rm(fileOrDir: string, opts?: { recursive?: boolean }): Promise<void>;
+}
+
+/** Gateway rows carry only host-resolved API/compat metadata, never a native provider endpoint. */
+export type PiGatewayModelSpec = Pick<
+  PiNativeModelSpec,
+  'api' | 'compat' | 'samplingParams' | 'thinkingLevelMap'
+>;
 
 /**
  * BYOM:一个**原生 pi provider**(用户自定义/本地模型)—— 直连用户端点,不经 Cindy 的
@@ -200,11 +275,16 @@ export interface PiNativeModelSpec {
  * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
  */
 export interface PiNativeProviderSpec {
-  /** provider id(slug,禁与网关 provider `cindy` 撞名)。 */
+  /** PI runtime provider id(slug,禁与网关 provider `cindy` 撞名)。 */
   id: string;
+  /** Cindy catalog / persisted provider id; defaults to the runtime id. */
+  sourceProviderId?: string;
   name: string;
   baseUrl: string;
-  api: PiNativeApi;
+  /** BYOM provider default. Omitted only when inheriting PI's bundled provider catalog. */
+  api?: PiNativeApi;
+  /** Keep PI's bundled models and serialize only models carrying an explicit api override. */
+  inheritModels?: boolean;
   /**
    * 存放该 provider api key 的 env 变量名;models.json 用 `$<envVar>` 插值引用(与网关
    * CINDY_PI_API_KEY 同机制,密钥只进子进程 env、不落盘)。keyless(本机 Ollama 等)留空 →
@@ -213,6 +293,17 @@ export interface PiNativeProviderSpec {
   apiKeyEnvVar?: string;
   headers?: Record<string, string>;
   models: PiNativeModelSpec[];
+  /** Translate Cindy's persisted/public model id to the Pi-native model id for this provider. */
+  modelIdAliases?: Record<string, string>;
+  /**
+   * This provider is backed by a loopback service owned by the Desktop host. Remote Pi may use
+   * it only after the host establishes the exact SSH reverse-forward described here. The marker
+   * is host control-plane data and is never serialized into models.json.
+   */
+  hostProxyForward?: {
+    localUrl: string;
+    remotePort: number;
+  };
 }
 
 /** host 解析出的 pi 原生 provider + 需注入子进程的 env(api keys)。 */
@@ -220,6 +311,21 @@ export interface PiNativeProvidersResult {
   providers: PiNativeProviderSpec[];
   /** 注入 spawn env 的键值(通常是各 provider 的 api key,键名对应 spec.apiKeyEnvVar)。 */
   env: Record<string, string>;
+}
+
+/**
+ * The host could not construct the first-party Pi provider because its local
+ * compatibility proxy is not ready. This is a fatal startup condition for
+ * every SuperGrok route, including provider-less and legacy sessions; it must
+ * not be converted into a silent fallback to the Cindy gateway.
+ */
+export class PiNativeProviderProxyNotReadyError extends Error {
+  readonly code = 'PI_NATIVE_PROVIDER_PROXY_NOT_READY';
+
+  constructor(message = 'SuperGrok Pi provider unavailable: local compatibility proxy is not ready') {
+    super(message);
+    this.name = 'PiNativeProviderProxyNotReadyError';
+  }
 }
 
 /**
@@ -238,18 +344,55 @@ export interface PiExtraSpawnConfigContext {
   /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
   sessionInstanceId?: string;
   workingDir: string;
+  /**
+   * 本会话的 Maker Memory 作用域键 (startSession opts.makerMemoryScopeKey)。
+   *
+   * 必须透到 bridge 注册的 session ctx 上:cindy_memory 的 withStore 优先用
+   * ctx.memoryScopeKey 定位 store, 缺失时才回落 buildMemoryScopeKey(workingDir)。
+   * Cindy Bot 会话的注入索引来自 `bot:<botId>` store —— 这里丢掉就会出现
+   * 「prompt 读伙伴记忆、工具写项目记忆」的两张皮。
+  */
+  memoryScopeKey?: string;
+  /** Whether this concrete Pi Session should receive the memory bridge server. */
+  memoryEnabled?: boolean;
+  /** Frozen per-Bot custom MCP policy; the host filters each session's bridge descriptor. */
+  botMcpPolicy?: BotRuntimeMcpPolicy;
   vendorOptions?: Record<string, unknown>;
   mcpCallerKind?: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested?: boolean;
+  /** SSH remote 会话的 host id;host 据此把 bridge URL 改成 remote-forward 地址。 */
+  remoteHostId?: string | null;
 }
+
+export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default' | 'smart';
 
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
+  requiredSpawnCredentialMode?: 'oauth-bearer';
   /** Cindy-side display fallback for Codex subagent cards. */
   subagentModelFallback?: string;
+  /** Provider route frozen alongside the locked subagent model for this app-server. */
+  subagentRoute?: {
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort?: ReasoningEffort | null;
+  };
+  /** Per-model Provider routes exposed only when Cindy smart Subagent routing is enabled. */
+  smartSubagentRoutes?: Array<{
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort?: ReasoningEffort | null;
+  }>;
+  /** Frozen identity of the Subagent routing/catalog snapshot used by this host. */
+  codexSubagentRoutingSignature?: string;
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
+  /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
+  codexOpenAiWebSocketsEnabled?: boolean;
+  /** Host-level Subagent route profile used to prevent incompatible local host reuse. */
+  codexSubagentRoutingProfile?: CodexSubagentRoutingProfile;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
   codexBrowserUseVersion?: string;
   /** Maximum startup wait copied from the verified companion descriptor. */
@@ -263,13 +406,22 @@ export interface CodexExtraSpawnConfig {
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   codexProxyActive?: boolean;
   /**
-   * spawn args 中定义的「OpenAI 身份」provider id(name 逐字为 "OpenAI",
-   * codex 据 name 判定 supports_remote_compaction)。仅 oauth-bearer spawn 下发。
-   * CodexAgent 只对 ChatGPT 订阅直连路由的 thread 在 thread/start|resume 传
-   * modelProvider=该 id,启用 OpenAI 远端压缩;其余 thread 保持默认 provider
-   * (本地压缩)—— 网关 / xAI / 自定义供应商上游不实现远端压缩,错配是硬失败。
+   * ChatGPT 订阅直连的内部 OpenAI transport identity，仅 oauth-bearer spawn 下发。
    */
   codexRemoteCompactionProviderId?: string;
+  /** Cindy Provider codex/* 的内部 OpenAI transport identity；固定走 HTTP。 */
+  codexCindyRemoteCompactionProviderId?: string;
+  /** Native summary identity persisted per thread after remote auto-compaction fails. */
+  codexLocalCompactionProviderId?: string;
+  /** Generic custom Provider identities and capabilities frozen into this app-server spawn. */
+  codexCustomProviderRoutes?: Array<{
+    providerId: string;
+    modelProviderId: string;
+    capabilities: Readonly<Record<string, boolean | undefined>>;
+    responseModels: readonly string[];
+  }>;
+  /** One-shot cleanup for spawn-time resources when this Host is terminally retired. */
+  onHostRetired?: () => void | Promise<void>;
 }
 
 export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
@@ -348,7 +500,85 @@ export interface TurnChangeCaptureHooks {
   }): void;
 }
 
+export type PiNativePackageEntry = string | ({ source: string } & Record<string, unknown>);
+
+export interface PiManagedPackageMutationRequest {
+  action: 'install' | 'update' | 'remove';
+  source: string;
+  /** Host-trusted evidence. This value is never accepted from Renderer or model input. */
+  authorization:
+    | 'local-desktop-command'
+    | 'authenticated-im-command'
+    | 'confirmed-tool-call';
+}
+
+/** Main-owned native confirmation was dismissed before any package mutation began. */
+export class PiManagedPackageMutationCancelledError extends Error {
+  readonly code = 'PI_PACKAGE_MUTATION_CANCELLED';
+
+  constructor() {
+    super('Pi extension mutation cancelled');
+    this.name = 'PiManagedPackageMutationCancelledError';
+  }
+}
+
+export type PiManagedPackageMutationFailureCode =
+  | 'source-unavailable'
+  | 'package-not-found'
+  | 'version-not-found'
+  | 'state-unavailable'
+  | 'native-command-failed';
+
+/** Host-classified package failure; raw cause remains Main-local. */
+export class PiManagedPackageMutationFailedError extends Error {
+  readonly code = 'PI_PACKAGE_MUTATION_FAILED';
+
+  constructor(
+    readonly mayHaveChangedState: boolean,
+    readonly failureCode: PiManagedPackageMutationFailureCode,
+  ) {
+    super('Pi extension mutation failed');
+    this.name = 'PiManagedPackageMutationFailedError';
+  }
+}
+
+export interface PiExtensionUiStrings {
+  confirm: string;
+  cancel: string;
+  mutationFailed: string;
+  mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
+  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+}
+
+export interface PiManagedPackageRuntimeConvergence {
+  runtimeConvergence: 'complete' | 'partial';
+  recoveryAction?: 'restart-cindy-to-refresh-packages';
+}
+
+export interface PiSubagentRunnerProcess {
+  readonly pid?: number;
+  readonly killed: boolean;
+  once(event: 'spawn', listener: () => void): this;
+  once(event: 'error', listener: (error: Error) => void): this;
+  once(
+    event: 'exit' | 'close',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): this;
+  kill(signal?: NodeJS.Signals): boolean;
+}
+
+export interface PiSubagentRunnerLaunchRequest {
+  runId: string;
+  runDir: string;
+  runnerFile: string;
+  configFile: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+
 export interface AgentDeps {
+  /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
+  getDisabledSkillPaths?: () => readonly string[];
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
@@ -360,6 +590,18 @@ export interface AgentDeps {
    */
   binaryPath: string;
   logger: Logger;
+
+  /**
+   * Claude Code 专用：按本次会话的当前 provider、账号与父模型实时判定显式
+   * Agent/Task 模型是否可路由。只有 `denied` 会形成产品硬阻断；目录未就绪、
+   * 非权威快照或读取失败必须返回 `unknown`，不能把静态 catalog 当权限清单。
+   */
+  resolveClaudeSubagentModelAccess?: (context: {
+    providerId?: string | null;
+    parentModel: string;
+    credentialMode?: AgentCredentialMode;
+    model: string;
+  }) => ClaudeSubagentModelAccessResult | Promise<ClaudeSubagentModelAccessResult>;
 
   /**
    * 解析某 session 的 cc-debug raw 文件落盘路径 (host 注入)。host 用 logger 的 logDir 拼
@@ -382,7 +624,62 @@ export interface AgentDeps {
    * 配置与会话文件。缺省 → 落系统临时目录(数据不保久,仅兜底)。
    * 其它 agent 不消费此字段。
    */
-  resolvePiAgentHome?: () => string | undefined;
+  resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
+  /** Native user context root, separate from Cindy's models/auth runtime home. */
+  resolvePiGlobalContextHome?: (remoteHostId?: string | null) => string | undefined;
+
+  /**
+   * Pi-only: advisory metadata for Cindy UI/command projection. This resolver
+   * may inspect or snapshot known resources, but its result is never the launch
+   * allowlist; resolvePiNativePackagePaths preserves Pi-native discovery.
+   */
+  resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
+    extensions: string[];
+    skills: Array<{ path: string; name: string; description?: string }>;
+    promptTemplates: string[];
+    packageRoots: string[];
+  }>;
+
+  /**
+   * Pi-only: installed local package roots that Pi must discover natively.
+   * Cindy inspection metadata is advisory; a host analyzer that does not
+   * understand a valid future package shape must not remove Pi functionality.
+   */
+  resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
+
+  /**
+   * Pi-only: mutate the shared package home through Pi's own package CLI.
+   * Host routing binds an exact user/tool action but must not add a second
+   * compatibility, fingerprint, or content-approval decision.
+   */
+  mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
+
+  /**
+   * Pi-only: host callback after a package mutation receipt has been queued/sent.
+   * Desktop publishes a bounded convergence outcome before retiring the caller,
+   * then retires its exact stale local ordinary Pi snapshot. Native package
+   * success remains authoritative.
+   */
+  onPiManagedPackageMutationSettled?: (
+    callerSessionId: string | undefined,
+    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => void,
+  ) => Promise<void>;
+
+  /**
+   * Pi-only: host-localized copy for extension dialogs and deterministic
+   * mutation receipts. The same strings flow through Desktop and attached IM
+   * interaction surfaces, so maker-core never hard-codes one UI language.
+   */
+  getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+
+  /**
+   * Pi-only: start a durable Subagent runner through a host-supported Node
+   * process boundary. Desktop injects Electron utilityProcess; maker-core never
+   * assumes that the application executable can run JavaScript.
+   */
+  spawnPiSubagentRunner?: (
+    request: PiSubagentRunnerLaunchRequest,
+  ) => PiSubagentRunnerProcess;
 
   /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
@@ -419,7 +716,19 @@ export interface AgentDeps {
    * PiAgent creates a high-entropy token per session, registers it before spawn,
    * and disposes the exact registration when startup fails or the session closes.
    */
-  registerPiProxySession?: (sessionId: string, token: string) => (() => void) | void;
+  registerPiProxySession?: (
+    sessionId: string,
+    token: string,
+    resolveProviderId: () => string | null,
+    options?: { scope?: 'session' | 'subagent-route' },
+  ) => (() => void) | void;
+
+  /**
+   * Pi-only: host-owned derivation for restart-stable remote proxy tokens.
+   * Desktop persists the secret key; maker-core receives only the per-session
+   * result. Missing hooks preserve the legacy process-stable fallback.
+   */
+  derivePiProxySessionToken?: (sessionId: string) => string;
 
   /**
    * BYOM:host 解析出当前会话可用的 pi **原生 provider**(用户自定义/本地模型)+ 需注入的
@@ -429,7 +738,14 @@ export interface AgentDeps {
    * 缺省 / 返回空 → 只有网关 provider `cindy`(现状,行为不变)。keyless provider 的 key 可省。
    */
   resolvePiNativeProviders?: (
-    ctx: { workingDir: string; remoteHostId?: string | null },
+    ctx: {
+      workingDir: string;
+      remoteHostId?: string | null;
+      providerId?: string | null;
+      model: string;
+      /** Present only when restoring an existing Pi session; permits private compatibility ids. */
+      resumeSessionId?: string;
+    },
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
@@ -453,18 +769,22 @@ export interface AgentDeps {
   ) => ModelDescriptor | null;
 
   /**
-   * Pi-only:解析 `cindy` gateway 内某模型应使用的 PI API。provider 仍保持 `cindy`，
-   * 但同一 model id 可能同时存在于 XD 与订阅来源，必须同时按当前会话来源落实 wire
-   * protocol，不能只按 model id 猜。三态语义：
-   * - `openai-responses`：Model Access v3 明确指定的 Cindy AI Pi 路由；
-   * - `anthropic-messages`：非 XD compat proxy 路由；
-   * - `null`：模型属于 Cindy AI Pi 目录，但协议缺失或不匹配，Pi fail closed；
-   * - `undefined`：模型不属于当前来源的 XD Pi 目录，保留既有 Messages 协议。
+   * Pi-only:按 Cindy Server > 执行环境本地 Pi 目录 > Gateway hint 解析 `cindy` API。
+   * `remote` 让 host 在无法探测实际远端 Pi 时跳过本机目录，禁止跨二进制借 metadata。
+   * null = 已知 Gateway Pi 模型但无法安全解析；undefined = 不属于 Gateway Pi 目录。
    */
   resolvePiGatewayModelApi?: (
     providerId: string | null | undefined,
     modelId: string,
+    context?: { remote: boolean },
   ) => PiNativeApi | null | undefined;
+
+  /** Host-resolved model-specific PI compatibility metadata for the Gateway block. */
+  resolvePiGatewayModelSpec?: (
+    providerId: string | null | undefined,
+    modelId: string,
+    context?: { remote: boolean },
+  ) => PiGatewayModelSpec | null | undefined;
 
   /**
    * Host-provided capability descriptor additions.
@@ -474,6 +794,16 @@ export interface AgentDeps {
    * needs to replace built-in behavior.
    */
   capabilityAdditions?: AgentCapabilityAdditions;
+
+  /**
+   * Pi-only:视觉桥后端 env（层 C）。host 解析视觉桥配置（主/fallback 视觉后端 →
+   * OpenAI 兼容端点 + model + key）后返回键值对，PiAgent 注入 pi 子进程 spawnEnv，
+   * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
+   * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
+   * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
+   * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
+   */
+  resolvePiVisionBridgeEnv?: (model: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -503,25 +833,41 @@ export interface AgentDeps {
     ensureCodexBrowserUseReady: () => Promise<boolean>;
   }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
+  /** Host working budget for this route (user override, optionally catalog default).
+   * Missing means the adapter uses its route/native defaults. */
+  resolveModelContextLimit?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
+  /** Resolve native metadata using the exact app-server config and usage report. */
+  resolveCodexContextWindowInfo?: (
+    modelId: string,
+    config: Record<string, unknown>,
+    reportedUsableWindow: number | null,
+  ) => Promise<CodexContextWindowInfo | null>;
+
   /**
-   * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
-   *
-   * 用于把上游上报的窗口收敛到真实上限：app-server 对网关路由的模型常报**基础模型**的窗口
-   * （例：目录 372K 的 GPT-5.6-Sol 被报成 1M），虚高值会让上下文占比被低估、memory flush
-   * 阈值跟着推迟。
-   *
-   * 为什么不让 agent 自己查 `capabilities.availableModels`：那是跨 provider 去重后的扁平表，
-   * 同一 model id 由多个 provider 提供时归属已丢，按 id 回查可能命中另一条路由的元数据 ——
-   * 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录与 provider 维度，由它按
-   * (providerId, modelId) 定夺；目录里那些**派生兜底**的窗口（上游不给元数据时补的常量）
-   * 一律不作为上限。
-   *
-   * 返回 null / 缺省不注入 = 不收敛，直接采信上报值（改动前行为）。
+   * Resolve verified catalog capacity for a concrete (provider, model) route.
+   * Return null for unknown, ambiguous, or derived fallback metadata. Do not use
+   * the provider-deduplicated capabilities.availableModels table for this lookup.
+   * Codex uses this only until native reports its effective usable window;
+   * catalog metadata must not overwrite an observed native capacity.
    */
   resolveVerifiedContextWindow?: (
     providerId: string | null | undefined,
     modelId: string,
   ) => number | null;
+
+  /**
+   * Per-model requested context window (user override first, explicit provider default second).
+   * A one-session native catalog permits this window without changing sibling routes.
+   * null preserves native defaults. A changed value requires a handle rebuild, preserving rollout.
+   */
+  resolveCodexThreadContextWindow?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null | Promise<number | null>;
 
   /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。
@@ -549,10 +895,34 @@ export interface AgentDeps {
     ctx: {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
-      /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
-      hostPurpose?: 'control-plane' | 'review';
+      /** Original session request when the shared host was upgraded to a credential superset. */
+      requestedCredentialMode?: AgentCredentialMode;
+      /** Marks app-server work that must not share the normal local task host. */
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+      /** Wire model id whose native catalog entry must allow the requested window. */
+      customContextModel?: string;
+      /** Requested context window for a one-session custom-context host. */
+      customContextWindow?: number;
+      /** Unique app-server Host-generation identity used to scope custom-context resources. */
+      customContextHostKey?: string;
     },
   ) => Promise<CodexExtraSpawnConfig>;
+
+  /** Recomputes the desired local Subagent routing identity before reusing a host. */
+  resolveCodexSubagentRoutingSignature?: (
+    providers: McpProvider[],
+    ctx: {
+      credentialMode?: AgentCredentialMode;
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+    },
+  ) => Promise<string>;
+
+  /**
+   * Codex-only host policy: disable local app-server plugin runtimes even when
+   * dynamic spawn configuration degrades after a non-fatal preparation error.
+   * Remote transports own their runtime and ignore this local policy.
+   */
+  disableCodexPluginRuntime?: boolean;
 
   /**
    * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
@@ -597,6 +967,11 @@ export interface AgentDeps {
    */
   reviewAutoPermissionAction?: AutoReviewDelegate;
 
+  /** Scope tools/list during native startup, before a real thread id exists. Never authorizes tools/call. */
+  withCodexMcpDiscoveryContext?: <T>(
+    args: Pick<CodexMcpThreadContextArgs, 'sessionId' | 'sessionInstanceId' | 'workingDir' | 'vendorOptions' | 'remoteHostId'>,
+    run: () => Promise<T>,
+  ) => Promise<T>;
   /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context
    * for host-owned HTTP MCP bridges. Missing hooks keep the old no-session
@@ -622,6 +997,78 @@ export interface AgentDeps {
    * 缺省 / undefined → 不支持远端, 任何带 remoteHostId 的 session 会被拒。
    */
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
+
+  /**
+   * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
+   *
+   * 当 session 标了 remoteHostId, PiAgent 会调这个钩子拿一个连远端 pi 进程的
+   * transport (替代本地 spawn)。host 层实现 — 通常用 `RemoteHost.execStream`
+   * 在远端跑 `pi --mode rpc ...` 并把 stdin/stdout 拽回本地 (SshPiTransport)。
+   *
+   * 返回的 transport 必须实现 PiTransport 接口 (writeLine / onLine / onClose /
+   * close)。PiAgent 拿到就当 stdio 用, 完全不感知背后是 SSH 桥接。
+   *
+   * 缺省 / undefined → 不支持远端 pi, 任何带 remoteHostId 的 pi session 会被拒。
+   */
+  getRemotePiTransport?: (
+    remoteHostId: string,
+    opts: {
+      /** 本地 pi 二进制路径(远端场景不可用,host 应改用它 resolve 的远端路径)。 */
+      binaryPath: string;
+      /** 远端 pi 二进制绝对路径(host 已 probe;plan-mode 扩展 / subagent spawn 用它)。 */
+      remoteBinaryPath: string;
+      args: string[];
+      cwd: string;
+      env: Record<string, string | undefined>;
+      logger: AgentDeps['logger'];
+      /** maker sessionId(daemon 模式用作远端 daemon 的 session key)。 */
+      sessionId?: string | null;
+      /** Host-owned loopback providers that must be reverse-forwarded before remote Pi starts. */
+      hostProxyForwards?: ReadonlyArray<{
+        localUrl: string;
+        remotePort: number;
+      }>;
+    },
+  ) => import('./pi/transport.js').PiTransport | Promise<import('./pi/transport.js').PiTransport>;
+
+  /**
+   * Pi 专用:解析远端 pi 二进制绝对路径(probe 远端安装)。缺省 → 远端会话回落
+   * 本地 binaryPath(错误语义,host 应在 getRemotePiTransport 之前 resolve)。
+   */
+  resolveRemotePiBinaryPath?: (remoteHostId: string) => Promise<string>;
+
+  /**
+   * Pi 专用:远端会话是否跳过 MCP bridge 注入。Phase 1 远端不桥 in-process MCP
+   * (cindy_orca / orca_worker_bridge / cindy_memory 的 loopback URL 远端够不到),
+   * host 据此 gate 掉 preparePiExtraSpawnConfig 的 bridge 部分;外部 HTTP MCP
+   * 直连不受影响。缺省 false = 本地行为不变。
+   */
+  remotePiSkipMcpBridge?: (remoteHostId: string) => boolean;
+
+  /**
+   * Pi 专用:远端会话的 agent-proxy env(HTTPS_PROXY/HTTP_PROXY/NO_PROXY 指向本地
+   * 代理经 SSH remote-forward 隧道)。host 装配;缺省 null = 远端不走本地代理。
+   */
+  getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
+
+  /**
+   * Pi 专用:远端 agentHome 文件操作原语。
+   *
+   * 本地 pi 会话的 models.json / cindy-bridge 扩展 / perm 权限档 / subagent 路由快照
+   * / 受管 rg 都写在本地 agentHome(父子进程共享文件系统)。远端会话里这些文件必须写
+   * 到**远端机器**(pi 进程在远端读), host 侧经 SSH 通道实现这套 fs 原语(remote-file-service
+   * 或 ssh heredoc)。缺省 → 远端 pi 会话的 agentHome 文件操作走本地 fs(错误语义,由
+   * host 在 getRemotePiTransport 阶段前置校验,或按 fail-closed 处理)。
+   */
+  getRemotePiFileOps?: (
+    remoteHostId: string,
+  ) => PiRemoteFileOps;
+
+  /** Read-only filesystem truth used by remote Skill catalog discovery. */
+  getRemoteAgentFileOps?: (
+    remoteHostId: string,
+  ) => RemoteAgentFileOps;
+
 
   /**
    * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」
@@ -676,28 +1123,13 @@ export interface AgentDeps {
   getGhostRosterPrompt?: (ctx: { workingDir?: string }) => string;
 
   /**
-   * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
-   * skips the permission prompt; `prompt` preserves the normal approval UI and
-   * its optional session grant; `prompt-each-time` always asks and never
-   * persists a server/tool grant.
-   *
-   * 背景:
-   *  - Codex CLI 对 raw `mcp_servers.*` 的 write 类 tool call 弹 user approval 是 known
-   *    limitation (openai/codex Issues #15437 / #19430 / #13476, 未修)。raw mcp_servers
-   *    没有像 `apps.*.default_tools_approval_mode=approve` 那样的 auto-approve 配置。
-   *  - host 自家可信的 MCP server (e.g. lizi_*) 每次写都弹严重影响 UX, 这里给一个
-   *    宿主策略短路。渐进式 server 还可利用 toolName/toolParams 区分 inner action,
-   *    让查询保持无打扰而删除/外部写入逐次确认。
-   *  - 同一个第一方 MCP 在两个 agent 下必须给出同一个答案。历史上 Claude 只有一份
-   *    静态 allowedTools 白名单、不查这个 hook, 结果 `cindy_browser` 之类高频 server
-   *    的 `call_tool` 在 Codex 侧静默执行、在 Claude 侧每调用一次弹一次窗。
-   *
-   * 实现位置:
-   *  - codex/index.ts mcpServerElicitation handler 在 dispatchInteraction 之前查这里;
-   *  - claude-code/index.ts canUseTool 对 `mcp__<server>__<tool>` 形态的工具查这里。
-   * 两侧同义: auto-approve 直接放行, prompt-each-time 禁掉 session persistence。
-   *
-   * 缺省 / undefined → 走原 dispatchInteraction (弹 UI), 行为与改动前一致。
+   * Host MCP risk classification shared by Claude Code, Codex and Pi.
+   * `auto-approve` permits a trusted shortcut. In Auto, both other grades go
+   * through the AI reviewer with the actual tool identity and arguments;
+   * only its ask verdict (including unavailable fallback) opens a user card.
+   * Outside Auto, prompt retains normal UI/session grants and prompt-each-time
+   * requires a one-time decision without persisting a server/tool grant.
+   * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
 
@@ -759,7 +1191,23 @@ export interface AgentDeps {
     sessionId: string;
     threadId: string;
     text: string;
+    subagentRoute?: {
+      providerId: string;
+      catalogModel: string;
+      reasoningEffort?: ReasoningEffort | null;
+    };
+    smartSubagentRoutes?: Array<{
+      providerId: string;
+      catalogModel: string;
+      reasoningEffort?: ReasoningEffort | null;
+    }>;
   }) => void;
+
+  /** Desktop proxy observation of the model actually sent for one Codex child thread. */
+  getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
+    model: string;
+    reasoningEffort?: string;
+  } | undefined;
 
   /**
    * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把
@@ -852,6 +1300,8 @@ export interface AgentDeps {
    */
   remoteCcQueryFactory?: (opts: {
     remoteHostId: string;
+    /** Inject the narrow helper transport for a Bot runtime. */
+    botSession?: boolean;
     sessionId: string;
     /** 当前 Maker Session 实例代号；只在宿主 MCP 身份上下文中流转。 */
     sessionInstanceId?: string;
@@ -883,6 +1333,11 @@ export interface AgentDeps {
      */
     onApprovalRequest?: (params: unknown) => Promise<unknown>;
     /**
+     * 远端 daemon 的 PreToolUse 通过反向 RPC 调回同一个实时模型准入 resolver。
+     * Params/Result 采用 maker-cc-manager 的同名协议形状，但保持 unknown 以免耦包。
+     */
+    onSubagentModelAccessRequest?: (params: unknown) => Promise<unknown>;
+    /**
      * 本 session 的 Maker Memory 注入开关 (startSession 时已按 per-session flag
      * + manager 就绪归一)。host 据此决定是否把 cindy_memory 以 http 形态经
      * bridge 注进远端 startParams.mcpServers — prompt 段 (rules + MEMORY.md
@@ -890,6 +1345,15 @@ export interface AgentDeps {
      * 调不存在的工具。缺省视为 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * 本 session 的 Maker Memory 作用域键 (startSession opts.makerMemoryScopeKey)。
+     *
+     * host 必须把它注册到远端 bridge 的 per-session ctx 上 —— cindy_memory 的
+     * withStore 优先用 ctx.memoryScopeKey 定位 store, 缺失时回落
+     * buildMemoryScopeKey(workingDir, remoteHostId)。Cindy Bot 会话的 prompt
+     * 索引来自 `bot:<botId>` store, 丢掉这个键就会「读伙伴记忆、写远端项目记忆」。
+     */
+    makerMemoryScopeKey?: string;
     /**
      * Callback for daemon-side subscription OAuth refresh (remote cc hit 401
      * mid-turn). ClaudeCodeAgent wires it to auth.getFreshSubscriptionToken —
@@ -963,6 +1427,17 @@ export interface OneShotOptions {
    * 用于 skillReview "用户主动取消发布" 等场景。
    */
   signal?: AbortSignal;
+  /** Provider-native system/developer instructions for this one-shot request. */
+  systemPrompt?: string;
+  /** Additional provider-native output-shape instructions for this request. */
+  responseInstructions?: string;
+  /**
+   * Internal ownership/configuration fence checked immediately before a
+   * provider dispatch. Returning false must fail closed without sending the
+   * one-shot request (for example when the owning workflow was replaced while
+   * the agent host was starting).
+   */
+  beforeDispatch?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -1004,6 +1479,130 @@ export class AgentNotAuthenticatedError extends Error {
   constructor(public readonly agentKind: string, msg?: string) {
     super(msg ?? `agent-not-authenticated:${agentKind}`);
     this.name = 'AgentNotAuthenticatedError';
+  }
+}
+
+/**
+ * An adapter failed before returning a handle and has confirmed its process stopped.
+ * Maker unwraps the cause after releasing only this startup's host resources.
+ */
+export class AgentStartupStoppedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupStoppedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+export class AgentStartupCleanupPendingError extends Error {
+  readonly whenStopped: Promise<void>;
+
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+    super(message, { cause: options.cause });
+    this.name = 'AgentStartupCleanupPendingError';
+    this.whenStopped = options.whenStopped;
+  }
+}
+
+export interface BotRuntimeSkillEntry {
+  name: string;
+  runtimeCommandName?: string;
+  path?: string;
+  enabled?: boolean;
+  runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+  scope?: string;
+}
+
+/** A Skill the Bot wrote for itself, stored in Cindy-owned per-Bot storage. */
+export interface BotRuntimeOwnSkillEntry {
+  name: string;
+  description?: string;
+  /** Absolute path to the Skill directory (the folder holding SKILL.md). */
+  path: string;
+  /** Absolute path to SKILL.md for harnesses whose config expects the file. */
+  filePath?: string;
+}
+
+export interface BotRuntimeSkillPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeSkillEntry[];
+  /**
+   * Skills this Bot distilled from its own finished work.
+   *
+   * These are deliberately kept out of `catalog` / `configured`: the allowlist
+   * describes which of the *harness-discovered* Skills a user let this Bot keep,
+   * while these are Cindy-owned files the Bot authored itself. They are always
+   * mounted, they are never something the user's allowlist can accidentally
+   * switch off, and they must not participate in the runtime resource drift
+   * freeze — a Bot that just learned something has to stay able to resume its
+   * own task.
+   */
+  ownSkills?: BotRuntimeOwnSkillEntry[];
+  /**
+   * Directories to mount as Claude Code local plugins so the Skills above reach
+   * a harness that only toggles what it discovered by itself. Other harnesses
+   * take the per-Skill paths in `ownSkills` instead.
+   */
+  ownSkillPluginRoots?: string[];
+}
+
+export interface BotRuntimeMcpEntry {
+  name: string;
+  source: 'builtin' | 'custom';
+  available?: boolean;
+}
+
+export interface BotRuntimeMcpPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeMcpEntry[];
+}
+
+export interface BotRuntimeToolsetEntry {
+  id: string;
+  name: string;
+  essential?: boolean;
+  available?: boolean;
+}
+
+export interface BotRuntimeToolsetPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeToolsetEntry[];
+}
+
+export interface BotRuntimeProfile {
+  botId: string;
+  profileVersion: number;
+  skillPolicy: BotRuntimeSkillPolicy;
+  mcpPolicy: BotRuntimeMcpPolicy;
+  toolsetPolicy: BotRuntimeToolsetPolicy;
+}
+
+/**
+ * The adapter dispatched a turn request but could not determine whether the
+ * provider accepted it. The Session wrapper must fence the ambiguous handle
+ * before surfacing this error. Fencing prevents further execution but does not
+ * roll back completed side effects, so orchestrators must not blindly replay
+ * the same turn.
+ */
+export class TurnDispatchUnconfirmedError extends Error {
+  readonly code = 'TURN_DISPATCH_UNCONFIRMED';
+
+  constructor(msg: string, options?: ErrorOptions) {
+    super(msg, options);
+    this.name = 'TurnDispatchUnconfirmedError';
+  }
+}
+
+/** The provider explicitly rejected the turn before accepting any work. */
+export class TurnDispatchRejectedError extends Error {
+  readonly code = 'TURN_DISPATCH_REJECTED';
+
+  constructor(msg: string, options?: ErrorOptions) {
+    super(msg, options);
+    this.name = 'TurnDispatchRejectedError';
   }
 }
 
@@ -1055,6 +1654,14 @@ export interface StartSessionOptions {
    */
   fastMode?: boolean;
   /**
+   * Host-owned live pricing variant for request-level usage segments.
+   * Pi reads this at each provider request boundary so a mid-turn Fast toggle
+   * prices already-started requests with the tariff they actually used.
+   */
+  getPriceVariant?: () => 'standard' | 'priority';
+  /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
+  thinkingEnabled?: boolean;
+  /**
    * 用户级 system prompt 追加段，跨 agent (claude-code / codex) 公用，
    * 拼接顺序最末（优先级最高），覆盖 engine 与 host 段。空串 / undefined 跳过。
    *
@@ -1063,6 +1670,30 @@ export interface StartSessionOptions {
    * 用户改 prompt 后，下一次新 session 立即生效，老 session 维持启动时快照。
    */
   userPrompt?: string;
+  /**
+   * Bot Profile runtime context, resolved by the main/DB authority at session
+   * start. It is a startup system-prompt segment, not a per-turn user prefix.
+   * Harness adapters place it before the user personalization segment.
+   */
+  botProfilePrompt?: string;
+  /**
+   * Stable profile-binding metadata rendered separately from the Bot SOUL.
+   * Hermes keeps the active-profile marker outside the identity document so
+   * profile metadata never mutates user-authored identity bytes.
+   */
+  botProfileContextPrompt?: string;
+  /**
+   * Hermes USER.md equivalent for a Bot Profile. This is frozen with the
+   * Profile/runtime snapshot and belongs in the volatile prompt tier after
+   * memory, not inside the Bot's SOUL identity.
+   */
+  botUserProfilePrompt?: string;
+  /**
+   * Native Bot capability snapshot resolved by the host before the harness
+   * starts. Adapters must enforce this through their own Skill/MCP/tool config;
+   * it must never be converted into natural-language capability claims.
+   */
+  botRuntimeProfile?: BotRuntimeProfile;
   /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。
@@ -1076,6 +1707,18 @@ export interface StartSessionOptions {
    * 共享 manager 的 enablement 由 host setting 控制，不由 session flag 改写。
    */
   makerMemoryEnabled?: boolean;
+  /**
+   * Stable host-owned Maker Memory scope. Cindy Bots use this to keep memory
+   * isolated by Bot identity instead of sharing it with every task in a workdir.
+   */
+  makerMemoryScopeKey?: string;
+  /**
+   * Exact host-frozen memory bytes for this runtime start. When present the
+   * harness must inject these bytes instead of re-reading MEMORY.md later in
+   * startup, otherwise the persisted runtime snapshot and the actual prompt
+   * can observe different memory generations.
+   */
+  makerMemoryIndexSnapshot?: string;
   /**
    * Host-owned Cindy Review policy. This is not a user permission preset:
    * adapters must keep the session local, fresh, memory-free and hard
@@ -1118,6 +1761,11 @@ export interface StartSessionOptions {
    */
   extraDirs?: string[];
   /**
+   * 附加可读写目录列表(绝对路径)。这是用户逐目录授予的会话级权限，不能从
+   * extraDirs 自动推导；启动时快照，并可由 setWritableDirs 热更新。
+   */
+  writableDirs?: string[];
+  /**
    * vendor-specific 透传字段。等价于现有 VendorSessionOptions.vendorOptions。
    * 例如：Claude 的 forkSession / resumeSessionAt / source / onStderrLine ...
    */
@@ -1125,10 +1773,33 @@ export interface StartSessionOptions {
 }
 
 /**
+ * Main-only send metadata. Symbol keys cannot cross Electron/device-link
+ * structured-clone boundaries, so Renderer-controlled send options cannot mint
+ * this proof. Main dispatchers attach it only after authenticating the source.
+ */
+export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
+
+/** Call-local user content before Session replaces images with generated descriptions. */
+export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
+
+/** Host-restored user authorization for this send; never accepted from wire options. */
+export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
+
+export interface MainOwnedSendContext {
+  readonly origin: TurnPermissionOrigin;
+  /** Main-authenticated user text before channel/persona/context decoration. */
+  readonly rawChannelText?: string;
+}
+
+/**
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
 export interface SendOptions {
+  readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
+  readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
    * 当前 session 的展示 title (renderer / IPC 层在调 send 前查到的最新值)。
    * 仅用于在 SDK ▷ token usage 等诊断日志里多一行可读上下文,
@@ -1214,6 +1885,8 @@ export type TurnPermissionOrigin =
   | { kind: 'hook'; source: string };
 
 export interface TurnPermissionPolicy {
+  /** Only the Host may supply this identity evidence; it is never parsed from message text. */
+  readonly autoReviewContext?: AutoReviewRequest['authorizationContext'];
   readonly origin: TurnPermissionOrigin;
   readonly confirmationSurface: 'desktop' | 'channel';
   readonly confirmationTimeoutMs?: number;
@@ -1248,6 +1921,12 @@ export interface BackgroundTaskSnapshot {
   taskType?: string;
   toolUseId?: string;
   title?: string;
+  /**
+   * Agent that produced this task. Renderer hydration must preserve it so a
+   * durable Pi Subagent is not synthesized as claude-code after reload.
+   * Omitted snapshots default to claude-code.
+   */
+  provider?: 'pi' | 'claude-code';
 }
 
 /**
@@ -1263,10 +1942,50 @@ export interface BackgroundTaskSnapshot {
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
 /**
+ * Why a session handle is being torn down.
+ *
+ * This is a *lifecycle identity*, not a hint: adapters that own detached,
+ * parent-independent resources (currently the Pi durable Subagent runners)
+ * branch on it.
+ *
+ * - `navigation` — ordinary session close / agent switch. The account and its
+ *   database stay the same, so detached work keeps running.
+ * - `account-boundary` — logout or account switch. The owner database and
+ *   gateway credentials are being replaced, so every detached child of the old
+ *   owner must be stopped and its credential leases revoked immediately.
+ * - `app-quit` — process shutdown. Detached children are stopped by the
+ *   dedicated quit step; this reason exists so quit is never mistaken for an
+ *   ownership change.
+ *
+ * Callers that cannot identify their boundary must omit the reason: teardown
+ * then fails closed to `account-boundary`.
+ */
+export type AgentSessionTeardownReason = 'navigation' | 'account-boundary' | 'app-quit';
+
+export interface AgentSessionTeardownOptions {
+  readonly reason: AgentSessionTeardownReason;
+}
+
+/** Read-only native Codex capacity, separate from provider catalog specifications. */
+export interface CodexContextWindowInfo {
+  contextWindow: number;
+  usableContextWindow: number;
+  autoCompactTokenLimit: number;
+  modelMaxContextWindow: number | null;
+  source: 'runtime' | 'config';
+  fallbackModel: boolean;
+  /** No live CLI handle: these settings will be applied on the next send. */
+  pendingApply?: boolean;
+}
+
+/**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
 export interface AgentSessionHandle {
+  /** Canonical physical Skill identities frozen at native runtime startup. */
+  readonly disabledSkillPaths?: readonly string[];
+  getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
   /** SDK 内部 sessionId，session.started 后会回填 */
   readonly id: string;
   readonly agentKind: AgentKind;
@@ -1279,6 +1998,15 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /**
+   * Codex-only: thread/start 或 thread/resume 响应确认的实际 model provider。
+   * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。
+   */
+  readonly codexThreadModelProviderId?: string;
+  /** Codex-only: provider-owned proof that this thread has crossed a turn boundary. */
+  readonly codexThreadMayHaveRollout?: boolean;
+  /** Codex-only: 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
+  readonly codexCindyRemoteCompactionCompatible?: boolean;
   /**
    * Codex-only: start/resume 成功后,产品 prompt 这一次到底有没有进入
    * codex thread history。Maker 用这个事实更新 host 持久化 bit,避免再从
@@ -1313,6 +2041,15 @@ export interface AgentSessionHandle {
   /** 中断当前 turn */
   abort(): Promise<void>;
 
+  /**
+   * 请求当前 turn 在 provider 的安全边界停止。
+   *
+   * 与 abort() 的产品语义不同：这里只发送 provider 原生的软中断请求，不得关闭
+   * Query、transport 或子进程，也不得升级为 kill/rebuild。Session 层负责等到当前
+   * 工具结果边界再调用，并对悬挂/失败做有界的 unconfirmed 降级。
+   */
+  requestGracefulStop?(opts?: { signal?: AbortSignal }): Promise<void>;
+
   /** Provider turn identity when the adapter exposes one (currently Codex). */
   getCurrentTurnId?(): string | null;
 
@@ -1326,12 +2063,24 @@ export interface AgentSessionHandle {
    */
   stopBackgroundTask?(taskId: string): Promise<void>;
 
+  /** Resume a terminal durable child on its existing provider session. */
+  resumeBackgroundTask?(taskId: string, message: string, childId?: string): Promise<void>;
+
   /**
    * 当前仍在运行的后台任务快照(含 local_bash)。事件流(agent_task_update)是
    * 唯一实时源;本方法只服务「订阅者挂载/重载晚于任务启动」的存量补齐场景。
    * 不支持的 agent 留空(Session 层回退为空数组)。
    */
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
+
+  /**
+   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
+   * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
+   * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
+   * 回退为 0,消费方按「信号不可用 → 不收口」保守处理)。
+   */
+  countPendingWakeContinuations?(): number;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.
@@ -1349,13 +2098,13 @@ export interface AgentSessionHandle {
   ): () => void;
 
   /** 关闭会话，清理子进程 */
-  close(): Promise<void>;
+  close(opts?: AgentSessionTeardownOptions): Promise<void>;
 
   /**
    * Detach from a long-lived remote session without terminating the upstream
    * process. Agents without detach semantics leave this undefined.
    */
-  detach?(): Promise<void>;
+  detach?(opts?: AgentSessionTeardownOptions): Promise<void>;
 
   /** 事件流（streaming + 翻译后的统一事件） */
   events(): AsyncIterable<AgentEvent>;
@@ -1372,8 +2121,21 @@ export interface AgentSessionHandle {
    */
   setInteractionResolver(resolver: InteractionResolver): void;
 
+  /** Host tool approval uses the same live intent/model/scope as native tool approval. */
+  reviewAutoPermissionAction?(action: ReviewableAction): Promise<AutoReviewDecision>;
+
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
   setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
+
+  /**
+   * 当前 provider handle 是否必须先关闭、再由同一业务任务 cold resume 才能应用目标模型。
+   * 缺省 false；用于 Codex 这类把部分模型配置冻结在 app-server spawn / thread resume
+   * 边界的 adapter。调用方必须在任何 route store 写入前完成该预检。
+   */
+  requiresModelSwitchRebuild?(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): boolean | Promise<boolean>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;
@@ -1421,11 +2183,16 @@ export interface AgentSessionHandle {
 
   /** 运行时切换 Fast mode；不支持的 agent 不实现。 */
   setFastMode?(enabled: boolean): Promise<void>;
+  /** Pi thinking-toggle 模型：运行时开关思考。 */
+  setThinkingEnabled?(enabled: boolean): Promise<void>;
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
    */
   setExtraDirs?(dirs: string[]): Promise<void>;
+
+  /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
+  setWritableDirs?(dirs: string[]): Promise<void>;
 
   /**
    * 运行时合并 vendorOptions(浅合并到内部闭包)。
@@ -1438,6 +2205,8 @@ export interface AgentSessionHandle {
 
   /** 当前 maker 进程内记录的 Fast mode 状态；不支持的 agent 不实现。 */
   getFastMode?(): boolean;
+  /** 当前 maker 进程内记录的思考强度；固定强度模型可返回 null。 */
+  getEffort?(): Effort | null;
 
   // ── Rewind ────────────────────────────────────────────────────────────────
   // Claude 走 SDK message uuid + file checkpoint；Codex 走 app-server thread/rollback
@@ -1590,6 +2359,15 @@ export abstract class BaseAgent {
     return [];
   }
 
+  /** Filter only the palette projection; management discovery retains disabled sources. */
+  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[]): ListAgentSkillsResult {
+    const disabled = remoteHostId ? [] : snapshot ?? this.deps.getDisabledSkillPaths?.() ?? [];
+    if (disabled.length === 0) return result;
+    return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
+      ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
+  }
+
+
   /**
    * Agent 用户/项目目录扫描出的 skill 列表 —— ChatInput `/` palette 的
    * 'agent-skill' 类目。
@@ -1598,6 +2376,7 @@ export abstract class BaseAgent {
    * app-server skills/list。子类自己负责缓存策略与未授权静默处理。
    * 默认无实现, 不暴露任何 skill。
    */
+
   async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     void opts;
     return { skills: [] };

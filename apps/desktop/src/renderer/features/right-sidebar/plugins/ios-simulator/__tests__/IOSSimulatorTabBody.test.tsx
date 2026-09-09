@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IOSSimulatorMutationState } from '@cindy/ios-simulator-runtime';
@@ -11,6 +11,7 @@ import type {
   IOSSimulatorH264FramePush,
   IOSSimulatorLiveTouchRequest,
   IOSSimulatorPublicInstance,
+  IOSSimulatorRetryNativeRouteRequest,
   IOSSimulatorRouteStatusPush,
   IOSSimulatorSessionStatus,
   IOSSimulatorToolResponse,
@@ -22,7 +23,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-import { IOSSimulatorTabBody, setupStepKeys } from '../IOSSimulatorTabBody';
+const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
+
+import { fitSimulatorScreenSize, IOSSimulatorTabBody, setupStepKeys } from '../IOSSimulatorTabBody';
 
 const ctx: TabKindHostContext = {
   tabId: 'tab-a',
@@ -172,6 +176,17 @@ function preparePointerTarget(container: HTMLElement): HTMLImageElement {
   return image;
 }
 
+function expectDisabledIconButton(label: string, accessibleLabel: string): void {
+  const button = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('button[aria-label]'),
+  ).find((candidate) => candidate.getAttribute('aria-label') === label);
+  expect(button?.disabled).toBe(true);
+  expect(button?.getAttribute('aria-hidden')).toBe('true');
+  expect(button?.parentElement?.getAttribute('role')).toBe('button');
+  expect(button?.parentElement?.getAttribute('aria-disabled')).toBe('true');
+  expect(button?.parentElement?.getAttribute('aria-label')).toBe(accessibleLabel);
+}
+
 function installFakeH264DecoderRuntime(): void {
   class FakeVideoDecoder {
     static async isConfigSupported() {
@@ -217,6 +232,12 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
       };
     },
   );
+  const retryNativeRoute = vi.fn(
+    async (request: IOSSimulatorRetryNativeRouteRequest): Promise<IOSSimulatorToolResponse> => {
+      void request;
+      return { ok: true, data: { nativeRecovered: true } };
+    },
+  );
   const setStreamProfile = vi.fn(async () => ({ ok: true as const, data: {} }));
   let h264FrameListener: ((payload: IOSSimulatorH264FramePush) => void) | null = null;
   let routeStatusListener: ((payload: IOSSimulatorRouteStatusPush) => void) | null = null;
@@ -252,6 +273,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
     ok: true,
     data: { stream: null },
   }));
+  const copyScreenshot = vi.fn(async () => ({ ok: true as const }));
   (
     window as unknown as {
       electronAPI: {
@@ -262,7 +284,9 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
             call: typeof call;
             setAgentControl: typeof setAgentControl;
             setViewerVisibility: typeof setViewerVisibility;
+            retryNativeRoute: typeof retryNativeRoute;
             latestFrame: typeof latestFrame;
+            copyScreenshot: typeof copyScreenshot;
             setStreamProfile: typeof setStreamProfile;
             liveTouch: typeof liveTouch;
             onH264Frame: typeof onH264Frame;
@@ -280,7 +304,9 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
         call,
         setAgentControl,
         setViewerVisibility,
+        retryNativeRoute,
         latestFrame,
+        copyScreenshot,
         setStreamProfile,
         liveTouch,
         onH264Frame,
@@ -295,7 +321,9 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
     call,
     setAgentControl,
     setViewerVisibility,
+    retryNativeRoute,
     latestFrame,
+    copyScreenshot,
     setStreamProfile,
     liveTouch,
     onH264Frame,
@@ -316,7 +344,28 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
   };
 }
 
+async function openMoreControls(): Promise<void> {
+  const trigger = await screen.findByRole('button', {
+    name: 'rightSidebar.iosSimulator.moreControls',
+  });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  await screen.findByRole('menu');
+}
+
+async function openStreamProfileControls(): Promise<void> {
+  await openMoreControls();
+  const trigger = await screen.findByRole('menuitem', {
+    name: 'rightSidebar.iosSimulator.streamProfile',
+  });
+  fireEvent.keyDown(trigger, { key: 'ArrowRight' });
+  await screen.findByRole('menuitemradio', {
+    name: 'rightSidebar.iosSimulator.streamProfiles.low',
+  });
+}
+
 beforeEach(() => {
+  toastMocks.success.mockReset();
+  toastMocks.error.mockReset();
   let objectUrlSequence = 0;
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
@@ -354,6 +403,167 @@ afterEach(() => {
 });
 
 describe('IOSSimulatorTabBody', () => {
+  it('fits the simulator viewport within both available width and panel height', () => {
+    expect(fitSimulatorScreenSize({ width: 400, height: 800 }, 700, 900)).toEqual({
+      width: 450,
+      height: 900,
+    });
+    expect(fitSimulatorScreenSize({ width: 400, height: 800 }, 300, 900)).toEqual({
+      width: 300,
+      height: 600,
+    });
+    expect(fitSimulatorScreenSize({ width: 800, height: 400 }, 700, 900)).toEqual({
+      width: 700,
+      height: 350,
+    });
+    expect(fitSimulatorScreenSize({ width: 0, height: 800 }, 700, 900)).toBeNull();
+  });
+
+  it('fits only the device header and screen within the panel height', async () => {
+    const instance = readyInstance();
+    const api = installStatus(readyStatus(instance));
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        queueMicrotask(() => callback(0));
+        return 1;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    await screen.findByRole('img', {
+      name: 'rightSidebar.iosSimulator.streamAlt',
+    });
+    const panel = screen.getByTestId('ios-simulator-panel-viewport');
+    const section = screen.getByTestId('ios-simulator-viewer-section');
+    const slot = screen.getByTestId('ios-simulator-screen-slot');
+    const simulatorScreen = screen.getByTestId('ios-simulator-screen');
+    let slotWidth = 700;
+    Object.defineProperty(panel, 'clientHeight', { configurable: true, value: 1_000 });
+    Object.defineProperty(slot, 'clientWidth', {
+      configurable: true,
+      get: () => slotWidth,
+    });
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({
+      top: 80,
+      bottom: 980,
+    } as DOMRect);
+    vi.spyOn(slot, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          top: 150,
+          bottom: 850,
+          width: slotWidth,
+        }) as DOMRect,
+    );
+
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(Number.parseFloat(simulatorScreen.style.height)).toBeCloseTo(930);
+      expect(Number.parseFloat(simulatorScreen.style.width)).toBeCloseTo(429.01, 1);
+    });
+
+    slotWidth = 250;
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(Number.parseFloat(simulatorScreen.style.width)).toBeCloseTo(250);
+      expect(Number.parseFloat(simulatorScreen.style.height)).toBeCloseTo(541.98, 1);
+    });
+  });
+
+  it('copies a screenshot for the exact attached simulator route', async () => {
+    const instance = readyInstance();
+    const api = installStatus(readyStatus(instance));
+    let finishCopy!: () => void;
+    const copyPending = new Promise<void>((resolve) => {
+      finishCopy = resolve;
+    });
+    api.copyScreenshot.mockImplementationOnce(async () => {
+      await copyPending;
+      return { ok: true as const };
+    });
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'rightSidebar.iosSimulator.copyScreenshot',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.copyScreenshot).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      });
+    });
+    expect(screen.queryByText('rightSidebar.iosSimulator.operations.screenshot')).toBeNull();
+    const loadingButton = document.querySelector<HTMLButtonElement>('button[aria-busy="true"]');
+    expect(loadingButton).toBeTruthy();
+    expect(loadingButton?.querySelector('.animate-spin')).toBeTruthy();
+
+    await act(async () => finishCopy());
+    await waitFor(() => {
+      expect(toastMocks.success).toHaveBeenCalledWith('rightSidebar.iosSimulator.screenshotCopied');
+    });
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps Viewer status visible while control waits for renewed authorization', async () => {
+    const pausedStatus = readyStatus();
+    if (!pausedStatus.ok) throw new Error('Expected a ready simulator status.');
+    pausedStatus.controlAccess = 'paused';
+    const api = installStatus(pausedStatus);
+
+    render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
+
+    await screen.findByText('rightSidebar.iosSimulator.accessRequiredTitle');
+    expect(screen.getByText('iPhone 17 Pro')).toBeTruthy();
+    await openMoreControls();
+    expect(
+      screen
+        .getByRole('menuitem', {
+          name: 'rightSidebar.iosSimulator.streamProfile',
+        })
+        .getAttribute('data-disabled'),
+    ).not.toBeNull();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(api.requestAccess).not.toHaveBeenCalled();
+    api.requestAccess.mockImplementationOnce(async () => {
+      api.setStatusValue({ ...pausedStatus, controlAccess: 'active' });
+      return { granted: true };
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rightSidebar.iosSimulator.allowTaskAccess' }),
+    );
+    await waitFor(() => {
+      expect(api.requestAccess).toHaveBeenCalledWith({ sessionId: 'session-a' });
+      expect(screen.queryByText('rightSidebar.iosSimulator.accessRequiredTitle')).toBeNull();
+    });
+  });
+
   it('requires a user gesture before requesting native access for a restored panel', async () => {
     const api = installStatus(readyStatus());
     api.status.mockRejectedValueOnce(
@@ -378,6 +588,39 @@ describe('IOSSimulatorTabBody', () => {
       expect(api.status).toHaveBeenCalledTimes(2);
     });
     expect(screen.queryByText('rightSidebar.iosSimulator.accessRequiredTitle')).toBeNull();
+  });
+
+  it('shows the exact plugin-session reason instead of reporting an environment probe failure', async () => {
+    const api = installStatus(readyStatus());
+    api.status.mockRejectedValueOnce(
+      new Error(
+        'Error invoking remote method: Error: [IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE] The iOS Simulator plugin is unavailable in the current Cindy session.',
+      ),
+    );
+
+    render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.pluginSessionUnavailable')).toBeTruthy();
+    });
+    expect(screen.queryByText('rightSidebar.iosSimulator.connectionError')).toBeNull();
+    expect(screen.queryByText('rightSidebar.iosSimulator.accessRequiredTitle')).toBeNull();
+  });
+
+  it('distinguishes an internal Host status failure from a simulator environment failure', async () => {
+    const api = installStatus(readyStatus());
+    api.status.mockRejectedValueOnce(
+      new Error(
+        'Error invoking remote method: Error: [INTERNAL] iOS Simulator status is temporarily unavailable.',
+      ),
+    );
+
+    render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.statusInternalError')).toBeTruthy();
+    });
+    expect(screen.queryByText('rightSidebar.iosSimulator.connectionError')).toBeNull();
   });
 
   it('animates the access loader on an HTML wrapper instead of the SVG', async () => {
@@ -467,7 +710,7 @@ describe('IOSSimulatorTabBody', () => {
         platform: 'darwin',
         supported: true,
         ready: true,
-        xcodeVersion: 'Xcode 26.4',
+        xcodeVersion: 'Xcode 26.4\nBuild version 17E192',
         runtimes: [],
         devices: [
           {
@@ -491,6 +734,10 @@ describe('IOSSimulatorTabBody', () => {
     render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
 
     await waitFor(() => expect(screen.getByText('iPhone 17 Pro')).toBeTruthy());
+    const environmentReady = screen.getByText('rightSidebar.iosSimulator.readyTitle');
+    expect(environmentReady.parentElement?.textContent).toContain('Xcode 26.4');
+    expect(screen.getAllByText('rightSidebar.iosSimulator.readyTitle')).toHaveLength(1);
+    expect(screen.queryByText('Build version 17E192')).toBeNull();
     expect(screen.getByText(/iOS 26\.4 · Booted/)).toBeTruthy();
     expect(screen.getByText('DEVICE-UDID-123')).toBeTruthy();
     expect(api.status).toHaveBeenCalledWith({ sessionId: 'session-a' });
@@ -671,7 +918,7 @@ describe('IOSSimulatorTabBody', () => {
       expect(screen.getByText('rightSidebar.iosSimulator.route.nativeH264')).toBeTruthy();
       expect(screen.getByText('rightSidebar.iosSimulator.route.wdaInput')).toBeTruthy();
       expect(screen.getByText('rightSidebar.iosSimulator.route.state.active')).toBeTruthy();
-      expect(screen.getByText('rightSidebar.iosSimulator.route.state.fallback')).toBeTruthy();
+      expect(screen.queryByText('rightSidebar.iosSimulator.route.state.fallback')).toBeNull();
     });
     expect(api.onRouteStatus).toHaveBeenCalledOnce();
 
@@ -716,6 +963,32 @@ describe('IOSSimulatorTabBody', () => {
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2));
     expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
     expect(screen.getByText('rightSidebar.iosSimulator.route.nativeHid')).toBeTruthy();
+
+    act(() => {
+      api.emitRouteStatus({
+        ...initialRouteStatus,
+        updatedAt: '2026-08-05T00:00:02.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'active',
+          reasonCode: 'wda-active',
+        },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-capability-unavailable',
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
+      expect(screen.getByText('rightSidebar.iosSimulator.route.wdaInput')).toBeTruthy();
+      expect(screen.queryByText('rightSidebar.iosSimulator.route.state.active')).toBeNull();
+      expect(screen.queryByText('rightSidebar.iosSimulator.route.state.fallback')).toBeNull();
+    });
   });
 
   it('offers 60 FPS only for active Native H.264 and keeps a 20 FPS WDA fallback', async () => {
@@ -766,28 +1039,32 @@ describe('IOSSimulatorTabBody', () => {
       />,
     );
 
-    const profileSelect = await screen.findByRole('combobox');
     await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
+    await openStreamProfileControls();
     expect(
-      screen.queryByRole('option', {
+      screen.queryByRole('menuitemradio', {
         name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
       }),
     ).toBeNull();
     act(() => api.emitRouteStatus(nativeRouteStatus));
     await waitFor(() => {
       expect(
-        screen.getByRole('option', {
+        screen.getByRole('menuitemradio', {
           name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
         }),
       ).toBeTruthy();
       expect(
-        screen.getByRole('option', {
+        screen.getByRole('menuitemradio', {
           name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
         }),
       ).toBeTruthy();
     });
 
-    fireEvent.change(profileSelect, { target: { value: 'high' } });
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
+      }),
+    );
     await waitFor(() => {
       expect(api.setStreamProfile).toHaveBeenCalledWith({
         sessionId: 'session-a',
@@ -800,7 +1077,12 @@ describe('IOSSimulatorTabBody', () => {
       });
     });
 
-    fireEvent.change(profileSelect, { target: { value: 'experimental60' } });
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
+      }),
+    );
     await waitFor(() => {
       expect(api.setStreamProfile).toHaveBeenCalledWith({
         sessionId: 'session-a',
@@ -848,12 +1130,6 @@ describe('IOSSimulatorTabBody', () => {
     });
 
     await waitFor(() => {
-      expect(
-        screen.queryByRole('option', {
-          name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
-        }),
-      ).toBeNull();
-      expect((profileSelect as HTMLSelectElement).value).toBe('high');
       expect(api.setStreamProfile).toHaveBeenLastCalledWith({
         sessionId: 'session-a',
         instanceId: instance.instanceId,
@@ -863,6 +1139,49 @@ describe('IOSSimulatorTabBody', () => {
         profile: { framesPerSecond: 20, jpegQuality: 70, scalingPercent: 100 },
       });
     });
+    await openStreamProfileControls();
+    expect(
+      screen.queryByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.experimental60',
+      }),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole('menuitemradio', {
+          name: 'rightSidebar.iosSimulator.streamProfiles.high',
+        })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('shows stream metrics beside the ready state without covering the viewer or changing its cursor', async () => {
+    const api = installStatus(
+      readyStatus({
+        ...readyInstance(),
+        deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
+      }),
+    );
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+
+    const rendered = render(
+      <IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active shellVisible />,
+    );
+
+    const metrics = await screen.findByText('0.0 FPS · 393×852');
+    expect(metrics.textContent).not.toContain('rightSidebar.iosSimulator.stream.streaming');
+    const lifecycle = screen.getByText('rightSidebar.iosSimulator.lifecycle.ready');
+    expect(lifecycle.parentElement).toBe(metrics.parentElement);
+    await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
+    const image = rendered.container.querySelector('img');
+    const canvas = rendered.container.querySelector('canvas');
+    const simulatorScreen = screen.getByTestId('ios-simulator-screen');
+    expect(image?.parentElement?.textContent).not.toContain('FPS');
+    expect(image?.classList.contains('cursor-crosshair')).toBe(false);
+    expect(canvas?.classList.contains('cursor-crosshair')).toBe(false);
+    expect(simulatorScreen.style.borderRadius).toBe('21.06% / 9.71%');
+    expect(simulatorScreen.classList.contains('border')).toBe(false);
+    expect(simulatorScreen.firstElementChild?.classList.contains('p-2')).toBe(false);
   });
 
   it('waits for the exact viewer claim before applying its stream profile', async () => {
@@ -984,7 +1303,12 @@ describe('IOSSimulatorTabBody', () => {
       );
       expect(api.latestFrame).toHaveBeenCalled();
     });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'high' } });
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.high',
+      }),
+    );
     await waitFor(() => {
       expect(api.setStreamProfile).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1041,6 +1365,7 @@ describe('IOSSimulatorTabBody', () => {
     const nativeFallback: IOSSimulatorRouteStatusPush = {
       ...nativeActive,
       updatedAt: '2026-08-06T00:00:01.000Z',
+      nativeRecoveryAvailable: true,
       stream: {
         adapter: 'wda',
         encoding: 'jpeg',
@@ -1121,6 +1446,7 @@ describe('IOSSimulatorTabBody', () => {
       api.emitRouteStatus({
         ...nativeActive,
         updatedAt: '2026-08-06T00:00:02.000Z',
+        nativeRecoveryAvailable: true,
         input: nativeFallback.input,
       }),
     );
@@ -1201,6 +1527,7 @@ describe('IOSSimulatorTabBody', () => {
       api.emitRouteStatus({
         ...nativeActive,
         updatedAt: '2026-08-06T00:00:01.000Z',
+        nativeRecoveryAvailable: true,
         stream: {
           adapter: 'wda',
           encoding: 'jpeg',
@@ -1276,11 +1603,23 @@ describe('IOSSimulatorTabBody', () => {
           state: 'fallback',
           reasonCode: 'native-decoder-fallback',
         },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-sidecar-unavailable',
+        },
       });
     });
     await waitFor(() => {
       expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
     });
+    expect(
+      screen.queryByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    ).toBeNull();
 
     act(() => {
       visibilityState = 'hidden';
@@ -1309,6 +1648,7 @@ describe('IOSSimulatorTabBody', () => {
         instanceId: instance.instanceId,
         generation: instance.generation,
         updatedAt: '2026-08-06T00:00:00.000Z',
+        nativeRecoveryAvailable: true,
         stream: {
           adapter: 'wda',
           encoding: 'jpeg',
@@ -1413,6 +1753,7 @@ describe('IOSSimulatorTabBody', () => {
         instanceId: instance.instanceId,
         generation: instance.generation,
         updatedAt: '2026-08-06T00:00:00.000Z',
+        nativeRecoveryAvailable: true,
         stream: {
           adapter: 'wda',
           encoding: 'jpeg',
@@ -1455,6 +1796,262 @@ describe('IOSSimulatorTabBody', () => {
       );
       expect(rendered.container.querySelector('img')).toBeTruthy();
     });
+  });
+
+  it('hides Native recovery when the Host omits or denies recovery eligibility', async () => {
+    const instance = readyInstance();
+    const statusValue = readyStatus(instance);
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [
+      {
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        updatedAt: '2026-08-06T00:00:00.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-sidecar-unavailable',
+        },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-sidecar-unavailable',
+        },
+      },
+    ];
+    const api = installStatus(statusValue);
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
+    });
+    expect(
+      screen.queryByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    ).toBeNull();
+    expect(api.retryNativeRoute).not.toHaveBeenCalled();
+
+    act(() => {
+      api.emitRouteStatus({
+        ...statusValue.routeStatuses![0]!,
+        updatedAt: '2026-08-06T00:00:01.000Z',
+        nativeRecoveryAvailable: false,
+      });
+    });
+    expect(
+      screen.queryByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    ).toBeNull();
+  });
+
+  it('lets the current viewer explicitly re-arm Native without disabling WDA controls', async () => {
+    installFakeH264DecoderRuntime();
+    const instance = readyInstance();
+    const statusValue = readyStatus(instance);
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [
+      {
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        updatedAt: '2026-08-06T00:00:00.000Z',
+        nativeRecoveryAvailable: true,
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-sidecar-unavailable',
+        },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-sidecar-unavailable',
+        },
+      },
+    ];
+    const api = installStatus(statusValue);
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+    let resolveRecovery!: (value: IOSSimulatorToolResponse) => void;
+    api.retryNativeRoute.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRecovery = resolve;
+        }),
+    );
+
+    const rendered = render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    const recoveryButton = await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+    });
+    await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
+    const image = rendered.container.querySelector('img');
+    expect(screen.getByTestId('ios-simulator-screen-slot').className).toContain('justify-center');
+    expect(image?.className).not.toContain('max-h-[520px]');
+    const textInput = screen.getByLabelText(
+      'rightSidebar.iosSimulator.textInputLabel',
+    ) as HTMLInputElement;
+    expect(textInput.disabled).toBe(false);
+
+    fireEvent.click(recoveryButton);
+    await waitFor(() => {
+      expect(api.retryNativeRoute).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+        viewerToken: expect.any(String),
+      });
+      expect(
+        (
+          screen.getByRole('button', {
+            name: 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction',
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+    });
+    expect(textInput.disabled).toBe(false);
+
+    resolveRecovery({ ok: true, data: { nativeRecovered: false } });
+    await screen.findByText('rightSidebar.iosSimulator.nativeRecovery.failed');
+    expect(rendered.container.querySelector('img')).toBeTruthy();
+    expect(textInput.disabled).toBe(false);
+  });
+
+  it('ignores an explicit Native recovery result after the viewer switches devices', async () => {
+    const statusValue = multiReadyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = statusValue.instances.map((instance) => ({
+      sessionId: 'session-a',
+      instanceId: instance.instanceId,
+      generation: instance.generation,
+      updatedAt: '2026-08-06T00:00:00.000Z',
+      nativeRecoveryAvailable: true,
+      stream: {
+        adapter: 'wda',
+        encoding: 'jpeg',
+        state: 'fallback',
+        reasonCode: 'native-sidecar-unavailable',
+      },
+      input: {
+        adapter: 'wda',
+        state: 'fallback',
+        continuous: false,
+        multiTouch: false,
+        reasonCode: 'native-sidecar-unavailable',
+      },
+    }));
+    const api = installStatus(statusValue);
+    const jpegResult = (
+      request: IOSSimulatorViewerVisibilityRequest,
+    ): IOSSimulatorToolResponse => ({
+      ok: true,
+      data: {
+        stream: {
+          instanceId: request.instanceId,
+          generation: request.generation,
+          state: 'streaming',
+          reconnectAttempt: 0,
+          latestFrame: {
+            instanceId: request.instanceId,
+            generation: request.generation,
+            sequence: 1,
+            encoding: 'jpeg',
+            receivedAt: '2026-08-06T00:00:00.000Z',
+            bytes: new Uint8Array([1, 2, 3]),
+          },
+        },
+        viewport: { width: 393, height: 852, orientation: 'PORTRAIT' },
+      },
+    });
+    api.setViewerVisibility.mockImplementation(async (request) => jpegResult(request));
+    api.latestFrame.mockImplementation(async (request?: unknown) =>
+      jpegResult({
+        ...(request as IOSSimulatorViewerVisibilityRequest),
+        viewerToken: 'poll',
+        visible: true,
+        preferredEncoding: 'jpeg',
+      }),
+    );
+    let resolveA!: (value: IOSSimulatorToolResponse) => void;
+    let resolveB!: (value: IOSSimulatorToolResponse) => void;
+    api.retryNativeRoute.mockImplementation(
+      (request) =>
+        new Promise((resolve) => {
+          if (request.instanceId === 'instance-a') resolveA = resolve;
+          else resolveB = resolve;
+        }),
+    );
+
+    const rendered = render(
+      <IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active shellVisible />,
+    );
+    const recoveryButtonA = (await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(recoveryButtonA.disabled).toBe(false));
+    fireEvent.click(recoveryButtonA);
+    await waitFor(() => expect(api.retryNativeRoute).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(
+      <IOSSimulatorTabBody state={{ instanceId: 'instance-b' }} ctx={ctx} active shellVisible />,
+    );
+    const recoveryButtonB = (await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(recoveryButtonB.disabled).toBe(false));
+    fireEvent.click(recoveryButtonB);
+    await waitFor(() => {
+      expect(api.retryNativeRoute).toHaveBeenCalledTimes(2);
+      expect(api.retryNativeRoute).toHaveBeenLastCalledWith(
+        expect.objectContaining({ instanceId: 'instance-b' }),
+      );
+    });
+
+    await act(async () => {
+      resolveA({ ok: true, data: { nativeRecovered: false } });
+      await Promise.resolve();
+    });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.queryByText('rightSidebar.iosSimulator.nativeRecovery.failed')).toBeNull();
+
+    await act(async () => {
+      resolveB({ ok: true, data: { nativeRecovered: false } });
+      await Promise.resolve();
+    });
+    await screen.findByText('rightSidebar.iosSimulator.nativeRecovery.failed');
   });
 
   it('streams pointer samples through native touch and temporarily boosts frame rate', async () => {
@@ -1755,11 +2352,8 @@ describe('IOSSimulatorTabBody', () => {
     });
     expect(rendered.container.querySelector('img')).toBeNull();
     expect(
-      (
-        screen.getByRole('button', {
-          name: 'rightSidebar.iosSimulator.pressHome',
-        }) as HTMLButtonElement
-      ).disabled,
+      (rendered.container.querySelector('.lucide-house')?.closest('button') as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
   });
 
@@ -1800,7 +2394,10 @@ describe('IOSSimulatorTabBody', () => {
 
     act(() => expireFreshness?.());
 
-    expect(homeButton.disabled).toBe(true);
+    expect(
+      (rendered.container.querySelector('.lucide-house')?.closest('button') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it('clears the last frame and keeps only recovery actions after an external shutdown', async () => {
@@ -1897,19 +2494,109 @@ describe('IOSSimulatorTabBody', () => {
       expect(screen.getByText('rightSidebar.iosSimulator.viewerStoppedDescription')).toBeTruthy();
     });
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:ios-simulator-1');
+    await openMoreControls();
     expect(
-      screen.getByRole('button', { name: 'rightSidebar.iosSimulator.startDevice' }),
+      screen.getByRole('menuitem', { name: 'rightSidebar.iosSimulator.startDevice' }),
     ).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'rightSidebar.iosSimulator.detachDevice' }),
+      screen.getByRole('menuitem', { name: 'rightSidebar.iosSimulator.detachDevice' }),
     ).toBeTruthy();
+    expect(
+      screen.queryByRole('menuitem', { name: 'rightSidebar.iosSimulator.deleteDevice' }),
+    ).toBeNull();
     expect(
       screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.pressHome' }),
     ).toBeNull();
     expect(
-      screen.queryByRole('button', { name: 'rightSidebar.iosSimulator.stopDevice' }),
+      screen.queryByRole('menuitem', { name: 'rightSidebar.iosSimulator.stopDevice' }),
     ).toBeNull();
     expect(screen.queryByText('rightSidebar.iosSimulator.agentControlTitle')).toBeNull();
+  });
+
+  it('confirms deletion for a stopped Cindy-created simulator', async () => {
+    const instance: IOSSimulatorPublicInstance = {
+      ...readyInstance(),
+      creationProvenance: 'cindy',
+      lifecycleState: 'stopped',
+      stoppedAt: '2026-08-04T09:00:00.000Z',
+    };
+    const api = installStatus(readyStatus(instance));
+    vi.mocked(ctx.patchState).mockClear();
+
+    render(<IOSSimulatorTabBody state={{ instanceId: instance.instanceId }} ctx={ctx} />);
+
+    await openMoreControls();
+    const deleteButton = await screen.findByRole('menuitem', {
+      name: 'rightSidebar.iosSimulator.deleteDevice',
+    });
+    expect(deleteButton.className).toContain('text-[var(--error-fg)]');
+    expect(deleteButton.className).toContain('focus:bg-[var(--error-bg)]');
+    fireEvent.click(deleteButton);
+    expect(screen.getByText('rightSidebar.iosSimulator.deleteDeviceConfirmTitle')).toBeTruthy();
+    expect(
+      screen.getByText('rightSidebar.iosSimulator.deleteDeviceConfirmDescription'),
+    ).toBeTruthy();
+    expect(api.call).not.toHaveBeenCalled();
+    const confirmButton = within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'rightSidebar.iosSimulator.deleteDevice',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(confirmButton));
+
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(api.call).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: {
+          instanceId: instance.instanceId,
+          generation: instance.generation,
+          leaseId: instance.lease.id,
+        },
+      });
+      expect(ctx.patchState).toHaveBeenCalledWith({ instanceId: null });
+    });
+  });
+
+  it('offers deletion while a Cindy-created simulator is running and explains automatic shutdown', async () => {
+    const instance: IOSSimulatorPublicInstance = {
+      ...readyInstance(),
+      creationProvenance: 'cindy',
+    };
+    const api = installStatus(readyStatus(instance));
+    vi.mocked(ctx.patchState).mockClear();
+
+    render(<IOSSimulatorTabBody state={{ instanceId: instance.instanceId }} ctx={ctx} />);
+
+    await openMoreControls();
+    fireEvent.click(
+      await screen.findByRole('menuitem', {
+        name: 'rightSidebar.iosSimulator.deleteDevice',
+      }),
+    );
+    expect(
+      screen.getByText('rightSidebar.iosSimulator.deleteRunningDeviceConfirmDescription'),
+    ).toBeTruthy();
+    expect(api.call).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'rightSidebar.iosSimulator.deleteDevice',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.call).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: {
+          instanceId: instance.instanceId,
+          generation: instance.generation,
+          leaseId: instance.lease.id,
+        },
+      });
+      expect(ctx.patchState).toHaveBeenCalledWith({ instanceId: null });
+    });
   });
 
   it('maps host error codes to stable localized setup steps', () => {
@@ -2326,6 +3013,10 @@ describe('IOSSimulatorTabBody', () => {
         }),
       );
     });
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.sendText',
+      'iPhone B rightSidebar.iosSimulator.sendText — rightSidebar.iosSimulator.enterTextBeforeSending',
+    );
 
     fireEvent.click(
       screen.getByRole('button', {
@@ -2472,13 +3163,26 @@ describe('IOSSimulatorTabBody', () => {
         value: () => ({ left: 0, top: 0, width: 200, height: 400 }),
       },
     });
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'iPhone B rightSidebar.iosSimulator.pressHome',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.pressHome',
+      'iPhone B rightSidebar.iosSimulator.pressHome — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.rotateDevice',
+      'iPhone B rightSidebar.iosSimulator.rotateDevice — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.lockScreen',
+      'iPhone B rightSidebar.iosSimulator.lockScreen — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.unlockScreen',
+      'iPhone B rightSidebar.iosSimulator.unlockScreen — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.sendText',
+      'iPhone B rightSidebar.iosSimulator.sendText — rightSidebar.iosSimulator.agentBusyDescription',
+    );
 
     fireEvent.pointerDown(image, { pointerId: 41, button: 0, clientX: 20, clientY: 40 });
     fireEvent.pointerUp(image, { pointerId: 41, clientX: 180, clientY: 360 });
@@ -2520,13 +3224,10 @@ describe('IOSSimulatorTabBody', () => {
     };
     await waitFor(
       () =>
-        expect(
-          (
-            screen.getByRole('button', {
-              name: 'iPhone B rightSidebar.iosSimulator.pressHome',
-            }) as HTMLButtonElement
-          ).disabled,
-        ).toBe(true),
+        expectDisabledIconButton(
+          'iPhone B rightSidebar.iosSimulator.pressHome',
+          'iPhone B rightSidebar.iosSimulator.pressHome — rightSidebar.iosSimulator.agentBusyDescription',
+        ),
       { timeout: 2_000 },
     );
     expect(api.status).toHaveBeenCalledOnce();
@@ -2633,13 +3334,10 @@ describe('IOSSimulatorTabBody', () => {
     });
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2), { timeout: 2_000 });
     await waitFor(() => expect(screen.queryByAltText('iPhone B')).toBeNull());
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'iPhone B rightSidebar.iosSimulator.pressHome',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.pressHome',
+      'iPhone B rightSidebar.iosSimulator.pressHome — rightSidebar.iosSimulator.controlsUnavailable',
+    );
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:ios-simulator-1');
     fireEvent.pointerUp(staleImage, {
       pointerId: 31,

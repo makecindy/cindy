@@ -39,16 +39,17 @@ import {
 import { UserMessageUrlLink } from '../UserMessageUrlLink';
 
 const URL = 'https://example.com/path';
+const LOCAL_URL = 'http://localhost:3000/app';
 const openExternal = vi.fn(async (url: string) => {
   void url;
   return { success: true };
 });
 
-function ExternalPreferenceButton() {
-  const { setPreference } = useLinkOpenPreference();
+function WebPreferenceButton({ value }: { value: 'sidebar' | 'external' }) {
+  const { setPreference } = useLinkOpenPreference('web');
   return (
-    <button type="button" onClick={() => setPreference('external')}>
-      use external
+    <button type="button" onClick={() => setPreference(value)}>
+      use {value}
     </button>
   );
 }
@@ -64,7 +65,26 @@ describe('UserMessageUrlLink', () => {
     });
   });
 
+  it('opens public web URLs in the system browser by default', async () => {
+    render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
+
+    fireEvent.click(screen.getByRole('link'));
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith(URL));
+    expect(openUrlInSidebarBrowser).not.toHaveBeenCalled();
+  });
+
+  it('opens localhost URLs in the current session sidebar by default', async () => {
+    render(<UserMessageUrlLink url={LOCAL_URL} sessionId="session-a" />);
+
+    fireEvent.click(screen.getByRole('link'));
+
+    await waitFor(() => expect(openUrlInSidebarBrowser).toHaveBeenCalledWith('session-a', LOCAL_URL));
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
   it('opens the URL in the current session sidebar when sidebar is preferred', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
 
     fireEvent.click(screen.getByRole('link'));
@@ -74,9 +94,10 @@ describe('UserMessageUrlLink', () => {
   });
 
   it('uses a newly selected external preference without remounting', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(
       <>
-        <ExternalPreferenceButton />
+        <WebPreferenceButton value="external" />
         <UserMessageUrlLink url={URL} sessionId="session-a" />
       </>,
     );
@@ -98,6 +119,7 @@ describe('UserMessageUrlLink', () => {
   });
 
   it('uses the visible session bucket for sidebar-embedded messages', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(
       <SessionNavigationModeProvider mode="sidebar-embedded" sidebarTargetSessionId="lead-a">
         <UserMessageUrlLink url={URL} sessionId="worker-a" />
@@ -120,6 +142,7 @@ describe('UserMessageUrlLink', () => {
   });
 
   it('keeps Ctrl-click as a temporary external-browser override', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
 
     fireEvent.click(screen.getByRole('link'), { ctrlKey: true });

@@ -122,11 +122,13 @@ describe('HELP_KNOWLEDGE invariants', () => {
     expect(HELP_KNOWLEDGE.find((d) => d.id === 'api-keys')).toBeUndefined();
   });
 
-  it('collaboration guidance includes Pi as a local lead and worker without claiming remote Pi support', () => {
+  it('collaboration guidance includes Pi as a lead and worker, locally or over SSH (round 42)', () => {
     const collaboration = HELP_KNOWLEDGE.find((d) => d.id === 'collaboration');
 
-    expect(collaboration?.content).toContain('Pi can lead in local sessions');
+    expect(collaboration?.content).toContain('Claude Code, Codex, and Pi can lead locally or over SSH');
     expect(collaboration?.content).toContain('Claude Code, Codex, or Pi');
-    expect(collaboration?.content).toContain('Pi sessions are local-only');
+    // 轮 42:Pi SSH remote 能力落地后「local-only」表述已过时,不得再出现。
+    expect(collaboration?.content).not.toContain('Pi sessions are local-only');
+    expect(collaboration?.content).not.toContain('SSH remote leads currently use Claude Code or Codex');
   });
 });

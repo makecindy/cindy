@@ -10,6 +10,9 @@ export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcrib
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 export const DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
 export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
+/** 桌面主动推给手机的只读词典快照；push 不受 remoteControlEnabled 控制门禁。 */
+export const DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL =
+  'device-link:voice:dictionary:snapshot';
 
 export type MobileVoiceCredentialSyncAsr = {
   provider: string;
@@ -88,6 +91,12 @@ export type MobileVoiceDictionarySnapshotResult =
        * 拿它当完整答案会漏词。老版本被控端不带这个字段,手机退回按到达时间比较。
        */
       stateVector?: Record<string, string>;
+      /**
+       * 桌面生成这份投影的本地时间(unix ms)。同一台电脑、同一代版本向量里,
+       * 用它而不是手机到达时间判断谁先发出 —— 晚到的旧拉取不能盖掉先发出的新推送。
+       * 老版本被控端不带这个字段。
+       */
+      emittedAt?: number;
     }
   | {
       ok: false;
@@ -255,6 +264,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:get-capabilities',
   'maker:provider:list',
   'local-db:sessions:get',
+  // 只读任务搜索(对齐桌面侧栏 / Composer @)。老被控端 CHANNEL_NOT_ALLOWED →
+  // 手机端降级为已缓存会话的本地匹配,不阻断搜索。
+  'local-db:conversations:search',
   'local-db:sessions:patch-meta',
   // error-tail / interrupted 收尾入口(对齐桌面 error-tail banner / InterruptedTurnBanner):
   // 「忽略」错误尾行 → 被控端持久化 merge dismissed:true;「忽略」中断提示 → 被控端写
@@ -265,6 +277,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // 同一 handler;老被控端 CHANNEL_NOT_ALLOWED → 手机端展示失败提示,不阻塞手动改名)。
   'maker:regenerate-title',
   'local-db:messages:list',
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:view-intent',
   'local-db:messages:around',
   'local-db:messages:around-client-id',
   'maker:send',
@@ -275,6 +290,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:set-effort',
   'maker:set-permission-mode',
   'maker:set-fast-mode',
+  'maker:set-thinking-enabled',
   'maker:set-extra-dirs',
   // 模型列表「非选中行」effort/fast 写穿(会话镜像 + 草稿默认双写;老被控端
   // CHANNEL_NOT_ALLOWED → 手机端吞掉降级,见 sessionModelMirror)。
@@ -294,6 +310,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:apply-new-maker-worktree-branch-pref',
   // 模型选择列表元信息:被控端视角的模型单价表(只读;拉不到 → 隐藏价格)。
   'maker:usage:model-pricing',
+  'local-db:messages:estimatedSessionValue',
   // Codex app-server 官方控制面:只读额度/reset 次数 + 人工确认后的单次 reset。
   // reset 使用 desktop 预签发、账号绑定的幂等 offer,手机不能自行指定 creditId。
   'maker:usage:codex-rate-limits',

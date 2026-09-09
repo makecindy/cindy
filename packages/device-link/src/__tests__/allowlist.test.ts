@@ -19,14 +19,40 @@ import {
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
 } from '../allowlist.js';
-import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
+import { SESSION_ACTIVITY_CHANNEL, topicForPush } from '../topics.js';
+import {
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_CHANNELS,
+} from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the reduced teammate directory while keeping native configuration local', () => {
+    for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    for (const channel of [
+      'local-db:bots:choose-avatar', 'local-db:bots:create', 'local-db:bots:update',
+      'local-db:bots:model-chain-settings-set', 'maker:bot-lifecycle:action',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(false);
+    }
+  });
+
   it('keeps every Review external-input classification inside the remote allowlist', () => {
     for (const channel of REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
     }
     expect(REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has('maker:input:get-projection')).toBe(false);
+  });
+
+  it('放行模块中立的远程资源 API，而不是逐功能扩张 channel', () => {
+    for (const channel of REMOTE_RESOURCE_CHANNELS) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(PUSH_FORWARD_ALLOWLIST.has(REMOTE_RESOURCE_CHANGED_CHANNEL)).toBe(true);
+    expect(topicForPush(REMOTE_RESOURCE_CHANGED_CHANNEL, {
+      collectionId: 'teammates',
+    })).toBe('sessions');
   });
 
   it('放行核心会话链路', () => {
@@ -103,6 +129,18 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
   });
 
+  it('routes durable PI Subagent reads and controls to the data-owning device', () => {
+    for (const channel of [
+      'local-db:subagent-runs:list',
+      'local-db:subagent-runs:detail',
+      'local-db:subagent-runs:transcript',
+      'maker:pi-subagent:control',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
+  });
+
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
     for (const ch of [
       'maker:fork-strip-encrypted',
@@ -133,6 +171,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行 Codex 官方额度读取与 desktop 绑定的人工 reset offer', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limits')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limit-reset')).toBe(true);
+  });
+
+  it('放行被控端项目顺序读写(显示偏好,真相在被控端)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:set-project-order')).toBe(false);
   });
 
   it('放行 Git safety 只读查询(远程 Codex Rewind 按被控端 snapshot 设置 gate)', () => {
@@ -328,6 +372,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:interaction-dismissed',
       'maker:auto-permission:fallback',
       'maker:provider:changed',
+      'maker:agents:changed',
       'maker:schedule:event',
       'maker:orca:worker-changed',
       'usage:message-turn-cost',
@@ -336,6 +381,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'local-db:messages:created',
       'local-db:messages:deleted',
       'local-db:session:error-persisted',
+      'sidebar-settings:project-order-changed',
       SESSION_ACTIVITY_CHANNEL,
     ]) {
       expect(PUSH_FORWARD_ALLOWLIST.has(ch)).toBe(true);

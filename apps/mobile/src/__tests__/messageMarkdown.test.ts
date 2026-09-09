@@ -10,6 +10,8 @@ import {
   MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
   mobileMarkdownInlineImageSize,
   parseMobileMarkdown,
+  parseMobileMarkdownDocument,
+  parseMobileMarkdownIncremental,
   parseMobileMarkdownInlines,
   groupMobileMarkdownSelectableBlocks,
 } from '@/session/messageMarkdown';
@@ -17,6 +19,102 @@ import {
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
+});
+
+describe('incremental mobile Markdown parsing', () => {
+  it('reuses completed blocks after a safe blank-line checkpoint', () => {
+    const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
+    const next = parseMobileMarkdownIncremental(
+      '# title\n\nfirst paragraph\n\nsecond paragraph',
+      first,
+    );
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.incremental).toBe(true);
+    expect(next.reusedBlockCount).toBe(1);
+    expect(next.blocks).toEqual(full.blocks);
+    expect(next.blocks[0]).toBe(first.blocks[0]);
+    expect(next.parsedSourceUtf16Length).toBe('first paragraph\n\nsecond paragraph'.length);
+  });
+
+  it('falls back to a full parse for an edit in the existing prefix', () => {
+    const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
+    const next = parseMobileMarkdownIncremental(
+      '# changed\n\nfirst paragraph\n\nsecond paragraph',
+      first,
+    );
+
+    expect(next.incremental).toBe(false);
+    expect(next.reusedBlockCount).toBe(0);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+  });
+
+  it('keeps fenced code and display math semantics when appending', () => {
+    const codeFirst = parseMobileMarkdownDocument('intro\n\n```ts\nconst x = 1;\n```');
+    const codeNext = parseMobileMarkdownIncremental(
+      `${codeFirst.source}\n\nend`,
+      codeFirst,
+    );
+    expect(codeNext.blocks).toEqual(parseMobileMarkdownDocument(codeNext.source).blocks);
+
+    const mathFirst = parseMobileMarkdownDocument('intro\n\n$$\nx = 1\n$$');
+    const mathNext = parseMobileMarkdownIncremental(
+      `${mathFirst.source}\n\nend`,
+      mathFirst,
+    );
+    expect(mathNext.blocks).toEqual(parseMobileMarkdownDocument(mathNext.source).blocks);
+  });
+
+  it('falls back when an escaped inline math opener is closed by a later flush', () => {
+    const first = parseMobileMarkdownDocument('intro\n\nvalue \\(');
+    const next = parseMobileMarkdownIncremental(`${first.source}x\\)`, first);
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.incremental).toBe(false);
+    expect(next.reusedBlockCount).toBe(0);
+    expect(next.blocks).toEqual(full.blocks);
+  });
+
+  it('keeps line offsets when appending after a closed fence without a trailing newline', () => {
+    const first = parseMobileMarkdownDocument('intro\n\n```ts\nconst x = 1;\n```');
+    const next = parseMobileMarkdownIncremental(`${first.source}\n\nend`, first);
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.blocks).toEqual(full.blocks);
+    expect(next.blocks.at(-1)?.key).toBe(full.blocks.at(-1)?.key);
+  });
+
+  it('does not reuse an EOF checkpoint when an append mutates its last line', () => {
+    const first = parseMobileMarkdownDocument('```ts\nconst x = 1;\n```');
+    const next = parseMobileMarkdownIncremental(`${first.source}continued`, first);
+
+    expect(next.incremental).toBe(false);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+  });
+
+  it('preserves full-parser semantics across character-by-character streaming flushes', () => {
+    const fixtures = [
+      '# heading\n\nplain text\n\n- item\n\nend',
+      'intro\n\n```ts\nconst x = 1;\n```\n\nresult',
+      'intro\n\n$$\nx = 1\n$$\n\nresult',
+      'prefix \\(x + 1\\) suffix\n\nnext',
+      '<!-- hidden\n\ntext -->\n\nvisible',
+    ];
+    for (const fixture of fixtures) {
+      let previous: ReturnType<typeof parseMobileMarkdownDocument> | null = null;
+      for (let end = 1; end <= fixture.length; end += 1) {
+        const source = fixture.slice(0, end);
+        const result = parseMobileMarkdownIncremental(source, previous);
+        expect(result.blocks, `prefix length ${end}`).toEqual(
+          parseMobileMarkdownDocument(source).blocks,
+        );
+        expect(result.ranges, `ranges at prefix length ${end}`).toEqual(
+          parseMobileMarkdownDocument(source).ranges,
+        );
+        previous = result;
+      }
+    }
+  });
 });
 
 describe('messageMarkdown', () => {
@@ -248,6 +346,140 @@ describe('messageMarkdown', () => {
       { type: 'text', text: 'Open ' },
       { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
       { type: 'text', text: ', then continue' },
+    ]);
+  });
+
+  it('does not swallow fullwidth parentheses or CJK punctuation after a bare URL', () => {
+    expect(parseMobileMarkdownInlines(
+      '诊断已写在 https://github.com/example/app/issues/3561#issuecomment-5391602790（无 @）。',
+    )).toEqual([
+      { type: 'text', text: '诊断已写在 ' },
+      {
+        type: 'link',
+        text: 'https://github.com/example/app/issues/3561#issuecomment-5391602790',
+        url: 'https://github.com/example/app/issues/3561#issuecomment-5391602790',
+      },
+      { type: 'text', text: '（无 @）。' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path（说明）然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '（说明）然后' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path。然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '。然后' },
+    ]);
+    expect(parseMobileMarkdownInlines('见 https://en.wikipedia.org/wiki/Foo_(bar) 词条')).toEqual([
+      { type: 'text', text: '见 ' },
+      {
+        type: 'link',
+        text: 'https://en.wikipedia.org/wiki/Foo_(bar)',
+        url: 'https://en.wikipedia.org/wiki/Foo_(bar)',
+      },
+      { type: 'text', text: ' 词条' },
+    ]);
+    expect(parseMobileMarkdownInlines('见 (https://example.com/path) 收尾')).toEqual([
+      { type: 'text', text: '见 (' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: ') 收尾' },
+    ]);
+    expect(parseMobileMarkdownInlines('~https://example.com/~alice')).toEqual([
+      { type: 'text', text: '~' },
+      {
+        type: 'link',
+        text: 'https://example.com/~alice',
+        url: 'https://example.com/~alice',
+      },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://example.com/api/[id] 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://example.com/api/[id]',
+        url: 'https://example.com/api/[id]',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://子域。例子。测试 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://子域。例子。测试', url: 'https://子域。例子。测试' },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://пример。онлайн/path 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://пример。онлайн/path',
+        url: 'https://пример。онлайн/path',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://例子。测试。这是说明')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://例子。测试', url: 'https://例子。测试' },
+      { type: 'text', text: '。这是说明' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://例子。ファッション/path 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://例子。ファッション/path',
+        url: 'https://例子。ファッション/path',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com。这是说明')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com', url: 'https://example.com' },
+      { type: 'text', text: '。这是说明' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://子域。四字域名。测试 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://子域。四字域名。测试',
+        url: 'https://子域。四字域名。测试',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://例子。测试。')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://例子。测试', url: 'https://例子。测试' },
+      { type: 'text', text: '。' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path・说明')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '・说明' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 http://localhost:3000。然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'http://localhost:3000', url: 'http://localhost:3000' },
+      { type: 'text', text: '。然后' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://例子。测试/path 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://例子。测试/path', url: 'https://例子。测试/path' },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://example.com/路径 与 https://例子.测试/path')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/路径', url: 'https://example.com/路径' },
+      { type: 'text', text: ' 与 ' },
+      { type: 'link', text: 'https://例子.测试/path', url: 'https://例子.测试/path' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://example.com/ＡＢＣ 与 https://example.com/abc々def')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/ＡＢＣ', url: 'https://example.com/ＡＢＣ' },
+      { type: 'text', text: ' 与 ' },
+      { type: 'link', text: 'https://example.com/abc々def', url: 'https://example.com/abc々def' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path\u00A0然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '\u00A0然后' },
     ]);
   });
 
@@ -1379,6 +1611,43 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1, 2]);
   });
 
+  it('can bound one native text run by inline fragment count', () => {
+    const blocks = [{
+      type: 'paragraph' as const,
+      key: 'paragraph:0',
+      inlines: Array.from({ length: 7 }, (_, index) => ({
+        type: 'strong' as const,
+        text: String(index),
+      })),
+    }];
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunInlineFragments: 3,
+    });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+    expect(chunks.map((block) => block.inlines.length)).toEqual([3, 3, 1]);
+    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true, true]);
+    expect(chunks.flatMap((block) => block.inlines).map((inline) => (
+      inline.type === 'image' ? inline.alt : inline.text
+    )).join('')).toBe('0123456');
+  });
+
+  it('counts inline fragments across adjacent text blocks', () => {
+    const blocks = Array.from({ length: 5 }, (_, index) => ({
+      type: 'paragraph' as const,
+      key: `paragraph:${index}`,
+      inlines: [{ type: 'text' as const, text: String(index) }],
+    }));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunInlineFragments: 2,
+    });
+
+    expect(groups.map((group) => (
+      group.type === 'text_run' ? group.blocks.length : 0
+    ))).toEqual([2, 2, 1]);
+  });
+
   it('counts rendered block separators when bounding text runs by text length', () => {
     const blocks = parseMobileMarkdown(['aaaa', '', 'bbbb'].join('\n'));
     const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
@@ -1461,6 +1730,7 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     const groups = groupMobileMarkdownSelectableBlocks(blocks, {
       maxTextRunBlocks: 0.5,
       maxTextRunUtf16Length: 0.5,
+      maxTextRunInlineFragments: 0.5,
     });
     expect(groups).toHaveLength(1);
     expect(groups[0].type).toBe('text_run');

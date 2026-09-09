@@ -29,9 +29,11 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
+const flashScrollbar = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -50,6 +52,7 @@ vi.mock('../../../../shared/brandRegion', () => ({
 }));
 vi.mock('@/hooks/useLogin', () => ({ useLogin: () => loginHook.value }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
+vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar }));
 
 import { LoginPage } from '../LoginPage';
 
@@ -61,6 +64,11 @@ function scenarioClient(scenario: string, region: 'cn' | 'global' = 'cn') {
     clientType: 'desktop',
     fetch: createScenarioFetch(scenario, { region })!,
   });
+}
+
+async function identifierState(scenario = 'providers:both') {
+  const providers = await scenarioClient(scenario).getProviders();
+  return reduceAuthFlow(null, { type: 'providers-loaded', providers });
 }
 
 async function methodChoiceState(scenario: string, email = 'user@example-corp.com') {
@@ -92,6 +100,7 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
     errorCode: null,
     loginState: state,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
     ...extra,
   };
@@ -237,15 +246,30 @@ describe('verification-code', () => {
     expect(spin.className).toContain('motion-reduce:animate-none');
   });
 
+  it('identifier → verification-code 自动起算 42s(含 AuthContext 自动发码路径)', async () => {
+    const view = mount(await identifierState());
+    expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
+    loginHook.value = {
+      ...loginHook.value,
+      loginState: await verificationState(),
+    };
+    view.rerender(<LoginPage />);
+    expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
+      'login.resendCountdown#42',
+    );
+  });
+
   it('重发成功重置 / 失败保持(dispatch 返回值驱动 arm)', async () => {
     vi.useFakeTimers();
-    const dispatch = vi.fn(async () => true);
-    mount(await verificationState(), { dispatch });
+    // request-code 走 dispatchWithResult(captcha 兜底需要读失败码),arm 由其
+    // success 驱动
+    const dispatchWithResult = vi.fn(async () => ({ success: true, code: null as string | null }));
+    mount(await verificationState(), { dispatchWithResult });
     // 初始无倒计时(直接注入态未经历 request-code) → 链接可点
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
     });
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatchWithResult).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'request-code', kind: 'email' }),
     );
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
@@ -253,7 +277,7 @@ describe('verification-code', () => {
     );
     // 走到 0 → 再点一次但失败:不 arm,链接保持
     act(() => vi.advanceTimersByTime(42_000));
-    dispatch.mockResolvedValueOnce(false);
+    dispatchWithResult.mockResolvedValueOnce({ success: false, code: 'RATE_LIMITED' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
     });
@@ -264,17 +288,67 @@ describe('verification-code', () => {
 
 /* ── account-selection / binding / browser-redirect / error / completed ── */
 describe('account-selection', () => {
-  it('outcome select_account → 双身份行 148/268(demo 行样式,左 icon 企业默认形)', async () => {
+  it('outcome select_account → 双身份行保持面板坐标 148/268', async () => {
     mount(await outcomeState('outcome:select-account'));
     expect(screen.getByTestId('login-panel-account-selection')).toBeTruthy();
+    const list = screen.getByTestId('login-account-list');
     const rows = screen.getAllByTestId('login-method-row');
     expect(rows.length).toBe(2);
-    expect(rows[0].style.top).toBe('148px');
-    expect(rows[1].style.top).toBe('268px');
+    expect(Number.parseInt(list.style.top) + Number.parseInt(rows[0].style.top)).toBe(148);
+    expect(Number.parseInt(list.style.top) + Number.parseInt(rows[1].style.top)).toBe(268);
+    expect(list.style.overflowY).toBe('hidden');
     expect(rows[0].textContent).toContain('Scenario User');
     expect(rows[0].textContent).toContain('login.personalAccount');
     expect(rows[1].textContent).toContain('Scenario Org User');
     expect(rows[1].textContent).toContain('Example Org');
+    expect(flashScrollbar).not.toHaveBeenCalled();
+  });
+
+  it('五个身份都能通过面板内滚动区域访问并选择第四个企业', async () => {
+    const dispatch = vi.fn(async () => true);
+    mount(
+      {
+        step: 'account-selection',
+        accounts: [
+          {
+            id: 'personal',
+            kind: 'personal',
+            role: 'owner',
+            displayName: 'weikailing',
+            email: 'weikailing@xd.com',
+            orgId: null,
+            orgName: null,
+          },
+          ...['心动网络', '平台测试企业', 'XDS', '22'].map((orgName, index) => ({
+            id: `org-${index + 1}`,
+            kind: 'org' as const,
+            role: 'admin' as const,
+            displayName: 'weikailing',
+            email: 'weikailing@xd.com',
+            orgId: `org-${index + 1}`,
+            orgName,
+          })),
+        ],
+      },
+      { dispatch },
+    );
+
+    const list = screen.getByTestId('login-account-list');
+    const rows = screen.getAllByTestId('login-method-row');
+    const content = list.firstElementChild as HTMLElement;
+    expect(rows).toHaveLength(5);
+    expect(list.style.overflowY).toBe('auto');
+    expect(Number.parseInt(content.style.height)).toBeGreaterThan(
+      Number.parseInt(list.style.height),
+    );
+    expect(Number.parseInt(list.style.top) + Number.parseInt(rows[2].style.top)).toBe(388);
+    expect(rows[3].textContent).toContain('XDS');
+    await vi.waitFor(() => expect(flashScrollbar).toHaveBeenCalledWith(list));
+
+    await act(async () => {
+      fireEvent.click(rows[3]);
+    });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'select-account', accountId: 'org-3' });
   });
 });
 

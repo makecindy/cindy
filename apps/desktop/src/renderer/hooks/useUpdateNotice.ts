@@ -33,6 +33,14 @@ const MAX_AGGREGATED_VERSIONS = 5;
  */
 const PREVIEW_INDEX_BUDGET_MS = 3000;
 
+/**
+ * A fresh install/update can race the CDN publishing the current notice or
+ * the renderer mounting during startup. Retry the automatic path once after a
+ * short pause; manual and pre-install preview paths already have explicit
+ * user-driven retry/fallback behavior.
+ */
+const AUTO_NOTICE_RETRY_DELAY_MS = 2000;
+
 /** Numeric semver comparison. Returns >0 if a > b, <0 if a < b, 0 if equal. */
 function cmpVersion(a: string, b: string): number {
   const pa = a.split('.').map(Number);
@@ -215,6 +223,11 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
   // Set synchronously (before any await) in onOpen so the auto-fetch path
   // can bail out if manual dialog was opened while the fetch was in flight.
   const dialogOpenedRef = useRef(false);
+  // Once a user explicitly opens either manual history or a pre-install
+  // preview, suppress the pending automatic retry for this hook lifetime.
+  // This must outlive dialogOpenedRef: dismiss() intentionally resets the
+  // latter, but the automatic attempt must not resurrect after dismissal.
+  const autoNoticeSuppressedRef = useRef(false);
   // Stored handle for the dismiss cleanup timer so onOpen can cancel it if
   // the user re-opens the dialog before the 200ms animation delay fires.
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -273,52 +286,64 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
     if (lastRead === appVersion) return;
 
     let cancelled = false;
+    autoNoticeSuppressedRef.current = false;
 
     (async () => {
-      // Fresh install: skip the index round-trip and show only the current
-      // version's notes. We don't want to blast a new user with 30 versions
-      // of history on first launch.
-      const index = lastRead === null ? null : await fetchReleaseNotesIndex();
-      if (cancelled) return;
+      // A transient CDN miss should not permanently lose the upgrade notice for
+      // this process. Keep the retry bounded so a genuinely unavailable CDN
+      // does not hold the renderer in a retry loop.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        // Fresh install: skip the index round-trip and show only the current
+        // version's notes. We don't want to blast a new user with 30 versions
+        // of history on first launch.
+        const index = lastRead === null ? null : await fetchReleaseNotesIndex();
+        if (cancelled || dialogOpenedRef.current || autoNoticeSuppressedRef.current) return;
 
-      const targets = versionsToFetch(index, lastRead, appVersion).slice(
-        -MAX_AGGREGATED_VERSIONS,
-      );
-      const results = await fetchVersionsForCurrentLocale(targets);
-      if (cancelled) return;
-      const notes = results.filter((n): n is ReleaseNotes => n !== null);
+        const targets = versionsToFetch(index, lastRead, appVersion).slice(
+          -MAX_AGGREGATED_VERSIONS,
+        );
+        const results = await fetchVersionsForCurrentLocale(targets);
+        if (cancelled || dialogOpenedRef.current || autoNoticeSuppressedRef.current) return;
+        const notes = results.filter((n): n is ReleaseNotes => n !== null);
 
-      if (notes.length === 0) return;
-      if (!notes.some((n) => n.version === appVersion)) return;
+        if (notes.length > 0 && notes.some((n) => n.version === appVersion)) {
+          // Compute the safe read-marker (unchanged from prior impl).
+          const isCurIdxMissing = index !== null && index.indexOf(appVersion) === -1;
+          const firstFailIdx = results.findIndex((n) => n === null);
+          if (isCurIdxMissing) {
+            readMarkerRef.current = lastRead ?? null;
+          } else if (firstFailIdx === -1) {
+            readMarkerRef.current = appVersion;
+          } else if (firstFailIdx === 0) {
+            const skipKey = `xdt-maker:notice-skip-tried-${targets[0]}`;
+            if (localStorage.getItem(skipKey) === null) {
+              localStorage.setItem(skipKey, '1');
+              readMarkerRef.current = lastRead ?? null;
+            } else {
+              readMarkerRef.current = targets[0];
+            }
+          } else {
+            readMarkerRef.current = targets[firstFailIdx - 1];
+          }
 
-      // Bail BEFORE computing readMarkerRef: if manual was opened while we
-      // fetched, don't write the marker (which would cause onOpen's
-      // readMarkerRef !== null guard to incorrectly abort the manual dialog).
-      if (dialogOpenedRef.current) return;
-
-      // Compute the safe read-marker (unchanged from prior impl).
-      const isCurIdxMissing = index !== null && index.indexOf(appVersion) === -1;
-      const firstFailIdx = results.findIndex((n) => n === null);
-      if (isCurIdxMissing) {
-        readMarkerRef.current = lastRead ?? null;
-      } else if (firstFailIdx === -1) {
-        readMarkerRef.current = appVersion;
-      } else if (firstFailIdx === 0) {
-        const skipKey = `xdt-maker:notice-skip-tried-${targets[0]}`;
-        if (localStorage.getItem(skipKey) === null) {
-          localStorage.setItem(skipKey, '1');
-          readMarkerRef.current = lastRead ?? null;
-        } else {
-          readMarkerRef.current = targets[0];
+          notes.reverse();
+          setMode('auto');
+          setReleaseNotes(notes);
+          setOpen(true);
+          return;
         }
-      } else {
-        readMarkerRef.current = targets[firstFailIdx - 1];
-      }
 
-      notes.reverse();
-      setMode('auto');
-      setReleaseNotes(notes);
-      setOpen(true);
+        if (
+          attempt === 0 &&
+          !cancelled &&
+          !dialogOpenedRef.current &&
+          !autoNoticeSuppressedRef.current
+        ) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, AUTO_NOTICE_RETRY_DELAY_MS);
+          });
+        }
+      }
     })().catch((err) => {
       log.warn('auto-fetch threw:', err);
     });
@@ -383,6 +408,7 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
     }
     // Set synchronously so the auto-fetch path can see it immediately even
     // before this async IIFE has called setOpen/setMode.
+    autoNoticeSuppressedRef.current = true;
     dialogOpenedRef.current = true;
     const appVersion = window.electronAPI.appVersion;
 
@@ -453,6 +479,7 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
       clearTimeout(dismissTimerRef.current);
       dismissTimerRef.current = null;
     }
+    autoNoticeSuppressedRef.current = true;
     dialogOpenedRef.current = true;
     const appVersion = window.electronAPI.appVersion;
 

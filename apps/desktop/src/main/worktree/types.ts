@@ -10,6 +10,8 @@
  * 同时也是 sessions.worktree_path 反范式快照的来源。
  */
 export interface WorktreeMeta {
+  /** New physical contents at the same path invalidate old recycle requests. */
+  generation?: string;
   sessionId: string;
   /** 用户输入或 nameGenerator 给的名字（用于显示 + 路径段 + 分支段）。 */
   name: string;

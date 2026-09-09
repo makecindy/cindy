@@ -83,7 +83,7 @@ describe('device-link reliable transport codec', () => {
   });
 
   it('ACK 是普通 push 且可解析', () => {
-    const ack = makeTransportAck('desktop', 'stream-1', 7);
+    const ack = makeTransportAck('desktop', 'stream-1', 7, 'link-open-1');
     expect(ack).toMatchObject({
       kind: 'push',
       dst: 'desktop',
@@ -92,6 +92,7 @@ describe('device-link reliable transport codec', () => {
     expect(parseTransportAck({ ...ack, src: 'mobile' })).toEqual({
       streamId: 'stream-1',
       ackSeq: 7,
+      linkRequestId: 'link-open-1',
     });
   });
 });

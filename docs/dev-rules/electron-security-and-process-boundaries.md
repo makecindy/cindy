@@ -128,6 +128,19 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload，
 身份由 Main 根据真实 `webContents` 反查。
 
+登录人机验证（captcha）webview 是 hardener 中与 ghost 同级的第三类受控分支
+（`LOGIN_CAPTCHA_PARTITION`，非 persist 内存分区）：`will-attach-webview` 阶段按
+`isAllowedLoginCaptchaUrl` 验明正身——协议（https，或 loopback http 兼容本地 dev
+auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端点集合 +
+路径精确等于托管挑战页（`@cindy/auth-client` 的 `CAPTCHA_CHALLENGE_PAGE_PATH`），
+验不过直接拒附加，绝不回落浏览器分区；attach 后零 preload、零弹窗，顶层导航仅放行
+同一白名单。挑战结果（Turnstile token）经托管页 `location.hash` 写入、宿主 renderer
+监听 `did-navigate-in-page` 读取——fragment 变更不产生网络请求，token 不进任何日志，
+也不需要新增 preload / IPC 注入面。主窗 CSP 保持不动：挑战页是独立 origin 的 guest
+文档，`installContentSecurityPolicy` 只注入 app 自有文档，`frame-src 'none'` 也不约束
+`<webview>`。回归用例钉在 `main/__tests__/webview-security.test.ts` 的 captcha 分区
+测试组。
+
 ## 4．preload 与 Context Bridge
 
 - 只通过 `contextBridge.exposeInMainWorld` 暴露按用途命名的最小方法。
@@ -176,6 +189,11 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 - 正式包不得新增远程脚本或 `'unsafe-inline'`。现有 `'unsafe-eval'` 仅为 vendored drawio
   的已知例外；新增用途必须先做安全评估，不能顺手扩大 `script-src`、`connect-src` 或
   `frame-src`。
+- 所有插件 HTML 页面统一允许 HTTPS 图片：Host 生成的 CSP 只给 `img-src` 增加 `https:`，
+  owner × plugin session 的请求闸只额外放行
+  `protocol === "https:" && resourceType === "image"`。HTTP 图片、XHR／fetch、脚本、
+  样式表、字体、媒体、WebSocket 与其它协议保持拒绝，同 ghost 的 `cindy-ghost://` 资源照常
+  放行。不得把这项图片能力扩成通用网络口子；listener 继续按 partition 幂等注册。
 - 新的本地资源通道优先使用范围受控的自定义协议，不新增 `file://` 读取路径。主 Renderer
   仍使用 `file://` 是存量架构，迁移需要单独设计和验证，不能在普通功能 PR 中顺带改动。
 - 打包必须保留现有 Fuses：关闭 RunAsNode、Node options 和 CLI inspect，开启 cookie 加密、

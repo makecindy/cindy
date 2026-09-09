@@ -26,9 +26,11 @@ import {
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  type PinnedHostname,
   type SsrFPolicy,
 } from '../_generated/leaf/src/infra/net/ssrf.js';
 
+export { SsrFBlockedError } from '../_generated/leaf/src/infra/net/ssrf.js';
 export type { LookupFn, SsrFPolicy } from '../_generated/leaf/src/infra/net/ssrf.js';
 
 export interface GuardedFetchOptions {
@@ -40,6 +42,18 @@ export interface GuardedFetchOptions {
   requireHttps?: boolean;
   maxRedirects?: number;
   lookupFn?: LookupFn;
+  /**
+   * 可选的安全出口适配器。DNS 守门完成后才调用；返回 undefined 时继续使用
+   * 默认的直连 pinned dispatcher。调用方若返回自定义 dispatcher，必须保证它
+   * 仍只连接 pinned.addresses 中的地址。
+   */
+  dispatcherFactory?: (params: {
+    url: URL;
+    pinned: PinnedHostname;
+    policy?: SsrFPolicy;
+  }) => Dispatcher | undefined | Promise<Dispatcher | undefined>;
+  /** DNS 与出口选择完成后、真正 dispatch 前的最后一道同步/异步资格复核。 */
+  beforeDispatch?: () => void | Promise<void>;
   /** Accepted for call-site compatibility; not used by the thin shell. */
   auditContext?: string;
   [extra: string]: unknown;
@@ -76,6 +90,44 @@ function assertScheme(url: URL, requireHttps: boolean | undefined): void {
   }
 }
 
+// DNS lookup cannot itself be cancelled. Stop waiting promptly, and never use a
+// late result to open a connection. Async dispatcher factories also need cleanup.
+function awaitWithSignal<T>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+  disposeLate?: (value: T) => void,
+): Promise<T> {
+  if (!signal) return pending;
+  return new Promise<T>((resolve, reject) => {
+    let cancelled = false;
+    const abort = (): void => {
+      cancelled = true;
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason);
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        if (cancelled) disposeLate?.(value);
+        else resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function guardSignal(params: GuardedFetchOptions): AbortSignal | undefined {
+  const signal = params.signal ?? params.init?.signal ?? undefined;
+  if (params.timeoutMs === undefined) return signal;
+  const deadline = AbortSignal.timeout(params.timeoutMs);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
 /**
  * Guard a single hop: scheme check, then the vendored policy gate.
  *
@@ -92,12 +144,70 @@ async function guardHop(
   policy: SsrFPolicy | undefined,
   lookupFn: LookupFn | undefined,
   requireHttps: boolean | undefined,
+  dispatcherFactory: GuardedFetchOptions['dispatcherFactory'],
+  signal?: AbortSignal,
 ): Promise<{ url: URL; dispatcher: Dispatcher }> {
+  signal?.throwIfAborted();
   const url = new URL(rawUrl);
   assertScheme(url, requireHttps);
-  const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, { policy, lookupFn });
-  const dispatcher = createPinnedDispatcher(pinned, undefined, policy);
+  const pinned = await awaitWithSignal(
+    resolvePinnedHostnameWithPolicy(url.hostname, { policy, lookupFn }), signal,
+  );
+  signal?.throwIfAborted();
+  const customDispatcher = await awaitWithSignal(
+    Promise.resolve(dispatcherFactory?.({ url, pinned, policy })), signal,
+    (late) => { void closeDispatcher(late); },
+  );
+  if (signal?.aborted) {
+    await closeDispatcher(customDispatcher);
+    signal.throwIfAborted();
+  }
+  const dispatcher = customDispatcher ?? createPinnedDispatcher(pinned, undefined, policy);
   return { url, dispatcher };
+}
+
+/**
+ * Guard and execute exactly one manually redirected HTTP hop.
+ *
+ * Callers that own redirect semantics can re-run this function for every hop;
+ * the returned dispatcher keeps the vetted DNS answers pinned until the
+ * response body has been consumed and `release()` is called.
+ */
+export async function fetchSingleHopWithSsrFGuard(
+  params: GuardedFetchOptions,
+): Promise<{ response: Response; release: () => Promise<void> }> {
+  const signal = guardSignal(params);
+  const { url, dispatcher } = await guardHop(
+    params.url,
+    params.policy,
+    params.lookupFn,
+    params.requireHttps,
+    params.dispatcherFactory,
+    signal,
+  );
+  try {
+    await awaitWithSignal(Promise.resolve().then(() => {
+      signal?.throwIfAborted();
+      return params.beforeDispatch?.();
+    }), signal);
+    const fetchOptions = {
+      ...params.init,
+      signal,
+      redirect: 'manual' as const,
+      dispatcher,
+    };
+    const response = (await undiciFetch(
+      url.href,
+      fetchOptions as unknown as Parameters<typeof undiciFetch>[1],
+    )) as unknown as Response;
+    return {
+      response,
+      release: () => closeDispatcher(dispatcher),
+    };
+  } catch (err) {
+    await closeDispatcher(dispatcher);
+    throw err;
+  }
 }
 
 function stripSensitiveHeaders(init: RequestInit | undefined): RequestInit | undefined {
@@ -112,6 +222,7 @@ function stripSensitiveHeaders(init: RequestInit | undefined): RequestInit | und
  * response plus a `release()` that closes the pinned dispatcher.
  */
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
+  const signal = guardSignal(params);
   const maxRedirects = params.maxRedirects ?? 10;
   let currentUrl = params.url;
   let currentInit: RequestInit | undefined = params.init;
@@ -130,14 +241,21 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         params.policy,
         params.lookupFn,
         params.requireHttps,
+        params.dispatcherFactory,
+        signal,
       );
       dispatchers.push(dispatcher);
+
+      await awaitWithSignal(Promise.resolve().then(() => {
+        signal?.throwIfAborted();
+        return params.beforeDispatch?.();
+      }), signal);
 
       // undici's fetch accepts a `dispatcher`; its RequestInit differs slightly
       // from the DOM lib types, so we go through `unknown` for the options bag.
       const fetchOptions = {
         ...currentInit,
-        signal: params.signal ?? currentInit?.signal,
+        signal,
         redirect: 'manual' as const,
         dispatcher,
       };

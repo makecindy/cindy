@@ -10,7 +10,7 @@
  * tool call), but each is uniquely keyed.
  */
 
-import type { InteractionDecision } from '@cindy/maker-core';
+import type { AskUserQuestionItem, InteractionDecision } from '@cindy/maker-core';
 
 import {
   buildAskNoAnswerDecision,
@@ -38,6 +38,18 @@ interface PendingEntry {
    * 一句「✅ 已允许」。
    */
   permissionCard?: { title: string; body: string };
+  /**
+   * 多题/多选打勾卡的原始问题(仅 kind === 'ask_user_question' 且
+   * needsAskMultiCard 时登记)。ask:multi 按键要按问题下标改写勾选态并
+   * 重建卡片, cardActionHandler 拿不到原始请求, 与 toolName 同理登记在此。
+   */
+  askQuestions?: AskUserQuestionItem[];
+  /**
+   * 打勾卡的勾选态: 问题下标 -> 已选选项下标集合。注册时置空 Map,
+   * cardActionHandler 在每次 ask:multi 按键时原地改动; 随 entry 一同
+   * 删除(resolve / cancel)即自动回收, 无需单独清理。
+   */
+  askSelections?: Map<number, Set<number>>;
 }
 
 const pending = new Map<string, PendingEntry>();
@@ -46,7 +58,12 @@ export function registerPending(
   requestId: string,
   kind: InteractionDecision['kind'],
   messageId: string,
-  extras?: { toolName?: string; permissionCard?: { title: string; body: string } },
+  extras?: {
+    toolName?: string;
+    permissionCard?: { title: string; body: string };
+    askQuestions?: AskUserQuestionItem[];
+    askSelections?: Map<number, Set<number>>;
+  },
 ): Promise<InteractionDecision> {
   return new Promise<InteractionDecision>((resolve, reject) => {
     try {
@@ -71,7 +88,12 @@ export function registerPendingExternal(
   messageId: string,
   resolve: (decision: InteractionDecision) => void,
   reject: (err: Error) => void,
-  extras?: { toolName?: string; permissionCard?: { title: string; body: string } },
+  extras?: {
+    toolName?: string;
+    permissionCard?: { title: string; body: string };
+    askQuestions?: AskUserQuestionItem[];
+    askSelections?: Map<number, Set<number>>;
+  },
 ): void {
   if (pending.has(requestId)) {
     throw new Error(`pending interaction already exists for requestId=${requestId}`);
@@ -83,6 +105,8 @@ export function registerPendingExternal(
     kind,
     toolName: extras?.toolName,
     permissionCard: extras?.permissionCard,
+    askQuestions: extras?.askQuestions,
+    askSelections: extras?.askSelections,
   });
 }
 

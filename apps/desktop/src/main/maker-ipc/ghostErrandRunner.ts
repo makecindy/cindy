@@ -245,12 +245,12 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
         'errand 会话恰好正忙,本单任务已排队进该会话但结果不再取回;请稍后查看会话或重新提交',
       );
     }
-
     // ── 收口:观察这一轮直到 done / 终态错误 / 超时 ─────────────────────
     const session = deps.getObservableSession(sessionId);
     if (!session) {
       return failure('SESSION_UNAVAILABLE', 'errand 会话进程不可用,请稍后再试');
     }
+    hooks?.onDispatched?.(sessionId);
     const observer = observeHookTurn(session, {
       // 不传 onProgress: errand 只取终态结果, 不向任何渠道发过程快照。
       onSilentStopSettled: deps.onSilentStopSettled,

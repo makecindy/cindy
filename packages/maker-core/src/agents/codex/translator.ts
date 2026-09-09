@@ -28,6 +28,7 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import {
   stableInternalWebCitationBoundary,
+  stableStandaloneModelStopTokenBoundary,
   stripInternalWebCitations,
 } from '@cindy/maker-shared/internal-citation';
 
@@ -45,7 +46,9 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
+import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
+import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -82,6 +85,8 @@ export interface CodexRuntimeState {
   generationPendingToolIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
+  /** Model time sampled with the latest accepted output usage. */
+  generationOutputDurationMs: number;
   generationTurnId: string | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
@@ -127,6 +132,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
     generationDurationMs: 0,
+    generationOutputDurationMs: 0,
     generationTurnId: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
@@ -178,6 +184,7 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
+  rt.generationOutputDurationMs = 0;
   rt.generationTurnId = null;
   rt.generationTimingReliable = true;
 }
@@ -477,32 +484,80 @@ export function isAuthRelatedErrorMessage(message: string, errorStatus?: number)
     .test(message);
 }
 
+export interface ClassifiedCodexError {
+  message: string;
+  errorStatus?: number;
+  errorInfoTag?: string;
+  usageLimit: boolean;
+  isCapacityError: boolean;
+  reason?: string;
+  data: Record<string, unknown> & { message: string };
+}
+
+/**
+ * ErrorNotification 与 turn/completed.turn.error 共用的结构化分类。
+ * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
+ * 唯一例外：远端 compact 密文 400 会把 `additionalDetails` 拼进 classify 文本，
+ * 因为用户形态经常是 message=`Error running remote compact task`、code 在 details 里。
+ */
+export function classifyCodexError(error: {
+  message?: string;
+  additionalDetails?: unknown;
+  codexErrorInfo?: import('./app-server/protocol.js').CodexErrorInfo | null;
+} | null | undefined): ClassifiedCodexError {
+  const rawMessage = error?.message ?? 'codex error';
+  const hasMissingBearer = /\bMissing bearer\b/i.test(rawMessage);
+  const hasAuthErrorMarker =
+    /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
+      rawMessage,
+    );
+  const message = redactSensitiveText(rawMessage);
+  const signals = extractNonSecretErrorSignals(rawMessage);
+  const errorStatus =
+    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+  const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
+  const isCapacityError =
+    parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+  const reason = isCapacityError
+    ? UPSTREAM_OVERLOAD_REASON
+    : errorInfoTag === 'contextWindowExceeded' ||
+        isContextOverflowErrorMessage(message) ||
+        isRemoteCompactEncryptedContentError(compactClassifyText)
+      ? CONTEXT_OVERFLOW_REASON
+      : undefined;
+  return {
+    message,
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
+    ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
+    usageLimit: signals.usageLimit,
+    isCapacityError,
+    ...(reason ? { reason } : {}),
+    data: {
+      message,
+      ...(errorStatus !== undefined ? { errorStatus } : {}),
+      ...(signals.usageLimit ? { usageLimit: true } : {}),
+      ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
+      ...(reason ? { reason } : {}),
+    },
+  };
+}
+
 /** error notification (顶层非 item.*) → AgentEvent error。 */
 export function translateErrorNotification(
   params: ErrorNotification['params'],
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const message = params.error?.message ?? 'codex error';
-  const hasMissingBearer = /\bMissing bearer\b/i.test(message);
-  const hasAuthErrorMarker =
-    /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
-      message,
-    );
-  const safeMessage = redactSensitiveText(message);
-  const signals = extractNonSecretErrorSignals(message);
-  const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  // 结构化错误标识。过载判定优先吃它(见下方 capacity 分支), 同时透出到 error data
-  // 供诊断与下游归因。**不参与上面的 errorStatus 推断** —— 那条链路上挂着
-  // renderer 的 401 banner 与 auth 修复 UX, 改推断依据会连带改这些行为。
-  const errorInfoTag = codexErrorInfoTag(params.error?.codexErrorInfo);
-  const safeErrorData = {
-    message: safeMessage,
-    ...(errorStatus !== undefined ? { errorStatus } : {}),
-    ...(signals.usageLimit ? { usageLimit: true } : {}),
-    ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
-  };
+  const classified = classifyCodexError(params.error);
+  const message = classified.message;
+  const safeMessage = classified.message;
+  const errorStatus = classified.errorStatus;
+  const isCapacityError = classified.isCapacityError;
+  const errorInfoTag = classified.errorInfoTag;
+  const safeErrorData = classified.data;
   // willRetry=true 的暂时错误 (transient API blip / 5xx blip), server 自己会重试 — 默认
   // 不 emit error event 给 UI,否则会把瞬时错误暴露成用户可见失败。**但** auth 缺失
   // (401/Unauthorized/Missing bearer) 是 daemon 怎么 retry 也不可能自愈的 —— 必须
@@ -565,20 +620,14 @@ export function translateErrorNotification(
   // 由 agent 层接管退避重投。接管成功时透成非终止状态并带进度后缀, renderer
   // 显示"模型繁忙, 正在重试 (N/M)"; 预算耗尽或条件不满足 (本 turn 已有产出)
   // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
-  const isCapacityError =
-    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
-  // 过载错误一律带上稳定 reason key。renderer 隔着 IPC 投影拿不到 codexErrorInfo,
-  // 靠这个 key 判定"是否过载"(ErrorBanner 的本地化文案 + 重试进度 + hideRetry 都由它
-  // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
-  // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
+  // 过载分类在函数入口已完成，避免同一判据在两处漂移。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
   // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
   // 它隐藏 Retry 并给出压缩 / 新开会话入口。结构化 contextWindowExceeded 优先，
   // 文案匹配仅兼容旧版 app-server；与 capacity 互斥时 overload 优先 —— 它还驱动
   // 退避重投接管，语义更具体。
   const contextOverflowReason =
-    !isCapacityError &&
-    (errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(safeMessage))
+    !isCapacityError && classified.reason === CONTEXT_OVERFLOW_REASON
       ? { reason: CONTEXT_OVERFLOW_REASON }
       : {};
   if (!params.willRetry && isCapacityError) {
@@ -642,6 +691,7 @@ export function translatePlanUpdatedNotification(
     data: {
       toolUseId: `plan:${params.turnId}`,
       toolName: 'update_plan',
+      runtimeActivity: 'snapshot',
       input: {
         ...(params.explanation ? { explanation: params.explanation } : {}),
         plan: params.plan,
@@ -715,6 +765,7 @@ export function extractRolloutUpdatePlanFunctionCallEvent(
       data: {
         toolUseId: turnId ? `plan:${turnId}` : `plan-call:${item.call_id ?? 'unknown'}`,
         toolName: 'update_plan',
+        runtimeActivity: 'snapshot',
         input,
       },
       source: 'codex',
@@ -730,6 +781,7 @@ interface AgentMessageItem {
   type: 'agentMessage';
   id: string;
   text: string;
+  phase?: 'commentary' | 'final_answer';
 }
 
 interface ReasoningItem {
@@ -1017,17 +1069,18 @@ export function finalizeCodexCitationText(text: string): string {
 }
 
 export function stableCitationBoundary(text: string): number {
+  const stopTokenEnd = stableStandaloneModelStopTokenBoundary(text);
   const open = findUnfinishedCitationOpen(text);
   if (open !== -1) {
-    return Math.min(open, stableInternalWebCitationBoundary(text));
+    return Math.min(open, stableInternalWebCitationBoundary(text), stopTokenEnd);
   }
   const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
   for (let k = maxProbe; k > 0; k -= 1) {
     if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) {
-      return Math.min(text.length - k, stableInternalWebCitationBoundary(text));
+      return Math.min(text.length - k, stableInternalWebCitationBoundary(text), stopTokenEnd);
     }
   }
-  return stableInternalWebCitationBoundary(text);
+  return Math.min(stableInternalWebCitationBoundary(text), stopTokenEnd);
 }
 
 function emitAgentMessageProgress(
@@ -1053,7 +1106,7 @@ function emitAgentMessageProgress(
   if (delta.length === 0) return;
   queue.push({
     type: 'text',
-    data: { text: delta, isFinal: false },
+    data: { text: delta, isFinal: false, agentMessageId: itemId },
     source: 'codex',
   });
 }
@@ -1141,7 +1194,13 @@ function handleAgentMessage(
     // finalizeCodexCitationText 是与历史导入共用的统一口径。
     queue.push({
       type: 'text',
-      data: { text: finalizeCodexCitationText(rawText), isFinal: true, isFullText: true },
+      data: {
+        text: finalizeCodexCitationText(rawText),
+        isFinal: true,
+        isFullText: true,
+        agentMessageId: item.id,
+        ...(item.phase ? { phase: item.phase } : {}),
+      },
       source: 'codex',
     });
     return;
@@ -1360,7 +1419,13 @@ function handleCommandExecution(
     type: 'tool_result_full',
     data: {
       toolUseId: item.id,
-      fullText: stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+      // #3793:bwrap 沙箱初始化失败(命令从未执行)时追加宿主归因标注,
+      // 模型不再盲目重试,用户在工具卡里能看到原因。健康与普通失败路径原样。
+      fullText: annotateSandboxInitFailure(
+        stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        isError,
+        item.command,
+      ),
       isError,
     },
     source: 'codex',
@@ -1796,6 +1861,8 @@ function handleCollabAgentToolCall(
   ctx: CodexTranslateContext,
 ): void {
   const toolName = `collab:${item.tool}`;
+  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
@@ -1805,6 +1872,13 @@ function handleCollabAgentToolCall(
   if (item.reasoningEffort) input.reasoningEffort = item.reasoningEffort;
 
   if (phase === 'started') {
+    // Codex can emit a provisional spawn item before validation has created a
+    // child thread. If validation then fails (for example an unknown model),
+    // 0.145 emits no matching terminal collab item. Publishing this empty-
+    // receiver placeholder would therefore leave an inline card and durable
+    // Subagent run stuck on running forever. Wait for a receiver-bearing
+    // updated/completed snapshot, which is the first proof that a child exists.
+    if (!hasSpawnReceiver) return;
     if (ctx.rt.emittedToolUse.has(item.id)) return;
     ctx.rt.emittedToolUse.add(item.id);
     queue.push({
@@ -1821,6 +1895,7 @@ function handleCollabAgentToolCall(
   }
 
   if (phase === 'updated') {
+    if (!hasSpawnReceiver) return;
     if (!ctx.rt.emittedToolUse.has(item.id)) {
       ctx.rt.emittedToolUse.add(item.id);
       queue.push({
@@ -1897,6 +1972,7 @@ interface SubAgentActivityItem {
   agentPath?: string;
   /** Newer Codex builds may include the selected child model on the activity. */
   model?: string;
+  reasoningEffort?: string | null;
 }
 
 /**
@@ -1972,10 +2048,14 @@ function handleSubAgentActivity(
   if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
   const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
   const model = typeof item.model === 'string' && item.model ? item.model : undefined;
+  const reasoningEffort = typeof item.reasoningEffort === 'string' && item.reasoningEffort
+    ? item.reasoningEffort
+    : undefined;
   const input: Record<string, unknown> = {};
   if (agentPath) input.name = agentPath;
   if (item.agentThreadId) input.agentThreadId = item.agentThreadId;
   if (model) input.model = model;
+  if (reasoningEffort) input.reasoningEffort = reasoningEffort;
   queue.push({
     type: 'tool_use',
     data: { toolUseId: item.id, toolName: 'collab:spawn', input },
@@ -2012,6 +2092,7 @@ function handleSubAgentActivity(
       ...(item.agentThreadId ? { receiverThreadIds: [item.agentThreadId] } : {}),
       ...(agentPath ? { title: agentPath } : {}),
       ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     },
     source: 'codex',
   });
@@ -2024,7 +2105,9 @@ function toCodexTaskUpdate(
   completedOnly = false,
 ): AgentTaskUpdateEventData {
   const isSpawn = item.tool.toLowerCase().startsWith('spawn');
-  const subagentObservation = isSpawn && (status !== 'completed' || completedOnly)
+  const subagentObservation = isSpawn
+    && item.receiverThreadIds.length > 0
+    && (status !== 'completed' || completedOnly)
     ? {
         kind: status === 'running' || completedOnly ? 'spawn' as const : 'terminal' as const,
         logicalSubagentId: item.id,

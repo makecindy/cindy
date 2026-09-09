@@ -5,16 +5,15 @@ import {
   isDeviceUnresponsiveRemoteError,
   isTransientRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
-import type { DeviceLinkConnectionIssueKind } from '@cindy/device-link';
+import type { DeviceLinkConnectionIssueKind, DeviceLinkStatus } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 
 export {
-  describeAgentAuthError,
   formatRemoteError,
   isPreconditionFailedRemoteError,
-  relayStatusHint,
-  relayStatusLabel,
 } from '@cindy/maker-shared/device-link-contract';
+
+const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(claude-code|codex|pi) not authenticated: ?(.*)$/;
 
 const CONNECTION_ISSUE_COPY_KEYS: Record<
   DeviceLinkConnectionIssueKind,
@@ -42,6 +41,42 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].hint);
 }
 
+export function relayStatusLabel(status: DeviceLinkStatus): string {
+  return i18n.t(`deviceLink.relay.label.${status}`);
+}
+
+export function relayStatusHint(status: DeviceLinkStatus, lastSyncedAt: number | null): string {
+  if (status === 'online') {
+    if (!lastSyncedAt) return i18n.t('deviceLink.relay.hint.online');
+    const time = new Intl.DateTimeFormat(i18n.resolvedLanguage || i18n.language, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(new Date(lastSyncedAt));
+    return i18n.t('deviceLink.relay.hint.lastSynced', { time });
+  }
+  return i18n.t(`deviceLink.relay.hint.${status}`);
+}
+
+export function describeAgentAuthError(error: string | null | undefined): string | null {
+  if (!error) return null;
+  const matched = AGENT_NOT_AUTHENTICATED_RE.exec(error.trim());
+  if (!matched) return null;
+  const agent = matched[1] === 'claude-code' ? 'Claude' : matched[1] === 'pi' ? 'Pi' : 'Codex';
+  const reason = matched[2] || 'unknown';
+  const reasonKey: Record<string, string> = {
+    no_key: 'noKey',
+    no_oauth: 'noOauth',
+    no_credentials: 'noCredentials',
+    no_encryption: 'noEncryption',
+    proxy_not_ready: 'proxyNotReady',
+  };
+  return i18n.t(`deviceLink.agentAuth.${reasonKey[reason] ?? 'default'}`, {
+    agent,
+    reason,
+  });
+}
+
 /** 自动恢复类连接错误保留结构化 marker 做状态分类，展示文案则复用 Mobile i18n。 */
 function localizedConnectionRecoveryCopy(error: unknown): string | null {
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
@@ -62,6 +97,9 @@ export function humanizeRemoteError(error: unknown): string {
   }
   const recoveryCopy = localizedConnectionRecoveryCopy(error);
   if (recoveryCopy) return recoveryCopy;
+  const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
+  const localized = localizedStableRemoteError(formatted);
+  if (localized) return localized;
   return humanizeRemoteErrorShared(error);
 }
 
@@ -93,12 +131,44 @@ export function connectionRecoverySyncRetryDelayMs(attempt: number): number {
 }
 
 export function describeRemoteError(error: string | null): string | null {
-  if (error?.includes('DEVICE_UNRESPONSIVE')) {
+  if (!error) return null;
+  if (error.includes('DEVICE_UNRESPONSIVE')) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
   const recoveryCopy = localizedConnectionRecoveryCopy(error);
   if (recoveryCopy) return recoveryCopy;
+  const agentAuth = describeAgentAuthError(error);
+  if (agentAuth) return agentAuth;
+  const localized = localizedStableRemoteError(error);
+  if (localized) return localized;
   return describeRemoteErrorShared(error);
+}
+
+function localizedStableRemoteError(error: string): string | null {
+  const simpleMarkers: Array<[string, string]> = [
+    ['REMOTE_DISABLED', 'remoteDisabled'],
+    ['CHANNEL_NOT_ALLOWED', 'channelNotAllowed'],
+    ['ACCESS_REVOKED', 'accessRevoked'],
+    ['DEVICE_UNRESPONSIVE', 'deviceUnresponsive'],
+    ['VERSION_MISMATCH', 'versionMismatch'],
+    ['PAYLOAD_TOO_LARGE', 'payloadTooLarge'],
+    ['MEDIA_FETCH_FAILED', 'mediaFetchFailed'],
+    ['VOICE_TRANSCRIBE_FAILED', 'voiceTranscribeFailed'],
+    ['LINK_NOT_OPEN', 'linkNotOpen'],
+  ];
+  for (const [marker, key] of simpleMarkers) {
+    if (error.includes(marker)) return i18n.t(`deviceLink.remoteError.${key}`);
+  }
+  if (error.includes('PRECONDITION_FAILED')) {
+    if (error.includes('ACCOUNT_CHANGED')) return i18n.t('deviceLink.remoteError.accountChanged');
+    if (error.includes('OFFER_EXPIRED')) return i18n.t('deviceLink.remoteError.offerExpired');
+    return i18n.t('deviceLink.remoteError.preconditionFailed');
+  }
+  if (isTransientRemoteError(error)) return i18n.t('deviceLink.remoteError.transient');
+  if (error.includes('BAD_REQUEST') || error.includes('INTERNAL')) {
+    return i18n.t('deviceLink.remoteError.callFailed', { error });
+  }
+  return null;
 }
 
 /**

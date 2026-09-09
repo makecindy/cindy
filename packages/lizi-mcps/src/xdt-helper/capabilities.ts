@@ -68,7 +68,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【怎么开】用户表达"用 worker / 协同模式 / 独立 agent / 派一个 agent 帮我 X"等意图时, Lead 调 start_team 工具创建 team, 再调 create_worker 工具添加 worker。worker 创建后可通过 send_to_worker 派活, 通过 list_workers 查看所有 worker, 通过 switch_focus 切换 focused worker。',
       '【怎么关】用户表达"够了 / 关掉 worker / 不要协同了"时, Lead 调 end_team 结束整个 team(归档所有 worker), 或调 archive_worker 归档单个 worker。Lead 自身保留可继续单 session 对话。',
       '【硬边界】Worker session 不能再开 team(嵌套禁止, 返 WORKER_CANNOT_NEST);Claude Code / Codex / Pi 本地项目或对话 session 都可以作为 Lead 调 start_team,也都可以作为 Worker;SSH 远程 Lead 与 Worker 当前只支持 Claude Code / Codex;Worker 不能结束自己所在 team(返 WORKER_CANNOT_DISABLE);要求 Lead session 有 workingDir。',
-      '【工具归属】13 个 team 工具(start_team / create_worker / create_workers / send_to_worker / list_worker_queue / update_queued_message / cancel_queued_message / list_workers / switch_focus / idle_worker / end_team / archive_worker / list_available_models)在独立的 cindy_orca server 直接顶层注册, 对应"协同模式"可关插件(Settings → Connections → Built-in Tools)。通用 session handoff 原语 send_to_session 在 essential 的 cindy_helper 的 handoff 类目下(走 call_tool, 常开, 供 skill 路由用)。',
+      '【工具归属】15 个 team 工具(start_team / create_worker / create_workers / send_to_worker / interrupt_worker / get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages / list_workers / switch_focus / idle_worker / end_team / archive_worker / list_available_models)在独立的 cindy_orca server 直接顶层注册, 对应"协同模式"可关插件(Settings → Connections → Built-in Tools)。通用 session handoff 原语 send_to_session 在 essential 的 cindy_helper 的 handoff 类目下(走 call_tool, 常开, 供 skill 路由用)。',
       `【与 Claude Code Task tool / Codex subagent 的区别】Task / subagent 是 agent 框架内的子任务派发机制(子 agent 跑在同一 SDK 进程内、有限工具集、生命周期短、对话历史归属父 turn);${BRAND_NAME} 协同模式是业务层的 session 级编排(Lead/Worker 都是完整独立的 ${BRAND_NAME} session, 独立进程、UI 栏位、完整工具、独立对话历史, 长生命周期, 通过 main 进程 IPC + MCP bridge 通信)。两者不互斥, Worker 内部仍可用 Task/subagent 派子任务。`,
       '【手动入口】ChatInput「+」菜单里的「协同模式」项,开启态用橙色 UsersRound 图标与文字标识;用户也能在这里手动开/关,与本工具走同一份业务代码。',
     ].join(' '),
@@ -83,6 +83,19 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【skill 端伪代码】first_seen -> sid = get_current_session_id(); store(key, sid.session_id); later -> sid = load(key); if sid then send_to_worker / send_to_session({ target_session_id: sid, message: "...增量..." }) else fallback normal flow。',
       '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档,skill 自己决定是否回退或等待未来的 unarchive 能力; BUSY 表示目标 turn 正在跑,本工具不排队,skill 自己决定 retry/backoff。',
       '【边界】它不是普通聊天入口,而是 session 间 handoff 的控制层能力;不会自动关闭当前 dispatcher session,也不会替 skill 管理绑定键的存储语义。',
+    ].join(' '),
+  },
+  {
+    key: 'session-control',
+    title: '会话控制面(队列 / 插话 / 停止 / 运行探针)',
+    oneLiner:
+      'agent 可观察任意本机会话队列与运行状态，并控制自己投递的队列消息、same-turn 插话或请求优雅停止。',
+    detail: [
+      '【入口】cindy_helper 的 history 类 list_sessions / list_session_queue 提供 queuedCount、队列位置、来源、入队时间、正文摘要与 consuming 状态；control 类提供 update_session_queued_message、cancel_session_queued_message、steer_session、stop_session_turn、get_session_runtime。',
+      '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。',
+      '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
+      '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',
+      '【探针】get_session_runtime 返回统一 phase、记录状态、标题工作流语义、turn generation、开始时间、最后活动时间、当前动作摘要和停止状态；动作摘要有界且不包含提示词正文、工具参数或凭证。',
     ].join(' '),
   },
   {
@@ -113,12 +126,12 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '官方反馈提交',
     oneLiner: '/issue 命令或自然语言发起,agent 对话式整理后经确认卡片提交 GitHub issue。',
     detail: [
-      '用户输入 /issue(可带初始描述)或直接说"帮我提个 issue",agent 先追问缺失或含糊的细节,不够清楚时不会急着提交。',
-      'Bug 会尽量补齐复现步骤、期望/实际行为、复现频率、已尝试方法和用户同意公开的脱敏诊断摘要;功能建议会澄清使用场景、当前痛点和期望结果。',
+      '用户输入 /issue(可带初始描述)或直接说"帮我提个 issue",agent 先把反馈整理清楚再提交:缺什么问什么,不套固定问卷,不够清楚时不会急着提交。',
+      '整理出对维护者有用的标题与正文,默认概括并脱敏;功能建议不写源码级方案。对话里的图不会传到 GitHub,不要声称截图已附。',
       '整理出结构化标题与正文后调用 submit_github_issue(cindy_helper 的 feedback 类目),系统会尽量隐藏常见密钥、个人路径和邮箱。',
       '提交前 App 内弹系统确认卡片,用户可编辑标题/正文、确认或取消;',
       '不需要安装或配置 GitHub 插件:默认由 Cindy 官方 Bot 提交;当前已配置且可用的 GitHub 账号只作为确认卡里的额外身份选项。',
-      `客户端版本 / OS / 界面语言由系统自动附加,最终创建到 ${BRAND_NAME} 官方 GitHub 仓库。创建后会返回 issue 链接,并可继续协助用户从源码复现、修复 Bug、开发功能和准备 PR。`,
+      `客户端版本 / OS / Harness / 模型 ID / 界面语言由系统作为「提交时的任务环境」自动附加(OS 来自提交客户端本机,Harness / 模型是当前任务快照,不一定是出问题的那个)。用户说明的实际故障环境按需写进正文。最终创建到 ${BRAND_NAME} 官方 GitHub 仓库。创建后会返回 issue 链接,并可继续协助用户从源码复现、修复 Bug、开发功能和准备 PR。`,
     ].join(' '),
   },
   {
@@ -148,8 +161,8 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '聊天历史查询(给 LLM 自助拉本地对话数据)',
     oneLiner: 'agent 通过 MCP 工具拉本地 SQLite 里所有 session / message 原始数据,适合做用户级 memory / 知识库整理。',
     detail: [
-      `【是什么】${BRAND_NAME} 所有用户和 agent 的对话全部存在本地 SQLite(按 userId 物理隔离), 但用户原本看不到这些数据, 也无法让 agent 帮忙整理。cindy_helper 的 history 类工具开放了四个只读查询入口, 让 agent 能拿到原始 raw data 协助用户组织自己的 memory / 知识库系统。`,
-      '【四个工具】(1)list_workdirs: 列出所有出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据(不返消息内容); (3)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (4)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口。',
+      `【是什么】${BRAND_NAME} 所有用户和 agent 的对话全部存在本地 SQLite(按 userId 物理隔离), 但用户原本看不到这些数据, 也无法让 agent 帮忙整理。cindy_helper 的 history 类工具开放了五个只读查询入口, 让 agent 能拿到原始 raw data 与当前输入队列协助用户组织自己的 memory / 知识库系统。`,
+      '【五个工具】(1)list_workdirs: 列出所有出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据，并附当前 queuedCount; (3)list_session_queue: 按 session_id 查看尚未消费消息的位置、来源、入队时间、正文摘要与投递状态; (4)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (5)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口。',
       '【典型用法】"帮我总结这周和 agent 的讨论, 写成 memory 条目" → list_sessions({from: 周一 ISO}) 拿 sessionId 列表 → get_chat_history({session_ids: [...]}) 拿对话 → LLM 提炼成 memory。"我之前聊过 X / 上次怎么解决那个 bug"(只记得内容、不知道在哪) → search_chat_history({query}) 直接语义召回。"我在 xxx 项目里都聊过啥" → list_sessions({workdir}) → get_chat_history。',
       '【向量是增益不是依赖】search_chat_history 在用户没开 embedding / sqlite-vec 不可用时静默退化为纯 FTS, 搜索照常工作; 响应里 vector_used 标明向量是否生效。',
       '【分页】所有工具游标分页, 单次硬上限防炸 context, 但 hasMore + nextCursor 串联多次调用可拿全量, 不会丢信息。',
@@ -180,11 +193,13 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
     key: 'feishu-integration',
     title: '飞书集成(基础接入)',
-    oneLiner: '飞书 OAuth 登录、IM 通知、文件上传,以及 agent 可调用的飞书 MCP 工具集。',
+    oneLiner: '飞书 OAuth 登录与 IM 出站通知;飞书数据读写由企业档 xd-feishu 插件经 ghost 网关提供。',
     detail: [
-      `使用飞书 OAuth 登录 ${BRAND_NAME}。任务完成、权限超期等事件通过 IM 推送通知。`,
-      'agent 通过 MCP 工具读写飞书数据:文档(docx_search / read / append_blocks / insert_blocks / update_block)、多维表格(bitable_search / list_tables / list_fields / list_records)、Wiki 知识空间(wiki_search / read / create_node / recent_changes 等)、IM 消息(im_list_chats / read_messages / send_message)、联系人、日程、会议纪要。',
-      '支持上传图片 / 文件到飞书(im_upload_image / im_upload_file),还有跨类型全局搜索 search_and_read。',
+      `使用飞书 OAuth 登录 ${BRAND_NAME}。任务完成、权限超期等事件通过 IM 推送通知;`,
+      '出站通道(cindy_feishu_bot)负责给当前飞书用户发消息 / 发文件 / 发图片,不提供数据读取。',
+      '读写飞书数据(云文档 docx / 多维表格 bitable / Wiki 知识库 / IM 消息搜索阅读 / 联系人 / 日程 / 审批 / 会议纪要)属于企业档 xd-feishu 插件:',
+      '需在侧边栏「插件」安装并启用 xd-feishu、在其详情页连接账号;OAuth 登录成功不等于该插件可用。',
+      '这些操作不注册为顶层 MCP 工具——agent 须经 ghost 网关发现与调用(ghost_info({ghost_id:"xd-feishu"}) 查实时工具清单,再 ghost_call 执行)。',
       '把"接管 desktop session 移动办公"这条独立能力请查 mobile-takeover bucket。',
     ].join(' '),
   },

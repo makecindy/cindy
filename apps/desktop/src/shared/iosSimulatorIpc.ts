@@ -75,6 +75,8 @@ export interface IOSSimulatorPublicRouteStatus {
   instanceId: string;
   generation: number;
   updatedAt: string;
+  /** Optional for compatibility with older Host builds; missing fails closed. */
+  nativeRecoveryAvailable?: boolean;
   stream: {
     adapter: IOSSimulatorPublicRouteAdapter;
     encoding: 'h264' | 'jpeg' | null;
@@ -101,6 +103,8 @@ export type IOSSimulatorSessionStatus =
       instances: IOSSimulatorPublicInstance[];
       deviceGrants: IOSSimulatorDeviceGrant[];
       mutationStates: IOSSimulatorMutationState[];
+      /** Optional for compatibility with older Main processes. */
+      controlAccess?: 'active' | 'paused';
       /** Optional for compatibility with older Host builds. */
       resource?: IOSSimulatorPublicResourceStatus;
       /** Optional for compatibility with older detached/sidebar renderers. */
@@ -125,11 +129,16 @@ export interface IOSSimulatorAccessRequestResult {
   granted: boolean;
 }
 
+/** Owner-scoped presentation preference. Simulator lifecycle and tool access are unaffected. */
+export interface IOSSimulatorPreferences {
+  autoOpenEmbeddedPanel: boolean;
+}
+
 /**
  * Renderer-owned simulator actions. Agent-only build, install, URL, push, media,
  * and diagnostic tools must stay behind the MCP approval/control boundary.
  */
-export const IOS_SIMULATOR_RENDERER_TOOL_NAMES = [
+const IOS_SIMULATOR_RENDERER_MCP_TOOL_NAMES = [
   'attach_device',
   'detach_device',
   'start_instance',
@@ -142,6 +151,13 @@ export const IOS_SIMULATOR_RENDERER_TOOL_NAMES = [
   'lock_screen',
   'unlock_screen',
 ] as const satisfies readonly IOSSimulatorMcpToolName[];
+
+export const IOS_SIMULATOR_RENDERER_TOOL_NAMES = [
+  ...IOS_SIMULATOR_RENDERER_MCP_TOOL_NAMES,
+  // Host-only destructive lifecycle action. Keep it out of the MCP registry:
+  // the trusted Renderer confirmation flow is its sole caller.
+  'delete_instance',
+] as const;
 
 export type IOSSimulatorRendererToolName = (typeof IOS_SIMULATOR_RENDERER_TOOL_NAMES)[number];
 
@@ -174,6 +190,12 @@ export interface IOSSimulatorViewerRouteRequest {
   leaseId: string;
 }
 
+export type IOSSimulatorCopyScreenshotRequest = IOSSimulatorViewerRouteRequest;
+
+export interface IOSSimulatorCopyScreenshotResult {
+  ok: true;
+}
+
 export interface IOSSimulatorViewerVisibilityRequest extends IOSSimulatorViewerRouteRequest {
   visible: boolean;
   /** Identifies one renderer effect lifetime so a stale close cannot stop its replacement. */
@@ -181,6 +203,11 @@ export interface IOSSimulatorViewerVisibilityRequest extends IOSSimulatorViewerR
   preferredEncoding?: 'jpeg' | 'h264';
   /** Renderer decoder failed after a native stream was selected. */
   fallbackReason?: 'native-decoder-fallback';
+}
+
+export interface IOSSimulatorRetryNativeRouteRequest extends IOSSimulatorViewerRouteRequest {
+  /** Exact viewer effect lifetime that is allowed to re-arm Native acceleration. */
+  viewerToken: string;
 }
 
 export type IOSSimulatorNativeH264StreamProfileRequest = Pick<

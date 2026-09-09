@@ -1,0 +1,262 @@
+# 统一模型选择器(模型优先)· 实施设计
+
+> **状态**:实施设计文档(本次交付的权威规格;合并后其中「交互契约」章节升为产品规则)
+> **读取时机**:实现、review 或修改新版模型选择器(新会话/会话内)前
+> **来源**:2026-08-12 交互设计稿(Chris 逐轮裁决)+ 三路代码侦察(选择器结构/目录平面/偏好持久化)
+
+## 0. 一句话
+
+用户只选模型;引擎(harness)由推荐映射自动配好且**常驻可见**;高级调整(引擎/思考深度/Fast/收藏)收进模型行的配置浮层;第一版一次交付完整体验。
+
+---
+
+## 1. 交互契约(定稿)
+
+### 1.1 触发器(composer pill)
+
+- 单一 pill:`[厂商图标] 模型名 · [引擎图标] 深度 [⚡]`。独立的引擎选择器(AgentSelect)从**新会话工具条**撤除。
+- 模型名超长:max-width 截断 + hover title 全名。
+- hover tooltip:`引擎名 · 思考深度 <档> [· Fast] [· 已自定义/收藏配置]`。
+- 智能模式(Cindy Fast/Smart)**本版不做**(无后端 = 假按钮);面板结构预留组位。
+
+### 1.2 面板(向下展开)
+
+- **A 版是新旧用户唯一的模型选择面板**（2026-09-05）。删除 B 版与样式切换入口，不再读取历史 `xdt:modelPickerLayout:v1` 偏好，升级无需手动切换。仅在老被控端 capabilities-only 时保留兼容列表。固定引擎表单同样使用 A，候选锁定在该表单实际能保存的引擎。
+- 全局入口：聊天、新任务、定时任务、IM 默认、Hook 工作目录、Worker、Subagent、视觉桥、辅助模型与插件快问快答复用同一面板。只存模型的入口不开放深度 / Fast 配置；仅存单引擎配置的入口不能选择其他引擎。专用模型白名单不得因界面统一而扩大，远程模型与来源来自被控端目录，不能写入本机记忆。
+- 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
+- 结构:搜索框贴顶 → 左侧 rail(★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
+- 宽度自适应:`max-content`,min 460px / max min(600px, 100vw-48px)——长名先撑宽,到上限才截断,不硬砍。
+- 行(双行):
+  - L1:厂商图标 · 模型名(弹性,截断) · 价格档/折扣/订阅徽标 · ☆ · 右侧**常驻三元组**`[引擎图标] 深度 [⚡]` · 选中勾。
+  - L2:一句描述(截断)。
+  - 三元组**所有行同构、永远显示**——引擎可见性靠一致的结构位,不靠出错才显示;自定义未收藏的行整组提亮一档(secondary)。
+- 分组:收藏 → 推荐（仅已有任务）→ 供应商分组。推荐区先放当前模型，再放同生效引擎的模型；推荐中的模型从下方供应商组移除，空组不渲染标题或间距。供应商侧栏仍基于完整目录。新任务不展示同引擎推荐。组间顺序遵循「设置 → 模型供应商」的拖动排序(本地会话;device-link 用被控端快照顺序,不套控制端本地序),组内按服务端下发 group/sortOrder。收藏区条目**不**从供应商组中去重移除(收藏是配置副本,模型本体仍在原地)。
+- 折扣表达:价格档 `¥/$` 串按折后价连续填充(付费亮、折扣灰),后跟淡染徽标 `↓60%`;详情(title+浮层)写全「折扣中 · 标准价 X · 省 Y%」。中文计价 ¥,英文 $。
+
+### 1.3 配置浮层(点「自定义」/ 右键 / ← 打开,跟随行定位)
+
+- 不再随 hover 自动弹出或收起。行 hover 时收藏 ☆ 右侧出现「自定义」(SlidersHorizontal),点它或右键该行打开;键盘入口仍是 ←。点击打开后，经过其他模型、离开行／浮层、焦点移动或滚动不收起。再次点击同一配置按钮只关闭浮层、保留选择器；点击浮层外、Esc 或锚点被过滤／删除也关闭。主动打开另一行切换配置对象，Esc 后焦点回到原行。
+
+- 定位:锚点或列表结构变化、滚动、窗口缩放时更新；同锚点内调整配置不重算(防抖动);高度恒定(底栏三态等高:推荐配置/已自定义·恢复推荐/收藏配置·取消收藏)。
+- 内容(自上而下):标题(≤2行截断+title) → 来源·上下文(**按当前选中引擎实时变**) → 深度滑杆(+⚡钮) → 引擎胶囊行 → 价格 → 状态底栏。无字段标题,组件自表达。
+- **深度滑杆**:
+  - 档位绝对色映射(跨模型一致):low `#2AAE5B` / medium `#14B8A6` / high `#3B82F6` / xhigh `#4F46E5` / max·ultra `#8B5CF6`。**紫只属于真正顶档**;封顶 high 的模型拉满也是蓝。
+  - 滑条单色 = 当前档色;拖动中滑块连续跟手、条色按相邻档色值逐像素插值;松手吸附;点击跳档 = 宽度+颜色 180ms 扫过动画。
+  - 「更高效/更智能」端点标签仅拖动时浮现;首尾档不画点;气泡带档色点,推荐档标注。
+- **引擎胶囊行**:小胶囊(高 26、无边框、图标+名),3-4 个横排可换行;推荐项 hover title「推荐」(不另打勾 / 描边,避免和底栏「恢复推荐」两处选中);单引擎模型与同引擎轨为静态块。
+- **Fast ⚡**:与深度正交的「插队加速」开关(28px 圆钮,开=蓝),hover 提示「Fast · 1.5 倍速 · 用量更多」;仅 supportsFastMode 的 (模型,引擎) 显示。外侧(pill/行内)Fast 只用中性色闪电,不写字不上蓝。
+
+### 1.4 自定义与恢复(遵循 configuration-and-overrides.md)
+
+- 浮层内改引擎/深度/Fast = 写该模型的用户 override;行内三元组提亮 + 底栏「已自定义 · 恢复推荐」。
+- 恢复推荐 = **删 override**,随版本跟随新推荐;未自定义用户自动获得新默认。
+- 不设集中管理入口(已裁决删除);恢复只在浮层就地做。
+
+### 1.5 收藏 = 配置副本
+
+- 行/浮层的 ☆ 是**单向「添加副本」动作**:把当前生效配置(模型+引擎+深度+Fast)拷进收藏区,点亮 0.7s 反馈后恢复;源头行不持有收藏态(多副本下不可判定)。重复添加去重。
+- 每条收藏有**独立锚点 uid**，浮层绑定与删除按 uid 区分；收藏不显示选中底色或勾；选中态只出现在模型本体上。配置编辑仍核对来源、模型、引擎、深度、Fast 与实际配置。同模型多条目互不牵连。
+- 打开收藏条目的配置浮层后，直接编辑该条。若当前任务正在使用其完整配置，先应用到当前任务，成功才保存收藏；其他旧任务保持原配置，不自动跟随收藏修改，重新打开时按实际配置显示选中行。底栏「收藏配置 · 取消收藏」。
+- 点击收藏按一份完整配置应用来源、模型、引擎、深度与 Fast。确认取消、写入失败或抛错时保留原选中态和面板，不提交收藏编辑或删除；成功后再收尾。同一面板的配置操作串行执行，写入及回滚完成前禁止连续修改，失败后允许重试。
+- 非默认配置条目右侧显示 `引擎 · 深度 [⚡]` 后缀;删除选中条目时选中回落到对应模型默认。
+
+### 1.6 会话内(切换有损)
+
+- 默认打开「全部」，移除同引擎过滤侧栏；引擎在外部变化后回到「全部」。
+- 搜索跨全部来源，不受当前侧栏限制；清空搜索恢复原侧栏。
+- 收藏允许与推荐或供应商区重复；推荐与下方供应商区不重复，供应商分组不改成引擎分组。
+- 打开时将模型本体的当前行中心定位到列表可视高度约 35% 处，允许收藏滚出顶部。用户手动滚动后不抢回位置。
+- 相邻模型行之间保留 4px 间隔，避免悬停底色和选中底色贴边。
+- 跨引擎:点「全部/供应商」显式切换,列表顶部一行警示「⚠ 跨引擎切换会重建上下文,有丢失风险」。
+- 切引擎执行仍走既有 `performAgentSwitch` 链路(确认弹窗、fastMode 不跨引擎带入等语义保留)。
+- **风险确认只认任务真实引擎**(Chris 2026-08-20):用户只要选的是**不是当前正在跑的引擎**的模型或收藏,
+  一律弹出换引擎确认。已经确认过的意图目标 Harness 内换模型不再弹;换到第三家仍然要问。
+  回原引擎不弹。确认成功后关掉选单,模型胶囊用「下条：」标明下一条消息才会切过去;
+  再打开默认停在**当前正在跑的** Harness / 模型。
+- **切换事务的「成功」= 本端请求的完整配置原样落地**(2026-08-19 review 收口):main 先广播意图回声、后回
+  ack,回声身份匹配只比 target/model/provider 三元组(effort/Fast 可能被 main 归一化,providerId 传 null 时
+  跟随默认路由解析)。因此三元组匹配、但权威回声里的 effort/Fast 与本端请求不一致(device-link 往返期间另一
+  控制端只改了同一意图的档位/Fast)时,事务按**未完整应用**上报 false:面板挂在成功上的持久化收尾
+  (清 override、提交/删除收藏编辑、写收藏锚点)一律不做,旧锚点由派生校验自然失效;意图展示与偏好同步照用
+  **权威快照**的值(缺字段的维不写)。判据的宽严取向(权威快照缺维放行、本端未指定的维放行、双方有值逐字比)
+  见 `agentSwitchConfirmation.isAgentSwitchEchoConfigConsistent` 头注。
+
+### 1.7 i18n / 主题
+
+- zh/en 全量;英文超长模型名:标题 2 行截断、来源单行截断、行内 118px 截断+title、引擎名 92px 截断;「Recommended」不进胶囊(描边+勾+title 表达)。
+- 颜色一律语义 token + 本组件注册的新 token(滑杆档色/折扣绿等按 DESIGN.md §10 流程登记);Light/Dark 双实现。
+
+---
+
+## 2. 数据契约
+
+### 2.1 推荐引擎推导(纯客户端,不动协议)
+
+模型的候选引擎与推荐引擎从既有 catalog 结构推导,**不新增 wire 字段**:
+
+- 候选引擎 = 该模型在最终 catalog 中出现的所有 `(provider, agent)` 组合(`Provider.models: Record<AgentKind, CatalogModel[]>`),经现有可见/准入/区域/SSH 过滤后。
+- 推荐引擎 = 模型**生效来源** provider 的主 root(`MODEL_PLANE_POLICIES`:openai→codex、anthropic→claude-code;xd 按 gateway `perAgent`/membership;user provider 按其 runtime)。同名多来源时先 `effectiveSourceIdForModel` 解析生效来源再推导——**禁止读拍平去重后的列表**(registry.ts 明示)。
+- Pi 的候选成员来自客户端随包的 Pi 原生目录与明确的 Pi 覆盖，不能从
+  Claude Code/Codex 的发现清单或 Registry 投影；wire enum 仍不增加 pi。
+- **Google 原生协议优先（2026-09-05）**：Cindy 模型目录明确声明
+  `nativeApi: google-generative-ai`，且 Pi 的实际协议匹配、在候选中时推荐 Pi。Claude Code / Codex 的
+  兼容接入不能因历史回落顺序排在它之前。此规则不靠 Google 分组或 Gemini 名字猜测，
+  也不创建缺失的 Pi 路由；手动选择的引擎保持优先。
+- **原生底座(排序用,与推荐引擎分离)只标确有主场的,可空**(Chris 2026-08-13 裁决):
+  anthropic→cc、openai→codex、折扣条目→codex;**多 root 全能模型(xai 系)与判不出家族的
+  BYOM 一律 null = 无主场**——任何引擎视图都不降级,只有「主场明确在别处」的行才降到
+  「仅兼容」层。理由:给 grok 这类三栖模型硬选主场,会让它在其余引擎视图被错误降级;
+  判定链不依赖 `routing.authStrategy`,device-link 投影下本地/远程排序天然一致。
+  服务端未来下发 `nativeAgent` 字段沿用同语义(可空,空=全场平等),数据覆盖客户端推导。
+- **主场按厂商家族补齐,不随来源变**(2026-08-14,Chris 实测「Claude 全列翻成 Codex」后
+  修订):内置 root 表与折扣判定之后,按 classification 既有分类(目录 `group` 优先、id
+  前缀兜底)补一层——anthropic 家族→cc,gpt/gpt-budget 家族→codex,其余仍 null。网关上的
+  `claude-*`/`gpt-*` 行因此有主场;没有这一层时它们全落 null,推荐走「候选里 cc 优先」
+  回落,会产出两类批量错配:GPT 非折扣行整列「底座 Claude」;cc 掉出候选时 Claude 整列
+  翻成 Codex。
+- **会话内落点(pinnedEngine)只对无主场或主场=当前引擎的行生效**(同日修订):主场在
+  别处的行(codex 会话里的 Claude 系)保持显示主场,选中走跨引擎切换确认,不静默骑
+  bridge;确要「Claude 骑 codex」走浮层引擎胶囊(override 恒为最高优先)。
+- **选中行显示以事实为准(forceEngine)**:当前草稿/会话正在用的那一行,引擎三元组强制
+  按实际引擎画(会话取已确认的 sessionAgent,草稿取草稿 vendor),推荐/override/pinned
+  都不得改写它。选中行的引擎胶囊因此有专属语义:草稿=override 落库并把新引擎配置立即
+  写回草稿;会话=改道跨引擎切换事务,取消时不留任何全局 override。
+
+### 2.2 (模型,引擎) 上下文与能力
+
+- 上下文窗口:走 `getCatalogModelContextWindow(providerId, agent, modelId)` 三元组口径(带 `[1m]`/前缀归一);浮层随引擎选择实时切换显示。
+- `resolveVerifiedContextWindow` 目前仅接 codex——本版为 cc/pi 补接 `AgentDeps`(实现清单 M6)。
+- efforts / defaultEffort / supportsFastMode:按 (provider, agent) 嵌套条目取,已是现状。
+
+### 2.3 新增存储(前两个只存 override;renderer localStorage,按既有命名约定)
+
+1. `xdt:modelEnginePrefs:v1:<dataOwnerId>` —— 每模型引擎 override:
+   `{ "<providerId>:<modelId>": { agent: AgentKind } }`
+   - 只在用户显式改引擎时写;删除 = 恢复推荐。key 与四根旧轴同形但**独立第五/六根轴**,不合并。
+   - 带 dataOwnerId 分区(吸取 providerModelMemory 不分账号串号的教训)。
+2. `xdt:modelFavorites:v1:<dataOwnerId>` —— 收藏配置副本:
+   `{ uidSeq, items: [{ uid, providerId, modelId, agent, effort, fast }] }`
+   - 深度/Fast 存**档位 key**(low/medium/...)不存显示文案(防语言串档,Maximum 混中文的教训)。
+3. `xdt:favoriteAnchorMemory:v1:<dataOwnerId>` —— **收藏锚点记忆**(「面板上哪一行打勾」),
+   Chris 2026-08-19 实测后从内存态改为持久化:
+   `{ drafts: { <cc|codex|pi>: { uid, wireModelId, providerId } }, sessions: [{ sessionId, uid, wireModelId, engine, providerId }] }`
+   - 草稿槽按引擎分(与 `lastByVendor` 同一分槽维度);会话槽按 sessionId,**LRU 上限 100**(队首=最近一次写)。
+   - 存的是**选中那一刻的身份快照**。uid 只记录用户曾选过哪一条；面板用当前收藏与任务实际配置核对全部字段，匹配用于配置编辑事务；选中标记始终落在实际模型行。深度/Fast 不另存一份快照，避免多份状态过期。此规则按 2026-09-05 的一致性修复取代仅凭 uid 勾选的旧规则。
+   - 仍**不是用户配置**:不落库、不进 device-link payload、写失败静默吞;丢了只是回落模型行。
+   - 草稿发送建会话时,仍有效且**有显式来源**的草稿锚点写进该 sessionId 的会话槽(跟随默认路由的会话
+     `providerId` 为 null,与显式来源的锚点永不相等,存了也打不上勾,故不延续)。
+- 深度/Fast 的每模型记忆**沿用** `providerModelMemory` `<agent>:*` 槽(不迁移不改形——它同时是 device-link wire 形状)。
+
+### 2.4 选中态与会话创建
+
+- 选中 = `{ kind:'model', providerId, modelId }` 或 `{ kind:'fav', uid }`(锚点语义)。
+- 落到既有链路:选中确定后派生 `(vendor, model, effort, fastMode, providerId)` 写入 `newMakerDraft`(`vendor` 由推荐/override 引擎决定,`lastByVendor`/`modelChosenByVendor` 语义原样保留),createSession 组装不变;会话内走 SET_MODEL / set-fast-mode / SWITCH_SESSION_AGENT 不变。
+- `sendProviderId` 契约保留:跟随默认路由时**不得**具体化为 'xd'(cohort 基线)。
+
+### 2.5 三类用户行为(configuration-and-overrides §3)
+
+| 情形 | 行为 |
+|---|---|
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / 模型目录默认深度；Anthropic 订阅→Claude Opus 5 / Claude Code / 模型目录默认深度；xAI 订阅→Grok 4.6 / Pi / 模型目录默认深度；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Pi / 模型目录默认深度。Gateway 默认必须同时明确声明图片输入与 Pi 实时能力；Pi 不可用时不把该默认强塞进 Codex 或 Claude Code |
+| 多来源 | Gateway 的可用推荐组合优先于订阅（CN / Global 一致）；Gateway 未就绪或推荐组合不可用时回退订阅，多订阅稳定按 OpenAI→Anthropic→xAI。本机自动发现 ChatGPT 登录不改变此优先级。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
+| 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
+| 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
+| 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
+
+---
+
+## 3. 实施地图(单 Draft PR 内的逻辑 commit 序)
+
+| # | 模块 | 主要文件 |
+|---|---|---|
+| M1 | 推荐引擎推导 + 跨引擎联合列表构建(纯逻辑+单测) | `packages/model-providers/src/`(新 `unifiedSelection.ts`;复用 registry/classification/sections) |
+| M2 | 新存储(enginePrefs/favorites)+ 读写 API + 单测 | `apps/desktop/src/renderer/state/` 新两文件 |
+| M3 | 面板 UI 重做:联合列表/行三元组/rail/收藏区 | `ModelSelector.tsx`(演进,不推倒;保持导出契约) |
+| M4 | 配置浮层:滑杆/引擎胶囊/Fast/价格/上下文 | `ModelSelector.tsx` configPanel 区段 + 新子组件 |
+| M5 | 新会话接线:撤 AgentSelect、vendor 派生、draft 写入 | `NewMakerDraftRoute.tsx` / `ChatInput.tsx` |
+| M6 | 会话内:同引擎过滤/有损警示/AgentSwitch 对接;cc/pi 补接 verifiedContextWindow | `ChatInput.tsx` / `maker-host/index.ts` |
+| M7 | i18n(zh/en+术语表)/token 登记/超长适配 | locales / globals.css / tailwind |
+| M8 | 测试:新逻辑单测 + 更新受影响测试锁(逐条列明有意变更) | `__tests__/` |
+
+设置类入口统一复用 ModelSelector 面板。自动化、IM 默认、Hook 工作目录、插件快问快答和 Worker 支持保存 Harness 的入口，必须通过 `onUnifiedSelect` 一次提交 Harness、来源、模型及该入口支持的配置，删除重复的 Harness 控件。只存模型或有意固定 Harness 的专用入口保留其契约限制；IM 默认和 Hook 工作目录不存 Fast，不展示 Fast 开关。
+
+绑定已有任务的自动化在保存时只更新自动化配置，下次触发时才通过现有任务切换流程应用完整选择；目标正忙时顺延，不能抢占当前轮次。新增的 `modelAgentKind` 标识显式 Harness 选择；旧记录不补默认值，继续跟随绑定任务的 Harness。选择“跟随”会清除整套显式覆盖，切换新建／绑定模式往返时保留用户已选配置。
+
+项目自动化的 `schedules.json` 同样保存可选的 `modelAgentKind`，导出、加载与配置同步均保留该标记；删除标记时清除数据库中的覆盖，已有绑定任务不丢失。旧版 `version: 1` 文件无需补字段。自动触发前按实际来源、Harness 和模型的当前目录拷贝补齐或收敛 effort，并清除已不受支持的 Fast；仍有效的用户选择保持不变。
+
+---
+
+## 4. 特殊情况检查表(实现与 review 逐条过)
+
+**目录/来源**
+- 同名模型多来源:一切能力(Fast/ctx/efforts/推荐)先解析生效来源再查,禁止读拍平列表;`actualSourceIdForModel`(会话内,含停用) vs `effectiveSourceIdForModel`(草稿)双口径保留。
+- XD 网关独占存在性:不从 Registry 给 XD 补条目;`/models` 空则空。
+- bridge 条目 id 带前缀(`chatgpt/`,anthropic→codex 强制 `supportsFastMode:false`):按 id 查推荐/能力时先归一。
+- `[1m]` 后缀 / `codex/` 前缀归一;`status:'retired'` 的 keepSelected 豁免(运行中会话仍显示)。
+- user provider:默认 ctx 200K 不带 verified 标;Pi effort 交集塌陷;`custom:<id>` 分组;`'cindy'` 复合路由排除 user provider。
+- 立省/订阅徽标:`group==='gpt-budget'`+前缀兜底;订阅走 provider.access(flat 模式 sourceAccess);`visibleModelUnion` 返回值含 3 个隐藏字段,禁止整对象过 wire/持久化。
+
+**偏好/记忆**
+- `MODEL_PRESET_SLOT_ID='*'` 保留 id,新代码读写路径都要防撞。
+- `xd` 来源同时服务 cc/codex,记忆 key 必须带 agent 维度(现状已是,别退化)。
+- `modelChosenByVendor` 三态:会话侧同步用 `patchVendorPrefsPreservingModelChoice`,不得误置位(scheduler 成本兜底依赖它)。
+- localStorage 同步写(热更 app.exit 会丢异步写),禁止 debounce「优化」;写失败静默吞,迁移标记别依赖 localStorage 落盘成功。
+- `getPersistedVendorModel` 直读裸 localStorage——改落盘形状必须同步它。
+- 多窗口:worktree 布尔有 storage 事件 rebase;新 store 也要监听 storage 事件防旧窗口回滚。
+- 正在跑的会话不受全局预设影响;不回填 sessions 表;`sessions.provider_id` NULL 不得具体化。
+
+**device-link / 远程**
+- `providerModelMemory` snapshot 原样进 `RemoteNewMakerDefaults` wire——**不改其 schema**;新 store 不进该 payload(老控制端看不到引擎 override 属可接受降级,新被控端按 override 生效,四格矩阵在 PR 写明)。
+- 旧控制端 `maker:set-session-model-pref` 与新 `apply-new-maker-draft-pref` 双写桥保留。
+- `pendingRemoteSwitch` 5s 兜底、`remoteSwitchInFlight` 绑 ack、镜像不写控制端本地记忆——原样保留。
+- SSH:`excludeSubscriptionDirect`/`excludeChatBridgedCodex` 只在 remoteHostId 非空时开;device-link 下 CreateWorkerPopover 外置 Fast 开关不能删。
+- 老被控端 capabilities-only flat fallback(`resolveRemoteModelListStatus`)保留。
+
+**交互/组件**
+- Radix Dialog 内禁 MorphPopover(ScheduleChips);`data-morph-autofocus` 单点;`keepOpenForAgentConfirmation`;`setOpenWithoutAutoRefresh` 只在真 open 边沿发现;发现指示 300ms 延迟。
+- `orca` 退役残留:sanitize 回退 cc、切换守卫保留。
+- 工具条 30px 视觉契约、field 面板宽度绑 trigger(DESIGN.md 宽度铁则)、composer 三菜单行统一契约(`--model-item-hover`)。
+- 引擎不可用 coerce(`useAvailableAgents` 未加载时不隐藏);`hiddenVendors` 中当前值永远可见。
+- 浮层高度恒定+锚点定位缓存(防滑杆下面板抖动);⚡/推荐 tooltip 用自绘即时 tooltip。
+
+---
+
+## 5. 验收与测试
+
+- 单测:M1 推导规则(含多来源/bridge/前缀归一)、M2 store(含 owner 分区/迁移空态)、滑杆档位色映射、收藏锚点语义。
+- 更新既有锁:`agentSelect`/`chatInputModelSelectorRouting`/`modelSelectorTriggerVariant`/`modelSelectorProviderGroups`/`newMakerCreateAgentVisualContract`/`draftModelCalibration`/`modelDefinitionsDefaults`/`deviceLinkModelMirror` 等——有意变更逐条在 PR「风险」说明。
+- 门禁:根 `pnpm test:unit` + `pnpm --filter desktop run typecheck` + `pnpm --filter @cindy/model-providers run --if-present typecheck`。
+- 实机:worktree `pnpm restart:desktop:remote --region=global --isolated=model-picker` 双模式目检;未能真实验证的面(如老版本 device-link 对端)在 PR 如实列出+用户验证步骤。
+
+## 6. 预留(本版不做)
+
+- Cindy Fast / Cindy Smart 智能模式组(等后端路由;UI 组位已在面板结构中留出)。
+- 服务端下发推荐引擎/排序字段(`ModelAgentOverride` 加字段的最小路径已勘明:protocol L222 + registry/catalog base + 两处手抄镜像类型 + modelRegistryMetaFields 塌平表)。
+- 移动端对齐(mobile 平行实现 + draftModelMemory 多 deviceId 维)。
+
+### 2026-09-05：共享 Harness 选项的原生与兼容说明
+
+- 模型配置浮层由 ModelHarnessPicker 常驻显示所有可选 Harness，每行只显示小图标、名称和选中勾；仅 Codex 确实处于兼容模式时在名称后标“兼容模式”并附小感叹号。不单挂推荐引擎，不逐行写原生/兼容说明，不用下拉隐藏候选。原生协议、实际协议与推荐关系放在各项详情，与设置页共用真实判定；简化显示不改变 Pi 或 Claude Code 的协议与默认配置。
+- 当前选择仅由实际 config.engine 决定。只有当前项画勾。推荐项排序靠前，推荐本身不画第二个选中态、不触发任何配置写入；未选中名称仍正常显示，避免被误认为不可用。
+- 判定复用原生协议比较，先按实际 provider/model/agent 查目录和 wire ID；不按推荐引擎或厂商品牌猜测。旧被控端无协议数据时显示待确认，不借控制端的目录补假信息。
+- 候选仍服从执行端的可用性、固定 Harness 与模型设置。此控件不恢复已关闭的兼容路径、不写模型可见性；只有用户点击可选项才调用既有切换回调。
+- 保留统一选择器的 engineLocked 接口：同引擎视图仅呈现当前引擎的不可切换选项，仍如实说明它是原生还是兼容；收藏、实际运行配置与保存中禁用语义不变。
+- 原生支持只说明当前请求协议直接匹配，不等于所有扩展能力均已做端到端认证；因此不使用“完美适配”。
+- 此轮不改思考深度组件、档位语义或交互；原有来源、上下文与报价保留。协议信息来自同一份执行端能力投影，不引入第二套模型事实。
+
+- 兼容模式的感叹号与设置页共用 ModelCompatibilityNotice，五语统一提示运行可能不稳定、建议有经验的用户使用。图标可悬停、聚焦或点击查看，点击仅查看说明，不切引擎、不改开关。选择器与设置页共用 MODEL_HARNESS_COLOR：Claude Code 橙、Codex 蓝、Pi 紫；不改思考深度的配色或交互。
+
+## 7. 切换失败的编排恢复（2026-09-05）
+
+模型选择提交的是来源、模型、Harness、推理档位和 Fast 的完整配置。收藏、模型行、本机和手机控制、运行中延期操作，均须走相同的主进程切换规则。
+
+- 运行中需要迁移原生历史时，记录完整待生效配置，空闲后串行处理。选择已接受不等于目标服务已经完成回复；不得自动发送收费探测请求。
+- 优先使用原生支持的切换。Codex 带 ordinal / history_base 的历史及索引归原生运行时管理，不能展开后覆盖已索引文件。
+- 确认原生历史无法安全迁移、索引不一致或原生记录缺失时，使用 Cindy 保存的可见历史建立有大小上限的交接，在同一任务中创建新的原生上下文。旧原文保持可查询，不重放用户消息或已执行的工具。
+- 目标配置、SDK 绑定失效和交接标记在同一数据库事务中保存。源绑定已变化、清空历史或写入失败时整笔回滚；不能留下目标配置与恢复内容不一致的状态。
+- 手动历史恢复分支遵循同一规则；新任务、历史副本和交接标记一起保存。跨 Harness 切回停泊会话优先原生恢复，失效时沿用完整交接恢复。
+- 离开旧来源时，历史预检不得先依赖旧来源凭证；仅用于迁移的旧来源控制进程无法鉴权时，允许走 Cindy 交接恢复。目标来源真实的鉴权、额度、网络、权限和取消不按历史损坏处理，不盲目清空上下文，不静默换成另一模型。恢复保留可继续的任务；不承诺保留原生缓存或未进入 Cindy 记录的内部状态。
+- 收起后的选择器按完整目标快照显示来源、模型、Harness、档位和 Fast。同 Harness 延期、跨 Harness 意图与远程待回流选择均标记待生效，并提供当前配置与下条消息配置的说明；取消或完成后撤掉标记。
+- 已建任务的来源断开不得抹掉已保存模型。未连接和已连接但不提供目标模型分别呈现，菜单提供对应来源的重新连接／管理入口，同时保留改选路径；添加模型入口继续使用通用导航。
+
+自动回归须分别报告宿主编排和原生运行时验证。`scripts/test-native-model-switch.mts <codex路径>` 使用隔离临时目录、本地模拟供应商和真实 Codex，检查 A→B→A→B、重启、重复分叉、原历史不变和无额外重放；它不能代替真实供应商服务及其他 Harness 原生验收。

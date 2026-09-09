@@ -30,9 +30,28 @@ export function setSessionProvider(sessionId: string, providerId: string | null)
   bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
 }
 
+/**
+ * 启动派发边界(`prepareStartOptions` 钩子)冻结调用方携带的来源:登记须早于第一次
+ * send 且不经 DB 往返 —— renderer 那份排在 createSession 之后、落库失败只记日志,
+ * 会让会话永久未登记而恒走默认路由。`undefined` = 调用方未携带选择,不写入:
+ * learn-host 等路径自己在 createSession 前写好 store,写 null 会清掉它们的选择。
+ * proxy 在 createSession 返回前反解不到 sessionId,首 turn 误路由(#4154)不在此闭合。
+ */
+export function freezeSessionProviderAtStart(
+  sessionId: string,
+  providerId: string | null | undefined,
+): void {
+  if (providerId !== undefined) setSessionProvider(sessionId, providerId);
+}
+
 /** 读取某会话的供应商;未设置或已清除返回 null(调用方据此走默认路由)。 */
 export function getSessionProvider(sessionId: string): string | null {
   return bySession.get(sessionId) ?? null;
+}
+
+/** 内存里是否已有该会话的来源条目(含显式 null)。未 hydrate 时为 false。 */
+export function hasSessionProvider(sessionId: string): boolean {
+  return bySession.has(sessionId);
 }
 
 /**
@@ -48,4 +67,9 @@ export function hydrateSessionProvider(sessionId: string, providerId: string | n
 /** 会话关闭/销毁时清理内存条目。 */
 export function clearSessionProvider(sessionId: string): void {
   bySession.delete(sessionId);
+}
+
+/** 账户 / app-session 边界清理全部 owner-scoped 路由。 */
+export function clearAllSessionProviders(): void {
+  bySession.clear();
 }

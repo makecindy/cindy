@@ -5,6 +5,7 @@
  * 静默改写；非 thread 渠道通过 `/new` 显式应用。
  */
 
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import {
   connectedProvidersForAgent,
   getModel,
@@ -14,8 +15,8 @@ import { MessageSquare, AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -26,6 +27,7 @@ import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
   isUnconditionalTurnPolicyChannel,
+  isImDefaultPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -37,7 +39,6 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 import {
   buildAgentSettingsPatch,
   mergeSettingsPatch,
-  resolveAgentSwitchSettings,
 } from './imDefaultSettingsLogic';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
@@ -81,6 +82,8 @@ export function ImDefaultSettingsSection({
   const pi = useAgentCapabilities('pi');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
+
+  const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code');
 
   useEffect(() => {
     let cancelled = false;
@@ -170,16 +173,18 @@ export function ImDefaultSettingsSection({
 
   const persist = useCallback(
     async (patch: ImDefaultSettingsPatch) => {
-      if (!settings || pending) return;
+      if (!settings || pending) return false;
       const previous = settings;
       setPending(true);
       setSettings(mergeSettingsPatch(settings, patch));
       try {
         const next = await window.electronAPI.maker.imDefaultSettingsSet(patch, channel);
         setSettings(next);
+        return true;
       } catch (err) {
         setSettings(previous);
         toast.error(err instanceof Error ? err.message : t('settings.imBot.defaults.saveFailed'));
+        return false;
       } finally {
         setPending(false);
       }
@@ -252,21 +257,6 @@ export function ImDefaultSettingsSection({
           : null
       : null;
 
-  const changeAgent = (agentKind: ImDefaultAgentKind) => {
-    if (agentKind === settings.agentKind) return;
-    // 只写 agentKind 会把目标 agent 上一次的模型原样带回来 —— 那个模型可能已停用
-    // 或供应商已断开, UI 照显而派发时静默降级。与 changeModel 同口径收敛。
-    const next = resolveAgentSwitchSettings({
-      current: settings.agents[agentKind],
-      available: modelsByAgent[agentKind],
-      // 与 changeModel 共用同一条解析链(model override / defaultEffort 先于 agent 出厂值)
-      resolveEffort: (modelId, requested) => resolveEffort(agentKind, modelId, requested),
-      resolveProviderId: (modelId, providerId) =>
-        resolveProviderId(agentKind, modelId, providerId),
-    });
-    void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
-  };
-
   const changeModel = (
     model: string,
     providerId: string | null = activeSettings.providerId,
@@ -276,7 +266,7 @@ export function ImDefaultSettingsSection({
     const effort = isImDefaultEffort(reconciledEffort)
       ? reconciledEffort
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
-    void persist(
+    return persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
         model,
@@ -288,7 +278,7 @@ export function ImDefaultSettingsSection({
 
   const changeEffort = (effort: Effort) => {
     if (!isImDefaultEffort(effort) || effort === activeSettings.effort) return;
-    void persist(
+    return persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
         effort,
@@ -331,30 +321,28 @@ export function ImDefaultSettingsSection({
         />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <div className="flex flex-col gap-2">
-          <span className="text-12 font-medium text-[var(--text-secondary)]">
-            {t('settings.imBot.defaults.agentLabel')}
-          </span>
-          {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
-              窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
-          <AgentSelect
-            value={vendorKeyFor(settings.agentKind)}
-            // 字段形态: 与右侧模型选择器同高同宽规格, 面板绑 trigger 宽度
-            // (DESIGN.md §4 Select & Dropdown 宽度铁则)。
-            triggerVariant="field"
-            side="bottom"
-            disabled={pending}
-            ariaContext={t('settings.imBot.defaults.agentLabel')}
-            onChange={(next) => changeAgent(agentKindOfVendor(next))}
-          />
-        </div>
-
+      <div>
         <div className="flex flex-col gap-2">
           <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.modelLabel')}
           </span>
           <ModelSelector
+            fastModeConfigurable={false}
+            unifiedAgents={pickerAgents}
+            onUnifiedSelect={({ engine, modelId, providerId, effort }) => {
+              const agentKind = agentKindOfVendor(engine);
+              return persist({
+                agentKind,
+                ...buildAgentSettingsPatch(agentKind, {
+                  ...settings.agents[agentKind],
+                  model: modelId,
+                  providerId,
+                  effort: isImDefaultEffort(effort)
+                    ? effort
+                    : resolveEffort(agentKind, modelId, ''),
+                }),
+              });
+            }}
             modelId={activeSettings.model}
             effort={activeSettings.effort}
             onModelChange={(modelId) => changeModel(modelId)}
@@ -370,6 +358,34 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {/* 飞书专属: 群里新建任务统一用的权限档(默认自动审批) —— 群里 @bot 开话题、
+          群里 /new、群里 /ctr 都以它为准, 上面那个权限档只管私聊。群上下文含成员
+          可控内容; 用户显式选择「完全访问」时群护栏取缔(不挂强确认策略, 直接
+          执行), 防注入过滤仍独立生效。共享 PermissionSelector — 权限语义与
+          新建对话工具栏同一份。 */}
+      {channel === 'feishu' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupPermissionLabel')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.groupPermissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            triggerVariant="field"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.groupPermissionLabel')}
+            onPermissionModeChange={(mode) => {
+              if (isImDefaultPermissionMode(mode)) {
+                void persist({ groupPermissionMode: mode });
+              }
+            }}
+          />
+          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupPermissionDescription')}
+          </p>
+        </div>
+      )}
 
       {turnPolicyWarning && (
         <div

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { CindyAuthClient, AuthApiError } from "../../src/client.js";
-import { reduceAuthFlow, type ProviderConfig } from "../../src/types.js";
+import {
+  reduceAuthFlow,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
+  ssoOrgDiscoveryToMethods,
+  type ProviderConfig,
+} from "../../src/types.js";
 import {
   CINDY_LOGIN_FIXTURE_SENTINEL,
   LOGIN_SCENARIO_ERROR_ENDPOINTS,
@@ -64,20 +70,35 @@ describe("附录 A sso:* 场景(method-choice 行)", () => {
     expect(ssoRows[0]).toMatchObject({ ssoRequired: false });
     const state = reduceAuthFlow(null, { type: "discovery-loaded", email: "user@example.com", methods });
     expect(state.step).toBe("method-choice");
+    expect(soleAutoStartSsoMethod(methods)).toBeNull();
   });
   it("sso:multi → 多 connection 行", async () => {
     const methods = await clientFor("sso:multi").discover("user@example.com");
     expect(methods.filter((m) => m.type === "sso")).toHaveLength(2);
+    expect(soleAutoStartSsoMethod(methods)).toBeNull();
   });
   it("sso:required → 该企业要求通过 SSO 登录(ssoRequired=true,无 email_code)", async () => {
     const methods = await clientFor("sso:required").discover("user@example.com");
     expect(methods).toHaveLength(1);
     expect(methods[0]).toMatchObject({ type: "sso", ssoRequired: true });
+    expect(soleAutoStartSsoMethod(methods)).toMatchObject({ type: "sso", ssoRequired: true });
   });
   it("sso discovery(企业 ID 入口)→ connection 列表", async () => {
     const discovery = await clientFor("sso:multi").discoverSsoOrg("example");
     expect(discovery.connections).toHaveLength(2);
     expect(discovery.orgName).toBe("Example Org");
+    expect(soleAutoStartSsoMethod(ssoOrgDiscoveryToMethods(discovery))).toBeNull();
+  });
+  it("sso discovery 单连接 → 无真正选择，控制器应跳过 method-choice", async () => {
+    const discovery = await clientFor("sso:single").discoverSsoOrg("example");
+    const methods = ssoOrgDiscoveryToMethods(discovery);
+    expect(methods).toHaveLength(1);
+    expect(soleAutoStartSsoMethod(methods)).toMatchObject({ type: "sso" });
+  });
+  it("纯邮箱 discovery → 唯一 email_code，应跳过 method-choice 直接发码", async () => {
+    const methods = await clientFor("providers:both").discover("personal@example.com");
+    expect(soleLoginMethod(methods)).toEqual({ type: "email_code" });
+    expect(soleAutoStartSsoMethod(methods)).toBeNull();
   });
 });
 

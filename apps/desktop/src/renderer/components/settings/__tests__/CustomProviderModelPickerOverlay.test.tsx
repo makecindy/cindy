@@ -60,6 +60,10 @@ describe('ModelPickerOverlay', () => {
     const user = userEvent.setup();
     render(<Harness />);
 
+    expect(
+      screen.queryAllByRole('button', { name: 'settings.providers.custom.cancel' }),
+    ).toHaveLength(1);
+
     await waitFor(() =>
       expect(document.activeElement).toBe(
         screen.getByPlaceholderText('settings.providers.custom.fetch.searchPlaceholder'),

@@ -1,5 +1,5 @@
 /**
- * ghostPanelBubbleState —— 插件停靠面板「最小化为浮动气泡」的 renderer 端状态。
+ * ghostPanelBubbleState —— 插件停靠面板的最小化状态(历史命名沿用 bubble)。
  *
  * 纯视图态,renderer 自有(localStorage 持久化,重启保留),不经 main:
  * 与 maximize(会话态)/ detach(main 持久化)三分天下——气泡既要重启保留

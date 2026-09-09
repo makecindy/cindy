@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   totalSteps: undefined as 2 | undefined,
   checkEnvironment: vi.fn(async () => undefined),
   authInitializing: false,
+  coverHeld: false,
   updateErrorCode: undefined as string | undefined,
 }));
 
@@ -45,6 +46,10 @@ vi.mock('@/hooks/useUpdateStatus', () => ({
   useUpdateStatus: () => ({ errorCode: mocks.updateErrorCode }),
 }));
 
+vi.mock('@/contexts/AppShellCoverContext', () => ({
+  useAppShellCover: () => ({ coverHeld: mocks.coverHeld, reportLocalDbGate: () => {} }),
+}));
+
 import { useSplash } from '../useSplash';
 
 describe('useSplash phase 表', () => {
@@ -54,6 +59,7 @@ describe('useSplash phase 表', () => {
     mocks.step = undefined;
     mocks.totalSteps = undefined;
     mocks.authInitializing = false;
+    mocks.coverHeld = false;
     mocks.updateErrorCode = undefined;
     mocks.checkEnvironment.mockClear();
     (
@@ -130,6 +136,16 @@ describe('useSplash phase 表', () => {
   it('auth 初始化未完成时 passed 不淡出(推进锚含 authInitializing)', () => {
     mocks.envStatus = 'passed';
     mocks.authInitializing = true;
+    const { result } = renderHook(() => useSplash());
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(result.current.phase).toBe('splash_passed');
+  });
+
+  it('LocalDbGate 仍在 checking 时 passed 不淡出(启动盖必须留到主界面可画)', () => {
+    mocks.envStatus = 'passed';
+    mocks.coverHeld = true;
     const { result } = renderHook(() => useSplash());
     act(() => {
       vi.advanceTimersByTime(10_000);

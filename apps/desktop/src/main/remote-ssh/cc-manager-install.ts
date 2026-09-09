@@ -49,7 +49,35 @@ import { PROTOCOL_VERSION as CC_MGR_PROTOCOL_VERSION } from '@cindy/maker-cc-man
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { broadcastSilentInstallStatus, broadcastCcMgrUpgradeAvailable } from './index.js';
+// 轮 22:不 import './index.js'(成环 —— index import pi-manager-client,
+// pi-manager-client import 本模块)。broadcast 的 channel 名与实现内联,
+// 与 index 的 REMOTE_SSH_PUSH 同名字符串(同一通道)。
+import { BrowserWindow } from 'electron';
+
+const CC_MGR_UPGRADE_AVAILABLE_CHANNEL = 'maker:remote-ssh:cc-mgr-upgrade-available';
+const SILENT_INSTALL_STATUS_CHANNEL = 'maker:remote-ssh:silent-install-status';
+function broadcastCcMgrUpgradeAvailable(payload: {
+  hostId: string;
+  available: { currentVersion: string; availableVersion: string } | null;
+  agent: 'cc' | 'pi';
+}): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.send(CC_MGR_UPGRADE_AVAILABLE_CHANNEL, payload);
+  }
+}
+function broadcastSilentInstallStatus(payload: {
+  hostId: string;
+  agentKind: string;
+  phase: 'started' | 'progress' | 'done' | 'failed';
+  eventKind?: string;
+  message?: string;
+}): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.send(SILENT_INSTALL_STATUS_CHANNEL, payload);
+  }
+}
 
 const log = createLogger('remote-ssh/cc-manager-install');
 
@@ -79,60 +107,88 @@ interface PendingCcMgrUpgrade {
   currentVersion: string;
   /** desktop-packaged bundle version (the upgrade target) */
   availableVersion: string;
+  /** 轮 22:哪个 daemon 需要升级 —— 'cc' | 'pi'。banner/force-upgrade 按此分流。 */
+  agent: 'cc' | 'pi';
 }
 
+type PendingAgent = 'cc' | 'pi';
+
 /**
- * Per-host pending-upgrade state. Set when silent-install probe detects a
- * version mismatch but skips auto-upgrade (because alive sessions would be
- * killed by daemon restart); cleared when user accepts upgrade via
- * `runCcMgrUpgrade` or explicitly dismisses (renderer `dismissPendingCcMgrUpgrade` IPC).
+ * Per-host per-agent pending-upgrade state(轮 22-F2 MEDIUM 修复):同一 host
+ * 上 cc 与 pi 两个 daemon 可能同时有版本差 —— 按 hostId 单键 + 单 agent 会
+ * 后写覆盖前者。改为 hostId → { cc?, pi? } 双槽, 各自独立 set/clear/broadcast。
+ *
+ * Set when silent-install probe detects a version mismatch but skips
+ * auto-upgrade (because alive sessions would be killed by daemon restart);
+ * cleared when user accepts upgrade or explicitly dismisses.
  *
  * Survives only desktop session lifetime — on restart, next silent-install
  * probe re-detects and re-broadcasts.
  */
-const pendingUpgrade = new Map<string, PendingCcMgrUpgrade>();
+const pendingUpgrade = new Map<string, Partial<Record<PendingAgent, PendingCcMgrUpgrade>>>();
 
 /** Snapshot for `list-pending` IPC — renderer calls this on mount to sync state
  *  it might have missed before subscribing to the broadcast. */
 export function listPendingCcMgrUpgrades(): PendingCcMgrUpgrade[] {
-  return Array.from(pendingUpgrade.values());
+  return Array.from(pendingUpgrade.values()).flatMap((m) => Object.values(m));
 }
 
-export function getPendingCcMgrUpgrade(hostId: string): PendingCcMgrUpgrade | null {
-  return pendingUpgrade.get(hostId) ?? null;
+export function getPendingCcMgrUpgrade(hostId: string, agent: PendingAgent): PendingCcMgrUpgrade | null {
+  return pendingUpgrade.get(hostId)?.[agent] ?? null;
 }
 
 /**
- * User-explicit dismiss — clears pending state for this host. Banner won't
+ * User-explicit dismiss — clears pending state for this host + agent. Banner won't
  * re-appear within this desktop session unless silent install runs again and
  * versions still don't match (e.g. user reconnects host, sends new message).
  */
-export function dismissPendingCcMgrUpgrade(hostId: string): void {
-  if (pendingUpgrade.delete(hostId)) {
-    broadcastCcMgrUpgradeAvailable({ hostId, available: null });
+export function dismissPendingCcMgrUpgrade(hostId: string, agent: PendingAgent = 'cc'): void {
+  const entry = pendingUpgrade.get(hostId);
+  if (entry && entry[agent]) {
+    delete entry[agent];
+    if (Object.keys(entry).length === 0) pendingUpgrade.delete(hostId);
+    broadcastCcMgrUpgradeAvailable({ hostId, available: null, agent });
   }
 }
 
+/** 升级成功 / 版本对齐后清除该 host 的该 agent pending(不广播? 广播 available:null 让 banner 消失)。 */
+export function clearPendingUpgrade(hostId: string, agent: PendingAgent): void {
+  dismissPendingCcMgrUpgrade(hostId, agent);
+}
+
 function setPending(p: PendingCcMgrUpgrade): void {
-  const prev = pendingUpgrade.get(p.hostId);
+  const entry = pendingUpgrade.get(p.hostId) ?? {};
+  const prev = entry[p.agent];
   // Idempotent: skip broadcast if state unchanged (same currentVer + availableVer).
-  // Otherwise overwrite (e.g. user reinstalled remote daemon at a different version).
   if (prev && prev.currentVersion === p.currentVersion && prev.availableVersion === p.availableVersion) {
     return;
   }
-  pendingUpgrade.set(p.hostId, p);
+  entry[p.agent] = p;
+  pendingUpgrade.set(p.hostId, entry);
   broadcastCcMgrUpgradeAvailable({
     hostId: p.hostId,
     available: {
       currentVersion: p.currentVersion,
       availableVersion: p.availableVersion,
     },
+    agent: p.agent,
   });
 }
 
-function clearPending(hostId: string): void {
-  if (pendingUpgrade.delete(hostId)) {
-    broadcastCcMgrUpgradeAvailable({ hostId, available: null });
+/**
+ * 轮 22:pi-manager 版本差 + daemon 活 → 记 pending(与 cc-mgr 共用 banner 通道)。
+ * 由 pi-manager-client 的 ensurePiManagerInstalled 在 defer 分支调用。
+ */
+export function setPendingPiUpgrade(hostId: string, currentVersion: string, availableVersion: string): void {
+  setPending({ hostId, currentVersion, availableVersion, agent: 'pi' });
+}
+
+function clearPending(hostId: string, agent: PendingAgent = 'cc'): void {
+  const entry = pendingUpgrade.get(hostId);
+  if (entry && entry[agent]) {
+    delete entry[agent];
+    if (Object.keys(entry).length === 0) pendingUpgrade.delete(hostId);
+    broadcastCcMgrUpgradeAvailable({ hostId, available: null, agent });
   }
 }
 
@@ -387,7 +443,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
                 remoteVer,
                 localVer,
               });
-              setPending({ hostId, currentVersion: remoteVer, availableVersion: localVer });
+              setPending({ hostId, currentVersion: remoteVer, availableVersion: localVer, agent: 'cc' });
               ccManagerInstalledCache.add(hostId);
               return;
             }
@@ -577,12 +633,19 @@ export function clearCcManagerInstallCache(hostId?: string): void {
   if (hostId) {
     ccManagerInstalledCache.delete(hostId);
     claudeBinaryPathCache.delete(hostId);
-    dismissPendingCcMgrUpgrade(hostId);
+    // 轮 42 P2(codex-connector):host 单独失效时 cc 与 pi 的 pending 都要清 ——
+    // 之前只 dismiss 默认 agent(cc), hostId:pi 的 pending 残留, host 复用后
+    // Settings 可能显示过期升级 banner。
+    dismissPendingCcMgrUpgrade(hostId, 'cc');
+    dismissPendingCcMgrUpgrade(hostId, 'pi');
   } else {
     ccManagerInstalledCache.clear();
     claudeBinaryPathCache.clear();
-    for (const id of pendingUpgrade.keys()) {
-      broadcastCcMgrUpgradeAvailable({ hostId: id, available: null });
+    // 轮 22-F2:全量清理按 (hostId, agent) 双键遍历广播(每个 agent 独立清)。
+    for (const [id, entry] of pendingUpgrade) {
+      for (const agent of Object.keys(entry) as PendingAgent[]) {
+        broadcastCcMgrUpgradeAvailable({ hostId: id, available: null, agent });
+      }
     }
     pendingUpgrade.clear();
   }

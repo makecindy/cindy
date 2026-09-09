@@ -70,6 +70,7 @@ import {
   normalizeRemoteOpDirEntries,
   parentRelPath,
   type FileBrowserGridItem,
+  type FileBrowserRemoteOpEntry,
   type FileBrowserSortMode,
 } from '@/session/fileBrowserGrid';
 import { useFileThumbnail } from '@/session/fileThumbnails';
@@ -97,6 +98,11 @@ type TextPreviewState =
  * 转成我们自己的 HTML,HTML 生成物则原样进 WebView。
  */
 type RichTextKind = 'markdown' | 'html';
+
+interface SiblingListing {
+  key: string;
+  entries: FileBrowserRemoteOpEntry[];
+}
 
 /**
  * **入参必须是 `item.relPath`(真实路径),不能是 `item.name`(展示名)。**
@@ -130,7 +136,7 @@ function avKindFor(pathOrName: string): 'video' | 'audio' | null {
 export default function RemoteFilePreviewScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -165,6 +171,7 @@ export default function RemoteFilePreviewScreen() {
   const workdir = session?.workingDir ?? '';
 
   const [siblings, setSiblings] = useState<FileBrowserGridItem[] | null>(null);
+  const [siblingListing, setSiblingListing] = useState<SiblingListing | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   // 屏级焦点(HTML 可执行 WebView 的挂载门之一,见 renderItem 的 visible)。
   // 本屏被压栈(点「发送到会话」→ router.navigate 把会话页推到根 Stack 上)时
@@ -250,16 +257,46 @@ export default function RemoteFilePreviewScreen() {
     setPageIndex(0);
   }, [singleAbsPath]);
 
-  // 同目录 pager:列父目录 → 文件项按浏览页同款排序;失败时退化为单文件。
-  // 重建列表时锚定「当前可见文件」而非固定 initialRelPath(review P1):恢复
-  // 重列 / 排序切换发生在用户已翻页之后时,重置回初始文件会让 FlatList 的
-  // 原生滚动位置与 pageIndex(标题 / 分享 / 下载的目标)指向两个不同文件。
-  // setPageIndex 后再显式 scrollToOffset 重锚一次(initialScrollIndex 只在
-  // 首挂载生效,items key 变化不会重置 contentOffset)。
+  // 同目录 pager 远端数据:只在目录来源或恢复代数变化时重列。语言 / 排序变化
+  // 只消费下面缓存的原始目录项重建展示模型,不能为翻译重新请求设备。
   useEffect(() => {
     if (!deviceId || !workdir || !initialRelPath) return undefined;
     let cancelled = false;
     const dirRel = parentRelPath(initialRelPath) ?? '';
+    const listingKey = `${deviceId}\u0000${workdir}\u0000${dirRel}`;
+    void withTransientRemoteRetry(async () => {
+      await openLink(deviceId);
+      return maker.fileBrowser.listDir(workdir, dirRel);
+    })
+      .then((raw) => {
+        if (cancelled) return;
+        setSiblingListing({ key: listingKey, entries: normalizeRemoteOpDirEntries(raw) });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSiblingListing(null);
+        setSiblings([fallbackItem(initialRelPath)]);
+        setPageIndex(0);
+        requestAnimationFrame(() => {
+          if (!cancelled) pagerRef.current?.scrollToOffset({ animated: false, offset: 0 });
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, initialRelPath, maker, openLink, recoveryEpoch, workdir]);
+
+  // 同目录 pager 展示投影:语言 / 排序变化只在本地重建 metaLabel 与顺序。
+  // 重建时锚定「当前可见文件」而非固定 initialRelPath(review P1):用户已翻页后,
+  // 重置回初始文件会让 FlatList 的原生滚动位置与 pageIndex(标题 / 分享 / 下载
+  // 的目标)指向两个不同文件。setPageIndex 后再显式重锚一次(initialScrollIndex
+  // 只在首挂载生效,items key 变化不会重置 contentOffset)。
+  useEffect(() => {
+    if (!deviceId || !workdir || !initialRelPath || !siblingListing) return undefined;
+    const dirRel = parentRelPath(initialRelPath) ?? '';
+    const listingKey = `${deviceId}\u0000${workdir}\u0000${dirRel}`;
+    if (siblingListing.key !== listingKey) return undefined;
+    let cancelled = false;
     const anchorRelPath = currentRelPathRef.current ?? initialRelPath;
     const anchorTo = (index: number): void => {
       setPageIndex(index);
@@ -269,36 +306,24 @@ export default function RemoteFilePreviewScreen() {
         }
       });
     };
-    void withTransientRemoteRetry(async () => {
-      await openLink(deviceId);
-      return maker.fileBrowser.listDir(workdir, dirRel);
-    })
-      .then((raw) => {
-        if (cancelled) return;
-        // 图片已统一走浏览页的 ImageLightbox,翻页器只装非图片文件;
-        // 仅当直接以图片路径进入(旧链路兜底)时保留该图片单页。
-        const files = buildFileBrowserGridItems(normalizeRemoteOpDirEntries(raw), sortMode, Date.now())
-          .filter((item) => item.kind === 'file')
-          .filter((item) => item.thumb !== 'image' || item.relPath === initialRelPath);
-        let index = files.findIndex((item) => item.relPath === anchorRelPath);
-        if (index < 0) index = files.findIndex((item) => item.relPath === initialRelPath);
-        if (files.length === 0 || index < 0) {
-          setSiblings([fallbackItem(initialRelPath)]);
-          anchorTo(0);
-          return;
-        }
-        setSiblings(files);
-        anchorTo(index);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSiblings([fallbackItem(initialRelPath)]);
-        anchorTo(0);
-      });
+    // 图片已统一走浏览页的 ImageLightbox,翻页器只装非图片文件;
+    // 仅当直接以图片路径进入(旧链路兜底)时保留该图片单页。
+    const files = buildFileBrowserGridItems(siblingListing.entries, sortMode, Date.now())
+      .filter((item) => item.kind === 'file')
+      .filter((item) => item.thumb !== 'image' || item.relPath === initialRelPath);
+    let index = files.findIndex((item) => item.relPath === anchorRelPath);
+    if (index < 0) index = files.findIndex((item) => item.relPath === initialRelPath);
+    if (files.length === 0 || index < 0) {
+      setSiblings([fallbackItem(initialRelPath)]);
+      anchorTo(0);
+    } else {
+      setSiblings(files);
+      anchorTo(index);
+    }
     return () => {
       cancelled = true;
     };
-  }, [deviceId, initialRelPath, maker, openLink, recoveryEpoch, sortMode, workdir]);
+  }, [deviceId, i18nInstance.language, initialRelPath, siblingListing, sortMode, workdir]);
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);

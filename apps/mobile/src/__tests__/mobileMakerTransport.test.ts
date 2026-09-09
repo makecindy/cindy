@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -27,11 +29,15 @@ describe('mobile maker transport', () => {
       'maker:get-capabilities',
       'maker:provider:list',
       'local-db:sessions:get',
+      'local-db:conversations:search',
       'local-db:sessions:patch-meta',
       'local-db:messages:dismiss-error',
       'local-db:sessions:ack-interrupted',
       'maker:regenerate-title',
       'local-db:messages:list',
+      'local-db:messages:view',
+      'local-db:messages:work-details',
+      'local-db:messages:view-intent',
       'local-db:messages:around',
       'local-db:messages:around-client-id',
       'maker:send',
@@ -42,6 +48,7 @@ describe('mobile maker transport', () => {
       'maker:set-effort',
       'maker:set-permission-mode',
       'maker:set-fast-mode',
+      'maker:set-thinking-enabled',
       'maker:set-extra-dirs',
       'maker:set-session-model-pref',
       'maker:apply-new-maker-draft-pref',
@@ -50,6 +57,7 @@ describe('mobile maker transport', () => {
       'maker:get-new-maker-worktree-branch-pref',
       'maker:apply-new-maker-worktree-branch-pref',
       'maker:usage:model-pricing',
+      'local-db:messages:estimatedSessionValue',
       'maker:usage:codex-rate-limits',
       'maker:usage:codex-rate-limit-reset',
       'maker:api-key:present',
@@ -178,7 +186,7 @@ describe('mobile maker transport', () => {
       {
         deviceId: 'dev-1',
         channel: 'maker:list-active',
-        args: [],
+        args: [{ summary: true }],
       },
     ]);
   });
@@ -201,6 +209,19 @@ describe('mobile maker transport', () => {
       deviceId: 'dev-1',
       channel: 'maker:create-session',
       args: [opts],
+    }]);
+  });
+
+  it('routes task search through the controlled desktop conversations:search channel', async () => {
+    const { calls, maker } = harness();
+    const request = { query: 'needle', semanticMode: 'keyword' as const };
+
+    await maker.searchConversations(request);
+
+    expect(calls).toEqual([{
+      deviceId: 'dev-1',
+      channel: 'local-db:conversations:search',
+      args: [request],
     }]);
   });
 
@@ -270,6 +291,68 @@ describe('mobile maker transport', () => {
     ]);
   });
 
+  it('does not advertise or emit the unimplemented model-window confirmation protocol', async () => {
+    const contextSource = readFileSync(
+      resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'),
+      'utf8',
+    );
+    const transportSource = readFileSync(
+      resolve(process.cwd(), 'src/device-link/mobileMakerTransport.ts'),
+      'utf8',
+    );
+    const { calls, maker } = harness();
+
+    await maker.setModel('s1', 'small-model', 'anthropic');
+
+    expect(contextSource).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+    expect(contextSource).not.toContain('model-window-confirmation-v1');
+    expect(transportSource).not.toContain('confirmedOverflow');
+    expect(transportSource).not.toContain('confirmedContextWindow');
+    expect(calls).toEqual([
+      {
+        deviceId: 'dev-1',
+        channel: 'maker:set-model',
+        args: ['s1', 'small-model', 'anthropic'],
+      },
+    ]);
+  });
+
+  it('sends model/provider/effort/Fast as one atomic set-model selection', async () => {
+    const { calls, maker } = harness();
+
+    await maker.setModel('s1', 'fixed-model', 'provider-a', {
+      effort: null,
+      fastMode: false,
+    });
+
+    expect(calls).toEqual([{
+      deviceId: 'dev-1',
+      channel: 'maker:set-model',
+      args: [
+        's1',
+        'fixed-model',
+        'provider-a',
+        null,
+        { effort: null, fastMode: false },
+      ],
+    }]);
+  });
+
+  it('fails closed when a legacy Desktop returns model-window confirmation data', async () => {
+    const invoke: RemoteInvoke = async () => ({
+      deferred: false,
+      contextWindowConfirmationRequired: 272_000,
+      contextTokensForConfirmation: 244_800,
+    }) as never;
+    const maker = createMobileMakerTransport({ deviceId: 'dev-1', invoke });
+
+    await expect(maker.setModel('s1', 'pi-model')).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message:
+        'remote model-window confirmation is unsupported; runtime selection was not changed',
+    });
+  });
+
   it('routes runtime controls and queue operations with stable channel names', async () => {
     const { calls, maker } = harness();
 
@@ -282,7 +365,9 @@ describe('mobile maker transport', () => {
     await maker.setFastMode('s1', true);
     await maker.setExtraDirs('s1', ['/repo/docs']);
     await maker.listAgentCommands('claude-code');
+    await maker.listAgentCommands('pi', { sessionId: 's1' });
     await maker.listAgentSkills('claude-code', { workingDir: '/repo' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 's1' });
     await maker.listAgentSkills('codex', {});
     await maker.scanAtResources('claude-code', { workingDir: '/repo', cap: 2000, query: 'session' });
     await maker.fetchRemoteMedia('xdt-image://local/a.png');
@@ -327,7 +412,9 @@ describe('mobile maker transport', () => {
       ['maker:set-fast-mode', ['s1', true]],
       ['maker:set-extra-dirs', ['s1', ['/repo/docs']]],
       ['maker:list-agent-commands', ['claude-code']],
+      ['maker:list-agent-commands', ['pi', { sessionId: 's1' }]],
       ['maker:list-agent-skills', ['claude-code', { workingDir: '/repo' }]],
+      ['maker:list-agent-skills', ['pi', { workingDir: '/repo', sessionId: 's1' }]],
       ['maker:list-agent-skills', ['codex', {}]],
       ['maker:scan-at-resources', ['claude-code', { workingDir: '/repo', cap: 2000, query: 'session' }]],
       ['device-link:media:fetch', [{ url: 'xdt-image://local/a.png' }]],

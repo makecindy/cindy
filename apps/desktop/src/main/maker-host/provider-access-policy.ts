@@ -1,11 +1,18 @@
 /**
  * provider-access-policy — runtime gates for user-selectable model providers.
  *
- * Routing keeps consuming the full active catalog. This projection only controls the
- * providers and models exposed as selectable capabilities to product surfaces.
+ * Routing and product surfaces consume the same active catalog. Successful Gateway
+ * catalogs and local provider discovery are never region-filtered here. The only
+ * regional projection below applies to unverified compatibility fallbacks, which must
+ * not claim that bundled XD media is currently routable by a regional endpoint.
  */
 
-import { classifyModel, type Catalog, type Provider } from '@cindy/model-providers';
+import {
+  classifyModel,
+  type Catalog,
+  type CatalogXdMediaKind,
+  type Provider,
+} from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 export interface ProviderAccessContext {
@@ -14,13 +21,18 @@ export interface ProviderAccessContext {
 }
 
 const CINDY_AI_PROVIDER_ID = 'xd';
-const MAINLAND_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
+const MAINLAND_FALLBACK_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
   'seedance-fast',
   'seedance-pro',
   'bytedance/seedance-2.5',
 ]);
+const ALL_XD_MEDIA_KINDS: ReadonlySet<CatalogXdMediaKind> = new Set([
+  'image',
+  'video',
+  'embedding',
+]);
 
-function projectVideoDefaults(
+function projectFallbackVideoDefaults(
   defaults: Provider['videoDefaults'],
   allowedIds: ReadonlySet<string>,
 ): Provider['videoDefaults'] | undefined {
@@ -33,90 +45,63 @@ function projectVideoDefaults(
 }
 
 /**
- * Build-region projection for Cindy-managed media capabilities. Global keeps
- * the catalog source verbatim; Mainland China and dev expose only the media
- * capabilities that the regional Cindy service supports.
- *
- * Region is a build-time choice for Cindy-owned services, not a restriction on
- * providers the user connected locally. OpenAI/Codex OAuth, xAI OAuth, Gemini
- * API keys and custom providers therefore keep their image catalog in every
- * build. Video dispatch is not provider-aware yet, so non-XD video capabilities
- * stay hidden outside Global until the runtime can route them by provider.
- *
- * Embedding clears the Cindy-managed list for Mainland China builds, because
- * every model behind that endpoint is an overseas one. Clearing the list (rather
- * than leaving it and failing at dispatch) is what makes the plugin capability
- * report "unavailable" instead of offering models that are guaranteed to fail.
- *
- * Non-XD providers are left untouched *here* on purpose, but that is not the
- * same as exposing them: unlike image, embedding dispatch is not provider-aware
- * yet (one EmbeddingService holding a single XD Gateway base URL and key), so a
- * non-XD `embeddingModels` list would be dispatched with Cindy's credential
- * rather than the user's own. `deriveCindyMediaConfig` therefore drops non-XD
- * embedding lists in *every* region — see the `kind === 'embed'` guard there.
- * This projection stays region-only; the routing constraint lives with the
- * derivation so both builds get it (PR #1707 review).
+ * A bundled/LKG/legacy snapshot is useful for compatibility metadata, but it is not
+ * evidence that the current regional Gateway can execute every XD media model baked
+ * into that snapshot. Keep the historical CN-safe XD subset until the configured
+ * current catalog source succeeds. Non-XD providers are intentionally untouched:
+ * locally connected providers and their discovery results do not belong to Gateway
+ * regional policy.
  */
-export function projectProviderCatalogForBuildRegion(
+export function projectUnverifiedCatalogFallbackForBuildRegion(
   catalog: Catalog,
   region: CindyRegion,
+  unverifiedKinds: ReadonlySet<CatalogXdMediaKind> = ALL_XD_MEDIA_KINDS,
 ): Catalog {
-  if (region === 'global') return catalog;
+  if (region === 'global' || unverifiedKinds.size === 0) return catalog;
 
   let changed = false;
   const providers = catalog.providers.map((provider) => {
-    const isCindyAi = provider.id === CINDY_AI_PROVIDER_ID;
-    if (!isCindyAi) {
-      const models = Object.fromEntries(
-        Object.entries(provider.models).map(([agent, list]) => [
-          agent,
-          (list ?? []).filter((model) => classifyModel(model) !== 'video'),
-        ]),
-      ) as Provider['models'];
-      const hasVideoModels = Object.values(provider.models).some(
-        (list) => list?.some((model) => classifyModel(model) === 'video') ?? false,
-      );
-      const hasVideoCatalog =
-        provider.videoModels !== undefined || provider.videoDefaults !== undefined;
-      if (!hasVideoModels && !hasVideoCatalog) return provider;
+    if (provider.id !== CINDY_AI_PROVIDER_ID) return provider;
 
-      changed = true;
-      const projected: Provider = {
-        ...provider,
-        models,
-        videoModels: [],
-      };
-      delete projected.videoDefaults;
-      return projected;
-    }
-    changed = true;
-
-    const videoModels = (provider.videoModels ?? []).filter((model) =>
-      MAINLAND_VIDEO_MODEL_IDS.has(model.id),
-    );
-    const videoIds = new Set(videoModels.map((model) => model.id));
-    const videoDefaults = projectVideoDefaults(provider.videoDefaults, videoIds);
+    const projectImage = unverifiedKinds.has('image');
+    const projectVideo = unverifiedKinds.has('video');
+    const projectEmbedding = unverifiedKinds.has('embedding');
+    const videoModels = projectVideo
+      ? (provider.videoModels ?? []).filter((model) =>
+          MAINLAND_FALLBACK_VIDEO_MODEL_IDS.has(model.id),
+        )
+      : provider.videoModels;
+    const videoIds = new Set((videoModels ?? []).map((model) => model.id));
+    const videoDefaults = projectVideo
+      ? projectFallbackVideoDefaults(provider.videoDefaults, videoIds)
+      : provider.videoDefaults;
     const models = Object.fromEntries(
       Object.entries(provider.models).map(([agent, list]) => [
         agent,
         (list ?? []).filter((model) => {
           const group = classifyModel(model);
-          if (group === 'image' || group === 'embedding') return false;
-          return group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id);
+          if (group === 'image' && projectImage) return false;
+          if (group === 'embedding' && projectEmbedding) return false;
+          return (
+            group !== 'video' ||
+            !projectVideo ||
+            MAINLAND_FALLBACK_VIDEO_MODEL_IDS.has(model.id)
+          );
         }),
       ]),
     ) as Provider['models'];
     const projected: Provider = {
       ...provider,
       models,
-      imageModels: [],
-      videoModels,
-      embeddingModels: [],
+      ...(projectImage ? { imageModels: [] } : {}),
+      ...(projectVideo ? { videoModels } : {}),
+      ...(projectEmbedding ? { embeddingModels: [] } : {}),
     };
-    delete projected.imageDefaults;
-    delete projected.videoDefaults;
-    delete projected.embeddingDefaults;
+    if (projectImage) delete projected.imageDefaults;
+    if (projectVideo) delete projected.videoDefaults;
+    if (projectEmbedding) delete projected.embeddingDefaults;
     if (videoDefaults) projected.videoDefaults = videoDefaults;
+    changed = true;
     return projected;
   });
 

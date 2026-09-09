@@ -37,7 +37,10 @@ const valid: CustomProviderConfig = {
   id: 'openrouter',
   name: 'OpenRouter',
   runtimes: {
-    codex: { baseUrl: 'https://openrouter.ai/api/v1', models: [{ id: 'meta/llama-4', name: 'Llama 4' }] },
+    codex: {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      models: [{ id: 'meta/llama-4', name: 'Llama 4' }],
+    },
   },
 };
 
@@ -72,6 +75,71 @@ afterEach(() => {
 });
 
 describe('validateCustomProviderConfig (per-runtime)', () => {
+  it.each(['codex', 'claude-code', 'pi'] as const)(
+    'round-trips opaque preset references for %s',
+    async (agent) => {
+      mountDb();
+      for (const catalogPresetId of ['My_Preset', 'vendor/preset:v2', '预设', 'x'.repeat(300)]) {
+        const config: CustomProviderConfig = {
+          id: 'preset-reference',
+          name: 'Reference',
+          runtimes: {
+            [agent]: {
+              baseUrl: 'https://example.test/v1',
+              catalogPresetId,
+              wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
+              models: [{ id: 'model', name: 'Model' }],
+            },
+          },
+        };
+        expect(validateCustomProviderConfig(config).ok).toBe(true);
+        await createCustomProvider(config);
+        expect((await getCustomProvider(config.id))?.runtimes[agent]?.catalogPresetId).toBe(
+          catalogPresetId,
+        );
+        expect((await listCustomProviders())[0]?.runtimes[agent]?.catalogPresetId).toBe(
+          catalogPresetId,
+        );
+        await deleteCustomProvider(config.id);
+      }
+      for (const catalogPresetId of ['', 42, null]) {
+        expect(
+          validateCustomProviderConfig({
+            ...valid,
+            runtimes: {
+              [agent]: {
+                baseUrl: 'https://example.test/v1',
+                wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
+                catalogPresetId,
+                models: [],
+              },
+            },
+          }).ok,
+        ).toBe(false);
+      }
+    },
+  );
+  it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
+    'rejects credentials in modelsUrl without exposing them: %s',
+    (userinfo) => {
+      expect(
+        validateCustomProviderConfig({
+          ...valid,
+          runtimes: {
+            codex: {
+              ...valid.runtimes.codex!,
+              modelsUrl: `https://${userinfo}openrouter.ai/api/v1/models`,
+            },
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        code: 'INVALID_PARAMS',
+        message: "runtime 'codex' modelsUrl must not contain embedded credentials",
+      });
+    },
+  );
+
   it('accepts a valid single-runtime config', () => {
     expect(validateCustomProviderConfig(valid)).toEqual({ ok: true });
   });
@@ -92,6 +160,10 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
   it('rejects bad / reserved ids', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...valid, id: 'xd' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }, { allowLegacyXai: true }).ok).toBe(
+      true,
+    );
     // 'cindy' 撞 pi 网关 provider id,必须保留
     expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });
@@ -105,7 +177,10 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
 
   it('rejects runtime with bad baseUrl / missing model fields', () => {
     expect(
-      validateCustomProviderConfig({ ...valid, runtimes: { codex: { baseUrl: 'ftp://x', models: [] } } }).ok,
+      validateCustomProviderConfig({
+        ...valid,
+        runtimes: { codex: { baseUrl: 'ftp://x', models: [] } },
+      }).ok,
     ).toBe(false);
     expect(
       validateCustomProviderConfig({
@@ -171,11 +246,125 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
           name: 'Local pi',
           auth: { method: 'none' },
           runtimes: {
-            pi: { baseUrl: 'http://127.0.0.1:11434/v1', wireProtocol: wp, models: [{ id: 'm', name: 'M' }] },
+            pi: {
+              baseUrl: 'http://127.0.0.1:11434/v1',
+              wireProtocol: wp,
+              models: [{ id: 'm', name: 'M' }],
+            },
           },
         }).ok,
       ).toBe(true);
     }
+  });
+
+  it('requires a default protocol on newly saved Pi runtimes', () => {
+    expect(
+      validateCustomProviderConfig({
+        id: 'localpi',
+        name: 'Local pi',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'm', name: 'M', piApi: 'openai-responses' }],
+          },
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'INVALID_PARAMS',
+      message: "runtime 'pi' wireProtocol required",
+    });
+  });
+
+  it('accepts a same-origin model route and rejects unsafe route variants', () => {
+    const config = (route: unknown) => ({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'glm-5.3', name: 'GLM-5.3', route }],
+        },
+      },
+    });
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://evil.example/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://user:secret@open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({ baseUrl: 'https://open.bigmodel.cn/api/v1', wireProtocol: 'bogus' }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('accepts supported per-model piApi values only on a Pi runtime', () => {
+    for (const piApi of [
+      'anthropic-messages',
+      'openai-responses',
+      'openai-completions',
+      'google-generative-ai',
+    ]) {
+      expect(
+        validateCustomProviderConfig({
+          id: 'pi-api',
+          name: 'Pi API',
+          runtimes: {
+            pi: {
+              baseUrl: 'https://example.com/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'm', name: 'M', piApi }],
+            },
+          },
+        }).ok,
+      ).toBe(true);
+    }
+    expect(
+      validateCustomProviderConfig({
+        id: 'bad-pi-api',
+        name: 'Bad Pi API',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'm', name: 'M', piApi: 'claude-v1' }],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        id: 'wrong-runtime-pi-api',
+        name: 'Wrong runtime Pi API',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            models: [{ id: 'm', name: 'M', piApi: 'openai-responses' }],
+          },
+        },
+      }).ok,
+    ).toBe(false);
   });
 
   it('accepts only explicit, non-empty, valid Pi reasoning effort capabilities', () => {
@@ -185,6 +374,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       runtimes: {
         [agent]: {
           baseUrl: 'https://example.com/v1',
+          ...(agent === 'pi' ? { wireProtocol: 'openai-chat' } : {}),
           models: [{ id: 'reasoner', name: 'Reasoner', ...model }],
         },
       },
@@ -195,6 +385,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         config({
           reasoning: true,
           reasoningEfforts: ['low', 'high', 'xhigh'],
+          reasoningDefaultEffort: 'high',
         }),
       ),
     ).toEqual({ ok: true });
@@ -218,10 +409,30 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     expect(validateCustomProviderConfig(config({ reasoningEfforts: ['high'] })).ok).toBe(false);
     expect(
       validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['low', 'high'],
+          reasoningDefaultEffort: 'max',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
         config(
           {
             reasoning: true,
             reasoningEfforts: ['high'],
+          },
+          'codex',
+        ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateCustomProviderConfig(
+        config(
+          {
+            reasoning: true,
+            reasoningEfforts: ['minimal'],
           },
           'codex',
         ),
@@ -236,7 +447,11 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         name: 'Local pi',
         auth: { method: 'none' },
         runtimes: {
-          pi: { baseUrl: 'http://127.0.0.1:11434/v1', wireProtocol: 'bogus-proto', models: [{ id: 'm', name: 'M' }] },
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'bogus-proto',
+            models: [{ id: 'm', name: 'M' }],
+          },
         },
       }).ok,
     ).toBe(false);
@@ -244,6 +459,74 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
 });
 
 describe('custom-provider-store CRUD (per-runtime)', () => {
+  it('accepts image generation only for a Codex runtime with an OpenAI Responses route', () => {
+    const model = { id: 'image-chat', name: 'Image Chat' };
+    expect(
+      validateCustomProviderConfig({
+        id: 'image-provider',
+        name: 'Image Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [model],
+          },
+        },
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateCustomProviderConfig({
+        id: 'chat-provider',
+        name: 'Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-chat',
+            supportsImageGeneration: true,
+            models: [model],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        id: 'pi-provider',
+        name: 'Pi Provider',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [model],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        id: 'mixed-provider',
+        name: 'Mixed Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-chat',
+            supportsImageGeneration: true,
+            models: [
+              {
+                ...model,
+                route: {
+                  baseUrl: 'https://example.com/responses',
+                  wireProtocol: 'openai-responses',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it('creates, lists, gets, updates, deletes', async () => {
     mountDb();
     expect(await listCustomProviders()).toEqual([]);
@@ -262,7 +545,10 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       name: 'OR v2',
       runtimes: {
         ...valid.runtimes,
-        'claude-code': { baseUrl: 'https://openrouter.ai/anthropic', models: [{ id: 'x/y', name: 'XY' }] },
+        'claude-code': {
+          baseUrl: 'https://openrouter.ai/anthropic',
+          models: [{ id: 'x/y', name: 'XY' }],
+        },
       },
     });
     expect(updated?.name).toBe('OR v2');
@@ -286,30 +572,90 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         ...snapshot!.runtimes,
         codex: {
           ...snapshot!.runtimes.codex!,
-          models: [
-            ...snapshot!.runtimes.codex!.models,
-            { id: 'new-model', name: 'New model' },
-          ],
+          models: [...snapshot!.runtimes.codex!.models, { id: 'new-model', name: 'New model' }],
         },
       },
     };
 
-    expect(
-      await updateCustomProviderIfUnchanged('openrouter', snapshot!, discovered, 1_000),
-    ).toBe(true);
+    expect(await updateCustomProviderIfUnchanged('openrouter', snapshot!, discovered, 1_000)).toBe(
+      true,
+    );
     expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models).toHaveLength(2);
 
-    await updateCustomProvider('openrouter', {
-      ...valid,
-      name: 'Edited in another window',
-    }, 1_000);
+    await updateCustomProvider(
+      'openrouter',
+      {
+        ...valid,
+        name: 'Edited in another window',
+      },
+      1_000,
+    );
     expect(
-      await updateCustomProviderIfUnchanged('openrouter', discovered, {
-        ...discovered,
-        name: 'Stale discovery write',
-      }, 1_000),
+      await updateCustomProviderIfUnchanged(
+        'openrouter',
+        discovered,
+        {
+          ...discovered,
+          name: 'Stale discovery write',
+        },
+        1_000,
+      ),
     ).toBe(false);
     expect((await getCustomProvider('openrouter'))?.name).toBe('Edited in another window');
+  });
+
+  it('recovers malformed stored updated_at values in both update paths', async () => {
+    mountDb();
+    const rows = [
+      ['iso-update', '2026-08-19T01:45:07Z'],
+      ['invalid-update', 'not-a-timestamp'],
+      ['numeric-discovery', '1234'],
+      ['iso-discovery', '2026-08-19T01:45:07Z'],
+    ] as const;
+    const insert = raw!.prepare(
+      `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const [id, updatedAt] of rows) {
+      insert.run(id, id, JSON.stringify(valid.runtimes), null, 0, 1, updatedAt);
+    }
+
+    await updateCustomProvider('iso-update', { ...valid, id: 'iso-update' }, 2_000);
+    await updateCustomProvider('invalid-update', { ...valid, id: 'invalid-update' }, 3_000);
+    const numericSnapshot = await getCustomProvider('numeric-discovery');
+    expect(numericSnapshot).not.toBeNull();
+    expect(
+      await updateCustomProviderIfUnchanged(
+        'numeric-discovery',
+        numericSnapshot!,
+        { ...numericSnapshot!, name: 'numeric-discovery-updated' },
+        1_000,
+      ),
+    ).toBe(true);
+    const isoSnapshot = await getCustomProvider('iso-discovery');
+    expect(isoSnapshot).not.toBeNull();
+    expect(
+      await updateCustomProviderIfUnchanged(
+        'iso-discovery',
+        isoSnapshot!,
+        { ...isoSnapshot!, name: 'iso-discovery-updated' },
+        4_000,
+      ),
+    ).toBe(true);
+
+    const updated = raw!
+      .prepare('SELECT id, updated_at FROM custom_providers ORDER BY id')
+      .all() as Array<{
+      id: string;
+      updated_at: unknown;
+    }>;
+    expect(updated).toEqual([
+      { id: 'invalid-update', updated_at: 3_000 },
+      { id: 'iso-discovery', updated_at: 4_000 },
+      { id: 'iso-update', updated_at: 2_000 },
+      { id: 'numeric-discovery', updated_at: 1_235 },
+    ]);
   });
 
   it('never persists headers and still dedupes models on normalize', async () => {
@@ -336,7 +682,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.headers).toBeUndefined();
   });
 
-  it('round-trips only an explicitly enabled Pi image-input capability', async () => {
+  it('round-trips explicit true and false Pi image-input capabilities', async () => {
     mountDb();
     await createCustomProvider({
       id: 'visual-pi',
@@ -356,11 +702,266 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect((await getCustomProvider('visual-pi'))?.runtimes.pi?.models).toEqual([
       { id: 'vision', name: 'Vision', supportsImageInput: true },
       { id: 'legacy', name: 'Legacy' },
-      { id: 'explicit-text', name: 'Explicit text' },
+      { id: 'explicit-text', name: 'Explicit text', supportsImageInput: false },
     ]);
   });
 
-  it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
+  it('round-trips only an explicitly enabled Codex image-generation capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'imagegen-provider',
+      name: 'Imagegen Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [
+            { id: 'enabled', name: 'Enabled' },
+            { id: 'legacy', name: 'Legacy' },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('imagegen-provider'))?.runtimes.codex).toMatchObject({
+      supportsImageGeneration: true,
+      models: [
+        { id: 'enabled', name: 'Enabled' },
+        { id: 'legacy', name: 'Legacy' },
+      ],
+    });
+  });
+
+  it('round-trips the Pi official catalog provider id without adding it to other runtimes', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'official-pi',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    });
+    expect((await getCustomProvider('official-pi'))?.runtimes.pi?.piCatalogProviderId).toBe(
+      'deepseek',
+    );
+    expect(
+      validateCustomProviderConfig({
+        id: 'bad-catalog-runtime',
+        name: 'Bad',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.example/v1',
+            piCatalogProviderId: 'deepseek',
+            models: [{ id: 'm', name: 'M' }],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {
+    mountDb();
+    const original = await createCustomProvider({
+      id: 'official-pi-edited',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-chat',
+          piCatalogProviderId: 'deepseek',
+          models: [
+            {
+              id: 'deepseek-v4-pro',
+              name: 'DeepSeek V4 Pro',
+              contextWindow: 1_000_000,
+              reasoning: true,
+              reasoningEfforts: ['high', 'max'],
+              reasoningDefaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    });
+    const edited: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: {
+          ...original.runtimes.pi!,
+          models: [
+            {
+              ...original.runtimes.pi!.models[0]!,
+              name: 'My DeepSeek',
+              contextWindow: 64_000,
+              supportsImageInput: true,
+              reasoningEfforts: ['low'],
+              reasoningDefaultEffort: 'low',
+            },
+          ],
+        },
+      },
+    };
+    expect(
+      (
+        await updateCustomProvider('official-pi-edited', {
+          ...original,
+          name: 'Renamed provider only',
+        })
+      )?.runtimes.pi?.piCatalogProviderId,
+    ).toBe('deepseek');
+    const defaultProtocolRoundTrip: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: { ...original.runtimes.pi!, wireProtocol: undefined },
+      },
+    };
+    expect(
+      (await updateCustomProvider('official-pi-edited', defaultProtocolRoundTrip))?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+    await updateCustomProvider('official-pi-edited', original);
+    expect(
+      (
+        await updateCustomProvider('official-pi-edited', {
+          ...original,
+          runtimes: {
+            ...original.runtimes,
+            pi: {
+              ...original.runtimes.pi!,
+              wireProtocol: 'anthropic-messages',
+            },
+          },
+        })
+      )?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+
+    await updateCustomProvider('official-pi-edited', original);
+    expect(
+      (await updateCustomProvider('official-pi-edited', edited))?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+
+    const second = await createCustomProvider({
+      ...original,
+      id: 'official-pi-discovered',
+    });
+    expect(
+      await updateCustomProviderIfUnchanged(second.id, second, {
+        ...second,
+        runtimes: {
+          ...second.runtimes,
+          pi: {
+            ...second.runtimes.pi!,
+            models: [
+              ...second.runtimes.pi!.models,
+              { id: 'new-from-models-url', name: 'New model' },
+            ],
+          },
+        },
+      }),
+    ).toBe(true);
+    expect((await getCustomProvider(second.id))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+
+    const replaced = await createCustomProvider({
+      ...original,
+      id: 'official-pi-replaced',
+    });
+    expect(
+      (
+        await updateCustomProvider(replaced.id, {
+          ...replaced,
+          runtimes: {
+            ...replaced.runtimes,
+            pi: {
+              ...replaced.runtimes.pi!,
+              models: [
+                {
+                  id: 'deepseek-v4-flash',
+                  name: 'My Flash Model',
+                  contextWindow: 64_000,
+                  supportsImageInput: true,
+                  reasoning: true,
+                  reasoningEfforts: ['low'],
+                  reasoningDefaultEffort: 'low',
+                },
+              ],
+            },
+          },
+        })
+      )?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+    expect((await getCustomProvider(replaced.id))?.runtimes.pi).toMatchObject({
+      models: [
+        {
+          id: 'deepseek-v4-flash',
+          name: 'My Flash Model',
+          contextWindow: 64_000,
+          supportsImageInput: true,
+          reasoning: true,
+          reasoningEfforts: ['low'],
+          reasoningDefaultEffort: 'low',
+        },
+      ],
+    });
+
+    const deleted = await createCustomProvider({
+      ...original,
+      id: 'official-pi-deleted',
+    });
+    expect(
+      (
+        await updateCustomProvider(deleted.id, {
+          ...deleted,
+          runtimes: {
+            ...deleted.runtimes,
+            pi: { ...deleted.runtimes.pi!, models: [] },
+          },
+        })
+      )?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+    const deletedSnapshot = await getCustomProvider(deleted.id);
+    expect(
+      (
+        await updateCustomProvider(deleted.id, {
+          ...deletedSnapshot!,
+          runtimes: {
+            ...deletedSnapshot!.runtimes,
+            pi: {
+              ...deletedSnapshot!.runtimes.pi!,
+              models: deleted.runtimes.pi!.models,
+            },
+          },
+        })
+      )?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+
+    const duplicate = await createCustomProvider({
+      ...original,
+      id: 'official-pi-duplicate',
+    });
+    expect(
+      (
+        await updateCustomProvider(duplicate.id, {
+          ...duplicate,
+          runtimes: {
+            ...duplicate.runtimes,
+            pi: {
+              ...duplicate.runtimes.pi!,
+              models: [
+                { ...duplicate.runtimes.pi!.models[0]!, name: 'Edited first duplicate' },
+                duplicate.runtimes.pi!.models[0]!,
+              ],
+            },
+          },
+        })
+      )?.runtimes.pi,
+    ).not.toHaveProperty('piCatalogProviderId');
+  });
+
+  it('round-trips explicit Pi reasoning choices separately from inheritance', async () => {
     mountDb();
     await createCustomProvider({
       id: 'reasoning-pi',
@@ -375,6 +976,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
               name: 'Reasoner',
               reasoning: true,
               reasoningEfforts: ['low', 'high', 'xhigh'],
+              reasoningDefaultEffort: 'xhigh',
             },
             { id: 'legacy', name: 'Legacy' },
             { id: 'explicit-off', name: 'Explicit off', reasoning: false },
@@ -388,9 +990,114 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         name: 'Reasoner',
         reasoning: true,
         reasoningEfforts: ['low', 'high', 'xhigh'],
+        reasoningDefaultEffort: 'xhigh',
       },
       { id: 'legacy', name: 'Legacy' },
-      { id: 'explicit-off', name: 'Explicit off' },
+      { id: 'explicit-off', name: 'Explicit off', reasoning: false },
+    ]);
+  });
+
+  it.each(['codex', 'claude-code', 'pi'] as const)(
+    'preserves reasoning off across %s updates and restores inheritance on deletion',
+    async (agent) => {
+      mountDb();
+      const provider = await createCustomProvider({
+        id: 'reasoning-choice',
+        name: 'Choice',
+        auth: { method: 'none' },
+        runtimes: {
+          [agent]: {
+            baseUrl: 'https://example.test/v1',
+            models: [
+              {
+                id: 'model',
+                name: 'Model',
+                reasoning: true,
+                reasoningEfforts: ['low', 'high'],
+                reasoningDefaultEffort: 'high',
+              },
+            ],
+          },
+        },
+      });
+      provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model', reasoning: false }];
+      await updateCustomProvider(provider.id, provider);
+      expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).toEqual({
+        id: 'model',
+        name: 'Model',
+        reasoning: false,
+      });
+      expect((await listCustomProviders())[0]?.runtimes[agent]?.models[0]?.reasoning).toBe(false);
+      provider.runtimes[agent]!.models = [{ id: 'model', name: 'Model' }];
+      await updateCustomProvider(provider.id, provider);
+      expect((await getCustomProvider(provider.id))?.runtimes[agent]?.models[0]).not.toHaveProperty(
+        'reasoning',
+      );
+    },
+  );
+
+  it('round-trips Claude Code thinking toggle and reasoning efforts', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'thinking-cc',
+      name: 'Thinking CC',
+      auth: { method: 'none' },
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'http://127.0.0.1:11434',
+          wireProtocol: 'anthropic-messages',
+          models: [
+            {
+              id: 'qwen3.8:27b-mxfp8',
+              name: 'Qwen 3.8',
+              reasoning: true,
+              reasoningEfforts: ['high', 'max'],
+              reasoningDefaultEffort: 'high',
+              thinkingToggle: true,
+            },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('thinking-cc'))?.runtimes['claude-code']?.models).toEqual([
+      {
+        id: 'qwen3.8:27b-mxfp8',
+        name: 'Qwen 3.8',
+        reasoning: true,
+        reasoningEfforts: ['high', 'max'],
+        reasoningDefaultEffort: 'high',
+        thinkingToggle: true,
+      },
+    ]);
+  });
+
+  it('round-trips a per-model Pi protocol correction', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'deepseek-pi',
+      name: 'DeepSeek Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-responses',
+          models: [
+            {
+              id: 'deepseek-v4-pro',
+              name: 'DeepSeek V4 Pro',
+              piApi: 'openai-responses',
+            },
+          ],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('deepseek-pi'))?.runtimes.pi?.models).toEqual([
+      {
+        id: 'deepseek-v4-pro',
+        name: 'DeepSeek V4 Pro',
+        piApi: 'openai-responses',
+      },
     ]);
   });
 
@@ -405,7 +1112,9 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         },
       },
     });
-    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('openai-chat');
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe(
+      'openai-chat',
+    );
   });
 
   it('round-trips an explicit Anthropic Messages protocol for Codex', async () => {
@@ -420,54 +1129,93 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         },
       },
     });
-    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('anthropic-messages');
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe(
+      'anthropic-messages',
+    );
   });
 
   it('preserves legacy remote auth:none records for repair without deleting them', async () => {
     mountDb();
-    raw!.prepare(
-      `INSERT INTO custom_providers
+    raw!
+      .prepare(
+        `INSERT INTO custom_providers
         (id, name, runtimes, auth, sort_order, created_at, updated_at)
        VALUES (?, ?, ?, ?, 0, 1, 1)`,
-    ).run(
-      'legacy-no-auth',
-      'Legacy no auth',
-      JSON.stringify({
-        codex: {
-          baseUrl: 'https://remote.example/v1',
-          models: [{ id: 'm', name: 'M' }],
-        },
-      }),
-      JSON.stringify({ method: 'none' }),
-    );
+      )
+      .run(
+        'legacy-no-auth',
+        'Legacy no auth',
+        JSON.stringify({
+          codex: {
+            baseUrl: 'https://remote.example/v1',
+            models: [{ id: 'm', name: 'M' }],
+          },
+        }),
+        JSON.stringify({ method: 'none' }),
+      );
 
     const [loaded] = await listCustomProviders();
     expect(loaded.id).toBe('legacy-no-auth');
     expect(loaded.auth).toEqual({ method: 'none' });
     expect(loaded.runtimes.codex?.baseUrl).toBe('https://remote.example/v1');
-    expect(raw!.prepare('SELECT auth FROM custom_providers WHERE id = ?').get('legacy-no-auth'))
-      .toEqual({ auth: JSON.stringify({ method: 'none' }) });
+    expect(
+      raw!.prepare('SELECT auth FROM custom_providers WHERE id = ?').get('legacy-no-auth'),
+    ).toEqual({ auth: JSON.stringify({ method: 'none' }) });
   });
 
   it('keeps legacy loopback auth:none records enabled when loading', async () => {
     mountDb();
-    raw!.prepare(
-      `INSERT INTO custom_providers
+    raw!
+      .prepare(
+        `INSERT INTO custom_providers
         (id, name, runtimes, auth, sort_order, created_at, updated_at)
        VALUES (?, ?, ?, ?, 0, 1, 1)`,
-    ).run(
-      'legacy-loopback',
-      'Legacy loopback',
-      JSON.stringify({
-        codex: {
-          baseUrl: 'http://127.0.0.1:4000/v1',
-          models: [{ id: 'm', name: 'M' }],
-        },
-      }),
-      JSON.stringify({ method: 'none' }),
-    );
+      )
+      .run(
+        'legacy-loopback',
+        'Legacy loopback',
+        JSON.stringify({
+          codex: {
+            baseUrl: 'http://127.0.0.1:4000/v1',
+            models: [{ id: 'm', name: 'M' }],
+          },
+        }),
+        JSON.stringify({ method: 'none' }),
+      );
 
     expect((await getCustomProvider('legacy-loopback'))?.auth).toEqual({ method: 'none' });
+  });
+
+  it('materializes the historical Pi Chat default only when reading legacy records', async () => {
+    mountDb();
+    const storedRuntimes = JSON.stringify({
+      pi: {
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        models: [
+          { id: 'inherited', name: 'Inherited' },
+          { id: 'explicit', name: 'Explicit', piApi: 'openai-responses' },
+        ],
+      },
+    });
+    raw!
+      .prepare(
+        `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 0, 1, 1)`,
+      )
+      .run('legacy-pi', 'Legacy Pi', storedRuntimes);
+
+    const loaded = await getCustomProvider('legacy-pi');
+    expect(loaded?.runtimes.pi).toMatchObject({
+      wireProtocol: 'openai-chat',
+      models: [
+        { id: 'inherited', name: 'Inherited' },
+        { id: 'explicit', name: 'Explicit', piApi: 'openai-responses' },
+      ],
+    });
+    expect(
+      raw!.prepare('SELECT runtimes FROM custom_providers WHERE id = ?').get('legacy-pi'),
+    ).toEqual({ runtimes: storedRuntimes });
   });
 
   it('round-trips a validated exact inference request path', async () => {
@@ -481,8 +1229,37 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         },
       },
     });
-    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.requestPath)
-      .toBe('/tenant/acme/v2/infer?stream=1');
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.requestPath).toBe(
+      '/tenant/acme/v2/infer?stream=1',
+    );
+  });
+
+  it('round-trips a validated model-specific route', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'glm-5.3',
+              name: 'GLM-5.3',
+              route: {
+                baseUrl: 'https://open.bigmodel.cn/api/v1',
+                wireProtocol: 'openai-responses',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models[0]?.route).toEqual({
+      baseUrl: 'https://open.bigmodel.cn/api/v1',
+      wireProtocol: 'openai-responses',
+    });
   });
 
   it('strips requestPath from Pi native runtime records', async () => {
@@ -509,34 +1286,104 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     '/infer\u0000mode',
     '/模型',
     'responses',
-  ])(
-    'rejects unsafe or non-path requestPath %s',
-    (requestPath) => {
-      expect(validateCustomProviderConfig({
+  ])('rejects unsafe or non-path requestPath %s', (requestPath) => {
+    expect(
+      validateCustomProviderConfig({
         ...valid,
         runtimes: {
           codex: { ...valid.runtimes.codex!, requestPath },
         },
-      }).ok).toBe(false);
-    },
-  );
+      }).ok,
+    ).toBe(false);
+  });
 
   it('rejects unsupported protocol/runtime combinations', () => {
-    expect(validateCustomProviderConfig({
-      ...valid,
-      runtimes: {
-        'claude-code': {
-          baseUrl: 'https://v.ai/chat',
-          wireProtocol: 'openai-chat',
-          models: [{ id: 'm', name: 'M' }],
+    expect(
+      validateCustomProviderConfig({
+        ...valid,
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://v.ai/chat',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'm', name: 'M' }],
+          },
         },
-      },
-    }).ok).toBe(false);
+      }).ok,
+    ).toBe(false);
   });
 
   it('update returns null when row absent', async () => {
     mountDb();
     expect(await updateCustomProvider('ghost', valid)).toBeNull();
+  });
+
+  // updated_at 列声明为 INTEGER，但表不是 STRICT，所以历史脏数据可能是文本。旧实现直接
+  // 对它 +1 得到字符串拼接，Math.max 变 NaN，写入 NOT NULL 整数列即失败 —— 那个供应商
+  // 此后永久保存不了。
+  it('still saves when updated_at holds a non-numeric value', async () => {
+    mountDb();
+    await createCustomProvider(valid, 1_000);
+    raw!
+      .prepare('UPDATE custom_providers SET updated_at = ? WHERE id = ?')
+      .run('2026-08-19T01:45:07.003Z', 'openrouter');
+    expect(
+      raw!
+        .prepare("SELECT typeof(updated_at) AS t FROM custom_providers WHERE id = 'openrouter'")
+        .get(),
+    ).toEqual({ t: 'text' });
+
+    const updated = await updateCustomProvider(
+      'openrouter',
+      { ...valid, name: 'Recovered' },
+      5_000,
+    );
+
+    expect(updated?.name).toBe('Recovered');
+    expect((await getCustomProvider('openrouter'))?.name).toBe('Recovered');
+    const row = raw!
+      .prepare(
+        "SELECT updated_at AS updatedAt, typeof(updated_at) AS t FROM custom_providers WHERE id = 'openrouter'",
+      )
+      .get() as { updatedAt: number; t: string };
+    expect(row.t).toBe('integer');
+    expect(row.updatedAt).toBe(5_000);
+  });
+
+  it('keeps the optimistic-lock bump strictly increasing when the clock does not advance', async () => {
+    mountDb();
+    await createCustomProvider(valid, 9_000);
+    // now 早于库里的 updatedAt：仍必须写出更大的值，否则乐观锁比较会失效。
+    await updateCustomProvider('openrouter', { ...valid, name: 'Same tick' }, 1_000);
+    const row = raw!
+      .prepare("SELECT updated_at AS updatedAt FROM custom_providers WHERE id = 'openrouter'")
+      .get() as { updatedAt: number };
+    expect(row.updatedAt).toBe(9_001);
+  });
+
+  it('recovers a non-numeric updated_at through the snapshot-guarded write too', async () => {
+    mountDb();
+    await createCustomProvider(valid, 1_000);
+    const snapshot = await getCustomProvider('openrouter');
+    raw!
+      .prepare('UPDATE custom_providers SET updated_at = ? WHERE id = ?')
+      .run('not-a-timestamp', 'openrouter');
+
+    // where 子句用旧值做乐观锁比较，文本值也要能匹配上并写回一个合法整数。
+    expect(
+      await updateCustomProviderIfUnchanged(
+        'openrouter',
+        snapshot!,
+        { ...snapshot!, name: 'Discovered' },
+        7_000,
+      ),
+    ).toBe(true);
+    const row = raw!
+      .prepare(
+        "SELECT updated_at AS updatedAt, typeof(updated_at) AS t FROM custom_providers WHERE id = 'openrouter'",
+      )
+      .get() as { updatedAt: number; t: string };
+    expect(row.t).toBe('integer');
+    expect(row.updatedAt).toBe(7_000);
   });
 
   it('isolates data per db file (account switch = new db)', async () => {
@@ -547,5 +1394,194 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     raw?.close();
     mountDb();
     expect(await listCustomProviders()).toEqual([]);
+  });
+
+  it('CAS: MAX_SAFE_INTEGER seed — writer B succeeds, stale reader A is rejected', async () => {
+    mountDb();
+
+    // Seed a provider with updated_at = MAX_SAFE_INTEGER (corrupted/legacy data)
+    raw!
+      .prepare(
+        `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'max-cas',
+        'MaxCAS',
+        JSON.stringify(valid.runtimes),
+        null,
+        0,
+        1,
+        Number.MAX_SAFE_INTEGER,
+      );
+
+    // Read raw updated_at to snapshot version
+    const versionA = (
+      raw!
+        .prepare('SELECT updated_at AS updatedAt FROM custom_providers WHERE id = ?')
+        .get('max-cas') as { updatedAt: number }
+    ).updatedAt;
+    expect(versionA).toBe(Number.MAX_SAFE_INTEGER);
+
+    // Reader A reads the config snapshot
+    const readerA = await getCustomProvider('max-cas');
+    expect(readerA).not.toBeNull();
+
+    // Writer B performs a normal edit
+    await updateCustomProvider(
+      'max-cas',
+      {
+        ...valid,
+        id: 'max-cas',
+        name: 'MaxCAS Edited by B',
+      },
+      1_700_000_000_000,
+    );
+
+    // B's write must produce a different updated_at
+    const versionB = (
+      raw!
+        .prepare('SELECT updated_at AS updatedAt FROM custom_providers WHERE id = ?')
+        .get('max-cas') as { updatedAt: number }
+    ).updatedAt;
+    expect(versionB).not.toBe(Number.MAX_SAFE_INTEGER);
+    expect(versionB).not.toBe(versionA);
+
+    // Verify B's content is correct
+    const afterB = await getCustomProvider('max-cas');
+    expect(afterB).not.toBeNull();
+    expect(afterB!.name).toBe('MaxCAS Edited by B');
+
+    // Reader A tries a stale CAS update — config equality check fails
+    // because writer B changed the name. This证明生产路径在 B 修改后
+    // 拒绝 A 的过时写入。注意：此处 name 不一致导致 equality check
+    // 先于 CAS timestamp 检查返回 false，因此不单独证明 CAS 失败。
+    // 真正的 CAS-only 拦截需要 config equality 通过但 timestamp 过时，
+    // 这在单线程测试中难以自然构造（需要 hook SELECT 和 UPDATE 之间）。
+    const staleResult = await updateCustomProviderIfUnchanged(
+      'max-cas',
+      readerA!,
+      { ...readerA!, name: 'Stale A overwrite' },
+      1_700_000_010_000,
+    );
+    expect(staleResult).toBe(false);
+
+    // Verify B's content was NOT overwritten by A
+    const final_ = await getCustomProvider('max-cas');
+    expect(final_).not.toBeNull();
+    expect(final_!.name).toBe('MaxCAS Edited by B');
+  });
+
+  it('CAS: normal seed — writer B succeeds, stale reader A is rejected', async () => {
+    mountDb();
+
+    // Seed with normal updated_at
+    raw!
+      .prepare(
+        `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('normal-cas', 'NormalCAS', JSON.stringify(valid.runtimes), null, 0, 1, 1000);
+
+    // Reader A snapshots the version
+    const versionA = (
+      raw!
+        .prepare('SELECT updated_at AS updatedAt FROM custom_providers WHERE id = ?')
+        .get('normal-cas') as { updatedAt: number }
+    ).updatedAt;
+    expect(versionA).toBe(1000);
+
+    // Reader A reads config snapshot
+    const readerA = await getCustomProvider('normal-cas');
+    expect(readerA).not.toBeNull();
+
+    // Writer B edits
+    await updateCustomProvider(
+      'normal-cas',
+      {
+        ...valid,
+        id: 'normal-cas',
+        name: 'NormalCAS Edited by B',
+      },
+      2000,
+    );
+
+    // B's updated_at changed
+    const versionB = (
+      raw!
+        .prepare('SELECT updated_at AS updatedAt FROM custom_providers WHERE id = ?')
+        .get('normal-cas') as { updatedAt: number }
+    ).updatedAt;
+    expect(versionB).not.toBe(versionA);
+
+    // Reader A stale CAS update — name mismatch causes config equality
+    // check to fail before CAS timestamp check.
+    const staleResult = await updateCustomProviderIfUnchanged(
+      'normal-cas',
+      readerA!,
+      { ...readerA!, name: 'Stale A overwrite' },
+      3000,
+    );
+    expect(staleResult).toBe(false);
+
+    // B's content preserved
+    const final_ = await getCustomProvider('normal-cas');
+    expect(final_).not.toBeNull();
+    expect(final_!.name).toBe('NormalCAS Edited by B');
+  });
+});
+
+describe('supplier metadata persistence', () => {
+  it('refreshes supplier facts without converting them into explicit user preferences', async () => {
+    mountDb();
+    const metadata = { name: 'Supplier', contextWindow: 1000, supportsImageInput: true };
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          ...valid.runtimes.codex!,
+          models: [
+            {
+              id: 'model',
+              name: 'My label',
+              nameExplicit: true,
+              contextWindow: 2000,
+              supportsImageInput: false,
+              discoveredMetadata: metadata,
+            },
+          ],
+        },
+      },
+    });
+    const saved = await getCustomProvider(valid.id);
+    expect(saved?.runtimes.codex?.models[0]).toMatchObject({
+      nameExplicit: true,
+      contextWindow: 2000,
+      supportsImageInput: false,
+      discoveredMetadata: metadata,
+    });
+    const next = {
+      ...saved!,
+      runtimes: {
+        codex: {
+          ...saved!.runtimes.codex!,
+          models: [
+            {
+              ...saved!.runtimes.codex!.models[0],
+              discoveredMetadata: { ...metadata, contextWindow: 3000 },
+            },
+          ],
+        },
+      },
+    };
+    await updateCustomProvider(valid.id, next);
+    expect((await getCustomProvider(valid.id))?.runtimes.codex?.models[0]).toMatchObject({
+      name: 'My label',
+      contextWindow: 2000,
+      supportsImageInput: false,
+      discoveredMetadata: { contextWindow: 3000 },
+    });
   });
 });

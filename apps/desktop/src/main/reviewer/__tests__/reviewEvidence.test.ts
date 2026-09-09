@@ -486,9 +486,9 @@ describe('readReviewWorkspaceSnapshot', () => {
   it('does not hand a dirty submodule to the file fingerprinter', async () => {
     // A gitlink is a directory and the fingerprinter accepts only regular
     // files, so including it would abort evidence loading and make the whole
-    // dirty workspace unreviewable. The cost of excluding it — edits inside
-    // the submodule are not bound — is stated at the call site and tracked in
-    // #2463; it is not offset by the porcelain status, which keeps no oid.
+    // dirty workspace unreviewable. Its identity is bound by the submodule
+    // reader instead (#2463) — stubbed here because this fixture directory is
+    // not a real Git repository.
     const repoRoot = await tempDir();
     const submodulePath = 'vendor/lib';
     await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });
@@ -507,7 +507,259 @@ describe('readReviewWorkspaceSnapshot', () => {
       },
     });
 
-    await expect(readReviewWorkspaceSnapshot('source')).resolves.toBeTruthy();
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        readSubmoduleIdentity: async () => ({ identities: [], hashedContent: false }),
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('excludes capped submodule entries from the content fingerprint paths (#2463 review)', async () => {
+    // capped bucket 里的 submodule 条目不得进入普通文件指纹器:gitlink 是
+    // 目录,指纹器会直接抛错,含 capped 子仓的大型 dirty workspace 整个
+    // Review 起不来;其身份由 submodule reader 绑定。
+    const repoRoot = await tempDir();
+    const submodulePath = 'vendor/lib';
+    await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });
+    const data = cappedReviewData(repoRoot, submodulePath);
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      status: data.status
+        ? { ...data.status, files: data.status.files.map((f) => ({ ...f, isSubmodule: true })) }
+        : data.status,
+      diffs: {
+        ...data.diffs,
+        capped: {
+          staged: null,
+          unstaged: {
+            ...data.diffs.capped!.unstaged!,
+            files: data.diffs.capped!.unstaged!.files.map((f) => ({ ...f, isSubmodule: true })),
+          },
+        },
+      },
+    });
+    const fingerprintCappedWorkspaceFiles = vi.fn(
+      async (_repoRoot: string, _paths: readonly string[]) => 'digest',
+    );
+    const readSubmoduleIdentity = vi.fn(
+      async (_repoRoot: string, _paths: readonly string[]) => ({
+        identities: [],
+        hashedContent: false,
+      }),
+    );
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        fingerprintCappedWorkspaceFiles,
+        readSubmoduleIdentity,
+      }),
+    ).resolves.toBeTruthy();
+    for (const [, paths] of fingerprintCappedWorkspaceFiles.mock.calls) {
+      expect(paths).not.toContain(submodulePath);
+    }
+    expect(readSubmoduleIdentity).toHaveBeenCalled();
+    expect(readSubmoduleIdentity.mock.calls[0]?.[1]).toContain(submodulePath);
+  });
+
+  it('binds a status-only dirty submodule missing from every diff bucket (#2463 review)', async () => {
+    // ignoreWhitespace 下只含 untracked 内部内容的子仓没有 numstat 条目,
+    // summary 构建把它当空白改动滤掉;unstaged bucket 又处于 capped、不建
+    // detail diff——此时它只存在于 status 里。身份收集必须从净化后的
+    // status 记录补齐,否则内层同尺寸替换可穿过两道新鲜度门(Codex review)。
+    const repoRoot = await tempDir();
+    const cappedPath = 'src/big.ts';
+    const submodulePath = 'vendor/lib';
+    await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });
+    const data = cappedReviewData(repoRoot, cappedPath);
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      status: data.status
+        ? {
+            ...data.status,
+            files: [
+              ...data.status.files,
+              {
+                path: submodulePath,
+                oldPath: null,
+                indexStatus: null,
+                worktreeStatus: 'modified' as const,
+                isUntracked: false,
+                isUnmerged: false,
+                isSubmodule: true,
+                sources: ['unstaged' as const],
+                rawXY: ' M',
+              },
+            ],
+          }
+        : data.status,
+      // diffs 保持原样:capped bucket 与 detail diffs 都不含该子仓。
+    });
+    const fingerprintCappedWorkspaceFiles = vi.fn(
+      async (_repoRoot: string, _paths: readonly string[]) => 'digest',
+    );
+    const readSubmoduleIdentity = vi.fn(
+      async (_repoRoot: string, _paths: readonly string[]) => ({
+        identities: [],
+        hashedContent: false,
+      }),
+    );
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        fingerprintCappedWorkspaceFiles,
+        readSubmoduleIdentity,
+      }),
+    ).resolves.toBeTruthy();
+    expect(readSubmoduleIdentity).toHaveBeenCalled();
+    expect(readSubmoduleIdentity.mock.calls[0]?.[1]).toContain(submodulePath);
+    // 子仓仍不得进入普通文件指纹器。
+    for (const [, paths] of fingerprintCappedWorkspaceFiles.mock.calls) {
+      expect(paths).not.toContain(submodulePath);
+    }
+  });
+
+  it('fails closed instead of probing local fs for a remote workspace submodule (#2463 review)', async () => {
+    // SSH 远程 review 的 repoRoot 是远端路径:本机 fs 探测会把 ENOENT 误判成
+    // uninitialized 放行过期结论,同路径本机目录还会绑错字节。命中 dirty
+    // submodule 的远程快照必须显式拒绝,且不得触碰 submodule reader。
+    const repoRoot = await tempDir();
+    const submodulePath = 'vendor/lib';
+    const data = cappedReviewData(repoRoot, 'src/big.ts');
+    const remoteScope = { ...data.scope, source: 'remote' as const };
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      scope: remoteScope,
+      status: data.status
+        ? {
+            ...data.status,
+            scope: remoteScope,
+            files: [
+              ...data.status.files,
+              {
+                path: submodulePath,
+                oldPath: null,
+                indexStatus: null,
+                worktreeStatus: 'modified' as const,
+                isUntracked: false,
+                isUnmerged: false,
+                isSubmodule: true,
+                sources: ['unstaged' as const],
+                rawXY: ' M',
+              },
+            ],
+          }
+        : data.status,
+    });
+    const readSubmoduleIdentity = vi.fn(
+      async (_repoRoot: string, _paths: readonly string[]) => ({
+        identities: [],
+        hashedContent: false,
+      }),
+    );
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        fingerprintCappedWorkspaceFiles: vi.fn(async () => 'digest'),
+        readSubmoduleIdentity,
+      }),
+    ).rejects.toThrow(/SSH remote/);
+    expect(readSubmoduleIdentity).not.toHaveBeenCalled();
+  });
+
+  it('keeps a remote workspace snapshot working when no submodule is involved (#2463 review)', async () => {
+    const repoRoot = await tempDir();
+    const data = cappedReviewData(repoRoot, 'src/big.ts');
+    const remoteScope = { ...data.scope, source: 'remote' as const };
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      scope: remoteScope,
+      status: data.status ? { ...data.status, scope: remoteScope } : data.status,
+    });
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        fingerprintCappedWorkspaceFiles: vi.fn(async () => 'digest'),
+        readSubmoduleIdentity: vi.fn(async () => ({ identities: [], hashedContent: false })),
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('routes submodule evidence to the identity reader and binds the manifest (#2463)', async () => {
+    const repoRoot = await tempDir();
+    const submodulePath = 'vendor/lib';
+    await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });
+    const data = binaryReviewData(repoRoot, submodulePath);
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      diffs: {
+        ...data.diffs,
+        unstaged: data.diffs.unstaged.map((diff) => ({
+          ...diff,
+          kind: 'unrenderable' as const,
+          isBinary: false,
+          isSubmodule: true,
+          error: null,
+        })),
+      },
+    });
+    const manifest = (subHead: string) => ({
+      identities: [
+        {
+          path: submodulePath,
+          indexRecord: `160000 0 ${'c'.repeat(40)}`,
+          headRecord: `160000 commit ${'c'.repeat(40)}`,
+          subHead,
+          stagedIdentity: [],
+          statusRecords: [],
+          dirtyContentFingerprint: null,
+          nested: [],
+        },
+      ],
+      hashedContent: false,
+    });
+
+    const before = await readReviewWorkspaceSnapshot('source', {
+      readSubmoduleIdentity: async (_repoRoot, paths) => {
+        expect(paths).toEqual([submodulePath]);
+        return manifest('a'.repeat(40));
+      },
+    });
+    const after = await readReviewWorkspaceSnapshot('source', {
+      readSubmoduleIdentity: async () => manifest('b'.repeat(40)),
+    });
+
+    expect(after?.workspace).toEqual(before?.workspace);
+    expect(before?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(after?.fingerprint).not.toBe(before?.fingerprint);
+  });
+
+  it('fails closed when the submodule identity cannot be read (#2463)', async () => {
+    const repoRoot = await tempDir();
+    const submodulePath = 'vendor/lib';
+    await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });
+    const data = binaryReviewData(repoRoot, submodulePath);
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      diffs: {
+        ...data.diffs,
+        unstaged: data.diffs.unstaged.map((diff) => ({
+          ...diff,
+          kind: 'unrenderable' as const,
+          isBinary: false,
+          isSubmodule: true,
+          error: null,
+        })),
+      },
+    });
+    const failure = new Error('submodule identity unreadable');
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        readSubmoduleIdentity: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
   });
 
   it('marks prepared Git evidence stale when the workspace changes before launch', async () => {

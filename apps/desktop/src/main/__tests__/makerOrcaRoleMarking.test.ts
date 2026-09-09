@@ -83,6 +83,18 @@ describe('maker Orca role marking IPC boundary', () => {
     expect(successHookSource).toContain("if (createOpts.orcaRole === 'worker') {");
     expect(successHookSource).toContain('markKnownOrcaWorkerSession(sessionId);');
   });
+
+  it('rejects Review sessions before thinking can be flipped', () => {
+    const thinkingSource = registerSource.slice(
+      registerSource.indexOf('MAKER_INVOKE.SET_THINKING_ENABLED'),
+      registerSource.indexOf('MAKER_INVOKE.SET_EXTRA_DIRS'),
+    );
+    expectOrder(
+      thinkingSource,
+      'await assertReviewSettingsUnlocked(sessionId);',
+      'await sess.setThinkingEnabled(enabled);',
+    );
+  });
 });
 
 function expectOrder(source: string, before: string, after: string): void {

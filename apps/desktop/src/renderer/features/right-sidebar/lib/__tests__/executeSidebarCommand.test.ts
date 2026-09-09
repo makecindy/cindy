@@ -1,8 +1,15 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../store', () => ({
   ensureHydrated: vi.fn(async () => undefined),
   addOrFocusSingletonTab: vi.fn(async () => undefined),
+  closeTab: vi.fn(async () => undefined),
+  getBucket: vi.fn(() => ({
+    tabs: [{ id: 'review-1', kind: 'review' }],
+    activeTabId: 'review-1',
+  })),
 }));
 vi.mock('../openInSidebarBrowser', () => ({
   openUrlInSidebarBrowser: vi.fn(async () => undefined),
@@ -20,7 +27,7 @@ vi.mock('../../plugins/orca-workers/actions', () => ({
   closeOrcaWorkersTabAfterTeamEnd: vi.fn(async () => undefined),
 }));
 
-import { addOrFocusSingletonTab, ensureHydrated } from '../../store';
+import { addOrFocusSingletonTab, closeTab, ensureHydrated, getBucket } from '../../store';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
   ensureOrcaWorkersTab,
@@ -104,5 +111,20 @@ describe('executeSidebarCommand', () => {
       revealSidebar: true,
       userInitiated: false,
     });
+  });
+
+  it('keeps Review when the detached host is still hidden', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
+    expect(getBucket).toHaveBeenCalledWith('s1');
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'review', null);
+  });
+
+  it('hides Review only after the detached host is already visible', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
+    expect(closeTab).toHaveBeenCalledWith('s1', 'review-1');
+    expect(addOrFocusSingletonTab).not.toHaveBeenCalled();
   });
 });

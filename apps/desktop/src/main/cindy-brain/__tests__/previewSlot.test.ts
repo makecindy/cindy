@@ -6,9 +6,8 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import { GhostPreviewSlot, type PreviewSlotDeps } from '../previewSlot';
 
 function previewGhost(
-  options: { hosts?: string[]; slots?: string[]; enabled?: boolean } = {},
+  options: { hosts?: string[]; preview?: boolean; enabled?: boolean } = {},
 ): InstalledGhost {
-  const slots = options.slots ?? ['preview'];
   return {
     manifest: {
       schemaVersion: 2,
@@ -17,8 +16,7 @@ function previewGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots,
-      ...(slots.includes('preview')
+      ...(options.preview !== false
         ? { preview: { hosts: options.hosts ?? ['*.example.dev', 'localhost'] } }
         : {}),
     },
@@ -45,8 +43,8 @@ function makeSlot(overrides: Partial<PreviewSlotDeps> = {}) {
 }
 
 describe('previewSlot · 资格审与 URL 守门', () => {
-  it('未声明 preview 槽 / 未启用 一律 PERMISSION_DENIED', () => {
-    const noSlot = makeSlot({ getGhost: () => previewGhost({ slots: ['panel'] }) });
+  it('未声明 preview 能力 / 未启用 一律 PERMISSION_DENIED', () => {
+    const noSlot = makeSlot({ getGhost: () => previewGhost({ preview: false }) });
     expect(
       noSlot.slot.handleRequest('preview-ghost', { url: 'https://a.example.dev/' }),
     ).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });

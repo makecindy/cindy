@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
+  getThinkingEnabledFromMemory,
   getWorkerDefaultsFromNewMaker,
   setNewMakerDraftCache,
   setProviderModelMemoryCache,
@@ -113,6 +114,21 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
       model: 'claude-sonnet-4-6',
       modelChosenByUser: false,
     });
+  });
+
+  it('reads thinkingEnabled from the provider model memory mirror', () => {
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': false },
+      },
+    });
+    expect(
+      getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8'),
+    ).toBe(false);
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'gpt-oss:20b')).toBeUndefined();
+    expect(getThinkingEnabledFromMemory('pi', null, 'qwen3.8:27b-mxfp8')).toBeUndefined();
   });
 
   it('providerModelMemory 镜像就绪时随返回(device-link 草稿列表行的真实读源)', () => {

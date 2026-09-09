@@ -1,3 +1,4 @@
+import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -6,6 +7,7 @@ import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
 import { GhostPanelWindowLayout } from '@/components/layout/GhostPanelWindowLayout';
 import { SettingsView } from '@/components/settings/SettingsView';
 import { LoginPage } from '@/components/login/LoginPage';
+import { AddAccountLoginPage } from '@/components/login/AddAccountLoginPage';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { GuestRoute } from '@/components/auth/GuestRoute';
 import { LocalDbGate } from '@/components/auth/LocalDbGate';
@@ -24,6 +26,13 @@ import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListVi
 import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
+import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
+import { BotsHomeView } from '@/features/bots/BotsHomeView';
+import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
+import { BotRosterView } from '@/features/bots/BotRosterView';
+import { BotSessionView } from '@/features/bots/BotSessionView';
+import { BotDirectMessageView } from '@/features/bots/BotDirectMessageView';
+import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatureLayout';
 
 /**
  * 三层路由架构：
@@ -31,11 +40,12 @@ import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
  *   GuestRoute (未登录)
  *    └── /login                    → LoginPage
  *
- *   ProtectedRoute (已登录) — 仅校验 isAuthenticated
+ *   ProtectedRoute (已登录) — 校验 canEnterApp（真登出或换号窗口）
  *    └── LocalDbGate               → 等 localDb.ensureReady（按 userId 切库）
  *         └── MainLayout            → 主功能区
  *              ├── /                → Navigate to /cc-agent
  *              ├── /cc-agent/...    → CCAgentFeatureLayout
+ *              ├── /bots/...        → BotsFeatureLayout
  *              └── /settings        → SettingsView
  *
  * LocalDbGate 下沉在路由层：AuthProvider 在 RouterProvider 之外无法 useNavigate。
@@ -55,6 +65,10 @@ export const router = createHashRouter([
     // 冒泡到这里,全屏展示可恢复错误页(2026-07-09 React #130 事故的直接止血层)。
     errorElement: <RouteErrorFallback />,
     children: [
+      {
+        path: 'add-account',
+        element: <AddAccountLoginPage />,
+      },
       {
         // 主功能区入口 —— 经过 LocalDbGate（localDb 就绪）才能进
         element: <LocalDbGate />,
@@ -108,6 +122,23 @@ export const router = createHashRouter([
                     ],
                   },
                   {
+                    path: 'bots',
+                    element: <BotsFeatureLayout />,
+                    children: [
+                      { index: true, element: <BotsHomeView /> },
+                      // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
+                      // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
+                      // 被当成一个叫 "roster" 的伙伴。
+                      { path: 'roster', element: <BotRosterView /> },
+                      { path: 'remote/:deviceId/:botId', element: <RemoteBotSessionView /> },
+                      // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
+                      { path: ':botId/direct/:threadId', element: <BotDirectMessageView /> },
+                      { path: ':botId', element: <BotsHomeView /> },
+                      { path: ':botId/session/:sessionId', element: <BotSessionView /> },
+                      { path: ':botId/history/:sessionId', element: <BotHistorySessionView /> },
+                    ],
+                  },
+                  {
                     // Issue Tracker — 已迁移至 GitHub，此处仅保留引导页
                     path: 'issues',
                     element: <IssueTrackerFeatureLayout />,
@@ -125,6 +156,7 @@ export const router = createHashRouter([
                             index: true,
                             element: <SkillhubHomeView />,
                           },
+                          { path: 'by-path', element: <SkillhubDetailView /> },
                           { path: ':kind/global/:name', element: <SkillhubDetailView /> },
                           {
                             path: ':kind/project/:projectHash/:name',
@@ -153,6 +185,7 @@ export const router = createHashRouter([
                   },
                   { path: 'settings', element: <SettingsView /> },
                   { path: 'plugins', element: <GhostPluginPage /> },
+                  { path: 'apps/:ghostId', element: <GhostMainViewFeatureLayout /> },
                   {
                     path: 'billing',
                     element: <Navigate to="/settings?tab=billing" replace />,

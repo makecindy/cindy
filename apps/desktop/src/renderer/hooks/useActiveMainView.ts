@@ -4,8 +4,9 @@
  * 推导主区域当前激活的 View（Chat / Issues / Plugins），并返回 navigateToView 切换函数。
  *
  * 激活态由 URL 派生：pathname === prefix || pathname.startsWith(prefix + '/')。
- * 当 pathname 不匹配任何 view prefix 时（如 /settings），保留最近一次匹配过的 key —
- * 否则 tabbar 会在打开 Settings 等"非 view 页面"时整体失去选中态。
+ * 当 pathname 不匹配任何 view prefix 时（如 /settings），通常保留最近一次匹配过的 key —
+ * 否则 tabbar 会在打开 Settings 等"非 view 页面"时整体失去选中态。插件 `/apps/*`
+ * 主视图是例外：它有自己的一级侧边栏入口，因此不沿用 Plugins 的 sticky active。
  *
  * navigateToView 内部做同源去重，避免重复 navigate 触发 FadeSwitcher
  * 不必要的子树重挂载。
@@ -17,7 +18,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-export type MainViewKey = 'cc-agent' | 'issues' | 'plugins';
+export type MainViewKey = 'cc-agent' | 'issues' | 'plugins' | 'bots';
 
 interface ViewDef {
   key: MainViewKey;
@@ -29,6 +30,7 @@ const VIEWS: ViewDef[] = [
   { key: 'cc-agent', to: '/cc-agent', prefixes: ['/cc-agent'] },
   { key: 'issues', to: '/issues', prefixes: ['/issues'] },
   { key: 'plugins', to: '/plugins', prefixes: ['/plugins', '/skillhub'] },
+  { key: 'bots', to: '/bots', prefixes: ['/bots'] },
 ];
 
 const DEFAULT_KEY: MainViewKey = 'cc-agent';
@@ -57,7 +59,9 @@ export function useActiveMainView() {
     }
   }, [matchedKey, location.pathname, location.search]);
 
-  const activeKey: MainViewKey = matchedKey ?? lastMatchedRef.current;
+  const isGhostMainView = location.pathname === '/apps' || location.pathname.startsWith('/apps/');
+  const activeKey: MainViewKey | null =
+    matchedKey ?? (isGhostMainView ? null : lastMatchedRef.current);
 
   const navigateToView = useCallback(
     (key: MainViewKey) => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ACCESS_TOKEN_EXPIRY_SKEW_MS, decodeJwtExpMs, isAccessTokenExpiring } from '../jwt';
+import {
+  ACCESS_TOKEN_EXPIRY_SKEW_MS,
+  decodeJwtExpMs,
+  decodeJwtOrgSlug,
+  isAccessTokenExpiring,
+} from '../jwt';
 
 function b64url(obj: object): string {
   return Buffer.from(JSON.stringify(obj))
@@ -16,6 +21,17 @@ function makeJwt(payload: object): string {
 const NOW = 1_700_000_000_000; // epoch ms == 1_700_000_000 s
 
 describe('jwt helpers', () => {
+  it('decodes a non-empty orgSlug claim', () => {
+    expect(decodeJwtOrgSlug(makeJwt({ ctx: 'org', orgSlug: 'xd' }))).toBe('xd');
+  });
+
+  it('returns null for missing/invalid orgSlug or malformed tokens', () => {
+    expect(decodeJwtOrgSlug(makeJwt({ sub: 'x' }))).toBeNull();
+    expect(decodeJwtOrgSlug(makeJwt({ orgSlug: '' }))).toBeNull();
+    expect(decodeJwtOrgSlug(makeJwt({ orgSlug: 42 }))).toBeNull();
+    expect(decodeJwtOrgSlug('not-a-jwt')).toBeNull();
+  });
+
   it('decodes a numeric exp (seconds) into epoch ms', () => {
     expect(decodeJwtExpMs(makeJwt({ exp: 1_700_000_000 }))).toBe(1_700_000_000_000);
   });

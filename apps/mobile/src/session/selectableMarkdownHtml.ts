@@ -19,6 +19,8 @@ import { i18n } from '@/i18n';
  * 只保留「markdown → 完整 HTML 文档」这一条能力。
  */
 export interface SelectableMarkdownHtmlOptions {
+  /** When supplied, export only these embedded images; never expose source URLs. */
+  imageSources?: ReadonlyMap<string, { uri: string }>;
   bodyGap?: number;
   borderColor?: string;
   chipColor?: string;
@@ -54,6 +56,7 @@ export interface SelectableMarkdownHtmlOptions {
 
 /** renderBlocks/renderInline 的渲染上下文(目前只有会话 chip 标题 map)。 */
 interface RenderContext {
+  imageSources?: SelectableMarkdownHtmlOptions['imageSources'];
   sessionLinkTitles?: Readonly<Record<string, string>>;
 }
 
@@ -82,7 +85,7 @@ export function buildSelectableMarkdownHtml(
     '</head>',
     '<body>',
     `<main id="xdt-content" role="article" aria-label="${escapeAttribute(i18n.t('message.renderer.markdownDocAriaLabel'))}">`,
-    renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles }),
+    renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles, imageSources: options.imageSources }),
     '</main>',
     hasMath ? buildMathRuntimeScript() : '',
     buildTargetLineScript(options.targetLine),
@@ -96,6 +99,7 @@ export function buildSelectableMarkdownFragmentHtml(
   options: SelectableMarkdownHtmlOptions = {},
 ): string {
   return renderBlocks(parseMobileMarkdown(markdown), {
+    imageSources: options.imageSources,
     sessionLinkTitles: options.sessionLinkTitles,
   });
 }
@@ -512,6 +516,13 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       // 关闭),加载失败保持斜体源码。
       return `<span class="xdt-math-inline" data-latex="${escapeAttribute(inline.text)}"><em>${escapeHtml(inline.text)}</em></span>`;
     case 'image': {
+      if (ctx.imageSources) {
+        const image = ctx.imageSources.get(inline.url);
+        const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
+        return image?.uri.startsWith('data:image/')
+          ? `<img src="${escapeAttribute(image.uri)}" alt="${escapeAttribute(alt)}">`
+          : `<span class="xdt-image-chip">${escapeHtml(alt)}</span>`;
+      }
       // xdt 系非直连图:WebView 无法解析 xdt-image:// 等内部 scheme,渲染占位 chip,
       // 点击经 data-xdt-src 上报后由 ImageLightbox 走 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {

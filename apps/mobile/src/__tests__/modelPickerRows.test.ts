@@ -12,9 +12,13 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import {
   budgetRowDisabled,
   buildRowMetaLine,
+  compactEffortLabelFor,
   effortLabelFor,
+  effortLabelFromRuntime,
   formatContextWindow,
   formatPriceLine,
+  modelRowAccessibilityLabel,
+  presentPickerPrice,
   providerDisplayTitle,
   rowEffortOf,
   rowFastEditable,
@@ -72,37 +76,275 @@ describe('providerDisplayTitle / formatPriceLine / buildRowMetaLine', () => {
     expect(formatPriceLine(undefined)).toBeNull();
   });
 
-  it('元信息行 = 供应商 · 上下文 · 单价 · 快速;全空 → null', () => {
+  it('元信息行 = 供应商 · 上下文 · 快速;单价改走独立价格块;全空 → null', () => {
     const full = buildRowMetaLine({
       provider: { id: 'xd', name: 'XD Gateway' },
       model: { id: 'gpt-5.5', contextWindow: 272_000, supportsFastMode: true },
-      pricing: { 'gpt-5.5': { inputUsdPerMtok: 3, outputUsdPerMtok: 15 } },
     });
-    expect(full).toBe('Cindy AI · 272K 上下文 · 输入 $3 · 输出 $15 / 百万 token · 快速');
+    expect(full).toBe('Cindy AI · 272K 上下文 · 快速');
 
     const minimal = buildRowMetaLine({
       provider: null,
       model: { id: 'm', contextWindow: 0 },
-      pricing: null,
     });
     expect(minimal).toBeNull();
   });
 });
 
-describe('effortLabelFor —— 四级优先(模型覆盖 → capabilities → 中文词表 → 原 id)', () => {
-  it('模型 effortDisplayNames 覆盖优先', () => {
-    expect(effortLabelFor({ effortDisplayNames: { xhigh: '特高' } }, 'xhigh', capabilities)).toBe('特高');
+function xdProviderWithCost(
+  modelId: string,
+  cost: { input: number; output: number },
+): ProviderView {
+  return {
+    id: 'xd',
+    name: 'Cindy AI',
+    agents: ['codex'],
+    connected: true,
+    models: { codex: [{ id: modelId, cost }] },
+  } as unknown as ProviderView;
+}
+
+describe('presentPickerPrice', () => {
+  it('无报价 → null;有报价无折扣 → 标准价', () => {
+    expect(
+      presentPickerPrice({
+        pricing: null,
+        provider: null,
+        modelId: 'grok-4.6',
+        agentKind: 'codex',
+      }),
+    ).toBeNull();
+    expect(
+      presentPickerPrice({
+        pricing: { 'grok-4.6': { inputUsdPerMtok: 2, outputUsdPerMtok: 6 } },
+        provider: null,
+        modelId: 'grok-4.6',
+        agentKind: 'codex',
+      }),
+    ).toEqual({
+      title: '每百万 token',
+      amountsLine: '输入 $2 · 输出 $6',
+      discountLabel: null,
+    });
   });
-  it('无覆盖 → capabilities effortLevels label', () => {
-    expect(effortLabelFor({}, 'xhigh', capabilities)).toBe('Extra High');
+
+  it('目录折后价与标准价同比例时展示折后价 + 折扣说明', () => {
+    expect(
+      presentPickerPrice({
+        pricing: { 'grok-4.6': { inputUsdPerMtok: 2, outputUsdPerMtok: 6 } },
+        provider: xdProviderWithCost('grok-4.6', { input: 0.3, output: 0.9 }),
+        modelId: 'grok-4.6',
+        agentKind: 'codex',
+      }),
+    ).toEqual({
+      title: '每百万 token',
+      amountsLine: '输入 $0.3 · 输出 $0.9',
+      discountLabel: '折扣中，较标准价省 85%',
+      discountPct: 85,
+    });
   });
-  it('capabilities 缺该档 / 未加载 → 中文词表兜底', () => {
+
+  it('目录缺失时回退报价 costDiscount', () => {
+    expect(
+      presentPickerPrice({
+        pricing: {
+          'grok-4.6': { inputUsdPerMtok: 2, outputUsdPerMtok: 6, costDiscount: 0.4 },
+        },
+        provider: null,
+        modelId: 'grok-4.6',
+        agentKind: 'codex',
+      }),
+    ).toEqual({
+      title: '每百万 token',
+      amountsLine: '输入 $1.2 · 输出 $3.6',
+      discountLabel: '折扣中，较标准价省 40%',
+      discountPct: 40,
+    });
+  });
+
+  it('目录折后价比例不一致时不挂折扣,保持标准价', () => {
+    expect(
+      presentPickerPrice({
+        pricing: { 'grok-4.6': { inputUsdPerMtok: 2, outputUsdPerMtok: 6 } },
+        provider: xdProviderWithCost('grok-4.6', { input: 1, output: 6 }),
+        modelId: 'grok-4.6',
+        agentKind: 'codex',
+      }),
+    ).toEqual({
+      title: '每百万 token',
+      amountsLine: '输入 $2 · 输出 $6',
+      discountLabel: null,
+    });
+  });
+
+  it('非 XD 供应商即使 modelId 撞车也不套用 XD 报价', () => {
+    const openai = {
+      id: 'openai',
+      name: 'OpenAI',
+      agents: ['codex'],
+      connected: true,
+      models: { codex: [{ id: 'gpt-5.5', cost: { input: 1, output: 5 } }] },
+    } as unknown as ProviderView;
+    expect(
+      presentPickerPrice({
+        pricing: { 'gpt-5.5': { inputUsdPerMtok: 3, outputUsdPerMtok: 15, costDiscount: 0.4 } },
+        provider: openai,
+        modelId: 'gpt-5.5',
+        agentKind: 'codex',
+      }),
+    ).toBeNull();
+  });
+
+  it('折后价小于 1 分时保留最多 4 位小数,不显示成 $0', () => {
+    expect(
+      presentPickerPrice({
+        pricing: { cheap: { inputUsdPerMtok: 0.04, outputUsdPerMtok: 0.04, costDiscount: 0.9 } },
+        provider: null,
+        modelId: 'cheap',
+        agentKind: 'codex',
+      }),
+    ).toEqual({
+      title: '每百万 token',
+      amountsLine: '输入 $0.004 · 输出 $0.004',
+      discountLabel: '折扣中，较标准价省 90%',
+      discountPct: 90,
+    });
+  });
+});
+
+describe('effortLabelFor —— 五级优先(i18n → 模型覆盖 → capabilities → 兼容词表 → 原 id)', () => {
+  it('已知档位优先使用当前界面的本地化文案', () => {
+    expect(effortLabelFor({ effortDisplayNames: { xhigh: '特高' } }, 'xhigh', capabilities)).toBe('超高');
+  });
+  it('未知档位回退模型覆盖与 capabilities 标签', () => {
+    expect(effortLabelFor({ effortDisplayNames: { custom: '自定义' } }, 'custom', capabilities)).toBe('自定义');
+    expect(
+      effortLabelFor({}, 'remote', {
+        ...capabilities,
+        effortLevels: [{ id: 'remote', label: '远程档' }],
+      }),
+    ).toBe('远程档');
+  });
+  it('capabilities 缺该档 / 未加载 → 本地化词表', () => {
     expect(effortLabelFor({}, 'minimal', capabilities)).toBe('最小');
     expect(effortLabelFor({}, 'high', null)).toBe('高');
     expect(effortLabelFor({}, 'ultra', null)).toBe('极致');
   });
   it('词表也没有 → 原 id', () => {
     expect(effortLabelFor({}, 'nonexistent', null)).toBe('nonexistent');
+  });
+});
+
+
+describe('effortLabelFromRuntime —— 会话摘要按 app 语言覆盖 snapshot 标签', () => {
+  it('effortOptions 为 zh-CN 快照时仍随界面语言切换', async () => {
+    const previousLanguage = i18n.language;
+    const runtime = {
+      currentModel: null,
+      effortOptions: [{ id: 'xhigh', label: '超高' }],
+    };
+    try {
+      await i18n.changeLanguage('en');
+      expect(effortLabelFromRuntime(runtime, 'xhigh')).toBe('Extra High');
+      await i18n.changeLanguage('zh-CN');
+      expect(effortLabelFromRuntime(runtime, 'xhigh')).toBe('超高');
+      expect(effortLabelFromRuntime(runtime, '')).toBe('');
+      expect(effortLabelFromRuntime(runtime, null)).toBe('');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
+});
+
+describe('compactEffortLabelFor —— 英文列表紧凑标签', () => {
+  it('英文只压缩长档位，非英文仍用本地化全称', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage('en');
+      expect(effortLabelFor({}, 'xhigh', capabilities)).toBe('Extra High');
+      expect(
+        compactEffortLabelFor({ effortDisplayNames: { xhigh: '特高' } }, 'xhigh', capabilities),
+      ).toBe('Extra');
+      expect(compactEffortLabelFor({}, 'minimal', capabilities)).toBe('Minimal');
+      expect(compactEffortLabelFor({}, 'low', capabilities)).toBe('Low');
+      expect(compactEffortLabelFor({}, 'medium', capabilities)).toBe('Medium');
+      expect(compactEffortLabelFor({}, 'high', capabilities)).toBe('High');
+      expect(compactEffortLabelFor({}, 'ultra', capabilities)).toBe('Ultra');
+      expect(compactEffortLabelFor({}, 'max', capabilities)).toBe('Max');
+      expect(
+        compactEffortLabelFor(
+          { effortDisplayNames: { 'adaptive-fast': 'Adaptive Fast' } },
+          'adaptive-fast',
+          capabilities,
+        ),
+      ).toBe('Adaptive Fast');
+      expect(
+        compactEffortLabelFor({}, 'adaptive-safe', {
+          ...capabilities,
+          effortLevels: [{ id: 'adaptive-safe', label: 'Adaptive Safe' }],
+        }),
+      ).toBe('Adaptive Safe');
+
+      await i18n.changeLanguage('zh-CN');
+      expect(compactEffortLabelFor({}, 'high', null)).toBe('高');
+      await i18n.changeLanguage('ja');
+      expect(compactEffortLabelFor({}, 'ultra', null)).toBe('究極');
+      await i18n.changeLanguage('ko');
+      expect(compactEffortLabelFor({}, 'medium', null)).toBe('보통');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
+});
+
+describe('modelRowAccessibilityLabel —— 父行保留完整元信息', () => {
+  it('无元信息时只读基础选择动作', () => {
+    expect(modelRowAccessibilityLabel({ baseLabel: 'Select Luna' })).toBe('Select Luna');
+  });
+
+  it.each([
+    ['en', 'Select Luna from OpenAI', 'Subscription', 'Reasoning effort Extra High', 'Fast Mode'],
+    ['zh-CN', '选择来源 OpenAI 的模型 Luna', '订阅', '推理强度 超高', '快速模式'],
+    ['zh-TW', '選擇來源 OpenAI 的模型 Luna', '訂閱', '推理強度 超高', '快速模式'],
+    ['ja', 'OpenAI のモデル Luna を選択', 'サブスク', '推論強度 超高', '高速モード'],
+    ['ko', 'OpenAI의 모델 Luna 선택', '구독', '추론 강도 초고', '빠른 모드'],
+  ])('在 %s 下把订阅、完整 effort 和 Fast 纳入行级名称', async (
+    language,
+    expectedBase,
+    expectedSubscription,
+    expectedEffort,
+    expectedFast,
+  ) => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage(language);
+      const baseLabel = i18n.t('models.picker.selectProviderModelAccessibility', {
+        provider: 'OpenAI',
+        model: 'Luna',
+      });
+      const subscriptionLabel = i18n.t('models.picker.subscriptionBadge');
+      const effortLabel = i18n.t('models.options.reasoningEffortAccessibility', {
+        label: i18n.t('models.options.effortLevels.xhigh'),
+      });
+      const fastLabel = i18n.t('models.options.fastMode');
+
+      expect([baseLabel, subscriptionLabel, effortLabel, fastLabel]).toEqual([
+        expectedBase,
+        expectedSubscription,
+        expectedEffort,
+        expectedFast,
+      ]);
+      expect(
+        modelRowAccessibilityLabel({
+          baseLabel,
+          subscriptionLabel,
+          effortLabel,
+          fastLabel,
+        }),
+      ).toBe([expectedBase, expectedSubscription, expectedEffort, expectedFast].join(', '));
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { constants, promises as fs } from 'node:fs';
+import fsSync, { constants, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -13,6 +13,20 @@ import {
 } from '../reviewArtifactFingerprint.js';
 
 const tempDirs: string[] = [];
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'review-fingerprint-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-fingerprint-'));
@@ -195,7 +209,7 @@ describe('review artifact fingerprint', () => {
   });
 
   it('does not follow a symlink that already replaced an artifact root', async () => {
-    if (process.platform === 'win32') return;
+    if (!canLinkFile) return;
     const dir = await makeTempDir();
     const link = path.join(dir, 'approved.txt');
     const sensitive = path.join(dir, 'private-key');
@@ -242,6 +256,7 @@ describe('review artifact fingerprint', () => {
     );
   });
 
+  // symlink-platform-skip: This case validates POSIX inode and hard-link confinement semantics.
   it('accepts a scoped pnpm mirror derived from confined package metadata', async () => {
     if (process.platform === 'win32') return;
     const root = await makeTempDir();

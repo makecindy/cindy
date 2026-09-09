@@ -402,7 +402,8 @@ function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
     const toolNamePrefix = guard.toolNamePrefix.trim();
     const sourceServerId = guard.sourceServerId?.trim();
     const validToolName = guard.invocation === 'root-only'
-      ? /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(toolNamePrefix)
+      ? toolNamePrefix === 'AskUserQuestion'
+        || /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(toolNamePrefix)
       : /^mcp__[A-Za-z0-9_-]+__$/.test(toolNamePrefix);
     if (!validToolName) {
       throwInvalid(

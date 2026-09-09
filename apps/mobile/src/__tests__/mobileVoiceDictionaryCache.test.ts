@@ -10,10 +10,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
 
 const storage = new Map<string, string>();
+const persistGate = {
+  delaySnapshotWrites: false,
+  waiters: [] as Array<() => void>,
+};
+
+function releaseSnapshotWrites(): void {
+  const waiters = persistGate.waiters.splice(0);
+  for (const release of waiters) release();
+}
+
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: async (key: string) => storage.get(key) ?? null,
     setItem: async (key: string, value: string) => {
+      if (
+        persistGate.delaySnapshotWrites
+        && key.includes('mobileVoiceDictionary.v2.')
+        && !key.endsWith('.hosts')
+      ) {
+        await new Promise<void>((resolve) => {
+          persistGate.waiters.push(resolve);
+        });
+      }
       storage.set(key, value);
     },
     removeItem: async (key: string) => {
@@ -28,23 +47,41 @@ vi.mock('@/session/mobileVoiceHistoryStore', () => ({
 
 const {
   __resetMobileVoiceDictionaryCacheForTests,
+  applyMobileVoiceDictionarySnapshot,
   setMobileVoiceDictionaryAccountScope,
   clearAllMobileVoiceDictionaryCaches,
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   refreshMobileVoiceDictionary,
+  subscribeMobileVoiceDictionaryCache,
 } = await import('@/session/mobileVoiceDictionaryCache');
 
 const HOST = 'desktop-1';
 
 beforeEach(() => {
   storage.clear();
+  persistGate.delaySnapshotWrites = false;
+  releaseSnapshotWrites();
   __resetMobileVoiceDictionaryCacheForTests();
   setMobileVoiceDictionaryAccountScope('');
 });
 
 describe('mobileVoiceDictionaryCache', () => {
+  it('接收桌面主动推送的快照后立即可读并落盘', async () => {
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '推送词', frequency: 4 }],
+    });
+
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([
+      { text: '推送词', frequency: 4, aliases: [] },
+    ]);
+    __resetMobileVoiceDictionaryCacheForTests();
+    await hydrateMobileVoiceDictionary(HOST);
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('推送词');
+  });
+
   it('拉取成功后缓存并落盘,重启后能恢复', async () => {
     await refreshMobileVoiceDictionary(HOST, async () => ({
       ok: true,
@@ -198,6 +235,35 @@ describe('mobileVoiceDictionaryCache', () => {
 });
 
 describe('账号分区', () => {
+  it('不把 v1 未分区缓存导入当前账号,只删除遗留键', async () => {
+    setMobileVoiceDictionaryAccountScope('user-a');
+    storage.set(
+      'xdt.mobileVoiceDictionary.v1.desktop-1',
+      JSON.stringify({
+        entries: [{ text: '旧版离线词', frequency: 2 }],
+        fetchedAt: 123,
+      }),
+    );
+
+    await hydrateMobileVoiceDictionary(HOST);
+
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([]);
+    expect(storage.has('xdt.mobileVoiceDictionary.v2.user-a.desktop-1')).toBe(false);
+    expect(storage.has('xdt.mobileVoiceDictionary.v1.desktop-1')).toBe(false);
+  });
+
+  it('匿名分区也不接管 v1 未分区缓存,并清掉遗留键', async () => {
+    storage.set(
+      'xdt.mobileVoiceDictionary.v1.desktop-1',
+      JSON.stringify({ entries: [{ text: '不能泄漏' }], fetchedAt: 123 }),
+    );
+
+    await hydrateMobileVoiceDictionary(HOST);
+
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([]);
+    expect(storage.has('xdt.mobileVoiceDictionary.v1.desktop-1')).toBe(false);
+  });
+
   it('切换账号后读不到上一个账号的快照 —— 即使清理没删干净', async () => {
     setMobileVoiceDictionaryAccountScope('user-a');
     await refreshMobileVoiceDictionary(HOST, async () => ({
@@ -291,6 +357,31 @@ describe('账号切走之后落地的旧请求', () => {
     await hydrateMobileVoiceDictionary(HOST);
     expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('账号B的词');
   });
+
+  it('旧账号落盘补偿不删新账号已接收的同 host 快照', async () => {
+    persistGate.delaySnapshotWrites = true;
+    setMobileVoiceDictionaryAccountScope('user-a');
+    const older = applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '账号A的词' }],
+      emittedAt: 1_000,
+    });
+    await Promise.resolve();
+    setMobileVoiceDictionaryAccountScope('user-b');
+    persistGate.delaySnapshotWrites = false;
+    const newer = applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '账号B的词' }],
+      emittedAt: 2_000,
+    });
+    releaseSnapshotWrites();
+    await Promise.all([older, newer]);
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('账号B的词');
+    __resetMobileVoiceDictionaryCacheForTests();
+    setMobileVoiceDictionaryAccountScope('user-b');
+    await hydrateMobileVoiceDictionary(HOST);
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('账号B的词');
+  });
 });
 
 describe('在途请求的去重范围', () => {
@@ -352,5 +443,125 @@ describe('版本向量的入站校验', () => {
     __resetMobileVoiceDictionaryCacheForTests();
     await hydrateMobileVoiceDictionary(HOST);
     expect(readCachedMobileVoiceDictionarySnapshot(HOST).stateVector).toEqual({ 'node-a': STAMP_A });
+  });
+
+  it('后到的旧快照不能覆盖已有的更新状态', async () => {
+    const newer = '0000000rt0.0000.node-a';
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '新词' }],
+      stateVector: { 'node-a': newer },
+    });
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '旧词' }],
+      stateVector: { 'node-a': STAMP_A },
+    });
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('新词');
+  });
+
+  it('不带 emittedAt 的同代拉取不能盖掉已有 push', async () => {
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '推送词' }],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 1_000,
+    });
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '拉取词' }],
+      stateVector: { 'node-a': STAMP_A },
+    });
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('推送词');
+  });
+
+  it('后到的无向量空投影不能清掉已有的更新快照', async () => {
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '新词' }],
+      stateVector: { 'node-a': STAMP_A },
+    });
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [],
+    });
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('新词');
+  });
+
+  it('带同一代版本向量且更晚发出的空投影可以清空缓存', async () => {
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '旧词' }],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 1_000,
+    });
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 2_000,
+    });
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([]);
+  });
+
+  it('并发落盘时较旧写入不能覆盖磁盘上的新快照', async () => {
+    persistGate.delaySnapshotWrites = true;
+    const older = applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '旧词' }],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 1_000,
+    });
+    await Promise.resolve();
+    const newer = applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '新词' }],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 2_000,
+    });
+    await Promise.resolve();
+    persistGate.delaySnapshotWrites = false;
+    releaseSnapshotWrites();
+    await Promise.all([older, newer]);
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('新词');
+    __resetMobileVoiceDictionaryCacheForTests();
+    await hydrateMobileVoiceDictionary(HOST);
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('新词');
+  });
+
+  it('更早发出的词表不能盖掉已清空的同一代投影', async () => {
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 2_000,
+    });
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '旧词' }],
+      stateVector: { 'node-a': STAMP_A },
+      emittedAt: 1_000,
+    });
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([]);
+  });
+});
+
+describe('缓存订阅隔离', () => {
+  it('订阅者抛错不打断落盘', async () => {
+    const unsubscribe = subscribeMobileVoiceDictionaryCache(() => {
+      throw new Error('subscriber failed');
+    });
+    try {
+      await expect(applyMobileVoiceDictionarySnapshot(HOST, {
+        ok: true,
+        entries: [{ text: '推送词', frequency: 1 }],
+      })).resolves.toBeUndefined();
+      expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('推送词');
+      __resetMobileVoiceDictionaryCacheForTests();
+      await hydrateMobileVoiceDictionary(HOST);
+      expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('推送词');
+    } finally {
+      unsubscribe();
+    }
   });
 });

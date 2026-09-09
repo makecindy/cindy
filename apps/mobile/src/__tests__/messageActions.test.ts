@@ -84,6 +84,29 @@ describe('messageActions', () => {
     expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
   });
 
+  it('projects confirmed Pi runtime /skill: aliases when copying a user message', () => {
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git follow-up review',
+      slashCommandRanges: [{ start: 0, end: 10 }],
+    }))).toBe('/git follow-up review');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git is just prose here',
+    }))).toBe('/skill:git is just prose here');
+    const quoted = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up review',
+    ].join('\n');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: quoted,
+      quotesEncoded: true,
+      slashCommandRanges: [
+        { start: quoted.indexOf('/skill:git'), end: quoted.indexOf('/skill:git') + 10 },
+      ],
+    }))).toBe(['> quoted', '', '/git follow-up review'].join('\n'));
+  });
+
   it('builds desktop-compatible copy text with attachment names', () => {
     expect(buildMobileMessageCopyText(normalizedMessage({
       body: 'Please inspect this.',
@@ -147,6 +170,18 @@ describe('messageActions', () => {
     expect(formatMessageRelativeTime('2026-06-16T09:00:00.000Z', now)).toBe('3 小时前');
     expect(formatMessageRelativeTime('2026-06-15T09:00:00.000Z', now)).toContain('06-15');
     expect(formatMessageAbsoluteTime('2026-06-16T09:00:05.000Z')).toContain('2026-06-16');
+  });
+
+  it('formats relative message times in English when the app language is English', async () => {
+    const now = new Date('2026-06-16T12:00:00.000Z').getTime();
+    await i18n.changeLanguage('en');
+    try {
+      expect(formatMessageRelativeTime('2026-06-16T11:59:31.000Z', now)).toBe('Just now');
+      expect(formatMessageRelativeTime('2026-06-16T11:42:00.000Z', now)).toBe('18 min ago');
+      expect(formatMessageRelativeTime('2026-06-16T09:00:00.000Z', now)).toBe('3 h ago');
+    } finally {
+      await i18n.changeLanguage('zh-CN');
+    }
   });
 
   it('formats per-turn cost like the desktop action bar', () => {

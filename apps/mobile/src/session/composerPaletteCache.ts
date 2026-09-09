@@ -12,7 +12,7 @@
  *   - slash:任意年龄的缓存先画(重开不闪 spinner),后台静默刷新覆盖(规则 7:
  *     先有内容再刷新)。
  *
- * 模块级 Map,会话页 / 新建页共享;按 device + agent + workingDir 键控。
+ * 模块级 Map,会话页 / 新建页共享;按 device + agent + workingDir + 可选 session 键控。
  * 纯逻辑,时钟注入,node 可单测。
  */
 import type { MobileAtResourceItem, MobileSlashCommand } from '@/device-link/mobileMakerTransport';
@@ -47,8 +47,9 @@ export function buildComposerPaletteCacheKey(
   deviceId: string,
   agentKind: string,
   workingDir: string,
+  sessionId?: string,
 ): string {
-  return [deviceId, agentKind, workingDir].join(KEY_SEPARATOR);
+  return [deviceId, agentKind, workingDir, sessionId ?? ''].join(KEY_SEPARATOR);
 }
 
 /** 读 @ 全量扫描缓存;stale(过 TTL)时也返回但标记,便于「先画旧数据再后台刷新」。 */

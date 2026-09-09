@@ -11,7 +11,7 @@
  *   (1280, 800) → ≈0.3813;(800, 600) → ≈0.2860;宽度拉伸不改 scale。
  */
 
-import { LOGIN_GROUP } from './loginDesignTokens';
+import { HERO, LOGIN_GROUP, WORDMARK } from './loginDesignTokens';
 
 /** 设计画布尺寸(figma §5.1 桌面通用画板 1819×2098)。 */
 export const LOGIN_STAGE_WIDTH = 1819;
@@ -94,28 +94,65 @@ export interface BrandPlacement {
   translateY: number;
 }
 
+function brandPlacementForPanelTop(
+  h: number,
+  base: number,
+  panelTop: number,
+  protectedBottomDesignY: number,
+  panelGap: number,
+): BrandPlacement {
+  const blockTop = h / 2 + (HERO.y - LOGIN_STAGE_HEIGHT / 2) * base;
+  const blockBottom = h / 2 + (protectedBottomDesignY - LOGIN_STAGE_HEIGHT / 2) * base;
+  // The collision boundary is the actual protected brand element, not a
+  // viewport-height mode switch. This keeps the layout continuous around
+  // neighboring heights (for example 768px and 769px).
+  const limit = panelTop - panelGap;
+  const overflow = blockBottom - limit;
+  if (overflow <= 0) return { scale: base, translateY: 0 };
+  const maxShift = blockTop - 12;
+  if (overflow <= maxShift) return { scale: base, translateY: -overflow };
+  // 压缩档:受保护品牌范围恰好塞进 [12, limit];画布仍中心缩放,
+  // 位移把立绘顶放到 12。登录短窗保护字标底部(1191),所以立绘尾部
+  // 比字标多出的 18 设计单位可以自然地落入面板下方。
+  const protectedHeight = protectedBottomDesignY - HERO.y;
+  const scale2 = Math.max(limit - 12, 0) / protectedHeight;
+  const blockTop2 = h / 2 + (HERO.y - LOGIN_STAGE_HEIGHT / 2) * scale2;
+  return { scale: scale2, translateY: 12 - blockTop2 };
+}
+
 /**
  * 品牌块整体让位(用户拍板 2026-07-23 第二轮,design.md §11):
- * 字标任何窗口必须完整可见,且绝不遮挡立绘脸部/黑猫——后者由「构图冻结」保证:
+ * 字标任何窗口必须完整可见,且优先保护立绘脸部/黑猫——后者由「构图冻结」保证:
  * 品牌块(立绘 275..1209,字标底 1191 / Slogan 底 995 均在其内)只作为整体
  * 移动/缩放,字标与立绘的设计相对位(压胸口渐隐区)永不改变。三级规则:
  *   ① 常态:v3.1 desktopScale + 画布居中(translateY=0),大窗零变化;
- *   ② 面板上侵:块底越过面板顶-12 → 整块上移补偿,至块顶触及视口顶 12 为止;
- *   ③ 极矮窗:上移仍不够 → 整块等比压缩至恰好塞进 [12, 面板顶-12]。
+ *   ② 面板上侵:有登录底部预留时以字标底部为碰撞边界,允许立绘尾部
+ *      (立绘底部比字标底部低 18 个设计单位)自然落入面板下方;不再按窗口高度硬切档;
+ *   ③ 极矮窗:上移仍不够 → 受保护的品牌范围等比压缩至恰好塞进
+ *      [12, 面板顶-当前安全间距]。
  * 面板锚点取 yDefault(sso 态差 2 设计px,由 12px gap 吸收)。
  */
 export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPlacement {
   const { scale: base } = desktopScale(w, h);
   const { topY: panelTop } = panelPlacement(w, h, 1229, bottomReserve);
-  const blockTop = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * base;
-  const blockBottom = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * base;
-  const limit = panelTop - 12;
-  const overflow = blockBottom - limit;
-  if (overflow <= 0) return { scale: base, translateY: 0 };
-  const maxShift = blockTop - 12;
-  if (overflow <= maxShift) return { scale: base, translateY: -overflow };
-  // 压缩档:块高(934 设计px)恰好塞进 [12, limit];画布仍中心缩放,位移把块顶放到 12。
-  const scale2 = Math.max(limit - 12, 0) / 934;
-  const blockTop2 = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * scale2;
-  return { scale: scale2, translateY: 12 - blockTop2 };
+  const protectsWordmark = bottomReserve > 0;
+  return brandPlacementForPanelTop(
+    h,
+    base,
+    panelTop,
+    protectsWordmark ? WORDMARK.inner.y + WORDMARK.inner.height : HERO.y + HERO.size,
+    protectsWordmark ? 0 : 12,
+  );
+}
+
+/**
+ * Splash 品牌块让位:品牌画布与 Splash 状态面板都使用 desktopScale,
+ * 因此不能复用登录页固定 0.5 面板的 bottom clamp。Splash 面板顶边在同一
+ * 设计画布坐标系的 LOGIN_GROUP.yDefault,仅保留品牌块与状态面板之间的
+ * 12px 屏幕安全间距;这样小窗口不会因为登录 footer reserve 被过度压缩。
+ */
+export function splashBrandPlacement(w: number, h: number): BrandPlacement {
+  const { scale: base } = desktopScale(w, h);
+  const splashPanelTop = h / 2 + (LOGIN_GROUP.yDefault - LOGIN_STAGE_HEIGHT / 2) * base;
+  return brandPlacementForPanelTop(h, base, splashPanelTop, HERO.y + HERO.size, 12);
 }

@@ -11,7 +11,6 @@ function manifest(oauth: Record<string, unknown> = {}): GhostManifest {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['network'],
     network: {
       hosts: ['accounts.google.com'],
       secrets: [{

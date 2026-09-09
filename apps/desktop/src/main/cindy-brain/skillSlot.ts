@@ -78,10 +78,10 @@ export function checkSkillMdConsistency(content: string, item: GhostSkillItem): 
   const fmName = typeof data.name === 'string' ? data.name.trim() : '';
   const fmDescription = typeof data.description === 'string' ? data.description.trim() : '';
   if (fmName !== item.name) {
-    return `SKILL.md frontmatter name ${JSON.stringify(fmName)} 与清单声明 ${JSON.stringify(item.name)} 不一致(装入确认框展示的必须就是 Agent 读到的)`;
+    return `SKILL.md frontmatter name ${JSON.stringify(fmName)} 与清单声明 ${JSON.stringify(item.name)} 不一致(插件详情展示的必须就是 Agent 读到的)`;
   }
   if (fmDescription !== item.description) {
-    return 'SKILL.md frontmatter description 与清单声明不一致(装入确认框展示的必须就是 Agent 读到的)';
+    return 'SKILL.md frontmatter description 与清单声明不一致(插件详情展示的必须就是 Agent 读到的)';
   }
   return null;
 }
@@ -350,7 +350,6 @@ export async function reconcileGhostSkillLinks(
         g.enabled &&
         g.approval.state === 'approved' &&
         Boolean(g.approvedSkillRoot) &&
-        g.manifest.slots.includes('skill') &&
         g.manifest.skill,
     )
     .sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));

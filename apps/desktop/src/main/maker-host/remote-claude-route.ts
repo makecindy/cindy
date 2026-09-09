@@ -212,11 +212,16 @@ function stripBearer(value: string): string {
   return m ? m[1] : value;
 }
 
-/** URL 是否指向本机 loopback(localhost / 127.* / ::1)。 */
+/** URL 是否指向本机 loopback(localhost / 127.x.y.z / ::1)。
+ *  轮 36 HIGH:与 pi-host.ts 的 isLoopbackUrl 对齐 —— startsWith('127.') 会误杀
+ *  127.example.com 等合法域名, 改为精确 IPv4 loopback 正则。 */
 function isLoopbackUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname.toLowerCase();
-    return host === 'localhost' || host.startsWith('127.') || host === '::1' || host === '[::1]';
+    return host === 'localhost'
+      || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+      || host === '::1'
+      || host === '[::1]';
   } catch {
     return false;
   }

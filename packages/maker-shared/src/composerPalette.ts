@@ -97,6 +97,113 @@ export function insertSlashCommand(
   return `${text.slice(0, trigger.from)}/${command.name} `;
 }
 
+/** Pi runtime invocation is `/skill:name`. Display layer always shows `/name`. */
+const PI_SKILL_RUNTIME_TOKEN_RE = /^\/skill:(\S+)$/i;
+const PI_SKILL_RUNTIME_PREFIX = 'skill:';
+
+/** Project a stored slash token (`/skill:git` or `/git`) to the human label. */
+export function slashCommandDisplayLabel(commandText: string): string {
+  const match = commandText.match(PI_SKILL_RUNTIME_TOKEN_RE);
+  return match ? `/${match[1]}` : commandText;
+}
+
+/**
+ * Project confirmed slash runs in a message body to the human label.
+ * Without ranges, leave the text untouched — ordinary `/skill:foo` prose
+ * must not be rewritten.
+ */
+export function projectSlashCommandsInText(
+  text: string,
+  ranges?: readonly { start: number; end: number }[],
+): string {
+  if (!ranges || ranges.length === 0) return text;
+  let result = text;
+  const ordered = [...ranges].sort((a, b) => b.start - a.start);
+  for (const range of ordered) {
+    if (range.start < 0 || range.end > result.length || range.end <= range.start) continue;
+    const token = result.slice(range.start, range.end);
+    const display = slashCommandDisplayLabel(token);
+    if (display === token) continue;
+    result = `${result.slice(0, range.start)}${display}${result.slice(range.end)}`;
+  }
+  return result;
+}
+
+/**
+ * Put a displayed `/git ...` back to the stored `/skill:git ...` when the
+ * user is resending an edited Pi skill message. Leave other commands alone.
+ */
+export function findSlashCommandToken(
+  text: string,
+): { start: number; end: number; name: string } | undefined {
+  const match = /(?:^|\n)[^\S\n]*(\/\S+)/.exec(text);
+  if (!match || match.index === undefined) return undefined;
+  const start = match.index + match[0].length - match[1].length;
+  return { start, end: start + match[1].length, name: match[1].slice(1) };
+}
+
+/** True when a confirmed slash range covers this token. */
+export function slashCommandRangeCoversToken(
+  ranges: readonly { start: number; end: number }[] | undefined,
+  token: { start: number; end: number } | undefined,
+): boolean {
+  if (!ranges || !token) return false;
+  return ranges.some((range) => range.start <= token.start && range.end >= token.end);
+}
+
+export function restoreSlashCommandRuntimeAlias(
+  originalText: string,
+  editedText: string,
+  confirmedRanges?: readonly { start: number; end: number }[],
+): string {
+  const original = findSlashCommandToken(originalText);
+  const edited = findSlashCommandToken(editedText);
+  if (!original || !edited) return editedText;
+  if (!slashCommandRangeCoversToken(confirmedRanges, original)) return editedText;
+  if (!original.name.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return editedText;
+  const humanName = original.name.slice(PI_SKILL_RUNTIME_PREFIX.length);
+  if (!humanName || edited.name.toLowerCase() !== humanName.toLowerCase()) return editedText;
+  return `${editedText.slice(0, edited.start)}/${original.name}${editedText.slice(edited.end)}`;
+}
+
+/** Range of the first `/command` token in already-restored submit text. */
+export function leadingSlashCommandRange(
+  text: string,
+): { start: number; end: number } | undefined {
+  const token = findSlashCommandToken(text);
+  return token ? { start: token.start, end: token.end } : undefined;
+}
+
+/**
+ * First `/token` after leading whitespace. Same recognition window as Pi
+ * (`text.trimStart().startsWith('/skill:')`): leading spaces/newlines count,
+ * a quote block or other prose before the slash does not.
+ */
+export function leadingSlashInvocation(
+  text: string,
+): { start: number; end: number; name: string } | undefined {
+  const start = text.search(/\S/);
+  if (start < 0 || text[start] !== '/') return undefined;
+  const token = text.slice(start).match(/^\/\S+/)?.[0];
+  if (!token) return undefined;
+  return { start, end: start + token.length, name: token.slice(1) };
+}
+
+/**
+ * Length of the hidden `skill:` run after `/` when the visible token is a Pi
+ * runtime alias. Zero when the document already uses the human name.
+ */
+export function slashCommandRuntimePrefixLength(
+  commandText: string,
+  command: { name?: string; runtimeCommandName?: string },
+): number {
+  const runtime = command.runtimeCommandName?.trim();
+  if (!runtime || !runtime.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return 0;
+  const body = commandText.startsWith('/') ? commandText.slice(1) : commandText;
+  if (body.toLowerCase() !== runtime.toLowerCase()) return 0;
+  return PI_SKILL_RUNTIME_PREFIX.length;
+}
+
 export function insertAtResource(
   text: string,
   trigger: ComposerTrigger,

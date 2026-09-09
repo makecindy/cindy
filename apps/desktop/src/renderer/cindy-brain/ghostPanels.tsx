@@ -6,14 +6,20 @@ import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../s
 import { minimizeGhostPanel, reconcileGhostPanelBubbles } from '../lib/ghostPanelBubbleState';
 import { toast } from '../lib/toast';
 import { usePanelMaximize } from '../layout/panelMaximize';
+import { usePaneAtWindowTop, usePaneFill } from '../layout/panePlacement';
 import { usePanelWidth } from '../layout/paneWidths';
 import { PanelChrome } from '../panels/PanelChrome';
-import { registerPanelKind, unregisterPanelKind, type PanelComponentProps } from '../panels/registry';
+import {
+  registerPanelKind,
+  unregisterPanelKind,
+  type PanelComponentProps,
+} from '../panels/registry';
 import { extractIpcError } from '../utils/ipcError';
 import { GhostChipPanelBody, GhostPanelError } from './ghostPanelBody';
 import { ghostInstallErrorKey } from './installErrorKey';
 import { pruneGhostSettingsSnapshots } from './ghostSettingsSnapshot';
 import { useGhostRuntimeState } from './runtimeStates';
+import { getDataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 
 /**
  * 意识面板接入布局引擎。
@@ -49,10 +55,10 @@ const PANEL_ENTER_ARMED_AT = Date.now() + 1500;
 const PANEL_EXIT_MS = 180;
 
 /** 意识面板宿主:标准头(PanelChrome)+ 沙箱自绘面板体(崩溃时错误接管)。 */
-function GhostPanel({
-  manifest,
-}: PanelComponentProps & { manifest: GhostManifest }): ReactNode {
+function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifest }): ReactNode {
   const kind = ghostPanelKind(manifest.id);
+  const fillContainer = usePaneFill();
+  const atWindowTop = usePaneAtWindowTop();
   // 宽度由引擎下发(fraction × 可用宽,缝把手可拖);兜底用清单 minWidth。
   const width = usePanelWidth(kind) ?? manifest.panel?.minWidth ?? 300;
   // 撑满态(引擎视图态):固定宽让位给 flex-1,树上的 fraction 账本不动。
@@ -114,24 +120,27 @@ function GhostPanel({
       className={
         isMaximized
           ? 'flex h-full min-w-0 flex-1'
-          : `h-full shrink-0 overflow-hidden${enter ? ' ghost-panel-enter' : ''}${
-              closing ? ' ghost-panel-exit' : ''
-            }`
+          : fillContainer
+            ? 'flex h-full min-h-0 min-w-0 flex-1 overflow-hidden'
+            : `h-full shrink-0 overflow-hidden${enter ? ' ghost-panel-enter' : ''}${
+                closing ? ' ghost-panel-exit' : ''
+              }`
       }
-      style={isMaximized ? undefined : { width }}
+      style={isMaximized || fillContainer ? undefined : { width }}
     >
       <section
         data-panel-drag-root={kind}
         // 侧边分割线由布局引擎统一绘制(LayoutRoot layout-divider),面板不自画。
         className={
-          isMaximized
+          isMaximized || fillContainer
             ? 'flex h-full w-full min-w-0 flex-col overflow-hidden bg-[var(--panel-bg)]'
             : 'flex h-full shrink-0 flex-col overflow-hidden bg-[var(--panel-bg)]'
         }
-        style={isMaximized ? undefined : { width }}
+        style={isMaximized || fillContainer ? undefined : { width }}
       >
         <PanelChrome
           title={manifest.panel?.title ?? manifest.name}
+          showWindowSpacer={atWindowTop}
           panelKind={maximizeEnabled ? kind : undefined}
           onMinimize={minimizeEnabled ? beginMinimize : undefined}
           onDetach={
@@ -165,7 +174,10 @@ export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 顺手清设置区快照缓存的孤儿(卸载的意识不该在 localStorage 留位图);
   // 本函数是"已装清单"的唯一同步点(启动 + ghosts:changed),挂这里最省。
   // 注意用全量清单(含沉睡)——沉睡只是不注册面板,快照仍然有效。
-  pruneGhostSettingsSnapshots(ghosts.map((g) => g.manifest.id));
+  pruneGhostSettingsSnapshots(
+    getDataOwnerGeneration().dataOwnerId,
+    ghosts.map((g) => g.manifest.id),
+  );
   // 气泡状态对齐(与快照 prune 不同:停用/失格的要强制还原,不只清卸载)——
   // 气泡是"面板不可见 + 唯一恢复入口",失格后必须回停靠,不留死角。
   reconcileGhostPanelBubbles(ghosts);

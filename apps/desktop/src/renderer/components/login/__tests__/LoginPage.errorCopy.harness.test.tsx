@@ -26,6 +26,7 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
@@ -44,6 +45,9 @@ const NAMED_CODES = [
   'INVALID_CODE',
   'CODE_ATTEMPTS_EXCEEDED',
   'RATE_LIMITED',
+  'CAPTCHA_REQUIRED',
+  'CAPTCHA_INVALID',
+  'CAPTCHA_UNAVAILABLE',
   'SSO_LOGIN_REQUIRED',
   'ORG_SSO_NOT_FOUND',
   'SOCIAL_TOKEN_INVALID',
@@ -115,6 +119,7 @@ function mountWithError(code: string) {
     errorCode: code,
     loginState: identifierState,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   };
   return render(<LoginPage />);

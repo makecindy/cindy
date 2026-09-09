@@ -133,7 +133,9 @@ describe('断网后远端选择的逃生路径', () => {
     expect(normalizeSelectedMachineId(raw, stoppedSelectable)).toBe(MACHINE_ALL);
   });
 
-  it('目录不可用但仍记着远端选择时保留切换入口，用户可显式切回本机', () => {
+  it('目录不可用但仍记着远端选择时,旧逃生 helper 仍为真;菜单是否画设备列表另看 devices.length', () => {
+    // shouldShowMachineSwitcher 仍给其它调用方用。范围标题恒在后,MachineSwitcherMenu
+    // 不再拿它决定要不要画「所有 / 本机」——目录空了只留两项设置。
     expect(shouldShowMachineSwitcher(['dev-a'], [])).toBe(true);
     expect(shouldShowMachineSwitcher([MACHINE_LOCAL], [])).toBe(false);
     expect(shouldShowMachineSwitcher(MACHINE_ALL, [])).toBe(false);

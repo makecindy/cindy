@@ -1633,6 +1633,8 @@ private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
 private let compactIslandMinContentWidth: CGFloat = 80
+private let compactCollapseLeadingReservedWidth: CGFloat = 80
+private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
 private let compactIslandDetailCollapseContentThreshold: CGFloat = 190
 private let compactIslandCjkTitleMinimumWidth: CGFloat = 32
@@ -4619,6 +4621,7 @@ final class AgentIslandController {
     notchBaselineHeight: 24,
     screenMetrics: .fallback
   )
+  private var lastCompactIslandWidth: CGFloat?
   private var globalClickMonitor: Any?
   private var localClickMonitor: Any?
   private var globalMoveMonitor: Any?
@@ -4758,7 +4761,7 @@ final class AgentIslandController {
       )
       return
     }
-    lastLayout = layout
+    rememberLayout(layout)
     if state.mode == "expanded" {
       cancelPendingCarrierFrame()
     }
@@ -5255,8 +5258,12 @@ final class AgentIslandController {
       return
     }
     pendingMoveInteraction = nil
+    // Collapse is owned here, not by SwiftUI top-bar taps, so the hit stays
+    // inside the original compact footprint instead of the whole spacer.
     if shouldTreatAsCompactClick(interaction: interaction, screenPoint: screenPoint) {
       eventSink(["type": "expand"])
+    } else if shouldTreatAsCompactCollapseClick(interaction: interaction, screenPoint: screenPoint) {
+      eventSink(["type": "collapse"])
     }
     handleMouseMoved(screenPoint: screenPoint, force: true)
     replayDeferredInteractionUpdateIfNeeded()
@@ -5424,8 +5431,64 @@ final class AgentIslandController {
     guard interaction.mode == .move, !interaction.startLayout.expanded else {
       return false
     }
-    return abs(screenPoint.x - interaction.startMouseX) <= agentIslandClickDragTolerance
+    return isClickWithoutDrag(interaction: interaction, screenPoint: screenPoint)
+  }
+
+  private func shouldTreatAsCompactCollapseClick(
+    interaction: PanelDragInteraction,
+    screenPoint: NSPoint
+  ) -> Bool {
+    guard interaction.mode == .move, interaction.startLayout.expanded else {
+      return false
+    }
+    guard isClickWithoutDrag(interaction: interaction, screenPoint: screenPoint) else {
+      return false
+    }
+    return isCompactFootprintClick(interaction: interaction)
+  }
+
+  private func isClickWithoutDrag(interaction: PanelDragInteraction, screenPoint: NSPoint) -> Bool {
+    abs(screenPoint.x - interaction.startMouseX) <= agentIslandClickDragTolerance
       && abs(screenPoint.y - interaction.startMouseY) <= agentIslandClickDragTolerance
+  }
+
+  /// The screen rectangle where the collapsed island sat. After expand, that
+  /// center strip is blank (hardware-notch Color.clear, or the top-bar spacer).
+  /// Clicking it should fold the island back; toolbar / title live outside it.
+  private func isCompactFootprintClick(interaction: PanelDragInteraction) -> Bool {
+    let layout = interaction.startLayout
+    let footprintWidth = compactCollapseFootprintWidth(layout: layout)
+    let centerX = interaction.startFrame.midX
+    let clickX = interaction.startMouseX
+    guard clickX >= centerX - footprintWidth / 2 && clickX <= centerX + footprintWidth / 2 else {
+      return false
+    }
+    let visualMinX = centerX - layout.width / 2
+    let visualMaxX = centerX + layout.width / 2
+    let sideChrome = layout.hasHardwareNotch
+      ? max(0, (layout.width - layout.notchWidth) / 2)
+      : 0
+    let leadingReserved = max(compactCollapseLeadingReservedWidth, sideChrome)
+    let trailingReserved = max(compactCollapseTrailingReservedWidth, sideChrome)
+    return clickX > visualMinX + leadingReserved
+      && clickX < visualMaxX - trailingReserved
+  }
+
+  private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {
+    if let remembered = lastCompactIslandWidth, remembered > 0 {
+      return remembered
+    }
+    if layout.hasHardwareNotch {
+      return max(1, layout.notchWidth)
+    }
+    return compactIslandBaseWidth
+  }
+
+  private func rememberLayout(_ layout: AgentIslandLayout) {
+    lastLayout = layout
+    if !layout.expanded, layout.width > 0 {
+      lastCompactIslandWidth = layout.width
+    }
   }
 
   private func shouldPromotePendingMove(interaction: PanelDragInteraction, screenPoint: NSPoint) -> Bool {
@@ -5478,7 +5541,7 @@ final class AgentIslandController {
       frame: frame,
       expanded: lastLayout.expanded
     )
-    lastLayout = AgentIslandLayout.compute(
+    rememberLayout(AgentIslandLayout.compute(
       state: model.state,
       availableFrameWidth: frame.width,
       locallyHovered: model.locallyHovered,
@@ -5486,7 +5549,7 @@ final class AgentIslandController {
       screenMetrics: model.screenMetrics,
       hardwareNotchLayoutEnabled: hardwareNotchLayoutEnabled,
       preferredContentWidth: currentContentWidth(frame: frame, layout: lastLayout)
-    )
+    ))
     let nextContentWidth = currentContentWidth(frame: frame, layout: lastLayout)
     if animatedSnap {
       beginCompactSnapLayoutAnimation()

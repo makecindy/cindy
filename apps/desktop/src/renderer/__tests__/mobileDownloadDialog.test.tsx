@@ -202,7 +202,7 @@ describe('resolveMobileRemotePresentation', () => {
       remoteEnabled: false,
       linkedMobileCount: 0,
       otherDeviceCount: 0,
-      selfDeviceId: 'desktop-device-1',
+      selfDeviceName: 'Studio Mac',
     });
     expect(
       resolveMobileRemotePresentation({
@@ -242,7 +242,7 @@ describe('resolveMobileRemotePresentation', () => {
       remoteEnabled: true,
       linkedMobileCount: 1,
       otherDeviceCount: 1,
-      selfDeviceId: 'desktop-device-1',
+      selfDeviceName: 'Studio Mac',
       linkedMobileName: 'My iPhone',
     });
   });
@@ -279,7 +279,7 @@ describe('resolveMobileRemotePresentation', () => {
     ).toMatchObject({
       layout: 'checking',
       remoteEnabled: true,
-      selfDeviceId: null,
+      selfDeviceName: null,
     });
   });
 });
@@ -425,7 +425,8 @@ describe('MobileDownloadDialog', () => {
 
     expect(await screen.findByText('sidebar.mobileDownload.myDevices')).toBeTruthy();
     expect(screen.getByText('My iPhone')).toBeTruthy();
-    expect(screen.getByText('sidebar.mobileDownload.deviceId')).toBeTruthy();
+    expect(screen.getByTitle('Studio Mac')).toBeTruthy();
+    expect(screen.getByText('sidebar.mobileDownload.deviceName')).toBeTruthy();
     expect(screen.getByTestId('mobile-download-qr-card').dataset.compact).toBe('true');
     fireEvent.click(screen.getByRole('button', { name: /sidebar\.mobileDownload\.myDevices/ }));
     expect(onOpenDevices).toHaveBeenCalledTimes(1);

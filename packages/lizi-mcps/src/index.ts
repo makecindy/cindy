@@ -32,6 +32,10 @@ export * from './lizi_xdtHelperMcpServer.js';
 export * from './lizi_xdtHelperToolRegistry.js';
 export * from './xdt-helper/index.js';
 
+export { createCindyDocsMcpServer } from './cindy_docsMcpServer.js';
+export * from './cindy_docsToolRegistry.js';
+export * from './cindy-docs/index.js';
+
 export * from './orca/index.js';
 
 export * from './session-context.js';

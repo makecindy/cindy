@@ -25,7 +25,9 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
+    enterLocalMode: vi.fn(async (): Promise<void> => undefined),
   },
 }));
 
@@ -63,35 +65,37 @@ async function globalIdentifierState(scenario = 'providers:global-social'): Prom
   return reduceAuthFlow(null, { type: 'providers-loaded', providers });
 }
 
-function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
-  loginHook.value = {
-    isLoading: false,
-    errorCode: null,
-    loginState: state,
-    dispatch: vi.fn(async () => true),
-    clearError: vi.fn(),
-    ...extra,
-  };
-  return render(<LoginPage />);
-}
-
 const openExternal = vi.fn(async () => ({ success: true }));
-const authEnterLocal = vi.fn(async () => ({ mode: 'local' }));
+const enterLocalMode = vi.fn(async (): Promise<void> => undefined);
 const acceptPrivacyConsent = vi.fn(async () => ({
   privacyConsentAccepted: true,
   analyticsEnabled: true,
   allowed: true,
 }));
 
+function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
+  loginHook.value = {
+    isLoading: false,
+    errorCode: null,
+    loginState: state,
+    dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
+    clearError: vi.fn(),
+    enterLocalMode,
+    ...extra,
+  };
+  return render(<LoginPage />);
+}
+
 beforeEach(() => {
   // isGlobalBuild 在渲染时读 import.meta.env,必须在 render 前置好
   vi.stubEnv('VITE_CINDY_AUTH_REGION', 'global');
   openExternal.mockClear();
-  authEnterLocal.mockClear();
+  enterLocalMode.mockClear();
   acceptPrivacyConsent.mockClear();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin', openExternal, authEnterLocal, acceptPrivacyConsent },
+    value: { platform: 'darwin', openExternal, acceptPrivacyConsent },
   });
 });
 
@@ -158,12 +162,12 @@ describe('Global 构建变体:登录改版四件事同样生效', () => {
       fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
     expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(enterLocalMode).not.toHaveBeenCalled();
     expect(acceptPrivacyConsent).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-consent-agree'));
     });
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
     expect(acceptPrivacyConsent).toHaveBeenCalled();
   });
 

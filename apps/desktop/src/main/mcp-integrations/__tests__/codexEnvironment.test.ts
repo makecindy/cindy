@@ -342,6 +342,18 @@ describe('codexEnvironment', () => {
     expect(cfg.extraArgs.some((a) => a.includes('sk-123'))).toBe(false);
   });
 
+  it('keeps Codex on direct mcp_servers config instead of the Pi gateway', async () => {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [testProvider(), remoteHttpProvider()],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_test.'))).toBe(true);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.themis.'))).toBe(true);
+    expect(cfg.extraArgs.join('\n')).not.toContain('cindy_mcp_list_tools');
+    expect(cfg.extraArgs.join('\n')).not.toContain('cindy_mcp_call_tool');
+  });
+
   // server 名可能来自用户可控来源（自定义 MCP id、插件身份卡）。普通 `{}` 上
   // `map['__proto__'] = cfg` 命中的是原型 setter：该 server 不出现在 Object.entries 里，
   // 于是在 Codex 侧静默消失，同一份配置却在 Claude 侧正常工作。

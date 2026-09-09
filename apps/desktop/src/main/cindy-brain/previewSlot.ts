@@ -71,8 +71,8 @@ export class GhostPreviewSlot {
 
   handleRequest(ghostId: string, payload: unknown): GhostPipePreviewResult {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('preview')) {
-      return fail('PERMISSION_DENIED', '插件未申请面板预览权限(preview 槽),或当前未启用');
+    if (!ghost?.enabled || !ghost.manifest.preview) {
+      return fail('PERMISSION_DENIED', '插件未申请面板预览权限(preview),或当前未启用');
     }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return fail('INVALID_REQUEST', 'preview-request 载荷必须是对象');

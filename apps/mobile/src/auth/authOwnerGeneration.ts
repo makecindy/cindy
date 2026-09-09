@@ -1,19 +1,30 @@
+import { accountVaultKey, type AuthRegion } from '@cindy/auth-client';
+
 export interface MobileAuthOwnerGeneration {
+  /** Bare membership ID retained for creation guards and recovery ledgers. */
   readonly accountId: string;
+  /** Canonical realm-qualified key for new account-scoped storage. */
+  readonly accountKey: string;
   readonly generation: number;
 }
 
 let current: MobileAuthOwnerGeneration = {
   accountId: '',
+  accountKey: '',
   generation: 0,
 };
 
 /** Publish the account owner synchronously, before React state updates settle. */
-export function setMobileAuthOwner(accountId: string | null | undefined): void {
+export function setMobileAuthOwner(
+  accountId: string | null | undefined,
+  realm: AuthRegion = 'global',
+): void {
   const normalized = accountId?.trim() ?? '';
-  if (current.accountId === normalized) return;
+  const accountKey = normalized ? accountVaultKey(realm, normalized) : '';
+  if (current.accountKey === accountKey) return;
   current = {
     accountId: normalized,
+    accountKey,
     generation: current.generation + 1,
   };
 }
@@ -26,13 +37,13 @@ export function isMobileAuthOwnerCurrent(
   owner: MobileAuthOwnerGeneration,
 ): boolean {
   return (
-    current.accountId === owner.accountId
+    current.accountKey === owner.accountKey
     && current.generation === owner.generation
   );
 }
 
 export const __testing = {
   reset(): void {
-    current = { accountId: '', generation: 0 };
+    current = { accountId: '', accountKey: '', generation: 0 };
   },
 };

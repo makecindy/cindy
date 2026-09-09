@@ -12,11 +12,20 @@ import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import { themeService } from '../../themes/theme-service';
-import { ThemeProvider, useTheme } from '../useTheme';
+import {
+  __resetLoginFirstLaunchLightGateForTest,
+  endLoginFirstLaunchLightGate,
+  getInitialThemeVariant,
+  ThemeProvider,
+  useTheme,
+} from '../useTheme';
+
+const applyVibrancyMock = vi.fn();
+let systemPrefersDark = false;
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
 vi.stubGlobal('matchMedia', (q: string) => ({
-  matches: false,
+  matches: systemPrefersDark,
   media: q,
   addEventListener: () => {},
   removeEventListener: () => {},
@@ -24,6 +33,10 @@ vi.stubGlobal('matchMedia', (q: string) => ({
 
 function wrapper({ children }: { children: ReactNode }) {
   return createElement(ThemeProvider, null, children);
+}
+
+function utilityWindowWrapper({ children }: { children: ReactNode }) {
+  return createElement(ThemeProvider, { children, syncWindowVibrancy: false });
 }
 
 // 构造 storage 事件:用普通 Event + 显式 key/newValue,避免依赖 jsdom 对
@@ -38,10 +51,50 @@ function dispatchStorage(key: string, newValue: string | null) {
 
 describe('useTheme 跨窗口主题同步(D2-3)', () => {
   beforeEach(() => {
+    __resetLoginFirstLaunchLightGateForTest();
+    systemPrefersDark = false;
     localStorage.clear();
     delete document.documentElement.dataset.theme;
     document.documentElement.classList.remove('dark');
     vi.spyOn(themeService, 'applyTheme').mockImplementation(() => {});
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      theme: { applyVibrancy: applyVibrancyMock },
+    };
+    applyVibrancyMock.mockClear();
+  });
+
+  it('把应用主题模式同步给 main 作为下次 Windows 创建期 backing 镜像', () => {
+    localStorage.setItem('theme', 'dark');
+    renderHook(() => useTheme(), { wrapper });
+
+    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true);
+  });
+
+  it('utility 窗口复用 ThemeProvider 时不写全局窗口材质快照', () => {
+    localStorage.setItem('theme', 'dark');
+    renderHook(() => useTheme(), { wrapper: utilityWindowWrapper });
+
+    expect(applyVibrancyMock).not.toHaveBeenCalled();
+  });
+
+  it('把单变体家族标记为不随系统模式切换', () => {
+    localStorage.setItem('theme.familyId', 'eclipse');
+    renderHook(() => useTheme(), { wrapper });
+
+    expect(applyVibrancyMock).toHaveBeenCalledWith('eclipse', true, 'system', false);
+  });
+
+  it('系统深色下真首启按亮色门的实际主题上报 backing，门结束后恢复深色', () => {
+    systemPrefersDark = true;
+    expect(getInitialThemeVariant().theme.type).toBe('light');
+
+    renderHook(() => useTheme(), { wrapper });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system', true);
+
+    act(() => {
+      endLoginFirstLaunchLightGate();
+    });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true);
   });
 
   it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {

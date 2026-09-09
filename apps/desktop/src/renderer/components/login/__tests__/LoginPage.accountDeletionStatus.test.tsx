@@ -12,6 +12,7 @@ const loginHook = vi.hoisted(() => ({
     getAccountDeletionStatus: vi.fn(),
     clearAccountDeletionReceipt: vi.fn(),
     dispatch: vi.fn(),
+    dispatchWithResult: vi.fn(),
     clearError: vi.fn(),
   },
 }));

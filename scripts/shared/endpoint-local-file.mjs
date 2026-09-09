@@ -25,6 +25,7 @@ const LOCAL_MODEL_ACCESS_BASE_URL = 'http://localhost:3339';
 const LOCAL_VOICE_BASE_URL = 'http://localhost:3342';
 const LOCAL_GITHUB_BASE_URL = 'http://localhost:3336';
 const LOCAL_SKILLHUB_BASE_URL = 'http://localhost:3341';
+const LOCAL_CINDY_SKILLHUB_BASE_URL = 'http://localhost:3345';
 const LOCAL_PLUGIN_BASE_URL = 'http://localhost:3343';
 
 /**
@@ -76,6 +77,7 @@ export function generateEndpointLocalFile({ repoRoot, region = 'global' }) {
     voiceApiBaseUrl: LOCAL_VOICE_BASE_URL,
     githubApiBaseUrl: LOCAL_GITHUB_BASE_URL,
     skillhubApiBaseUrl: LOCAL_SKILLHUB_BASE_URL,
+    cindySkillHubApiBaseUrl: LOCAL_CINDY_SKILLHUB_BASE_URL,
     pluginApiBaseUrl: LOCAL_PLUGIN_BASE_URL,
   };
   fs.writeFileSync(targetPath, `${JSON.stringify(local, null, 2)}\n`);

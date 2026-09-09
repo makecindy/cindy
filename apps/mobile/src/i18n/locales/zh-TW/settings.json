@@ -1,4 +1,27 @@
 {
+  "localLogs": {
+    "upload": "上傳日誌",
+    "uploadHint": "僅傳送篩選後的執行記錄及應用程式、系統版本。詳細 Debug 日誌請使用匯出。",
+    "uploadResult": {
+      "unavailable": "目前版本未設定日誌上傳。",
+      "consentRequired": "上傳日誌前需同意隱私政策。",
+      "empty": "暫無近期日誌，請先開啟記錄並重現問題。",
+      "failed": "上傳失敗，日誌仍保留在手機上。"
+    },
+    "title": "Debug 日誌",
+    "record": "記錄 Debug 日誌",
+    "hint": "記錄手機上的連線、恢復、捲動、鍵盤與效能細節。預設關閉，最多保留 7 天、8 MB，不會自動上傳。",
+    "export": "匯出 Debug 日誌",
+    "clear": "清空日誌",
+    "busy": "處理中…",
+    "failed": "無法儲存或分享日誌，請重試。",
+    "clearHint": "刪除已儲存的診斷日誌？",
+    "cancel": "取消",
+    "exportHint": "分享詳細本機日誌供疑難排解；不含任務內文或憑證。",
+    "options": "日誌選項",
+    "uploadCopied": "上傳成功，編號 {{code}} 已複製。",
+    "uploadSucceeded": "上傳成功，編號 {{code}}。"
+  },
   "title": "設定",
   "language": {
     "title": "語言",
@@ -37,6 +60,15 @@
     "checkFailedDetail": "檢查更新失敗：{{detail}}",
     "checkFailed": "檢查更新失敗，請稍後重試"
   },
+  "betaChannel": {
+    "title": "Beta 測試管道",
+    "badge": "Beta",
+    "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。",
+    "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
+    "ok": "我知道了",
+    "saveFailed": "儲存 Beta 測試管道設定失敗",
+    "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。"
+  },
   "notifications": {
     "sectionTitle": "通知",
     "taskDone": "任務完成通知",
@@ -49,9 +81,6 @@
     "deviceName": "裝置名稱",
     "deviceNameDetail": "電腦端授權列表會顯示這個名稱。",
     "platform": "平臺",
-    "remoteControl": "被控權限",
-    "remoteControlValue": "電腦端管理",
-    "remoteControlDetail": "手機只作為控制端。允許被控、撤銷和恢復權限仍在電腦端設定裡完成。",
     "editAccessibility": "修改{{label}}"
   },
   "relay": {
@@ -75,6 +104,21 @@
     "initializing": "初始化中",
     "authServer": "Auth Server",
     "authRegion": "登入區域"
+  },
+  "devServerEnvironment": {
+    "title": "伺服器環境",
+    "description": "僅影響 CindyDev 連線的業務伺服器",
+    "accessibility": "切換伺服器環境",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "切換至 {{environment}}？",
+    "confirmBody": "切換會登出目前帳號並重新啟動 App。",
+    "cancel": "取消",
+    "switchAction": "切換",
+    "switching": "切換中",
+    "switchFailed": "切換伺服器環境失敗，請再試一次。"
   },
   "updateInfo": {
     "embedded": "隨整包",
@@ -107,7 +151,7 @@
     "analyticsResetAction": "恢復"
   },
   "account": {
-    "logoutHint": "退出只會清除這臺手機上的登入態和本地遠端映象，不會影響電腦端任務。",
+    "logoutHint": "退出會清除這臺手機上儲存的全部帳號和本地遠端映象，不會影響電腦端任務。",
     "logout": "退出登入",
     "loggingOut": "退出中",
     "loggingOutAccessibility": "正在退出登入"

@@ -13,6 +13,7 @@ import * as WorktreeManager from './WorktreeManager';
 import * as worktreeStore from './worktreeStore';
 import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';
 import { createLogger } from '../logger';
+import { throwIpcError } from '../utils/ipcValidate';
 
 const log = createLogger('worktree');
 
@@ -32,6 +33,7 @@ export {
   recycleWorktreeForRemovedSession,
   reconcileWorktreesForDeletedSessions,
 } from './sessionRemovalRecycle';
+export { reconcilePendingSafeDirectoryCleanups } from './WorktreeManager';
 export {
   getWorktreeRestoreStatus,
   restoreMissingManagedWorktreeForSession,
@@ -50,9 +52,15 @@ export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
     WorktreeManager.createWorktree(req),
   );
 
-  ipcMain.handle('worktree:detect-cwd', (_e, req: DetectCwdReq) =>
-    WorktreeManager.detectCwd(req.cwd),
-  );
+  ipcMain.handle('worktree:detect-cwd', async (_e, req: DetectCwdReq) => {
+    try {
+      return await WorktreeManager.detectCwd(req.cwd);
+    } catch {
+      // Keep probe failure distinct from a missing directory, without sending
+      // raw Git output or internal paths across the IPC boundary.
+      throwIpcError('INTERNAL', 'Worktree directory probe failed');
+    }
+  });
 
   ipcMain.handle('worktree:get-for-session', (_e, sessionId: string) =>
     WorktreeManager.getForSession(sessionId),

@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent task history status · UI evidence</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #f2f2ed;
+        --surface-elevated: #fdfdf8;
+        --surface-chip: #eeeee9;
+        --border-default: #e4e4df;
+        --text-primary: #1a1a1a;
+        --text-secondary: #888883;
+        --text-tertiary: #6b6b67;
+        --error-fg: #dc2626;
+        --focus-ring: #417cdd;
+      }
+
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --surface: #181818;
+        --surface-elevated: #1f1f1f;
+        --surface-chip: #1d1d1d;
+        --border-default: #313131;
+        --text-primary: #d4d4d4;
+        --text-secondary: #6f6f6f;
+        --text-tertiary: #c1c1c1;
+        --error-fg: #f87171;
+        --focus-ring: #417cdd;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text-primary);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Noto Sans CJK SC", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .page {
+        width: min(780px, calc(100vw - 48px));
+        margin: 0 auto;
+        padding: 46px 0 50px;
+      }
+
+      .eyebrow-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 10px;
+      }
+
+      .eyebrow {
+        color: var(--text-tertiary);
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      .theme-switch {
+        display: flex;
+        gap: 4px;
+        padding: 3px;
+        border: 1px solid var(--border-default);
+        border-radius: 8px;
+        background: var(--surface-elevated);
+      }
+
+      .theme-button {
+        min-width: 56px;
+        height: 26px;
+        padding: 0 9px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text-tertiary);
+        cursor: pointer;
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      .theme-button[aria-pressed="true"] {
+        background: var(--surface-chip);
+        color: var(--text-primary);
+      }
+
+      .theme-button:focus-visible {
+        outline: 2px solid var(--focus-ring);
+        outline-offset: 1px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 30px;
+      }
+
+      .lede {
+        margin: 7px 0 24px;
+        color: var(--text-tertiary);
+        font-size: 13px;
+        line-height: 20px;
+      }
+
+      .history-label {
+        margin: 0 0 8px;
+        color: var(--text-tertiary);
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      .task-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .task-card {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid var(--border-default);
+        border-radius: 12px;
+        background: var(--surface-elevated);
+      }
+
+      .task-button {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+      }
+
+      .avatar {
+        display: inline-flex;
+        width: 20px;
+        height: 20px;
+        flex: 0 0 20px;
+        align-items: center;
+        justify-content: center;
+        margin-top: 2px;
+        border-radius: 999px;
+        background: var(--surface-chip);
+        color: var(--text-secondary);
+      }
+
+      .avatar svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      .task-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .title-row {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .status-icon {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 14px;
+        color: var(--text-secondary);
+      }
+
+      .task-card[data-status="failed"] .status-icon {
+        color: var(--error-fg);
+      }
+
+      .task-title {
+        overflow: hidden;
+        color: var(--text-primary);
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 20px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        column-gap: 8px;
+        row-gap: 2px;
+        margin-top: 2px;
+        color: var(--text-tertiary);
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      .chevron {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 14px;
+        margin-top: 4px;
+        color: var(--text-tertiary);
+      }
+
+      .note {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 1px solid var(--border-default);
+        color: var(--text-tertiary);
+        font-size: 12px;
+        line-height: 18px;
+      }
+
+      .note-mark {
+        width: 5px;
+        height: 5px;
+        flex: 0 0 5px;
+        margin-top: 6px;
+        border-radius: 999px;
+        background: var(--text-secondary);
+      }
+
+      svg {
+        display: block;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+      }
+
+      @media (max-width: 620px) {
+        .page {
+          width: min(100% - 28px, 780px);
+          padding-top: 24px;
+        }
+
+        .eyebrow-row {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="eyebrow-row">
+        <div class="eyebrow">
+          Cindy Desktop · macOS · <span id="theme-name">cindy-light</span>
+        </div>
+        <div class="theme-switch" aria-label="主题">
+          <button class="theme-button" type="button" data-theme-choice="light">
+            Light
+          </button>
+          <button class="theme-button" type="button" data-theme-choice="dark">
+            Dark
+          </button>
+        </div>
+      </div>
+
+      <h1>Agent 任务历史状态</h1>
+      <p class="lede">
+        重新打开任务后，从持久化消息恢复 completed、failed 与 stopped 终态。
+      </p>
+
+      <p class="history-label">任务历史</p>
+      <section class="task-list" aria-label="Agent 任务历史状态示例">
+        <article class="task-card" data-status="completed">
+          <button
+            class="task-button"
+            type="button"
+            aria-label="展开 Subagent 详情"
+          >
+            <span class="avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8V4H8" />
+                <rect width="16" height="12" x="4" y="8" rx="2" />
+                <path d="M2 14h2M20 14h2M9 13v2M15 13v2" />
+              </svg>
+            </span>
+            <span class="task-copy">
+              <span class="title-row">
+                <svg class="status-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+                <span class="task-title">汇总开放 Issue</span>
+              </span>
+              <span class="meta">
+                <span>Codex</span>
+                <span>已完成</span>
+                <span>1m 12s</span>
+              </span>
+            </span>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </button>
+        </article>
+
+        <article class="task-card" data-status="failed">
+          <button
+            class="task-button"
+            type="button"
+            aria-label="展开 Subagent 详情"
+          >
+            <span class="avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8V4H8" />
+                <rect width="16" height="12" x="4" y="8" rx="2" />
+                <path d="M2 14h2M20 14h2M9 13v2M15 13v2" />
+              </svg>
+            </span>
+            <span class="task-copy">
+              <span class="title-row">
+                <svg class="status-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 8v4M12 16h.01" />
+                </svg>
+                <span class="task-title">运行相关测试</span>
+              </span>
+              <span class="meta">
+                <span>Claude Code</span>
+                <span>失败</span>
+                <span>36s</span>
+              </span>
+            </span>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </button>
+        </article>
+
+        <article class="task-card" data-status="stopped">
+          <button
+            class="task-button"
+            type="button"
+            aria-label="展开 Subagent 详情"
+          >
+            <span class="avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8V4H8" />
+                <rect width="16" height="12" x="4" y="8" rx="2" />
+                <path d="M2 14h2M20 14h2M9 13v2M15 13v2" />
+              </svg>
+            </span>
+            <span class="task-copy">
+              <span class="title-row">
+                <svg class="status-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <rect width="6" height="6" x="9" y="9" rx="1" />
+                </svg>
+                <span class="task-title">检查持久化链路</span>
+              </span>
+              <span class="meta">
+                <span>Pi</span>
+                <span>已停止</span>
+                <span>18s</span>
+              </span>
+            </span>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </button>
+        </article>
+      </section>
+
+      <div class="note">
+        <span class="note-mark" aria-hidden="true"></span>
+        <span>
+          视觉契约来自当前 AgentTaskCard：完成与停止使用中性图标，失败使用
+          error-fg； 三种终态同时保留各自图标与文案。
+        </span>
+      </div>
+    </main>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const initialTheme = params.get("theme") === "dark" ? "dark" : "light";
+      const root = document.documentElement;
+      const themeName = document.getElementById("theme-name");
+      const buttons = document.querySelectorAll("[data-theme-choice]");
+
+      function applyTheme(theme) {
+        root.dataset.theme = theme;
+        themeName.textContent = `cindy-${theme}`;
+        buttons.forEach((button) => {
+          button.setAttribute(
+            "aria-pressed",
+            String(button.dataset.themeChoice === theme),
+          );
+        });
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set("theme", theme);
+        window.history.replaceState(null, "", nextUrl);
+      }
+
+      buttons.forEach((button) => {
+        button.addEventListener("click", () =>
+          applyTheme(button.dataset.themeChoice),
+        );
+      });
+
+      applyTheme(initialTheme);
+    </script>
+  </body>
+</html>

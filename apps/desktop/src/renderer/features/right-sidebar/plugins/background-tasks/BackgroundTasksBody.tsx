@@ -50,11 +50,9 @@ import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import {
-  getSessionDeviceId,
-  useRemoteDevices,
-} from '@/features/device-link/remoteProjectsStore';
+import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -232,20 +230,43 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
     },
     [sessionId, taskId, stopping],
   );
-  return (
+  const actionLabel = t('rightSidebar.backgroundTasks.stop');
+  const label = stopping
+    ? `${actionLabel} — ${t('rightSidebar.backgroundTasks.stopping')}`
+    : actionLabel;
+  const button = (
     <button
       type="button"
       onClick={handleStop}
       disabled={stopping}
-      aria-label={t('rightSidebar.backgroundTasks.stop')}
-      title={t('rightSidebar.backgroundTasks.stop')}
+      aria-label={actionLabel}
+      aria-hidden={stopping ? true : undefined}
       className={cn(
         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         stopping && 'cursor-default opacity-50',
       )}
     >
       <Square size={12} aria-hidden="true" />
     </button>
+  );
+
+  return (
+    <Tip text={label} side="bottom">
+      {stopping ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={label}
+          tabIndex={0}
+          className="inline-flex rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
+    </Tip>
   );
 }
 
@@ -443,15 +464,16 @@ function WorkflowDetail({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--border-default)] px-2 py-1.5">
-        <button
-          type="button"
-          onClick={onBack}
-          aria-label={t('rightSidebar.backgroundTasks.back')}
-          title={t('rightSidebar.backgroundTasks.back')}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-        >
-          <ArrowLeft size={14} aria-hidden="true" />
-        </button>
+        <Tip text={t('rightSidebar.backgroundTasks.back')} side="bottom">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label={t('rightSidebar.backgroundTasks.back')}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+          </button>
+        </Tip>
         <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
           <Workflow size={12} aria-hidden="true" />
         </span>

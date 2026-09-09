@@ -24,6 +24,7 @@
  */
 
 import { ArrowDown } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 
@@ -42,6 +43,7 @@ export function JumpToBottomChip({
   onClick,
   bottomOffset,
 }: JumpToBottomChipProps) {
+  const { t } = useTranslation();
   return (
     <div
       aria-live="polite"
@@ -57,7 +59,7 @@ export function JumpToBottomChip({
     >
       <button
         type="button"
-        aria-label="跳到底部"
+        aria-label={t('chat.jumpToBottom')}
         onClick={onClick}
         className={cn(
           // 与 NewMessageIndicator 同款 pill 外形 (h-8 / px-3 py-1.5)
@@ -76,7 +78,7 @@ export function JumpToBottomChip({
         <ArrowDown size={14} className="shrink-0" />
         {/* translate-y-[0.5px]:leading-none + 中文字符相对 icon 视觉中心偏上,
             微调 0.5px 下移让"跳到底部"和向下箭头的视觉中线对齐。 */}
-        <span className="translate-y-[0.5px]">跳到底部</span>
+        <span className="translate-y-[0.5px]">{t('chat.jumpToBottom')}</span>
       </button>
     </div>
   );

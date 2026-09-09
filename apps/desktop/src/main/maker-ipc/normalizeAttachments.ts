@@ -55,6 +55,7 @@ let tempAttachmentOwner: ReviewRunOwner = {
   instanceId: randomUUID(),
   processId: process.pid,
 };
+let ensureTempAttachmentOwnerLiveness: (() => Promise<void>) | null = null;
 
 interface TempAttachmentOwnerRecord {
   version: 1;
@@ -64,8 +65,12 @@ interface TempAttachmentOwnerRecord {
 }
 
 /** Share the exact Main-process identity used by Review lifecycle recovery. */
-export function configureTempAttachmentOwner(owner: ReviewRunOwner): void {
+export function configureTempAttachmentOwner(
+  owner: ReviewRunOwner,
+  ensureOwnerLiveness?: () => Promise<void>,
+): void {
   tempAttachmentOwner = owner;
+  ensureTempAttachmentOwnerLiveness = ensureOwnerLiveness ?? null;
 }
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -191,6 +196,11 @@ async function ensureTempOwnerRoot(): Promise<string> {
   const pending = TEMP_OWNER_ROOT_PREPARATIONS.get(ownerRoot);
   if (pending) return pending;
   const preparation = (async () => {
+    // The cleanup boundary is shared across Desktop instances. Persist an
+    // exact incarnation proof before any ordinary turn can leave temporary
+    // attachment bytes behind; PID-only records become ambiguous after PID
+    // reuse and cannot safely be reclaimed on a fixed deadline.
+    await ensureTempAttachmentOwnerLiveness?.();
     await fs.mkdir(sharedRoot, { recursive: true, mode: 0o700 });
     await assertRealTempDirectory(sharedRoot);
     await fs.chmod(sharedRoot, 0o700);
@@ -271,10 +281,18 @@ type AttachmentBlock = {
   type: 'image' | 'file';
   path?: string;
   base64?: string;
+  managedUrl?: string;
   mimeType?: string;
   pathOrigin?: 'desktop-host';
 };
 type UserMessageShape = string | { type: 'user'; content: string | RawBlock[] };
+
+function trustedManagedImageUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.startsWith('xdt-image://')) return value;
+  if (value.startsWith('cindy-media://blobs/')) return value;
+  return undefined;
+}
 
 /** 旧引用没有完整性声明；新引用由共享 parser 保证 size/sha256 同时合法。 */
 function integrityForRef(ref: AttachmentOssRef): AttachmentIntegrity | undefined {
@@ -300,6 +318,10 @@ export async function normalizeUserMessage(
     }
 
     const block = { ...raw } as AttachmentBlock & { type: 'image' | 'file' };
+    const managedUrl = block.type === 'image' ? trustedManagedImageUrl(block.path) : undefined;
+    // This IPC boundary does not trust a renderer-supplied identity field. Only
+    // derive it from a Host-managed path that is successfully resolved below.
+    delete block.managedUrl;
     const isDesktopHostImage = block.type === 'image' && (
       block.pathOrigin === 'desktop-host'
       || Boolean(block.base64)
@@ -364,6 +386,7 @@ export async function normalizeUserMessage(
         if (!block.mimeType && mimeType !== 'application/octet-stream') {
           block.mimeType = mimeType;
         }
+        if (managedUrl) block.managedUrl = managedUrl;
       } catch (e) {
         log.warn('xdt-image resolve failed, dropping attachment', {
           url: block.path,
@@ -380,6 +403,7 @@ export async function normalizeUserMessage(
         const { absPath, mimeType } = cindyMediaBlobStore.resolveSafe(block.path);
         block.path = absPath;
         if (!block.mimeType) block.mimeType = mimeType;
+        if (managedUrl) block.managedUrl = managedUrl;
       } catch (e) {
         log.warn('cindy-media resolve failed, dropping attachment', {
           url: block.path,
@@ -900,6 +924,7 @@ export async function materializeDirectSendOssAttachments(
     }
     const originalPath = (original as { path?: unknown }).path;
     const pathValue = (materialized as { path?: unknown }).path;
+    const managedUrl = (materialized as { url?: unknown }).url;
     if (
       isOssRefField(originalPath) &&
       typeof pathValue === 'string' &&
@@ -908,7 +933,7 @@ export async function materializeDirectSendOssAttachments(
       const isImage = (original as { type?: unknown }).type === 'image';
       nextContent[attachmentIndexes[index]] = {
         ...(original as object),
-        path: pathValue,
+        path: isImage && trustedManagedImageUrl(managedUrl) ? managedUrl : pathValue,
         ...(isImage ? { pathOrigin: 'desktop-host' as const } : {}),
         base64: undefined,
       };

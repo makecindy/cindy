@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { decodeRemoteErrorMessage } from '@/lib/makerChatStore';
 
 describe('decodeRemoteErrorMessage', () => {
+  it.each([
+    ['MCP_APPROVAL_AUTO_BLOCKED', 'Automatic approval review blocked this tool call. No manual rejection was received.'],
+    ['MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.'],
+    ['MCP_APPROVAL_CONFIRMATION_UNAVAILABLE', 'Permission confirmation could not be completed. No manual rejection was received.'],
+  ])('explains %s without blaming the user', (code, text) => {
+    expect(decodeRemoteErrorMessage(`[${code}] fallback`)).toBe(text);
+  });
+
   it('maps user-facing device-link chat errors to i18n text', () => {
     expect(decodeRemoteErrorMessage('[DEVICE_LINK_CONTROL_DISABLED] device control is disabled locally')).toBe(
       'Control for this device is off; the message was not sent.',
@@ -28,5 +36,15 @@ describe('decodeRemoteErrorMessage', () => {
 
   it('decodes remote agent errors while preserving fallback text for missing keys', () => {
     expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
+  });
+
+  it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
+    expect(
+      decodeRemoteErrorMessage(
+        '[AUTO_REVIEW_CONFIRM_UNDELIVERED] Automatic review was unavailable, and the confirmation request was not completed.',
+      ),
+    ).toBe(
+      'Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.',
+    );
   });
 });

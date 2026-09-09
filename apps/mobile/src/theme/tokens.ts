@@ -89,6 +89,10 @@ export interface ThemeColors {
   brandSplashForeground: string;
   /** App 内品牌 splash 二级文案 */
   brandSplashMuted: string;
+  /** Beta 测试渠道已开启徽标红底(用户指定,跨主题不变) */
+  betaChannelBadgeBackground: string;
+  /** Beta 测试渠道已开启徽标白字(与红底对比度 4.98:1) */
+  betaChannelBadgeForeground: string;
   /** Chip / pill / 选中行填充 */
   surfaceChip: string;
   /** 1px 分隔线 / 边框(桌面 Board) */
@@ -394,6 +398,8 @@ export const lightColors: ThemeColors = {
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
+  betaChannelBadgeBackground: '#DF0C27',
+  betaChannelBadgeForeground: '#FFFFFF',
   surfaceChip: '#F1F1F1',
   border: '#C6C9CE', // 试穿 B 档(原 #DCDFE3,light 对 #EDEDED 仅 1.14:1 太弱 → 1.42:1)
   borderTranslucent: 'rgba(198, 201, 206, 0.62)',
@@ -466,6 +472,8 @@ export const darkColors: ThemeColors = {
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
+  betaChannelBadgeBackground: '#DF0C27',
+  betaChannelBadgeForeground: '#FFFFFF',
   surfaceChip: '#2F2D2D',
   border: '#434343',
   borderTranslucent: 'rgba(67, 67, 67, 0.62)',

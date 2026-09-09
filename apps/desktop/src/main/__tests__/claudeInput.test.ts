@@ -49,6 +49,41 @@ describe('Claude Code SDK input', () => {
     expect(imageResizer.process).toHaveBeenCalledWith(imagePath);
   });
 
+  it('keeps the original Host-managed URI visible when native image bytes are resized', async () => {
+    const tempDir = await createTempDir();
+    const imagePath = path.join(tempDir, 'managed-source.png');
+    const resizedPath = path.join(tempDir, 'managed-resized.webp');
+    const managedUrl = 'xdt-image://managed-session/managed.png';
+    const resizedBytes = Buffer.from('RIFF0000WEBP', 'ascii');
+    await fs.writeFile(resizedPath, resizedBytes);
+    const imageResizer = {
+      process: vi.fn(async () => resizedPath),
+      validateBuffer: vi.fn(async () => true),
+    };
+
+    const result = await toClaudeSdkContent([
+      { type: 'image', path: imagePath, managedUrl, mimeType: 'image/png' },
+      { type: 'text', text: 'Edit this image' },
+    ], imageResizer);
+
+    expect(result).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/webp',
+          data: resizedBytes.toString('base64'),
+        },
+      },
+      {
+        type: 'text',
+        text: expect.stringContaining(JSON.stringify({ image: 1, uri: managedUrl })),
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(imagePath);
+    expect(JSON.stringify(result)).not.toContain(resizedPath);
+  });
+
   it('uses the resized file format and bytes for the native image block', async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, 'large.png');

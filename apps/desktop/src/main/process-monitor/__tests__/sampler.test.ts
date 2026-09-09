@@ -283,7 +283,36 @@ describe('createProcessMonitorSampler', () => {
     expect(entryByPid(sample, 100)?.kind).toBe('main');
     expect(log.warn).toHaveBeenCalledWith(
       'process monitor os scan failed',
-      expect.objectContaining({ error: 'ps blew up' }),
+      expect.objectContaining({
+        childProcessSource: 'process-monitor.os-process-scan',
+        error: 'ps blew up',
+      }),
     );
+  });
+
+  it('Windows active sampling does not await OS scan before its first frame', async () => {
+    let resolveScan!: (snapshot: OsProcessSnapshot) => void;
+    const pendingScan = new Promise<OsProcessSnapshot>((resolve) => {
+      resolveScan = resolve;
+    });
+    const { sampler } = makeHarness({
+      metrics: [metric({ pid: 100, type: 'Browser' })],
+      deps: {
+        deferOsScan: true,
+        scanOsProcesses: () => pendingScan,
+      },
+    });
+
+    const first = await sampler.sample();
+    expect(first.entries).toHaveLength(1);
+    expect(entryByPid(first, 100)?.kind).toBe('main');
+
+    resolveScan(
+      snapshotOf([osRow({ pid: 501, ppid: SELF_PID, cmdLineLower: 'x claude-marker y' })]),
+    );
+    await pendingScan;
+    await Promise.resolve();
+
+    expect(entryByPid(await sampler.sample(), 501)?.kind).toBe('agent-claude');
   });
 });

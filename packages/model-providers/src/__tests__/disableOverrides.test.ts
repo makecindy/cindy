@@ -13,7 +13,12 @@ import { describe, expect, it } from 'vitest';
 
 import { actualSourceIdForModel, buildRegistry, connectedProvidersForAgent, effectiveSourceIdForModel, sourcesForModel } from '../registry.js';
 import { deriveModelList, deriveModelSections } from '../modelList.js';
-import { isModelDisabled, isProviderDisabled, modelDisableKey } from '../disableOverrides.js';
+import {
+  isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
+  isProviderDisabled,
+  modelDisableKey,
+} from '../disableOverrides.js';
 import type { Catalog, CatalogModel, Provider } from '../types.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
@@ -51,6 +56,26 @@ describe('disableOverrides 决策函数', () => {
     expect(isProviderDisabled(access, 'alpha')).toBe(false);
     expect(isModelDisabled(undefined, 'alpha', 'claude-opus-5')).toBe(false);
     expect(isProviderDisabled(undefined, 'alpha')).toBe(false);
+  });
+
+  it('旧裸 modelId 仅在当前 namespaced 候选唯一时继承停用状态', () => {
+    const access = { disabledModels: { 'xd:gpt-image-2': true } };
+    expect(
+      isModelDisabledWithUniqueLegacyBasename(
+        access,
+        'xd',
+        'openai/gpt-image-2',
+        ['openai/gpt-image-2'],
+      ),
+    ).toBe(true);
+    expect(
+      isModelDisabledWithUniqueLegacyBasename(
+        access,
+        'xd',
+        'openai/gpt-image-2',
+        ['openai/gpt-image-2', 'other/gpt-image-2'],
+      ),
+    ).toBe(false);
   });
 });
 

@@ -15,24 +15,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { wizardSpy, providersState, codexAuthState, codexAuthActions, toastError } = vi.hoisted(
-  () => ({
-    wizardSpy: vi.fn(),
-    providersState: { providers: [] as unknown[], order: [] as string[] },
-    codexAuthState: {
-      state: { kind: 'unauthenticated' } as Record<string, unknown>,
-      reconnectCredentialScope: undefined as string | undefined,
-      recoveryCheck: 'idle' as 'idle' | 'checking' | 'failed',
-    },
-    codexAuthActions: {
-      refresh: vi.fn(async () => undefined),
-      triggerLogin: vi.fn(async () => 'authenticated'),
-      cancelLogin: vi.fn(async () => undefined),
-      logout: vi.fn(async () => undefined),
-    },
-    toastError: vi.fn(),
-  }),
-);
+const {
+  wizardSpy,
+  providersState,
+  codexAuthState,
+  codexAuthActions,
+  toastError,
+  setModelVisibilitiesSpy,
+  customDialogSpy,
+} = vi.hoisted(() => ({
+  wizardSpy: vi.fn(),
+  providersState: { providers: [] as unknown[], order: [] as string[] },
+  codexAuthState: {
+    state: { kind: 'unauthenticated' } as Record<string, unknown>,
+    reconnectCredentialScope: undefined as string | undefined,
+    recoveryCheck: 'idle' as 'idle' | 'checking' | 'failed',
+  },
+  codexAuthActions: {
+    refresh: vi.fn(async () => undefined),
+    triggerLogin: vi.fn(async () => 'authenticated'),
+    cancelLogin: vi.fn(async () => undefined),
+    logout: vi.fn(async () => undefined),
+  },
+  toastError: vi.fn(),
+  setModelVisibilitiesSpy: vi.fn(() => true),
+  customDialogSpy: vi.fn(),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
@@ -53,7 +61,8 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
-  isChatGptConnectionConnected: () => false,
+  isChatGptConnectionConnected: (state: { kind?: string; authSource?: string }) =>
+    state.kind === 'authenticated' && state.authSource === 'oauth',
   useCodexAuth: () => ({
     ...codexAuthState,
     ...codexAuthActions,
@@ -78,6 +87,12 @@ vi.mock('@/lib/toast', () => ({
 
 vi.mock('@/lib/customProviders', () => ({
   deleteCustomProvider: vi.fn(),
+  providerViewToCustomProviderConfig: (provider: ProviderView) => ({
+    id: provider.id,
+    name: provider.name,
+    auth: provider.auth,
+    runtimes: {},
+  }),
   readCustomProviderKey: vi.fn(async () => null),
   updateCustomProvider: vi.fn(),
 }));
@@ -93,13 +108,16 @@ vi.mock('@/lib/providerSubtitle', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: () => true,
-  setManyVisibility: vi.fn(),
+  setModelVisibilities: setModelVisibilitiesSpy,
   setModelVisibility: vi.fn(),
   useModelVisibilityVersion: () => 0,
 }));
 
 vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+  CustomProviderDialog: (props: unknown) => {
+    customDialogSpy(props);
+    return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' });
+  },
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
@@ -178,7 +196,60 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
-  it('ChatGPT 系统共享登录失效时显示来源说明并在 Cindy 中重新登录', async () => {
+  it('Dev 只读复用 OpenAI 登录态时保持已连接且不能断开', async () => {
+    codexAuthState.state = {
+      kind: 'authenticated',
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    };
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        agents: ['codex', 'claude-code'],
+        connected: true,
+        models: { codex: [], 'claude-code': [] },
+      }),
+    ];
+    renderAt('?tab=providers&connect=openai');
+
+    const disconnect = await screen.findByRole('button', {
+      name: 'settings.providers.button.disconnect',
+    });
+    expect((disconnect as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(disconnect);
+    expect(codexAuthActions.logout).not.toHaveBeenCalled();
+  });
+
+  it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
+    codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked' };
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [
+            {
+              id: 'gpt-6',
+              name: 'GPT-6',
+              contextWindow: 272_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    renderAt('?tab=providers&connect=openai');
+    const toggle = (await screen.findByRole('switch', { name: 'GPT-6' })) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(setModelVisibilitiesSpy).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.providers.models.manage.connectionRequired')).toBeTruthy();
+  });
+
+  it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -201,13 +272,13 @@ describe('ProvidersSection — 深链定位', () => {
       'var(--remote-status-failed)',
     );
     expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
 
-    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledOnce());
-    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
+    await waitFor(() => expect(window.electronAPI.openChatGPTApp).toHaveBeenCalledOnce());
+    expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
   });
 
-  it('ChatGPT 系统共享重新登录被取消时保留恢复入口', async () => {
+  it('ChatGPT 系统共享打开 App 后保留恢复入口', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -222,15 +293,13 @@ describe('ProvidersSection — 深链定位', () => {
         models: { codex: [], 'claude-code': [] },
       }),
     ];
-    codexAuthActions.triggerLogin.mockResolvedValueOnce('cancelled');
     renderAt('?tab=providers&connect=openai');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
 
-    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledOnce());
+    await waitFor(() => expect(window.electronAPI.openChatGPTApp).toHaveBeenCalledOnce());
     expect(toastError).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).not.toBeNull();
-    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' })).not.toBeNull();
   });
 
   it('connect=anthropic(未占行内置渠道)→ 向导 builtin 直达;参数消费后清除', async () => {
@@ -258,6 +327,72 @@ describe('ProvidersSection — 深链定位', () => {
       expect(screen.getByText('settings.providers.anthropic.title')).not.toBeNull(),
     );
     expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it.each([true, false])(
+    '内置供应商深链会定位目标模型行（默认显示：%s）',
+    async (defaultEnabled) => {
+      providersState.providers = [
+        makeProvider('openai', {
+          name: 'OpenAI',
+          connected: true,
+          agents: ['codex'],
+          models: {
+            codex: [
+              {
+                id: 'gpt-unknown',
+                defaultEnabled,
+                name: 'GPT Unknown',
+                contextWindow: 0,
+                efforts: [],
+                defaultEffort: null,
+              },
+            ],
+          },
+        }),
+      ];
+      const view = renderAt('?tab=providers&connect=openai&model=gpt-unknown&agent=codex');
+
+      await waitFor(() =>
+        expect(view.container.querySelector('[data-deep-link-target="true"]')).not.toBeNull(),
+      );
+      expect(screen.getByText('GPT Unknown')).not.toBeNull();
+      await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+    },
+  );
+
+  it('自定义供应商深链会打开编辑表单并定位模型上下文窗口', async () => {
+    providersState.providers = [
+      makeProvider('custom-provider', {
+        name: 'Custom Provider',
+        source: 'user',
+        connected: true,
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        models: {
+          codex: [
+            {
+              id: 'custom-model',
+              name: 'Custom Model',
+              contextWindow: 0,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    renderAt('?tab=providers&connect=custom-provider&model=custom-model&agent=codex');
+
+    expect(await screen.findByTestId('custom-provider-dialog-stub')).not.toBeNull();
+    expect(customDialogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        focusModelId: 'custom-model',
+        focusAgent: 'codex',
+        initial: expect.objectContaining({ id: 'custom-provider' }),
+      }),
+    );
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
   });
 
@@ -298,6 +433,51 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(screen.queryByTestId('wizard-stub')).not.toBeNull());
     expect(wizardSpy).toHaveBeenCalledWith(undefined);
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('统一模型开关跨 agent 一次提交，失败时提示用户', async () => {
+    providersState.providers = [
+      makeProvider('dual', {
+        name: 'Dual',
+        connected: true,
+        agents: ['claude-code', 'codex'],
+        models: {
+          'claude-code': [
+            {
+              id: 'shared',
+              name: 'Shared',
+              contextWindow: 200_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+          codex: [
+            {
+              id: 'shared',
+              name: 'Shared',
+              contextWindow: 272_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    setModelVisibilitiesSpy.mockReturnValueOnce(false);
+    renderAt('?tab=providers');
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Shared' }));
+
+    expect(setModelVisibilitiesSpy).toHaveBeenCalledOnce();
+    expect(setModelVisibilitiesSpy).toHaveBeenCalledWith(
+      'dual',
+      [
+        { agent: 'claude-code', modelId: 'shared' },
+        { agent: 'codex', modelId: 'shared' },
+      ],
+      false,
+    );
+    expect(toastError).toHaveBeenCalledWith('settings.providers.models.visibilityWriteFailed');
   });
 
   it('authorization-code 自定义供应商登录期间卸载时取消本视图拥有的授权', async () => {

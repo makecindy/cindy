@@ -6,7 +6,13 @@
  * 与现有 httpClient 错误对齐。
  */
 
-import type { OrcaRole, Session, SessionStatus, WorkspaceKind } from '@/lib/ccAgent.types';
+import type {
+  OrcaRole,
+  Session,
+  SessionStatus,
+  UsageHistorySession,
+  WorkspaceKind,
+} from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
 import { extractIpcError } from '@/utils/ipcError';
 // device-link 透明对等:fork / rewind 按 sessionId 来源路由(本机 → 本地 maker,
@@ -26,6 +32,10 @@ import type { SessionReference } from '../../shared/sessionReference';
  */
 export type ListStatusFilter = 'active' | 'archived' | 'all';
 
+export type SessionStatusWriteTarget =
+  | { kind: 'local' }
+  | { kind: 'device-link'; deviceId: string };
+
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
     const ipcError = extractIpcError(err);
@@ -44,11 +54,42 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 // settled rows must not become a stale renderer cache.
 const getInFlight = new Map<string, Promise<Session>>();
 
+export type SessionListOptions = {
+  includePinned?: boolean;
+  /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
+  fresh?: boolean;
+  /** 用量历史页读取完整会话候选集，跳过侧栏的 1000 行上限与消息预览。 */
+  usageHistory?: boolean;
+};
+
+type SessionListRegularOptions = Omit<SessionListOptions, 'usageHistory'> & {
+  usageHistory?: false | undefined;
+};
+type SessionListUsageOptions = Omit<SessionListOptions, 'usageHistory'> & {
+  usageHistory: true;
+};
+
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListRegularOptions,
+): Promise<Session[]>;
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListUsageOptions,
+): Promise<UsageHistorySession[]>;
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListOptions,
+): Promise<Session[] | UsageHistorySession[]>;
 export async function list(
   limit: number = 20,
   status?: ListStatusFilter,
-): Promise<Session[]> {
-  return wrap(window.electronAPI.localDb.sessions.list(limit, status));
+  options?: SessionListOptions,
+): Promise<Session[] | UsageHistorySession[]> {
+  return wrap(window.electronAPI.localDb.sessions.list(limit, status, options));
 }
 
 export async function create(body?: {
@@ -65,6 +106,7 @@ export async function create(body?: {
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];
+  writableDirs?: string[];
   /** Remote codex session (P2): 远端 SSH host alias。设置后 workingDir 须为
    *  远端绝对路径; codex agent 跑在远端机器, 本地不 spawn。 */
   remoteHostId?: string;
@@ -142,6 +184,7 @@ export async function update(
     orcaRole?: OrcaRole | null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
     extraDirs?: string[];
+    writableDirs?: string[];
     /**
      * per-session 来源(供应商)选择,持久化到 sessions.provider_id(与 model/effort 同模式)。
      * null = 清除显式选择,回落默认路由。运行时即时生效由 maker.setModel 的第 3 参负责;
@@ -178,9 +221,54 @@ export async function patchMeta(
   return update(sessionId, patch);
 }
 
+/**
+ * Resolve one status mutation before the caller starts local optimistic convergence.
+ *
+ * A restored/copied database can contain the same session id as a task mirrored from a
+ * device that the user has disabled controlling. Sticky origin deliberately survives
+ * mirror removal, so only prefer the local row when both facts are proven: that exact
+ * device is disabled locally and the current local database contains the id. Any lookup
+ * failure stays pinned to the remote device (fail closed) instead of risking a local write.
+ */
+export async function resolveStatusWriteTarget(
+  sessionId: string,
+): Promise<SessionStatusWriteTarget> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return { kind: 'local' };
+
+  try {
+    const state = await window.electronAPI.deviceLink.getState();
+    if (!state.disabledControlDeviceIds?.includes(deviceId)) {
+      return { kind: 'device-link', deviceId };
+    }
+  } catch {
+    return { kind: 'device-link', deviceId };
+  }
+
+  try {
+    await get(sessionId);
+    return { kind: 'local' };
+  } catch {
+    return { kind: 'device-link', deviceId };
+  }
+}
+
 /** status 切换便捷封装(archive 一并 unpin)。 */
-export async function setStatus(sessionId: string, status: SessionStatus): Promise<Session> {
-  return patchMeta(sessionId, status === 'archived' ? { status, pinnedAt: null } : { status });
+export async function setStatus(
+  sessionId: string,
+  status: SessionStatus,
+  target?: SessionStatusWriteTarget,
+): Promise<Session> {
+  const patch = status === 'archived' ? { status, pinnedAt: null } : { status };
+  const resolvedTarget = target ?? (await resolveStatusWriteTarget(sessionId));
+  if (resolvedTarget.kind === 'local') return update(sessionId, patch);
+  return wrap(
+    window.electronAPI.deviceLink.invoke(
+      resolvedTarget.deviceId,
+      'local-db:sessions:patch-meta',
+      [sessionId, patch],
+    ) as Promise<Session>,
+  );
 }
 
 /**

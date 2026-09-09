@@ -1,6 +1,8 @@
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
+import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
+import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
 export type RemoteMessageRole =
@@ -33,6 +35,11 @@ export interface RemoteSession {
   effort: string;
   permissionMode: string;
   fastMode: boolean;
+  /** Temporary host runtime route; optional for older controlled Desktop versions. */
+  runtimeGeneration?: number;
+  runtimeBaseline?: RemoteSessionRuntimeProfile;
+  runtimeEffective?: RemoteSessionRuntimeProfile;
+  runtimePending?: RemoteSessionRuntimePending | null;
   /** 计划模式一级开关(#494,与 permissionMode 正交)。被控端 sessionToCamel 带出,
    *  一次性消耗(plan_mode_changed)后经 sessions:patched 回流置 false;老被控端缺省。 */
   planModeEnabled?: boolean;
@@ -52,6 +59,8 @@ export interface RemoteSession {
    *  原样透出,startedAt > endedAt 且未被 /clear 越过 = 上次 turn 因应用退出被中断,
    *  见桌面 sessionActiveTurn.ts)。老被控端缺省 → 判定恒不命中,banner 不出现。 */
   activeTurnStartedAt?: number | null;
+  /** Host-confirmed pre-boot interruption generation; absent on older hosts. */
+  interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
   agentKind: 'cc' | 'codex' | 'pi';
@@ -83,6 +92,20 @@ export interface RemoteSession {
   pendingLocalCreation?: boolean;
 }
 
+export interface RemoteSessionRuntimeProfile {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  model: string;
+  providerId: string | null;
+  effort: string | null;
+  fastMode: boolean;
+}
+
+export interface RemoteSessionRuntimePending {
+  generation: number;
+  source: 'agent' | 'fallback';
+  profile: RemoteSessionRuntimeProfile;
+}
+
 export interface RemoteMessage {
   id: string;
   clientId: string;
@@ -94,8 +117,10 @@ export interface RemoteMessage {
   toolUseId: string | null;
   agentMeta: Record<string, unknown> | null;
   createdAt: string;
+  /** Large settled tool input released from the transcript mirror and recoverable by message id. */
+  mobileToolInputProjection?: MobileToolInputProjection;
   systemCardData?: Record<string, unknown>;
-  systemCardType?: 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'auto-resume' | 'learn' | 'agent-switch';
+  systemCardType?: 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch';
 }
 
 export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office';
@@ -220,6 +245,10 @@ export interface InputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Stable error reason for live projections; older controlled hosts may omit it. */
+  errorReason?: string | null;
+  /** Bounded details for tool-loop errors; older projections may omit them. */
+  toolLoop?: MobileToolLoopErrorDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   autoResumePending?: Record<string, unknown> | null;

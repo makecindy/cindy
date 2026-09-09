@@ -35,7 +35,7 @@ export function resolveIOSSimulatorPluginAccess(
   workingDir: string | null,
   deps: IOSSimulatorPluginGateDeps,
 ): IOSSimulatorMcpAccessDecision {
-  const candidates = ghosts.filter((ghost) => ghost.manifest.slots.includes('ios-simulator'));
+  const candidates = ghosts.filter((ghost) => ghost.manifest.iosSimulator === true);
   if (candidates.length === 0) {
     return {
       allowed: false,

@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -192,14 +193,28 @@ export function SessionShareExportDialog({
                     color: 'var(--confirm-title)',
                   }}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPass((v) => !v)}
-                  aria-label={t(showPass ? 'sessionShare.export.hidePassword' : 'sessionShare.export.showPassword')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                <Tip
+                  text={t(
+                    showPass
+                      ? 'sessionShare.export.hidePassword'
+                      : 'sessionShare.export.showPassword',
+                  )}
+                  side="bottom"
+                  contentClassName="z-[10001]"
                 >
-                  {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPass((v) => !v)}
+                    aria-label={t(
+                      showPass
+                        ? 'sessionShare.export.hidePassword'
+                        : 'sessionShare.export.showPassword',
+                    )}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  >
+                    {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </Tip>
               </div>
               <input
                 type={showPass ? 'text' : 'password'}
@@ -215,7 +230,11 @@ export function SessionShareExportDialog({
               />
               {(mismatch || tooShort) && (
                 <p className="text-xs" style={{ color: 'var(--error-fg)' }}>
-                  {t(mismatch ? 'sessionShare.export.passwordMismatch' : 'sessionShare.export.passwordTooShort')}
+                  {t(
+                    mismatch
+                      ? 'sessionShare.export.passwordMismatch'
+                      : 'sessionShare.export.passwordTooShort',
+                  )}
                 </p>
               )}
             </div>

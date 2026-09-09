@@ -28,6 +28,7 @@ import type { SchedulerDrizzleDb } from '../storage';
  */
 export interface BackfillSessionMetaPatch {
   effort?: string;
+  fastMode?: boolean;
   /**
    * heartbeat 模式 schedule.model 覆盖了绑定 session 的旧 model 时落库，
    * 让 chat UI model picker 与下次 fire 读到的 meta.model 跟实际运行一致。
@@ -47,9 +48,9 @@ export interface BackfillSessionMetaPatch {
    * 落库的权限模式。缺省 'bypassPermissions'(scheduler unattended 语义不变);
    * learn-host 传 'acceptEdits' —— 蒸馏会话建会话时已降权,若这里放任默认值
    * 写回 bypass,app 重启后 lazy-resume 会按 sessions 行重建 createOpts,修订
-   * 回合就逃出了降权约束(Codex review)。
+   * 回合就逃出了降权约束(Codex review)。null 保留目标已有权限，伙伴例行任务使用此语义。
    */
-  permissionMode?: string;
+  permissionMode?: string | null;
 }
 
 export async function backfillSessionMeta(
@@ -60,10 +61,11 @@ export async function backfillSessionMeta(
 ): Promise<void> {
   try {
     const patch: Record<string, unknown> = {
-      permissionMode: meta.permissionMode ?? 'bypassPermissions',
       updatedAt: Date.now(),
     };
+    if (meta.permissionMode !== null) patch.permissionMode = meta.permissionMode ?? 'bypassPermissions';
     if (meta.effort) patch.effort = meta.effort;
+    if (meta.fastMode !== undefined) patch.fastMode = meta.fastMode;
     if (meta.model) patch.model = meta.model;
     if (meta.providerId) patch.providerId = meta.providerId;
     if (meta.workspaceKind) patch.workspaceKind = meta.workspaceKind;

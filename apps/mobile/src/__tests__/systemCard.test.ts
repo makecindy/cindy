@@ -105,9 +105,8 @@ describe('systemCard', () => {
     expect(formatMobileSystemCard('compact', {
       detail: 'Compacted 20 messages',
     })).toEqual({
-      title: 'Compact',
+      title: i18n.t('message.systemCard.compact.auto'),
       rows: [],
-      body: 'Compacted 20 messages',
     });
 
     expect(formatMobileSystemCard('cmd', {
@@ -138,6 +137,47 @@ describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {
     expect(formatMobileSystemCard('goal-resumed', undefined).title).toBe(
       i18n.t('message.systemCard.goalResumed'),
     );
+  });
+});
+
+describe('compact and context-rebuild notices', () => {
+  it('only reports savings when both token counts are known', () => {
+    for (const postTokens of [undefined, NaN, Infinity, -1, '1000']) {
+      expect(formatMobileSystemCard('compact', { preTokens: 25000, postTokens }).title)
+        .toBe(i18n.t('message.systemCard.compact.auto'));
+    }
+    expect(formatMobileSystemCard('compact', {
+      trigger: 'manual', preTokens: 25000, postTokens: 1000, durationMs: 2400,
+    }).title).toBe([
+      i18n.t('message.systemCard.compact.manual'),
+      i18n.t('message.systemCard.compact.savedTokens', { tokens: '24.0k' }),
+      '2.4s',
+    ].join(' · '));
+  });
+
+  it.each([
+    ['context-overflow', 'labelOverflow'],
+    ['pi-prompt-timeout', 'labelTimeout'],
+    ['codex-history-strip', 'labelStrip'],
+    ['future-reason', 'labelOverflow'],
+  ])('preserves the reason for %s without exposing a handoff as message body', (reason, key) => {
+    expect(formatMobileSystemCard('context-rebuild', { reason, handoff: '  ' })).toEqual({
+      title: i18n.t(`message.systemCard.contextRebuild.${key}`), rows: [],
+    });
+  });
+
+  it('preserves the handoff and only labels English when its terminal marker matches', () => {
+    const marker = "; the user's new message follows ==";
+    for (const [handoff, key] of [
+      ['旧交接正文', 'handoffTitle'],
+      [`Quoted ${marker}\n旧交接结尾`, 'handoffTitle'],
+      [`Summary ${marker}\n`, 'handoffTitleEnglishSource'],
+    ]) {
+      expect(formatMobileSystemCard('context-rebuild', { handoff })).toMatchObject({
+        body: handoff,
+        subtitle: i18n.t(`message.systemCard.contextRebuild.${key}`),
+      });
+    }
   });
 });
 

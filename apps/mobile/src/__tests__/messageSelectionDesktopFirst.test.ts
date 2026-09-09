@@ -41,6 +41,19 @@ describe('mobile message text selection', () => {
 
     // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');
+    // Agent 回复二次测宽:stretch 量到像素宽后钉死,避免 UITextView 首帧偏矮被列表裁切。
+    expect(markdownBodySource).toContain('nextSettledContentWidth');
+    expect(markdownBodySource).toContain('collapsable={false}');
+    expect(markdownBodySource).toContain('onLayout={handleSettledWidthLayout}');
+    expect(markdownBodySource).toContain('pinContentWidth');
+    expect(markdownBodySource).toContain('pinSettledWidth');
+    expect(markdownBodySource).toContain("pinContentWidth ? { alignSelf: 'stretch' } : null");
+    expect(markdownBodySource).toContain(
+      'style={pinSettledWidth ? { width: contentWidth, maxWidth: \'100%\' } : null}',
+    );
+    expect(markdownBodySource).toContain(
+      "key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}",
+    );
     expect(markdownBodySource).not.toContain('SelectableMarkdownWebView');
     expect(source).not.toContain('SelectableMarkdownWebView');
     expect(source).not.toContain('MessageTextSelectionModal');
@@ -54,6 +67,8 @@ describe('mobile message text selection', () => {
     // 跨段选择:连续纯文本块合并进同一个原生文本视图(text_run),原生选择手柄可横跨段落。
     // Android 上长 selectable Text 分块,避免单个超高原生文本视图干扰列表测高/滚动。
     expect(markdownBodySource).toContain('ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS');
+    expect(markdownBodySource).toContain("const textRunGroupingOptions = Platform.OS === 'android'");
+    expect(markdownBodySource).not.toContain("selectable === true && Platform.OS === 'android'");
     expect(markdownBodySource).toContain('groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions)');
     expect(markdownBodySource).toContain('testID="message.markdownTextRun"');
     expect(markdownBodySource).toContain("lineHeight: layout.markdownBodyGap");

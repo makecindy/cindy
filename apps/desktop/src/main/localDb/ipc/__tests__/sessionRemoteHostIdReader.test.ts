@@ -21,6 +21,7 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../client/current', () => ({
+  getCurrentDbClientUserId: () => 'test-user',
   getDbClient: () => {
     if (h.failNext.value) {
       h.failNext.value = false;

@@ -12,6 +12,7 @@ import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import {
   calibrateDraftModel,
   pickConnectedModelForAgent,
+  pickFirstConnectedModelForAgent,
   resolveDraftSessionProviderId,
   type DraftModelCalibrationInput,
 } from '../lib/draftModelCalibration';
@@ -243,6 +244,30 @@ describe('pickConnectedModelForAgent', () => {
     pickId([gateway], 'codex', 'nonexistent');
     // 展示层依赖 ProviderView 里的原始顺序，原地 sort 会把选择器的分组顺序搅乱。
     expect(models.map((m) => m.id)).toEqual(['b', 'a']);
+  });
+});
+
+describe('pickFirstConnectedModelForAgent', () => {
+  it('忽略 newSessionDefault marker,严格返回当前可选顺序的第一项', () => {
+    const first = provider(
+      'openai',
+      true,
+      { pi: [model('chatgpt/gpt-first', { sortOrder: 0 })] },
+      'subscription',
+    );
+    const marked = provider('xd', true, {
+      pi: [
+        model('deepseek/marked', {
+          sortOrder: 0,
+          newSessionDefault: ['pi'],
+        }),
+      ],
+    });
+
+    expect(pickFirstConnectedModelForAgent([first, marked], 'pi')).toEqual({
+      model: 'chatgpt/gpt-first',
+      providerId: 'openai',
+    });
   });
 });
 
@@ -639,6 +664,25 @@ describe('校准结果要带上供应商', () => {
 });
 
 describe('resolveDraftSessionProviderId', () => {
+  it('唯一已连接来源是用户 Provider 时仍显式保留，避免 Claude 回退 Cindy gateway', () => {
+    const codingPlan = {
+      ...provider('coding-plan', true, {
+        'claude-code': [model('ark-code-latest')],
+      }),
+      source: 'user',
+    } as ProviderView;
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [codingPlan],
+        agent: 'claude-code',
+        model: 'ark-code-latest',
+        explicitProviderId: null,
+        effectiveProviderId: 'coding-plan',
+      }),
+    ).toBe('coding-plan');
+  });
+
   it('XD 已连接但不提供当前模型时,不能省略校准选中的 Anthropic 来源(issue #1196)', () => {
     const gateway = provider('xd', true, {
       'claude-code': [model('claude-sonnet-5')],

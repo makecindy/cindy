@@ -5,7 +5,7 @@
  * 插件**专属 errand 会话**里的 agent 跑一轮,把最终回复文字取回给插件。
  *
  * 安全边界(全部由本层与注入 runner 的主机代码强制,prompt 不构成边界):
- * - 插件必须声明 `agent` 槽 + `agent.errand: true`(装入确认高风险单列);
+ * - 插件必须声明 `agent` 槽 + `agent.errand: true`(插件详情高风险能力单列);
  * - 任务文本只进普通 user 消息,绝不进 system prompt;
  * - errand 会话的 agent/模型/权限档/工作目录由用户配置(runner 侧解析;
  *   权限档默认 plan 只读,协议层就没有 bypassPermissions)。唯一例外:
@@ -41,9 +41,14 @@ const MAX_JOB_ID_LEN = 64;
 /** 每插件完成态任务记录保留上限(同 cindySlot 的第二道闸)。 */
 const MAX_SETTLED_JOBS_PER_GHOST = 16;
 
+/** 派活来源：面板/卡片点击 vs MCP/调度器静默回合。由主机归因，插件不能自报。 */
+export type GhostErrandOrigin = 'user-action' | 'background';
+
 export interface GhostErrandRunRequest {
   ghostId: string;
   ghostVersion: string;
+  /** 主机归因的来源；切任务只认 user-action。 */
+  origin: GhostErrandOrigin;
   /** 已组装的最终任务消息(task + 结构化上下文;本层组装,runner 原样投递)。 */
   message: string;
   /** 首次创建对应 errand 会话时的标题提示。 */
@@ -63,6 +68,8 @@ export interface GhostErrandRunRequest {
 export interface GhostErrandRunHooks {
   /** errand 会话 id 一旦确定即回报(异步单据此让 query 尽早可见 sessionId)。 */
   onSession?(sessionId: string): void;
+  /** 忙检通过且消息已投进会话后再回报；切任务只认这一下。 */
+  onDispatched?(sessionId: string): void;
 }
 
 export type GhostErrandRunOutcome =
@@ -94,10 +101,17 @@ export interface GhostErrandSlotDeps {
   releasePipeCall?(ghostId: string, callId: string): void;
   now?: () => number;
   createJobId?: () => string;
+  /** 消费卡片点击票（与 agent.run 同一套 Host 铸造票，一次作废）。 */
+  consumeUserActionToken?(token: string, ghostId: string): boolean;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
+  /**
+   * 派活落到专属可见任务时，由主机把左侧切过去。
+   * 签字门「执行」走这条：插件自己开一间 errand 会话干活。
+   */
+  onRevealSession?: (sessionId: string) => void;
 }
 
 /** 在途/完成的派活任务记录(内存表;语义同 cindySlot 的 CindyAsyncJob)。 */
@@ -107,6 +121,10 @@ interface ErrandJob {
   status: 'running' | 'done' | 'failed';
   /** runner 一旦确定 errand 会话即回填(running 期即可见)。 */
   sessionId?: string;
+  /** 本单已经切过左侧，onSession + 收口只切一次。 */
+  revealed?: boolean;
+  /** 主机归因：只有 user-action 才切任务。 */
+  origin: GhostErrandOrigin;
   result?: { sessionId: string; text: string; agentKind?: string; model?: string };
   errorCode?: GhostAgentErrandErrorCode;
   error?: string;
@@ -130,19 +148,31 @@ export function clampErrandResultText(text: string): string {
   return `${text.slice(0, GHOST_ERRAND_MAX_RESULT_CHARS)}\n…[结果超长,已截断]`;
 }
 
+/** 面板点击到派活必须紧挨着；订阅/定时器不能吃到几分钟前的一次乱点。 */
+const USER_GESTURE_TTL_MS = 3_000;
+
 export class GhostErrandSlot {
   private readonly jobs = new Map<string, ErrandJob>();
   private readonly inFlightGhosts = new Set<string>();
   private readonly lastRunAt = new Map<string, number>();
+  /** ghostId → 主机观察到的当次点击过期时刻。 */
+  private readonly userGestures = new Map<string, number>();
   private runner: GhostErrandRunner | null;
+  private onRevealSession: ((sessionId: string) => void) | null;
 
   constructor(private readonly deps: GhostErrandSlotDeps) {
     this.runner = deps.runner ?? null;
+    this.onRevealSession = deps.onRevealSession ?? null;
   }
 
   /** maker-ipc 初始化完成后注入真实 runner;传 null 用于退出清理。 */
   setRunner(runner: GhostErrandRunner | null): void {
     this.runner = runner;
+  }
+
+  /** maker-ipc 初始化完成后注入任务聚焦；传 null 用于退出清理。 */
+  setRevealSession(reveal: ((sessionId: string) => void) | null): void {
+    this.onRevealSession = reveal;
   }
 
   /** clearGhost 只删 jobs，不删 inFlightGhosts；收口前两者可能短暂不一致。 */
@@ -152,9 +182,16 @@ export class GhostErrandSlot {
     );
   }
 
+  /** 宿主确认的真实点击（卡片按钮 / 面板 mouseDown / keyDown）。 */
+  noteUserGesture(ghostId: string): void {
+    this.sweepUserGestures();
+    this.userGestures.set(ghostId, this.now() + USER_GESTURE_TTL_MS);
+  }
+
   /** 插件停用/卸载时清除节流状态与任务记录,防止权限/信息残留。 */
   clearGhost(ghostId: string): void {
     this.lastRunAt.delete(ghostId);
+    this.userGestures.delete(ghostId);
     for (const [jobId, job] of [...this.jobs]) {
       if (job.ghostId === ghostId) this.jobs.delete(jobId);
     }
@@ -164,7 +201,7 @@ export class GhostErrandSlot {
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeAgentErrandResult> {
     this.sweepJobs();
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('agent') || ghost.manifest.agent?.errand !== true) {
+    if (!ghost?.enabled || ghost.manifest.agent?.errand !== true) {
       return fail('PERMISSION_DENIED', '插件未申请「派活取件」权限(身份卡 agent.errand),或当前未启用');
     }
     if (!isPlainObject(payload) || payload.type !== 'agent-errand-request') {
@@ -217,6 +254,16 @@ export class GhostErrandSlot {
       return fail('INVALID_REQUEST', 'callId 不合法(1–128 字符的字符串,或不传)');
     }
     const callId = (payload.callId as string | undefined) ?? 'unattributed';
+    if (
+      payload.userActionToken !== undefined &&
+      (typeof payload.userActionToken !== 'string' ||
+        payload.userActionToken.length === 0 ||
+        payload.userActionToken.length > MAX_CALL_ID_LEN)
+    ) {
+      return fail('INVALID_REQUEST', 'userActionToken 不合法');
+    }
+    const userActionToken =
+      typeof payload.userActionToken === 'string' ? payload.userActionToken : undefined;
 
     // 结构化上下文:JSON 化由主机做(确定性代码),超限明拒。
     let contextJson: string | null = null;
@@ -248,7 +295,8 @@ export class GhostErrandSlot {
     this.lastRunAt.set(ghostId, now);
     this.evictSettledJobs(ghostId);
     const jobId = (this.deps.createJobId ?? randomUUID)();
-    const job: ErrandJob = { ghostId, startedAt: now, status: 'running' };
+    const origin = this.resolveOrigin(ghostId, userActionToken);
+    const job: ErrandJob = { ghostId, startedAt: now, status: 'running', origin };
     this.jobs.set(jobId, job);
     this.inFlightGhosts.add(ghostId);
 
@@ -262,6 +310,7 @@ export class GhostErrandSlot {
       ghostId,
       jobId,
       callId,
+      origin,
       mode: payload.mode === 'wait' ? 'wait' : 'submit',
     });
 
@@ -271,6 +320,7 @@ export class GhostErrandSlot {
           {
             ghostId,
             ghostVersion: ghost.manifest.version,
+            origin,
             message,
             ...(typeof payload.title === 'string' ? { title: payload.title.trim() } : {}),
             ...(typeof payload.workingDir === 'string' ? { workingDir: payload.workingDir } : {}),
@@ -280,11 +330,16 @@ export class GhostErrandSlot {
             onSession: (sessionId) => {
               job.sessionId = sessionId;
             },
+            onDispatched: (sessionId) => {
+              job.sessionId = sessionId;
+              this.revealSessionOnce(job, sessionId);
+            },
           },
         );
         if (outcome.ok) {
           job.status = 'done';
           job.sessionId = outcome.sessionId;
+          this.revealSessionOnce(job, outcome.sessionId);
           job.result = {
             sessionId: outcome.sessionId,
             text: clampErrandResultText(outcome.text),
@@ -385,6 +440,44 @@ export class GhostErrandSlot {
       };
     }
     return fail(job.errorCode ?? 'TURN_FAILED', job.error ?? '派活失败');
+  }
+
+  private resolveOrigin(ghostId: string, userActionToken?: string): GhostErrandOrigin {
+    // 只认 Host 铸造的当次点击：卡片票，或面板 webview 上真实的 mouse/key。
+    if (
+      userActionToken &&
+      this.deps.consumeUserActionToken?.(userActionToken, ghostId) === true
+    ) {
+      this.userGestures.delete(ghostId);
+      return 'user-action';
+    }
+    if (this.consumeUserGesture(ghostId)) return 'user-action';
+    return 'background';
+  }
+
+  private consumeUserGesture(ghostId: string): boolean {
+    const expiresAt = this.userGestures.get(ghostId);
+    if (expiresAt === undefined) return false;
+    this.userGestures.delete(ghostId);
+    return expiresAt > this.now();
+  }
+
+  private sweepUserGestures(): void {
+    const now = this.now();
+    for (const [ghostId, expiresAt] of [...this.userGestures]) {
+      if (expiresAt <= now) this.userGestures.delete(ghostId);
+    }
+  }
+
+  private revealSessionOnce(job: ErrandJob, sessionId: string): void {
+    if (job.origin !== 'user-action') return;
+    if (job.revealed) return;
+    job.revealed = true;
+    try {
+      this.onRevealSession?.(sessionId);
+    } catch {
+      // 聚焦失败不能让已经受理的派活对插件变失败。
+    }
   }
 
   private now(): number {

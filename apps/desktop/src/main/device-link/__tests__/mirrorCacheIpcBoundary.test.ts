@@ -90,6 +90,17 @@ vi.mock('../index', () => ({
   restoreController: vi.fn(),
   broadcast: vi.fn(),
   deviceLinkApiBase: 'https://example.invalid',
+  applyControllerDisplayNameListSnapshot: vi.fn(),
+  applyControllerPresenceListSnapshot: vi.fn(),
+  beginControllerDisplayNameDirectoryRefresh: vi.fn(() => 1),
+  captureControllerDisplayNameRequestEpoch: () => 0,
+  captureControllerPresenceRequestEpoch: () => 0,
+  isLatestControllerDisplayNameDirectoryRefresh: vi.fn(() => true),
+  waitForNewerControllerDisplayNameDirectoryRefresh: vi.fn(async () => {}),
+  readControllerDisplayNameFreshnessSince: () => ({
+    changedAfterRequest: false,
+    authoritativeName: null,
+  }),
 }));
 vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
 vi.mock('../outboundMedia', () => ({ rewriteOutboundMedia: vi.fn(async (_c, a) => a) }));
@@ -98,7 +109,9 @@ vi.mock('../outboundSessionReferences', () => ({
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
 }));
 vi.mock('../settings-store', () => ({
+  forgetLastKnownDeviceName: vi.fn(),
   isPlaceholderDeviceName: () => false,
+  normalizeCachedDeviceName: (name: string) => name.trim() || null,
   readDeviceLinkSettings: () => ({
     remoteControlEnabled: true,
     keepAwake: false,
@@ -120,6 +133,15 @@ vi.mock('../subscriptionRefcount', () => ({
 
 import { DEVICE_LINK_INVOKE } from '../../../shared/deviceLinkIpc';
 import { registerDeviceLinkIpc } from '../ipc';
+import { REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
+import { DESKTOP_LOCAL } from '../../../shared/remoteDesktop';
+import {
+  setRemoteControlEnabled,
+  revokeController,
+  restoreController,
+  disconnectAllControllers,
+} from '../index';
+import { setDeviceControlEnabled } from '../settings-store';
 
 const EVENT = {} as Electron.IpcMainInvokeEvent;
 
@@ -205,5 +227,54 @@ describe('mirror-cache IPC 授权边界', () => {
     await call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId: 'dev-1' });
     await expect(call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, {})).rejects.toThrow(/INVALID_PARAMS/);
     expect(h.cache.clearAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('local control authorization IPC boundary', () => {
+  const calls = [
+    [DEVICE_LINK_INVOKE.SET_ENABLED, true, setRemoteControlEnabled],
+    [DEVICE_LINK_INVOKE.SET_ENABLED, false, setRemoteControlEnabled],
+    [
+      DEVICE_LINK_INVOKE.SET_DEVICE_CONTROL_ENABLED,
+      { deviceId: 'peer', enabled: true },
+      setDeviceControlEnabled,
+    ],
+    [
+      DEVICE_LINK_INVOKE.SET_DEVICE_CONTROL_ENABLED,
+      { deviceId: 'peer', enabled: false },
+      setDeviceControlEnabled,
+    ],
+    [DEVICE_LINK_INVOKE.RESTORE, { deviceId: 'peer' }, restoreController],
+    [DEVICE_LINK_INVOKE.REVOKE, { deviceId: 'peer' }, revokeController],
+    [DEVICE_LINK_INVOKE.DISCONNECT_ALL, undefined, disconnectAllControllers],
+  ] as const;
+
+  it.each(calls)(
+    'rejects foreign senders before %s can change authority',
+    async (channel, payload, effect) => {
+      h.trusted = false;
+      await expect(call(channel, payload)).rejects.toThrow(/PERMISSION_DENIED/);
+      expect(effect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(calls)(
+    'keeps %s available to the local app without another confirmation',
+    async (channel, payload, effect) => {
+      await call(channel, payload);
+      expect(effect).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(calls)('still requires account capability for %s', async (channel, payload, effect) => {
+    h.canUseDeviceLink = false;
+    await expect(call(channel, payload)).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  it('never exposes local grants, revocation or capture IPC to remote invokes', () => {
+    for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL)]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel), channel).toBe(false);
+    }
   });
 });

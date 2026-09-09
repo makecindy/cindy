@@ -219,6 +219,27 @@ describe('desktop send outcome helper', () => {
     });
   });
 
+  it('preserves provider rejection through Desktop compatibility outcomes', async () => {
+    const outcome = toDesktopSessionDispatchOutcome(
+      { accepted: false, reason: 'provider-rejected-before-dispatch' },
+      { source: 'goal', context: 'GOAL/session-4/continuation' },
+    );
+
+    expect(outcome).toEqual({
+      kind: 'session-dispatch',
+      source: 'goal',
+      dispatched: false,
+      reason: 'provider-rejected-before-dispatch',
+      context: 'GOAL/session-4/continuation',
+      message: 'Provider rejected the Session send before dispatch: GOAL/session-4/continuation',
+    });
+    expect(toCompatibleMakerSendResult(outcome)).toEqual({
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+      outcome,
+    });
+  });
+
   it('keeps renderer compatibility payloads while carrying the typed outcome', async () => {
     const hostPayload = toCompatibleMakerSendResult(
       createHostSendFailure('WORKDIR_MISSING', 'cwd missing'),

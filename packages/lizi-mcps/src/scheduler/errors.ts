@@ -35,7 +35,21 @@ export function classifySchedulerError(err: unknown): SchedulerToolError {
   const utilityCode = /^\[(UTILITY_MODEL_(?:NO_CANDIDATE|ALL_CANDIDATES_FAILED|EMPTY_RESPONSE|TIMEOUT))\]/
     .exec(message)?.[1];
   if (utilityCode) {
-    return { code: utilityCode as SchedulerToolErrorCode, message };
+    // Append actionable hint so the MCP caller (agent) can suggest a workaround
+    // instead of silently retrying the same failing utility-model chain.
+    // See #3317.
+    const hints: Record<string, string> = {
+      UTILITY_MODEL_ALL_CANDIDATES_FAILED:
+        ' All utility-model candidates failed. You can bypass generation by passing the "script" parameter directly with a hand-written check script.',
+      UTILITY_MODEL_NO_CANDIDATE:
+        ' No utility-model candidate is configured. You can bypass generation by passing the "script" parameter directly.',
+      UTILITY_MODEL_TIMEOUT:
+        ' The utility-model call timed out. You can bypass generation by passing the "script" parameter directly.',
+      UTILITY_MODEL_EMPTY_RESPONSE:
+        ' The utility-model returned an empty response. You can bypass generation by passing the "script" parameter directly.',
+    };
+    const hint = hints[utilityCode] ?? '';
+    return { code: utilityCode as SchedulerToolErrorCode, message: message + hint };
   }
   if (/scheduler not started/i.test(message)) {
     return { code: 'SCHEDULER_NOT_READY', message };

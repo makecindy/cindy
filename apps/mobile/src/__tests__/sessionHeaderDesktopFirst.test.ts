@@ -26,7 +26,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;\n  if (syncing) return i18n.t('session.screen.syncing');");
     // 后台静默刷新:同步提示由 showSyncingIndicator gate —— 仅首次加载、还没有任何内容时显示,
     // 已有 messages(重开已看过的会话)时后台对账静默,不再弹"正在同步"。
-    expect(source).toContain('const showSyncingIndicator = loading && messages.length === 0;');
+    expect(source).toContain('const showSyncingIndicator = loading && !hasRenderedMessages;');
     expect(source).toContain("if (queuePaused) return i18n.t('session.screen.queuePausedNotice');\n  return null;");
     expect(source).toContain('attention ? (');
   });
@@ -104,7 +104,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
     expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
     expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
-    expect(source).toContain('if (targetSession.id === sessionId) {\n      closeSessionListDrawer();');
+    expect(source).toContain('if (targetSession.id === sessionId && !focusClientId) {\n      closeSessionListDrawer();');
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
     expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
@@ -188,8 +188,8 @@ describe('mobile session header desktop-first surface', () => {
     expect(draftScopeEnd).toBeGreaterThan(draftScopeStart);
     expect(draftScope).toContain('if (composerDraftStateKey !== activeComposerDraftScopeKey) {');
     expect(draftScope).toContain('const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);');
-    expect(draftScope).toContain('setComposerDocumentState(nextScope.document);');
-    expect(draftScope).toContain('setDraft(nextDraft);');
+    expect(draftScope).toContain('setComposerDraftSource(createComposerDraftSource(nextScope.document));');
+    expect(draftScope).toContain('draftRef.current = nextDraft;');
     expect(draftScope).toContain('setComposerDraftHydrated(false);');
     expect(draftScope).toContain('appliedRouteDraftRef.current = null;');
     expect(draftScope).toContain('composerDocumentRef.current = nextScope.document;');

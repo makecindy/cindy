@@ -42,6 +42,9 @@ type FullMaker = typeof window.electronAPI.maker;
  * REMOTE_INVOKE_ALLOWLIST 白名单内(被控端执行前还会再校验一层)。
  */
 export interface RoutableMaker {
+  listBotDelegations: FullMaker['listBotDelegations'];
+  cancelBotDelegation: FullMaker['cancelBotDelegation'];
+  getBotDirectMessageThread: FullMaker['getBotDirectMessageThread'];
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
   // session-agent-switch:跨引擎切换是**会话级**操作,数据真相(pending 意图注册表 +
@@ -52,6 +55,7 @@ export interface RoutableMaker {
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
+  setThinkingEnabled: FullMaker['setThinkingEnabled'];
   setPlanMode: FullMaker['setPlanMode'];
   getSessionTree: FullMaker['getSessionTree'];
   navigateSessionTree: FullMaker['navigateSessionTree'];
@@ -66,6 +70,7 @@ export interface RoutableMaker {
   rewindCommit: FullMaker['rewindCommit'];
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
+  setWritableDirs: FullMaker['setWritableDirs'];
   closeSession: FullMaker['closeSession'];
   // 手动压缩(pi 原生 compact,capability-aware 的 maker:compact-session):
   // 上下文环 / 会话菜单对 device-link 远程 pi 会话也要隧道到被控端执行
@@ -139,6 +144,9 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     (...args: unknown[]): Promise<unknown> =>
       invokeRemote(deviceId, channel, args);
   return {
+    listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
+    cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
+    getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
     send: t('maker:send') as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
       invokeRemote(
@@ -153,6 +161,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
+    setThinkingEnabled: t('maker:set-thinking-enabled') as FullMaker['setThinkingEnabled'],
     setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
     getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
     navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],
@@ -167,6 +176,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     rewindCommit: t('maker:rewind:commit') as FullMaker['rewindCommit'],
     getContextUsage: t('maker:get-context-usage') as FullMaker['getContextUsage'],
     setExtraDirs: t('maker:set-extra-dirs') as FullMaker['setExtraDirs'],
+    setWritableDirs: t('maker:set-writable-dirs') as FullMaker['setWritableDirs'],
     closeSession: t('maker:close-session') as FullMaker['closeSession'],
     compactSession: ((sessionId, instructions) =>
       invokeRemote(

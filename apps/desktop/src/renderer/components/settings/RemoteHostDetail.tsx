@@ -28,7 +28,7 @@ import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 
 type AgentKind = RemoteAgentKind;
-const AGENT_KINDS: ReadonlyArray<AgentKind> = ['claude-code', 'codex'];
+const AGENT_KINDS: ReadonlyArray<AgentKind> = ['claude-code', 'codex', 'pi'];
 
 interface AgentRowState {
   loading: boolean;
@@ -54,6 +54,7 @@ export function RemoteHostDetail({ hostId }: Props) {
   const [agents, setAgents] = useState<Record<AgentKind, AgentRowState>>(() => ({
     'claude-code': { ...EMPTY_AGENT_STATE },
     codex: { ...EMPTY_AGENT_STATE },
+    pi: { ...EMPTY_AGENT_STATE },
   }));
   const [codexSyncBusy, setCodexSyncBusy] = useState(false);
 
@@ -80,10 +81,13 @@ export function RemoteHostDetail({ hostId }: Props) {
     [hostId, t, updateAgent],
   );
 
-  // Initial probe for both agents when the detail mounts.
+  // Initial probe for all agents when the detail mounts.
+  // 轮 31 发现 3:补 pi —— 此前只 probe claude-code/codex, Pi 行永远显示
+  // 「未安装」直到手动刷新。
   useEffect(() => {
     void probe('claude-code');
     void probe('codex');
+    void probe('pi');
   }, [probe]);
 
   // Subscribe to install-progress push events.
@@ -822,7 +826,10 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
 // ── helpers ───────────────────────────────────────────────────────────────
 
 function agentDisplayName(kind: AgentKind, t: (k: string) => string): string {
-  return kind === 'codex' ? 'Codex' : t('settings.remote.detail.claudeCodeName');
+  // 轮 33 C1:补 pi 分支 —— 此前落入 claudeCodeName 显示为 "Claude Code"。
+  if (kind === 'codex') return 'Codex';
+  if (kind === 'pi') return t('settings.remote.detail.piName');
+  return t('settings.remote.detail.claudeCodeName');
 }
 
 function formatProgressLine(ev: RemoteAgentInstallProgress): string {

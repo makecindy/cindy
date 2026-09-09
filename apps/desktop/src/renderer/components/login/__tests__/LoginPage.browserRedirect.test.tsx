@@ -5,12 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loginHook = vi.hoisted(() => ({
   dispatch: vi.fn(),
+  dispatchWithResult: vi.fn(),
   value: {
     isLoading: false,
     errorCode: null,
     loginState: { step: 'browser-redirect' as const, label: 'Google' },
     dispatch: vi.fn(),
+    dispatchWithResult: vi.fn(),
     clearError: vi.fn(),
+    listAccounts: vi.fn(),
   },
 }));
 
@@ -38,17 +41,28 @@ vi.mock('@/components/title-bar/WindowControls', () => ({
   WindowControls: () => null,
 }));
 
+vi.mock('@/components/sidebar/AccountSwitcherDialog', () => ({
+  AccountSwitcherDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="account-switcher-dialog" /> : null,
+}));
+
 import { LoginPage } from '../LoginPage';
 
 describe('LoginPage browser redirect waiting state', () => {
   beforeEach(() => {
     loginHook.dispatch = vi.fn().mockResolvedValue(true);
+    loginHook.dispatchWithResult = vi.fn().mockResolvedValue({ success: true, code: null });
     loginHook.value = {
       isLoading: false,
       errorCode: null,
       loginState: { step: 'browser-redirect', label: 'Google' },
       dispatch: loginHook.dispatch,
+      dispatchWithResult: loginHook.dispatchWithResult,
       clearError: vi.fn(),
+      listAccounts: vi.fn().mockResolvedValue({
+        accounts: [],
+        mutationAllowed: true,
+      }),
     };
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -92,6 +106,38 @@ describe('LoginPage browser redirect waiting state', () => {
     expect(screen.getByText('login.localModeDescription')).toBeTruthy();
   });
 
+  it('makes retained accounts reachable from the signed-out error screen', async () => {
+    const listAccounts = vi.fn().mockResolvedValue({
+      accounts: [{ accountKey: 'saved-account' }],
+      mutationAllowed: true,
+    });
+    loginHook.value = {
+      isLoading: false,
+      errorCode: 'NETWORK_ERROR',
+      loginState: { step: 'error', code: 'NETWORK_ERROR', recoverTo: 'identifier' },
+      dispatch: loginHook.dispatch,
+      dispatchWithResult: loginHook.dispatchWithResult,
+      clearError: vi.fn(),
+      listAccounts,
+    } as unknown as typeof loginHook.value;
+
+    render(<LoginPage />);
+
+    const trigger = await screen.findByRole('button', {
+      name: 'sidebar.accountSwitcher.title',
+    });
+    expect(listAccounts).toHaveBeenCalledOnce();
+    fireEvent.click(trigger);
+    expect(await screen.findByTestId('account-switcher-dialog')).toBeTruthy();
+  });
+
+  it('does not advertise account switching when no reusable account remains', async () => {
+    render(<LoginPage />);
+
+    await vi.waitFor(() => expect(loginHook.value.listAccounts).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'sidebar.accountSwitcher.title' })).toBeNull();
+  });
+
   it('disables local entry while a login request is pending', () => {
     loginHook.value = {
       isLoading: true,
@@ -104,8 +150,7 @@ describe('LoginPage browser redirect waiting state', () => {
     render(<LoginPage />);
 
     expect(
-      (screen.getByRole('button', { name: 'login.localModeEntry' }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole('button', { name: 'login.localModeEntry' }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 });

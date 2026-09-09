@@ -19,8 +19,15 @@ type TestAuthState = {
   identity?: string;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  oauthWritesBlocked?: boolean;
   credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
   recoveryRequiredReason?: string;
+  credentialDiagnostics?: {
+    linkType: 'symlink';
+    healthy: boolean;
+    devReadOnly: boolean;
+    systemAuthLinkCount?: number;
+  };
 };
 
 function deferred<T>() {
@@ -95,6 +102,34 @@ describe('useCodexAuth lifecycle', () => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
+  it('projects structured Codex credential diagnostics into renderer state', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+      credentialDiagnostics: {
+        linkType: 'symlink',
+        healthy: true,
+        devReadOnly: true,
+        systemAuthLinkCount: 1,
+      },
+    });
+
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+    expect(result.current.state).toMatchObject({
+      credentialDiagnostics: {
+        linkType: 'symlink',
+        healthy: true,
+        devReadOnly: true,
+        systemAuthLinkCount: 1,
+      },
+    });
+  });
+
   it('keeps the authenticated UI when durable disconnect was not committed', async () => {
     const auth = installAuthApi(async () => {
       throw new Error('[INTERNAL] failed to persist Codex disconnect state');
@@ -119,7 +154,45 @@ describe('useCodexAuth lifecycle', () => {
       await result.current.logout();
     });
 
-    expect(result.current.state.kind).toBe('unauthenticated');
+    expect(result.current.state).toEqual({ kind: 'unauthenticated' });
+  });
+
+  it('blocks Dev logout without hiding the shared OpenAI login', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      oauthWritesBlocked: true,
+    });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() =>
+      expect(result.current.state).toMatchObject({
+        kind: 'authenticated',
+        oauthWritesBlocked: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.logout();
+    });
+    expect(auth.logout).not.toHaveBeenCalled();
+    expect(result.current.state).toMatchObject({
+      kind: 'authenticated',
+      oauthWritesBlocked: true,
+    });
+
+    // A real Main-side invalidation is still authoritative; write protection
+    // must not keep a rejected token projected as usable.
+    act(() => {
+      stateChangedListener(auth)({ agentKind: 'codex', authenticated: false });
+    });
+    expect(result.current.state).toEqual({
+      kind: 'unauthenticated',
+      oauthWritesBlocked: true,
+    });
+    await expect(result.current.triggerLogin()).resolves.toBe('blocked');
+    expect(auth.triggerLogin).not.toHaveBeenCalled();
   });
 
   it('refreshes to disconnected when cleanup fails after the marker committed', async () => {
@@ -187,6 +260,36 @@ describe('useCodexAuth lifecycle', () => {
     });
 
     expect(result.current.state).toEqual({ kind: 'error', message: 'login_timeout' });
+  });
+
+  it('surfaces the dev read-only policy and reports blocked without hiding it', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: false,
+      oauthWritesBlocked: true,
+    });
+    auth.triggerLogin.mockResolvedValue({
+      authenticated: false,
+      errorReason: 'dev_oauth_write_blocked',
+      oauthWritesBlocked: true,
+    });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        kind: 'unauthenticated',
+        oauthWritesBlocked: true,
+      }),
+    );
+    await act(async () => {
+      await expect(result.current.triggerLogin()).resolves.toBe('blocked');
+    });
+
+    expect(result.current.state).toEqual({
+      kind: 'unauthenticated',
+      oauthWritesBlocked: true,
+    });
+    expect(auth.triggerLogin).not.toHaveBeenCalled();
   });
 
   it('restores reconnect-required from a persisted OAuth invalidation', async () => {

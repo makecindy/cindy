@@ -1,3 +1,12 @@
+import {
+  validModelMetadata,
+  type ModelMetadata,
+  type BaseModel,
+  parseLocalModelCatalog,
+  type LocalModelCatalog,
+  type LocalCatalogModel,
+  type AgentKind,
+} from '@cindy/model-providers';
 /**
  * localCatalogOverrides —— 用户本地模型目录 override 的**纯合并逻辑**(零 IO;
  * 持久化见 maker-host/model-catalog-override-store.ts)。
@@ -9,7 +18,7 @@
  *   - 本地参考价 → usage/modelPriceOverrideStore;
  *   - RoutingDescriptor / auth / upstream → 永不属于任何 override 面。
  *
- * 形状(v1):key = `${providerId}:${modelId}`(**不含 agent**),一条记录经
+ * 形状(v1):key = `${encodeURIComponent(providerId)}:${modelId}`(**不含 agent**),一条记录经
  * base + perAgent(claude-code/codex) 表达跨 root 差异 —— 修 xAI Codex 专属
  * 思考档 = 一条 { perAgent: { codex: { efforts } } } patch,不用双写。
  *   - additions:完整新实体(base+perAgent 合成后须能力自洽),同 key 整条
@@ -53,6 +62,7 @@ export interface ModelCatalogOverrideFields {
   efforts?: Effort[];
   defaultEffort?: Effort | null;
   supportsFastMode?: boolean;
+  supportsImageInput?: boolean;
   /** 与 Registry 使用同一作者侧 lifecycle 词汇；应用到 CatalogModel 时 preview→alpha。 */
   status?: 'active' | 'preview' | 'deprecated';
 }
@@ -63,19 +73,33 @@ export interface ModelCatalogOverrideFields {
  */
 export type ModelCatalogPerAgentOverrideFields = Pick<
   ModelCatalogOverrideFields,
-  'contextWindow' | 'maxOutput' | 'efforts' | 'defaultEffort' | 'supportsFastMode'
+  | 'contextWindow'
+  | 'maxOutput'
+  | 'efforts'
+  | 'defaultEffort'
+  | 'supportsFastMode'
+  | 'supportsImageInput'
 >;
 
 export interface ModelCatalogOverrideEntry {
   /** 消费 membership；缺省 = provider policy 的全部 root + wire bridge，且必须含至少一个 root。 */
-  agents?: RootAgentKind[];
+  agents?: AgentKind[];
   base?: ModelCatalogOverrideFields;
-  perAgent?: Partial<Record<RootAgentKind, ModelCatalogPerAgentOverrideFields>>;
+  perAgent?: Partial<Record<AgentKind, ModelCatalogPerAgentOverrideFields>>;
 }
 
+export interface LocalModelCatalogOverrides {
+  featuredIds?: string[];
+  patches?: Record<string, Partial<LocalCatalogModel>>;
+  additions?: LocalCatalogModel[];
+  removedIds?: string[];
+}
 export interface ModelCatalogOverrides {
+  /** Sparse user-owned public metadata patches, keyed by canonical model identity. */
+  baseModels?: Record<string, ModelMetadata>;
+  localModels?: LocalModelCatalogOverrides;
   version: 1;
-  /** key = `${providerId}:${modelId}`。 */
+  /** key = `${encodeURIComponent(providerId)}:${modelId}`。 */
   additions: Record<string, ModelCatalogOverrideEntry>;
   patches: Record<string, ModelCatalogOverrideEntry>;
 }
@@ -102,10 +126,17 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function parseKey(key: string): { providerId: string; modelId: string } | null {
   const sep = key.indexOf(':');
   if (sep <= 0 || sep === key.length - 1) return null;
-  const providerId = key.slice(0, sep);
+  let providerId: string;
+  try {
+    providerId = decodeURIComponent(key.slice(0, sep));
+  } catch {
+    return null;
+  }
   const modelId = key.slice(sep + 1);
-  // allowlist 之外(含 xd 与任意未知 provider)一律无效:本地不能造 XD/未知供应商实体。
-  if (!MODEL_PLANE_POLICIES.has(providerId)) return null;
+  // Escape only the provider segment; model IDs may already contain colons.
+  // Require canonical encoding so parsing and direct lookups share one key.
+  if (encodeURIComponent(providerId) !== key.slice(0, sep)) return null;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/.test(providerId)) return null;
   if (modelId.length > 256) return null;
   return { providerId, modelId };
 }
@@ -123,7 +154,8 @@ function sanitizeFields(
       k !== 'maxOutput' &&
       k !== 'efforts' &&
       k !== 'defaultEffort' &&
-      k !== 'supportsFastMode'
+      k !== 'supportsFastMode' &&
+      k !== 'supportsImageInput'
     ) {
       return null;
     }
@@ -162,9 +194,10 @@ function sanitizeFields(
         if (v !== null && (typeof v !== 'string' || !VALID_EFFORTS.has(v))) return null;
         out.defaultEffort = v as Effort | null;
         break;
+      case 'supportsImageInput':
       case 'supportsFastMode':
         if (typeof v !== 'boolean') return null;
-        out.supportsFastMode = v;
+        out[k] = v;
         break;
       case 'status':
         // 'retired' 在此被拒:本地禁写 tombstone,复活远端 retired 只能走完整 addition。
@@ -183,7 +216,7 @@ function sanitizeFields(
   if (out.efforts !== undefined && out.defaultEffort !== undefined) {
     if (out.efforts.length === 0) {
       if (out.defaultEffort !== null) return null;
-    } else if (out.defaultEffort === null || !out.efforts.includes(out.defaultEffort)) {
+    } else if (out.defaultEffort !== null && !out.efforts.includes(out.defaultEffort)) {
       return null;
     }
   }
@@ -198,7 +231,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
       if (
         !Array.isArray(v) ||
         v.length === 0 ||
-        v.some((a) => a !== 'claude-code' && a !== 'codex') ||
+        v.some((a) => a !== 'claude-code' && a !== 'codex' && a !== 'pi') ||
         new Set(v).size !== v.length
       )
         return null;
@@ -211,7 +244,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
       if (!isPlainObject(v)) return null;
       const perAgent: ModelCatalogOverrideEntry['perAgent'] = {};
       for (const [agent, fields] of Object.entries(v)) {
-        if (agent !== 'claude-code' && agent !== 'codex') return null;
+        if (agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') return null;
         const sanitized = sanitizeFields(fields, 'perAgent');
         if (!sanitized) return null;
         perAgent[agent] = sanitized;
@@ -230,7 +263,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
 /** 合成某 agent 的有效字段:base + perAgent[agent] 逐字段覆盖。 */
 function effectiveFields(
   entry: ModelCatalogOverrideEntry,
-  agent: RootAgentKind,
+  agent: AgentKind,
 ): ModelCatalogOverrideFields {
   return { ...entry.base, ...entry.perAgent?.[agent] };
 }
@@ -262,6 +295,7 @@ function additionModelFor(
     efforts: f.efforts,
     defaultEffort,
     ...(f.supportsFastMode !== undefined ? { supportsFastMode: f.supportsFastMode } : {}),
+    ...(f.supportsImageInput !== undefined ? { supportsImageInput: f.supportsImageInput } : {}),
     ...(f.status !== undefined
       ? { status: f.status === 'preview' ? ('alpha' as const) : f.status }
       : {}),
@@ -280,8 +314,27 @@ export function sanitizeModelCatalogOverrides(raw: unknown): SanitizeResult {
     return { overrides: out, invalid: ['version'] };
   }
   for (const key of Object.keys(raw)) {
-    if (key !== 'version' && key !== 'additions' && key !== 'patches') {
+    if (
+      key !== 'version' &&
+      key !== 'additions' &&
+      key !== 'patches' &&
+      key !== 'localModels' &&
+      key !== 'baseModels'
+    ) {
       invalid.push(`root:${key}`);
+    }
+  }
+  if (raw.baseModels !== undefined) {
+    if (!isPlainObject(raw.baseModels)) invalid.push('baseModels');
+    else {
+      out.baseModels = {};
+      for (const [key, value] of Object.entries(raw.baseModels).slice(
+        0,
+        MAX_OVERRIDE_ENTRIES_PER_SECTION,
+      )) {
+        if (key && key.length <= 256 && validModelMetadata(value)) out.baseModels[key] = value;
+        else invalid.push(`baseModels:${key}`);
+      }
     }
   }
   for (const section of ['additions', 'patches'] as const) {
@@ -300,7 +353,7 @@ export function sanitizeModelCatalogOverrides(raw: unknown): SanitizeResult {
         continue;
       }
       const agents = entryRootAgents(entry, parsed.providerId);
-      if (agents.length === 0) {
+      if (section === 'additions' && agents.length === 0) {
         invalid.push(`${section}:${key}`);
         continue;
       }
@@ -319,6 +372,16 @@ export function sanitizeModelCatalogOverrides(raw: unknown): SanitizeResult {
       kept += 1;
     }
   }
+  if (raw.localModels !== undefined) {
+    if (
+      isPlainObject(raw.localModels) &&
+      Object.keys(raw.localModels).every((k) =>
+        ['featuredIds', 'patches', 'additions', 'removedIds'].includes(k),
+      )
+    )
+      out.localModels = raw.localModels as LocalModelCatalogOverrides;
+    else invalid.push('localModels');
+  }
   return { overrides: out, invalid };
 }
 
@@ -329,7 +392,11 @@ function entryMembershipAgents(
 ): RootAgentKind[] {
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!policy) return [];
-  return entry.agents ?? [...new Set([...policy.roots, ...policy.membershipGatedBridges])];
+  return (
+    entry.agents?.filter((agent): agent is RootAgentKind => agent !== 'pi') ?? [
+      ...new Set([...policy.roots, ...policy.membershipGatedBridges]),
+    ]
+  );
 }
 
 /** entry 实际落实体的 roots；派生端只作为 membership，不接受直接写实体。 */
@@ -357,12 +424,13 @@ function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): Cata
     ...(f.efforts !== undefined ? { efforts: f.efforts } : {}),
     ...(f.defaultEffort !== undefined ? { defaultEffort: f.defaultEffort } : {}),
     ...(f.supportsFastMode !== undefined ? { supportsFastMode: f.supportsFastMode } : {}),
+    ...(f.supportsImageInput !== undefined ? { supportsImageInput: f.supportsImageInput } : {}),
     ...(f.status !== undefined
       ? { status: f.status === 'preview' ? ('alpha' as const) : f.status }
       : {}),
   };
   if (next.efforts.length === 0) next = { ...next, defaultEffort: null };
-  else if (next.defaultEffort === null || !next.efforts.includes(next.defaultEffort)) {
+  else if (next.defaultEffort !== null && !next.efforts.includes(next.defaultEffort)) {
     return 'local patch leaves defaultEffort outside effective efforts';
   }
   return next;
@@ -482,7 +550,98 @@ export function hasLocalAddition(
   modelId: string,
   agent: RootAgentKind,
 ): boolean {
-  const entry = overrides.additions[`${providerId}:${modelId}`];
+  const entry = overrides.additions[`${encodeURIComponent(providerId)}:${modelId}`];
   if (!entry) return false;
   return entryRootAgents(entry, providerId).includes(agent);
+}
+
+/** A working default must not replace a context value explicitly supplied locally. */
+export function hasLocalContextWindowOverride(
+  overrides: ModelCatalogOverrides,
+  providerId: string,
+  modelId: string,
+  agent: AgentKind,
+): boolean {
+  return (['additions', 'patches'] as const).some((section) => {
+    const entry = overrides[section][`${encodeURIComponent(providerId)}:${modelId}`];
+    return (
+      entry &&
+      (agent === 'pi'
+        // Pi has an independent catalog: only existing-model patches apply to it.
+        // Additions materialize provider roots, even when their membership lists Pi.
+        ? section === 'patches' && (!entry.agents || entry.agents.includes('pi'))
+        : entryMembershipAgents(entry, providerId).includes(agent)) &&
+      effectiveFields(entry, agent).contextWindow !== undefined
+    );
+  });
+}
+
+/** User patches affect existing members only, including XD, custom providers and Pi. */
+export function applyExistingModelLocalPatch(
+  providerId: string,
+  agent: AgentKind,
+  model: CatalogModel,
+  overrides: ModelCatalogOverrides,
+): CatalogModel {
+  const patch = overrides.patches[`${encodeURIComponent(providerId)}:${model.id}`];
+  if (!patch || (patch.agents && !patch.agents.includes(agent))) return model;
+  const result = overlayFields(model, { ...patch.base, ...patch.perAgent?.[agent] });
+  return typeof result === 'string'
+    ? model
+    : model.status === 'retired'
+      ? { ...result, status: 'retired' }
+      : result;
+}
+export function applyLocalModelCatalogOverrides(
+  base: LocalModelCatalog | undefined,
+  override: LocalModelCatalogOverrides | undefined,
+  baseModels?: readonly BaseModel[],
+): LocalModelCatalog | undefined {
+  if (!base || !override) return base;
+  const validRef = (model: LocalCatalogModel) =>
+    isPlainObject(model) &&
+    (model.modelRef === undefined ||
+      baseModels?.some((base) => base.id === model.modelRef) === true);
+  let models = base.models;
+  if (
+    Array.isArray(override.removedIds) &&
+    override.removedIds.every((id) => typeof id === 'string')
+  )
+    models = models.filter((model) => !override.removedIds!.includes(model.id));
+  if (isPlainObject(override.patches))
+    for (const [index, model] of models.entries()) {
+      const patch = override.patches?.[model.id];
+      if (!isPlainObject(patch)) continue;
+      const next = { ...model, ...patch, id: model.id };
+      const candidate = models.map((current, i) => (i === index ? next : current));
+      if (
+        validRef(next) &&
+        parseLocalModelCatalog({ version: 1, models: candidate, featuredIds: [] })
+      )
+        models = candidate;
+    }
+  if (Array.isArray(override.additions))
+    for (const model of override.additions) {
+      if (
+        !validRef(model) ||
+        !parseLocalModelCatalog({ version: 1, models: [model], featuredIds: [] })
+      )
+        continue;
+      const candidate = [...models.filter((m) => m.id !== model.id), model];
+      if (parseLocalModelCatalog({ version: 1, models: candidate, featuredIds: [] }))
+        models = candidate;
+    }
+  const ids = new Set(models.map((model) => model.id));
+  const featuredIds =
+    Array.isArray(override.featuredIds) &&
+    override.featuredIds.every((id) => typeof id === 'string' && ids.has(id))
+      ? override.featuredIds
+      : base.featuredIds.filter((id) => ids.has(id));
+  return (
+    parseLocalModelCatalog({ version: 1, models, featuredIds }) ?? {
+      version: 1,
+      models,
+      featuredIds: base.featuredIds.filter((id) => ids.has(id)),
+    }
+  );
 }

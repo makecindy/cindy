@@ -99,7 +99,7 @@ function AddRow({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
     >
       <div
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
@@ -155,6 +155,7 @@ export function McpServersSection() {
   const handleDelete = useCallback(
     async (config: CustomMcpConfig) => {
       const ok = await confirm({
+        presentation: 'standard',
         title: t('settings.mcp.deleteConfirm.title', { name: config.name }),
         description: t('settings.mcp.deleteConfirm.message'),
         confirmText: t('settings.mcp.deleteConfirm.confirm'),

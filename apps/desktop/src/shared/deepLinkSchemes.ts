@@ -31,6 +31,24 @@ export const DEEP_LINK_URL_PREFIXES: readonly string[] = DEEP_LINK_SCHEMES.map(
 );
 
 /**
+ * settings/providers 深链的 connect id 边界。
+ * connect 可指向内置 provider 或 preset：字符集覆盖 catalog provider id 的
+ * `[A-Za-z0-9_-]` 契约，也覆盖 preset 的小写 slug 子集；长度上限只约束外部
+ * URL 输入，避免把无界字符串送进 IPC / renderer。
+ */
+const DEEP_LINK_PROVIDER_CONNECT_ID_RE = /^[A-Za-z0-9_-]+$/;
+export const DEEP_LINK_PROVIDER_CONNECT_ID_MAX_LENGTH = 128;
+
+export function isDeepLinkProviderConnectId(value: unknown): value is string {
+  return (
+    typeof value === 'string'
+    && value.length > 0
+    && value.length <= DEEP_LINK_PROVIDER_CONNECT_ID_MAX_LENGTH
+    && DEEP_LINK_PROVIDER_CONNECT_ID_RE.test(value)
+  );
+}
+
+/**
  * 内嵌进匹配正则的 scheme 备选组源(非捕获):`(?:cindy|xdt-maker)`。
  * scheme 里的 `-` 在组内是字面量,其余字符按正则元字符防御性转义
  * (scheme 值来自 brand-identity,理论上永远是 [a-z-],转义只是兜底)。

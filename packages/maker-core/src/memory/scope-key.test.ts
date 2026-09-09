@@ -9,7 +9,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildMemoryScopeKey, memoryScopeDirName, sanitizeWorkdir } from './storage.js';
+import {
+  buildBotMemoryScopeKey,
+  buildMemoryScopeKey,
+  memoryScopeDirName,
+  sanitizeWorkdir,
+} from './storage.js';
 
 describe('buildMemoryScopeKey', () => {
   it('本地会话 (无 remoteHostId) 原样返回 workdir — 既有 store 目录不迁移', () => {
@@ -38,6 +43,22 @@ describe('buildMemoryScopeKey', () => {
     expect(
       new Set([memoryScopeDirName(local), memoryScopeDirName(hostA), memoryScopeDirName(hostB)]).size,
     ).toBe(3);
+  });
+});
+
+describe('buildBotMemoryScopeKey', () => {
+  it('is stable across workdirs and isolated from local path keys', () => {
+    const key = buildBotMemoryScopeKey('bot_alpha');
+    expect(key).toBe('bot:bot_alpha');
+    expect(memoryScopeDirName(key)).toMatch(/^bot-bot_alpha-[0-9a-f]{16}$/);
+    expect(memoryScopeDirName(key)).not.toBe(memoryScopeDirName('/bot/bot_alpha'));
+  });
+
+  it('keeps unusual ids collision-safe', () => {
+    const a = buildBotMemoryScopeKey('team/a:b');
+    const b = buildBotMemoryScopeKey('team-a-b');
+    expect(a).not.toBe(b);
+    expect(memoryScopeDirName(a)).not.toBe(memoryScopeDirName(b));
   });
 });
 

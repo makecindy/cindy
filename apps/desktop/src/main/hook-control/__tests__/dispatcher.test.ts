@@ -207,6 +207,7 @@ function makeDispatcher(overrides?: {
   buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
+  archiveSessionRow?: HookDispatcherDeps['archiveSessionRow'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
@@ -228,6 +229,7 @@ function makeDispatcher(overrides?: {
     buildContextPrefix: overrides?.buildContextPrefix,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
+    archiveSessionRow: overrides?.archiveSessionRow,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
     subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
@@ -1282,6 +1284,8 @@ describe('dispatcher 核心语义', () => {
     await tick();
     const firstSessionId = fr.calls[0]?.sessionId;
     expect(firstSessionId).toBeTruthy();
+    expect(fr.calls[0]).toMatchObject({ isNew: true, prompt: '干活' });
+    expect(fr.calls[0]).not.toHaveProperty('replacementOfSessionId');
 
     d.handleDispatch(
       'conn-1',
@@ -1394,6 +1398,114 @@ describe('dispatcher 核心语义', () => {
     });
     expect(fr.calls).toHaveLength(1);
     expect(bindings.get('conn-1', externalKey)).toBe(replacementSessionId);
+    fr.finish();
+  });
+
+  it('replacement 再次失效时仍从最初任务恢复原始需求，不把“再试试”当上下文', async () => {
+    const dd = dialogueDep();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const bindings = memoryBindings();
+    const externalKey = 'team-slack:C1:replacement-context';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep, bindings });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'original',
+        externalKey,
+        sessionId: null,
+        workspace: 'xdmaker',
+        prompt: '检查支付回调失败的问题并修复',
+      }),
+      c.send,
+    );
+    await tick();
+    const originalSessionId = fr.calls[0]?.sessionId;
+    expect(originalSessionId).toBeTruthy();
+    bindings.set('conn-1', externalKey, originalSessionId!);
+    sessions[originalSessionId!] = { workingDir: WS_DIR, usable: false };
+    fr.finish({ status: 'error', errorMessage: 'token expired' });
+    await tick();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'retry',
+        externalKey,
+        sessionId: originalSessionId,
+        workspace: null,
+        prompt: '再试试',
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[1]).toMatchObject({
+      isNew: true,
+      replacementOfSessionId: originalSessionId,
+      replacementPrompt: '检查支付回调失败的问题并修复',
+      prompt: '再试试',
+    });
+    const firstReplacementId = fr.calls[1]?.sessionId;
+    expect(firstReplacementId).toBeTruthy();
+    sessions[firstReplacementId!] = { workingDir: WS_DIR, usable: false };
+    fr.finish({ status: 'error', errorMessage: 'models not ready' });
+    await tick();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'retry-again',
+        externalKey,
+        sessionId: firstReplacementId,
+        workspace: null,
+        prompt: '再试一次',
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[2]).toMatchObject({
+      isNew: true,
+      replacementOfSessionId: originalSessionId,
+      replacementPrompt: '检查支付回调失败的问题并修复',
+      prompt: '再试一次',
+    });
+    fr.finish();
+  });
+
+  it('显式失效目标不属于当前 lane 时不读取它的上下文', async () => {
+    const dd = dialogueDep();
+    const fr = fakeRunner({
+      sessions: {
+        'private-session': {
+          workingDir: path.join(DIALOGUE_ROOT, '2026-07-07', 'private-session'),
+          usable: false,
+        },
+      },
+    });
+    const externalKey = 'team-slack:C1:foreign-stale';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'foreign-stale',
+        externalKey,
+        sessionId: 'private-session',
+        workspace: null,
+        prompt: '再试试',
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[0]).toMatchObject({ isNew: true, prompt: '再试试' });
+    expect(fr.calls[0]).not.toHaveProperty('replacementOfSessionId');
+    expect(fr.calls[0]).not.toHaveProperty('replacementPrompt');
     fr.finish();
   });
 
@@ -3125,6 +3237,51 @@ describe('options 透传(model/effort/agentKind/permissionMode)', () => {
 });
 
 describe('session.archive(/new 换代归档旧代会话)', () => {
+  it('creates and binds a blank new task before archiving the previous generation', async () => {
+    const previousId = 'old-session';
+    const previousKey = 'telegram:dm:bot:user:g1';
+    const nextKey = 'telegram:dm:bot:user:g2';
+    const bindings = memoryBindings();
+    bindings.set('conn-1', previousKey, previousId);
+    const calls: HookRunRequest[] = [];
+    const runner: HookSessionRunner = {
+      isBusy: () => false,
+      inspect: async (id) => (id === previousId ? { workingDir: WS_DIR, usable: true } : null),
+      run: async (req) => {
+        calls.push(req);
+        return { status: 'ok', finalText: '', errorMessage: null, durationMs: 1 };
+      },
+    };
+    const archived: string[] = [];
+    const { d } = makeDispatcher({
+      bindings,
+      runner,
+      archiveSessionRow: async (id) => void archived.push(id),
+    });
+
+    const result = await d.createSession('conn-1', {
+      previousExternalKey: previousKey,
+      externalKey: nextKey,
+      workspace: 'xdmaker',
+      options: { agentKind: 'pi', model: 'grok-4.6', permissionMode: 'bypassPermissions' },
+      source: { im: 'telegram', userText: '' },
+    });
+
+    expect(result.sessionId).not.toBe(previousId);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      sessionId: result.sessionId,
+      isNew: true,
+      createOnly: true,
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      permissionMode: 'bypassPermissions',
+    });
+    expect(bindings.get('conn-1', nextKey)).toBe(result.sessionId);
+    expect(bindings.get('conn-1', previousKey)).toBeNull();
+    expect(archived).toEqual([previousId]);
+  });
+
   it('安全接管旧 Slack 命名空间映射；跨白名单映射只清理不归档', async () => {
     const safeSession = 'legacy-safe';
     const unsafeSession = 'legacy-unsafe';

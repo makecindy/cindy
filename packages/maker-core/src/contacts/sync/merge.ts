@@ -21,23 +21,67 @@ export function compareContactsSyncText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** JSON-compatible serialization with recursively sorted object keys. */
+/**
+ * JSON-compatible serialization with sorted object keys.
+ *
+ * This is deliberately iterative: stamped values may carry unknown extension
+ * fields from a newer client, and a deeply nested extension must not overflow
+ * the codec worker's call stack. Valid sync rows are already bounded by the
+ * state validator; cyclic references are handled explicitly so malformed
+ * in-memory values cannot loop forever.
+ */
 export function stableContactsSyncJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
+  type Frame =
+    | { kind: "value"; value: unknown }
+    | { kind: "text"; text: string };
+
+  const output: string[] = [];
+  const stack: Frame[] = [{ kind: "value", value }];
+  const seen = new WeakSet<object>();
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (frame.kind === "text") {
+      output.push(frame.text);
+      continue;
+    }
+
+    const current = frame.value;
+    if (current === null || typeof current !== "object") {
+      output.push(JSON.stringify(current) ?? "null");
+      continue;
+    }
+    if (seen.has(current)) {
+      output.push('"[circular]"');
+      continue;
+    }
+    seen.add(current);
+
+    if (Array.isArray(current)) {
+      output.push("[");
+      stack.push({ kind: "text", text: "]" });
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        stack.push({ kind: "value", value: current[index] });
+        if (index > 0) stack.push({ kind: "text", text: "," });
+      }
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+    const keys = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort(compareContactsSyncText);
+    output.push("{");
+    stack.push({ kind: "text", text: "}" });
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      const key = keys[index]!;
+      stack.push({ kind: "value", value: record[key] });
+      stack.push({ kind: "text", text: `:${JSON.stringify(key)}` });
+      if (index > 0) stack.push({ kind: "text", text: "," });
+    }
   }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableContactsSyncJson(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record)
-    .filter((key) => record[key] !== undefined)
-    .sort(compareContactsSyncText);
-  return `{${keys
-    .map(
-      (key) => `${JSON.stringify(key)}:${stableContactsSyncJson(record[key])}`,
-    )
-    .join(",")}}`;
+
+  return output.join("");
 }
 
 export function compareContactsSyncStamp(
@@ -64,11 +108,10 @@ function mergeStamped<T>(
   const order = compareContactsSyncStamp(a.stamp, b.stamp);
   if (order > 0) return a;
   if (order < 0) return b;
-  // 同 stamp 理论上来自同一次写入；异常状态仍按规范化 JSON 值稳定裁决，
-  // 不能让对象 key 的输入顺序影响跨设备赢家。
-  return stableContactsSyncJson(a.value) >= stableContactsSyncJson(b.value)
-    ? a
-    : b;
+  // 同 stamp 理论上来自同一次写入；异常状态仍按完整 stamped value 的
+  // 规范化 JSON 稳定裁决。这样附着在写入上的向后兼容元数据也不会让
+  // 合并结果依赖参数顺序。
+  return stableContactsSyncJson(a) >= stableContactsSyncJson(b) ? a : b;
 }
 
 function mergeContact(

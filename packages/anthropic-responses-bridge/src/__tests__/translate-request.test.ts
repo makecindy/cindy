@@ -21,6 +21,63 @@ describe('translateRequest', () => {
     ]);
   });
 
+  it('strict 逐工具判定:开关开启时合规工具 strict:true,不合规工具回落 strict:false', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'xai/grok-4.6',
+      messages: [],
+      tools: [
+        {
+          // 合规:全必填 + additionalProperties:false
+          name: 'Conforming',
+          input_schema: {
+            type: 'object',
+            properties: { file_path: { type: 'string' } },
+            required: ['file_path'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // Edit 真实形态:replace_all 是 optional → 不合规,回落 strict:false
+          name: 'Edit',
+          input_schema: {
+            type: 'object',
+            properties: {
+              file_path: { type: 'string' },
+              old_string: { type: 'string' },
+              new_string: { type: 'string' },
+              replace_all: { type: 'boolean' },
+            },
+            required: ['file_path', 'old_string', 'new_string'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // 复杂 MCP schema 形态:propertyNames 在 strict 子集外 → 不合规
+          name: 'ghost_call',
+          input_schema: {
+            type: 'object',
+            properties: {
+              args: { type: 'object', propertyNames: { type: 'string' } },
+            },
+            required: ['args'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // 无 input_schema → 兜底 {} 不合规,strict:false
+          name: 'NoSchema',
+        },
+      ],
+    };
+    const strictFlags = (opts: Parameters<typeof translateRequest>[1]): boolean[] =>
+      (translateRequest(req, opts).tools ?? []).map((t) => (t as { strict?: boolean }).strict === true);
+
+    // 开关关闭(默认,所有非启用 provider):全部 strict:false
+    expect(strictFlags({ model: 'grok-4.6' })).toEqual([false, false, false, false]);
+    // 开关开启:只有合规工具 strict:true,其余回落
+    expect(strictFlags({ model: 'grok-4.6', strictFunctionTools: true })).toEqual([true, false, false, false]);
+  });
+
   it('上游恒流式:调用方 stream:false 也发 stream:true(codex 对 stream:false 返 400)', () => {
     // chatgpt.com/backend-api/codex 实测:stream:false → 400
     // `{"detail":"Stream must be set to true"}`。非流式调用方由 handler 在下游缓冲满足。

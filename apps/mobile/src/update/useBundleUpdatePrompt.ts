@@ -23,7 +23,8 @@ import {
 } from './bundleUpdate';
 import type { BundleUpdateCheckOutcome } from './manualUpdateCheck';
 import { enterForcedUpdate } from './forcedUpdateStore';
-import { isCanaryChannel } from './canaryChannelStore';
+import { resolveUpdateChannelForDevice } from './canaryChannelStore';
+import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 
 type CheckState = 'idle' | 'checking' | 'up-to-date' | 'update-available' | 'error';
 
@@ -32,8 +33,8 @@ interface Options {
   auto?: boolean;
   /** 无更新时是否提示(设置页手动检查用 true,启动静默用 false)。 */
   notifyWhenUpToDate?: boolean;
-  /** 自建更新通道；缺省读取启动时已 hydrate 的本地快照。 */
-  isCanary?: boolean;
+  /** 自建更新通道；缺省读取启动时已 hydrate 的本地快照(canary+beta 收敛)。 */
+  channel?: UpdateChannel;
 }
 
 async function openInstall(url: string): Promise<void> {
@@ -91,7 +92,7 @@ export function promptBundleUpdate(evaluation: ReturnType<typeof evaluateBundleU
 export function useBundleUpdatePrompt({
   auto = true,
   notifyWhenUpToDate = false,
-  isCanary = isCanaryChannel(),
+  channel = resolveUpdateChannelForDevice(),
 }: Options = {}) {
   const [state, setState] = useState<CheckState>('idle');
   const bundleCheckEnabled = shouldCheckBundleUpdate({
@@ -99,21 +100,21 @@ export function useBundleUpdatePrompt({
     isReviewMode: REVIEW_MODE,
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
   });
-  const inFlightChannels = useRef(new Set<boolean>());
+  const inFlightChannels = useRef(new Set<UpdateChannel>());
   const channelEpochRef = useRef(0);
-  const previousChannelRef = useRef(isCanary);
+  const previousChannelRef = useRef(channel);
   // render 已经是 channel 切换对本 hook 可见的最早时点；在这里递增 epoch，
   // 让旧账号请求即使恰好晚返回，也不能更新新账号的 UI。
-  if (previousChannelRef.current !== isCanary) {
-    previousChannelRef.current = isCanary;
+  if (previousChannelRef.current !== channel) {
+    previousChannelRef.current = channel;
     channelEpochRef.current += 1;
   }
 
   const checkNow = useCallback(async (): Promise<BundleUpdateCheckOutcome> => {
     // 审核模式与 TestFlight 都禁止整包外跳；这里再挡一层，不依赖调用方记得隐藏入口。
     if (!bundleCheckEnabled) return 'skipped';
-    if (inFlightChannels.current.has(isCanary)) return 'busy';
-    inFlightChannels.current.add(isCanary);
+    if (inFlightChannels.current.has(channel)) return 'busy';
+    inFlightChannels.current.add(channel);
     const requestEpoch = channelEpochRef.current;
     setState('checking');
     try {
@@ -123,7 +124,7 @@ export function useBundleUpdatePrompt({
         Platform.OS === 'android' ? 'android' : 'ios',
         undefined,
         undefined,
-        isCanary,
+        channel,
       );
       if (requestEpoch !== channelEpochRef.current) return 'skipped';
       const evaluation = evaluateBundleUpdate({
@@ -150,16 +151,16 @@ export function useBundleUpdatePrompt({
       if (notifyWhenUpToDate) Alert.alert(i18n.t('update.checkFailedTitle'), i18n.t('update.checkFailedBody'));
       return 'error';
     } finally {
-      inFlightChannels.current.delete(isCanary);
+      inFlightChannels.current.delete(channel);
     }
-  }, [bundleCheckEnabled, isCanary, notifyWhenUpToDate]);
+  }, [bundleCheckEnabled, channel, notifyWhenUpToDate]);
 
   useEffect(() => {
     if (auto && bundleCheckEnabled) void checkNow();
     // auto hook 在登录/切账号导致 channel 变化时再检查一次，避免新的账号
     // 继续沿用旧账号的 release 指针；手动检查入口仍由调用方通过 checkNow 触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, bundleCheckEnabled, isCanary]);
+  }, [auto, bundleCheckEnabled, channel]);
 
   return { state, checkNow };
 }

@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 /**
  * PR4a 错误文案行测试(SC-7 slice pr4a error-copy 族):
- * inventory §4.5 移动具名 14 码 + REGION_MISMATCH + UNKNOWN_CODE 兜底,
+ * inventory §4.5 移动具名码 + REGION_MISMATCH + 发码路径常见码
+ * (RATE_LIMITED / SSO_LOGIN_REQUIRED / INVALID_RESPONSE / AUTH_SERVICE_UNAVAILABLE)
+ * + UNKNOWN_CODE 兜底,
  * 逐码断言 5 语 catalog verbatim 路由(vi.mock expo-localization 轮换系统 locale,
  * authErrorText 走真实解析链)。皮肤层错误条消费 authErrorText 输出,
  * 文案权威在 loginMessages catalog(translation-review SHA 绑定)。
@@ -63,6 +65,27 @@ describe("loginSkin 错误文案 5 语(catalog verbatim 路由)", () => {
     expectCodeRoutedVerbatim("INVALID_PARAMS");
     expect(authErrorMessages.INVALID_PARAMS["zh-CN"]).toBe(
       "输入内容格式不正确。",
+    );
+  });
+
+  it("CAPTCHA_REQUIRED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_REQUIRED");
+    expect(authErrorMessages.CAPTCHA_REQUIRED["zh-CN"]).toBe(
+      "请先完成安全验证。",
+    );
+  });
+
+  it("CAPTCHA_INVALID:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_INVALID");
+    expect(authErrorMessages.CAPTCHA_INVALID["zh-CN"]).toBe(
+      "安全验证未通过，请重试。",
+    );
+  });
+
+  it("CAPTCHA_UNAVAILABLE:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_UNAVAILABLE");
+    expect(authErrorMessages.CAPTCHA_UNAVAILABLE["zh-CN"]).toBe(
+      "安全验证服务暂不可用，请稍后再试。",
     );
   });
 
@@ -145,6 +168,43 @@ describe("loginSkin 错误文案 5 语(catalog verbatim 路由)", () => {
     expectCodeRoutedVerbatim("ORG_SSO_NOT_FOUND");
     expect(authErrorMessages.ORG_SSO_NOT_FOUND["zh-CN"]).toBe(
       "未找到该企业，或该企业未启用 SSO 登录。",
+    );
+  });
+
+  it("RATE_LIMITED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("RATE_LIMITED");
+    expect(authErrorMessages.RATE_LIMITED["zh-CN"]).toBe(
+      "操作过于频繁，请稍后再试。",
+    );
+  });
+
+  it("SSO_LOGIN_REQUIRED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("SSO_LOGIN_REQUIRED");
+    expect(authErrorMessages.SSO_LOGIN_REQUIRED["zh-CN"]).toBe(
+      "该邮箱所属企业要求通过 SSO 登录。",
+    );
+  });
+
+  it("AUTH_SERVICE_UNAVAILABLE:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("AUTH_SERVICE_UNAVAILABLE");
+    expect(authErrorMessages.AUTH_SERVICE_UNAVAILABLE["zh-CN"]).toBe(
+      "登录服务暂不可用，请稍后重试。",
+    );
+  });
+
+  it("INVALID_RESPONSE:5 语 catalog verbatim 路由(zod 契约漂移,不在 scenario error 值域)", () => {
+    const perLocale = authErrorMessages.INVALID_RESPONSE;
+    expect(perLocale).toBeTruthy();
+    expect(Object.keys(perLocale).sort()).toEqual([...LOCALES].sort());
+    for (const locale of LOCALES) {
+      mockLanguageTag.current = LOCALE_TAGS[locale];
+      const text = authErrorText("INVALID_RESPONSE");
+      expect(text, locale).toBe(perLocale[locale]);
+      expect(text, locale).not.toBe(loginMessages[locale].errorFallback);
+    }
+    mockLanguageTag.current = "zh-Hans-CN";
+    expect(authErrorMessages.INVALID_RESPONSE["zh-CN"]).toBe(
+      "登录服务返回了无法识别的结果，请稍后重试。",
     );
   });
 

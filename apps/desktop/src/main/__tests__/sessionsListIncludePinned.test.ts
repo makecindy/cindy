@@ -8,8 +8,14 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { resetSessionListSingleFlightForTests } from '../localDb/ipc/sessionListSingleFlight.js';
+
 const h = vi.hoisted(() => {
   const queryResults: unknown[][] = [];
+  const queryHold = {
+    pending: null as Promise<void> | null,
+    remaining: 0,
+  };
 
   // builder 方法一律返回自身，**只有 await（then）才消费一份 queryResults**。
   // 惰性很关键：list 走两段式后，CTE 内层的 `select(...).limit(cap)` 只是被交给
@@ -28,7 +34,15 @@ const h = vi.hoisted(() => {
     chain.then = (
       resolve: (value: unknown[]) => void,
       reject: (reason?: unknown) => void,
-    ) => Promise.resolve(queryResults.shift() ?? []).then(resolve, reject);
+    ) => {
+      const rows = queryResults.shift() ?? [];
+      const finish = () => Promise.resolve(rows).then(resolve, reject);
+      if (queryHold.remaining > 0 && queryHold.pending) {
+        queryHold.remaining -= 1;
+        return queryHold.pending.then(finish);
+      }
+      return finish();
+    };
     return chain;
   };
 
@@ -38,9 +52,11 @@ const h = vi.hoisted(() => {
 
   return {
     ipcHandle: vi.fn(),
+    assertTrustedAppRendererEvent: vi.fn(),
     logDebug: vi.fn(),
     logInfo: vi.fn(),
     queryResults,
+    queryHold,
     listQuery: withFn,
     fakeDb: {
       select: vi.fn(() => makeSelectChain()),
@@ -57,7 +73,10 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: h.logDebug, info: h.logInfo, warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
+vi.mock('../localDb/client/current', () => ({
+  getDbClient: () => ({ drizzle: h.fakeDb }),
+  getCurrentDbClientUserId: () => 'test-user',
+}));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
@@ -71,12 +90,18 @@ vi.mock('../agent-island/service.js', () => ({
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 vi.mock('../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
+vi.mock('../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: h.assertTrustedAppRendererEvent,
+}));
 
 import { registerSessionIpc } from '../localDb/ipc/sessions.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.queryResults.length = 0;
+  h.queryHold.pending = null;
+  h.queryHold.remaining = 0;
+  resetSessionListSingleFlightForTests();
 });
 
 function sessionRow(id: string, patch: Record<string, unknown> = {}) {
@@ -119,7 +144,7 @@ function listRow(id: string, patch: Record<string, unknown> = {}) {
   return {
     session: sessionRow(id, patch),
     messageCount: 0,
-    latestMessageContent: null,
+    latestMessageExtract: null,
     latestMessageRole: null,
   };
 }
@@ -149,6 +174,45 @@ function resolveReferencesHandler() {
 }
 
 describe('local-db:sessions:list includePinned', () => {
+  it('projects usage-history windows before stripping agent identity from the response', async () => {
+    const resolveContextWindow = vi.fn((row: { agentKind?: string | null }) =>
+      row.agentKind === 'codex' ? 272_000 : null,
+    );
+    registerSessionIpc(undefined, { resolveContextWindow });
+    const handler = h.ipcHandle.mock.calls.find(([name]) => name === 'local-db:sessions:list')![1];
+    h.queryResults.push([
+      sessionRow('codex', { agentKind: 'codex', contextWindow: 1_050_000, contextTokens: 140_500 }),
+      sessionRow('pi', { agentKind: 'pi', contextWindow: 872_000, contextTokens: 140_500 }),
+    ]);
+    const result = await handler({}, 20, 'all', { usageHistory: true });
+    expect(result[0]).toMatchObject({ contextWindow: 272_000, contextTokens: 140_500 });
+    expect(result[1]).toMatchObject({ contextWindow: 872_000, contextTokens: 140_500 });
+    expect(result[0]).not.toHaveProperty('agentKind');
+    expect(result[1]).not.toHaveProperty('agentKind');
+  });
+
+  it.each(['local-db:sessions:get', 'local-db:sessions:list'])(
+    '%s projects historical context using the stored route without writing it',
+    async (channel) => {
+      const resolveContextWindow = vi.fn(() => 272_000);
+      registerSessionIpc(undefined, { resolveContextWindow });
+      const handler = h.ipcHandle.mock.calls.find(([name]) => name === channel)![1];
+      const saved = listRow('old-astra', {
+        agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+        contextTokens: 140_500, contextWindow: 1_050_000,
+      });
+      h.queryResults.push([saved]);
+      const result = channel.endsWith(':get')
+        ? await handler({}, 'old-astra')
+        : (await handler({}, 20, 'active'))[0];
+      expect(result).toMatchObject({ contextTokens: 140_500, contextWindow: 272_000 });
+      expect(resolveContextWindow).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+      }));
+      expect(saved.session.contextWindow).toBe(1_050_000);
+    },
+  );
+
   it('returns recent active rows plus missing active pinned rows without duplicates', async () => {
     const handler = sessionsListHandler();
     h.queryResults.push(
@@ -172,6 +236,60 @@ describe('local-db:sessions:list includePinned', () => {
     expect(result.map((s) => s.id)).toEqual(['recent']);
     expect(h.listQuery).toHaveBeenCalledTimes(1);
     expect(h.queryResults).toHaveLength(1);
+  });
+
+  it('returns the full sessions set for the usage-history query without message projections', async () => {
+    const handler = sessionsListHandler();
+    h.queryResults.push([
+      sessionRow('recent', { totalTokenUsage: 20 }),
+      sessionRow('old', { totalTokenUsage: 200 }),
+    ]);
+
+    const result = await handler({}, 20, 'all', { usageHistory: true });
+
+    expect(result.map((s) => s.id)).toEqual(['recent', 'old']);
+    expect(result[0]).toEqual({
+      id: 'recent',
+      title: 'recent',
+      model: 'sonnet',
+      providerId: null,
+      totalTokenUsage: 20,
+      contextTokens: 0,
+      contextWindow: 0,
+      userSendAt: null,
+      updatedAt: new Date(1_700_000_000_000).toISOString(),
+    });
+    expect(result[0]).not.toHaveProperty('workingDir');
+    const selectCalls = h.fakeDb.select.mock.calls as unknown as Array<unknown[]>;
+    const projection = selectCalls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(Object.keys(projection ?? {})).toEqual([
+      'id',
+      'title',
+      'model',
+      'providerId',
+      'totalTokenUsage',
+      'contextTokens',
+      'contextWindow',
+      'agentKind',
+      'userSendAt',
+      'updatedAt',
+    ]);
+    expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
+    expect(h.listQuery).not.toHaveBeenCalled();
+    expect(h.queryResults).toHaveLength(0);
+    expect(h.assertTrustedAppRendererEvent).toHaveBeenCalledWith({});
+  });
+
+  it('rejects an untrusted renderer before running the unbounded usage-history query', async () => {
+    const handler = sessionsListHandler();
+    h.assertTrustedAppRendererEvent.mockImplementationOnce(() => {
+      throw new Error('[PERMISSION_DENIED]');
+    });
+
+    await expect(handler({}, 20, 'all', { usageHistory: true })).rejects.toThrow(
+      '[PERMISSION_DENIED]',
+    );
+    expect(h.fakeDb.select).not.toHaveBeenCalled();
   });
 
   it('also includes pinned rows for the all-status bucket used by mobile detail filters', async () => {
@@ -216,6 +334,32 @@ describe('local-db:sessions:list includePinned', () => {
 
     expect(h.logInfo).toHaveBeenCalledTimes(2);
     expect(h.logDebug).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a fresh list join an in-flight matching query', async () => {
+    const handler = sessionsListHandler();
+    let release!: () => void;
+    h.queryHold.pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.queryHold.remaining = 1;
+    h.queryResults.push([listRow('stale')], [listRow('fresh')]);
+
+    const stale = handler({}, 20, 'active');
+    await vi.waitFor(() => expect(h.listQuery).toHaveBeenCalledTimes(1));
+
+    const joined = handler({}, 20, 'active');
+    const fresh = handler({}, 20, 'active', { fresh: true });
+    await vi.waitFor(() => expect(h.listQuery).toHaveBeenCalledTimes(2));
+
+    release();
+    await expect(Promise.all([stale, joined])).resolves.toEqual([
+      [expect.objectContaining({ id: 'stale' })],
+      [expect.objectContaining({ id: 'stale' })],
+    ]);
+    await expect(fresh).resolves.toEqual([expect.objectContaining({ id: 'fresh' })]);
+    expect(h.listQuery).toHaveBeenCalledTimes(2);
+    expect(h.queryResults).toHaveLength(0);
   });
 });
 

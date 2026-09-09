@@ -163,7 +163,13 @@ function modelsForTarget(
       ...portable,
       ...(existing?.supportsImageInput === true ? { supportsImageInput: true } : {}),
       ...(existing?.reasoning === true && existing.reasoningEfforts?.length
-        ? { reasoning: true, reasoningEfforts: [...existing.reasoningEfforts] }
+        ? {
+            reasoning: true,
+            reasoningEfforts: [...existing.reasoningEfforts],
+            ...(existing.reasoningDefaultEffort
+              ? { reasoningDefaultEffort: existing.reasoningDefaultEffort }
+              : {}),
+          }
         : {}),
     };
   });
@@ -262,6 +268,7 @@ export function cloneRuntimeFillDraft(draft: RuntimeFillDraft): RuntimeFillDraft
     ...draft,
     models: draft.models.map((model) => ({
       ...model,
+      ...(model.route ? { route: { ...model.route } } : {}),
       ...(model.reasoningEfforts ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
     })),
     headers: draft.headers.map((header) => ({ ...header })),

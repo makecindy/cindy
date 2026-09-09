@@ -8,9 +8,14 @@ import {
   XD_ATLASSIAN_GHOST_ID,
   XD_ATLASSIAN_SECRET_KEY,
   migrateAtlassianAccounts,
+  migrateAtlassianAccountsWithResult,
   type AtlassianAccountsMigrationDeps,
 } from '../atlassianAccountsMigration.js';
 import type { GhostOauthVault } from '../ghostOauthAccounts.js';
+
+const available = <T>(value: T) => ({ status: 'available' as const, value });
+const missing = { status: 'missing' as const };
+const retryableFailure = { status: 'retryable-failure' as const };
 
 function memoryVault(seed?: Record<string, string>): GhostOauthVault & { data: Map<string, string> } {
   const data = new Map<string, string>(
@@ -31,8 +36,8 @@ function memoryVault(seed?: Record<string, string>): GhostOauthVault & { data: M
 
 function makeDeps(overrides?: Partial<AtlassianAccountsMigrationDeps>): AtlassianAccountsMigrationDeps {
   return {
-    readLegacyRefreshToken: () => 'rt-legacy',
-    readLegacyConnection: () => ({ email: 'dev@example.com' }),
+    readLegacyRefreshToken: () => available('rt-legacy'),
+    readLegacyConnection: () => available({ email: 'dev@example.com' }),
     vault: memoryVault(),
     ...overrides,
   };
@@ -73,14 +78,27 @@ describe('migrateAtlassianAccounts', () => {
 
   it('无老存储 / rt 解密失败 → no-op', () => {
     const vault = memoryVault();
-    expect(migrateAtlassianAccounts(makeDeps({ vault, readLegacyRefreshToken: () => null }))).toBe(0);
+    expect(migrateAtlassianAccounts(makeDeps({ vault, readLegacyRefreshToken: () => missing }))).toBe(0);
     expect(readManifest(vault)).toBeNull();
   });
 
   it('连接信息缺失或无 email → label 为 null,照迁', () => {
     const vault = memoryVault();
-    expect(migrateAtlassianAccounts(makeDeps({ vault, readLegacyConnection: () => null }))).toBe(1);
+    expect(migrateAtlassianAccounts(makeDeps({ vault, readLegacyConnection: () => missing }))).toBe(1);
     expect(readManifest(vault)?.accounts[0]?.label).toBeNull();
+  });
+
+  it('旧 token 或连接读取暂时失败 → 不写目标并保留重试', () => {
+    expect(
+      migrateAtlassianAccountsWithResult(
+        makeDeps({ readLegacyRefreshToken: () => retryableFailure }),
+      ),
+    ).toEqual({ migrated: 0, retryPending: true });
+    expect(
+      migrateAtlassianAccountsWithResult(
+        makeDeps({ readLegacyConnection: () => retryableFailure }),
+      ),
+    ).toEqual({ migrated: 0, retryPending: true });
   });
 
   it('清单写失败 → 回收已搬 rt,保持"没迁过"状态', () => {
@@ -94,6 +112,10 @@ describe('migrateAtlassianAccounts', () => {
       remove: vault.remove,
     };
     expect(migrateAtlassianAccounts(makeDeps({ vault: failingVault }))).toBe(0);
+    expect(migrateAtlassianAccountsWithResult(makeDeps({ vault: failingVault }))).toEqual({
+      migrated: 0,
+      retryPending: true,
+    });
     // rt 已回收,vault 里不残留任何键。
     expect(vault.data.size).toBe(0);
   });

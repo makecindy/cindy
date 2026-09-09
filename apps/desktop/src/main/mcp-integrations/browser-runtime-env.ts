@@ -2,12 +2,11 @@
  * Side-effect module: set XDT_BROWSER_RUNTIME_DIR BEFORE @cindy/browser-control-runtime
  * is imported.
  *
- * The runtime reads this env var into an EAGER module-level const (CONFIG_DIR, in
- * `packages/browser-control-runtime/src/shim/_local/text-utils.ts`) at import time, so
- * it must already be set — otherwise the runtime falls back to `~/.xdt-maker`.
- * `browser.ts` imports this ABOVE the runtime import so the browser profile data lands
- * under Electron userData (rule 15: a per-install location that's cleaned on uninstall)
- * instead of a shared home-dir fallback.
+ * The runtime reads this env var into CONFIG_DIR
+ * (`packages/browser-control-runtime/src/shim/_local/text-utils.ts`). Vite's main
+ * bundle require()s that module before `index.ts` body, so desktop also refreshes
+ * the live binding after pinning. This module remains the fallback for tests that
+ * import `browser.ts` without going through `index.ts`.
  */
 import path from 'node:path';
 import { app } from 'electron';

@@ -2,7 +2,7 @@ interface LocalAttachmentPickerContext {
   sessionId?: string;
   runtimeAgentKind?: string | null;
   remoteHostId?: string | null;
-  deviceLinkDeviceId?: string;
+  deviceLinkDeviceId?: string | null;
 }
 
 /**

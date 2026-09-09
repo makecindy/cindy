@@ -16,6 +16,8 @@ type MockAsrProvider = AsrProvider & {
 
 function makeMockProvider(options?: {
   startError?: Error;
+  startGate?: Promise<void>;
+  stopGate?: Promise<void>;
   recover?: () => Promise<void>;
 }): MockAsrProvider {
   const callbacks: Array<(event: AsrEvent) => void> = [];
@@ -24,8 +26,11 @@ function makeMockProvider(options?: {
     appended,
     start: vi.fn(async () => {
       if (options?.startError) throw options.startError;
+      await options?.startGate;
     }),
-    stop: vi.fn(async () => {}),
+    stop: vi.fn(async () => {
+      await options?.stopGate;
+    }),
     appendAudio: vi.fn((chunk: ArrayBuffer) => {
       appended.push(chunk);
     }),
@@ -74,6 +79,66 @@ describe('FallbackAsrProvider', () => {
     expect(events).toEqual([{ type: 'partial', text: 'hello', at: 1 }]);
     fallback.appendAudio(chunk(1));
     expect(first.appended).toHaveLength(1);
+  });
+
+  it('replays the connected event emitted during start() once the candidate wins', async () => {
+    const callbacks: Array<(event: AsrEvent) => void> = [];
+    const provider: AsrProvider = {
+      start: vi.fn(async () => {
+        // Real providers emit `connected` from inside start(), before the
+        // wrapper has committed them as active.
+        for (const callback of callbacks) callback({ type: 'connected', at: 7 });
+      }),
+      stop: vi.fn(async () => {}),
+      appendAudio: vi.fn(),
+      flushAudio: vi.fn(async () => {}),
+      onEvent: (callback) => {
+        callbacks.push(callback);
+      },
+    };
+    const fallback = new FallbackAsrProvider([candidate('litellm-volcengine-sauc-asr', async () => provider)]);
+    const events: AsrEvent[] = [];
+    fallback.onEvent((event) => events.push(event));
+
+    await fallback.start();
+
+    expect(events).toEqual([{ type: 'connected', at: 7 }]);
+  });
+
+  it('drops the connected event of a losing candidate', async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstCallbacks: Array<(event: AsrEvent) => void> = [];
+    const first: AsrProvider = {
+      start: vi.fn(async () => {
+        await firstGate;
+        for (const callback of firstCallbacks) callback({ type: 'connected', at: 1 });
+      }),
+      stop: vi.fn(async () => {}),
+      appendAudio: vi.fn(),
+      flushAudio: vi.fn(async () => {}),
+      onEvent: (callback) => {
+        firstCallbacks.push(callback);
+      },
+      dispose: vi.fn(async () => {}),
+    };
+    const second = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', async () => first),
+      candidate('litellm-qwen3-asr-flash-realtime', second),
+    ], { hedgeDelayMs: 0 });
+    const events: AsrEvent[] = [];
+    fallback.onEvent((event) => events.push(event));
+
+    await fallback.start();
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    releaseFirst();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events).toEqual([]);
   });
 
   it('falls back to the next candidate when start() fails and suppresses events from the failed attempt', async () => {
@@ -244,5 +309,87 @@ describe('FallbackAsrProvider', () => {
     expect(typeof fallbackWithRecover.recover).toBe('function');
     await expect(fallbackWithRecover.recover!()).rejects.toThrow('recover exhausted');
     expect(isVoiceInputProviderCoolingDown('asr', 'litellm-qwen3-asr-flash-realtime')).toBe(true);
+  });
+
+  it('starts a delayed hedge when the primary is slow and disposes the losing attempt', async () => {
+    let releasePrimary!: () => void;
+    const primaryGate = new Promise<void>((resolve) => { releasePrimary = resolve; });
+    const primary = makeMockProvider({ startGate: primaryGate });
+    const backup = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', primary),
+      candidate('litellm-qwen3-asr-flash-realtime', backup),
+    ], { hedgeDelayMs: 10 });
+
+    const startPromise = fallback.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(backup.start).toHaveBeenCalledTimes(1);
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    expect(primary.stop).toHaveBeenCalled();
+    expect(primary.dispose).toHaveBeenCalled();
+    releasePrimary();
+    await startPromise;
+  });
+
+  it('launches the next candidate immediately after an explicit start failure', async () => {
+    const first = makeMockProvider({ startError: new Error('connection refused') });
+    const second = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', first),
+      candidate('litellm-qwen3-asr-flash-realtime', second),
+    ], { hedgeDelayMs: 10_000 });
+
+    await fallback.start();
+
+    expect(second.start).toHaveBeenCalledTimes(1);
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+  });
+
+  it('does not wait for failed-candidate cleanup before starting the fallback', async () => {
+    let releaseStop!: () => void;
+    const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const first = makeMockProvider({
+      startError: new Error('connection refused'),
+      stopGate,
+    });
+    const second = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', first),
+      candidate('litellm-qwen3-asr-flash-realtime', second),
+    ], { hedgeDelayMs: null });
+
+    await fallback.start();
+
+    expect(first.stop).toHaveBeenCalledTimes(1);
+    expect(first.dispose).not.toHaveBeenCalled();
+    expect(second.start).toHaveBeenCalledTimes(1);
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    releaseStop();
+    await vi.waitFor(() => expect(first.dispose).toHaveBeenCalledTimes(1));
+  });
+
+  it('lets a slow single candidate finish on its own deadline instead of imposing a wrapper timeout', async () => {
+    let releaseStart!: () => void;
+    const slow = makeMockProvider({
+      startGate: new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      }),
+    });
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', slow),
+    ]);
+
+    const startPromise = fallback.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fallback.activeProviderKind).toBeNull();
+    expect(slow.stop).not.toHaveBeenCalled();
+
+    releaseStart();
+    await startPromise;
+
+    expect(slow.start).toHaveBeenCalledTimes(1);
+    expect(slow.stop).not.toHaveBeenCalled();
+    expect(slow.dispose).not.toHaveBeenCalled();
+    expect(fallback.activeProviderKind).toBe('litellm-volcengine-sauc-asr');
   });
 });

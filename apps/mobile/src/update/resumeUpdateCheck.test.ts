@@ -110,6 +110,75 @@ describe('createResumeUpdateChecker OTA 静默路径', () => {
     expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
   });
 
+  it('不再依赖 analytics consent，走正常 OTA 检查', async () => {
+    const deps = makeDeps();
+    const { ota } = await runOnce(deps);
+    expect(ota).toBe('up-to-date');
+    expect(deps.checkForUpdateAsync).toHaveBeenCalledOnce();
+  });
+
+  it('check 期间账号切换 → 下载前跳过,不 fetch', async () => {
+    let current = true;
+    const deps = makeDeps({
+      isCurrent: () => current,
+      checkForUpdateAsync: vi.fn(async () => {
+        current = false;
+        return { isAvailable: true };
+      }),
+    });
+    const { ota } = await runOnce(deps);
+    expect(ota).toBe('skipped');
+    expect(deps.checkForUpdateAsync).toHaveBeenCalledOnce();
+    expect(deps.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('排队等待包装器期间账号切换 → 请求前跳过,不访问旧 channel', async () => {
+    let current = true;
+    let releaseQueue!: () => void;
+    const wrappedCheck = vi.fn(async () => ({ isAvailable: false }));
+    const withOtaClient: NonNullable<ResumeUpdateCheckDeps['withOtaClient']> =
+      vi.fn(async (operation) => {
+        await new Promise<void>((resolve) => { releaseQueue = resolve; });
+        return operation({
+          checkForUpdateAsync: wrappedCheck,
+          fetchUpdateAsync: vi.fn(async () => ({ isNew: false })),
+        });
+      });
+    const deps = makeDeps({
+      withOtaClient,
+      isCurrent: () => current,
+    });
+
+    const pending = runOnce(deps);
+    await vi.waitFor(() => expect(withOtaClient).toHaveBeenCalledOnce());
+    current = false;
+    releaseQueue();
+
+    await expect(pending).resolves.toMatchObject({ ota: 'skipped' });
+    expect(wrappedCheck).not.toHaveBeenCalled();
+    expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('用同一个包装器覆盖完整 check → fetch 事务', async () => {
+    const wrappedCheck = vi.fn(async () => ({ isAvailable: true }));
+    const wrappedFetch = vi.fn(async () => ({ isNew: true }));
+    const withOtaClient: NonNullable<ResumeUpdateCheckDeps['withOtaClient']> =
+      vi.fn(async (operation) => operation({
+        checkForUpdateAsync: wrappedCheck,
+        fetchUpdateAsync: wrappedFetch,
+      }));
+    const deps = makeDeps({ withOtaClient });
+
+    const { ota } = await runOnce(deps);
+
+    expect(ota).toBe('fetched');
+    expect(withOtaClient).toHaveBeenCalledOnce();
+    expect(wrappedCheck).toHaveBeenCalledOnce();
+    expect(wrappedFetch).toHaveBeenCalledOnce();
+    expect(deps.checkForUpdateAsync).not.toHaveBeenCalled();
+    expect(deps.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
   it('无可用更新 → up-to-date,不 fetch', async () => {
     const deps = makeDeps();
     const { ota } = await runOnce(deps);

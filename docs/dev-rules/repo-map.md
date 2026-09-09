@@ -35,8 +35,10 @@
 | 包 | 一句话用途 | 主要使用方 |
 |---|---|---|
 | `maker-core` | Cindy 核心：agent 抽象（BaseAgent）、session 编排与事件流，零 Electron 依赖；改动前必读 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md) | desktop、lizi-mcps、orca-workflow |
+| [`design-tokens`](../../packages/design-tokens/README.md) | DTCG reference / semantic / 薄 component 影子字典；当前与冻结快照一致，未来设计值生成合同见 README | 当前影子层，无生产消费者；后续按设计治理路线 DS-8（Desktop）/ DS-10（Mobile）接管 |
 | `maker-shared` | 桌面与手机共享的展示层契约模型，零 React／Electron／Expo 依赖 | desktop + mobile |
 | `maker-cc-manager` | cc-remote：跑在远程 SSH 机器上的 NDJSON RPC 守护进程，封装 Claude Agent SDK，向本地桌面暴露多会话／detach-reattach 能力 | desktop（remote-ssh） |
+| `maker-pi-manager` | pi-remote：跑在远程 SSH 机器上的 PI 单例 daemon（TS NDJSON RPC + unix socket bridge），持有 pi 会话、条件 restart、空闲回收 | desktop（remote-ssh） |
 | `maker-remote-ssh` | SSH remote：连接池、`~/.ssh/config` 读写、凭据解析，零 Electron 依赖 | desktop |
 | `maker-scheduler` | 定时任务：cron 引擎 + storage／runner／notifier 接口 | desktop、lizi-mcps |
 | `orca-workflow` | Orca 多 worker 协同的 lead 侧：MCP 桥接 + lead prompt；改动前必读 [`orca-team-architecture.md`](orca-team-architecture.md) | desktop |

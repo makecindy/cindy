@@ -71,7 +71,7 @@ export class SilentStopTurnLeaseGate {
   }
 }
 
-type SessionTurnLeaseDb = Pick<DbClient, 'exec' | 'query'>;
+type SessionTurnLeaseDb = Pick<DbClient, 'exec' | 'query' | 'tx'>;
 
 function sessionTurnLeaseAgentMeta(lease: SessionTurnLease): string {
   return JSON.stringify({ sessionTurnLease: lease });
@@ -128,21 +128,15 @@ export async function tryAcquireSessionTurnLease(
   },
 ): Promise<boolean> {
   const lease: SessionTurnLease = { version: 1, turnId: input.turnId, owner: input.owner };
-  const result = await dbClient.exec(
-    `INSERT INTO messages (
-       id, client_id, session_id, role, content, agent_meta, created_at, rewind_at
-     ) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
-     ON CONFLICT(session_id, client_id) DO NOTHING`,
-    [
-      createId(),
-      sessionTurnLeaseClientId(input.owner),
-      input.sessionId,
-      sessionTurnLeaseToken(lease),
-      sessionTurnLeaseAgentMeta(lease),
-      input.createdAt,
-      input.createdAt,
-    ],
-  );
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'insert',
+    sessionId: input.sessionId,
+    clientId: sessionTurnLeaseClientId(input.owner),
+    id: createId(),
+    content: sessionTurnLeaseToken(lease),
+    agentMeta: sessionTurnLeaseAgentMeta(lease),
+    createdAt: input.createdAt,
+  });
   return result.changes === 1;
 }
 
@@ -184,23 +178,53 @@ export async function replaceSessionTurnLease(
   return result.changes === 1;
 }
 
-/** Delete only the exact turn that acquired the row; a delayed end cannot delete its successor. */
-export async function releaseSessionTurnLease(
+/** Refresh one live generation's owner proof without changing its turn identity. */
+export async function refreshSessionTurnLeaseOwner(
   dbClient: Pick<DbClient, 'exec'>,
-  input: { sessionId: string; turnId: string; owner: ReviewRunOwner },
+  input: {
+    sessionId: string;
+    turnId: string;
+    owner: ReviewRunOwner;
+  },
 ): Promise<boolean> {
-  const lease: SessionTurnLease = { version: 1, turnId: input.turnId, owner: input.owner };
+  const lease: SessionTurnLease = {
+    version: 1,
+    turnId: input.turnId,
+    owner: input.owner,
+  };
   const result = await dbClient.exec(
-    `DELETE FROM messages
+    `UPDATE messages
+        SET agent_meta = ?
       WHERE session_id = ? AND client_id = ? AND content = ?`,
-    [input.sessionId, sessionTurnLeaseClientId(input.owner), sessionTurnLeaseToken(lease)],
+    [
+      sessionTurnLeaseAgentMeta(lease),
+      input.sessionId,
+      sessionTurnLeaseClientId(input.owner),
+      sessionTurnLeaseToken(lease),
+    ],
   );
   return result.changes === 1;
 }
 
-export async function listPersistedSessionTurnLeases(
+/** Delete only the exact turn that acquired the row; a delayed end cannot delete its successor. */
+export async function releaseSessionTurnLease(
+  dbClient: Pick<DbClient, 'tx'>,
+  input: { sessionId: string; turnId: string; owner: ReviewRunOwner },
+): Promise<boolean> {
+  const lease: SessionTurnLease = { version: 1, turnId: input.turnId, owner: input.owner };
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'deleteByContent',
+    sessionId: input.sessionId,
+    clientId: sessionTurnLeaseClientId(input.owner),
+    content: sessionTurnLeaseToken(lease),
+  });
+  return result.changes === 1;
+}
+
+/** Read and recover turn leases only when that exact task needs them. */
+export async function readPersistedSessionTurnLeases(
   dbClient: Pick<DbClient, 'query'>,
-  sessionId?: string,
+  sessionId: string,
 ): Promise<PersistedSessionTurnLeaseRow[]> {
   const rows = await dbClient.query<{
     id: string;
@@ -210,10 +234,8 @@ export async function listPersistedSessionTurnLeases(
   }>(
     `SELECT id, client_id AS clientId, session_id AS sessionId, agent_meta AS agentMeta
        FROM messages
-      WHERE client_id LIKE ?${sessionId ? ' AND session_id = ?' : ''}`,
-    sessionId
-      ? [`${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`, sessionId]
-      : [`${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`],
+      WHERE session_id = ? AND client_id LIKE ?`,
+    [sessionId, `${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`],
   );
   return rows.map((row) => ({
     id: row.id,
@@ -223,23 +245,17 @@ export async function listPersistedSessionTurnLeases(
   }));
 }
 
-export function readPersistedSessionTurnLeases(
-  dbClient: Pick<DbClient, 'query'>,
-  sessionId: string,
-): Promise<PersistedSessionTurnLeaseRow[]> {
-  return listPersistedSessionTurnLeases(dbClient, sessionId);
-}
-
 /** Remove a malformed row only while its immutable id still identifies the same lease row. */
 export async function discardInvalidSessionTurnLease(
-  dbClient: Pick<DbClient, 'exec'>,
+  dbClient: Pick<DbClient, 'tx'>,
   row: Pick<PersistedSessionTurnLeaseRow, 'id' | 'clientId' | 'sessionId'>,
 ): Promise<boolean> {
-  const result = await dbClient.exec(
-    `DELETE FROM messages
-      WHERE id = ? AND session_id = ? AND client_id = ?`,
-    [row.id, row.sessionId, row.clientId],
-  );
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'deleteById',
+    sessionId: row.sessionId,
+    clientId: row.clientId,
+    id: row.id,
+  });
   return result.changes === 1;
 }
 
@@ -378,6 +394,26 @@ export class SessionTurnLeaseTracker {
     });
   }
 
+  /** Add newly available exact-instance liveness to this process's active leases only. */
+  async refreshActiveLeaseOwners(): Promise<void> {
+    const activeTurns = [...this.activeTurnIds.entries()];
+    await Promise.all(
+      activeTurns.map(([sessionId, turnId]) =>
+        this.enqueue(sessionId, async () => {
+          if (this.activeTurnIds.get(sessionId) !== turnId) return;
+          const refreshed = await refreshSessionTurnLeaseOwner(this.deps.getDbClient(), {
+            sessionId,
+            turnId,
+            owner: this.deps.owner,
+          });
+          if (!refreshed && this.activeTurnIds.get(sessionId) === turnId) {
+            throw new Error('could not refresh the active turn lease owner');
+          }
+        }),
+      ),
+    );
+  }
+
   /** End one exact generation and report whether no local/shared successor remains. */
   async markTurnEndedAndCheckIdle(sessionId: string, expectedTurnId: string): Promise<boolean> {
     await this.markTurnEnded(sessionId, expectedTurnId);
@@ -394,11 +430,5 @@ export class SessionTurnLeaseTracker {
       if (!(await this.clearRecoverableLease(dbClient, row))) active = true;
     }
     return active;
-  }
-
-  async reconcileStaleLeases(): Promise<void> {
-    const dbClient = this.deps.getDbClient();
-    const rows = await listPersistedSessionTurnLeases(dbClient);
-    for (const row of rows) await this.clearRecoverableLease(dbClient, row);
   }
 }

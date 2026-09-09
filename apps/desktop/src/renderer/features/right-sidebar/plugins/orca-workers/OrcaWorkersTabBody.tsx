@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react';
-import { MemoryRouter, useNavigate } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
@@ -28,15 +28,9 @@ import { getOrcaWorkersCloseDecision } from './closeDecision';
 const log = createLogger('OrcaWorkersPlugin');
 
 function RoutedOrcaWorkerPanel(
-  props: Omit<React.ComponentProps<typeof OrcaWorkerPanel>, 'onOpenSettings'>,
+  props: React.ComponentProps<typeof OrcaWorkerPanel>,
 ) {
-  const navigate = useNavigate();
-  return (
-    <OrcaWorkerPanel
-      {...props}
-      onOpenSettings={() => navigate('/settings?section=collaboration')}
-    />
-  );
+  return <OrcaWorkerPanel {...props} />;
 }
 
 export function OrcaWorkersTabBody({
@@ -114,8 +108,8 @@ export function OrcaWorkersTabBody({
 
   const workerPanelProps = {
     leadSessionId: ctx.sessionId,
-    deviceId: leadSession?.deviceLinkDeviceId,
-    sshRemote: !!leadSession?.remoteHostId,
+    deviceId: ctx.deviceLinkDeviceId,
+    sshRemote: !!ctx.remoteHostId,
     viewVisible,
     chatRealtime,
     focusWorkerSessionId: state.focusWorkerSessionId,

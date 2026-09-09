@@ -6,7 +6,8 @@
  *   1. `oauth-endpoint` — GET api.anthropic.com/api/oauth/usage(未文档化端点,Claude Code
  *      自己的 /usage 命令同源)。utilization 为 0-100;新 schema 以 `limits[]` 数组为准
  *      (kind: session / weekly_all / weekly_scoped,scoped 带 scope.model),旧 schema 的
- *      `five_hour` / `seven_day` / `seven_day_opus` / `seven_day_sonnet` 顶层键做兜底。
+ *      `five_hour` / `seven_day` / `seven_day_opus` / `seven_day_sonnet` /
+ *      `seven_day_fable` 顶层键做兜底。
  *      仅端点源有分模型周窗口(Fable / Opus / Sonnet 各自独立)与 extra usage。
  *   2. `unified-headers` — 订阅直连响应上的 `anthropic-ratelimit-unified-*` headers
  *      (每次 API call 都带,由本地 proxy 旁路读取)。utilization 为 0.0-1.0 分数,
@@ -187,15 +188,24 @@ export function parseClaudeOAuthUsageResponse(
   // 旧 schema 兜底:limits[] 没给的窗口再看顶层键。
   if (!fiveHour) fiveHour = parseLegacyWindow(data.five_hour);
   if (!sevenDay) sevenDay = parseLegacyWindow(data.seven_day);
-  if (scoped.length === 0) {
-    const legacyScoped: Array<[unknown, string]> = [
-      [data.seven_day_opus, 'Opus'],
-      [data.seven_day_sonnet, 'Sonnet'],
-    ];
-    for (const [raw, displayName] of legacyScoped) {
-      const window = parseLegacyWindow(raw);
-      if (window) scoped.push({ ...window, modelDisplayName: displayName });
-    }
+  // 旧 schema 分模型周窗口兜底:按家族补 limits[] 没给 weekly_scoped 的家族,从顶层
+  // seven_day_<model> 键取。不能用 `scoped.length === 0` 整体门控——混合/降级响应里
+  // limits[] 可能只给了部分家族(如只有 Opus),其余家族(Fable)只通过顶层键下发;某家族
+  // 的 weekly_scoped 畸形被跳过时同理。已由 limits[] 给出的家族以 limits[] 为准,不被
+  // legacy 覆盖。家族归属统一走 scopedWindowBelongsToFamily,与 matchScopedWindowForModel
+  // 同一份口径,避免两份 includes 规则漂移。Fable 是较新加的家族,旧兜底原先只列
+  // Opus/Sonnet,走旧端点或降级快照时 Fable 周限丢失(issue #3244);Mythos/Haiku 端点
+  // 目前不下发分模型周窗口,如未来新增在此追加。
+  const legacyScoped: Array<[unknown, string]> = [
+    [data.seven_day_opus, 'Opus'],
+    [data.seven_day_sonnet, 'Sonnet'],
+    [(data as { seven_day_fable?: unknown }).seven_day_fable, 'Fable'],
+  ];
+  for (const [raw, displayName] of legacyScoped) {
+    const family = displayName.toLowerCase();
+    if (scoped.some((w) => scopedWindowBelongsToFamily(w, family))) continue;
+    const window = parseLegacyWindow(raw);
+    if (window) scoped.push({ ...window, modelDisplayName: displayName });
   }
 
   if (!fiveHour && !sevenDay && scoped.length === 0) return null;
@@ -340,9 +350,29 @@ export function claudeModelFamily(modelId: string | null | undefined): string | 
 }
 
 /**
+ * 判断一个分模型周窗口是否属于指定家族。
+ *
+ * 优先用窗口自带的 `modelId` 经 `claudeModelFamily` 归类(权威、精确);`modelId`
+ * 缺失或无法归类(端点常为 null,或 id 形态不在识别表里)时,回退用 `modelDisplayName`
+ * 的变体包含匹配——端点对 display_name 的口径历史上有 "Fable" / "Claude Fable" /
+ * "Fable 5" 等形态,精确等于会漏掉变体(issue #3244)。家族名互斥,不会跨家族误命中。
+ *
+ * matcher(`matchScopedWindowForModel`)与 legacy 兜底去重共用这一份口径,避免两份
+ * includes 规则漂移。
+ */
+function scopedWindowBelongsToFamily(
+  window: ClaudeScopedUsageWindow,
+  family: string,
+): boolean {
+  const fromId = claudeModelFamily(window.modelId);
+  if (fromId) return fromId === family;
+  return window.modelDisplayName.trim().toLowerCase().includes(family);
+}
+
+/**
  * 找当前会话模型对应的分模型周窗口(chip 方案 B:第二栏跟随当前模型)。
- * 匹配口径:scoped.modelDisplayName 小写 == 模型家族名。找不到 → null,调用方回退
- * sevenDay 总周限(绝不臆造)。
+ * 找不到 → null,调用方回退 sevenDay 总周限(绝不臆造)。家族归属口径见
+ * scopedWindowBelongsToFamily。
  */
 export function matchScopedWindowForModel(
   scoped: ClaudeScopedUsageWindow[] | null | undefined,
@@ -351,7 +381,7 @@ export function matchScopedWindowForModel(
   if (!scoped || scoped.length === 0) return null;
   const family = claudeModelFamily(modelId);
   if (!family) return null;
-  return scoped.find((w) => w.modelDisplayName.trim().toLowerCase() === family) ?? null;
+  return scoped.find((w) => scopedWindowBelongsToFamily(w, family)) ?? null;
 }
 
 // ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───

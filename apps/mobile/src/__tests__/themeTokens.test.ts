@@ -182,6 +182,17 @@ describe('theme tokens', () => {
     expect(darkColors.cta).not.toBe(darkColors.brandSplashBackground);
   });
 
+  it('Beta 渠道状态徽标使用跨主题固定红底白字,且小字对比度 ≥4.5:1', () => {
+    expect(lightColors.betaChannelBadgeBackground).toBe('#DF0C27');
+    expect(darkColors.betaChannelBadgeBackground).toBe('#DF0C27');
+    expect(lightColors.betaChannelBadgeForeground).toBe('#FFFFFF');
+    expect(darkColors.betaChannelBadgeForeground).toBe('#FFFFFF');
+    expect(contrastRatio(
+      lightColors.betaChannelBadgeForeground,
+      lightColors.betaChannelBadgeBackground,
+    )).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('typeScale 严格单调递增', () => {
     const sizes = Object.values(typeScale);
     for (let i = 1; i < sizes.length; i += 1) {

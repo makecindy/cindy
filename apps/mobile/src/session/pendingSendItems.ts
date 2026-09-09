@@ -27,6 +27,7 @@ import {
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
+import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 
 export type MobilePendingSendPhase =
   /** 已确认入队,等被控端派发。 */
@@ -63,6 +64,7 @@ export interface MobilePendingSendItem {
   thumbs: MobileOutboxThumb[];
   /** 非图片附件数(pdf / office 等,渲染「N 个文件」计数行)。 */
   fileCount: number;
+  fileNames?: string[];
   /** 附件总数与已上传数(uploading 阶段渲染「上传中 k/N」)。 */
   attachmentCount: number;
   uploadedCount: number;
@@ -73,8 +75,48 @@ export interface MobilePendingSendItem {
   hint: string | null;
 }
 
+export interface MobileMessageListExtraData {
+  pendingSendSelectedClientId: string | null;
+  shareSelectionActive: boolean;
+}
+
+/**
+ * LegendList 的行外刷新信号。待发送气泡的展开态不改变 data，必须把选中项放进
+ * extraData，才能让已复用的可见行重新计算操作区。
+ */
+export function buildMobileMessageListExtraData(
+  pendingSendSelectedClientId: string | null,
+  shareSelectionActive: boolean,
+): MobileMessageListExtraData {
+  return { pendingSendSelectedClientId, shareSelectionActive };
+}
+
+/** 待发送气泡是否处于展开态；生产渲染与状态转换测试共用同一判据。 */
+export function isPendingSendItemSelected(
+  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase'>,
+  selectedClientId: string | null,
+): boolean {
+  const interactive = item.actions !== null || item.phase === 'failed';
+  return interactive && selectedClientId === item.clientId;
+}
+
 export function pendingSendItemKey(clientId: string): string {
   return `message-${clientId}`;
+}
+
+/**
+ * History and queue snapshots can arrive independently. Deduplicate against the
+ * rows actually being rendered, even when the queue's hidden-id snapshot is stale.
+ * Duplicate keys reserve two list positions while mounting only one bubble.
+ */
+export function appendPendingSendItems<T extends { key: string }>(
+  rendered: readonly T[],
+  pending: readonly MobilePendingSendItem[],
+): readonly (T | MobilePendingSendItem)[] {
+  if (pending.length === 0) return rendered;
+  const renderedKeys = new Set(rendered.map((item) => item.key));
+  const remaining = pending.filter((item) => !renderedKeys.has(item.key));
+  return remaining.length === 0 ? rendered : [...rendered, ...remaining];
 }
 
 /**
@@ -126,6 +168,7 @@ function buildPendingSentInlineTokens(input: {
 function queuedAttachmentThumbs(
   item: Pick<QueuedRemoteMessage, 'clientId' | 'files'>,
   previewByOssRef?: ReadonlyMap<string, string>,
+  getImagePreview?: GetSentMessageImagePreview,
 ): { thumbs: MobileOutboxThumb[]; fileCount: number } {
   const thumbs: MobileOutboxThumb[] = [];
   let fileCount = 0;
@@ -135,14 +178,16 @@ function queuedAttachmentThumbs(
       return;
     }
     const ossRef = file.url ?? file.path;
+    const preview = getImagePreview?.(item.clientId, thumbs.length, file.name, file.id);
     thumbs.push({
-      key: `${item.clientId}-file-${index}`,
+      key: `${item.clientId}-slot-${index}`,
       // 发送时刻抓下的本地预览优先:sentAttachmentThumbStore 那条兜底链要等「上传落定 →
       // 拷进自有目录 → AsyncStorage hydrate」全部完成才查得到,期间 getSentAttachmentThumbUri
       // 一律返回 null,排队气泡只能画空占位格(实测:兜底文件已生成,气泡仍是空方块)。
       // 乐观语义下图必须从第一帧就在,所以直接用手边的 file:// 预览,store 只作为
       // 「重开会话 / 预览已失效」时的后备。
-      uri: (ossRef && previewByOssRef?.get(ossRef)) || null,
+      uri: preview?.uri ?? ((ossRef && previewByOssRef?.get(ossRef)) || null),
+      ...(preview ? { previewRef: preview.sourceRef } : {}),
       ossRef,
       uploading: false,
     });
@@ -172,6 +217,7 @@ export interface BuildPendingSendItemsInput {
    * 排队气泡的图靠它即时显示,不等 sentAttachmentThumbStore 的拷贝 + hydrate 链。
    */
   previewByOssRef?: ReadonlyMap<string, string>;
+  getImagePreview?: GetSentMessageImagePreview;
 }
 
 /**
@@ -187,7 +233,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   const pushQueued = (item: QueuedRemoteMessage, phase: MobilePendingSendPhase, queueIndex: number | null) => {
     if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
-    const attachments = queuedAttachmentThumbs(item, input.previewByOssRef);
+    const attachments = queuedAttachmentThumbs(item, input.previewByOssRef, input.getImagePreview);
     const presentation = queueIndex === null
       ? null
       : input.presentationByClientId.get(item.clientId) ?? null;
@@ -206,6 +252,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       queueIndex,
       thumbs: attachments.thumbs,
       fileCount: attachments.fileCount,
+      fileNames: (item.files ?? []).filter((file) => file.category !== 'image').map((file) => file.name),
       attachmentCount: attachments.thumbs.length + attachments.fileCount,
       uploadedCount: attachments.thumbs.length + attachments.fileCount,
       errorText: null,
@@ -222,7 +269,8 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   input.queue.forEach((item, index) => {
     const phase: MobilePendingSendPhase = input.editingClientId === item.clientId
       ? 'editing'
-      : input.steeringClientIds.has(item.clientId) || input.sendingClientIds.has(item.clientId)
+      : input.steeringClientIds.has(item.clientId)
+        || input.sendingClientIds.has(item.clientId)
         ? 'sending'
         : 'queued';
     pushQueued(item, phase, index + 1);
@@ -242,6 +290,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       queueIndex: null,
       thumbs: item.thumbnails,
       fileCount: item.fileCount,
+      fileNames: item.fileNames,
       attachmentCount: item.attachmentCount,
       uploadedCount: item.uploadedCount,
       errorText: item.errorText,

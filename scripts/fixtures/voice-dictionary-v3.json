@@ -1,0 +1,2558 @@
+{
+  "version": 1,
+  "id": "voice-prompt-v6-validation48",
+  "labelPolicy": "48 analyst-constructed cases originally frozen before candidate screening, then used for prompt development after the first validation exposed regressions. Now known regression cases, not unseen validation. No real private records; not author-blinded. Labels remain unchanged: required aliases for unambiguous canonical name corrections; contextual alternatives predeclared and aliases optional.",
+  "cases": [
+    {
+      "id": "check-correction-0",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。Githab 的登录页打不开。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。GitHub 的登录页打不开。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "GitHub"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "GitHub",
+          "alias": "Githab",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-1",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "Fairfox 里能复现这个现象。",
+        "afterText": "Firefox 里能复现这个现象。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Firefox"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Firefox",
+          "alias": "Fairfox",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-2",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。这个脚本是 Pyton 写的。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。这个脚本是 Python 写的。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Python"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Python",
+          "alias": "Pyton",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-3",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "请打开 GitHab Desktop 的设置。",
+        "afterText": "请打开 GitHub Desktop 的设置。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "GitHub Desktop"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "GitHub Desktop",
+          "alias": "GitHab Desktop",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-4",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。Visual Stduio Code 启动后提示这个错误。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。Visual Studio Code 启动后提示这个错误。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Visual Studio Code"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Visual Studio Code",
+          "alias": "Visual Stduio Code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-5",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "OribitTracer 是这里显示的项目名。",
+        "afterText": "OrbitTracer 是这里显示的项目名。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "OrbitTracer"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "OrbitTracer",
+          "alias": "OribitTracer",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-6",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。请检查 Aster Realy 的连接状态。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。请检查 Aster Relay 的连接状态。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Aster Relay"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Aster Relay",
+          "alias": "Aster Realy",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-7",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "Redis Clsuter 的地址就是这一项。",
+        "afterText": "Redis Cluster 的地址就是这一项。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Redis Cluster"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Redis Cluster",
+          "alias": "Redis Clsuter",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-8",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。这个模块用 Cot lin 编写。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。这个模块用 Kotlin 编写。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Kotlin"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Kotlin",
+          "alias": "Cot lin",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-9",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "韦伯索克特 连接刚才断开了。",
+        "afterText": "WebSocket 连接刚才断开了。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "WebSocket"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "WebSocket",
+          "alias": "韦伯索克特",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-10",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。Terrafrom 的计划文件已经生成。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。Terraform 的计划文件已经生成。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Terraform"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Terraform",
+          "alias": "Terrafrom",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-correction-11",
+      "category": "validation_correction",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; clear same-name spelling or phonetic correction; canonical alias required",
+      "input": {
+        "beforeText": "Blutooth 的开关现在已经打开。",
+        "afterText": "Bluetooth 的开关现在已经打开。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Bluetooth"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Bluetooth",
+          "alias": "Blutooth",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "check-addition-0",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "我准备试用这个编辑器。",
+        "afterText": "我准备试用 Zed 这个编辑器。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Zed"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-1",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。把这个问题登记到跟踪工具。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。把这个问题登记到 Linear。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Linear"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-2",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "这段说明放进笔记软件。",
+        "afterText": "这段说明放进 Obsidian。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Obsidian"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-3",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。我们通过这个工具连接。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。我们通过 Tailscale 这个工具连接。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Tailscale"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-4",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "这里需要一个运行环境。",
+        "afterText": "这里需要 Deno 运行环境。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Deno"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-5",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。接下来加上自动化检查。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。接下来加上 Playwright 自动化检查。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Playwright"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-6",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "先按刚才的方法启动。",
+        "afterText": "先按刚才的方法启动，使用 Bun。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Bun"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-7",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。这个按钮用于打开聊天软件。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。这个按钮用于打开 Signal。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Signal"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-8",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "帮我看一下这个项目的启动日志。",
+        "afterText": "帮我看一下 Lumen Atlas 项目的启动日志。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Lumen Atlas"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-addition-9",
+      "category": "validation_addition",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; new specific name; not an alias of replaced generic text",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。引擎启动时会输出这行信息。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。Drift Engine 启动时会输出这行信息。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Drift Engine"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-0",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。先把消息发给 Firefox。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。先把消息整理后发给 Firefox。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-1",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。我们今天检查 GPU 和 Firefox 的状态。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。我们明天检查 GPU 和 Firefox 的状态。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ],
+        "rawTranscriptText": "GPU 和 Fairfox 的状态需要检查。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-2",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。窗口要放在上面。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。窗口要放在下面。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-3",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。等十分钟再试一次。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。等十五分钟再试一次。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-4",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。请说明怎么操作。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。请说明怎么操作，并补充一个完整示例。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-5",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。这部分先按现有安排做。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。这部分先按现有安排做，并解释清楚每一步的原因。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-6",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。建议把入口放在右侧。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。我认为把入口放在右侧会更合适。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-7",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。连接断开后告诉用户。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。连接断开后告诉用户现在没有连上，稍后可以再试。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-8",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。点开窗口以后可以继续。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。点开窗口以后，等内容全部显示出来才可以继续。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-9",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。这个改动已经做完。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。这个改动还没有做完。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-10",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。把这句话删掉，然后继续。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。继续之前，先把这句话删掉。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-11",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。保留标题和下面的说明。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。保留标题。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-12",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。请核对 Clarity 的设置。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。麻烦帮我核对一下 Clarity 的设置。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-13",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。列表里的内容需要检查。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。列表里的内容需要逐条检查，确认没有重复后再发给我。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-14",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。先打开 MercuryPanel，再看看结果。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。先打开 MercuryPanel，然后把结果逐项整理出来。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-15",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。GPU 和 Firefox 都不需要改。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。GPU 和 Firefox 都不用改，补充一下说明就好。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-16",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。我想看看当前的结果。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。我想看看最新的结果。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-17",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。请加一句提醒。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。请加一句温和一点的提醒，让用户知道稍后再试即可。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-18",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。这段文字需要放到最下面。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。这段文字需要放到最下面，和前面的内容留一点距离。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-negative-19",
+      "category": "validation_negative",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; ordinary content or unchanged names; no vocabulary evidence",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。请检查一下这个地方。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。请认真检查一下这个地方，别漏掉小问题。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "check-phrase-0",
+      "category": "validation_phrase",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; contextually clear mishearing; reasonable phrase boundaries labeled in advance",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。这个按钮已经点量了。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。这个按钮已经点亮了。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "点亮",
+            "点亮了"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "点亮",
+          "alias": "点量",
+          "required": false
+        },
+        {
+          "term": "点亮了",
+          "alias": "点量了",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "check-phrase-1",
+      "category": "validation_phrase",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; contextually clear mishearing; reasonable phrase boundaries labeled in advance",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。点击左边的箭头，切回上衣页。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。点击左边的箭头，切回上一页。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "上一页",
+            "切回上一页"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "上一页",
+          "alias": "上衣页",
+          "required": false
+        },
+        {
+          "term": "切回上一页",
+          "alias": "切回上衣页",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "check-phrase-2",
+      "category": "validation_phrase",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; contextually clear mishearing; reasonable phrase boundaries labeled in advance",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。先把窗口最笑化，再继续操作。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。先把窗口最小化，再继续操作。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "最小化",
+            "窗口最小化"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "最小化",
+          "alias": "最笑化",
+          "required": false
+        },
+        {
+          "term": "窗口最小化",
+          "alias": "窗口最笑化",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "check-phrase-3",
+      "category": "validation_phrase",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; contextually clear mishearing; reasonable phrase boundaries labeled in advance",
+      "input": {
+        "beforeText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。鼠标旋亭时显示这条说明。",
+        "afterText": "先补充一下使用背景。我们每天会在几个窗口之间来回切换，反馈已经分了几批整理，前面讨论的安排保持原样。这次只记录刚才看到的情况，后续请按现有流程处理。鼠标悬停时显示这条说明。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "悬停",
+            "鼠标悬停"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "悬停",
+          "alias": "旋亭",
+          "required": false
+        },
+        {
+          "term": "鼠标悬停",
+          "alias": "鼠标旋亭",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "check-phrase-4",
+      "category": "validation_phrase",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; contextually clear mishearing; reasonable phrase boundaries labeled in advance",
+      "input": {
+        "beforeText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。请再电击一次按钮。",
+        "afterText": "这是一段用于检查输入结果的工作记录。前面的内容已经确认过，排期、负责人和验收办法都没有新的变化。我把这一处具体情况放在最后，便于之后回头核对。请再点击一次按钮。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "点击一次",
+            "点击一次按钮",
+            "点击"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "点击一次",
+          "alias": "电击一次",
+          "required": false
+        },
+        {
+          "term": "点击一次按钮",
+          "alias": "电击一次按钮",
+          "required": false
+        },
+        {
+          "term": "点击",
+          "alias": "电击",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "check-phrase-5",
+      "category": "validation_phrase",
+      "split": "validation_constructed",
+      "rationale": "Constructed before candidate selection; contextually clear mishearing; reasonable phrase boundaries labeled in advance",
+      "input": {
+        "beforeText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。列表需要往下话动才能看到最后一行。",
+        "afterText": "关于今天的检查结果，整体流程已经走完了一遍，大部分地方都和预期一致。暂时没有必要重做其他部分，先保留这次记录里的具体表述，稍后再继续验证。列表需要往下滑动才能看到最后一行。",
+        "existingEntries": [
+          {
+            "term": "Firefox",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "GPU",
+                "count": 7
+              }
+            ]
+          },
+          {
+            "term": "MercuryPanel",
+            "source": "manual",
+            "aliases": [
+              {
+                "text": "水星面板",
+                "count": 2
+              }
+            ]
+          },
+          {
+            "term": "Clarity",
+            "source": "automatic",
+            "aliases": [
+              {
+                "text": "普通任务",
+                "count": 3
+              }
+            ]
+          }
+        ],
+        "existingCandidates": [
+          {
+            "term": "Mosaic",
+            "evidenceCount": 1,
+            "aliases": [
+              {
+                "text": "马赛克",
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "滑动",
+            "往下滑动"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "滑动",
+          "alias": "话动",
+          "required": false
+        },
+        {
+          "term": "往下滑动",
+          "alias": "往下话动",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

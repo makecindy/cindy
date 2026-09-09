@@ -521,7 +521,7 @@ describe('mobileHome', () => {
     expect(home.projects[0].sessions.map((item) => [item.session.id, item.automationGroup])).toEqual([['solo-run', undefined]]);
   });
 
-  it('keeps the grouped automation row activity on the newest run even when an older unread run is primary', () => {
+  it('keeps the latest run as primary when an older successful run is unread', () => {
     // 旧 run 未读(primary 选中它)+ 新 run 已读:组行与项目卡的活动时间必须跟最新一条,
     // 否则该项目卡会按旧时间排到别的项目后面(P2 回归)。
     const scheduleInfo = (latestRunAt: number, unread: boolean) => ({
@@ -546,15 +546,14 @@ describe('mobileHome', () => {
     });
 
     const row = home.projects[0].sessions[0];
-    // primary 是未读的旧 run,但组行活动时间取最新一条(new-read)。
-    expect(row.automationGroup?.primarySessionId).toBe('old-unread');
+    // 成功未读不改变组头代理，展开子行仍能看到旧运行。
+    expect(row.automationGroup?.primarySessionId).toBe('new-read');
     expect(row.lastActivityAt).toBe('2026-01-01T12:00:00.000Z');
     expect(home.projects[0].latestActivityAt).toBe('2026-01-01T12:00:00.000Z');
   });
 
-  it('routes the grouped automation primary to the run waiting for interaction', () => {
-    // 旧 run 有待处理交互、新 run 正常:primary 必须是等用户行动的那条(点行直开它),
-    // 不能落在最新一条把待确认内容藏进展开列表(P2 回归)。
+  it('keeps the latest primary when an older run waits for interaction, matching desktop', () => {
+    // 与 Desktop 一致，旧运行的待处理交互保留在展开子行。
     const scheduleInfo = (latestRunAt: number) => ({
       scheduleId: 'sched-1',
       scheduleName: '每日巡检',
@@ -577,7 +576,7 @@ describe('mobileHome', () => {
     });
 
     const row = home.projects[0].sessions[0];
-    expect(row.automationGroup?.primarySessionId).toBe('old-pending');
+    expect(row.automationGroup?.primarySessionId).toBe('new-idle');
     // 组行活动时间仍取组内最新,不因 primary 是旧 run 而回退。
     expect(row.lastActivityAt).toBe('2026-01-01T12:00:00.000Z');
   });

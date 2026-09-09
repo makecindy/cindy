@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "component": "Microsoft Visual C++ Runtime for the Windows updater",
+  "version": "14.44.35211.0",
+  "architecture": "x64",
+  "source": {
+    "downloadUrl": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+    "retrievedOn": "2026-08-31",
+    "installerVersion": "14.44.35211.0",
+    "installerSize": 25635768,
+    "installerSha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+    "visualStudioRedistPath": "VC/Redist/MSVC/14.44.35112/x64/Microsoft.VC143.CRT"
+  },
+  "files": [
+    {
+      "name": "vcruntime140.dll",
+      "size": 124544,
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+      "fileVersion": "14.44.35211.0",
+      "signer": "Microsoft Windows Software Compatibility Publisher"
+    },
+    {
+      "name": "vcruntime140_1.dll",
+      "size": 49792,
+      "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+      "fileVersion": "14.44.35211.0",
+      "signer": "Microsoft Windows Software Compatibility Publisher"
+    }
+  ]
+}

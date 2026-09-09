@@ -8,6 +8,7 @@
     "emptyDefault": "利用可能なモデルがありません",
     "loadingDefault": "モデルを読み込み中…",
     "subscriptionBadge": "サブスク",
+    "subscriptionBadgeCompact": "サブスク",
     "backToModels": "モデル一覧に戻る",
     "agentSwitchHint": "モデルを選択すると、次のメッセージから {{agent}} に切り替わります",
     "crossAgentEmptyHint": "先に操作対象のデバイスで {{agent}} のモデルソースを接続してください",
@@ -17,6 +18,9 @@
     "configureAccessibility": "{{model}} を設定",
     "budgetDisabledHint": "このモデルを使うには、先に操作対象のデバイスで API キーを設定してください",
     "priceLine": "入力 {{input}} · 出力 {{output}} / 100万トークン",
+    "priceTitle": "100万トークンあたり",
+    "priceAmounts": "入力 {{input}} · 出力 {{output}}",
+    "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得",
     "contextSuffix": "{{size}} コンテキスト",
     "fastTag": "高速"
   },
@@ -24,7 +28,24 @@
     "fastMode": "高速モード",
     "fastModeAccessibility": "高速モード {{model}}",
     "reasoningEffort": "推論強度",
-    "reasoningEffortAccessibility": "推論強度 {{label}}"
+    "reasoningEffortAccessibility": "推論強度 {{label}}",
+    "effortLevels": {
+      "minimal": "最小",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高",
+      "ultra": "究極"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "このモデルには現在の会話が収まりません",
+    "remoteTitle": "このリモートタスクではモデルを安全に切り替えられません",
+    "description": "現在の会話はすでに {{used}} を使用しており、新しいモデルの上限 {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy は短い要約を作成して続行します。会話履歴は残りますが、すべてがそのまま新しいモデルに渡されるわけではありません。",
+    "remoteDescription": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
+    "cancel": "現在のモデルを維持",
+    "confirm": "切り替えて続行"
   },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示",

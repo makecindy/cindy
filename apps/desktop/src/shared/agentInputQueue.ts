@@ -20,6 +20,32 @@ import {
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 
+export type AgentInputToolLoopKind = 'consecutive' | 'pingpong' | 'rotation' | 'contract';
+
+/** Bounded tool-loop details safe to carry across the input projection boundary. */
+export interface AgentInputToolLoopDetails {
+  kind: AgentInputToolLoopKind;
+  count: number;
+}
+
+/** Reject untrusted projection data unless it matches the bounded tool-loop contract exactly. */
+export function parseAgentInputToolLoopDetails(value: unknown): AgentInputToolLoopDetails | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as { kind?: unknown; count?: unknown };
+  if (
+    raw.kind !== 'consecutive' &&
+    raw.kind !== 'pingpong' &&
+    raw.kind !== 'rotation' &&
+    raw.kind !== 'contract'
+  ) {
+    return null;
+  }
+  if (!Number.isSafeInteger(raw.count) || typeof raw.count !== 'number' || raw.count < 1 || raw.count > 100_000) {
+    return null;
+  }
+  return { kind: raw.kind, count: raw.count };
+}
+
 export type AgentInputFileCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
 export interface AgentInputSerializedFile {
@@ -187,6 +213,8 @@ export interface RecoveryCheckpoint {
 }
 
 export interface AgentInputQueuedMessage {
+  /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
+  autoReviewUserText?: string;
   clientId: string;
   text: string;
   /**
@@ -237,6 +265,13 @@ export interface AgentInputQueuedMessage {
         scheduleName: string;
         /** 老队列快照可能没有；新 scheduler run 始终写入。 */
         runId?: string;
+      }
+    | {
+        /** cindy_helper 的 send_to_session 入队来源；只用于本人排队消息控制授权。 */
+        kind: 'session';
+        senderSessionId: string;
+        /** 原始可编辑正文；单独保留以兼容未来可能加入的派发包装。 */
+        displayText: string;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。
@@ -251,6 +286,8 @@ export interface AgentInputQueuedMessage {
    * 见 device-link/invoke-context 的可信度说明。
    */
   fromMobileClient?: boolean;
+  /** Main-owned provenance: this queue item entered through device-link input IPC. */
+  fromDeviceLinkClient?: boolean;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
@@ -345,6 +382,10 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Stable error reason for live clients; older controlled hosts may omit it. */
+  errorReason?: string | null;
+  /** Bounded details for tool-loop errors; never carries the raw provider message. */
+  toolLoop?: AgentInputToolLoopDetails | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer
@@ -387,8 +428,9 @@ export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string
 }
 
 /**
- * 队列崩溃恢复快照不能持久化跨设备引用正文。正文只在当前进程内存中存活；
- * 恢复后保留 fail-closed 标记，禁止按目标设备本地坐标重新解释 raw refs。
+ * 队列崩溃恢复快照不能持久化跨设备引用正文或瞬时 Bot 状态。两者只在当前
+ * 进程内存中存活；恢复后正文保留 fail-closed 标记，Bot 状态必须重新查询，
+ * 不能把崩溃前的 working/idle 当成当前事实。
  */
 export function sanitizeQueuedMessageForPersistence(
   item: AgentInputQueuedMessage,
@@ -396,8 +438,9 @@ export function sanitizeQueuedMessageForPersistence(
   let changed = false;
   let persistedContent = item.persistedContent;
   let agentReferences = item.agentReferences;
+  let chatMessage = item.chatMessage;
 
-  const stripMessageBodies = (
+  const stripTransientReferenceData = (
     references: readonly unknown[],
   ): { references: unknown[]; stripped: boolean } => {
     let stripped = false;
@@ -406,26 +449,38 @@ export function sanitizeQueuedMessageForPersistence(
         return reference;
       }
       const record = reference as Record<string, unknown>;
-      if (
-        record.kind !== 'message' ||
-        (!Object.hasOwn(record, 'text') && !Object.hasOwn(record, 'truncated'))
-      ) {
-        return reference;
-      }
+      const hasMessageBody = record.kind === 'message'
+        && (Object.hasOwn(record, 'text') || Object.hasOwn(record, 'truncated'));
+      const hasBotHostSnapshot = record.kind === 'bot'
+        && Object.hasOwn(record, 'hostSnapshot');
+      if (!hasMessageBody && !hasBotHostSnapshot) return reference;
       stripped = true;
       const sanitized = { ...record };
-      delete sanitized.text;
-      delete sanitized.truncated;
+      if (hasMessageBody) {
+        delete sanitized.text;
+        delete sanitized.truncated;
+      }
+      if (hasBotHostSnapshot) delete sanitized.hostSnapshot;
       return sanitized;
     });
     return { references: stripped ? next : [...references], stripped };
   };
 
   if (agentReferences) {
-    const topLevel = stripMessageBodies(agentReferences);
+    const topLevel = stripTransientReferenceData(agentReferences);
     if (topLevel.stripped) {
       changed = true;
       agentReferences = topLevel.references as AgentInputReference[];
+    }
+  }
+  if (chatMessage.agentReferences) {
+    const chat = stripTransientReferenceData(chatMessage.agentReferences);
+    if (chat.stripped) {
+      changed = true;
+      chatMessage = {
+        ...chatMessage,
+        agentReferences: chat.references as AgentInputReference[],
+      };
     }
   }
   try {
@@ -433,7 +488,7 @@ export function sanitizeQueuedMessageForPersistence(
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>;
       if (Array.isArray(record.agentReferences)) {
-        const persisted = stripMessageBodies(record.agentReferences);
+        const persisted = stripTransientReferenceData(record.agentReferences);
         if (persisted.stripped) {
           changed = true;
           persistedContent = JSON.stringify({
@@ -451,6 +506,7 @@ export function sanitizeQueuedMessageForPersistence(
   const sanitized: AgentInputQueuedMessage = {
     ...item,
     persistedContent,
+    chatMessage,
     ...(agentReferences ? { agentReferences } : {}),
     ...(item.trustedSessionReferenceContexts
       ? { sessionReferencesRequireTrustedSnapshot: true }

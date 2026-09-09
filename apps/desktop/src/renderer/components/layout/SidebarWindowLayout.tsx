@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
 
 import { RightSidebarShell } from '@/features/right-sidebar/RightSidebarShell';
+import { ToastContainer } from '@/components/ui/toast';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { onRequestRightSidebarVisibility } from '@/features/right-sidebar/lib/sidebarCommands';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
@@ -60,6 +61,7 @@ interface SidebarWindowContext {
   workdir: string | null;
   remoteHostId: string | null;
   deviceLinkDeviceId?: string | null;
+  subagentsAvailable?: boolean;
   available: boolean;
 }
 
@@ -294,7 +296,6 @@ export function SidebarWindowLayout() {
                 log.warn('merge back failed', err);
               });
             }}
-            title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
           >
             <PanelRight size={14} />
@@ -326,6 +327,7 @@ export function SidebarWindowLayout() {
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
           deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
+          subagentsAvailable={ctx?.subagentsAvailable}
           shellVisible={windowVisible}
           isMac={isMac}
         />
@@ -337,6 +339,7 @@ export function SidebarWindowLayout() {
           </div>
         )}
       </div>
+      <ToastContainer />
       <GhostMediaLightboxHost
         key={interactiveSessionId ?? 'hidden'}
         sessionId={interactiveSessionId ?? undefined}

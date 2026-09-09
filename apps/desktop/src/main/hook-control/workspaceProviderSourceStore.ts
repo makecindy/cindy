@@ -5,9 +5,9 @@
  *
  * 为什么单独存本地而不进 server prefs 表:来源是纯客户端维度(供应商凭证、
  * 连接态、目录、派发全在客户端,server 对它零感知,Slack /model 卡也不需要
- * 编辑它)。server prefs 继续只存 model/effort/agentKind/permissionMode 四字段
- * 服务卡片展示;本表按 (channel, teamId, workspace) 记来源,派发合成时与
- * server 显式 model 组合,再经 effectiveSourceIdForModel 收窄到真实已连接来源
+ * 编辑它)。model/effort/agentKind/permissionMode 的正本同样在本机
+ * (workspacePrefsStore);本表按 (channel, teamId, workspace) 记来源,派发合成
+ * 时与本机目录 model 组合,再经 effectiveSourceIdForModel 收窄到真实已连接来源
  * (来源断开/不提供该模型时自动回落,不会拼出不可能路由)。
  *
  * 持久化 <userData>/hook-workspace-provider-source.json —— 属配置而非业务数据,

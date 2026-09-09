@@ -858,6 +858,7 @@ export function projectBillingSubscription(value: unknown): BillingSubscription 
     currentPeriodEndAt,
     entitlementValidUntil,
     cancelAtPeriodEnd: value.cancelAtPeriodEnd,
+    ...(typeof value.resumable === 'boolean' ? { resumable: value.resumable } : {}),
     effectivePlan: value.effectivePlan === null ? null : projectEffectivePlan(value.effectivePlan),
     purchaseAttemptId,
     paymentAction: projectPaymentAction(value.paymentAction),

@@ -91,6 +91,8 @@ export class SseTranslator {
   /** 当前打开的 Anthropic 块所属 item 的 output_index;null = 没有块打开(单开块不变量)。 */
   private openOutputIndex: number | null = null;
   private model: string;
+  /** Host-selected tier for this concrete provider request; carried in usage so Pi can latch it. */
+  private readonly serviceTier?: string;
   /** 构造时传入非空 model 即 pin —— message_start 固定用它,不被上游回显的裸 model 覆盖。 */
   private readonly modelPinned: boolean;
   /**
@@ -100,8 +102,9 @@ export class SseTranslator {
    */
   private readonly signaturePrefix: string;
 
-  constructor(model: string) {
+  constructor(model: string, serviceTier?: string) {
     this.model = model;
+    this.serviceTier = serviceTier;
     this.modelPinned = model.length > 0;
     const slash = model.indexOf('/');
     this.signaturePrefix = slash > 0 ? model.slice(0, slash + 1) : '';
@@ -329,7 +332,13 @@ export class SseTranslator {
           content: [],
           stop_reason: null,
           stop_sequence: null,
-          usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            ...(this.serviceTier !== undefined ? { service_tier: this.serviceTier } : {}),
+          },
         },
       },
     });
@@ -583,6 +592,7 @@ export class SseTranslator {
           output_tokens: usage.output_tokens,
           cache_read_input_tokens: usage.cache_read_input_tokens,
           cache_creation_input_tokens: usage.cache_creation_input_tokens,
+          ...(this.serviceTier !== undefined ? { service_tier: this.serviceTier } : {}),
         },
       },
     });

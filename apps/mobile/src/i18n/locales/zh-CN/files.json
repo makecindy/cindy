@@ -46,6 +46,34 @@
     "a11yPreviewName": "预览 {{name}}",
     "a11yPreviewNameLine": "预览 {{name}} 第 {{line}} 行"
   },
+  "presentation": {
+    "grid": {
+      "today": "今天 {{time}}", "yesterday": "昨天 {{time}}", "empty": "文件夹为空",
+      "summaryMixed": "{{dirs}} 个文件夹、{{files}} 个文件", "summaryDirs": "{{count}} 个文件夹", "summaryFiles": "{{count}} 个文件", "workdir": "工作目录"
+    },
+    "preview": {
+      "nonText": {
+        "pdf": "PDF 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端或系统 PDF 阅读器中打开。",
+        "drawio": "Draw.io 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端继续查看或编辑。",
+        "office": "Office 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端或系统应用中打开。",
+        "binary": "当前文件不是文本格式，手机版暂不读取内容；可复制路径到桌面端打开。",
+        "unknown": "当前文件类型无法确认，手机版暂不读取内容；可复制路径到桌面端打开。",
+        "text": "可以按需加载文本预览。"
+      },
+      "pathOnly": "当前文件只有路径信息，无法从远程电脑读取预览。",
+      "loading": "正在从远程电脑读取文本预览",
+      "ready": "已加载文本预览 · {{size}}",
+      "idle": "按需读取远程文本预览，不会在消息列表里批量拉取文件内容。",
+      "failure": {
+        "oversize": "文件超过远程预览上限 · {{limit}} · 当前 {{size}}",
+        "forbidden": "被控电脑拒绝读取这个路径。",
+        "notFound": "被控电脑上没有找到这个文件。",
+        "readFailed": "读取失败。",
+        "readFailedWithError": "读取失败：{{error}}",
+        "default": "当前文件无法预览。"
+      }
+    }
+  },
   "preview": {
     "done": "完成",
     "a11yShare": "导出分享",

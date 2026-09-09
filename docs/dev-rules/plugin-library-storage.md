@@ -1,0 +1,145 @@
+# 插件持久 Library 能力
+
+> **状态**：权威开发规则（authoritative）
+> **读取时机**：新增或修改 library 能力（持久作品库）、binding / 目录选择、迁移、
+> 回收站删除、SQLite 语句门、面板 `/library/` 投影、会话级只读 extraDirs 注入，
+> 或任何触碰 `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
+
+`library: true` 给插件一个**用户作品级**的持久存储区，与 `fs: true` 私有储物柜
+（256MiB/2000 文件配额、卸载即回收）是两个语义：不受配额约束（只受磁盘保留
+水位与软水位约束）、**卸载插件不删数据**、删除必须走设置页独立确认。完整产品
+语义与裁决记录见方案文档。安装直接使用系统管理的默认位置，不增加安装确认步骤；
+用户可在插件详情页随时安全迁移。
+
+## 事实来源
+
+| 内容 | 权威来源 |
+| --- | --- |
+| 文件层基座（路径纪律 / 原子写 / 分块流 / 用量账本 / 状态机） | `apps/desktop/src/main/cindy-brain/libraryVault.ts` |
+| 自定义位置 binding 与候选目录校验 | `apps/desktop/src/main/cindy-brain/libraryBinding.ts` |
+| SQLite 语句门与执行核心（worker 与单测共用） | `apps/desktop/src/main/cindy-brain/libraryDbCore.ts` |
+| per-plugin worker 入口 | `apps/desktop/src/main/cindy-brain/libraryDbWorker.ts` |
+| 主进程 RPC 服务（发送前语句门 / dispose 收口） | `apps/desktop/src/main/cindy-brain/librarySqlService.ts` |
+| 协议分派（资格审 / binding 根解析 / owner scope 复核） | `apps/desktop/src/main/cindy-brain/librarySlot.ts` |
+| 随时迁移状态机 | `apps/desktop/src/main/cindy-brain/libraryMigrate.ts` |
+| 回收站删除通道 | `apps/desktop/src/main/cindy-brain/libraryTrash.ts` |
+| 管子协议类型（`library-request`） | `apps/desktop/src/shared/ghost.ts`（`GhostPipeLibraryRequest/Result`） |
+| 面板 `/library/` 投影 | `cindy-brain/runtime/electronSandboxAdapter.ts`（`serveGhostLibraryFile`） |
+| 装配 / 生命周期挂点 / 设置面 IPC | `cindy-brain/index.ts`（`getGhostLibrarySlot`、`relocateGhostLibraryTo`、`getGhostLibraryOverview`） |
+| 作者手册章节 | `cindy-brain/forge.ts` 的 `FORGE_GUIDE` §4.10.1 |
+
+## 落盘布局（owner-scoped，全部经 `ownerScopedUserDataPath`）
+
+```
+owners/<ownerKey>/
+├── libraries/<ghostId>/          # 系统管理默认根
+├── libraries-binding.json        # 自定义位置持久 binding（原子写）
+└── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+```
+
+自定义根 = `<用户所选父目录>/<ghostId>`（binding 记录 realpath 快照 + 文件
+identity + generation）。库内宿主命名空间 `.cindy-library/`（meta/usage/tmp/
+backups）对插件不可达——路径语法段首不许点，协议层天然隔离。
+
+## 不变量
+
+1. **不可用 ≠ 空**：meta 损坏 → `unavailable(corrupt)`；binding 漂移 →
+   `binding-moved` / `disk-missing`。宿主不自动重建、不清空、不回退写默认根、
+   不触发 GC、不判素材已删。插件侧同样语义写进了 FORGE_GUIDE。
+2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
+   事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
+   （rename 进回收站，漂移时 NOT_FOUND 不误删）。内置插件退役清理
+   （`cleanupRetiredGhostData`）**不得**触及 Library。
+3. **owner 隔离**：会话绑定 `activeOwnerScopeKey` 每请求比对；切换在途由
+   `interruptGhostCallsForAccountBoundary` 的 `disposeAll` 收口（在途写入随串行
+   链归属原 owner）。根解析每次经 binding store 现解。
+4. **路径纪律**：相对路径四层校验（`isSafeGhostRelativePath` →
+   `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
+   不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验
+   （对齐 `dirDeposit.writeNewSaveFile` 范式）。
+5. **SQL 白名单**：better-sqlite3 无 set_authorizer，唯一可靠防线是首词允许
+   清单（deny-by-default）+ prepare 单语句 + 事务/迁移/备份全宿主管理。
+   ATTACH/VACUUM INTO/PRAGMA/事务语句一律 `DB_STATEMENT_REJECTED`。改白名单
+   前必须重新论证「该语句类型无法嵌进 SELECT/触发器/视图」。
+6. **票据不升级**：`dir`/`save_dir` 十分钟内存票据与 Library binding 不共享
+   存储与校验入口。
+7. **结果集上限**：2000 行 / 16MiB 序列化（`DB_ROW_LIMIT`）；分块流 Commit 核
+   对宿主实算 sha256——`write`/`writeCommit`/`read` 返回的 sha256 是未来网络
+   同步的素材完整性地基，不得移除。
+8. **迁移安全**：precheck（校验 + 空间 ≥ 用量×1.2 + 目标非空拒）→ copying
+   （.sqlite 走在线 backup）→ verifying（清单逐项对账 + quick_check）→
+   switching（binding generation+1 原子写）→ grace（旧目录改名保留 14 天）。
+   任一步失败 binding 未切换、原位置原样。
+9. **面板投影**：`cindy-ghost://<ghostId>/library/<relPath>` 与电子脑 read 同
+   源校验，失败折叠 404；内容可变故 `Cache-Control: no-cache`（与内容寻址的
+   `/media/` 长缓存刻意不同）。
+10. **known limitation（如实告知，不假装覆盖）**：Windows 上 binding 的文件
+    identity（st_ino）多为 0，「同路径删后重建」检不出（POSIX 可检出）；映射
+    网络盘符检测需要 Win32 API，v1 只拒 UNC 路径。
+11. **Agent 只读 extraDirs（会话级，PR0）**：当前 Mivo 会话且 library 可用时，宿主把
+    library 根 realpath 静默写入该会话只读 extraDirs。只读、不弹 picker / 确认卡、
+    不改权限档。library 专用槽不占用户 EXTRA_DIRS_MAX=10。回执 / 握手 / probe 禁绝对
+    路径，相对键 `library:assets/<2>/<hash>/blob.<ext>`。路径不跨 turn 缓存。
+    confirmed 只认宿主 `librarySlot.writeCommit` ACK 的 64-hex sha256。仓内无
+    `libraryConfirmed.ts`（不存在），不得发明该文件。
+12. **切根像素与限额**：正本文件名是 `blob`（路径 `assets/<2>/<hash>/blob.<ext>`），
+    不是 `<hash>.<ext>`。同目录 sidecar `meta.json` / `preview.webp` 禁止当像素。
+    16MiB 是 library 分块阈值（更大走 writeBegin），cindy-media 单件 50MiB、配额
+    1GiB。library 软水位 8GiB + 磁盘保留 1GiB + 5 万文件保险丝。
+13. **只读操作能力合同（capabilities）**：`{op:'capabilities'}` 在资格审与 op 合法性
+    校验之后、会话创建之前返回，不捕获 owner、不解析库根、不 open vault、不弹窗、
+    不碰剪贴板、不泄漏 owner 或绝对库路径。成功形态固定为
+    `{ok:true, op:'capabilities', capabilities:{version:1, operations:['clipboardWrite','saveAs']}}`。
+    `operations` 只表达**实现支持**，不等于此刻有窗口、已授权或库可用。
+    消费规则：仅 `version===1` 且 `operations` 为字符串数组才有效；额外字段忽略，未知
+    operation 忽略，已知项保留；有效 v1 清单缺少某项才是 unsupported；缺字段、错类型、
+    `version` 非 1、或旧宿主 unknown-op 一律 unknown。旧插件无需重装或重授权。
+    实际操作失败仍用旧 `errorCode`，另加稳定 `reason`：无 handler=`IMPLEMENTATION_UNSUPPORTED`，
+    无窗口=`NO_VISIBLE_WINDOW`，权限=`PERMISSION_DENIED`，库不可用=`LIBRARY_UNAVAILABLE`
+    （含 vault 透传的 open/status 失败），非法请求=`INVALID_REQUEST`（含非法/越界
+    `dbPath` 与未知 op），取消=`CANCELLED`。成功 `open`/`status` 的 `state:'unavailable'`
+    仍用结果体 `reason`（如 `disk-missing`），不是失败 `reason` 枚举。查询/传输层本地分类
+    `TIMEOUT` / `TRANSPORT_ERROR`。插件不得解析人类 `message` 猜类别。插件基座改动按仓库白名单人工
+    Approve 才能合并。合同示例：
+
+    ```ts
+    // 旧宿主 unknown-op：没有 capabilities，不得当成全部支持或版本过旧
+    classifyGhostLibraryOperationSupport(
+      { ok: false, errorCode: 'PATH_INVALID', message: 'op 必须是 open / status / …' },
+      'clipboardWrite',
+    ) === 'unknown'
+
+    // 新版支持：只说明实现存在，不等于此刻有窗口 / 已授权 / 库可用
+    classifyGhostLibraryOperationSupport(
+      { ok: true, op: 'capabilities', capabilities: { version: 1, operations: ['clipboardWrite', 'saveAs'] } },
+      'clipboardWrite',
+    ) === 'supported'
+
+    // 新版无窗口：旧 errorCode 仍是 UNSUPPORTED，reason 才区分窗口缺失
+    { ok: false, errorCode: 'UNSUPPORTED', reason: 'NO_VISIBLE_WINDOW' }
+
+    // 新版拒权：能力查询与实际操作都不得越过资格审
+    { ok: false, errorCode: 'NOT_DECLARED', reason: 'PERMISSION_DENIED' }
+
+    // 错类型：数组内混入非字符串，整体 unknown，不得把其中合法项当有效 v1
+    classifyGhostLibraryOperationSupport(
+      { ok: true, op: 'capabilities', capabilities: { version: 1, operations: ['saveAs', 123] } },
+      'saveAs',
+    ) === 'unknown'
+    ```
+
+## Review 清单
+
+1. 路径/SQL 是否仍只经白名单与相对键？有没有新的绝对路径出口？（saveAs 成功 path 必须是库内相对键，不得把用户另存目标送进沙箱；extraDirs 握手/回执/probe 同禁）
+2. 失败路径是否保持「不可用 ≠ 空」「任一步失败原位原样」？
+3. 生命周期挂点（uninstall/setEnabled/owner 边界）是否补了对应的 dispose？
+4. i18n 五语与中文标点门禁、FORGE_GUIDE §4.10.1 是否同步？
+5. 会话级 extraDirs 是否只读、静默、专用槽不占 EXTRA_DIRS_MAX=10？confirmed 是否只认 writeCommit ACK，有没有发明 `libraryConfirmed.ts`？
+6. capabilities 是否在会话创建前返回？是否把 PERMISSION / UNAVAILABLE / 无窗口误判成旧宿主？失败 `reason` 是否稳定、旧 `errorCode` 是否保留？
+
+最小验证入口：
+
+```bash
+pnpm --filter desktop exec vitest run src/main/cindy-brain/__tests__/library
+pnpm --filter desktop typecheck
+```

@@ -41,6 +41,8 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    * main 端仍统一校验，防 IPC 直调 / 老 DB 残留 / bug 数据。
    */
   extraDirs?: string[];
+  /** 用户逐目录明确授予的附加可读写目录；不从 extraDirs 推导。 */
+  writableDirs?: string[];
   /**
    * 远端目标 host id。非空表示 session 跑在远端机器上，workingDir 必须是远端路径。
    * 目前仅 Codex 支持，Claude session 会忽略。

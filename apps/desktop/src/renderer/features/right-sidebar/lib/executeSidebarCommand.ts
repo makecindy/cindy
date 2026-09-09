@@ -1,7 +1,8 @@
+import { openRoutinesTab } from './openRoutinesTab';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
 import type { RsbWindowCommand } from '../../../../shared/rightSidebarWindow';
-import { addOrFocusSingletonTab, ensureHydrated } from '../store';
+import { addOrFocusSingletonTab, closeTab, ensureHydrated, getBucket } from '../store';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
   ensureOrcaWorkersTab,
@@ -18,6 +19,10 @@ import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
 export async function executeSidebarCommand(command: RsbWindowCommand): Promise<void> {
+  if (command.type === 'open-routines-tab') {
+    await openRoutinesTab(command.sessionId, command.botId);
+    return;
+  }
   if (command.type === 'open-web-browser') {
     await openUrlInSidebarBrowser(command.sessionId, command.url);
     return;
@@ -70,6 +75,18 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
       requestNonce: command.requestNonce,
       hostSessionId: command.hostSessionId ?? null,
     });
+    return;
+  }
+  if (command.type === 'toggle-review-tab') {
+    await ensureHydrated(command.sessionId);
+    const bucket = getBucket(command.sessionId);
+    const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
+    const hostAlreadyVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
+    if (reviewTab && bucket.activeTabId === reviewTab.id && hostAlreadyVisible) {
+      await closeTab(command.sessionId, reviewTab.id);
+      return;
+    }
+    await addOrFocusSingletonTab(command.sessionId, 'review', null);
     return;
   }
   await ensureHydrated(command.sessionId);

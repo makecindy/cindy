@@ -98,10 +98,11 @@ function renderPreviewPage(
       ...base,
       pageKind: 'desktop-login',
       copyKind: 'login.browserCallback',
-      action: { ...action, label: login.returnButton },
+      action: success ? undefined : { ...action, label: login.returnButton },
       variant: success ? 'success' : 'error',
       title: success ? login.successTitle : login.errorTitle,
       body: success ? login.successBody : login.errorBody,
+      closeCountdown: success ? login.closeCountdown : undefined,
       detail: success ? undefined : 'STATE_MISMATCH',
     });
   }
@@ -170,7 +171,7 @@ function renderToolbar(
 <title>Cindy OAuth 回调页预览</title>
 <style>
 *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-rows:auto 1fr;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:#ececea;color:#262626}
-.toolbar{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #d7d7d4;background:#f8f8f6}.title{font-size:14px;font-weight:600;margin-right:auto}.field{display:flex;align-items:center;gap:6px;font-size:12px;color:#737373}select,.open{height:34px;border:1px solid #c7c7c3;border-radius:8px;background:#fff;color:#262626;padding:0 10px;font:inherit}.open{display:inline-flex;align-items:center;text-decoration:none;font-size:12px}iframe{width:100%;height:100%;border:0;background:#f8f8f6}@media(max-width:720px){.toolbar{align-items:stretch;flex-wrap:wrap}.title{width:100%;margin:0}.field{flex:1;min-width:140px}.field select{width:100%}}
+.toolbar{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #d7d7d4;background:#f8f8f6}.title{font-size:14px;font-weight:600;margin-right:auto}.field{display:flex;align-items:center;gap:6px;font-size:12px;color:#737373}select,.open,.script-open{height:34px;border:1px solid #c7c7c3;border-radius:8px;background:#fff;color:#262626;padding:0 10px;font:inherit}.open,.script-open{display:inline-flex;align-items:center;text-decoration:none;font-size:12px;cursor:pointer}.script-open{appearance:none}iframe{width:100%;height:100%;border:0;background:#f8f8f6}@media(max-width:720px){.toolbar{align-items:stretch;flex-wrap:wrap}.title{width:100%;margin:0}.field{flex:1;min-width:140px}.field select{width:100%}}
 </style>
 </head>
 <body>
@@ -180,13 +181,15 @@ function renderToolbar(
   <label class="field">语言<select id="lang">${langOptions}</select></label>
   <label class="field">主题<select id="theme">${themeOptions}</select></label>
   <a class="open" id="open" target="_blank" rel="noreferrer">单独打开</a>
+  <button class="script-open" id="script-open" type="button">脚本打开测试</button>
 </div>
 <iframe id="preview" title="OAuth result page preview"></iframe>
 <script>
 const fields={kind:document.querySelector('#kind'),lang:document.querySelector('#lang'),theme:document.querySelector('#theme')};
-const frame=document.querySelector('#preview');const open=document.querySelector('#open');
+const frame=document.querySelector('#preview');const open=document.querySelector('#open');const scriptOpen=document.querySelector('#script-open');
 function refresh(){const query=new URLSearchParams({kind:fields.kind.value,lang:fields.lang.value,theme:fields.theme.value});const page='/page?'+query;frame.src=page;open.href=page;history.replaceState(null,'','/?'+query)}
 Object.values(fields).forEach((field)=>field.addEventListener('change',refresh));refresh();
+scriptOpen.addEventListener('click',()=>window.open(open.href,'_blank'));
 </script>
 </body>
 </html>`;

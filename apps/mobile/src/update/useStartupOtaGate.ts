@@ -2,15 +2,16 @@
 // loading 门(避免先显示旧 UI 再 reload 的闪帧)。gate 不满足(非自建 / dev / updates 不可用)时
 // 直接 ready=true,不阻塞、不发起任何网络。判定逻辑在 startupOtaUpdate.ts(纯函数、已单测)。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Updates from 'expo-updates';
-import { IS_OTA_SELFHOST, OTA_SERVER_BASE_URL, REVIEW_MODE } from '@/config/env';
+import { IS_OTA_SELFHOST, REVIEW_MODE } from '@/config/env';
 import {
   runEmergencyOtaRecovery,
   runStartupOtaUpdate,
   type StartupOtaOutcome,
 } from './startupOtaUpdate';
-import { updateChannelRequestHeaders } from './canaryChannelStore';
+import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
+import { runSelfHostedOtaRequest, type OtaRequestClient } from './otaRequestCoordinator';
 import {
   clearOtaReloadGuardIfLaunched,
   readOtaReloadGuard,
@@ -49,68 +50,52 @@ function logStartupOtaLaunch(outcome: StartupOtaOutcome): void {
   );
 }
 
-export function useStartupOtaGate(isCanary = false): boolean {
+export function useStartupOtaGate(channel: UpdateChannel = 'release'): boolean {
   // 仅自建变体 + 非 dev + expo-updates 运行时可用才走热更门;其余一律直接放行。
   // 审核模式(清单 review 送审版本号命中当前二进制版本)本门关闭:启动不走 JS
   // 显式 check→fetch→reload,直接进主界面(expo-updates 原生层的后台静默检查是
   // build-time 配置,不受此字段控制,边界见 maker-shared clientEndpoints 的
   // CLIENT_ENDPOINT_REVIEW_KEY)。REVIEW_MODE 是 live binding,本 hook 挂载在
   // 端点闸门 ready 之后,读到的必是清单匹配结果。
-  const enabled = IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled && !REVIEW_MODE;
-  const [ready, setReady] = useState(!enabled);
+  const baseEnabled = IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled && !REVIEW_MODE;
+  const [ready, setReady] = useState(!baseEnabled);
   const started = useRef(false);
-  const configuredChannelRef = useRef<boolean | null>(null);
-
-  const configureUpdateUrl = useCallback(() => {
-    if (!OTA_SERVER_BASE_URL) {
-      throw new Error('endpoint manifest missing mobileUpdateBaseUrl');
-    }
-    Updates.setUpdateURLAndRequestHeadersOverride({
-      updateUrl: `${OTA_SERVER_BASE_URL}/manifest`,
-      requestHeaders: updateChannelRequestHeaders(isCanary),
-    });
-    configuredChannelRef.current = isCanary;
-  }, [isCanary]);
-
-  // feature-flags 在登录/切账号后可能更新 channel；启动检查只跑一次，但
-  // expo-updates 仍必须马上切换 request header，否则本进程会把下一个账号
-  // 的请求发到上一个账号的 canary/stable 指针。stable 的空 header 也会
-  // 覆盖掉之前的 canary header。
-  useEffect(() => {
-    if (!enabled || configuredChannelRef.current === isCanary) return;
-    try {
-      configureUpdateUrl();
-    } catch {
-      // 真正的启动检查会把配置异常按 fail-open 处理；这里仅提前同步配置，
-      // 失败不能阻断主界面或后续重试。
-    }
-  }, [configureUpdateUrl, enabled, isCanary]);
 
   useEffect(() => {
-    if (!enabled || started.current) return;
+    // 非自建变体:ready 初值已是 true,无需处理。
+    if (!baseEnabled) return;
+    if (started.current) return;
     started.current = true; // 只冷启一次(不随 resume 重跑)
     let cancelled = false;
-    const otaDeps = {
-      enabled,
-      configureUpdateUrl,
-      checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
-      fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
-      reloadAsync: () => Updates.reloadAsync(),
+    const otaDeps = (client: OtaRequestClient) => ({
+      enabled: true,
+      // URL + requestHeaders 已由 runSelfHostedOtaRequest 事务式配置。
+      configureUpdateUrl: () => undefined,
+      checkForUpdateAsync: client.checkForUpdateAsync,
+      fetchUpdateAsync: client.fetchUpdateAsync,
+      reloadAsync: client.reloadAsync,
       isEmergencyLaunch: () => Updates.isEmergencyLaunch,
       currentUpdateId: () => Updates.updateId,
       isReloadBlocked: async (targetUpdateId: string) =>
         shouldBlockOtaReload(await readOtaReloadGuard(), targetUpdateId),
       recordReload: recordOtaReload,
-    };
-    void runStartupOtaUpdate(otaDeps).then((outcome) => {
+    });
+
+    void runSelfHostedOtaRequest(
+      channel,
+      (client) => runStartupOtaUpdate(otaDeps(client)),
+    ).then((outcome) => {
       logStartupOtaLaunch(outcome);
       // emergency launch:门已放行,修复版热更改在后台找(绝不 reload,见
       // runEmergencyOtaRecovery)。fire-and-forget——它的结果不影响本次启动,
       // 只是让下一次冷启动有机会跑上修复版,而不是等用户去清应用数据。
       if (outcome === 'emergency-launch') {
-        void runEmergencyOtaRecovery(otaDeps).then((recovery) => {
+        void runSelfHostedOtaRequest(
+          channel,
+          (client) => runEmergencyOtaRecovery(otaDeps(client)),
+        ).then((recovery) => {
           console.info('[ota] emergency recovery', JSON.stringify({ recovery }));
-        });
+        }).catch(() => undefined);
       }
       // 'reloading' 时 app 正在重启,保持 loading 门直到重启;其余情况放行进 App。
       if (!cancelled && outcome !== 'reloading') setReady(true);
@@ -121,7 +106,7 @@ export function useStartupOtaGate(isCanary = false): boolean {
       if (!cancelled) setReady(true);
     });
     return () => { cancelled = true; };
-  }, [configureUpdateUrl, enabled]);
+  }, [baseEnabled, channel]);
 
   return ready;
 }

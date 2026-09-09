@@ -2,6 +2,7 @@ export interface SessionDrawerRouteTarget {
   deviceId: string;
   deviceName: string;
   sessionId: string;
+  focusClientId?: string;
 }
 
 export interface SessionRouteParamsNavigation {
@@ -25,5 +26,6 @@ export function switchDrawerSessionInPlace(
     deviceId: target.deviceId,
     deviceName: target.deviceName,
     sessionId: target.sessionId,
+    ...(target.focusClientId ? { focusClientId: target.focusClientId } : {}),
   });
 }

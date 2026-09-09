@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
+import { defaultEffortForCapabilities } from '@cindy/model-providers';
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -81,7 +82,7 @@ function isProviderModel(value: unknown): boolean {
     value.contextWindow > 0 &&
     Array.isArray(efforts) &&
     efforts.every((effort) => typeof effort === 'string') &&
-    (defaultEffort === null ||
+    (defaultEffort === undefined || defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
     isOptionalBoolean(value.disabled) &&
     isOptionalBoolean(value.supportsFastMode) &&
@@ -97,10 +98,28 @@ function isProviderRoute(value: unknown): boolean {
   );
 }
 
+function sanitizeProviderModels(
+  models: unknown,
+): Record<string, unknown[]> | null {
+  if (!isRecord(models)) return null;
+  const sanitized: Record<string, unknown[]> = {};
+  for (const [agent, entries] of Object.entries(models)) {
+    if (!Array.isArray(entries)) return null;
+    sanitized[agent] = entries.filter(isProviderModel).map((entry: Record<string, unknown>) =>
+      entry.defaultEffort === undefined
+        ? { ...entry, defaultEffort: defaultEffortForCapabilities(entry.efforts as string[]) }
+        : entry,
+    );
+  }
+  return sanitized;
+}
+
 function isProviderView(value: unknown): value is ProviderView {
   if (!isRecord(value)) return false;
   const routing = value.routing;
-  const models = value.models;
+  const models = sanitizeProviderModels(value.models);
+  if (!models) return false;
+  value.models = models;
   return (
     typeof value.id === 'string' &&
     value.id.length > 0 &&
@@ -109,10 +128,6 @@ function isProviderView(value: unknown): value is ProviderView {
     value.agents.every((agent) => typeof agent === 'string') &&
     (routing === undefined ||
       (isRecord(routing) && Object.values(routing).every(isProviderRoute))) &&
-    isRecord(models) &&
-    Object.values(models).every(
-      (entries) => Array.isArray(entries) && entries.every(isProviderModel),
-    ) &&
     typeof value.connected === 'boolean' &&
     isOptionalBoolean(value.suspended)
   );
@@ -122,7 +137,12 @@ export function parseDeviceProvidersPayload(value: unknown): DeviceProvidersPayl
   if (!isRecord(value)) {
     throw new Error('Invalid provider list response');
   }
-  if (!Array.isArray(value.providers) || !value.providers.every(isProviderView)) {
+  if (!Array.isArray(value.providers)) {
+    throw new Error('Invalid provider list response');
+  }
+  const rawProviders = value.providers;
+  const providersIn = rawProviders.filter(isProviderView);
+  if (providersIn.length === 0 && rawProviders.length > 0) {
     throw new Error('Invalid provider list response');
   }
   const overrides = value.modelVisibilityOverrides;
@@ -137,7 +157,7 @@ export function parseDeviceProvidersPayload(value: unknown): DeviceProvidersPayl
   // 但 model-providers 的 connectedProvidersForAgent 需要每个声明的 agent 有一个
   // routing entry 才会把供应商视为可用。只在远程解析边界补齐空 entry，不改变本机
   // registry 对缺失 route 的严格语义，也保留已有 disabled 标记。
-  const providers = value.providers.map((provider) => {
+  const providers = providersIn.map((provider) => {
     const routing = { ...(provider.routing ?? {}) } as ProviderView['routing'];
     for (const agent of provider.agents) {
       if (routing[agent as keyof ProviderView['routing']] === undefined) {

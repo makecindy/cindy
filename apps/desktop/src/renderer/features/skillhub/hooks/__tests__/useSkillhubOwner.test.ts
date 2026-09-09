@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast, type ToastOptions } from '@/lib/toast';
+
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@/lib/toast', () => ({ toast: {
+  warning: vi.fn(() => 'cleanup-notice'), dismiss: vi.fn(), success: vi.fn(), error: vi.fn(),
+} }));
 
 vi.mock('../useSkillSync', () => ({
   registerSyncStoreSetters: vi.fn(),
@@ -30,6 +36,27 @@ describe('SkillHub data-owner bootstrap', () => {
     await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(2));
 
     expect(scan).toHaveBeenLastCalledWith({ projects: [] });
+  });
+
+  it('restores cleanup notices from scanning and invalidates old actions across owner changes', async () => {
+    reset();
+    const retry = vi.fn(async () => ({ complete: true }));
+    window.electronAPI.skillhub.retryUninstallCleanup = retry;
+    scan.mockResolvedValue({ success: true, skills: [], sources: [], pendingCleanups: [{ token: 'receipt', name: 'example' }] });
+    await refresh();
+    await refresh();
+    expect(toast.warning).toHaveBeenCalledOnce();
+    const firstAction = (vi.mocked(toast.warning).mock.calls[0]![1] as ToastOptions).action!;
+    setSkillhubDataOwner('another-owner');
+    firstAction.onClick();
+    expect(retry).not.toHaveBeenCalled();
+    await refresh();
+    const newAction = (vi.mocked(toast.warning).mock.calls.at(-1)![1] as ToastOptions).action!;
+    newAction.onClick();
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledOnce());
+    expect(retry).toHaveBeenCalledWith('receipt');
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith('skillhub.management.cleanupComplete'));
+    reset();
   });
 
   it('makes a stale refresh wait for and return the newest scan result', async () => {

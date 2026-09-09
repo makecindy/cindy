@@ -1,11 +1,10 @@
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
-import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import {
   addRecentFolder,
   FolderPickerPopover,
@@ -163,28 +162,6 @@ export function ProjectChip({
         className="[&>span:nth-child(2)]:min-w-[94px] max-w-[220px] gap-[7px]"
       />
     </FolderPickerPopover>
-  );
-}
-
-/**
- * Scheduler compatibility adapter: keep the persisted scheduler kind shape,
- * while sharing the same AgentSelect dropdown used by IM settings and chat.
- */
-export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onChange: (v: AgentKind) => void; disabled?: boolean }) {
-  return (
-    <AgentSelect
-      value={agentKindToVendor(value)}
-      disabled={disabled}
-      side="top"
-      // ScheduleFormDialog 是 Radix modal。MorphPopover 的 custom portal 不在
-      // Dialog focus scope 内，动画结束聚焦选中项时会被拉回并立即自动收起；
-      // 此处使用 Radix Popover，让嵌套焦点与 outside-interaction 语义正确组合。
-      useMorphPopover={false}
-      overlayContentClassName="z-[10010]"
-      onChange={(vendor) => {
-        onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex');
-      }}
-    />
   );
 }
 
@@ -378,7 +355,7 @@ export function ScheduleChip({
   const intervalIsPreset = timingPresentation.kind !== 'intervalExact';
   const scheduleUnset = intervalMs === undefined && cronExpr.trim() === '';
   const scheduleSummary = intervalMs === undefined
-    ? summarizeConfig(normalizeScheduleConfig(config))
+    ? summarizeConfig(normalizeScheduleConfig(config), t)
     : formatIntervalDuration(intervalMs, i18n.resolvedLanguage ?? i18n.language);
   const chipLabel = scheduleUnset
     ? t('scheduler.chips.chooseTime')
@@ -575,21 +552,21 @@ function ScheduleConfigPanel({
         {(mode === 'daily' || mode === 'weekdays') && (
           <>
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode, ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
         {mode === 'weekly' && (
           <>
             <WeekdayRow value={panelConfig.weekday} onFocus={commit} onChange={(weekday) => onUpdate({ mode: 'weekly', weekday })} />
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode: 'weekly', ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
         {mode === 'monthly' && (
           <>
             <MonthDayRow value={panelConfig.monthDay} onFocus={commit} onChange={(monthDay) => onUpdate({ mode: 'monthly', monthDay })} />
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode: 'monthly', ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
       </div>
@@ -931,6 +908,7 @@ function WeekdayRow({
   onFocus: () => void;
   multi?: boolean;
 }) {
+  const { t } = useTranslation();
   const selected = multi ? [1, 2, 3, 4, 5] : [value];
   return (
     <div className="flex min-h-[34px] w-full items-center">
@@ -949,9 +927,11 @@ function WeekdayRow({
                   ? 'border-transparent bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'border-[var(--cmd-palette-border)] bg-transparent text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:border-[var(--cmd-palette-border)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               )}
-              aria-label={WEEKDAY_LABELS[day]}
+              aria-label={t(`scheduler.presentation.weekday.full.${day}`)}
             >
-              {WEEKDAY_SHORT[day]}
+              {t(`scheduler.presentation.weekday.short.${day}`, {
+                defaultValue: WEEKDAY_SHORT[day],
+              })}
             </button>
           );
         })}
@@ -1044,6 +1024,8 @@ function previewConfigFor(mode: EditableScheduleMenuMode, current: CodexSchedule
 }
 
 export function ModelEffortChip({
+  onSelect,
+  onFollowSession,
   agentKind,
   modelValue,
   onChangeModel,
@@ -1057,6 +1039,8 @@ export function ModelEffortChip({
   fastMode,
   onChangeFast,
 }: {
+  onSelect: NonNullable<React.ComponentProps<typeof ModelSelectorContent>['onUnifiedSelect']>;
+  onFollowSession: () => void;
   agentKind: AgentKind;
   modelValue: string;
   onChangeModel: (v: string) => void;
@@ -1075,7 +1059,7 @@ export function ModelEffortChip({
   onChangeProviderId: (providerId: string) => void;
   /** 0 个 / 引导连接来源时跳设置→供应商页;不传则来源轨不显示「连接」入口。 */
   onNavigateToProviders?: () => void;
-  /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。heartbeat 态不传 → Edit 无 Fast。 */
+  /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
   fastMode?: boolean;
   onChangeFast?: (v: boolean) => void;
 }) {
@@ -1104,6 +1088,7 @@ export function ModelEffortChip({
     },
     [disabled, discovery],
   );
+  const pickerAgents = useModelPickerAgents(agentKind);
   const caps = useAgentCapabilities(agentKind);
   // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
@@ -1130,9 +1115,12 @@ export function ModelEffortChip({
   const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
   const effectiveId = followsSessionModel ? '' : modelValue || getScheduleDefaultModel(agentKind);
   const current = models.find((m) => m.id === effectiveId);
-  const allowedEfforts = (current?.efforts ?? []) as readonly EffortValue[];
-  const fallbackEffort = (current?.defaultEffort ?? 'high') as EffortValue;
-  const effectiveEffort: EffortValue = effortValue && allowedEfforts.includes(effortValue) ? effortValue : fallbackEffort;
+  const sourceId = effectiveSourceIdForModel(providers, providerId || null, effectiveId, agentKind);
+  const source = providers.find((provider) => provider.id === sourceId);
+  const catalogModel = source ? getModel(source, effectiveId, agentKind) : undefined;
+  const effectiveEffort = effortValue || catalogModel?.defaultEffort || current?.defaultEffort || '';
+  const modelLabel = catalogModel?.name || current?.displayName || effectiveId;
+  const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
   const display = followsSessionModel
     ? [
@@ -1142,9 +1130,8 @@ export function ModelEffortChip({
         : null,
       effortValue ? effortLabel(effortValue) : null,
     ].filter(Boolean).join(' · ')
-    : current
-      ? `${current.displayName} · ${allowedEfforts.length ? effortLabel(effectiveEffort) : t('scheduler.chips.model.effortDefault')}`
-      : t('scheduler.chips.model.default');
+    : [agentLabel, modelLabel, effectiveEffort ? effortLabel(effectiveEffort as EffortValue) : null,
+      fastMode ? '⚡' : null].filter(Boolean).join(' · ');
 
   // railSources 仅用于 nativeDefault 归一化(下拉宽度由 ModelSelectorContent 内容自适应,见 w-auto)。
   const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
@@ -1212,6 +1199,9 @@ export function ModelEffortChip({
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
         <ModelSelectorContent
+          fastModeConfigurable={['codex', 'pi']}
+          unifiedAgents={pickerAgents}
+          onUnifiedSelect={onSelect}
           vendorKey={vendorKey}
           modelId={effectiveId}
           effort={effectiveEffort}
@@ -1221,8 +1211,9 @@ export function ModelEffortChip({
           onFastModeChange={onChangeFast}
           onDismiss={() => setOpenWithoutAutoRefresh(false)}
           currentProviderId={providerId || null}
-          onProviderChange={(pid, reconciledModelId, reconciledEffort) => {
+          onProviderChange={(pid, reconciledModelId, reconciledEffort, reconciledFast) => {
             onChangeProviderId(pid && pid !== nativeDefault ? pid : '');
+            if (reconciledFast !== undefined) onChangeFast?.(reconciledFast);
             if (reconciledModelId) onChangeModel(reconciledModelId);
             if (reconciledEffort !== undefined) {
               onChangeEffort(reconciledEffort as EffortValue | '');
@@ -1242,9 +1233,7 @@ export function ModelEffortChip({
                   active: isFollowingSession,
                   label: t('scheduler.chips.model.followSession'),
                   onFollow: () => {
-                    onChangeModel('');
-                    onChangeEffort('');
-                    onChangeProviderId('');
+                    onFollowSession();
                   },
                 }
               : undefined

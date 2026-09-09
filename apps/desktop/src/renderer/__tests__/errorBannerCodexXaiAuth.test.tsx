@@ -74,6 +74,23 @@ describe('ErrorBanner Codex xAI auth classification', () => {
   });
 });
 
+describe('ErrorBanner context-overflow retry', () => {
+  it('keeps Retry when automatic rollover failed and recovery is still available', () => {
+    const onRetry = vi.fn();
+    render(
+      createElement(ErrorBanner, {
+        error: "This model's maximum prompt length is 500000",
+        errorReason: 'context-overflow',
+        retryText: 'retry-token',
+        onRetry,
+      }),
+    );
+    const retry = screen.getByTitle('chat.errorBanner.retryTitle');
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledWith('retry-token');
+  });
+});
+
 describe('ErrorBanner network retry guidance', () => {
   it('shows Codex reconnect progress while the turn keeps running', () => {
     render(createElement(ErrorBanner, {

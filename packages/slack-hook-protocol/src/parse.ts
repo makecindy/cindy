@@ -782,6 +782,27 @@ function validateQueryRequest(p: Record<string, unknown>): string | null {
   if (!QUERY_KINDS.includes(p.kind as never)) {
     return `query.request.kind must be one of: ${QUERY_KINDS.join(', ')}`;
   }
+  if (p.kind === 'session-new') {
+    if (!isPlainObject(p.sessionNew)) {
+      return 'query.request.sessionNew must be an object when kind is session-new';
+    }
+    const request = p.sessionNew;
+    if (!isNonEmptyString(request.previousExternalKey)) {
+      return 'query.request.sessionNew.previousExternalKey must be a non-empty string';
+    }
+    if (!isNonEmptyString(request.externalKey)) {
+      return 'query.request.sessionNew.externalKey must be a non-empty string';
+    }
+    if (request.externalKey === request.previousExternalKey) {
+      return 'query.request.sessionNew.externalKey must differ from previousExternalKey';
+    }
+    if (!isNonEmptyString(request.workspace)) {
+      return 'query.request.sessionNew.workspace must be a non-empty string';
+    }
+    const optErr = validateDispatchOptions(request.options);
+    if (optErr) return optErr;
+    return validateSource(request.source);
+  }
   return null;
 }
 
@@ -881,7 +902,10 @@ function validateQueryResponse(p: Record<string, unknown>): string | null {
     return null;
   }
   if (kind === 'models') return validateAgentModels(p.agents);
-  return validateQuerySessions(p.sessions);
+  if (kind === 'sessions') return validateQuerySessions(p.sessions);
+  return isNonEmptyString(p.sessionId)
+    ? null
+    : 'query.response.sessionId must be a non-empty string when kind is session-new';
 }
 
 function validateTaskCancel(p: Record<string, unknown>): string | null {

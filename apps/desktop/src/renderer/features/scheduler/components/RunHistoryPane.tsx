@@ -208,9 +208,9 @@ export function RunHistoryPane({
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
   const cronText = s.manual
     ? t('scheduler.detail.manualTrigger')
-    : summarizeConfig(cronToConfig(s.cronExpr));
+    : summarizeConfig(cronToConfig(s.cronExpr), t);
   const agentText = humanizeAgentKind(s.agentKind);
-  const dest = describeDestination(s);
+  const dest = describeDestination(s, t);
   // title 兜底显示完整路径，悬浮即可看到 — basename 视觉简洁，hover/title 看全量
   const titleText = `${cronText} · ${agentText} · ${dest.prefix}${dest.workingDir ?? ''}`;
 

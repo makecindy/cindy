@@ -7,6 +7,11 @@ import type {
   RemoteScheduleWriteInput,
   RemoteTemplateParameter,
 } from './scheduleTypes';
+import {
+  presentationText,
+  type PresentationInterpolationValue,
+  type PresentationLocalizer,
+} from './presentationLocalization.js';
 
 export const MOBILE_SCHEDULE_EFFORT_VALUES = [
   'minimal',
@@ -48,6 +53,9 @@ export interface MobileScheduleDraft {
    */
   intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
+  modelAgentKind?: RemoteScheduleAgentKind;
+  /** Form-only baseline; changing the selected model must not overwrite this binding. */
+  boundAgent?: { sessionId: string; agentKind: RemoteScheduleAgentKind };
   model: string;
   providerId: string;
   effort: string;
@@ -66,6 +74,56 @@ export interface MobileScheduleDraft {
 export interface ScheduleDraftValidation {
   field: keyof MobileScheduleDraft;
   message: string;
+  messageFallback: string;
+  messageKey: string;
+  messageValues?: Readonly<Record<string, PresentationInterpolationValue>>;
+}
+
+export interface TemplateParamValidation extends ScheduleDraftValidation {
+  parameterKey: string;
+}
+
+function scheduleDraftValidation(
+  field: keyof MobileScheduleDraft,
+  localizer: PresentationLocalizer | undefined,
+  messageKey: string,
+  messageFallback: string,
+  messageValues?: Readonly<Record<string, PresentationInterpolationValue>>,
+): ScheduleDraftValidation {
+  return {
+    field,
+    message: presentationText(localizer, messageKey, messageFallback, messageValues),
+    messageFallback,
+    messageKey,
+    messageValues,
+  };
+}
+
+export function localizeScheduleDraftValidation(
+  validation: ScheduleDraftValidation,
+  localizer?: PresentationLocalizer,
+): string {
+  return presentationText(
+    localizer,
+    validation.messageKey,
+    validation.messageFallback,
+    validation.messageValues,
+  );
+}
+
+export function localizeTemplateParamValidation(
+  validation: TemplateParamValidation,
+  template: Pick<RemoteScheduleTemplate, 'parameters'>,
+  localizer?: PresentationLocalizer,
+): string {
+  const parameter = template.parameters?.find((item) => item.key === validation.parameterKey);
+  const label = parameter?.label || validation.parameterKey;
+  return presentationText(
+    localizer,
+    validation.messageKey,
+    `请输入模板参数：${label}`,
+    { label },
+  );
 }
 
 const DEFAULT_CRON = '0 9 * * *';
@@ -113,8 +171,11 @@ export function createMobileScheduleDraft(
     timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
-    agentKind: schedule.agentKind ?? 'claude-code',
-    model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
+    agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',
+    modelAgentKind: schedule.modelAgentKind,
+    boundAgent: schedule.targetSessionId
+      ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
+    model: schedule.model ?? (schedule.targetSessionId ? '' : defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code')),
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
@@ -146,6 +207,7 @@ export function applyTemplateToMobileScheduleDraft(
   paramValues: Record<string, string> = {},
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
+  const model = template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind));
   return {
     ...draft,
     name: template.name || draft.name,
@@ -157,7 +219,9 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     intervalMinutesTouched: true,
     agentKind,
-    model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
+    // A template producing a model is an explicit choice, including a legacy bound draft.
+    ...(model.trim() || draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
+    model,
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
     providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
@@ -182,11 +246,22 @@ export function applyTemplateToMobileScheduleDraft(
 export function validateTemplateParamValues(
   template: Pick<RemoteScheduleTemplate, 'parameters'>,
   values: Record<string, string>,
-): string | null {
+  localizer?: PresentationLocalizer,
+): TemplateParamValidation | null {
   for (const parameter of template.parameters ?? []) {
     if (!parameter.required) continue;
     if ((values[parameter.key] ?? parameter.default ?? '').trim()) continue;
-    return `请输入模板参数：${parameter.label || parameter.key}`;
+    const label = parameter.label || parameter.key;
+    return {
+      ...scheduleDraftValidation(
+        'prompt',
+        localizer,
+        'devices.automations.presentation.validation.templateParameter',
+        `请输入模板参数：${label}`,
+        { label },
+      ),
+      parameterKey: parameter.key,
+    };
   }
   return null;
 }
@@ -218,36 +293,78 @@ export function applyMobileTemplateParams(
 
 export function validateMobileScheduleDraft(
   draft: MobileScheduleDraft,
+  localizer?: PresentationLocalizer,
 ): ScheduleDraftValidation | null {
-  if (!draft.name.trim()) return { field: 'name', message: '请输入任务名称' };
+  if (!draft.name.trim()) {
+    return scheduleDraftValidation(
+      'name',
+      localizer,
+      'devices.automations.presentation.validation.name',
+      '请输入任务名称',
+    );
+  }
   // "仅运行脚本"任务(桌面端高级功能)prompt 合法为空——mobile 没有编辑
   // scriptConfig 的 UI,不该拿桌面端才有意义的字段挡住这类任务在移动端的其它
   // 可编辑操作(改名、通知开关等),否则打开/保存一个桌面端创建的脚本任务在
   // 移动端会先于任何改动就校验失败(codex review 发现)。
   if (draft.executionMode !== 'script' && !draft.prompt.trim()) {
-    return { field: 'prompt', message: '请输入任务提示词' };
+    return scheduleDraftValidation(
+      'prompt',
+      localizer,
+      'devices.automations.presentation.validation.prompt',
+      '请输入任务提示词',
+    );
   }
-  if (!draft.timezone.trim()) return { field: 'timezone', message: '请输入时区' };
+  if (!draft.timezone.trim()) {
+    return scheduleDraftValidation(
+      'timezone',
+      localizer,
+      'devices.automations.presentation.validation.timezone',
+      '请输入时区',
+    );
+  }
   if (draft.targetSessionId.trim() === MOBILE_SCHEDULE_PENDING_SESSION_ID) {
-    return { field: 'targetSessionId', message: '请选择要绑定的任务' };
+    return scheduleDraftValidation(
+      'targetSessionId',
+      localizer,
+      'devices.automations.presentation.validation.boundSession',
+      '请选择要绑定的任务',
+    );
   }
   if (draft.runMode === 'recurring') {
-    if (!draft.cronExpr.trim()) return { field: 'cronExpr', message: '请输入 cron 表达式' };
-    const intervalError = validateIntervalMinutes(draft.intervalMinutes);
-    if (intervalError) return { field: 'intervalMinutes', message: intervalError };
+    if (!draft.cronExpr.trim()) {
+      return scheduleDraftValidation(
+        'cronExpr',
+        localizer,
+        'devices.automations.presentation.validation.cron',
+        '请输入 cron 表达式',
+      );
+    }
+    const intervalValidation = validateIntervalMinutes(draft.intervalMinutes, localizer);
+    if (intervalValidation) return intervalValidation;
   }
   if (
     draft.workspaceKind === 'project' &&
     !draft.targetSessionId.trim() &&
     !draft.workingDir.trim()
   ) {
-    return { field: 'workingDir', message: '请输入项目目录' };
+    return scheduleDraftValidation(
+      'workingDir',
+      localizer,
+      'devices.automations.presentation.validation.workingDir',
+      '请输入项目目录',
+    );
   }
   if (draft.effort.trim() && !isMobileScheduleEffort(draft.effort.trim())) {
-    return {
-      field: 'effort',
-      message: `推理强度只能是 ${MOBILE_SCHEDULE_EFFORT_VALUES.join(' / ')}`,
-    };
+    return scheduleDraftValidation(
+      'effort',
+      localizer,
+      'devices.automations.presentation.validation.effort',
+      `推理强度只能是 ${MOBILE_SCHEDULE_EFFORT_VALUES.join(' / ')}`,
+      {
+        values: MOBILE_SCHEDULE_EFFORT_VALUES.join(' / '),
+      },
+    );
   }
   return null;
 }
@@ -283,7 +400,8 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
           && typeof draft.sourceIntervalMs === 'number'
         ? draft.sourceIntervalMs
         : null,
-    agentKind: draft.agentKind,
+    agentKind: draft.executionMode !== 'script' && targetSessionId && draft.boundAgent?.sessionId === targetSessionId
+      ? draft.boundAgent.agentKind : draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
     persistentSession: draft.persistentSession,
@@ -312,11 +430,21 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     };
   }
 
+  // An empty model follows the bound task. Omit the marker so the full-form
+  // device-link normalization can clear an existing explicit selection.
+  if (draft.modelAgentKind && draft.model.trim()) {
+    input.modelAgentKind = draft.agentKind;
+    input.model = draft.model.trim();
+    input.providerId = draft.providerId.trim();
+    input.effort = draft.effort.trim();
+    input.fastMode = draft.fastMode;
+  }
+
   if (targetSessionId) {
     input.useWorktree = false;
-    input.model = draft.model.trim() || undefined;
+    input.model = draft.modelAgentKind ? draft.model.trim() : draft.model.trim() || undefined;
     const effort = draft.effort.trim();
-    input.effort = isMobileScheduleEffort(effort) ? effort : undefined;
+    input.effort = isMobileScheduleEffort(effort) ? effort : draft.modelAgentKind ? '' : undefined;
     return input;
   }
 
@@ -336,8 +464,10 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   return input;
 }
 
+export class ScheduleModelSelectionUnsupportedError extends Error {}
+
 /**
- * 按被控端能力决定 intervalMs 清空的 wire 形态(device-link 两端版本会错位):
+ * 按被控端能力决定 intervalMs 清空与显式模型选择的 wire 形态(device-link 两端版本会错位):
  *
  * - 新 desktop(capabilities.supportsScheduleIntervalNullClear)认识 null,
  *   IPC 入口把它归一化成引擎的「带 key 的 undefined」显式清空;
@@ -350,10 +480,20 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
  */
 export function applyScheduleWireCompat(
   input: RemoteScheduleWriteInput,
-  opts: { supportsIntervalNullClear: boolean },
+  opts: { supportsIntervalNullClear: boolean; supportsModelSelection?: boolean },
 ): RemoteScheduleWriteInput {
-  if (opts.supportsIntervalNullClear || input.intervalMs !== null) return input;
-  const { intervalMs: _legacyDropped, ...legacy } = input;
+  let compatible = input;
+  if (!opts.supportsModelSelection && input.modelAgentKind) {
+    // Old hosts cannot apply an explicit bound selection. Do not report a successful
+    // save when Harness/Fast would be ignored. Fresh creation can use its legacy fields.
+    if (input.targetSessionId) {
+      throw new ScheduleModelSelectionUnsupportedError('Scheduled model selection requires a newer desktop');
+    }
+    const { modelAgentKind, ...legacy } = input;
+    compatible = { ...legacy, agentKind: modelAgentKind };
+  }
+  if (opts.supportsIntervalNullClear || compatible.intervalMs !== null) return compatible;
+  const { intervalMs: _legacyDropped, ...legacy } = compatible;
   return legacy;
 }
 
@@ -365,6 +505,8 @@ export function updateDraftAgentKind(
   return {
     ...draft,
     agentKind,
+    // Selecting another Harness must leave follow mode even on pre-upgrade bindings.
+    ...(draft.modelAgentKind || draft.targetSessionId.trim() ? { modelAgentKind: agentKind } : {}),
     model: defaultModelFor(agentKind),
     providerId: '',
     effort: '',
@@ -480,12 +622,21 @@ export function updateDraftSessionMode(
 export function updateDraftBoundSessionId(
   draft: MobileScheduleDraft,
   targetSessionId: string,
+  targetAgentKind?: RemoteScheduleAgentKind | 'cc',
 ): MobileScheduleDraft {
   const nextTargetSessionId = targetSessionId.trim() || MOBILE_SCHEDULE_PENDING_SESSION_ID;
+  const boundAgent = targetAgentKind && nextTargetSessionId !== MOBILE_SCHEDULE_PENDING_SESSION_ID
+    ? { sessionId: nextTargetSessionId, agentKind: targetAgentKind === 'cc' ? 'claude-code' as const : targetAgentKind }
+    : draft.boundAgent?.sessionId === nextTargetSessionId ? draft.boundAgent : undefined;
+  const agentKind = !draft.modelAgentKind && !draft.model.trim() && boundAgent
+    ? boundAgent.agentKind : draft.agentKind;
   if (
     !draft.persistentSession &&
     draft.targetSessionId === nextTargetSessionId &&
-    !draft.useWorktree
+    !draft.useWorktree &&
+    draft.boundAgent?.sessionId === boundAgent?.sessionId &&
+    draft.boundAgent?.agentKind === boundAgent?.agentKind &&
+    draft.agentKind === agentKind
   ) {
     return draft;
   }
@@ -493,7 +644,24 @@ export function updateDraftBoundSessionId(
     ...draft,
     persistentSession: false,
     targetSessionId: nextTargetSessionId,
+    boundAgent,
+    agentKind,
     useWorktree: false,
+  };
+}
+
+/** Resolve manually entered ids before saving; never infer a new target's Harness from its model override. */
+export async function resolveMobileScheduleBinding(
+  draft: MobileScheduleDraft,
+  getSession: (id: string) => Promise<{ id: string; agentKind: RemoteScheduleAgentKind | 'cc' }>,
+): Promise<MobileScheduleDraft> {
+  if (draft.executionMode === 'script' || !hasMobileScheduleRealBinding(draft)) return draft;
+  const targetSessionId = draft.targetSessionId.trim();
+  if (draft.boundAgent?.sessionId === targetSessionId) return draft;
+  const target = await getSession(targetSessionId);
+  return {
+    ...updateDraftBoundSessionId(draft, targetSessionId, target.agentKind),
+    persistentSession: draft.persistentSession,
   };
 }
 
@@ -513,14 +681,27 @@ function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
   return DEFAULT_CLAUDE_MODEL;
 }
 
-function validateIntervalMinutes(value: string): string | null {
+function validateIntervalMinutes(
+  value: string,
+  localizer?: PresentationLocalizer,
+): ScheduleDraftValidation | null {
   if (!value.trim()) return null;
   const minutes = Number(value);
   if (!Number.isInteger(minutes) || minutes <= 0) {
-    return '间隔分钟必须是正整数';
+    return scheduleDraftValidation(
+      'intervalMinutes',
+      localizer,
+      'devices.automations.presentation.validation.intervalPositiveInteger',
+      '间隔分钟必须是正整数',
+    );
   }
   if (intervalMinutesToCronExpr(minutes) === null) {
-    return '分钟间隔只支持 1-59 分钟，或 1-23 小时的整点间隔';
+    return scheduleDraftValidation(
+      'intervalMinutes',
+      localizer,
+      'devices.automations.presentation.validation.intervalUnsupported',
+      '分钟间隔只支持 1-59 分钟，或 1-23 小时的整点间隔',
+    );
   }
   return null;
 }

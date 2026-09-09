@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +10,8 @@ describe('native e2e environment', () => {
     const runner = readFileSync(resolve(process.cwd(), 'scripts/maestro-e2e.mjs'), 'utf8');
 
     expect(helper).toContain('const MIN_JAVA_MAJOR = 17');
+    expect(helper).toContain('env.ANDROID_STUDIO_JDK');
+    expect(helper).toContain("env.ProgramFiles, 'Android', 'Android Studio', 'jbr'");
     expect(helper).toContain("brew', ['--prefix', 'openjdk@17']");
     expect(helper).toContain("'/usr/libexec/java_home', ['-v', version]");
     expect(helper).toContain('JAVA_HOME: javaHome');
@@ -166,15 +169,29 @@ describe('native e2e environment', () => {
     expect(mockHost).toContain('return { discarded: true, branchDeleted: true };');
   });
 
-  it('can run reconnect smoke as a self-contained local relay gate', () => {
+  it('keeps the reconnect entry usable without the removed server and auth APIs', () => {
+    const script = 'scripts/device-link-reconnect-smoke.mjs';
     const packageJson = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
-    const reconnectSmoke = readFileSync(resolve(process.cwd(), 'scripts/device-link-reconnect-smoke.mjs'), 'utf8');
-
     expect(packageJson).toContain('"test:e2e:reconnect:local": "node scripts/device-link-reconnect-smoke.mjs --start-server"');
-    expect(reconnectSmoke).toContain("if (arg === '--start-server')");
-    expect(reconnectSmoke).toContain('function startServerProcess()');
-    expect(reconnectSmoke).toContain("XDT_DEV_AUTH_ENABLED: process.env.XDT_DEV_AUTH_ENABLED ?? '1'");
-    expect(reconnectSmoke).toContain('Or pass --start-server.');
+    const result = spawnSync(process.execPath, [script, '--start-server', '--dry-run'], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('formal DeviceLinkClient');
+    expect(result.stdout).toContain('loopback WebSocket contract fixture');
+    expect(readFileSync(resolve(process.cwd(), script), 'utf8')).not.toContain('/api/auth/dev-login');
+
+    const missingCredentials = spawnSync(process.execPath, [script, '--interop'], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
+      env: {
+        ...process.env,
+        CINDY_TEST_RELAY_URL: '',
+        CINDY_TEST_HOST_TOKEN: '',
+        CINDY_TEST_CONTROLLER_TOKEN: '',
+      },
+    });
+    expect(missingCredentials.status).toBe(2);
+    expect(missingCredentials.stderr).toContain('isolated test environment');
   });
 
   it('keeps cloud voice preflight opt-in and secret-redacted with the credential relay removed', () => {
@@ -251,7 +268,7 @@ describe('native e2e environment', () => {
     );
     // Scope the ordering check to the shared local-session cleanup: both logout and confirmed
     // account deletion use it, and refresh-token deletion remains serialized against refresh.
-    const cleanupStart = authContext.indexOf('const clearLocalSession = useCallback(async () => {');
+    const cleanupStart = authContext.indexOf('const clearLocalSession = useCallback(async (');
     const cleanupBody = authContext.slice(cleanupStart, authContext.indexOf('}, [', cleanupStart));
     const refreshTokenDelete = cleanupBody.indexOf('await serializeRefreshTokenMutation(() =>');
     expect(refreshTokenDelete).toBeGreaterThanOrEqual(0);
@@ -260,8 +277,13 @@ describe('native e2e environment', () => {
     expect(cleanupBody.indexOf('await clearAllMobileVoiceInputHistories().catch(() => undefined);')).toBeLessThan(refreshTokenDelete);
     const logoutStart = authContext.indexOf('const logout = useCallback(async () => {');
     const logoutBody = authContext.slice(logoutStart, authContext.indexOf('}, [', logoutStart));
-    expect(logoutBody).toContain('await persistAccountDeletionReceipt(null);');
-    expect(logoutBody).toContain('await clearLocalSession();');
+    expect(logoutBody).toContain('clearMobileLoginCredentialsForLogout({');
+    expect(logoutBody).toContain(
+      'clearReceipt: () => persistAccountDeletionReceipt(null),',
+    );
+    expect(logoutBody).toContain(
+      'await clearLocalSession({ persistedAuthAlreadyCleared: true });',
+    );
     // 启动(auth 初始化)也要做一次存量清理,防旧版本留下的桌面 key 继续躺在
     // secure storage(与 LEGACY_* token 清理同一批)。
     expect(authContext).toContain('clearAllMobileVoiceCredentials().catch(() => undefined),');
@@ -299,7 +321,10 @@ describe('native e2e environment', () => {
     );
     expect(sessionScreen).toContain('const latestDocument = latestDraft.trim()');
     expect(sessionScreen).toContain('readCurrentDraft: () => draftRef.current');
-    expect(sessionScreen).toContain('onDraftChanged: setComposerDraft');
+    expect(sessionScreen).toContain('if (selection) input?.rememberSelection(text, selection);');
+    expect(sessionScreen).toContain('writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });');
+    expect(sessionScreen).toContain('reconcileComposerVoiceDraft(composerDocumentRef.current, update)');
+    expect(sessionScreen).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
     expect(sessionScreen).toContain('createMobileVoiceControllerSession({');
     expect(sessionScreen).not.toContain('await sendLatest({ draftOverride: latestDraft });');
   });

@@ -9,7 +9,10 @@ import type {
   AutomationSessionGroup,
   SidebarSessionEntry,
 } from '../lib/automationSidebarGrouping';
-import { getEntryActivityMs, groupAutomationSidebarEntries } from '../lib/automationSidebarGrouping';
+import {
+  getEntryActivityMs,
+  groupAutomationSidebarEntries,
+} from '../lib/automationSidebarGrouping';
 import { getSessionListCollapseView } from '../lib/sessionListCollapse';
 import { AutomationSessionGroupItem } from './AutomationSessionGroupItem';
 import { SessionItem } from './SessionItem';
@@ -26,7 +29,10 @@ function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): bo
   return entry.group.sessions.some((s) => s.id === activeSessionId);
 }
 /** 条目是否需关注(group 命中其下任一会话)。 */
-function entryHasAttention(entry: SidebarSessionEntry, notifications: ReadonlySet<string>): boolean {
+function entryHasAttention(
+  entry: SidebarSessionEntry,
+  notifications: ReadonlySet<string>,
+): boolean {
   if (entry.kind === 'session') return notifications.has(entry.session.id);
   return entry.group.sessions.some((s) => notifications.has(s.id));
 }
@@ -63,6 +69,13 @@ export interface SessionEntryListProps {
   sectionCollapsed?: boolean;
   /** 项目置顶到列表模式时，项目内会话复用满宽列表卡片；其它场景保持紧凑文字行。 */
   sessionVariant?: 'text' | 'list';
+  /**
+   * list 变体的分割线规则是「每行画底线 + 列表首行补顶线」。混排主列表把**每条**
+   * 散排对话各渲染成一个独立的 SessionEntryList,每个都自认首行 → 上一行底线 +
+   * 本行顶线叠成两根(2026-08-12 实机反馈)。这种「本列表只是长列表中的一段」的
+   * 场景传 false 关掉顶线;真正的列表首行(置顶段 / 项目内会话)保持默认。
+   */
+  showFirstDivider?: boolean;
 }
 
 export interface SessionEntryRowsProps extends Omit<
@@ -70,6 +83,8 @@ export interface SessionEntryRowsProps extends Omit<
   'sessions' | 'scheduleSessionIndex' | 'sectionCollapsed'
 > {
   entries: readonly SidebarSessionEntry[];
+  automationGroupCollapsed?: (groupKey: string) => boolean;
+  onAutomationGroupCollapsedChange?: (groupKey: string, collapsed: boolean) => void;
 }
 
 export function SessionEntryRows({
@@ -90,6 +105,9 @@ export function SessionEntryRows({
   matchMap,
   sourceLabelMap,
   sessionVariant = 'text',
+  showFirstDivider = true,
+  automationGroupCollapsed,
+  onAutomationGroupCollapsedChange,
 }: SessionEntryRowsProps) {
   return (
     <>
@@ -122,8 +140,9 @@ export function SessionEntryRows({
               key={entry.session.id}
               {...commonProps}
               variant="list"
-              isFirst={index === 0}
+              isFirst={showFirstDivider && index === 0}
               hideBottomDivider={nextHighlighted}
+              sourceLabel={sourceLabelMap?.get(entry.session.id)}
             />
           ) : (
             <SessionItem
@@ -147,8 +166,17 @@ export function SessionEntryRows({
             onAction={onAction}
             onRename={onRename}
             onTogglePin={onTogglePin}
+            onMoveSession={onMoveSession}
+            projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
+            collapsed={automationGroupCollapsed?.(entry.group.id)}
+            onCollapsedChange={
+              onAutomationGroupCollapsedChange
+                ? (collapsed) => onAutomationGroupCollapsedChange(entry.group.id, collapsed)
+                : undefined
+            }
             indented={indented}
+            matchMap={matchMap}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={sessionVariant}
           />

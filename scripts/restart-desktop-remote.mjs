@@ -1,14 +1,27 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   applyDesktopDevStartupConfig,
+  DESKTOP_DEV_REGIONS,
   desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
 } from './shared/desktop-dev-region.mjs';
+import {
+  buildDesktopDevVerdictFromFailure,
+  buildDesktopDevVerdictFromWhoami,
+  desktopRestartArgvConflictMessage,
+  normalizeDesktopRestartArgv,
+  printDesktopDevVerdict,
+  resolveIsolatedArg,
+  restartContextFromArgv,
+  SHARED_USERDATA_ARG,
+} from './desktop-dev-verdict.mjs';
+import { collectDesktopWhoamiReport } from './desktop-whoami.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -16,7 +29,13 @@ const gracefulTimeoutMs = 3000;
 const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
 const startupReadyTimeoutMs = 120_000;
+export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
+const isolatedAuthLaunchProofTtlMs = 10 * 60_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
+const desktopDevCacheRelativeDirs = Object.freeze([
+  path.join('apps', 'desktop', 'node_modules', '.vite'),
+  path.join('apps', 'desktop', '.vite'),
+]);
 
 /**
  * 产品默认 userData 目录基名。⚠️ 值必须与
@@ -107,8 +126,9 @@ export function commandContainsPath(command, candidatePath) {
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const hasStartBoundary = before === undefined || /\s|["'=]/.test(before);
-    // 命令行字符串无法安全区分裸 root 参数后接参数，和带空格的 sibling 路径。
-    // kill 旧进程宁可漏杀也不能误杀其它 checkout，所以这里不把空格当结束边界。
+    // 命令行无法安全区分「裸 root 后接参数」和「带空格的 sibling 路径」。
+    // 空格当结束边界会误伤 sibling；不当结束会漏认裸路径。desktop-dev 命令行里
+    // checkout 都以 /node_modules 或 /apps/desktop 出现，保守匹配足够。
     const hasEndBoundary = after === undefined || after === '/' || after === '"' || after === "'";
     if (hasStartBoundary && hasEndBoundary) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
@@ -222,6 +242,42 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+export function desktopDevCacheDirs(root = rootDir) {
+  return desktopDevCacheRelativeDirs.map((entry) => path.join(root, entry));
+}
+
+function assertDesktopDevCachePath(root, target) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  const allowedTargets = new Set(desktopDevCacheDirs(resolvedRoot).map((entry) => path.resolve(entry)));
+  if (!allowedTargets.has(resolvedTarget)) {
+    throw new Error(`Refusing to remove unexpected desktop dev cache path: ${resolvedTarget}`);
+  }
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Refusing to remove desktop dev cache outside repository: ${resolvedTarget}`);
+  }
+}
+
+export function clearDesktopDevCaches(root = rootDir, { logger = console } = {}) {
+  const removed = [];
+  for (const cacheDir of desktopDevCacheDirs(root)) {
+    assertDesktopDevCachePath(root, cacheDir);
+    if (!fs.existsSync(cacheDir)) continue;
+    fs.rmSync(cacheDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    removed.push(cacheDir);
+  }
+
+  if (removed.length > 0) {
+    logger.log(
+      `==> Cleared desktop dev cache: ${removed.map((entry) => path.relative(root, entry)).join(', ')}`,
+    );
+  } else {
+    logger.log('==> Desktop dev cache already clean.');
+  }
+  return removed;
+}
+
 function listWindowsProcesses() {
   const script = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -283,10 +339,9 @@ function hasRepositoryCheckoutPath(command, checkoutPaths = repositoryWorktreePa
 }
 
 // 沿 ppid 链向上找祖先里有没有 Cindy desktop dev 进程。
-// 用途：拦住"agent 跑在 Cindy desktop dev 进程内还调 restart"这种自杀场景——
-// 一旦 taskkill /T 走到祖先 dev 进程，整棵树（包括正在跑的本脚本）都会被收掉，
-// 新 cmd 要么没机会起、要么撞上未释放的端口/文件锁，结果是看不懂的 ELIFECYCLE。
-// 检测到就直接 exit 1 + 清晰提示，让 agent 把控制权交回给开发者。
+// 用途：拦住"agent 跑在【当前 checkout】的 desktop dev 里还调 restart"这种自杀场景——
+// kill 作用域虽已限本 checkout，但祖先就是这份 checkout 时仍会把本脚本一起收掉。
+// 宿主是正式版或另一个 worktree 时不拦：杀不到那份祖先，隔离启动可以继续。
 function findDevAncestor() {
   const processes = process.platform === 'win32' ? listWindowsProcesses() : listPosixProcesses();
   const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
@@ -329,6 +384,16 @@ export function isRepositoryDesktopDevProcess(proc, checkoutPaths, currentPid = 
   if (!proc.pid || proc.pid === currentPid) return false;
   const command = normalize(proc.command);
   if (command.includes('apps/claude-code-bin') || command.includes('apps/codex-bin')) return false;
+  // Durable PI Subagent runners intentionally outlive the Electron main
+  // process. They use the bundled Electron executable with
+  // ELECTRON_RUN_AS_NODE=1, so the executable path alone looks like a Desktop
+  // dev process. Killing them alongside the app turns a normal dev restart
+  // into an unexpected terminal failure instead of letting the next Desktop
+  // instance reattach to the still-running durable job.
+  if (
+    command.includes('/runtime/pi-subagent-runs/')
+    && command.includes('/runner.cjs')
+  ) return false;
 
   return hasRepositoryCheckoutPath(command, checkoutPaths) && hasDesktopDevSignature(command);
 }
@@ -447,6 +512,228 @@ function userDataDirNamed(dirName) {
   }
   const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config');
   return path.join(xdgConfig, dirName);
+}
+
+export function hasIsolationIntent(argv = [], env = process.env) {
+  return argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='))
+    || env.XDT_ISOLATED === '1';
+}
+
+export function officialProductionUserDataDirs() {
+  return DESKTOP_DEV_REGIONS.map((region) => productionUserDataDir(region));
+}
+
+/** 与 devCliFlags ISOLATION_NAME_RE 一致：非法名字回落默认沙箱，不把路径段写进目录。 */
+export const ISOLATION_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+export function sanitizeIsolationName(raw) {
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  return ISOLATION_NAME_RE.test(name) ? name : '';
+}
+
+export function looksLikeCindyManagedUserDataDir(dir) {
+  const base = path.basename(path.resolve(dir));
+  return /^(Cindy|CindyGlobal|CindyDev)(?:-dev2(?:-[A-Za-z0-9_-]+)?)?$/i.test(base);
+}
+
+/** Named `--isolated=<name>` must not inherit another Cindy profile. Custom dirs stay. */
+export function inheritedUserDataBlocksNamedIsolation(isolatedArg, envUserDataDir, derivedDir) {
+  if (!envUserDataDir || !isolatedArg || !isolatedArg.includes('=')) return false;
+  if (!looksLikeCindyManagedUserDataDir(envUserDataDir)) return false;
+  return canonicalizeUserDataDir(envUserDataDir) !== canonicalizeUserDataDir(derivedDir);
+}
+
+function volumeIsCaseInsensitive(existingDir) {
+  let dir = existingDir;
+  for (;;) {
+    const parent = path.dirname(dir);
+    const atRoot = parent === dir;
+    if (!atRoot) {
+      try {
+        if (fs.statSync(parent).dev !== fs.statSync(dir).dev) return false;
+      } catch {
+        return false;
+      }
+    }
+    const name = path.basename(dir);
+    const flipped = name.replace(/[a-zA-Z]/g, (ch) => (
+      ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase()
+    ));
+    if (flipped !== name) {
+      try {
+        return fs.realpathSync.native(path.join(parent, flipped))
+          === fs.realpathSync.native(dir);
+      } catch {
+        return false;
+      }
+    }
+    if (atRoot) return false;
+    dir = parent;
+  }
+}
+
+function foldCaseOption(dir) {
+  try {
+    fs.statSync(dir);
+    return { foldCase: volumeIsCaseInsensitive(dir) };
+  } catch {
+    return {};
+  }
+}
+
+export function canonicalizeUserDataDir(dir) {
+  const resolved = path.resolve(dir);
+  try {
+    const real = fs.realpathSync.native(resolved);
+    return volumeIsCaseInsensitive(real) ? real.toLowerCase() : real;
+  } catch {
+    // 叶子还不存在:沿最近存在祖先做 realpath,再按该卷语义接回剩余段。
+  }
+  let current = resolved;
+  const suffix = [];
+  for (;;) {
+    const parent = path.dirname(current);
+    suffix.unshift(path.basename(current));
+    if (parent === current) return resolved;
+    current = parent;
+    try {
+      const ancestorReal = fs.realpathSync.native(current);
+      const joined = path.join(ancestorReal, ...suffix);
+      return volumeIsCaseInsensitive(ancestorReal) ? joined.toLowerCase() : joined;
+    } catch {
+      // 继续上溯
+    }
+  }
+}
+
+export function isOfficialProductionUserDataDir(dir) {
+  const resolved = canonicalizeUserDataDir(dir);
+  return officialProductionUserDataDirs().some(
+    (official) => canonicalizeUserDataDir(official) === resolved,
+  );
+}
+
+export function resolveRestartTargetUserDataDir({
+  envUserDataDir,
+  isolatedArg,
+  isolatedEnv,
+  isolatedName,
+  selectedRegion,
+  rootDir: targetRoot = rootDir,
+}) {
+  const resolvedIsolatedArg = resolveIsolatedArg(isolatedArg, targetRoot, foldCaseOption(targetRoot));
+  const isolationName = sanitizeIsolationName(
+    resolvedIsolatedArg ? parseIsolationName(resolvedIsolatedArg) : isolatedName,
+  );
+  const isolated = Boolean(resolvedIsolatedArg) || isolatedEnv === '1';
+  return envUserDataDir
+    || (isolated
+      ? defaultIsolatedUserDataDir(isolationName, selectedRegion)
+      : productionUserDataDir(selectedRegion));
+}
+
+/**
+ * Credential cleanup/write access is more destructive than ordinary isolated
+ * startup. Trust only the v2 sandbox selected by this restart invocation; an
+ * ambient userData path must not gain that authority by spoofing the epoch.
+ */
+export function isTrustedIsolatedAuthUserDataDir({
+  isolatedArg,
+  userDataDir,
+  userDataDirEpoch,
+  userDataDerivedByRestart,
+  selectedRegion,
+}) {
+  if (
+    !isolatedArg
+    || !userDataDir
+    || userDataDirEpoch !== '1'
+    || userDataDerivedByRestart !== true
+  ) {
+    return false;
+  }
+  const expectedDir = defaultIsolatedUserDataDir(
+    parseIsolationName(isolatedArg),
+    selectedRegion,
+  );
+  if (userDataDirEntryIsAliasOrUnverifiable(userDataDir)) return false;
+  return canonicalizeUserDataDir(userDataDir) === canonicalizeUserDataDir(expectedDir);
+}
+
+function userDataDirEntryIsAliasOrUnverifiable(dir) {
+  try {
+    return fs.lstatSync(path.resolve(dir)).isSymbolicLink();
+  } catch (error) {
+    // A not-yet-created derived sandbox is valid at the early trust gate. Every other lstat
+    // failure is ambiguous and must not authorize credential cleanup or OAuth writes.
+    return error?.code !== 'ENOENT';
+  }
+}
+
+/**
+ * Mint a single-use proof only after this restart invocation derived and accepted the sandbox.
+ * The nonce crosses Terminal/runner/Forge via env; the bound file is the second factor that an
+ * inherited ambient env does not carry. Desktop consumes it from its actual app userData path.
+ */
+export function createIsolatedAuthLaunchProof({
+  userDataDir,
+  isolationName = '',
+  now = Date.now(),
+  nonce = randomBytes(32).toString('hex'),
+}) {
+  // Recheck at the write boundary: process cleanup between authorization and proof minting leaves
+  // time for the derived directory to be swapped for a symlink / Windows junction.
+  if (userDataDirEntryIsAliasOrUnverifiable(userDataDir)) {
+    throw new Error('Refusing isolated-auth launch proof for a symlink or junction userData path');
+  }
+  const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+  const tempPath = `${proofPath}.${process.pid}.${nonce}.tmp`;
+  const proof = {
+    version: 1,
+    nonce,
+    userDataDir: canonicalizeUserDataDir(userDataDir),
+    profileKind: 'isolated-sandbox',
+    epoch: 1,
+    isolationName,
+    issuedAtMs: now,
+    expiresAtMs: now + isolatedAuthLaunchProofTtlMs,
+  };
+  fs.rmSync(proofPath, { force: true });
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(proof)}\n`, { flag: 'wx', mode: 0o600 });
+    fs.renameSync(tempPath, proofPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+  return nonce;
+}
+
+/**
+ * Refuse when restarting would suicide this checkout's host, or when a shared
+ * start is hosted by another checkout's desktop-dev (same official profile).
+ * Isolated start from another checkout is safe: kill scope is ownRootDir.
+ */
+export function shouldRefuseHostedRestart(ancestor, {
+  preserveRunning,
+  ownRootDir,
+  isolated = false,
+}) {
+  if (!ancestor || preserveRunning) return false;
+  if (commandContainsPath(ancestor.command, ownRootDir)) return true;
+  return isolated !== true;
+}
+
+export function hostedRestartRefusal(ancestor, { ownRootDir }) {
+  return commandContainsPath(ancestor.command, ownRootDir)
+    ? {
+      code: 'HOSTED_RESTART_REFUSED',
+      message: "Refusing to restart from within this checkout's desktop dev process tree.",
+    }
+    : {
+      code: 'HOSTED_SHARED_REFUSED',
+      message: 'Cannot share official userData while hosted by another checkout desktop dev.',
+    };
 }
 
 export function defaultIsolatedUserDataDir(isolationName, region = 'global') {
@@ -584,8 +871,19 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
+    // 沙箱凭证隔离(--isolated-auth):不与 ~/.codex 共享 auth 硬链,auth-adapters 消费。
+    ['XDT_ISOLATED_AUTH', env.XDT_ISOLATED_AUTH],
+    ['XDT_ALLOW_DEV_OAUTH_WRITE', env.XDT_ALLOW_DEV_OAUTH_WRITE],
+    ['XDT_ISOLATED_AUTH_PROOF', env.XDT_ISOLATED_AUTH_PROOF],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
+    // A long-lived Terminal can retain a previous smoke run's environment.
+    // Override its value even when this invocation did not request the smoke.
+    ['CINDY_CUA_SMOKE', env.CINDY_CUA_SMOKE === '1' ? '1' : '0'],
+    // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
+    ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
+    // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。
+    ['XDT_WIRE_DIAGNOSTICS_STRICT', env.XDT_WIRE_DIAGNOSTICS_STRICT],
     ['CINDY_IOS_SIMULATOR_NATIVE_H264', env.CINDY_IOS_SIMULATOR_NATIVE_H264],
     ['CINDY_IOS_SIMULATOR_NATIVE_HID', env.CINDY_IOS_SIMULATOR_NATIVE_HID],
     ['XDT_TAPDB_DEV', env.XDT_TAPDB_DEV],
@@ -606,7 +904,6 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
   ].filter(([, value]) => value);
-  if (envEntries.length === 0) return '';
 
   if (platform === 'win32') {
     return envEntries
@@ -631,7 +928,9 @@ function launchInSystemTerminal(mode) {
       stdio: 'inherit',
       windowsHide: false,
     });
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    if (result.status !== 0) {
+      throw new Error(`Failed to open cmd window (exit ${result.status ?? 1})`);
+    }
     console.log(`==> Opened desktop ${mode} dev in a new cmd window.`);
     return;
   }
@@ -644,8 +943,7 @@ function launchInSystemTerminal(mode) {
     });
     child.unref();
     if (child.pid === undefined) {
-      console.error('Failed to open Terminal.app');
-      process.exit(1);
+      throw new Error('Failed to open Terminal.app');
     }
     console.log(`==> Opened desktop ${mode} dev in a new Terminal window.`);
     return;
@@ -671,6 +969,8 @@ function startDesktopDev(mode) {
   });
 
   child.on('exit', (code, signal) => {
+    // --wait-ready owns the process exit so it can print DESKTOP_DEV_VERDICT.
+    if (process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE) return;
     if (signal) process.kill(process.pid, signal);
     process.exit(code ?? 0);
   });
@@ -719,6 +1019,11 @@ function writeDesktopStartupStatus(statusPath, status) {
   }
 }
 
+function attachStartupFailure(error, status) {
+  error.startupStatus = status ?? null;
+  return error;
+}
+
 export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -726,12 +1031,15 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
     if (status?.state === 'ready') {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
-      return;
+      return status;
     }
     if (status?.state === 'failed') {
       fs.rmSync(statusPath, { force: true });
-      throw new Error(
-        `${formatDesktopStartupFailure(status)} Check the dev terminal, run \`pnpm desktop:whoami\`, and inspect apps/desktop/logs/.`,
+      throw attachStartupFailure(
+        new Error(
+          `${formatDesktopStartupFailure(status)} Check the dev terminal, run \`pnpm desktop:whoami\`, and inspect apps/desktop/logs/.`,
+        ),
+        status,
       );
     }
     await sleep(pollIntervalMs);
@@ -739,8 +1047,15 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
   // Keep a tombstone so a late Electron startup signal cannot recreate a stale
   // status file after this waiter has already reported timeout to its caller.
   writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
-  throw new Error(
-    `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
+  throw attachStartupFailure(
+    new Error(
+      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
+    ),
+    {
+      state: 'failed',
+      code: 'STARTUP_TIMEOUT',
+      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
+    },
   );
 }
 
@@ -754,8 +1069,24 @@ export function applyDesktopStartupConfigForPhase(options) {
   return applyDesktopDevStartupConfig(options);
 }
 
+export function clearInheritedIsolatedAuthAuthorization(env = process.env) {
+  delete env.XDT_ISOLATED_AUTH;
+  delete env.XDT_ALLOW_DEV_OAUTH_WRITE;
+  delete env.XDT_ISOLATED_AUTH_PROOF;
+}
+
 async function main() {
-  const argv = process.argv.slice(2);
+  // These capabilities are granted below only for this invocation's accepted --isolated-auth.
+  clearInheritedIsolatedAuthAuthorization();
+  let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
+  const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
+  if (sharedArgvConflict) throw new Error(sharedArgvConflict);
+  const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
+  const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir, foldCaseOption(rootDir));
+  if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {
+    argv = argv.map((arg) => (arg === rawIsolatedArg ? isolatedArg : arg));
+    console.log(`==> Isolated sandbox from worktree: ${parseIsolationName(isolatedArg)}`);
+  }
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
   const preserveRunning = argv.includes('--preserve-running');
@@ -767,7 +1098,34 @@ async function main() {
   const mode = argv.includes('--local') ? 'local' : 'remote';
   const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const selectedRegion = startupConfig?.region ?? resolveDesktopDevRegion(argv, process.env);
-  const isolatedArg = argv.find((a) => a === '--isolated' || a.startsWith('--isolated='));
+  let userDataDerivedByRestart = false;
+  let isolatedAuthAuthorizedByRestart = false;
+  if (isolatedArg && isolatedArg.includes('=')) {
+    const derivedDir = defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion);
+    if (inheritedUserDataBlocksNamedIsolation(isolatedArg, process.env.XDT_USER_DATA_DIR, derivedDir)) {
+      delete process.env.XDT_USER_DATA_DIR;
+      delete process.env.XDT_USER_DATA_DIR_EPOCH;
+      delete process.env.XDT_DEVICE_ID_OVERRIDE;
+      delete process.env.XDT_ISOLATED_NAME;
+      console.log(`==> Ignoring inherited Cindy profile so --isolated=${parseIsolationName(isolatedArg)} can use its own sandbox.`);
+    }
+  }
+  const isolationName = isolatedArg ? parseIsolationName(isolatedArg) : '';
+  const verdictContext = {
+    rootDir,
+    isolated: Boolean(isolatedArg) || process.env.XDT_ISOLATED === '1',
+    sandbox: isolationName || undefined,
+    local: mode === 'local',
+    region: selectedRegion,
+  };
+  const exitWithFailure = (code, message, details = []) => {
+    for (const line of details) console.error(line);
+    printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(new Error(message), {
+      ...verdictContext,
+      code,
+    }));
+    process.exit(1);
+  };
   if (preserveRunning && killOnly) {
     throw new Error('--preserve-running cannot be combined with the internal --kill-only stage');
   }
@@ -791,10 +1149,13 @@ async function main() {
       '--preserve-running only supports remote mode: sharing remote login storage with a local auth server could invalidate the persisted credential',
     );
   }
-  if (preserveRunning && isolatedArg) {
+  if (preserveRunning && hasIsolationIntent(argv, process.env)) {
     throw new Error(
-      '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated',
+      '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated or XDT_ISOLATED=1',
     );
+  }
+  if (startupConfig && argv.includes(SHARED_USERDATA_ARG)) {
+    console.log('==> Shared userData mode: dev keeps the legacy shared profile behavior instead of an isolated sandbox.');
   }
   if (startupConfig) {
     console.log(`==> Desktop region: ${startupConfig.region}`);
@@ -833,15 +1194,15 @@ async function main() {
   // ——服务端登录凭证按 (user, device) 一对一存,不派生的话沙箱登录会覆盖正式版
   // 的续期凭证,同机互踢。
   if (startupConfig && isolatedArg) {
-    let isolationName = '';
-    if (isolatedArg.includes('=')) {
-      isolationName = isolatedArg.slice('--isolated='.length);
-      // 名字白名单与主进程 devCliFlags 一致:目录跨平台安全 + deviceId 总长可控。
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(isolationName)) {
-        console.error(`==> Invalid --isolated name: "${isolationName}"`);
-        console.error('    Allowed: letters / digits / _ / -, max 32 chars. e.g. --isolated=feature-a');
-        process.exit(1);
-      }
+    if (isolationName && !/^[A-Za-z0-9_-]{1,32}$/.test(isolationName)) {
+      exitWithFailure(
+        'INVALID_ISOLATED_NAME',
+        `Invalid --isolated name: "${isolationName}"`,
+        [
+          `==> Invalid --isolated name: "${isolationName}"`,
+          '    Allowed: letters / digits / _ / -, max 32 chars. e.g. --isolated=feature-a',
+        ],
+      );
     }
     process.env.XDT_ISOLATED = '1';
     if (isolationName) process.env.XDT_ISOLATED_NAME = isolationName;
@@ -852,23 +1213,68 @@ async function main() {
       // 进入)或旧 checkout 启动都不带该信号 → 观察模式,防旧代码对同一显式
       // 路径以默认身份打开造成双身份互写(#912 review P1)。
       process.env.XDT_USER_DATA_DIR_EPOCH = '1';
+      userDataDerivedByRestart = true;
     }
-    fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
-    console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
+  }
+  // --isolated-auth: 沙箱凭证隔离 —— 启动时清掉本沙箱旧 auth(共享硬链与独立孤岛
+  // 都处理),再显式允许沙箱自己的 OAuth 写入；正式实例与本机 CLI 凭证不受影响。
+  // 隔离沙箱里测登录流程时必用:共享硬链下沙箱登录会改写共用凭证文件,把正式版
+  // 一起退登(2026-08-13 实测)。实现:置 XDT_ISOLATED_AUTH=1,经 devEnvPrefix
+  // 白名单透传,maker-host auth-adapters 消费(仅非 packaged 生效)。
+  if (startupConfig && argv.includes('--isolated-auth')) {
+    if (!isolatedArg) {
+      exitWithFailure(
+        'INVALID_ISOLATED_NAME',
+        '--isolated-auth requires --isolated: shared userData must not isolate credentials alone',
+        ['==> --isolated-auth requires --isolated: 共享 userData 的实例不该单独隔离凭证'],
+      );
+    }
+    if (!isTrustedIsolatedAuthUserDataDir({
+      isolatedArg,
+      userDataDir: process.env.XDT_USER_DATA_DIR,
+      userDataDirEpoch: process.env.XDT_USER_DATA_DIR_EPOCH,
+      userDataDerivedByRestart,
+      selectedRegion,
+    })) {
+      exitWithFailure(
+        'STARTUP_FAILED',
+        '--isolated-auth requires a userData sandbox derived by this restart invocation',
+        [
+          '==> Refusing --isolated-auth for an inherited or explicit XDT_USER_DATA_DIR.',
+          '    Unset XDT_USER_DATA_DIR and retry with --isolated-auth --isolated[=<name>].',
+        ],
+      );
+    }
+    process.env.XDT_ISOLATED_AUTH = '1';
+    process.env.XDT_ALLOW_DEV_OAUTH_WRITE = '1';
+    isolatedAuthAuthorizedByRestart = true;
+    console.log('==> Isolated auth: this sandbox will NOT share codex OAuth credentials with ~/.codex.');
   }
   if (startupConfig) ensureDesktopEnv();
 
   const devAncestor = findDevAncestor();
-  if (devAncestor && !preserveRunning) {
-    console.error('==> Detected this script is running inside an Cindy desktop dev process tree:');
-    console.error(`    ancestor pid ${devAncestor.pid}: ${devAncestor.command.slice(0, 180)}`);
-    console.error('==> Refusing to restart from within. Killing the ancestor would terminate this');
-    console.error('    script mid-flight and leave ports / file locks held by the dying process,');
-    console.error('    causing the new electron-forge to fail with ELIFECYCLE.');
-    console.error('==> Ask the user to restart from the terminal where they originally launched');
-    console.error(`    \`pnpm ${devScriptForMode(mode)}\` (Ctrl+C then re-run), or from any external shell`);
-    console.error('    not spawned by the desktop dev tree.');
-    process.exit(1);
+  if (shouldRefuseHostedRestart(devAncestor, {
+    preserveRunning,
+    ownRootDir: rootDir,
+    isolated: hasIsolationIntent(argv, process.env),
+  })) {
+    const refusal = hostedRestartRefusal(devAncestor, { ownRootDir: rootDir });
+    exitWithFailure(
+      refusal.code,
+      refusal.message,
+      [
+        `==> ${refusal.message}`,
+        `    ancestor pid ${devAncestor.pid}: ${devAncestor.command.slice(0, 180)}`,
+        refusal.code === 'HOSTED_RESTART_REFUSED'
+          ? '==> Ask the user to restart from the official Cindy app, another worktree, or an external terminal.'
+          : '==> Use --isolated=@worktree, or --preserve-running if you explicitly want shared login.',
+      ],
+    );
+  }
+  if (devAncestor && !preserveRunning && isolatedArg) {
+    console.log(
+      `==> Hosted by another checkout's desktop dev pid ${devAncestor.pid}; this isolated restart will not stop that host.`,
+    );
   }
   if (devAncestor && preserveRunning) {
     if (replaceRunningRoot && commandContainsPath(devAncestor.command, replaceRunningRoot)) {
@@ -887,23 +1293,49 @@ async function main() {
   // --isolated 名字,或用户自己停掉那个实例。preserve-running 不进此门 ——
   // 它的语义就是共享 userData 的被动预览。检测是尽力而为:靠 helper 进程命令行
   // 上的 --user-data-dir,对方实例刚启动还没起 helper 时可能漏检。
-  const targetUserDataDir = process.env.XDT_USER_DATA_DIR
-    || (isolatedArg
-      ? defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion)
-      : productionUserDataDir(selectedRegion));
+  const targetUserDataDir = resolveRestartTargetUserDataDir({
+    envUserDataDir: process.env.XDT_USER_DATA_DIR,
+    isolatedArg,
+    isolatedEnv: process.env.XDT_ISOLATED,
+    isolatedName: process.env.XDT_ISOLATED_NAME,
+    selectedRegion,
+  });
+  if (
+    hasIsolationIntent(argv, process.env)
+    && isOfficialProductionUserDataDir(targetUserDataDir)
+  ) {
+    throw new Error(
+      `--isolated cannot use the official Cindy profile (${targetUserDataDir}). ` +
+        'Omit XDT_USER_DATA_DIR, or point it at a sandbox directory.',
+    );
+  }
+  if (startupConfig && hasIsolationIntent(argv, process.env)) {
+    if (!process.env.XDT_USER_DATA_DIR) {
+      process.env.XDT_USER_DATA_DIR = targetUserDataDir;
+      process.env.XDT_USER_DATA_DIR_EPOCH = '1';
+    }
+    fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
+    const isolationName = isolatedArg
+      ? parseIsolationName(isolatedArg)
+      : (process.env.XDT_ISOLATED_NAME || '');
+    console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
+  }
   if (!preserveRunning) {
     const conflicts = listDesktopDevProcesses().filter(
       (proc) => !commandContainsPath(proc.command, rootDir)
         && commandUsesUserDataDir(proc.command, targetUserDataDir),
     );
     if (conflicts.length > 0) {
-      console.error(`==> Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`);
-      for (const proc of conflicts) {
-        console.error(`    pid ${proc.pid}: ${proc.command.slice(0, 180)}`);
-      }
-      console.error('==> Refusing to stop processes outside this checkout. Pick a different sandbox');
-      console.error('    name (--isolated=<name>), or stop that instance yourself and re-run.');
-      process.exit(1);
+      exitWithFailure(
+        'USERDATA_IN_USE',
+        `Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`,
+        [
+          `==> Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`,
+          ...conflicts.map((proc) => `    pid ${proc.pid}: ${proc.command.slice(0, 180)}`),
+          '==> Refusing to stop processes outside this checkout. Pick a different sandbox',
+          '    name (--isolated=<name>), or stop that instance yourself and re-run.',
+        ],
+      );
     }
   } else {
     const compatibility = inspectSharedUserDataRegion(
@@ -968,11 +1400,14 @@ async function main() {
         matchesReplacementRoot,
       );
       if (remainingAfterForce.length > 0) {
-        console.error(`==> Failed to stop ${remainingAfterForce.length} process(es) from ${replaceRunningRoot}; aborting restart.`);
-        for (const target of remainingAfterForce) {
-          console.error(`    still running ${target.pid}: ${target.command.slice(0, 180)}`);
-        }
-        process.exit(1);
+        exitWithFailure(
+          'STARTUP_FAILED',
+          `Failed to stop ${remainingAfterForce.length} process(es) from ${replaceRunningRoot}; aborting restart.`,
+          [
+            `==> Failed to stop ${remainingAfterForce.length} process(es) from ${replaceRunningRoot}; aborting restart.`,
+            ...remainingAfterForce.map((target) => `    still running ${target.pid}: ${target.command.slice(0, 180)}`),
+          ],
+        );
       }
 
       closeDarwinTerminalTtys(darwinTerminalTtys);
@@ -1000,11 +1435,14 @@ async function main() {
 
     const remainingAfterForce = await waitForDesktopDevProcessesToExit(forceTimeoutMs, matchesOwnRoot);
     if (remainingAfterForce.length > 0) {
-      console.error(`==> Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`);
-      for (const target of remainingAfterForce) {
-        console.error(`    still running ${target.pid}: ${target.command.slice(0, 180)}`);
-      }
-      process.exit(1);
+      exitWithFailure(
+        'STARTUP_FAILED',
+        `Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`,
+        [
+          `==> Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`,
+          ...remainingAfterForce.map((target) => `    still running ${target.pid}: ${target.command.slice(0, 180)}`),
+        ],
+      );
     }
 
     closeDarwinTerminalTtys(darwinTerminalTtys);
@@ -1012,18 +1450,45 @@ async function main() {
 
   if (killOnly) return;
 
+  if (!preserveRunning) clearDesktopDevCaches(rootDir);
+
   let startupStatusPath = null;
   if (waitReady) {
     startupStatusPath = createStartupStatusPath();
     writeDesktopStartupStatus(startupStatusPath, { state: 'pending', at: Date.now() });
     process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE = startupStatusPath;
   }
+  if (isolatedAuthAuthorizedByRestart) {
+    process.env.XDT_ISOLATED_AUTH_PROOF = createIsolatedAuthLaunchProof({
+      userDataDir: process.env.XDT_USER_DATA_DIR,
+      isolationName: process.env.XDT_ISOLATED_NAME || '',
+    });
+  }
   startDesktopDev(mode);
-  if (startupStatusPath) await waitForDesktopStartup(startupStatusPath);
+  if (startupStatusPath) {
+    try {
+      await waitForDesktopStartup(startupStatusPath);
+      const report = collectDesktopWhoamiReport({
+        rootDir,
+        userDataDir: process.env.XDT_USER_DATA_DIR,
+      });
+      const verdict = buildDesktopDevVerdictFromWhoami(report, verdictContext);
+      printDesktopDevVerdict(verdict);
+      if (verdict.state !== 'ready') process.exit(1);
+    } catch (error) {
+      printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, verdictContext));
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
+    printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, {
+      rootDir,
+      ...restartContextFromArgv(process.argv.slice(2)),
+    }));
     console.error(error);
     process.exit(1);
   });

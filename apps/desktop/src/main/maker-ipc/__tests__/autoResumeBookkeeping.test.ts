@@ -11,10 +11,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AutoResumeBookkeeping,
+  shouldSkipOrcaWorkerTerminal,
   type AutoResumeBookkeepingDeps,
   type AutoResumeOutcome,
+  type OrcaSuppressedTerminal,
   type SuppressedTurnError,
 } from '../autoResumeBookkeeping.js';
+
+function createOrcaTerminal(overrides?: Partial<OrcaSuppressedTerminal>): OrcaSuppressedTerminal {
+  return {
+    status: 'error',
+    finalText: '',
+    diagnostic: 'codex_reconnect_stalled',
+    capture: { sessionId: 's1', generation: 1 },
+    ...overrides,
+  };
+}
 
 function createHarness() {
   const persisted: Array<{ sessionId: string; detail: SuppressedTurnError }> = [];
@@ -22,14 +34,26 @@ function createHarness() {
   const guardRollbacks: string[] = [];
   const abandons: Array<{ sessionId: string; message?: string }> = [];
   const surfaced: Array<{ sessionId: string; detail: SuppressedTurnError }> = [];
+  const orcaFinalized: Array<{ sessionId: string; payload: OrcaSuppressedTerminal }> = [];
   const deps: AutoResumeBookkeepingDeps = {
     persistSuppressedError: (sessionId, detail) => persisted.push({ sessionId, detail }),
     surfaceSuppressedError: (sessionId, detail) => surfaced.push({ sessionId, detail }),
+    finalizeOrcaSuppressedTerminal: (sessionId, payload) =>
+      orcaFinalized.push({ sessionId, payload }),
     markOutcome: (sessionId, clientId, outcome) => outcomes.push({ sessionId, clientId, outcome }),
     rollbackGuardPendingResume: (sessionId) => guardRollbacks.push(sessionId),
-    abandonTakeover: (sessionId, message) => abandons.push({ sessionId, ...(message !== undefined ? { message } : {}) }),
+    abandonTakeover: (sessionId, message) =>
+      abandons.push({ sessionId, ...(message !== undefined ? { message } : {}) }),
   };
-  return { book: new AutoResumeBookkeeping(deps), persisted, surfaced, outcomes, guardRollbacks, abandons };
+  return {
+    book: new AutoResumeBookkeeping(deps),
+    persisted,
+    surfaced,
+    orcaFinalized,
+    outcomes,
+    guardRollbacks,
+    abandons,
+  };
 }
 
 beforeEach(() => {
@@ -118,12 +142,8 @@ describe('被压住的错误详情:必有人补落', () => {
     expect(h.book.rollbackReplacementPreview('s1', 'retry-1')).toBe(true);
     expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(true);
     expect(h.book.surfaceSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'old interruption' } },
-    ]);
-    expect(h.surfaced).toEqual([
-      { sessionId: 's1', detail: { message: 'old interruption' } },
-    ]);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
+    expect(h.surfaced).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
   });
 
   it('Island preview 不可用时 dispatch 仍切开新错误归属，但继续兜住旧 completion tail', () => {
@@ -155,12 +175,8 @@ describe('被压住的错误详情:必有人补落', () => {
     expect(h.book.discardSuppressedErrorForRetry('s1', 'retry-1')).toBe(false);
 
     expect(h.book.surfaceSuppressedError('s1')).toBe(true);
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'new interruption' } },
-    ]);
-    expect(h.surfaced).toEqual([
-      { sessionId: 's1', detail: { message: 'new interruption' } },
-    ]);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'new interruption' } }]);
+    expect(h.surfaced).toEqual([{ sessionId: 's1', detail: { message: 'new interruption' } }]);
   });
 
   it('replacement 的同步不可续跑终态可直接丢弃旧 dispatch owner', () => {
@@ -304,12 +320,12 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     // 排期的句柄,teardown 从此取消不了任何东西(codex P1)。
     const h = createHarness();
     const timers: Array<() => void> = [];
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, 'setTimeout')
-      .mockImplementation(((fn: () => void) => {
-        timers.push(fn);
-        return timers.length as unknown as ReturnType<typeof setTimeout>;
-      }) as typeof setTimeout);
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      fn: () => void,
+    ) => {
+      timers.push(fn);
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
 
     const first = vi.fn();
@@ -333,7 +349,9 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'old interruption' });
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     h.book.schedule('s1', 1_000, async (attempt) => {
       await gate;
       if (attempt.isCurrent()) {
@@ -361,7 +379,9 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     h.book.beginAttempt('s1', 7);
     h.book.stashSuppressedError('s1', { message: 'old interruption' }, 7);
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let callbackAttempt!: { isCurrent: () => boolean };
 
     h.book.schedule('s1', 7, 1_000, async (attempt) => {
@@ -396,7 +416,9 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     h.book.registerPendingOutcome('s1', 7, 'retry-1');
 
     h.book.settleOutcomeForClient('s1', 7, 'retry-1', 'failed');
-    expect(h.book.isCurrentAttempt('s1', 7), 'suppressed owner 仍在时不能提前删 attempt').toBe(true);
+    expect(h.book.isCurrentAttempt('s1', 7), 'suppressed owner 仍在时不能提前删 attempt').toBe(
+      true,
+    );
 
     h.book.finalizeSuppressedError('s1', 7, { surfaceBanner: true });
     expect(h.book.isCurrentAttempt('s1', 7)).toBe(false);
@@ -431,7 +453,9 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'old interruption' });
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     h.book.schedule('s1', 1_000, async (attempt) => {
       await gate;
       if (attempt.isCurrent()) {
@@ -444,9 +468,7 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     expect(h.book.supersedeUnclaimedErrorForUserIntervention('s1')).toBe(true);
     expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(false);
     expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(false);
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'old interruption' } },
-    ]);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
 
     release();
     await Promise.resolve();
@@ -512,9 +534,7 @@ describe('会话终止收尾', () => {
 
     h.book.teardown('s1');
 
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'old interruption' } },
-    ]);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
     expect(h.surfaced).toEqual([]);
     expect(h.book.hasSuppressedError('s1')).toBe(false);
   });
@@ -530,9 +550,7 @@ describe('会话终止收尾', () => {
     expect(h.book.rollbackReplacementPreview('s1', 'retry-1')).toBe(false);
     expect(h.book.surfaceSuppressedErrorForRetry('s1', 'retry-1')).toBe(false);
 
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'old interruption' } },
-    ]);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
     expect(h.surfaced).toEqual([]);
   });
 
@@ -549,5 +567,236 @@ describe('会话终止收尾', () => {
     expect(h.persisted).toEqual([]);
     expect(h.surfaced).toEqual([]);
     expect(h.book.hasSuppressedError('s1')).toBe(false);
+  });
+});
+
+describe('Orca L2 terminal 与 suppressed error 共用 owner', () => {
+  it('没有对应 error 时 stash Orca payload 失败，避免 silently skip-without-finalize', () => {
+    const h = createHarness();
+    expect(h.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal())).toBe(false);
+    expect(h.orcaFinalized).toEqual([]);
+  });
+
+  it('surface 用当初的 capture 恰好一次收口 Orca；重复 surface 是 no-op', () => {
+    const h = createHarness();
+    const payload = createOrcaTerminal({ capture: { sessionId: 's1', stamp: 7 } });
+    h.book.stashSuppressedError('s1', { message: 'boom' });
+    expect(h.book.stashOrcaSuppressedTerminal('s1', payload)).toBe(true);
+
+    expect(h.book.surfaceSuppressedError('s1')).toBe(true);
+    expect(h.book.surfaceSuppressedError('s1')).toBe(false);
+    expect(h.orcaFinalized).toEqual([{ sessionId: 's1', payload }]);
+  });
+
+  it('flush / discard / teardown 丢掉 payload，不把 L2 收成产品 error', () => {
+    const flushCase = createHarness();
+    flushCase.book.stashSuppressedError('s1', { message: 'boom' });
+    flushCase.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    expect(flushCase.book.flushSuppressedError('s1')).toBe(true);
+    expect(flushCase.orcaFinalized).toEqual([]);
+
+    const discardCase = createHarness();
+    discardCase.book.stashSuppressedError('s1', { message: 'boom' });
+    discardCase.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    expect(discardCase.book.discardSuppressedError('s1')).toBe(true);
+    expect(discardCase.orcaFinalized).toEqual([]);
+
+    const teardownCase = createHarness();
+    teardownCase.book.stashSuppressedError('s1', { message: 'boom' });
+    teardownCase.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    teardownCase.book.teardown('s1');
+    expect(teardownCase.orcaFinalized).toEqual([]);
+  });
+
+  it('后一次中断覆盖前一次时，旧 Orca payload 不收口；surface 只用最新一份', () => {
+    const h = createHarness();
+    const first = createOrcaTerminal({ diagnostic: 'first' });
+    const second = createOrcaTerminal({
+      diagnostic: 'second',
+      capture: { sessionId: 's1', stamp: 2 },
+    });
+    h.book.stashSuppressedError('s1', { message: 'first interruption' });
+    h.book.stashOrcaSuppressedTerminal('s1', first);
+    h.book.stashSuppressedError('s1', { message: 'second interruption' });
+    h.book.stashOrcaSuppressedTerminal('s1', second);
+
+    expect(h.orcaFinalized, '仍在自愈，旧 worker terminal 不得先 bridge').toEqual([]);
+    expect(h.book.surfaceSuppressedError('s1')).toBe(true);
+    expect(h.orcaFinalized).toEqual([{ sessionId: 's1', payload: second }]);
+  });
+
+  it('finalize(surfaceError=true) 收口 Orca；用户接手则不收口', () => {
+    const surfaced = createHarness();
+    const payload = createOrcaTerminal();
+    surfaced.book.stashSuppressedError('s1', { message: 'boom' });
+    surfaced.book.stashOrcaSuppressedTerminal('s1', payload);
+    surfaced.book.finalizeSuppressedError('s1', { surfaceError: true });
+    expect(surfaced.orcaFinalized).toEqual([{ sessionId: 's1', payload }]);
+
+    const handedOff = createHarness();
+    handedOff.book.stashSuppressedError('s1', { message: 'boom' });
+    handedOff.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    handedOff.book.finalizeSuppressedError('s1', { surfaceError: false });
+    expect(handedOff.orcaFinalized).toEqual([]);
+  });
+
+  it('claimed retry：dispatch 失败才收口，成功 discard / Stop flush 都不收口', () => {
+    const failedDispatch = createHarness();
+    const payload = createOrcaTerminal({ diagnostic: 'undispatched' });
+    failedDispatch.book.stashSuppressedError('s1', { message: 'old interruption' });
+    failedDispatch.book.stashOrcaSuppressedTerminal('s1', payload);
+    failedDispatch.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    expect(failedDispatch.book.surfaceSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
+    expect(failedDispatch.orcaFinalized).toEqual([{ sessionId: 's1', payload }]);
+
+    const discarded = createHarness();
+    discarded.book.stashSuppressedError('s1', { message: 'old interruption' });
+    discarded.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    discarded.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    expect(discarded.book.discardSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
+    expect(discarded.orcaFinalized).toEqual([]);
+
+    const stopped = createHarness();
+    stopped.book.stashSuppressedError('s1', { message: 'old interruption' });
+    stopped.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    stopped.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    expect(stopped.book.flushSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
+    expect(stopped.orcaFinalized).toEqual([]);
+  });
+});
+
+describe('shouldSkipOrcaWorkerTerminal', () => {
+  const idle = {
+    isContinuationBoundary: false,
+    stashedThisErrorEvent: false,
+    eventType: 'done',
+    isPairedFailedTurnDone: false,
+    isFailedTurnCompletionTail: false,
+    hasSuppressedError: false,
+    isAutoResumePending: false,
+    isAutoResumeDeferred: false,
+  };
+
+  it('skips continuation-boundary terminals so a claim-bearing segment cannot settle Orca', () => {
+    expect(
+      shouldSkipOrcaWorkerTerminal({ ...idle, isContinuationBoundary: true, eventType: 'error' }),
+    ).toBe(true);
+    expect(shouldSkipOrcaWorkerTerminal({ ...idle, isContinuationBoundary: true })).toBe(true);
+  });
+
+  it('skips the L2 error that just stashed the Orca payload', () => {
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        stashedThisErrorEvent: true,
+        eventType: 'error',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not skip an L3 terminal error that was not stashed', () => {
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        eventType: 'error',
+      }),
+    ).toBe(false);
+  });
+
+  it('skips the unclaimed paired done that follows a failed turn', () => {
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        isPairedFailedTurnDone: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        hasSuppressedError: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        isAutoResumePending: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        isAutoResumeDeferred: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('lets a real product done through after auto-resume no longer owns the failure', () => {
+    expect(shouldSkipOrcaWorkerTerminal(idle)).toBe(false);
+  });
+
+  it('skips a zero-output failed-turn done after user force-flush cleared persist pairing and pending', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'network blip' });
+    h.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+
+    // User enqueue: force-flush drops the suppressed entry / Orca payload, no finalize.
+    expect(h.book.supersedeUnclaimedErrorForUserIntervention('s1')).toBe(true);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
+    expect(h.orcaFinalized).toEqual([]);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(true);
+
+    const isFailedTurnCompletionTail = h.book.consumeFailedTurnCompletionTail('s1', 5);
+    expect(isFailedTurnCompletionTail).toBe(true);
+    expect(
+      shouldSkipOrcaWorkerTerminal({
+        ...idle,
+        isPairedFailedTurnDone: false,
+        isFailedTurnCompletionTail,
+        hasSuppressedError: h.book.hasSuppressedError('s1'),
+        isAutoResumePending: false,
+        isAutoResumeDeferred: false,
+      }),
+    ).toBe(true);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(false);
+  });
+
+  it('does not skip a later product done after a new attempt starts', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    h.book.clearFailedTurnCompletionTail('s1');
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 6)).toBe(false);
+    expect(shouldSkipOrcaWorkerTerminal(idle)).toBe(false);
+  });
+
+  it('does not skip a later-generation done when the failed turn never emitted a paired done', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 6)).toBe(false);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(false);
+    expect(shouldSkipOrcaWorkerTerminal(idle)).toBe(false);
+  });
+
+  it('keeps the current tail when an older stray done arrives first', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 4)).toBe(false);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(true);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 5)).toBe(true);
+  });
+
+  it('does not treat an unstamped done as the failed-turn tail', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    expect(h.book.consumeFailedTurnCompletionTail('s1')).toBe(false);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(true);
+  });
+
+  it('teardown drops an unconsumed tail so session-id reuse cannot steal a done', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    h.book.teardown('s1');
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(false);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 5)).toBe(false);
   });
 });

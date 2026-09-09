@@ -303,6 +303,39 @@ describe('统一 composer 建议入口', () => {
     );
     expect(screen.getByText('extraDirs.pluginAgentInvoked')).toBeTruthy();
   });
+
+  it('embedded 面板跟 Morph 壳等宽且锁死横向滚动;独立 @ 面板仍是 480',
+    () => {
+      const entries = buildComposerSuggestionEntries({
+        query: '',
+        actions: [{ id: 'new-goal', label: 'goal', run: vi.fn() }],
+        resources: [],
+        plugins: [],
+      });
+      const props = {
+        query: '',
+        state: { kind: 'ready' as const, items: [], truncated: false },
+        entries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+      };
+      const { container, rerender } = render(
+        createElement(AtMentionPanel, { ...props, embedded: true }),
+      );
+      const embeddedScroller = container.querySelector('.overflow-y-auto');
+      expect(embeddedScroller).toBeTruthy();
+      expect(embeddedScroller?.className).toContain('w-full');
+      expect(embeddedScroller?.className).toContain('overflow-x-hidden');
+      expect(embeddedScroller?.className).not.toContain('w-[480px]');
+
+      rerender(createElement(AtMentionPanel, props));
+      const standaloneScroller = container.querySelector('.overflow-y-auto');
+      expect(standaloneScroller?.className).toContain('w-[480px]');
+      expect(standaloneScroller?.className).toContain('overflow-x-hidden');
+    });
 });
 
 describe('PlanModeIndicator 激活 chip', () => {

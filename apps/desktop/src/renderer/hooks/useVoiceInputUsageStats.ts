@@ -192,7 +192,7 @@ function estimateRefineUsd(
   let accountedUsage: VoiceInputRefinementTokenDelta = {};
   let totalUsd = 0;
   for (const [provider, usage] of Object.entries(stats.refinementTokensByProvider)) {
-    if (!isVoiceInputRefinerProviderKind(provider)) continue;
+    if (!usage || !isVoiceInputRefinerProviderKind(provider)) continue;
     totalUsd += estimateVoiceInputRefinerCostUsd(getVoiceInputRefinerProfile(provider), usage);
     accountedUsage = addTokenUsage(accountedUsage, usage);
   }

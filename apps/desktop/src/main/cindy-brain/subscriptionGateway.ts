@@ -196,7 +196,6 @@ export class GhostSubscriptionGateway {
   ): void {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
-      if (!ghost.manifest.slots.includes('subscribe')) continue;
       if (!ghost.manifest.subscribe?.topics?.includes(topic)) continue;
       this.dispatchTo(ghost, topic, name, data);
     }

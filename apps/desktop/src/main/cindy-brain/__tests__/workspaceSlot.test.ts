@@ -9,7 +9,7 @@ import {
   type WorkspaceSlotDeps,
 } from '../workspaceSlot';
 
-function workspaceGhost(options: { slots?: string[]; enabled?: boolean } = {}): InstalledGhost {
+function workspaceGhost(options: { workspace?: boolean; enabled?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -18,7 +18,7 @@ function workspaceGhost(options: { slots?: string[]; enabled?: boolean } = {}): 
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: options.slots ?? ['workspace'],
+      ...(options.workspace === false ? {} : { workspace: true }),
     },
     dir: '/fake/ws-ghost',
     enabled: options.enabled ?? true,
@@ -67,8 +67,8 @@ const DIR_REQ = {
 } as const;
 
 describe('workspaceSlot · 资格审与载荷校验', () => {
-  it('未声明 workspace 槽 / 未启用 一律 PERMISSION_DENIED', async () => {
-    const noSlot = makeSlot({ getGhost: () => workspaceGhost({ slots: ['pick'] }) });
+  it('未声明 workspace 能力 / 未启用 一律 PERMISSION_DENIED', async () => {
+    const noSlot = makeSlot({ getGhost: () => workspaceGhost({ workspace: false }) });
     expect(await noSlot.slot.handleRequest('ws-ghost', PICK_REQ)).toMatchObject({
       ok: false,
       errorCode: 'PERMISSION_DENIED',
@@ -377,5 +377,60 @@ describe('workspaceSlot · 骚扰钳制与失败面', () => {
     const result = await slot.handleRequest('ws-ghost', PICK_REQ);
     expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+});
+
+
+describe('workspace Auto review', () => {
+  it('does not focus after the call ends while creation is pending', async () => {
+    let active = true;
+    let finish!: (id: string) => void;
+    const service = makeService({ createDraftSession: vi.fn(() => new Promise<string>((resolve) => { finish = resolve; })) });
+    const { slot } = makeSlot({ resolveCallContext: () => active ? { ghostId: 'ws-ghost', sessionId: 'sess-1' } : null }, service);
+    const result = slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true });
+    await vi.waitFor(() => expect(service.createDraftSession).toHaveBeenCalledOnce());
+    const params = vi.mocked(service.createDraftSession).mock.calls[0][0];
+    expect(params.shouldContinue?.()).toBe(true);
+    active = false;
+    expect(params.shouldContinue?.()).toBe(false);
+    finish('committed-before-cancel');
+    expect(await result).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('returns cancellation when the creation commit was prevented', async () => {
+    const service = makeService({ createDraftSession: vi.fn(async () => null) });
+    const { slot } = makeSlot({}, service);
+    expect(await slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['allow', 'block', 'ask'] as const)('obeys %s for an outside directory', async (verdict) => {
+    const reviewPermissionAction = vi.fn(async () => ({ verdict, reason: 'reviewed' }));
+    const service = makeService({ reviewPermissionAction });
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false,
+      resolveCallContext: () => ({ ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' }),
+    }, service);
+    const result = await slot.handleRequest('ws-ghost', DIR_REQ);
+    expect(reviewPermissionAction).toHaveBeenCalledWith('sess-1', 'instance-1', expect.objectContaining({ kind: 'other', description: expect.stringContaining(DIR_REQ.dir) }));
+    expect(result.ok).toBe(verdict !== 'block');
+    expect(deps.confirmDir).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    expect(service.createDraftSession).toHaveBeenCalledTimes(verdict === 'block' ? 0 : 1);
+  });
+  it('does not create a workspace when the originating call ends during review', async () => {
+    let active = true;
+    const service = makeService({ reviewPermissionAction: async () => { active = false; return { verdict: 'allow' }; } });
+    const { slot } = makeSlot({ isInsideWorkdir: () => false,
+      resolveCallContext: () => active ? { ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' } : null,
+    }, service);
+    expect(await slot.handleRequest('ws-ghost', DIR_REQ)).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+  });
+  it('does not review without a runtime instance identity', async () => {
+    const reviewPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false }, makeService({ reviewPermissionAction }));
+    await slot.handleRequest('ws-ghost', DIR_REQ);
+    expect(reviewPermissionAction).not.toHaveBeenCalled();
+    expect(deps.confirmDir).toHaveBeenCalledOnce();
   });
 });

@@ -5,10 +5,10 @@
  * SKILL.md,与 CC/Codex 的技能可见性对齐;发现层零基线上下文(仅 name/description)。
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
 import type { AgentDeps } from '../../base-agent.js';
@@ -66,6 +66,7 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     expect(found?.scope).toBe('repo');
     expect(found?.runtimeStatus).toBe('discovered');
     expect(found?.runtimeCommandName).toBe('skill:demo-skill');
+    expect(found?.path).toBe(realpathSync(path.join(skillDir, 'SKILL.md')));
     expect(found?.description).toContain('demo skill');
   });
 
@@ -74,5 +75,35 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     const result = await agent.listAgentSkills({ workingDir });
     // 真实环境可能有用户级 ~/.agents/skills,故只断言"不抛 + 是数组",不断言空。
     expect(Array.isArray(result.skills)).toBe(true);
+  });
+
+  it('includes Cindy-managed package skills only when the host explicitly allows them', async () => {
+    const resolver = vi.fn(async () => ({
+      extensions: [],
+      skills: [{ path: '/managed/sample/SKILL.md', name: 'managed-sample' }],
+      promptTemplates: [],
+      packageRoots: ['/managed/sample'],
+    }));
+    const agent = new PiAgent({ ...buildDeps(), resolvePiManagedPackageResources: resolver });
+
+    const isolated = await agent.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: false,
+    });
+    expect(isolated.skills.some((skill) => skill.name === 'managed-sample')).toBe(false);
+    expect(resolver).not.toHaveBeenCalled();
+
+    const ordinary = await agent.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: true,
+    });
+    expect(ordinary.skills).toContainEqual(expect.objectContaining({
+      name: 'managed-sample',
+      runtimeStatus: 'approved',
+      origin: 'package',
+      enabled: true,
+      runtimeCommandName: 'skill:managed-sample',
+    }));
+    expect(resolver).toHaveBeenCalledOnce();
   });
 });

@@ -1,9 +1,5 @@
 .plugin-motion-root {
   --plugin-motion-state: 220ms;
-  --plugin-motion-enter: 420ms;
-  --plugin-motion-page: 520ms;
-  --plugin-motion-rise: 14px;
-  --plugin-motion-stagger: 44ms;
   --plugin-motion-ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
   --plugin-card-shadow: var(--shadow-soft-panel);
   --plugin-icon-surface: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
@@ -16,31 +12,10 @@
 }
 
 /**
- * Compositor-friendly transitions shared by Plugin and Skill management views.
+ * Shared Plugin / Skill catalog chrome. Catalog pages have no enter-rise
+ * animation; selection and overflow still ease.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-
-@keyframes plugin-page-enter {
-  from {
-    opacity: 0;
-    transform: translate3d(0, var(--plugin-motion-rise), 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes plugin-item-enter {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 10px, 0) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
 
 @keyframes plugin-selection-settle {
   from {
@@ -51,46 +26,6 @@
   }
 }
 
-.plugin-motion-tabs {
-  animation: plugin-page-enter 300ms var(--plugin-motion-ease-enter) backwards;
-}
-.plugin-motion-page-header {
-  animation: plugin-page-enter var(--plugin-motion-enter) var(--plugin-motion-ease-enter) 45ms
-    backwards;
-}
-.plugin-motion-page-section {
-  animation: plugin-page-enter var(--plugin-motion-page) var(--plugin-motion-ease-enter) 135ms
-    backwards;
-}
-.plugin-motion-stagger > * {
-  --plugin-motion-order: 0;
-  animation: plugin-item-enter var(--plugin-motion-enter) var(--plugin-motion-ease-enter) backwards;
-  animation-delay: calc(var(--plugin-motion-order) * var(--plugin-motion-stagger));
-}
-.plugin-motion-stagger > :nth-child(2) {
-  --plugin-motion-order: 1;
-}
-.plugin-motion-stagger > :nth-child(3) {
-  --plugin-motion-order: 2;
-}
-.plugin-motion-stagger > :nth-child(4) {
-  --plugin-motion-order: 3;
-}
-.plugin-motion-stagger > :nth-child(5) {
-  --plugin-motion-order: 4;
-}
-.plugin-motion-stagger > :nth-child(6) {
-  --plugin-motion-order: 5;
-}
-.plugin-motion-stagger > :nth-child(7) {
-  --plugin-motion-order: 6;
-}
-.plugin-motion-stagger > :nth-child(8) {
-  --plugin-motion-order: 7;
-}
-.plugin-motion-stagger > :nth-child(n + 9) {
-  --plugin-motion-order: 8;
-}
 .plugin-motion-selected {
   background: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
   border-color: color-mix(in srgb, var(--border-default) 48%, transparent);
@@ -273,23 +208,8 @@
   }
 }
 
-@media (max-width: 767px) {
-  .plugin-motion-root {
-    --plugin-motion-rise: 10px;
-    --plugin-motion-stagger: 32ms;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .plugin-motion-root
-    :is(
-      .plugin-motion-tabs,
-      .plugin-motion-page-header,
-      .plugin-motion-page-section,
-      .plugin-motion-stagger > *,
-      .plugin-motion-selected,
-      .plugin-installed-overflow
-    ) {
+  .plugin-motion-root :is(.plugin-motion-selected, .plugin-installed-overflow) {
     animation: none !important;
     transition: none !important;
   }

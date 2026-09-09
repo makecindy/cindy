@@ -59,6 +59,12 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   'cindy_scheduler::list_tools',
   'cindy_ssh::list_tools',
   'cindy_helper::list_tools',
+  // cindy_docs 六个工具顶层暴露(2026-08-21)。两个只读工具免审批:路径由
+  // cindy-docs/_paths.ts 钳制在会话 workingDir 内,不写盘、不出境。inspect_pdf
+  // 尤其要免审批 —— 它是「出完 PDF 回读自检」闭环的一步,卡审批模型就会跳过自检
+  // 直接交付。四个落盘工具(make_docx/make_pptx/make_xlsx/render_pdf)不在此表。
+  'cindy_docs::read_sheet',
+  'cindy_docs::inspect_pdf',
   'cindy_memory::list_tools',
   'cindy_contacts::list_tools',
   'cindy_slack::slack_status',

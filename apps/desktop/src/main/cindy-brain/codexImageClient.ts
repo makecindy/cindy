@@ -7,9 +7,11 @@
  * SSE stream because image-generation events may be newer than SDK typings.
  */
 
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 
 import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js';
+import { mediaRequestParamsForLog, mediaRequestUrlForLog } from '../cindy-media/mediaRequestLog.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { createLogger } from '../logger.js';
 
@@ -143,6 +145,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     prompt: string;
     imagePaths?: string[];
     aspectRatio?: '1:1' | '3:2' | '2:3';
+    signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
     if (params.model !== `openai/${IMAGE_MODEL}`) {
       throw new Error(`Codex 图像通道不支持模型:${params.model}`);
@@ -159,36 +162,66 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       { type: 'input_text', text: params.prompt },
       ...images,
     ];
-    const response = await doFetch(CODEX_RESPONSES_URL, {
+    const body = {
+      model: HOST_MODEL,
+      store: false,
+      stream: true,
+      instructions: 'Use the image_generation tool to fulfill this image request.',
+      input: [{ type: 'message', role: 'user', content }],
+      tools: [
+        {
+          type: 'image_generation',
+          model: IMAGE_MODEL,
+          ...(params.aspectRatio ? { size: SIZE_BY_ASPECT[params.aspectRatio] } : {}),
+          quality: 'medium',
+          output_format: 'png',
+          background: 'opaque',
+          partial_images: 1,
+        },
+      ],
+    };
+    const requestId = randomUUID();
+    const startedAt = Date.now();
+    const requestLog = {
+      requestId,
+      providerId: 'openai',
+      modelId: params.model,
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${auth.accessToken}`,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        'OpenAI-Beta': 'responses=experimental',
-        originator: 'codex_cli_rs',
-        'User-Agent': USER_AGENT,
-        ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
-      },
-      body: JSON.stringify({
-        model: HOST_MODEL,
-        store: false,
-        stream: true,
-        instructions: 'Use the image_generation tool to fulfill this image request.',
-        input: [{ type: 'message', role: 'user', content }],
-        tools: [
-          {
-            type: 'image_generation',
-            model: IMAGE_MODEL,
-            ...(params.aspectRatio ? { size: SIZE_BY_ASPECT[params.aspectRatio] } : {}),
-            quality: 'medium',
-            output_format: 'png',
-            background: 'opaque',
-            partial_images: 1,
-          },
-        ],
-      }),
+      url: mediaRequestUrlForLog(CODEX_RESPONSES_URL),
+    };
+    log.info('media request dispatch', {
+      ...requestLog,
+      params: mediaRequestParamsForLog(body),
     });
+    let response: Response;
+    try {
+      response = await doFetch(CODEX_RESPONSES_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.accessToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          'OpenAI-Beta': 'responses=experimental',
+          originator: 'codex_cli_rs',
+          'User-Agent': USER_AGENT,
+          ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: params.signal,
+      });
+      log.info('media request response', {
+        ...requestLog,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      log.warn('media request failed', {
+        ...requestLog,
+        durationMs: Date.now() - startedAt,
+        error: mediaRequestParamsForLog(error instanceof Error ? error.message : String(error)),
+      });
+      throw error;
+    }
     if (!response.ok) await httpError(response, auth.accessToken, opts.onAuthFailure);
     const b64 = await collectImageB64(response);
     if (!b64) throw new Error('Codex 返回中没有图片,请重试或改用 OpenAI Platform API key');
@@ -197,8 +230,9 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
 
   return {
     ready: opts.hasOAuthLogin,
-    generateImage: ({ model, prompt, aspectRatio }) => generate({ model, prompt, aspectRatio }),
-    editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
-      generate({ model, prompt, imagePaths, aspectRatio }),
+    generateImage: ({ model, prompt, aspectRatio, signal }) =>
+      generate({ model, prompt, aspectRatio, signal }),
+    editImage: ({ model, prompt, imagePaths, aspectRatio, signal }) =>
+      generate({ model, prompt, imagePaths, aspectRatio, signal }),
   };
 }

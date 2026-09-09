@@ -6,6 +6,7 @@ import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
   isPlanModeComposerCommandText,
+  planModeComposerDraftText,
   shouldPreservePlanModeComposerDraft,
 } from '../components/new-chat/planModeComposerCommand';
 import type { UnifiedCommand } from '../lib/slashCommands';
@@ -83,5 +84,27 @@ describe('/plan composer command', () => {
     expect(shouldPreservePlanModeComposerDraft(1, 0)).toBe(true);
     expect(shouldPreservePlanModeComposerDraft(0, 1)).toBe(true);
     expect(shouldPreservePlanModeComposerDraft(0, 0)).toBe(false);
+  });
+
+  it('captures editor text before the plan command clears the editor', () => {
+    const editorText = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'keep me' }] }],
+    };
+    const storedText = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'stored' }] }],
+    };
+
+    expect(planModeComposerDraftText(true, editorText, storedText)).toBe(editorText);
+    expect(planModeComposerDraftText(false, null, storedText)).toBe(storedText);
+    expect(planModeComposerDraftText(true, null, storedText)).toBeNull();
+    expect(planModeComposerDraftText(true, editorText, storedText, true)).toBeNull();
+  });
+
+  it('does not persist the consumed /plan command as draft text', () => {
+    const editorText = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '/plan' }] }] };
+    expect(planModeComposerDraftText(true, editorText, null, true)).toBeNull();
+    expect(planModeComposerDraftText(false, null, editorText, true)).toBeNull();
   });
 });

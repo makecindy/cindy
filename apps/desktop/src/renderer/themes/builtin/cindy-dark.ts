@@ -1,5 +1,6 @@
 import type { Theme } from '../types';
 import cindyLogoDark from '../../assets/cindy-logo-dark.png';
+import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
 
 /*
  * CINDY Dark — 品牌红 CTA + 中性近黑底(#181818)+ AA 正文;U2 二级信息色忠于 Figma 原值。
@@ -101,7 +102,7 @@ const overrides = {
   'settings-integration-avatar-bg': '#1D1D1D', // hover/chip
   'settings-logout-bg': '#1F1F1F', // 卡片/输入框
   'settings-menu-bg-hover': '#282828', // 菜单 hover/提问卡纸片档
-  'settings-menu-bg-selected': '#1D1D1D', // hover/chip
+  'settings-menu-bg-selected': '#282828', // 卡片锚定: 比卡片 #1F1F1F 亮一档(压在设置卡上的选中态)
   'settings-source-link': '#93C5FD', // 可访问链接蓝
   'settings-theme-auto-dark': '#181818', // Auto 预览: 新暗色底
   'sidebar-action-icon': '0 0% 43.5%', // E1D 侧栏层级:二级暗灰 #6F6F6F(时间戳/RemoteProjectIcon)
@@ -140,7 +141,7 @@ const overrides = {
   'sidebar-search-bg': '0 0% 9.4%', // 页底 -> HSL
   'sidebar-search-input-bg': 'rgba(0, 0, 0, 0.25)', // 玻璃面搜索输入框 2026-07-21:黑 25% 下陷字段感(与 hover 白 9% 方向相反,可区分"可输入")
   'sidebar-muted': '0 0% 43.5%', // E1D 侧栏层级:二级暗灰 #6F6F6F(行首图标普通态)
-  'surface-translucent-sidebar': 'rgba(5, 5, 5, 0.85)', // 侧栏玻璃: 用户调参 2026-08-11(黑 5 度 85%)
+  'surface-translucent-sidebar': CINDY_ACRYLIC_WINDOW_BACKING.dark, // 侧栏玻璃: 用户调参 2026-08-11(黑 5 度 85%)
   'surface-translucent-main': '#181818', // 直映: 页底(纯中性)
   'surface-translucent-overlay': 'rgba(21, 21, 21, 0.80)', // 浮层玻璃: 平移
   'composer-pill-bg': '#272727', // composer pill

@@ -1,3 +1,4 @@
+import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 import { describe, expect, it } from "vitest";
 
 import modelRegistryJson from "../../catalog/model-registry.json" with { type: "json" };
@@ -23,7 +24,11 @@ import type {
  * maxInputTokens) —— max 为排他上界(`inputTokens >= max` 不命中)。
  */
 
-const registry = modelRegistryJson as unknown as ModelRegistry;
+const rawRegistry = modelRegistryJson as unknown as ModelRegistry;
+const registry = {
+  ...rawRegistry,
+  models: expandedRegistryEntries(rawRegistry),
+};
 
 function effectiveWindow(
   entry: ModelRegistryEntry,
@@ -42,7 +47,9 @@ function bandGroups(route: ModelRegistryRoute): ModelReferencePrice[][] {
     else groups.set(key, [price]);
   }
   return Array.from(groups.values()).map((group) =>
-    group.slice().sort((a, b) => (a.minInputTokens ?? 0) - (b.minInputTokens ?? 0)),
+    group
+      .slice()
+      .sort((a, b) => (a.minInputTokens ?? 0) - (b.minInputTokens ?? 0)),
   );
 }
 
@@ -50,12 +57,21 @@ describe("model registry data consistency", () => {
   it("window / output declarations are positive and mutually sane", () => {
     for (const entry of registry.models) {
       if (entry.contextWindow !== undefined) {
-        expect(entry.contextWindow, `${entry.id} contextWindow`).toBeGreaterThan(0);
+        expect(
+          entry.contextWindow,
+          `${entry.id} contextWindow`,
+        ).toBeGreaterThan(0);
       }
       if (entry.maxOutputTokens !== undefined) {
-        expect(entry.maxOutputTokens, `${entry.id} maxOutputTokens`).toBeGreaterThan(0);
+        expect(
+          entry.maxOutputTokens,
+          `${entry.id} maxOutputTokens`,
+        ).toBeGreaterThan(0);
       }
-      if (entry.contextWindow !== undefined && entry.maxOutputTokens !== undefined) {
+      if (
+        entry.contextWindow !== undefined &&
+        entry.maxOutputTokens !== undefined
+      ) {
         expect(
           entry.maxOutputTokens,
           `${entry.id}: maxOutputTokens exceeds contextWindow`,
@@ -83,7 +99,10 @@ describe("model registry data consistency", () => {
         for (const group of bandGroups(route)) {
           const label = `${entry.id} @ ${route.providerId}`;
           // 第一条必须从 0 起 —— 否则低输入段无价可循
-          expect(group[0]!.minInputTokens ?? 0, `${label}: first band must start at 0`).toBe(0);
+          expect(
+            group[0]!.minInputTokens ?? 0,
+            `${label}: first band must start at 0`,
+          ).toBe(0);
           for (let i = 1; i < group.length; i += 1) {
             const prev = group[i - 1]!;
             const cur = group[i]!;
@@ -99,15 +118,36 @@ describe("model registry data consistency", () => {
     }
   });
 
-  it("every tier boundary is reachable by at least one agent's declared window", () => {
-    // band 起点 ≥ 该路由所有 agent 的声明窗口 = 这条价档永不可达,
-    // 说明窗口或价档必有一边写错(#1429 的窗口下调修正会先撞到这里)。
+  it("tier boundaries fit declared windows except documented API reference bands", () => {
+    // These existing Server prices also value historical/explicit long-window
+    // usage. Their public API bands must not enlarge today's subscription window.
+    const subscriptionApiReferences = new Set([
+      "openai/gpt-6-astra",
+      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-terra",
+      "openai/gpt-5.6-luna",
+      "openai/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
     for (const entry of registry.models) {
       for (const route of entry.routes) {
         for (const group of bandGroups(route)) {
           for (const band of group) {
             const lo = band.minInputTokens ?? 0;
             if (lo === 0) continue;
+            if (
+              subscriptionApiReferences.has(entry.id) &&
+              route.providerId === "openai"
+            ) {
+              expect(lo, entry.id).toBe(272_001);
+              for (const agent of route.agents) {
+                expect(
+                  effectiveWindow(entry, agent),
+                  `${entry.id}/${agent}`,
+                ).toBe(272_000);
+              }
+              continue;
+            }
             const reachable = route.agents.some((agent) => {
               const window = effectiveWindow(entry, agent);
               return window === undefined || window > lo;

@@ -155,3 +155,38 @@ describe('agent switch 历史投影', () => {
     expect(card?.systemCardData).toMatchObject({ resumed: true });
   });
 });
+
+describe('context rebuild 历史投影', () => {
+  it('把可见交接行投影成可展开的 context-rebuild 卡', async () => {
+    const id = sid('context-rebuild-card');
+    transportMocks.listMessages.mockResolvedValueOnce([
+      {
+        id: 'row-rebuild',
+        clientId: 'context-rebuild-card:1',
+        sessionId: id,
+        role: 'assistant',
+        content: '',
+        agentMeta: {
+          contextRebuild: {
+            reason: 'pi-prompt-timeout',
+            handoff: 'stopped responding to prompts',
+          },
+        },
+        createdAt: Date.now(),
+      },
+    ] as never);
+
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => {
+      expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true);
+    });
+
+    const card = makerChatStore
+      .getSnapshot(id)
+      .messages.find((message) => message.systemCardType === 'context-rebuild');
+    expect(card?.systemCardData).toMatchObject({
+      reason: 'pi-prompt-timeout',
+      handoff: 'stopped responding to prompts',
+    });
+  });
+});

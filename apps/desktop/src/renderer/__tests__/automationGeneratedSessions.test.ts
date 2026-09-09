@@ -26,6 +26,7 @@ import {
   getAutomationGroupPrimarySession,
   getVisibleAutomationGroupSessions,
   groupAutomationSidebarEntries,
+  unreadSuccessScheduleRunIds,
   type AutomationScheduleSessionInfo,
 } from '@/features/cc-agent/lib/automationSidebarGrouping';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -36,9 +37,7 @@ import {
   isScheduledSession,
 } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 import { getFocusedScheduleStatusFilter } from '@/features/scheduler/SchedulerPage';
-import { isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
-import { formatUsd } from '@/features/scheduler/lib/formatters';
-
+import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
@@ -90,6 +89,7 @@ const makeScheduleSessionInfo = (
   scheduleId: 'sched-1',
   scheduleName: 'Schedule',
   unreadRunIds: [],
+  unreadFailedRunIds: [],
   hasUnreadRun: false,
   hasUnreadFailedRun: false,
   ...partial,
@@ -103,6 +103,8 @@ describe('automation-generated sessions', () => {
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
     // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
+    // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
+    // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
       'desktop',
       'feishu',
@@ -125,6 +127,7 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('bot');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -493,8 +496,48 @@ describe('automation-generated sessions', () => {
   it('keeps schedule run unread semantics shared with the run history badge', () => {
     expect(isUnreadScheduleRun({ status: 'success', readAt: undefined })).toBe(true);
     expect(isUnreadScheduleRun({ status: 'failed', readAt: undefined })).toBe(true);
+    expect(isUnreadScheduleRun({ status: 'interrupted', readAt: undefined })).toBe(true);
+    expect(isUnreadScheduleRun({ status: 'aborted', readAt: undefined })).toBe(false);
     expect(isUnreadScheduleRun({ status: 'running', readAt: undefined })).toBe(false);
     expect(isUnreadScheduleRun({ status: 'success', readAt: 1 })).toBe(false);
+    expect(isUnreadFailedScheduleRun({ status: 'failed', readAt: undefined })).toBe(true);
+    expect(isUnreadFailedScheduleRun({ status: 'interrupted', readAt: undefined })).toBe(true);
+    expect(isUnreadFailedScheduleRun({ status: 'aborted', readAt: undefined })).toBe(false);
+    expect(isUnreadFailedScheduleRun({ status: 'success', readAt: undefined })).toBe(false);
+    expect(
+      unreadSuccessScheduleRunIds({
+        unreadRunIds: ['ok', 'bad'],
+        unreadFailedRunIds: ['bad'],
+      }),
+    ).toEqual(['ok']);
+  });
+
+  it('routes historical failures to the seen receipt while keeping retry scoped to one run', () => {
+    const sessionViewSource = readTextLf(
+      new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
+      'utf8',
+    );
+    const bannerSource = readTextLf(
+      new URL('../components/chat/UnreadFailedScheduleBanner.tsx', import.meta.url),
+      'utf8',
+    );
+    const zh = JSON.parse(
+      readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
+    );
+
+    expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
+    expect(sessionViewSource).toContain('scheduleSessionInfo.hasFailedRun');
+    expect(sessionViewSource).toContain('shouldShowFailedScheduleNotice({');
+    expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
+    expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
+    expect(sessionViewSource).toContain('latestUnreadFailedRunId');
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined)');
+    expect(sessionViewSource).toContain(
+      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined)',
+    );
+    expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
+    expect(sessionViewSource).toContain('latestFailedRun={scheduleSessionInfo.latestFailedRun}');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {
@@ -571,6 +614,108 @@ describe('automation-generated sessions', () => {
     expect(view.isOverflowing).toBe(true);
     expect(view.hiddenCount).toBe(2);
     expect(view.totalCount).toBe(7);
+  });
+
+  describe('collapsed automation group keeps unhandled alerts reachable', () => {
+    const alertGroup = (count = 7) => ({
+      id: 'schedule:sched-alert',
+      title: 'Alert',
+      sessions: Array.from({ length: count }, (_, index) =>
+        makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
+      ),
+      attentionSessionIds: [],
+    });
+
+    it('renders nothing extra while no run holds an alert', () => {
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(['run-0']),
+        showAll: false,
+        collapsed: true,
+      });
+      expect(view.visibleSessions).toEqual([]);
+      expect(view.isOverflowing).toBe(false);
+      expect(view.totalCount).toBe(0);
+    });
+
+    it('lifts only the alerting runs out of a collapsed group', () => {
+      // run-3 是「组内第 3 新、turn 从未收尾」那类运行:组头代表的是 run-0,
+      // 收起态若返回空列表,项目折叠头的红点就没有任何一行能对应上。
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(['run-0', 'run-3']),
+        showAll: false,
+        collapsed: true,
+        alertSessionIds: new Set(['run-3']),
+      });
+      expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-3']);
+      expect(view.isOverflowing).toBe(false);
+      expect(view.totalCount).toBe(1);
+    });
+
+    it('caps lifted alerts at five and counts only alerts in the overflow label', () => {
+      const alerts = ['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
+      const view = getAutomationGroupChildView(alertGroup(8), {
+        notifications: new Set(alerts),
+        showAll: false,
+        collapsed: true,
+        alertSessionIds: new Set(alerts),
+      });
+      expect(view.visibleSessions).toHaveLength(5);
+      expect(view.isOverflowing).toBe(true);
+      expect(view.hiddenCount).toBe(1);
+      // 「显示全部 N 个」的 N 是告警数,不是整组运行数(收起态列表语义就是告警)。
+      expect(view.totalCount).toBe(6);
+
+      const expanded = getAutomationGroupChildView(alertGroup(8), {
+        notifications: new Set(alerts),
+        showAll: true,
+        collapsed: true,
+        alertSessionIds: new Set(alerts),
+      });
+      expect(expanded.visibleSessions.map((session) => session.id)).toEqual(alerts);
+      expect(expanded.isOverflowing).toBe(false);
+    });
+
+    it('ignores a frozen expanded layout so collapsing cannot drag non-alert runs back', () => {
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: false,
+        collapsed: true,
+        alertSessionIds: new Set(['run-4']),
+        frozenVisibleSessionIds: ['run-0', 'run-1', 'run-2'],
+      });
+      expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-4']);
+    });
+
+    it('goes back to the regular collapse cap once the group is expanded', () => {
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: false,
+        collapsed: false,
+        alertSessionIds: new Set(['run-6']),
+      });
+      expect(view.visibleSessions.map((session) => session.id)).toEqual([
+        'run-0',
+        'run-1',
+        'run-2',
+        'run-3',
+        'run-4',
+      ]);
+      expect(view.totalCount).toBe(7);
+    });
+
+    it('does not let a leftover collapsed showAll dump the whole history on expand', () => {
+      // 收起态点过「显示全部」后,showAll 仍为 true;若展开分支把 collapsed 短路排在
+      // showAll 之后,会一次渲染全部历史运行。组件切折叠时会清 showAll,本断言钉住
+      // childView 自己也不依赖那次复位。
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: true,
+        collapsed: false,
+        alertSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
+      });
+      expect(view.visibleSessions).toHaveLength(7);
+      expect(view.totalCount).toBe(7);
+    });
   });
 
   it('keeps unread automation runs visible past the collapse cap', () => {
@@ -699,39 +844,62 @@ describe('automation-generated sessions', () => {
       new URL('../features/cc-agent/sidebar/AutomationSessionGroupItem.tsx', import.meta.url),
       'utf8',
     );
+    const entryListSource = readTextLf(
+      new URL('../features/cc-agent/sidebar/SessionEntryList.tsx', import.meta.url),
+      'utf8',
+    );
 
     expect(source).toContain('setFrozen(null)');
     // 轴 1:箭头切换的是持久化 disclosure(useAutomationGroupCollapsed),不是「显示全部」。
-    expect(source).toContain('useAutomationGroupCollapsed(group.id)');
+    expect(source).toContain('useAutomationGroupCollapsed(');
+    expect(source).toContain('group.legacyId');
     expect(source).toContain('toggleCollapsed()');
+    // 切折叠必须复位轴 2:showAll 被收起告警列表和展开历史列表共用。复位挂在
+    // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
+    expect(source).toContain('useLayoutEffect(() => {\n    setShowAll(false);\n  }, [collapsed]);');
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
-    // 轴 1 收起时藏掉全部子运行(只留组头)。
-    expect(source).toContain('const visibleSessions = collapsed ? [] : childView.visibleSessions');
+    // 轴 1 收起时只留组头 + 被提上来的未处理告警行,取舍统一由 childView 决定
+    // (收起态曾经是硬编码的空列表,于是组内非最新一条的告警既不上组头也不成行)。
+    expect(source).toContain('const visibleSessions = childView.visibleSessions;');
+    expect(source).toMatch(/getAutomationGroupChildView\(group, \{[\s\S]*?collapsed,/);
     expect(source).toContain('const hasVisibleChildren = visibleSessions.length > 0');
     expect(source).toContain('{hasVisibleChildren && (');
     // 侧栏侧保留「立即运行」直点,低频的编辑 / 暂停恢复 / 删除收回 More 菜单。
     expect(source).toContain("onScheduleAction(group, 'run')");
+    expect(source).toContain('const canMarkRead = collapsedAttention.tone != null');
+    expect(source).toContain('{canMarkRead && (');
+    expect(source).toContain("onScheduleAction(group, 'mark-read')");
     expect(source).toContain("onScheduleAction(group, 'edit')");
     expect(source).toContain("onScheduleAction(group, 'toggle-pause')");
     expect(source).toContain("onScheduleAction(group, 'delete')");
     expect(source).toContain('EllipsisVertical');
     expect(source).toContain('setMenuOpen');
-    expect(source).not.toContain('handleGroupContextMenu');
+    expect(source).toContain('onContextMenu={(event) => {');
+    expect(source).toContain('setMenuOpen(true)');
     // Run / More 图标(lucide Play / EllipsisVertical)必须都在,按钮尺寸与普通会话行对齐。
     expect(source).toMatch(/<Play size=\{14\}/);
     expect(source).toMatch(/<EllipsisVertical size=\{14\}/);
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.runNow');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.more');
+    expect(source).toContain('ccAgent.sidebar.automationGroup.menu.markAllAsRead');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.edit');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.pause');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.resume');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.delete');
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
-    // 组头点击打开组内「最新一条」运行(需求:点折叠组头打开最新 session),不再走 primary。
-    expect(source).toContain('onSessionClick(latestSession.id)');
+    // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
+    expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
+    expect(source).toContain('onSessionClick(targetId)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
+    // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。
+    expect(source).toContain('onMoveSession,');
+    expect(source).toContain('projectOptions,');
+    expect(source).toContain('matchIndices: matchMap?.get(session.id)');
+    expect(entryListSource).toContain('onMoveSession={onMoveSession}');
+    expect(entryListSource).toContain('projectOptions={projectOptions}');
+    expect(entryListSource).toContain('matchMap={matchMap}');
     expect(source).toContain('originActiveSessionId: activeSessionId ?? null');
     expect(source).toContain('hasBeenActive: false');
     expect(source).toContain('hasBeenActive: true');
@@ -758,8 +926,9 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('onClick={openLatestSession}');
     expect(source).not.toMatch(/role=\{latestSession \? 'button'/);
     expect(source).toContain("group.scheduleStatus === 'active'");
-    expect(source).toContain(
-      "scheduleId && !menuOpen && 'group-hover:opacity-0 group-focus-within/slot:opacity-0'",
+    // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
+    expect(source).toMatch(
+      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
@@ -768,7 +937,9 @@ describe('automation-generated sessions', () => {
     // vendor 经 agentKindToVendor 归一(pi 会话显示 π,而非 Claude 脸);尺寸规则:cc=13,其余(codex/pi)=12。
     expect(source).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(source).toContain('vendor={agentKindToVendor(latestSession?.agentKind)}');
-    expect(source).toContain("size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}");
+    expect(source).toContain(
+      "size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}",
+    );
     // 所有自动任务统一 Timer；暂停只叠角标，主图标和 12px 槽位不替换。
     expect(source).toContain('<AutomationTimerIcon');
     expect(source).toContain('paused={isScheduleStopped}');
@@ -776,12 +947,16 @@ describe('automation-generated sessions', () => {
     expect(source).not.toContain('<Pause');
     // text 沿用 vendor → Timer → 标题的 6px 节奏；list 把 Timer 排到标题后，
     // 标题与普通列表任务落在同一列。
-    expect(source).toContain(
-      'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
-    );
+    expect(source).toContain('className="min-w-0 truncate text-left disabled:cursor-default"');
     expect(source).toContain('className="flex min-w-0 items-center gap-1.5"');
     expect(source).toContain("sessionVariant === 'list' && 'order-2'");
     expect(source).toContain('runningSessionIds,');
+    // 组头右侧的时间文字与普通任务行的信息槽(SessionInfoMeta)同款字体 / 色号,
+    // 含 tabular-nums(2026-08-12 用户裁决;C 期给普通行加等宽数字时组头漏跟)。
+    expect(source).toContain(
+      "'col-start-1 row-start-1 flex items-center gap-1 text-xs font-medium tabular-nums'",
+    );
+    expect(source).toContain("'text-sidebar-action-icon'");
   });
 
   it('auto-collapses an expanded automation group once focus leaves it and offers show-all', () => {
@@ -887,8 +1062,9 @@ describe('automation-generated sessions', () => {
     expect(unreadCountsHookSource).not.toContain('RUNS_PER_SCHEDULE_LIMIT');
     expect(unreadCountsHookSource).not.toContain('listRuns(');
     expect(storageSource).toContain('listSidebarIndexRuns');
+    expect(storageSource).toContain('.from(scheduleSessionLatestRuns)');
     expect(storageSource).toContain('isNotNull(scheduleRuns.sessionId)');
-    expect(storageSource).toContain('UNREAD_TERMINAL_RUN_STATUSES');
+    expect(storageSource).toContain('unreadTerminalRunWhere');
     expect(storageSource).toContain('nextFireAt: schedules.nextFireAt');
     expect(storageSource).toContain('listSchedulesByLegacyKey(db)');
     expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
@@ -900,15 +1076,12 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain("eq(sessions.source, 'scheduler')");
     expect(storageSource).toContain('listDirectScheduleIdsByLegacyKey');
     expect(storageSource).toContain('directScheduleId && directScheduleId !== row.id');
-    expect(scheduleIndexHookSource).toContain('nextFireAt: run.nextFireAt');
+    expect(scheduleIndexHookSource).toContain('projectScheduleSidebarIndex(runs)');
+    expect(readFileSync(new URL('../features/scheduler/lib/projectScheduleSidebarIndex.ts', import.meta.url), 'utf8')).toContain('nextFireAt: run.nextFireAt');
     expect(preloadSource).toContain('listSidebarIndexRuns');
   });
 
-  it('surfaces total automation task cost from deduped schedule sessions', () => {
-    const storageSource = readTextLf(
-      new URL('../../main/scheduler-host/storage.ts', import.meta.url),
-      'utf8',
-    );
+  it('keeps per-run Automation cost without loading cumulative list cost', () => {
     const schedulePageSource = readTextLf(
       new URL('../features/scheduler/SchedulerPage.tsx', import.meta.url),
       'utf8',
@@ -929,47 +1102,15 @@ describe('automation-generated sessions', () => {
       new URL('../features/scheduler/components/RunHistoryPane.tsx', import.meta.url),
       'utf8',
     );
-    const hookSource = readTextLf(
-      new URL('../features/scheduler/hooks/useScheduleCostSummaries.ts', import.meta.url),
-      'utf8',
-    );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
     const zh = JSON.parse(
       readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
     );
 
-    expect(formatUsd(0)).toBe('$0.00');
-    expect(formatUsd(0.001)).toBe('<$0.01');
-    expect(formatUsd(1.234)).toBe('$1.23');
-    expect(storageSource).toContain('listCostSummaries');
-    expect(storageSource).toContain('messages.agentMeta');
-    expect(storageSource).toContain('scheduleOriginFromAgentMeta');
-    expect(storageSource).toContain("origin?.kind !== 'scheduler'");
-    expect(storageSource).toContain('turnCostFromAgentMeta');
-    expect(storageSource).toContain('turnCostIsEstimate === true');
-    expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
-    expect(storageSource).toContain("when 'user' then 0 else 1 end");
-    expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
-    expect(storageSource).toContain(
-      'addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency)',
-    );
-    expect(storageSource).toContain('totalMoney');
-    expect(storageSource).toContain('listLegacySessionRuns');
-    expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
-    expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
-    expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
-    expect(storageSource).toContain('listLegacyAliasesForSchedule');
-    expect(storageSource).toContain('inArray(sessions.title, titles)');
-    expect(storageSource).toContain('legacyAliases.has(');
-    expect(storageSource).toContain('directScheduleId && directScheduleId !== schedule.id');
-    expect(preloadSource).toContain('listCostSummaries');
-    expect(hookSource).toContain('onUsageSessionSpendChanged');
-    expect(hookSource).toContain('onUsageMessageTurnCost');
-    expect(hookSource).toContain('maker.schedule.listCostSummaries()');
-    expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
-    expect(taskListPaneSource).toContain('costSummariesLoaded');
-    expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatTurnCostMoney(totalMoney)');
+    expect(preloadSource).not.toContain('listCostSummaries');
+    expect(schedulePageSource).not.toContain('useScheduleCostSummaries');
+    expect(taskListPaneSource).not.toContain('costSummaries');
+    expect(taskListCellSource).not.toContain('scheduler.cell.totalCost');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');
@@ -978,8 +1119,6 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("!isLegacySessionRun && run.status !== 'running'");
     expect(runHistoryCardSource).toContain('scheduler.runs.runCost');
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
-    expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
-    expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
     expect(zh.scheduler.runs.sessionCost).toBe('任务开销 {{cost}}');
     expect(zh.scheduler.runs.sessionValue).toBe('任务价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
@@ -1009,6 +1148,14 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('useDeleteScheduleWithSessions');
     expect(sidebarSource).toContain('requestDeleteSchedule({');
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
+    expect(sidebarSource).toContain("if (action === 'mark-read')");
+    expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
+    expect(sidebarSource).toContain(
+      "t('ccAgent.layout.markedAsRead', { count: processed.length })",
+    );
+    expect(sidebarSource).not.toContain(
+      "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
+    );
     expect(schedulerPageSource).toContain('getFocusedScheduleStatusFilter(schedules, focusId)');
     expect(schedulerPageSource).toContain('setEditing(focused)');
     expect(schedulerPageSource).toContain('setFormOpen(true)');

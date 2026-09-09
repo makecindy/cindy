@@ -12,6 +12,7 @@ import {
   todoStatusPresentation,
   type ToolRowWording,
 } from '../messagePresentation';
+import type { PresentationLocalizer } from '../presentationLocalization';
 import type {
   MessageRenderNormalizedMessage,
   MessageRenderSourceMessageLike,
@@ -581,7 +582,7 @@ describe('messagePresentation', () => {
     };
 
     expect(summarizeWorkGroupPresentation(workGroup)).toEqual({
-      title: '已工作 1m 5s',
+      title: 'Worked for 1m 5s',
       subtitle: '',
       header: {
         chevronPosition: 'trailing',
@@ -590,19 +591,81 @@ describe('messagePresentation', () => {
         iconSize: 14,
         summaryCount: 0,
         subtitle: null,
-        title: '已工作 1m 5s',
+        title: 'Worked for 1m 5s',
         variant: 'plain',
       },
     });
 
     expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true })).toMatchObject({
-      title: '正在工作…',
-      header: { title: '正在工作…' },
+      title: 'Working…',
+      header: { title: 'Working…' },
     });
+
+    expect(summarizeWorkGroupPresentation({
+      ...workGroup,
+      durationMs: undefined,
+      isStreaming: false,
+    }).title).toBe('Work details');
 
     expect(countMessageRenderItemDiffs([
       { type: 'tool_group', key: 'plain-tools', tools: [editTool] },
       workGroup,
     ])).toBe(2);
+  });
+
+  it('localizes work-group titles and tool-row read verbs through injected i18n', () => {
+    const catalogs: Record<string, Record<string, string>> = {
+      en: {
+        'chat.workGroup.working': 'Working…',
+        'chat.workGroup.worked': 'Worked for {{duration}}',
+        'chat.workGroup.workDetails': 'Work details',
+      },
+      'zh-CN': {
+        'chat.workGroup.working': '正在工作…',
+        'chat.workGroup.worked': '已工作 {{duration}}',
+        'chat.workGroup.workDetails': '工作过程',
+      },
+    };
+    const localizerFor = (locale: 'en' | 'zh-CN'): PresentationLocalizer => ({
+      translate: (key, fallback, values) => {
+        let text = catalogs[locale][key] ?? fallback;
+        if (values) {
+          for (const [name, value] of Object.entries(values)) {
+            text = text.replaceAll(`{{${name}}}`, String(value ?? ''));
+          }
+        }
+        return text;
+      },
+    });
+    const workGroup: MessageRenderWorkGroupItem<TestMessage> = {
+      type: 'work_group',
+      key: 'work-i18n',
+      durationMs: 65_000,
+      children: [],
+    };
+    const readTool = message('read-en', {
+      label: 'Read',
+      source: {
+        clientId: 'read-en',
+        content: { toolName: 'Read', input: { file_path: '/repo/src/app.ts' } },
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+    const enWording: ToolRowWording = {
+      verb: (key) => (key === 'read' ? 'Read' : `verb:${key}`),
+      intentVerb: (action) => `intent:${action}`,
+      updateFilesLabel: (count) => `Updated ${count} files`,
+    };
+
+    expect(summarizeWorkGroupPresentation(workGroup, localizerFor('en')).title).toBe('Worked for 1m 5s');
+    expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true }, localizerFor('en')).title)
+      .toBe('Working…');
+    expect(summarizeWorkGroupPresentation(workGroup, localizerFor('zh-CN')).title).toBe('已工作 1m 5s');
+    expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true }, localizerFor('zh-CN')).title)
+      .toBe('正在工作…');
+
+    expect(summarizeToolRowPresentation(readTool).label).toBe('读取 app.ts');
+    expect(summarizeToolRowPresentation(readTool, { wording: enWording }).label).toBe('Read app.ts');
+    expect(summarizeToolRowPresentation(readTool, { wording: enWording }).label).not.toContain('读取');
   });
 });

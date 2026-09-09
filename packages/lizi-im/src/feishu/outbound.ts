@@ -18,7 +18,10 @@
  * `img` elements directly.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { open as openFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
@@ -29,18 +32,364 @@ import * as ownerGuard from './ownerGuard.js';
 import { parseIncoming } from './incomingContent.js';
 import type { AttachmentRef } from './incomingContent.js';
 import { messages as transportMessages } from './messages.js';
-import type { InteractiveCardSpec, SendFileResult } from '../types.js';
+import type {
+  IMMessageEvent,
+  InteractiveCardSpec,
+  SendFileResult,
+} from '../types.js';
 import type { BotCredentials } from './internal-types.js';
 
 /** 30 MB per file — feishu's upper limit for `im.file.create`. */
 const FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024;
 /** 10 MB per image when sending as `msg_type:image`. */
 const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const HANDLE_PATH_HELPER_TIMEOUT_MS = 5_000;
+const HANDLE_PATH_HELPER_MAX_BYTES = 256 * 1024;
+
+/**
+ * Windows does not expose a `/proc/self/fd` equivalent to Node. The helper gets
+ * the already-open file as stdin, then asks the kernel for that inherited
+ * handle's final path. It never accepts an Agent-controlled path argument.
+ */
+const WINDOWS_HANDLE_PATH_SCRIPT = String.raw`
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $utf8
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CindyHandlePath {
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  public static extern uint GetFinalPathNameByHandle(IntPtr handle, StringBuilder path, uint size, uint flags);
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr GetStdHandle(int kind);
+}
+'@
+$handle = [CindyHandlePath]::GetStdHandle(-10)
+$path = New-Object System.Text.StringBuilder 32768
+$length = [CindyHandlePath]::GetFinalPathNameByHandle($handle, $path, $path.Capacity, 0)
+if ($length -eq 0 -or $length -ge $path.Capacity) { exit 1 }
+[Console]::Out.Write($path.ToString())
+`;
+const WINDOWS_HANDLE_PATH_COMMAND = Buffer.from(
+  WINDOWS_HANDLE_PATH_SCRIPT,
+  'utf16le',
+).toString('base64');
+
+/**
+ * Prove that an already-open source handle is reachable from an already-open
+ * directory handle without resolving any Agent-controlled absolute path. Each
+ * component is opened relative to the previous handle with reparse traversal
+ * disabled; the final native file identity must equal the source handle.
+ */
+const WINDOWS_HANDLE_CONTAINMENT_SCRIPT = String.raw`
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $utf8
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class CindyHandleContainment {
+  private const uint FILE_READ_ATTRIBUTES = 0x00000080;
+  private const uint SYNCHRONIZE = 0x00100000;
+  private const uint FILE_SHARE_ALL = 0x00000007;
+  private const uint FILE_SHARE_READ_WRITE = 0x00000003;
+  private const uint FILE_OPEN = 0x00000001;
+  private const uint FILE_DIRECTORY_FILE = 0x00000001;
+  private const uint FILE_NON_DIRECTORY_FILE = 0x00000040;
+  private const uint FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
+  private const uint FILE_OPEN_REPARSE_POINT = 0x00200000;
+  private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct UNICODE_STRING {
+    public ushort Length;
+    public ushort MaximumLength;
+    public IntPtr Buffer;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct OBJECT_ATTRIBUTES {
+    public int Length;
+    public IntPtr RootDirectory;
+    public IntPtr ObjectName;
+    public uint Attributes;
+    public IntPtr SecurityDescriptor;
+    public IntPtr SecurityQualityOfService;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct IO_STATUS_BLOCK {
+    public IntPtr Status;
+    public IntPtr Information;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FILE_ATTRIBUTE_TAG_INFO {
+    public uint FileAttributes;
+    public uint ReparseTag;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BY_HANDLE_FILE_INFORMATION {
+    public uint FileAttributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+  }
+
+  [DllImport("kernel32.dll")]
+  private static extern IntPtr GetStdHandle(int kind);
+
+  [DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetFileInformationByHandle(
+    IntPtr handle,
+    out BY_HANDLE_FILE_INFORMATION info
+  );
+
+  [DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetFileInformationByHandleEx(
+    IntPtr handle,
+    int infoClass,
+    out FILE_ATTRIBUTE_TAG_INFO info,
+    uint size
+  );
+
+  [DllImport("ntdll.dll")]
+  private static extern int NtCreateFile(
+    out SafeFileHandle fileHandle,
+    uint desiredAccess,
+    ref OBJECT_ATTRIBUTES objectAttributes,
+    out IO_STATUS_BLOCK ioStatusBlock,
+    IntPtr allocationSize,
+    uint fileAttributes,
+    uint shareAccess,
+    uint createDisposition,
+    uint createOptions,
+    IntPtr eaBuffer,
+    uint eaLength
+  );
+
+  private static SafeFileHandle OpenRelative(IntPtr root, string name, bool directory) {
+    IntPtr nameBuffer = IntPtr.Zero;
+    IntPtr unicodePointer = IntPtr.Zero;
+    try {
+      nameBuffer = Marshal.StringToHGlobalUni(name);
+      var unicode = new UNICODE_STRING {
+        Length = checked((ushort)(name.Length * 2)),
+        MaximumLength = checked((ushort)((name.Length + 1) * 2)),
+        Buffer = nameBuffer
+      };
+      unicodePointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));
+      Marshal.StructureToPtr(unicode, unicodePointer, false);
+      var attributes = new OBJECT_ATTRIBUTES {
+        Length = Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES)),
+        RootDirectory = root,
+        ObjectName = unicodePointer,
+        Attributes = 0,
+        SecurityDescriptor = IntPtr.Zero,
+        SecurityQualityOfService = IntPtr.Zero
+      };
+      IO_STATUS_BLOCK statusBlock;
+      SafeFileHandle opened;
+      uint options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT |
+        (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE);
+      int status = NtCreateFile(
+        out opened,
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        ref attributes,
+        out statusBlock,
+        IntPtr.Zero,
+        0,
+        directory ? FILE_SHARE_READ_WRITE : FILE_SHARE_ALL,
+        FILE_OPEN,
+        options,
+        IntPtr.Zero,
+        0
+      );
+      if (status < 0 || opened == null || opened.IsInvalid) {
+        if (opened != null) opened.Dispose();
+        return null;
+      }
+      FILE_ATTRIBUTE_TAG_INFO tag;
+      if (!GetFileInformationByHandleEx(
+          opened.DangerousGetHandle(),
+          9,
+          out tag,
+          (uint)Marshal.SizeOf(typeof(FILE_ATTRIBUTE_TAG_INFO))) ||
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        opened.Dispose();
+        return null;
+      }
+      return opened;
+    } catch {
+      return null;
+    } finally {
+      if (unicodePointer != IntPtr.Zero) Marshal.FreeHGlobal(unicodePointer);
+      if (nameBuffer != IntPtr.Zero) Marshal.FreeHGlobal(nameBuffer);
+    }
+  }
+
+  private static bool SameFile(IntPtr left, IntPtr right) {
+    BY_HANDLE_FILE_INFORMATION a;
+    BY_HANDLE_FILE_INFORMATION b;
+    if (!GetFileInformationByHandle(left, out a) || !GetFileInformationByHandle(right, out b)) {
+      return false;
+    }
+    if (a.FileIndexHigh == 0 && a.FileIndexLow == 0) return false;
+    if (b.FileIndexHigh == 0 && b.FileIndexLow == 0) return false;
+    return a.VolumeSerialNumber == b.VolumeSerialNumber &&
+      a.FileIndexHigh == b.FileIndexHigh &&
+      a.FileIndexLow == b.FileIndexLow;
+  }
+
+  public static bool Check(string[] segments) {
+    if (segments == null || segments.Length == 0) return false;
+    IntPtr root = GetStdHandle(-10);
+    IntPtr source = GetStdHandle(-12);
+    if (root == IntPtr.Zero || root == new IntPtr(-1) ||
+        source == IntPtr.Zero || source == new IntPtr(-1)) return false;
+
+    var opened = new List<SafeFileHandle>();
+    try {
+      IntPtr parent = root;
+      for (int i = 0; i < segments.Length; i++) {
+        string segment = segments[i];
+        if (String.IsNullOrEmpty(segment) || segment == "." || segment == ".." ||
+            segment.IndexOf('\0') >= 0 || segment.IndexOf('\\') >= 0 ||
+            segment.IndexOf('/') >= 0 || segment.IndexOf(':') >= 0) return false;
+        SafeFileHandle next = OpenRelative(parent, segment, i < segments.Length - 1);
+        if (next == null) return false;
+        opened.Add(next);
+        parent = next.DangerousGetHandle();
+      }
+      return opened.Count > 0 && SameFile(opened[opened.Count - 1].DangerousGetHandle(), source);
+    } finally {
+      for (int i = opened.Count - 1; i >= 0; i--) opened[i].Dispose();
+    }
+  }
+}
+'@
+try {
+  $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:CINDY_HANDLE_SEGMENTS))
+  $segments = @((ConvertFrom-Json -InputObject $json))
+  if ([CindyHandleContainment]::Check([string[]]$segments)) {
+    [Console]::Out.Write('1')
+    exit 0
+  }
+} catch {}
+exit 1
+`;
+const WINDOWS_HANDLE_CONTAINMENT_COMMAND = Buffer.from(
+  WINDOWS_HANDLE_CONTAINMENT_SCRIPT,
+  'utf16le',
+).toString('base64');
+
+/**
+ * Darwin `/dev/fd` is fdescfs: `chdir("/dev/fd/N")` is ENOTDIR even when N is
+ * a directory fd. Walk with `openat` from the inherited root handle instead.
+ */
+const DARWIN_HANDLE_CONTAINMENT_SCRIPT = String.raw`
+use strict;
+use warnings;
+use Fcntl qw(O_RDONLY O_NONBLOCK O_DIRECTORY O_NOFOLLOW :mode);
+
+use constant SYS_openat => 463;
+
+sub fail_closed { exit 1; }
+
+my @segments = @ARGV;
+fail_closed() unless @segments;
+for my $segment (@segments) {
+  fail_closed() if !defined($segment) || $segment eq '' || $segment eq '.' ||
+    $segment eq '..' || index($segment, '/') >= 0 || index($segment, "\0") >= 0;
+}
+
+my @source = stat(STDERR);
+fail_closed() unless @source && S_ISREG($source[2]) && $source[1] != 0;
+my $parent = fileno(STDIN);
+fail_closed() unless defined $parent && $parent >= 0;
+
+my @opened;
+for (my $index = 0; $index < @segments; $index += 1) {
+  my $directory = $index < @segments - 1;
+  my $flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
+  $flags |= O_DIRECTORY if $directory;
+  my $fd = syscall(SYS_openat, $parent, $segments[$index], $flags, 0);
+  fail_closed() if !defined($fd) || $fd < 0;
+  open(my $handle, '<&=', $fd) or fail_closed();
+  push @opened, $handle;
+  my @opened_stat = stat($handle);
+  fail_closed() unless @opened_stat;
+  if ($directory) {
+    fail_closed() unless S_ISDIR($opened_stat[2]);
+    $parent = $fd;
+  } else {
+    fail_closed() unless S_ISREG($opened_stat[2]) && $opened_stat[1] != 0 &&
+      $opened_stat[0] == $source[0] && $opened_stat[1] == $source[1];
+  }
+}
+
+print STDOUT '1';
+`;
 
 let client: Lark.Client | null = null;
 let creds: BotCredentials | null = null;
 
+/** 最近一次 bind 的账号身份 — 跨 unbind 保留, 用于判「账号是否真替换」。 */
+let lastBoundCreds: BotCredentials | null = null;
+
+function sameBoundAccount(next: BotCredentials): boolean {
+  return (
+    lastBoundCreds !== null &&
+    lastBoundCreds.appId === next.appId &&
+    lastBoundCreds.service === next.service
+  );
+}
+
+/**
+ * 账号代次 — 账号身份变化(换账号 bind / 明确清凭证)时递增: 在途的排空/兜底
+ * 续段据此丢弃, 旧账号的终态不得经新账号的 client 呈现。
+ */
+let accountEpoch = 0;
+
+function clearAccountScopedOutboundState(): void {
+  laneAnchors.clear();
+  patchableOpeners.clear();
+  openerTriggers.clear();
+  clearDeferredOpenerConsumes();
+  accountEpoch += 1;
+}
+
+/**
+ * 明确清除凭证/登出路径(clearAndDisconnect)用: 与 transport 重连区分 —
+ * 清掉账号态并重置 lastBoundCreds, 之后重新保存相同 appId/service 不会被
+ * 误判为同账号重连(登出前的 opener/锚点不得被新一轮会话认领)。
+ */
+export function forgetBoundAccount(): void {
+  clearAccountScopedOutboundState();
+  lastBoundCreds = null;
+}
+
+/** 当前账号代次(清凭证递增) — 在途排空续段比对用。 */
+export function getAccountEpoch(): number {
+  return accountEpoch;
+}
+
 export function bindClient(c: BotCredentials): void {
+  // 账号真正替换(appId/service 变化)才清开场白卡与话题锚点: 同账号 transport
+  // 重连(reconnectSavedCredentials: stop → start 同凭证)时 turn 仍在跑, 未消费
+  // 的 opener / 锚点必须仍可被认领, 否则答案无处 patch、话题出站没有 reply 根。
+  if (!sameBoundAccount(c)) clearAccountScopedOutboundState();
+  lastBoundCreds = c;
   creds = c;
   client = new Lark.Client({
     appId: c.appId,
@@ -52,7 +401,8 @@ export function bindClient(c: BotCredentials): void {
 export function unbindClient(): void {
   client = null;
   creds = null;
-  laneAnchors.clear();
+  cardLanes.clear();
+  // patchableOpeners / laneAnchors 不随 unbind 清空(见 bindClient 的账号替换清理)。
 }
 
 // ── group lane reply anchors ──────────────────────────────────────────────────
@@ -60,7 +410,7 @@ export function unbindClient(): void {
 // 出站按回合领取(流式建卡时 advance)。话题 lane 的**所有**出站都走 reply
 // 锚点 — 被回复消息在话题里, 回复自动落回话题(会话与挂回一次解决);
 // 普通群 lane 只有回合首条出站 reply(引用式"挂在提问下"), 后续 chat_id 直发。
-// 连接换代(unbindClient)清空 — 旧锚点不跨代错配(telegram 同语义)。
+// 账号替换时清空 — 同账号 transport 重连保留, 避免进行中的 turn 丢掉话题锚点。
 
 interface LaneAnchorState {
   /** 待领取的触发消息 id FIFO(多条消息先后触发同一 lane 各自排队)。 */
@@ -69,13 +419,23 @@ interface LaneAnchorState {
   held: string | null;
   /** 普通群: held 是否已用于引用回复(用过则后续 chat_id 直发)。 */
   quotedHeld: boolean;
+  /**
+   * held 是群主流触发消息(开场白撤回后的回拨锚点)时置位 — 对它 reply 必须带
+   * reply_in_thread 才会落回话题(触发消息本人在群主流)。
+   */
+  inThreadReply: boolean;
 }
 
 const laneAnchors = new Map<string, LaneAnchorState>();
 
 /** wsClient 在 owner 群触发时登记回挂锚点。 */
 export function pushReplyAnchor(laneUserId: string, messageId: string): void {
-  const state = laneAnchors.get(laneUserId) ?? { queue: [], held: null, quotedHeld: false };
+  const state = laneAnchors.get(laneUserId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
   state.queue.push(messageId);
   laneAnchors.set(laneUserId, state);
 }
@@ -87,8 +447,20 @@ export function pushReplyAnchor(laneUserId: string, messageId: string): void {
 
 const patchableOpeners = new Map<string, string>();
 
-export function pushPatchableOpener(laneUserId: string, messageId: string): void {
+/**
+ * 开场白卡对应的触发消息 id(lane → 群主流触发消息)。开场白 patch/替换失败
+ * 被撤回后, 话题里不再有合法锚点 — 回拨到触发消息并带 reply_in_thread 回复
+ * 才能落回话题(触发消息本人在群主流)。
+ */
+const openerTriggers = new Map<string, string>();
+
+export function pushPatchableOpener(
+  laneUserId: string,
+  messageId: string,
+  triggerMessageId?: string,
+): void {
   patchableOpeners.set(laneUserId, messageId);
+  if (triggerMessageId) openerTriggers.set(laneUserId, triggerMessageId);
 }
 
 /**
@@ -100,19 +472,138 @@ export function claimPatchableOpener(laneUserId: string): string | null {
   const openerId = patchableOpeners.get(laneUserId);
   if (!openerId) return null;
   patchableOpeners.delete(laneUserId);
-  const state = laneAnchors.get(laneUserId) ?? { queue: [], held: null, quotedHeld: false };
+  // openerTriggers 保留 — patch/替换失败撤回开场白卡时需要回拨锚点
+  // (rearmAnchorToTrigger 消费); 正常认领成功则随下次 push 覆盖或账号替换清空。
+  const state = laneAnchors.get(laneUserId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
   // 锚点队列头正常就是这张开场白卡; 对不上说明顺序被破坏, 保守起见仍保留队列。
   if (state.queue[0] === openerId) state.queue.shift();
   state.held = openerId;
   state.quotedHeld = true;
+  state.inThreadReply = false;
   laneAnchors.set(laneUserId, state);
   return openerId;
+}
+
+/**
+ * 重连空窗(outbound client 已解绑)时到达的开场白卡消费暂存 — 同账号重连后
+ * 由 FeishuIM 排空(见 drainDeferredOpenerConsumes): 若此时直接认领, 后续
+ * patch/撤回全部失败且注册被永久移除; 若完全放弃, 本轮终态丢失且注册残留
+ * 会被下一条消息误认领。上限防御, 超限丢最旧。
+ */
+export type DeferredOpenerConsume = (
+  | { userId: string; openerId: string; markdown: string }
+  | { userId: string; openerId: string; spec: InteractiveCardSpec }
+) & { epoch: number };
+
+const MAX_DEFERRED_OPENER_CONSUMES = 50;
+const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
+
+/**
+ * 容量淘汰的开场白卡 id — 条目被挤掉时其 opener 已被原子预留(不可再认领),
+ * 静默删除会留下永久「思考中」卡: 记录 id, 连接恢复排空时撤回。
+ */
+// 上限防御撤除: 每个条目只是短消息 id, 且连接恢复排空即清 — 有界淘汰会
+// 再次静默丢卡(阈值从 51 推迟到 101 而已), 不留可收口记录违背设计。
+const evictedOpeners: string[] = [];
+
+/** 账号替换时清空暂存消费(属旧账号的开场白卡, 新账号不需要)。 */
+function clearDeferredOpenerConsumes(): void {
+  deferredOpenerConsumes.length = 0;
+  evictedOpeners.length = 0;
+}
+
+export function deferOpenerConsume(
+  entry: { userId: string; openerId: string } & (
+    | { markdown: string }
+    | { spec: InteractiveCardSpec }
+  ),
+): void {
+  deferredOpenerConsumes.push({ ...entry, epoch: accountEpoch });
+  while (deferredOpenerConsumes.length > MAX_DEFERRED_OPENER_CONSUMES) {
+    const evicted = deferredOpenerConsumes.shift();
+    if (evicted) {
+      evictedOpeners.push(evicted.openerId);
+    }
+  }
+}
+
+/** 取出被容量淘汰的开场白卡 id(清空), 连接恢复排空时撤回。 */
+export function drainEvictedOpeners(): string[] {
+  return evictedOpeners.splice(0, evictedOpeners.length);
+}
+
+/** 取出全部暂存的消费(清空), 调用方在连接就绪后排空。 */
+export function drainDeferredOpenerConsumes(): DeferredOpenerConsume[] {
+  return deferredOpenerConsumes.splice(0, deferredOpenerConsumes.length);
+}
+
+/**
+ * 取出并移除某 lane 的匹配暂存消费 — 调用方的兜底发送在连接恢复后执行时,
+ * 优先就地收口被预留的 opener(见 FeishuIM 的发送包装): patch/替换成功即
+ * 不再另发、不留卡; 无匹配返回 undefined。
+ */
+export function takeMatchingDeferredOpenerConsume(
+  userId: string,
+  kind: 'markdown' | 'spec',
+): DeferredOpenerConsume | undefined {
+  for (let i = deferredOpenerConsumes.length - 1; i >= 0; i--) {
+    const entry = deferredOpenerConsumes[i]!;
+    if (entry.userId !== userId) continue;
+    if (kind === 'markdown' && !('markdown' in entry)) continue;
+    if (kind === 'spec' && !('spec' in entry)) continue;
+    deferredOpenerConsumes.splice(i, 1);
+    return entry;
+  }
+  return undefined;
+}
+
+/** 按 openerId 取出暂存消费 — 原兜底发送认领本轮条目, 避免同 lane 后续发送误领。 */
+export function takeDeferredOpenerConsumeById(openerId: string): DeferredOpenerConsume | undefined {
+  const index = deferredOpenerConsumes.findIndex((entry) => entry.openerId === openerId);
+  if (index < 0) return undefined;
+  return deferredOpenerConsumes.splice(index, 1)[0];
+}
+
+/**
+ * 返回该 lane 上 pending opener 的触发消息 id(没有则返回 undefined)。
+ * 调用方用它判断「这张思考卡是不是本轮消息创建的」— 空文本终态等场景下
+ * 不应消费上一轮遗留的 opener。
+ */
+export function getOpenerTrigger(laneUserId: string): string | undefined {
+  return openerTriggers.get(laneUserId);
+}
+
+/**
+ * patch/替换失败撤回开场白卡后调用: 把 held 锚点回拨到触发消息(带
+ * reply_in_thread 标记)。兜底发送向触发消息 reply 且 reply_in_thread=true,
+ * 仍落回话题 — 而不是向已删除的开场白卡 reply 失败。无触发记录返回 false。
+ */
+export function rearmAnchorToTrigger(laneUserId: string): boolean {
+  const triggerId = openerTriggers.get(laneUserId);
+  openerTriggers.delete(laneUserId);
+  if (!triggerId) return false;
+  const state = laneAnchors.get(laneUserId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
+  state.held = triggerId;
+  state.quotedHeld = true;
+  state.inThreadReply = true;
+  laneAnchors.set(laneUserId, state);
+  return true;
 }
 
 type SendTarget =
   | { kind: 'open_id'; id: string }
   | { kind: 'chat_id'; id: string }
-  | { kind: 'reply'; messageId: string };
+  | { kind: 'reply'; messageId: string; replyInThread?: boolean };
 
 /**
  * userId → 本次出站目标。
@@ -126,7 +617,12 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean }): S
   const lane = decodeLaneUserId(userId);
   if (!lane) return { kind: 'open_id', id: userId };
 
-  const state = laneAnchors.get(userId) ?? { queue: [], held: null, quotedHeld: false };
+  const state = laneAnchors.get(userId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
   laneAnchors.set(userId, state);
   // 领取条件: advanceRound(流式建卡 = 新回合)必领; 其余出站只在完全没有
   // 持有时领(首次一次性回复)。回合中途的卡片/文件**不领** — 队列里可能已经
@@ -135,12 +631,16 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean }): S
   if ((opts?.advanceRound || !state.held) && state.queue.length > 0) {
     state.held = state.queue.shift() ?? null;
     state.quotedHeld = false;
+    state.inThreadReply = false;
   }
 
   if (lane.threadId) {
     // 话题 lane: 必须 reply 锚点才能落回话题; 没有锚点宁可失败也不能把
-    // 消息发进群主流(位置错误比丢失更糟)。
-    return state.held ? { kind: 'reply', messageId: state.held } : null;
+    // 消息发进群主流(位置错误比丢失更糟)。held 是回拨的群主流触发消息时
+    // 带 reply_in_thread 回复才能落回话题。
+    return state.held
+      ? { kind: 'reply', messageId: state.held, replyInThread: state.inThreadReply || undefined }
+      : null;
   }
   if (state.held && !state.quotedHeld) {
     state.quotedHeld = true;
@@ -154,12 +654,18 @@ async function createMessage(
   target: SendTarget,
   msgType: string,
   content: string,
+  uuid?: string,
 ): Promise<{ messageId: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
     const res = await c.im.v1.message.reply({
       path: { message_id: target.messageId },
-      data: { content, msg_type: msgType },
+      data: {
+        content,
+        msg_type: msgType,
+        // 回拨到群主流触发消息的锚点: 必须 reply_in_thread 才落回话题。
+        ...(target.replyInThread ? { reply_in_thread: true } : {}),
+      },
     });
     const id = res.data?.message_id ?? '';
     if (!id) throw new Error('[feishu/outbound] reply: no message_id in response');
@@ -167,7 +673,7 @@ async function createMessage(
   }
   const res = await c.im.v1.message.create({
     params: { receive_id_type: target.kind },
-    data: { receive_id: target.id, msg_type: msgType, content },
+    data: { receive_id: target.id, msg_type: msgType, content, ...(uuid ? { uuid } : {}) },
   });
   const id = res.data?.message_id ?? '';
   if (!id) throw new Error('[feishu/outbound] create: no message_id in response');
@@ -192,7 +698,38 @@ export function getBoundCreds(): BotCredentials | null {
   return creds;
 }
 
+interface PinnedAccount {
+  client: Lark.Client;
+  epoch: number;
+}
+
+const pinnedAccount = new AsyncLocalStorage<PinnedAccount>();
+
+/** Run outbound work against the client captured at schedule time. */
+export function runWithPinnedAccount<T>(
+  pin: PinnedAccount,
+  fn: () => Promise<T> | T,
+): Promise<T> | T {
+  return pinnedAccount.run(pin, fn);
+}
+
+/** `true` when no pin is active, or the pin still matches the current account epoch. */
+export function isPinnedAccountCurrent(): boolean {
+  const pin = pinnedAccount.getStore();
+  if (!pin) return true;
+  return pin.epoch === accountEpoch;
+}
+
 function ensureClient(): Lark.Client {
+  const pin = pinnedAccount.getStore();
+  if (pin) {
+    if (pin.epoch !== accountEpoch) {
+      throw new Error(
+        '[feishu/outbound] pinned Feishu account was replaced — send aborted',
+      );
+    }
+    return pin.client;
+  }
   if (!client)
     throw new Error('[feishu/outbound] Lark.Client not bound — feishu connection not established');
   return client;
@@ -222,16 +759,32 @@ export async function replyText(
 // promise, 已完成的按 TTL 短缓存 — 重投事件直接复用同一个话题。缓存键是
 // 触发消息 id(平台内唯一), 不随 unbindClient 清空(换代不会重放别的消息 id)。
 
-interface OpenThreadResult {
-  messageId: string;
-  threadId: string;
-}
+/** 开话题结果 — 调用方按状态决定路由与降级(见 openThread 文档)。 */
+export type OpenThreadOutcome =
+  /** 话题已开, 开场白 messageId + threadId 都是话题内合法锚点/身份。 */
+  | { kind: 'opened'; messageId: string; threadId: string }
+  /** 无可确认已发出的开场白(API 失败/无 id, 或已成功撤回) — 可降级群 lane。 */
+  | { kind: 'degraded' }
+  /**
+   * 开场白已发出但 thread_id 恢复失败、撤回也失败 — 开场白孤立在话题里。
+   * 降级群 lane 会一边留着「思考中」的开场白卡、一边把回答刷进群主流;
+   * 调用方应回复开场白(落回话题)说明失败并放弃本轮, 而不是降级。
+   */
+  | { kind: 'orphaned'; openerMessageId: string }
+  /**
+   * reply 在超时/断线后用同一 uuid 有界重试仍拿不到回执 — 服务端可能已经
+   * 发出「思考中」卡。不能降级群 lane(会刷屏 + 留卡), 调用方应放弃本轮
+   * 并 evict 缓存, 让重投再用同一 uuid 取回原 message_id/thread_id。
+   */
+  | { kind: 'unconfirmed' };
 
 const OPEN_THREAD_DEDUP_TTL_MS = 10 * 60_000;
 const OPEN_THREAD_DEDUP_MAX_ENTRIES = 200;
+/** 超时/断线后用同一 uuid 再打 reply 的次数(不含首次)。 */
+const OPEN_THREAD_UNCERTAIN_RETRIES = 2;
 const openThreadByTrigger = new Map<
   string,
-  { ts: number; promise: Promise<OpenThreadResult | null> }
+  { ts: number; promise: Promise<OpenThreadOutcome> }
 >();
 
 function pruneOpenThreadDedup(): void {
@@ -258,78 +811,199 @@ function pruneOpenThreadDedup(): void {
  * 本轮流式卡**: 发一张「思考中」占位卡片(message 可被 patch 升级成正文),
  * 之后流式卡直接 patch 它 — 话题里不会多出一条「开个话题聊这条」的占位
  * 消息, 第一条可见内容就是答案本身(streamingText.start 经
- * claimPatchableOpener 认领)。返回开场白卡 id + 新话题 thread_id。
- * 同一触发消息并发/重复调用共享同一次开话题 — 防飞书重投事件开出多个话题
- * (含进程重启: uuid 走服务端去重)。
+ * claimPatchableOpener 认领)。返回 opened / degraded / orphaned / unconfirmed
+ * (见类型注释)。同一触发消息并发/重复调用
+ * 共享同一次开话题 — 防飞书重投事件开出多个话题(含进程重启: uuid 走服务端
+ * 去重)。
  *
- * 失败语义: API 失败或响应缺 message_id → null(没有可确认已发出的开场白);
- * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id, 查不到就
- * 撤回开场白再返回 null — 不让「回复都在里面」的开场白承诺落空。调用方在
- * null 时降级回群 lane 旧行为(引用回复 + chat_id 直发)。
+ * 失败语义: API 失败或响应缺 message_id → degraded(没有可确认已发出的开场白);
+ * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id; 查不到就
+ * 撤回开场白 — 撤回成功 → degraded, 撤回失败(含业务错误码)→ orphaned。
+ * reply 超时/断线等不确定错误 → 同一 uuid 有界重试取回原消息; 仍无回执 →
+ * unconfirmed(不降级)。任何状态都不出现「开场白可见但回答进群主流」。
  */
-export function openThread(replyToMessageId: string): Promise<OpenThreadResult | null> {
+export function openThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const now = Date.now();
   const cached = openThreadByTrigger.get(replyToMessageId);
   if (cached && now - cached.ts <= OPEN_THREAD_DEDUP_TTL_MS) return cached.promise;
 
-  const promise = doOpenThread(replyToMessageId);
+  const promise = doOpenThread(replyToMessageId).then((outcome) => {
+    // unconfirmed 不是稳定结论: 清掉缓存, 重投再用同一 uuid 取回原消息。
+    if (outcome.kind === 'unconfirmed') openThreadByTrigger.delete(replyToMessageId);
+    return outcome;
+  });
   openThreadByTrigger.set(replyToMessageId, { ts: now, promise });
   pruneOpenThreadDedup();
   return promise;
 }
 
-async function doOpenThread(replyToMessageId: string): Promise<OpenThreadResult | null> {
+/**
+ * 移除某触发消息的开话题结果缓存 — 只在「放弃本轮、期待重投重试」的路径
+ * 调用(连接换代丢弃时与入站认领释放配套)。不 evict 的话, 重投会复用旧连接
+ * 上的 degraded/orphaned 结果(旧客户端已 unbind, 补查/撤回必然失败), 而不是
+ * 用新客户端重试 API。孤儿提示失败的重试路径不 evict — 复用 orphaned 结果
+ * 重试提示正是设计意图。
+ */
+export function evictOpenThreadOutcome(replyToMessageId: string): void {
+  openThreadByTrigger.delete(replyToMessageId);
+}
+
+/**
+ * 用指定 client 撤回 bot 自己发的消息 — patch/替换失败路径把撤回 pin 到
+ * 触发账号: 中途换凭证时不得拿新账号的 client 删除旧账号的开场白。
+ */
+/** 飞书 REST 2xx 仍可能带非零业务码; SDK 对此不抛。缺省或 0 才算成功。 */
+function feishuBusinessRejectReason(res: { code?: number; msg?: string }): string | null {
+  if (res.code === undefined || res.code === 0) return null;
+  return res.msg ? `${res.msg} (code=${res.code})` : `code=${res.code}`;
+}
+
+export async function recallOwnMessageWith(
+  c: Lark.Client,
+  messageId: string,
+): Promise<boolean> {
   const log = getLog();
   try {
-    const res = await ensureClient().im.v1.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content: JSON.stringify(buildMarkdownCardV2(transportMessages.streaming.randomThinking())),
-        msg_type: 'interactive',
-        reply_in_thread: true,
-        // 服务端幂等键: 同一触发消息重复开话题(重投事件、进程重启后重放)时,
-        // 飞书按 uuid 去重(1 小时内同 uuid 至多发一条, 重复调用返回原消息
-        // id), 不会开出第二个话题。
-        uuid: replyToMessageId,
-      },
-    });
-    const messageId = res.data?.message_id ?? '';
-    const threadId = res.data?.thread_id ?? '';
-    if (!messageId) {
-      log.warn(
-        '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
-      );
-      return null;
+    const res = await c.im.v1.message.delete({ path: { message_id: messageId } });
+    const rejected = feishuBusinessRejectReason(res);
+    if (rejected) {
+      log.warn(`[feishu/outbound] recallOwnMessage rejected: ${rejected}`);
+      return false;
     }
-    if (threadId) return { messageId, threadId };
-    // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
-    const recovered = await tryFetchMessageThreadId(messageId);
-    if (recovered) return { messageId, threadId: recovered };
-    // 恢复不了: 撤回开场白再降级, 避免「回复都在里面」的开场白留在群里误导。
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] recallOwnMessage failed: ${msg}`);
+    return false;
+  }
+}
+
+/**
+ * 撤回 bot 自己发的消息(孤儿开场白卡重试耗尽后的最后兜底)。返回是否成功;
+ * 失败只 log — 撤回成功用户看到干净群主流而不是永久「思考中」卡, 撤回失败
+ * 说明故障仍未恢复, 已无更进一步的兜底手段。
+ */
+export async function recallOwnMessage(messageId: string): Promise<boolean> {
+  return recallOwnMessageWith(ensureClient(), messageId);
+}
+
+/** reply 抛错是否「结果不确定」: 请求可能已在服务端落地, 不能立刻假定没发。 */
+function isUncertainOpenThreadError(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : '';
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+  const hay = `${name} ${code} ${msg}`.toLowerCase();
+  return /timeout|timed?\s*out|etimedout|econnreset|econnrefused|econnaborted|enotfound|eai_again|epipe|socket hang up|network|fetch failed|aborted|und_err/.test(
+    hay,
+  );
+}
+
+async function replyOpenThread(
+  c: Lark.Client,
+  replyToMessageId: string,
+): Promise<{ messageId: string; threadId: string } | 'degraded' | 'unconfirmed'> {
+  const log = getLog();
+  const maxAttempts = 1 + OPEN_THREAD_UNCERTAIN_RETRIES;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
-      log.warn(
-        '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
-      );
+      const res = await c.im.v1.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          content: JSON.stringify(buildMarkdownCardV2(transportMessages.streaming.randomThinking())),
+          msg_type: 'interactive',
+          reply_in_thread: true,
+          // 服务端幂等键: 同一触发消息重复开话题(重投事件、进程重启后重放)时,
+          // 飞书按 uuid 去重(1 小时内同 uuid 至多发一条, 重复调用返回原消息
+          // id), 不会开出第二个话题。超时后用同一 uuid 重试即可取回原消息。
+          uuid: replyToMessageId,
+        },
+      });
+      const messageId = res.data?.message_id ?? '';
+      const threadId = res.data?.thread_id ?? '';
+      if (!messageId) {
+        log.warn(
+          '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
+        );
+        return 'degraded';
+      }
+      return { messageId, threadId };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(
-        `[feishu/outbound] openThread: thread_id unrecoverable, opener recall failed (non-fatal): ${msg}`,
-      );
+      const uncertain = isUncertainOpenThreadError(err);
+      if (uncertain && attempt < maxAttempts) {
+        log.warn(
+          `[feishu/outbound] openThread reply uncertain (retry ${attempt}/${OPEN_THREAD_UNCERTAIN_RETRIES} with same uuid): ${msg}`,
+        );
+        continue;
+      }
+      if (uncertain) {
+        log.warn(
+          `[feishu/outbound] openThread reply unconfirmed after ${maxAttempts} attempts — not degrading: ${msg}`,
+        );
+        return 'unconfirmed';
+      }
+      log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
+      return 'degraded';
     }
-    return null;
+  }
+  return 'unconfirmed';
+}
+
+async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
+  const log = getLog();
+  // 全程 pin 到触发时的 client: reply / message.get / message.delete 都用
+  // 同一个实例。中途换账号(unbindClient + bindClient 新凭证)时, 补查与
+  // 撤回仍走创建开场白的那条连接 — 不会经新账号的 client 操作旧消息。
+  let c: Lark.Client;
+  try {
+    c = ensureClient();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
-    return null;
+    return { kind: 'degraded' };
+  }
+  const replied = await replyOpenThread(c, replyToMessageId);
+  if (replied === 'degraded') return { kind: 'degraded' };
+  if (replied === 'unconfirmed') return { kind: 'unconfirmed' };
+  const { messageId, threadId } = replied;
+  if (threadId) return { kind: 'opened', messageId, threadId };
+  // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
+  const recovered = await tryFetchMessageThreadId(c, messageId);
+  if (recovered) return { kind: 'opened', messageId, threadId: recovered };
+  // 恢复不了: 撤回开场白再降级, 避免「思考中」的开场白卡留在群里误导。
+  try {
+    const del = await c.im.v1.message.delete({
+      path: { message_id: messageId },
+    });
+    // SDK 对业务错误不抛异常, 2xx 响应也可能带非零 code — 只有 code 缺省
+    // 或为 0 才算撤回成功, 否则开场白卡仍在群里, 降级会制造误导组合。
+    if (del.code !== undefined && del.code !== 0) {
+      log.error(
+        `[feishu/outbound] openThread: opener recall rejected (code=${del.code}) — opener orphaned: ${del.msg ?? ''}`,
+      );
+      return { kind: 'orphaned', openerMessageId: messageId };
+    }
+    log.warn(
+      '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
+    );
+    return { kind: 'degraded' };
+  } catch (err) {
+    // 撤回也失败: 开场白卡孤立在话题里 — 宁可让调用方放弃本轮(回复开场白
+    // 说明失败), 也不能降级群 lane 制造「开场白可见 + 回答刷群主流」。
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(
+      `[feishu/outbound] openThread: thread_id unrecoverable and opener recall failed — opener orphaned: ${msg}`,
+    );
+    return { kind: 'orphaned', openerMessageId: messageId };
   }
 }
 
 /** 用 message.get 补查开场白消息的 thread_id(部分成功恢复);失败返回 ''。 */
-async function tryFetchMessageThreadId(messageId: string): Promise<string> {
+async function tryFetchMessageThreadId(c: Lark.Client, messageId: string): Promise<string> {
   const log = getLog();
   try {
-    const res = await ensureClient().im.v1.message.get({ path: { message_id: messageId } });
+    const res = await c.im.v1.message.get({ path: { message_id: messageId } });
     return res.data?.items?.[0]?.thread_id ?? '';
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -379,6 +1053,60 @@ export async function removeReaction(messageId: string, reactionId: string): Pro
 
 // ── interactive cards ─────────────────────────────────────────────────────────
 
+// ── card lane registry (发卡登记 messageId → lane) ────────────────────────────
+// 卡片回调(card.action.trigger)的 context 只带 open_message_id / open_chat_id,
+// 不带话题 thread_id — 编排层按 (bot, senderId) 记 /ctr 锁与接管 binding, 消息
+// 侧 senderId 是群话题 lane(g/{chatId}/{threadId}), 回调侧只有 operator.open_id,
+// 键对不上会让 /ctr 锁永远清不掉。发往 lane 的卡在发送成功后把 messageId 登记
+// 回发卡 lane, 回调时反查归一成同一条 lane;私聊卡(open_id)与改投 owner DM 的卡
+// 不登记, 回调保持 open_id。飞书卡片回调有效期 30 天, 过期条目不会再有点击,
+// 按 31 天 TTL + 上限淘汰;unbindClient 清空(卡片回调不跨连接认领旧卡)。
+
+const CARD_LANE_TTL_MS = 31 * 24 * 60 * 60 * 1000;
+const CARD_LANE_MAX_ENTRIES = 512;
+const cardLanes = new Map<string, { ts: number; lane: string }>();
+
+function pruneCardLanes(): void {
+  const now = Date.now();
+  for (const [messageId, entry] of cardLanes) {
+    if (now - entry.ts > CARD_LANE_TTL_MS) cardLanes.delete(messageId);
+  }
+  while (cardLanes.size > CARD_LANE_MAX_ENTRIES) {
+    let oldestKey: string | undefined;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [messageId, entry] of cardLanes) {
+      if (entry.ts < oldestTs) {
+        oldestTs = entry.ts;
+        oldestKey = messageId;
+      }
+    }
+    if (oldestKey === undefined) break;
+    cardLanes.delete(oldestKey);
+  }
+}
+
+/** 发卡成功后在 lane 通道登记 card messageId → laneUserId;私聊发送不登记。 */
+/** 登记交互卡的发卡 lane(按钮回调 resolveCardLane 反查用)。 */
+export function registerCardLane(userId: string, messageId: string): void {
+  if (!decodeLaneUserId(userId)) return;
+  cardLanes.set(messageId, { ts: Date.now(), lane: userId });
+  pruneCardLanes();
+}
+
+/**
+ * 按卡片回调的 open_message_id 反查发卡 lane。chatId 兜底比对防串(卡在话题里
+ * 时 open_chat_id 是群 id, 与 lane 的 chatId 恒一致)。查不到返回 null — 私聊卡、
+ * 改投 DM 卡或已过期淘汰的条目, 回调 senderId 保持 operator.open_id。
+ */
+export function resolveCardLane(messageId: string, chatId: string): string | null {
+  pruneCardLanes();
+  const entry = cardLanes.get(messageId);
+  if (!entry) return null;
+  const lane = decodeLaneUserId(entry.lane);
+  if (!lane || lane.chatId !== chatId) return null;
+  return entry.lane;
+}
+
 export async function sendInteractive(
   userId: string,
   spec: InteractiveCardSpec,
@@ -395,7 +1123,13 @@ export async function sendInteractive(
     return createMessage({ kind: 'open_id', id: owner }, 'interactive', JSON.stringify(card));
   }
   const card = buildInteractiveCardV1(spec);
-  return createMessage(requireSendTarget(userId), 'interactive', JSON.stringify(card));
+  const result = await createMessage(
+    requireSendTarget(userId),
+    'interactive',
+    JSON.stringify(card),
+  );
+  registerCardLane(userId, result.messageId);
+  return result;
 }
 
 export async function updateInteractive(
@@ -403,19 +1137,27 @@ export async function updateInteractive(
   spec: InteractiveCardSpec,
 ): Promise<void> {
   const card = buildInteractiveCardV1(spec);
-  await ensureClient().im.v1.message.patch({
+  const res = await ensureClient().im.v1.message.patch({
     path: { message_id: messageId },
     data: { content: JSON.stringify(card) },
   });
+  const rejected = feishuBusinessRejectReason(res);
+  if (rejected) {
+    throw new Error(`updateInteractive rejected: ${rejected}`);
+  }
 }
 
 // ── raw card patch (used by streamingText for v2 markdown patching) ───────────
 
 export async function patchCardRaw(messageId: string, cardJson: unknown): Promise<void> {
-  await ensureClient().im.v1.message.patch({
+  const res = await ensureClient().im.v1.message.patch({
     path: { message_id: messageId },
     data: { content: JSON.stringify(cardJson) },
   });
+  const rejected = feishuBusinessRejectReason(res);
+  if (rejected) {
+    throw new Error(`patchCardRaw rejected: ${rejected}`);
+  }
 }
 
 /**
@@ -430,6 +1172,20 @@ export async function sendCardRaw(
     requireSendTarget(userId, { advanceRound: true }),
     'interactive',
     JSON.stringify(cardJson),
+  );
+}
+
+/** Send a terminal-output mirror directly to a parent group main timeline. */
+export async function sendCardToChat(
+  chatId: string,
+  cardJson: unknown,
+  uuid: string,
+): Promise<{ messageId: string }> {
+  return createMessage(
+    { kind: 'chat_id', id: chatId },
+    'interactive',
+    JSON.stringify(cardJson),
+    uuid,
   );
 }
 
@@ -454,42 +1210,439 @@ function inferFeishuFileType(
   return 'stream';
 }
 
+/** A Feishu upload reference that can be sent again without reading the source file. */
+export interface ReusableFeishuFileMessage {
+  msgType: 'file' | 'image';
+  content: string;
+}
+
+export interface FeishuUploadedFileSource {
+  realPath: string;
+  /** Exact decimal identities; strings avoid truncating 64-bit Windows file IDs. */
+  dev: string;
+  ino: string;
+  /**
+   * Compatibility-only diagnostic. Parent-chat authorization ignores caller-
+   * supplied ancestry and walks from the live pinned root handle instead.
+   */
+  ancestors: ReadonlyArray<{ dev: string; ino: string }>;
+}
+
+export interface FeishuSendFileResult extends SendFileResult {
+  reusableMessage?: ReusableFeishuFileMessage;
+  /** Identity of the bytes that were uploaded; authorizes parent-chat key reuse. */
+  uploadedSource?: FeishuUploadedFileSource;
+}
+
 export async function sendFile(
   userId: string,
   absPath: string,
   displayName?: string,
-): Promise<SendFileResult> {
-  const log = getLog();
-  const c = ensureClient();
-  const baseName = path.basename(absPath);
-  const showName = displayName?.length ? displayName : baseName;
-
-  if (!fs.existsSync(absPath)) return { ok: false, reason: 'NOT_FOUND' };
-  const stat = fs.statSync(absPath);
-  if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
-  if (stat.size > FEISHU_FILE_SIZE_LIMIT) return { ok: false, reason: 'TOO_LARGE' };
-
+): Promise<FeishuSendFileResult> {
   const target = resolveSendTarget(userId);
   if (!target) {
-    log.error(`[feishu/outbound] sendFile: no reply anchor for topic lane ...${userId.slice(-8)}`);
+    getLog().error(`[feishu/outbound] sendFile: no reply anchor for topic lane ...${userId.slice(-8)}`);
     return { ok: false, reason: 'SEND_FAIL' };
   }
+  return sendFileToTarget(target, absPath, displayName);
+}
+
+/** Re-send an already uploaded terminal-output file to a parent group main timeline. */
+export async function sendFileToChat(
+  chatId: string,
+  message: ReusableFeishuFileMessage,
+  uuid: string,
+): Promise<SendFileResult> {
+  try {
+    const res = await createMessage(
+      { kind: 'chat_id', id: chatId },
+      message.msgType,
+      message.content,
+      uuid,
+    );
+    return { ok: true, messageId: res.messageId };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    getLog().error(`[feishu/outbound] sendFileToChat SEND_FAIL: ${msg}`);
+    return { ok: false, reason: 'SEND_FAIL' };
+  }
+}
+
+interface OutboundFileSource {
+  absPath: string;
+  size: number;
+  createReadStream(): fs.ReadStream;
+}
+
+function isSyntheticFdPath(resolved: string): boolean {
+  const normalized = resolved.replaceAll('\\', '/');
+  return /(?:^|\/)(?:proc\/self\/fd|dev\/fd)\/\d+$/.test(normalized);
+}
+
+function realPathIfInode(
+  candidate: string,
+  identity: { dev: string; ino: string },
+): string | null {
+  try {
+    const realPath = fs.realpathSync.native(candidate);
+    if (isSyntheticFdPath(realPath)) return null;
+    const leaf = fs.statSync(realPath, { bigint: true });
+    if (String(leaf.dev) === identity.dev && String(leaf.ino) === identity.ino) return realPath;
+  } catch {
+    /* candidate no longer names this inode */
+  }
+  return null;
+}
+
+function runHandlePathHelper(
+  command: string,
+  args: readonly string[],
+  stdin: number | 'ignore',
+  stderr: number | 'ignore' = 'ignore',
+  env?: NodeJS.ProcessEnv,
+): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        stdio: [stdin, 'pipe', stderr],
+        windowsHide: true,
+        ...(env ? { env } : {}),
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    let settled = false;
+    const finish = (value: Buffer | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += next.length;
+      if (total > HANDLE_PATH_HELPER_MAX_BYTES) {
+        child.stdout?.destroy();
+        child.kill();
+        finish(null);
+        return;
+      }
+      chunks.push(next);
+    });
+    child.once('error', () => finish(null));
+    child.once('close', (code) => finish(code === 0 ? Buffer.concat(chunks) : null));
+
+    const timer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.kill();
+      finish(null);
+    }, HANDLE_PATH_HELPER_TIMEOUT_MS);
+    timer.unref?.();
+  });
+}
+
+function windowsPowerShellPath(): string | null {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot || !path.win32.isAbsolute(systemRoot)) return null;
+  const executable = path.win32.join(
+    systemRoot,
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  try {
+    return fs.statSync(executable).isFile() ? executable : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWindowsHandlePath(raw: string): string | null {
+  const value = raw.replace(/^\uFEFF/, '');
+  if (!value || /[\0\r\n]/.test(value)) return null;
+  const extendedPrefix = '\\\\?\\';
+  if (!value.startsWith(extendedPrefix)) return null;
+  const unprefixed = value.slice(extendedPrefix.length);
+  if (unprefixed.startsWith('UNC\\')) return `\\\\${unprefixed.slice(4)}`;
+  return /^[A-Za-z]:\\/.test(unprefixed) ? unprefixed : null;
+}
+
+async function windowsHandlePath(fd: number): Promise<string | null> {
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return null;
+  const output = await runHandlePathHelper(
+    powershell,
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', WINDOWS_HANDLE_PATH_COMMAND],
+    fd,
+  );
+  return output ? normalizeWindowsHandlePath(output.toString('utf8')) : null;
+}
+
+function decodeLsofFileName(raw: string): string {
+  if (!raw.includes('\\')) return raw;
+  const bytes: number[] = [];
+  for (let i = 0; i < raw.length; ) {
+    if (raw.startsWith('\\x', i) && /^[0-9a-fA-F]{2}/.test(raw.slice(i + 2, i + 4))) {
+      bytes.push(Number.parseInt(raw.slice(i + 2, i + 4), 16));
+      i += 4;
+      continue;
+    }
+    const code = raw.charCodeAt(i);
+    if (code > 255) {
+      bytes.push(...Buffer.from(raw[i]!, 'utf8'));
+    } else {
+      bytes.push(code);
+    }
+    i += 1;
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+async function darwinHandlePath(fd: number): Promise<string | null> {
+  const output = await runHandlePathHelper(
+    '/usr/sbin/lsof',
+    ['-w', '-a', '-p', String(process.pid), '-d', String(fd), '-F0n'],
+    'ignore',
+    'ignore',
+    { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+  );
+  if (!output) return null;
+  for (const rawField of output.toString('utf8').split('\0')) {
+    const field = rawField.startsWith('\n') ? rawField.slice(1) : rawField;
+    if (field.startsWith('n') && field.length > 1) {
+      return decodeLsofFileName(field.slice(1));
+    }
+  }
+  return null;
+}
+
+/**
+ * Native canonical path for the opened handle. A later lookup of `absPath` is
+ * a separate operation that can be retargeted. Linux binds through procfs;
+ * macOS asks `lsof` for the live vnode path; Windows passes the opened handle
+ * to a fixed PowerShell/GetFinalPathNameByHandle helper. Any unavailable or
+ * unverifiable helper fails closed.
+ */
+export async function attestedRealPath(
+  fd: number,
+  identity: { dev: string; ino: string },
+): Promise<string> {
+  const candidate =
+    process.platform === 'linux'
+      ? `/proc/self/fd/${fd}`
+      : process.platform === 'darwin'
+        ? await darwinHandlePath(fd)
+        : process.platform === 'win32'
+          ? await windowsHandlePath(fd)
+          : null;
+  return candidate ? (realPathIfInode(candidate, identity) ?? '') : '';
+}
+
+function validContainmentSegments(segments: readonly string[]): boolean {
+  if (segments.length === 0) return false;
+  return segments.every(
+    (segment) =>
+      segment.length > 0 &&
+      segment !== '.' &&
+      segment !== '..' &&
+      !segment.includes('\0') &&
+      !segment.includes('/'),
+  );
+}
+
+function sameOpenFile(leftFd: number, rightFd: number): boolean {
+  try {
+    const left = fs.fstatSync(leftFd, { bigint: true });
+    const right = fs.fstatSync(rightFd, { bigint: true });
+    if (!left.isFile() || !right.isFile() || left.ino === 0n || right.ino === 0n) return false;
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
+}
+
+function linuxHandleContainment(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): boolean {
+  if (!fs.constants.O_NOFOLLOW || !validContainmentSegments(segments)) return false;
+  const opened: number[] = [];
+  let parentFd = rootFd;
+  try {
+    for (let index = 0; index < segments.length; index += 1) {
+      const directory = index < segments.length - 1;
+      let flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+      if (fs.constants.O_NONBLOCK) flags |= fs.constants.O_NONBLOCK;
+      if (directory && fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY;
+      const fd = fs.openSync(`/proc/self/fd/${parentFd}/${segments[index]}`, flags);
+      opened.push(fd);
+      const stat = fs.fstatSync(fd, { bigint: true });
+      if (directory) {
+        if (!stat.isDirectory()) return false;
+        parentFd = fd;
+      } else if (!sameOpenFile(fd, sourceFd)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    for (const fd of opened.reverse()) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* best-effort close */
+      }
+    }
+  }
+}
+
+async function windowsHandleContainment(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): Promise<boolean> {
+  if (!validContainmentSegments(segments) || segments.some((segment) => segment.includes('\\'))) {
+    return false;
+  }
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return false;
+  const encodedSegments = Buffer.from(JSON.stringify(segments), 'utf8').toString('base64');
+  const output = await runHandlePathHelper(
+    powershell,
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      WINDOWS_HANDLE_CONTAINMENT_COMMAND,
+    ],
+    rootFd,
+    sourceFd,
+    { ...process.env, CINDY_HANDLE_SEGMENTS: encodedSegments },
+  );
+  return output?.toString('utf8') === '1';
+}
+
+async function darwinHandleContainment(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): Promise<boolean> {
+  if (!validContainmentSegments(segments)) return false;
+  const output = await runHandlePathHelper(
+    '/usr/bin/perl',
+    ['-e', DARWIN_HANDLE_CONTAINMENT_SCRIPT, '--', ...segments],
+    rootFd,
+    sourceFd,
+    {},
+  );
+  return output?.toString('utf8') === '1';
+}
+
+/**
+ * Object-chain containment proof. `sourceFd` and `rootFd` stay open throughout
+ * the check; every child is opened relative to the preceding directory handle
+ * with symlink/reparse traversal disabled, then the final handle is compared
+ * to `sourceFd`. No absolute path is re-resolved by the helper.
+ */
+export async function attestOpenFileWithinDirectory(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): Promise<boolean> {
+  if (process.platform === 'linux') {
+    return linuxHandleContainment(sourceFd, rootFd, segments);
+  }
+  if (process.platform === 'darwin') {
+    return darwinHandleContainment(sourceFd, rootFd, segments);
+  }
+  if (process.platform === 'win32') {
+    return windowsHandleContainment(sourceFd, rootFd, segments);
+  }
+  return false;
+}
+
+async function sendFileToTarget(
+  target: SendTarget,
+  absPath: string,
+  displayName?: string,
+  uuid?: string,
+): Promise<FeishuSendFileResult> {
+  const c = ensureClient();
+
+  let handle: FileHandle;
+  try {
+    handle = await openFile(absPath, 'r');
+  } catch {
+    return { ok: false, reason: 'NOT_FOUND' };
+  }
+
+  try {
+    const stat = await handle.stat({ bigint: true });
+    const identity = { dev: String(stat.dev), ino: String(stat.ino) };
+    const realPath = await attestedRealPath(handle.fd, identity);
+    const result = await sendFileSourceToTarget(
+      c,
+      target,
+      {
+        absPath,
+        size: Number(stat.size),
+        createReadStream: () => handle.createReadStream({ autoClose: false }),
+      },
+      displayName,
+      uuid,
+    );
+    if (result.ok) {
+      result.uploadedSource = {
+        realPath,
+        ...identity,
+        ancestors: [],
+      };
+    }
+    return result;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function sendFileSourceToTarget(
+  c: Lark.Client,
+  target: SendTarget,
+  source: OutboundFileSource,
+  displayName?: string,
+  uuid?: string,
+): Promise<FeishuSendFileResult> {
+  const log = getLog();
+  const baseName = path.basename(source.absPath);
+  const showName = displayName?.length ? displayName : baseName;
+
+  if (source.size === 0) return { ok: false, reason: 'EMPTY' };
+  if (source.size > FEISHU_FILE_SIZE_LIMIT) return { ok: false, reason: 'TOO_LARGE' };
 
   // Image fast-path: if the file is a feishu-supported image type and within
   // the image-msg size cap, send as msg_type:image so it previews inline.
-  if (isFeishuImageExt(absPath) && stat.size <= FEISHU_IMAGE_MAX_BYTES) {
-    return sendImageMessage(c, target, absPath);
+  if (isFeishuImageExt(source.absPath) && source.size <= FEISHU_IMAGE_MAX_BYTES) {
+    return sendImageMessage(c, target, source.createReadStream, uuid);
   }
 
   // 1. Upload to obtain file_key.
   let fileKey: string;
   try {
-    const fileType = inferFeishuFileType(absPath);
+    const fileType = inferFeishuFileType(source.absPath);
     const res = await c.im.file.create({
       data: {
         file_type: fileType,
         file_name: showName,
-        file: fs.createReadStream(absPath),
+        file: source.createReadStream(),
       },
     });
     const key = (res as { file_key?: string } | null)?.file_key;
@@ -503,8 +1656,13 @@ export async function sendFile(
 
   // 2. Send message referencing file_key.
   try {
-    const res = await createMessage(target, 'file', JSON.stringify({ file_key: fileKey }));
-    return { ok: true, messageId: res.messageId };
+    const content = JSON.stringify({ file_key: fileKey });
+    const res = await createMessage(target, 'file', content, uuid);
+    return {
+      ok: true,
+      messageId: res.messageId,
+      reusableMessage: { msgType: 'file', content },
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`[feishu/outbound] sendFile SEND_FAIL: ${msg}`);
@@ -544,6 +1702,94 @@ export async function uploadImage(absPath: string): Promise<string | null> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`[feishu/outbound] uploadImage failed: ${msg}`);
+    return null;
+  }
+}
+
+// ── exact reply context ───────────────────────────────────────────────────────
+
+export interface ResolvedReplyMessage {
+  replyContext: NonNullable<IMMessageEvent['replyContext']>;
+}
+
+function renderReplyMessageText(
+  parsed: ReturnType<typeof parseIncoming>,
+): string {
+  const parts: string[] = [];
+  if (parsed.text) parts.push(parsed.text);
+  for (const attachment of parsed.attachments) {
+    parts.push(attachment.kind === 'image' ? '[图片]' : `[文件: ${attachment.fileName}]`);
+  }
+  for (const unsupported of parsed.unsupported) parts.push(`[${unsupported.label}]`);
+  return parts.join('\n').trim();
+}
+
+function replaceFetchedMentions(
+  text: string,
+  mentions: Array<{ key: string; name?: unknown }> | undefined,
+): string {
+  let out = text;
+  for (const mention of mentions ?? []) {
+    if (!mention.key) continue;
+    const rawName = typeof mention.name === 'string' ? mention.name : '';
+    const name = rawName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
+    out = out.split(mention.key).join(`@${name || 'user'}`);
+  }
+  return out;
+}
+
+/**
+ * 精确读取一条飞书普通回复所引用的原消息。全程 pin 到开始时的 client;
+ * 账号换代后调用方会用 connection generation 丢弃结果, 不会串进新账号。
+ *
+ * 任何读取、解析失败都降级为 null, 当前 turn 继续走既有群历史上下文路径。
+ * 跨群 parent_id fail closed, 防止异常事件带出别处内容。被引附件只渲染
+ * [图片]/[文件] 占位, 不在 transport 层提前下载或并入当前消息附件:正文要先
+ * 经 host 的注入扫描, 且引用附件不应按触发消息语义落库。
+ */
+export async function resolveReplyMessage(
+  messageId: string,
+  expectedChatId: string,
+): Promise<ResolvedReplyMessage | null> {
+  const c = client;
+  if (!c) return null;
+  const log = getLog();
+  try {
+    const res = await c.im.v1.message.get({
+      params: { user_id_type: 'open_id', with_sender_name: true },
+      path: { message_id: messageId },
+    });
+    const rejected = feishuBusinessRejectReason(res);
+    if (rejected) {
+      log.warn(`[feishu/outbound] reply context fetch rejected: ${rejected}`);
+      return null;
+    }
+    const item = res.data?.items?.[0];
+    if (!item || item.deleted) return null;
+    if (item.chat_id !== expectedChatId) {
+      log.warn('[feishu/outbound] reply context dropped: parent message belongs to another chat');
+      return null;
+    }
+
+    const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
+    const text = replaceFetchedMentions(
+      renderReplyMessageText(parsed),
+      item.mentions,
+    );
+    if (!text) return null;
+
+    const isBot = item.sender?.sender_type === 'app';
+    const author = item.sender?.sender_name?.trim() || (isBot ? 'bot' : 'user');
+    return {
+      replyContext: {
+        author,
+        text,
+        ...(isBot ? { isBot: true } : {}),
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] reply context fetch failed (degraded): ${msg}`);
     return null;
   }
 }
@@ -607,12 +1853,17 @@ export async function fetchChatHistoryPage(args: {
     const rawContent = item.body?.content ?? '';
     let text = '';
     let attachments: AttachmentRef[] = [];
-    if (msgType === 'text' || msgType === 'post' || msgType === 'image' || msgType === 'file') {
+    if (
+      msgType === 'text' ||
+      msgType === 'post' ||
+      msgType === 'image' ||
+      msgType === 'file' ||
+      msgType === 'interactive' ||
+      msgType === 'card'
+    ) {
       const parsed = parseIncoming(msgType, rawContent);
       text = parsed.text;
       attachments = parsed.attachments;
-    } else if (msgType === 'interactive') {
-      text = '[卡片消息]';
     } else {
       continue; // audio/media/sticker 等对上下文无意义, 跳过
     }
@@ -663,21 +1914,27 @@ export async function getChatName(chatId: string): Promise<string | null> {
 async function sendImageMessage(
   c: Lark.Client,
   target: SendTarget,
-  absPath: string,
-): Promise<SendFileResult> {
+  createReadStream: () => fs.ReadStream,
+  uuid?: string,
+): Promise<FeishuSendFileResult> {
   const log = getLog();
   try {
     const upRes = await c.im.v1.image.create({
       data: {
         image_type: 'message',
-        image: fs.createReadStream(absPath),
+        image: createReadStream(),
       },
     });
     const imageKey = (upRes as { image_key?: string }).image_key;
     if (!imageKey) return { ok: false, reason: 'UPLOAD_FAIL' };
 
-    const res = await createMessage(target, 'image', JSON.stringify({ image_key: imageKey }));
-    return { ok: true, messageId: res.messageId };
+    const content = JSON.stringify({ image_key: imageKey });
+    const res = await createMessage(target, 'image', content, uuid);
+    return {
+      ok: true,
+      messageId: res.messageId,
+      reusableMessage: { msgType: 'image', content },
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`[feishu/outbound] sendImageMessage failed: ${msg}`);

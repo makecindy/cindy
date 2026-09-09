@@ -20,6 +20,15 @@ describe('composePiSystemPrompt', () => {
     expect(composePiSystemPrompt('  You are Cindy.  ', '   ')).toBe('You are Cindy.');
   });
 
+  it('keeps dedicated file-tool guidance in the Pi behavior section', () => {
+    expect(piSystemPrompt).toContain(
+      'Use the dedicated grep tool for content search, the find tool for file discovery, the ls tool for directory listings, and the read tool for examining files.',
+    );
+    expect(piSystemPrompt).toContain(
+      'Use Bash for Git, builds, tests, package managers, and shell operations not covered by a dedicated tool.',
+    );
+  });
+
   it('does not extend Claude/Codex Skill precedence into Pi', () => {
     expect(composePiSystemPrompt(hostSystemPrompt, piSystemPrompt)).not.toContain(
       '## Skill source precedence',

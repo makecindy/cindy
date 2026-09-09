@@ -277,6 +277,31 @@ describe('send_to_session tool', () => {
     expect(parse(res)).toMatchObject({ ok: true, wake_kind: 'resumed', target_title: null });
   });
 
+  it('jump 排队时返回可供后续修改或撤回的 queued_message_id', async () => {
+    const { registry } = setup({
+      result: {
+        ok: true,
+        targetSessionId: UUID,
+        agentKind: 'codex',
+        wakeKind: 'queued',
+        queuedMessageId: 'queued-by-session-1',
+        targetTitle: 'Busy target',
+        targetLastUserSendAt: '2026-08-16T01:00:00.000Z',
+      },
+    });
+
+    const res = await registry.call('send_to_session', {
+      target_session_id: UUID,
+      message: '稍后处理这条',
+    });
+
+    expect(parse(res)).toMatchObject({
+      ok: true,
+      wake_kind: 'queued',
+      queued_message_id: 'queued-by-session-1',
+    });
+  });
+
   it('无 dispatcher sessionId → host 仍被调(dispatcherSessionId=undefined), host 返 LEAD_NOT_SUPPORTED 透传', async () => {
     const { registry, sendToSession } = setup({
       sessionId: undefined,

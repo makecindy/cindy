@@ -10,9 +10,14 @@ import {
   LEGACY_GITHUB_TOKEN_FILE,
   LEGACY_GITHUB_CONNECTION_FILE,
   migrateGithubAccounts,
+  migrateGithubAccountsWithResult,
   type GithubAccountsMigrationDeps,
   type GithubAccountsMigrationVault,
 } from '../githubAccountsMigration.js';
+
+const available = <T>(value: T) => ({ status: 'available' as const, value });
+const missing = { status: 'missing' as const };
+const retryableFailure = { status: 'retryable-failure' as const };
 
 function memoryVault(seed?: Record<string, string>): GithubAccountsMigrationVault & {
   data: Map<string, string>;
@@ -33,8 +38,8 @@ function memoryVault(seed?: Record<string, string>): GithubAccountsMigrationVaul
 /** 模拟老 safe-storage 存储:记录读取次数,断言迁移对老存储只读不写。 */
 function makeDeps(overrides?: Partial<GithubAccountsMigrationDeps>): GithubAccountsMigrationDeps {
   return {
-    readLegacyToken: () => 'ghp_legacy_token',
-    readLegacyConnection: () => ({ host: 'github.com' }),
+    readLegacyToken: () => available('ghp_legacy_token'),
+    readLegacyConnection: () => available({ host: 'github.com' }),
     vault: memoryVault(),
     ...overrides,
   };
@@ -63,7 +68,7 @@ describe('migrateGithubAccounts', () => {
           vault,
           readLegacyToken: () => {
             legacyReads += 1;
-            return 'ghp_legacy_token';
+            return available('ghp_legacy_token');
           },
         }),
       ),
@@ -75,13 +80,13 @@ describe('migrateGithubAccounts', () => {
 
   it('无老 token(未连接过 / 解密失败)→ no-op', () => {
     const vault = memoryVault();
-    expect(migrateGithubAccounts(makeDeps({ vault, readLegacyToken: () => null }))).toBe(0);
+    expect(migrateGithubAccounts(makeDeps({ vault, readLegacyToken: () => missing }))).toBe(0);
     expect(vault.data.size).toBe(0);
   });
 
   it('connection.json 缺失(半身位残留)→ 保守不迁,不写库', () => {
     const vault = memoryVault();
-    expect(migrateGithubAccounts(makeDeps({ vault, readLegacyConnection: () => null }))).toBe(0);
+    expect(migrateGithubAccounts(makeDeps({ vault, readLegacyConnection: () => missing }))).toBe(0);
     expect(vault.data.size).toBe(0);
   });
 
@@ -89,7 +94,7 @@ describe('migrateGithubAccounts', () => {
     const vault = memoryVault();
     expect(
       migrateGithubAccounts(
-        makeDeps({ vault, readLegacyConnection: () => ({ host: 'ghe.corp.example' }) }),
+        makeDeps({ vault, readLegacyConnection: () => available({ host: 'ghe.corp.example' }) }),
       ),
     ).toBe(0);
     expect(vault.data.size).toBe(0);
@@ -99,10 +104,19 @@ describe('migrateGithubAccounts', () => {
     const vault = memoryVault();
     expect(
       migrateGithubAccounts(
-        makeDeps({ vault, readLegacyConnection: () => ({ host: '  GitHub.COM ' }) }),
+        makeDeps({ vault, readLegacyConnection: () => available({ host: '  GitHub.COM ' }) }),
       ),
     ).toBe(1);
     expect(vault.read(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY)).toBe('ghp_legacy_token');
+  });
+
+  it('旧 token 或连接读取暂时失败 → 不写目标并保留重试', () => {
+    expect(
+      migrateGithubAccountsWithResult(makeDeps({ readLegacyToken: () => retryableFailure })),
+    ).toEqual({ migrated: 0, retryPending: true });
+    expect(
+      migrateGithubAccountsWithResult(makeDeps({ readLegacyConnection: () => retryableFailure })),
+    ).toEqual({ migrated: 0, retryPending: true });
   });
 
   it('vault.store 写失败(safeStorage 不可用)→ 返回 0,下次启动可重试', () => {
@@ -112,6 +126,10 @@ describe('migrateGithubAccounts', () => {
       store: () => false,
     };
     expect(migrateGithubAccounts(makeDeps({ vault: failingVault }))).toBe(0);
+    expect(migrateGithubAccountsWithResult(makeDeps({ vault: failingVault }))).toEqual({
+      migrated: 0,
+      retryPending: true,
+    });
     // 没有任何值落库,保持"没迁过"状态。
     expect(vault.data.size).toBe(0);
   });

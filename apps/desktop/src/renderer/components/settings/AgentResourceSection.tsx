@@ -10,10 +10,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
 
 type Wire = AgentResourceSettingsWire;
 type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
@@ -35,23 +38,11 @@ const CARD_CLASS = cn(
 /** 卡片内一行:左侧标签 + 说明,右侧控件相对整块垂直居中(设置页各 section 通用版式)。 */
 const ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
 const ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
-const ROW_HINT_CLASS =
-  'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
+const ROW_HINT_CLASS = 'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
 /** 行间分割线:左右缩进与行内边距对齐。 */
 const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
 
-/**
- * 数字输入框的框体规格,与设置页统一输入框 `SettingsTextInput` 的 md 档一致
- * (DESIGN.md §4-5:单行输入走药丸圆角;fill 必须是 `--surface-elevated` —— 设置卡片
- * 本身是 ivory,ivory 输入压在 ivory 卡上会与背景同色、填充对比度归零)。
- * 上下调节沿用浏览器原生步进器,不自绘 —— 设置页的控件样式统一是独立议题,留待整体收敛。
- */
-const NUMBER_INPUT_CLASS = cn(
-  'h-9 w-24 shrink-0 rounded-full px-4 text-13 outline-none transition-colors',
-  'bg-[var(--surface-elevated)] text-[var(--settings-input-text)]',
-  'border border-[var(--settings-input-border)] focus:border-[var(--settings-input-border-focus)]',
-  'focus:ring-2 focus:ring-[var(--focus-ring)]',
-);
+/** 数字输入复用标准 Input md 档，设置封装保留旧局部主题覆盖，原生步进器不自绘。 */
 
 /**
  * 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致),
@@ -254,11 +245,7 @@ export function AgentResourceSection() {
                     key={key}
                     data-preset-hint={key}
                     aria-hidden={!shown || undefined}
-                    className={cn(
-                      ROW_HINT_CLASS,
-                      'col-start-1 row-start-1',
-                      !shown && 'invisible',
-                    )}
+                    className={cn(ROW_HINT_CLASS, 'col-start-1 row-start-1', !shown && 'invisible')}
                   >
                     {t(`settings.agentResource.presetHints.${key}`)}
                   </p>
@@ -266,34 +253,16 @@ export function AgentResourceSection() {
               })}
             </div>
           </div>
-          <div
-            role="radiogroup"
+          <SettingsSegmentedControl
             aria-label={t('settings.agentResource.preset')}
-            className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-          >
-            {(['full', 'balanced', 'background'] as const).map((id) => {
-              const active = activePreset === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  disabled={applyingPreset}
-                  onClick={() => void applyPreset(id)}
-                  className={cn(
-                    'rounded-full px-2.5 py-1 text-xs transition-colors',
-                    active
-                      ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                      : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                    applyingPreset && 'opacity-60',
-                  )}
-                >
-                  {t(`settings.agentResource.presets.${id}`)}
-                </button>
-              );
-            })}
-          </div>
+            value={activePreset}
+            onValueChange={(id) => void applyPreset(id)}
+            options={(['full', 'balanced', 'background'] as const).map((id) => ({
+              value: id,
+              label: t(`settings.agentResource.presets.${id}`),
+            }))}
+            disabled={applyingPreset}
+          />
         </div>
 
         <div className={DIVIDER_CLASS} />
@@ -304,17 +273,15 @@ export function AgentResourceSection() {
             <span className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.maxConcurrent')}
             </span>
-            <span className={ROW_HINT_CLASS}>
-              {t('settings.agentResource.maxConcurrentHint')}
-            </span>
+            <span className={ROW_HINT_CLASS}>{t('settings.agentResource.maxConcurrentHint')}</span>
           </span>
-          <input
+          <SettingsTextInput
             type="number"
             min={0}
             max={MAX_CONCURRENT_CAP}
             disabled={applyingPreset}
             value={maxDraft ?? String(settings.maxConcurrentCommands)}
-            onChange={(e) => setMaxDraft(e.target.value)}
+            onChange={setMaxDraft}
             onBlur={() => {
               // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
               // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
@@ -327,7 +294,8 @@ export function AgentResourceSection() {
               if (raw === settings.maxConcurrentCommands) return;
               persist('maxConcurrentCommands', raw);
             }}
-            className={NUMBER_INPUT_CLASS}
+            size="md"
+            className="w-24 shrink-0"
           />
         </label>
 
@@ -341,33 +309,16 @@ export function AgentResourceSection() {
             </p>
             <p className={ROW_HINT_CLASS}>{t('settings.agentResource.priorityHint')}</p>
           </div>
-          <div
-            role="radiogroup"
+          <SettingsSegmentedControl
             aria-label={t('settings.agentResource.priority')}
-            className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-          >
-            {PRIORITY_OPTIONS.map((tier) => {
-              const active = settings.processPriority === tier;
-              return (
-                <button
-                  key={tier}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  disabled={applyingPreset}
-                  onClick={() => persist('processPriority', tier)}
-                  className={cn(
-                    'rounded-full px-2.5 py-1 text-xs transition-colors',
-                    active
-                      ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                      : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                  )}
-                >
-                  {t(`settings.agentResource.priorityOptions.${tier}`)}
-                </button>
-              );
-            })}
-          </div>
+            value={settings.processPriority}
+            onValueChange={(tier) => persist('processPriority', tier)}
+            options={PRIORITY_OPTIONS.map((tier) => ({
+              value: tier,
+              label: t(`settings.agentResource.priorityOptions.${tier}`),
+            }))}
+            disabled={applyingPreset}
+          />
         </div>
 
         <div className={DIVIDER_CLASS} />

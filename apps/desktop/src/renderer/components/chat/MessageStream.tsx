@@ -25,22 +25,41 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type ReactNode,
 } from 'react';
+import { HistoryViewHandoff, renderHistoryView } from '@cindy/maker-shared/message-window';
+import { getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
+import {
+  groupWorkRuns,
+  isCompletedAssistantMessage,
+  messageTs,
+  renderItemStartMs,
+  type RenderItem,
+  type WorkChildItem,
+  type WorkGroupChildItem,
+  type ToolSegmentRenderItem,
+  type AgentTaskRenderItem,
+  type ForkOriginRenderItem,
+} from './messageWorkGroups';
+export { groupWorkRuns } from './messageWorkGroups';
+export type { RenderItem, WorkChildItem } from './messageWorkGroups';
 import { useTranslation } from 'react-i18next';
 import {
-  deriveAgentTaskStatus,
-  subagentSpawnReceiptName,
-  subagentSpawnResultIndicatesRunning,
-} from '@cindy/maker-shared/agent-task';
-import {
+  findMessageTodoInsertions,
+  getLatestMessageTodoState,
   isAgentPlanToolName,
-  isDeliveryProseText,
+  isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
+import {
+  extractCachedRenderedMarkdownImageTargets,
+  extractRenderedMarkdownImageTargets,
+  type MarkdownImageTargetCache,
+} from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -56,14 +75,13 @@ import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
-import {
-  isRemoteSessionSticky,
-  subscribeTurnChangeSetUpdated,
-} from '@/lib/makerTransport';
+import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
+import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
-import { cn } from '@/lib/utils';
+import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
@@ -89,6 +107,86 @@ const JUMP_DOWN_IDLE_MS = 2000;
 const SCROLL_DIRECTION_DEAD_ZONE_PX = 1;
 const TOUCH_HISTORY_INTENT_THRESHOLD_PX = 8;
 const HISTORY_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['PageUp', 'ArrowUp', 'Home']);
+
+type ProgrammaticScrollEndDecision =
+  'stale' | 'finished' | 'replay-deferred-delete' | 'consume-deferred-delete';
+
+type ChipJumpTarget = {
+  generation: number;
+  clientId: string;
+  selector: 'message' | 'user-message';
+  topOffset: number;
+};
+
+/**
+ * 程序化滚动结束时的删除补偿裁决。用户接管必须重放延期补偿；显式的新导航有
+ * 自己的确定落点，可以消费旧补偿；过期 generation 不能触碰后发滚动的状态。
+ */
+export function resolveProgrammaticScrollEndDecision({
+  generation,
+  activeGeneration,
+  hasDeferredDelete,
+  consumeDeferredDelete = false,
+}: {
+  generation: number;
+  activeGeneration: number;
+  hasDeferredDelete: boolean;
+  consumeDeferredDelete?: boolean;
+}): ProgrammaticScrollEndDecision {
+  if (generation !== activeGeneration) return 'stale';
+  if (!hasDeferredDelete) return 'finished';
+  return consumeDeferredDelete ? 'consume-deferred-delete' : 'replay-deferred-delete';
+}
+
+/**
+ * 贴底时由 auto-follow 独占本轮布局变化，并消费此前记录的视口重锚。
+ * 返回 true 表示调用方必须立即结束旧视口补偿，避免其覆盖同一提交里的 pinToBottom。
+ */
+export function consumePendingReanchorForAutoFollow({
+  isNearBottom,
+  clearPendingReanchor,
+}: {
+  isNearBottom: boolean;
+  clearPendingReanchor: () => void;
+}): boolean {
+  if (!isNearBottom) return false;
+  clearPendingReanchor();
+  return true;
+}
+
+/** 以落定时的最新 DOM 几何重新计算 chip / 导航轨道目标，而不是复用 smooth 开始前的像素。 */
+export function resolveChipJumpTargetScrollTop({
+  scrollTop,
+  containerTop,
+  targetTop,
+  topOffset,
+}: {
+  scrollTop: number;
+  containerTop: number;
+  targetTop: number;
+  topOffset: number;
+}): number {
+  return Math.max(0, scrollTop + targetTop - containerTop - topOffset);
+}
+
+/** 搜索目标只有作为精确 DOM 消息锚点跨过视口顶边时，才能覆盖真实顶端量测。 */
+export function shouldUseFocusedElementAsViewportAnchor({
+  focusClientId,
+  elementClientId,
+  containerTop,
+  elementTop,
+  elementBottom,
+}: {
+  focusClientId: string;
+  elementClientId?: string;
+  containerTop: number;
+  elementTop: number;
+  elementBottom: number;
+}): boolean {
+  return (
+    elementClientId === focusClientId && elementTop <= containerTop && elementBottom > containerTop
+  );
+}
 // chip jump 抑制 expand/load 的安全兜底时长。正常解抑靠 wheel/touch/keydown,
 // 这个 timer 只防"click 后既不滚也不动键盘"的极端情况,够长能覆盖最长 smooth
 // scroll(浏览器长距离 ~1s)。
@@ -151,6 +249,25 @@ function hasNestedScrollableAncestorThatCanScrollUp(
   return false;
 }
 
+function hasNestedScrollableAncestorThatCanScrollDown(
+  root: HTMLElement,
+  target: EventTarget | null,
+): boolean {
+  let el = eventTargetElement(target);
+  while (el && el !== root) {
+    if (!root.contains(el)) return false;
+    const overflowY = window.getComputedStyle(el).overflowY;
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    const canScroll =
+      (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+      maxScroll > SCROLL_DIRECTION_DEAD_ZONE_PX &&
+      el.scrollTop < maxScroll - SCROLL_DIRECTION_DEAD_ZONE_PX;
+    if (canScroll) return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
@@ -158,13 +275,14 @@ import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
 import { PlanReviewBubble } from './PlanReviewBubble';
 import { ToolCallCard, getToolSummary } from './ToolCallCard';
+import { InlinePlanCard } from './TodoListCard';
 import { SystemCard } from './SystemCard';
 import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
 import { TurnChangesCard } from './TurnChangesCard';
-import { GeneratedFilesCard } from './GeneratedFilesCard';
+import { GeneratedFilesCard, generatedFilesCheckKey } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
   extractAnchorCardId,
@@ -216,15 +334,38 @@ import {
   NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
 import {
+  bumpSendFollowCancelGeneration,
+  collectKnownUserMessageIds,
+  findLastMatching,
+  findLastMatchingId,
+  resolveEffectiveNearBottom,
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
+  resolveSendWindowHandoff,
+  resolveWindowCoverageLossAction,
   selectTailUserMessageId,
+  readFollowLatestRequestKey,
+  shouldBumpSendFollowCancelOnScroll,
+  subscribeFollowLatestRequests,
+  REPIN_AT_BOTTOM_PX,
+  isVerticalScrollbarPress,
+  shouldRepinOnDownIntent,
+  shouldRepinOnWheel,
+  shouldUnpinOnScrollbarDrag,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
 import { countUnreadAdded } from './unreadCount';
-import { useNavigationKeyListener } from './useNavigationKeyListener';
+import {
+  collectBotMessageTimeGroups,
+  findFirstUnreadBotReplyClientId,
+  formatBotMessageGroupTime,
+} from '@/features/bots/botConversationTimeline';
+import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
+export function isScrollNavigationKey(key: string): boolean {
+  return NAVIGATION_KEYS.has(key);
+}
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
 import { useAutomaticHistoryLoadBudget } from './useAutomaticHistoryLoadBudget';
 import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
@@ -250,8 +391,23 @@ interface MessageStreamProps {
    *  MessageStream via the `key={sessionId}` parent prop), so it never
    *  triggers extra re-renders mid-session. */
   workingDir: string;
+  /**
+   * Identity mark drawn to the left of every assistant bubble.
+   *
+   * Only a Bot conversation passes one — a normal Cindy task has no "who is
+   * speaking" question to answer, so it stays undefined and the layout is
+   * byte-identical to before. The node must be stable across renders (memoize
+   * it at the owner): it is a prop of the memoized `MessageItem`.
+   */
+  assistantAvatar?: ReactNode;
+  /** 伙伴专属轻量时间线：隐藏内部工作卡，只保留单一运行状态与分组时间。 */
+  simplifiedBotConversation?: boolean;
+  /** Bot read position captured before entry marks the conversation read. */
+  botUnreadBoundaryAt?: number | null;
   messages: ChatMessage[];
   historyLoaded: boolean;
+  /** The task shell remains, but all prior message content was intentionally cleared. */
+  historyCleared?: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
   /** Kept for API compatibility. v2 — no longer threaded into render items
    *  (AgentActionsBlock + ThinkingCard manage their own per-block expand
@@ -266,14 +422,18 @@ interface MessageStreamProps {
   onLoadMore?: (automatic?: boolean) => Promise<boolean>;
   isLoadingMore?: boolean;
   hasMoreMessages?: boolean;
+  /** 当前逻辑历史窗口中间仍有缺口；与 hasMoreMessages 一样会让父调用归属不可信。 */
+  historyWindowHasIsland?: boolean;
   /** Dynamic bottom padding (px) to reserve space for the input overlay */
   bottomPadding?: number;
-  /** Distance from the chat viewport bottom to the visible composer stack top. */
-  composerStackTopOffset?: number;
+  /** Distance from the chat viewport bottom to the topmost occupied bottom-center layer. */
+  bottomCenterClearanceOffset?: number;
   /** Content width — shared with the input overlay so chat stream + input
    *  box stay horizontally aligned (same width, same center, symmetric
    *  padding when the main area is compressed). */
-  contentWidth?: number;
+  contentWidth?: CSSProperties['maxWidth'];
+  /** Returns the current numeric content width for geometry consumers without rerendering. */
+  getContentWidth?: () => number;
   /** Message clientId to scroll into view and briefly highlight after search navigation. */
   focusMessageClientId?: string | null;
   /** Incremented by the parent for each search navigation, including repeated hits. */
@@ -295,144 +455,110 @@ interface MessageStreamProps {
    * behavior of treating every new tail user message as a local send.
    */
   isLocalUserSend?: (clientId: string) => boolean;
+  /**
+   * Whether this stream should consume hardware scroll commands.
+   * Split panes keep every MessageStream mounted; only the focused owner may act.
+   */
+  ownsHardwareScrollActions?: boolean;
+  /**
+   * 当前计划的流内卡是否仍在用户可见区域。父层据此决定 composer 上方的
+   * 兜底胶囊是否需要接力；key 防止新旧计划切换时沿用上一张卡的可见状态。
+   */
+  onInlinePlanVisibilityChange?: (state: InlinePlanVisibility | null) => void;
+}
+
+export interface InlinePlanVisibility {
+  key: string;
+  visible: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Merged rendering items
 // ---------------------------------------------------------------------------
 
-// Render-item 单元:渲染窗口 / 锚点 / 滚动数学的统一度量。`key` 是 stable id,
-// 跨 build 保持稳定(由消息 clientId 派生),供:
-//   - React `key=` 复用 DOM 节点(避免 unmount 丢折叠态)
-//   - render-window 锚点 `firstVisibleItemKey` 跨 build 定位 slice 起点
-// key 派生约定见 buildRenderItems 内注释。
-// export 仅供单测(`buildRenderItemsKeyStability.test.ts`)使用,运行时无外部消费者。
-// message / tool_segment 抽成命名别名 — work_group 的 children 需要在类型层
-// 引用这两个成员(WorkChildItem),让「children 只含这两类」由类型系统保证,
-// 渲染处无需 as 强转;其余成员保持内联。
-type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
-type ToolSegmentRenderItem = {
-  /** A run of consecutive tool_use messages between text segments,
-   *  rendered as a single AgentActionsBlock. v2 — no isStreaming
-   *  field; default-collapsed + persistent memory removes the need
-   *  to thread streaming state down. */
-  type: 'tool_segment';
-  key: string;
-  toolCalls: ChatMessage[];
-  resultMap: Map<string, string>;
-  /** tool_use clientId 集合:tool_result 已到达(含被 shouldHideToolResult
-   *  隐藏、没进 resultMap 的空结果)。行级 running/done 状态判定用 —
-   *  只看 resultMap 会让 orca 通信工具永久显示 running。 */
-  settledIds: Set<string>;
-  /** tool_use clientId → 对应 tool_result 的 createdAt(ms)。
-   *  段的结束时间必须算进 result:单次工具跑了半小时以上时,只看最后一个 tool_use 的
-   *  createdAt 会把段的结束时间大幅低估,让紧随其后的最终答复被空洞守卫误判(#676
-   *  review)。resultMap 只留正文,时间戳单独存这里。 */
-  resultTsMap: Map<string, number>;
-};
-type AgentTaskRenderItem = {
-  type: 'agent_task';
-  key: string;
-  toolCall?: ChatMessage;
-  update?: AgentTaskUpdate;
-  result?: string;
-  /** 对应 tool_result 的 createdAt(ms)。历史会话没有 live taskUpdates 时,item 的结束
-   *  时间只能靠它 —— 否则跑了半小时以上的 Agent/Task 会让紧随其后的最终答复被空洞守卫
-   *  误判(#676 review)。与 tool_segment 的 resultTsMap 同源。 */
-  resultTsMs?: number;
-};
-type ForkOriginRenderItem = {
-  type: 'fork_origin';
-  key: string;
-  parentSessionId: string;
-  forkedAtMessageId: string;
-};
-type TurnChangesRenderItem = {
-  /** Exact provider patches attached to one visible user turn. */
-  type: 'turn_changes';
-  key: string;
-  changeSet: TurnChangeSetSummary;
-};
-type GeneratedFilesRenderItem = {
-  type: 'generated_files';
-  key: string;
-  files: GeneratedFileRef[];
-  turnStartMs: number | null;
-  turnEndMs: number | null;
-};
-
-/** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
-export type WorkChildItem = ToolSegmentRenderItem | AgentTaskRenderItem | MessageRenderItem;
-
-/** work_group 可以嵌套一层:完成态外组装 assistant 文字时间线,其中每段
- *  连续动作仍是独立的内层「已工作 Xs」。内层继续只收原子工作子项。 */
-type WorkGroupChildItem = WorkChildItem | WorkGroupRenderItem;
-
-interface WorkGroupRenderItem {
-  /** work-group:运行中的连续动作段,或完成态收拢整段工作文字的外层时间线。
-   *  动作段展开后直接显示思考 / 工具行;外层展开后显示 assistant 文字和
-   *  仍保持折叠的内层动作段。tool_media 不参与合并,继续留在组外可见。 */
-  type: 'work_group';
-  key: string;
-  children: WorkGroupChildItem[];
-  durationMs?: number;
-  /** 当前是否是仍在执行的尾部动作段。完成态时间线始终 false。 */
-  isStreaming: boolean;
-  /** 工作段起点 epoch ms,供 live elapsed ticker 使用。优先是上一个边界
-   *  (用户消息/上一句正文,可能早于段内首个活动),边界缺失时退回首个活动
-   *  时间戳 —— 与 durationMs 的段起点同源(见 createWorkGroup)。 */
-  startedAtMs?: number;
+// Item types and pure work grouping live in messageWorkGroups; window/DOM behavior stays here.
+function isBotInternalActivity(item: RenderItem): boolean {
+  if (
+    item.type === 'tool_segment' ||
+    item.type === 'agent_task' ||
+    item.type === 'work_group' ||
+    item.type === 'agent_plan' ||
+    item.type === 'turn_changes'
+  ) {
+    return true;
+  }
+  return item.type === 'message' && item.message.role === 'thinking';
 }
 
-export type RenderItem =
-  | MessageRenderItem
-  | ToolSegmentRenderItem
-  | AgentTaskRenderItem
-  | ForkOriginRenderItem
-  | TurnChangesRenderItem
-  | GeneratedFilesRenderItem
-  | {
-      /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
-       *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,
-       *  按 kind 分发到 ChatImageView / ChatVideoView。
-       *
-       *  生成期间不展示占位卡 — 与 image_generate 保持同款体验:tool_use 卡
-       *  自身就标识"正在做",result 一到再渲染媒体。失败由 tool_result 文本
-       *  里的 error 字段承载,不需要单独的 placeholder。 */
-      type: 'tool_media';
-      key: string;
-      items: ToolMediaItem[];
+export function simplifyBotRenderItems(
+  items: readonly RenderItem[],
+  isStreaming: boolean,
+): RenderItem[] {
+  const visible = items.filter((item) => !isBotInternalActivity(item));
+  if (!isStreaming) return visible;
+
+  // 当前回合的普通 assistant 正文从首字开始流式展示；工具媒体、交付卡等容易
+  // 改变布局的结果仍等回合完成后出现。这样既不泄露内部工作过程，也不会把整段
+  // 答案藏到 done 后才突然闪现。
+  let currentTurnStart = -1;
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const item = visible[index];
+    if (
+      item.type === 'message' &&
+      item.message.role === 'user' &&
+      item.message.delivery !== 'steer' &&
+      !item.message.isSyntheticTrigger
+    ) {
+      currentTurnStart = index;
+      break;
     }
-  | {
-      /** ghost-card(卡槽③海报模式):意识为自己的一次 ghost_call 供片的
-       *  聊天卡片,是该次调用的**唯一呈现**——配上卡后对应工具行不进
-       *  tool_segment(行与卡信息重复,合并进卡),原始调用参数由卡片头带
-       *  展开区承担(toolCall 透传)。key 锚定 ghost_call tool_use 的
-       *  clientId(`ghostcard-${clientId}`,窗口锚定稳定);卡体 html/height
-       *  渲染时从 ghostCardStore 现取(限速 ≥1s/卡,重建频率可控)。
-       *  settled=false 为进行中(turn 内活卡,claude 精确 toolUseId 锚 /
-       *  codex 同 ghost 启发式锚),tool_result 到达后经 xdt_card_id 配对
-       *  转 settled。未供卡的调用不产生本 item —— 逐像素回退今日渲染。 */
-      type: 'ghost_card';
-      key: string;
-      callId: string;
-      ghostId: string;
-      /** 该次调用的意识侧工具名(toolInput.tool;身份头徽章展示)。 */
-      tool: string;
-      /** 原始 tool_use 消息(头带展开区显示调用参数;审计层不因行隐身而丢)。 */
-      toolCall: ChatMessage;
-      settled: boolean;
-      /** 配对到的 tool_result 时间戳(ms)。与 AgentTaskRenderItem.resultTsMs 同口径:
-       *  toolCall.createdAt 只是"开始调用",一次跑很久的供卡调用(出图 / 出视频)拿它
-       *  当结束会把结束时间低估整个执行时长,紧随其后的正文被误判成历史空洞。
-       *  未配对(活卡)时缺省。 */
-      resultTsMs?: number;
-      /** 回锚媒体:后续调用(如 poll_result)的 tool_result 带 xdt_anchor_card_id
-       *  指回本卡时,其媒体挂在卡正下方渲染(替换"生成中"的视觉位置),而非
-       *  留在轮询调用处。仅同 ghostId 的结果可锚入;无回锚时字段缺省。 */
-      media?: ToolMediaItem[];
+  }
+  if (currentTurnStart < 0) return visible;
+  return visible.filter((item, index) => {
+    if (index <= currentTurnStart) return true;
+    if (item.type !== 'message') return false;
+    if (item.message.role === 'user') return !item.message.isSyntheticTrigger;
+    // A direct-message stamp is the durable entry into the Bot-to-Bot conversation,
+    // not an expanding work/result card. The reverse delivery starts another hidden
+    // canonical turn; hiding system cards during that turn used to make the already
+    // persisted "sent" stamp flash and disappear until streaming finished.
+    if (item.message.systemCardType === 'bot-direct-message') return true;
+    return (
+      item.message.role === 'assistant' &&
+      !item.message.systemCardType &&
+      item.message.content.trim().length > 0
+    );
+  });
+}
+
+/**
+ * 当前可见用户 turn 是否已经产出正文。Bot composer 用它把「正在思考」限制在
+ * 首字到来之前；子代理内部行、系统卡、空 assistant 和合成续跑行都不参与判断。
+ */
+export function hasBotAssistantOutputInCurrentTurn(messages: readonly ChatMessage[]): boolean {
+  let currentTurnStart = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isSubagentInternalMessage(message)) continue;
+    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) {
+      currentTurnStart = index;
+      break;
     }
-  | WorkGroupRenderItem;
+  }
+  if (currentTurnStart < 0) return false;
+  for (let index = currentTurnStart + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (isSubagentInternalMessage(message)) continue;
+    if (
+      message.role === 'assistant' &&
+      !message.systemCardType &&
+      message.content.trim().length > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
@@ -500,6 +626,47 @@ export function shouldBoostDefaultWindow({
   return visibleItemCount < allItemCount;
 }
 
+type VisibilityRect = Pick<DOMRect, 'top' | 'right' | 'bottom' | 'left' | 'width' | 'height'>;
+
+/**
+ * 判定流内计划卡是否至少有一个可见像素。
+ *
+ * scroll 容器底部被 composer overlay 覆盖，单看容器的 DOMRect 会把“实际藏在
+ * 输入框后面”误判为可见，所以把 overlay 高度作为 bottomInset 从可视区扣掉。
+ */
+export function isPlanCardVisibleInViewport(
+  card: VisibilityRect,
+  viewport: VisibilityRect,
+  bottomInset = 0,
+): boolean {
+  if (card.width <= 0 || card.height <= 0 || viewport.width <= 0 || viewport.height <= 0) {
+    return false;
+  }
+  const safeBottomInset = Math.min(Math.max(0, bottomInset), Math.max(0, viewport.height - 1));
+  const visibleBottom = viewport.bottom - safeBottomInset;
+  return (
+    card.bottom > viewport.top &&
+    card.top < visibleBottom &&
+    card.right > viewport.left &&
+    card.left < viewport.right
+  );
+}
+
+export function planSessionBelongsToLatestUserTurn(
+  messages: readonly ChatMessage[],
+  sourceClientIds: readonly string[],
+): boolean {
+  const sourceIds = new Set(sourceClientIds);
+  let latestNormalUserIndex = -1;
+  let latestPlanRowIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (isPlanUserBoundary(message)) latestNormalUserIndex = index;
+    if (sourceIds.has(message.clientId)) latestPlanRowIndex = index;
+  }
+  return latestPlanRowIndex >= 0 && latestNormalUserIndex <= latestPlanRowIndex;
+}
+
 export function resolveDefaultWindowStartIdx({
   allItemCount,
   defaultWindowItems,
@@ -550,6 +717,19 @@ function ForkOriginMarker({ onClick }: { onClick?: () => void }) {
         <GitFork size={15} strokeWidth={2} className="shrink-0" aria-hidden="true" />
         <span>{t('chat.forkOrigin.label')}</span>
       </button>
+      <div className="h-px flex-1 bg-[var(--border-default)]" />
+    </div>
+  );
+}
+
+function HistoryClearedMarker() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center gap-4 py-3" role="status">
+      <div className="h-px flex-1 bg-[var(--border-default)]" />
+      <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
+        {t('settings.about.storage.dbSlimmingHistoryCleared')}
+      </span>
       <div className="h-px flex-1 bg-[var(--border-default)]" />
     </div>
   );
@@ -765,15 +945,34 @@ export function shouldBlockAssistantFork(
  * 尾部 turn 是否"已结束"由调用方叠加 shouldBlockAssistantFork 判定,本函数
  * 只回答"是不是本 turn 最后一条正文"。export 仅供单测使用。
  */
-function isCompletedAssistantMessage(message: ChatMessage): boolean {
-  return (
-    message.turnCompleted === true ||
-    (message.turnMoney?.amount ?? 0) > 0 ||
-    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
-    // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),
-    // 与费用字段一样是等价的收尾信号 —— 少这一条,无金额轮就挂不出 action bar。
-    message.turnUsageDetails !== undefined
-  );
+
+function isGeneratedFilesSubTurnTerminal(message: ChatMessage): boolean {
+  // 显式失败也是子轮终态:后续没有新工作就该封口复核,不能把失败当成「还在跑」。
+  return message.turnCompleted === false || isCompletedAssistantMessage(message);
+}
+
+/**
+ * 产物卡封口只看当前尾部子轮。同一可见 user turn 在 turnCompleted 后自动续跑时,
+ * 前一子轮的收尾信号不得让后续 ready:false 的文件立刻 stat。
+ * export 仅供单测使用。
+ */
+export function isGeneratedFilesTurnSealed(
+  slice: readonly ChatMessage[],
+  hasFollowingUser: boolean,
+): boolean {
+  if (hasFollowingUser) return true;
+  let lastTerminalIdx = -1;
+  for (let i = 0; i < slice.length; i++) {
+    if (isGeneratedFilesSubTurnTerminal(slice[i])) lastTerminalIdx = i;
+  }
+  if (lastTerminalIdx < 0) return false;
+  for (let i = lastTerminalIdx + 1; i < slice.length; i++) {
+    const message = slice[i];
+    if (message.role === 'tool_use') return false;
+    if (message.role === 'user' && message.isSyntheticTrigger === true) return false;
+    if (message.role === 'assistant' && !message.systemCardType) return false;
+  }
+  return true;
 }
 
 export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessage[]): Set<string> {
@@ -817,12 +1016,10 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * collapsed; user click → persisted).
  *
  * Agent plan handling:
- *   Plan tool calls (TodoWrite / update_plan / TaskCreate…) are swallowed
- *   entirely — same treatment as F7's AskUserQuestion / ExitPlanMode: the
- *   call and its tool_results produce no render item and do NOT cut the
- *   surrounding tool_segment. 计划的唯一呈现是 composer 上方的常驻面板
- *   (PinnedPlanPanel,Codex IDE 扩展式钉住交互),它直接从 messages 派生
- *   最新 plan session 快照,与本函数无关。
+ *   Pass 1 groups TodoWrite / update_plan / Task* calls into logical plan
+ *   sessions. Pass 2 replaces each session's latest tool row with one
+ *   `agent_plan` item in the chat timeline. The composer capsule observes the
+ *   latest inline card and only takes over after that card leaves the viewport.
  */
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
@@ -835,7 +1032,8 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * 扫描 allRenderItems 找哪个 item **现在覆盖**这个 clientId:
  *   - message: msg.clientId 严格匹配
  *   - tool_segment: toolCalls.*.clientId 任一匹配(段合并后老 toolCall 仍在新段内)
- *   - tool_media / ghost_card: 用 key 后缀匹配(它们的 key 派生自 stable message clientId)
+ *   - tool_media / ghost_card:用派生 key 后缀匹配
+ *   - agent_plan:除 key 外还保留 session 内全部计划行的 clientId
  *
  * 找到即返回该 index,visible slice 从这里继续;找不到才退回默认窗口。
  *
@@ -859,6 +1057,14 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
       if (it.toolCalls.some((tc) => tc.clientId === lostCid)) return i;
     } else if (it.type === 'agent_task') {
       if (it.toolCall?.clientId === lostCid) return i;
+    } else if (it.type === 'agent_plan') {
+      if (
+        it.key === lostKey ||
+        it.key.endsWith(`-${lostCid}`) ||
+        it.sourceClientIds.includes(lostCid)
+      ) {
+        return i;
+      }
     } else if (it.type === 'work_group') {
       // work_group 可能嵌套完成态时间线 — 老锚点(`seg-${cid}` /
       // `msg-${cid}` / `work-${cid}`)递归落到任一后代即由外组接住。
@@ -875,6 +1081,183 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
 export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKey: string): number {
   const exactIdx = items.findIndex((it) => it.key === viewportTopKey);
   return exactIdx >= 0 ? exactIdx : recoverLostAnchorIdx(items, viewportTopKey);
+}
+
+/**
+ * 删除补偿的落点选择:视口顶端 item 被删后,取旧序列里它之后第一条存活 item
+ * (连带删除可能越过多条);无则回退它之前最近的存活 item,再无则落到新末条。
+ * 返回 null = 旧序列里找不到被删 key(快照过旧),无从补偿。
+ * 注意:窗口整段被清时 prevKeys 必须是旧**全量**序列——已回退的可见窗没有删除区
+ * 的邻接信息,fallback 会落到 curKeys 末项(会话尾)。
+ */
+export function pickDeleteCompensationAnchorKey(
+  prevKeys: readonly string[],
+  curKeys: readonly string[],
+  deletedKey: string,
+): string | null {
+  const deletedIdx = prevKeys.indexOf(deletedKey);
+  if (deletedIdx < 0) return null;
+  const alive = new Set(curKeys);
+  return (
+    prevKeys.slice(deletedIdx + 1).find((k) => alive.has(k)) ??
+    prevKeys.slice(0, deletedIdx).findLast((k) => alive.has(k)) ??
+    curKeys.at(-1) ??
+    null
+  );
+}
+
+/** 删除补偿落点：精确可见 child 优先；否则落到折叠摘要容器，不用隐藏后代配外层旧 offset。 */
+export function resolveDeleteCompensationLanding(input: {
+  exactVisible: boolean;
+  fallbackContainerVisible: boolean;
+}): 'exact' | 'container' | 'item' {
+  if (input.exactVisible) return 'exact';
+  if (input.fallbackContainerVisible) return 'container';
+  return 'item';
+}
+
+export function isVisibleDeleteCompensationElement(
+  element: { getBoundingClientRect(): { height: number } } | null,
+): boolean {
+  return Boolean(element && element.getBoundingClientRect().height > 0);
+}
+
+/**
+ * 渲染顺序下所有可定位 clientId：message、tool_segment、agent_task、嵌套 work_group。
+ * 删除补偿与 focus 落点都走这条序列，避免子消息删除时跳过中间的工具行。
+ */
+export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (item.type === 'message') ids.push(item.message.clientId);
+    else if (item.type === 'tool_segment') {
+      for (const toolCall of item.toolCalls) ids.push(toolCall.clientId);
+    } else if (item.type === 'agent_task' && item.toolCall) {
+      ids.push(item.toolCall.clientId);
+    } else if (item.type === 'work_group') {
+      ids.push(...collectDeleteAnchorClientIds(item.children));
+    }
+  }
+  return ids;
+}
+
+function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
+  return root.querySelector(
+    `[data-message-client-id="${CSS.escape(clientId)}"]`,
+  ) as HTMLElement | null;
+}
+
+/**
+ * 精确 message / 任务卡优先；否则取 data-message-client-ids 的最内层匹配。
+ * 工作组容器也会带全量子 id，必须用最内层，否则会滚到组顶而不是中间的工具行。
+ */
+function queryFocusElement(root: ParentNode, clientId: string): HTMLElement | null {
+  const exact = queryMessageElement(root, clientId);
+  if (exact) return exact;
+  const matches = root.querySelectorAll<HTMLElement>(
+    `[data-message-client-ids~="${CSS.escape(clientId)}"]`,
+  );
+  return matches[matches.length - 1] ?? null;
+}
+
+/** 折叠摘要容器：跳过高度为 0 的精确 child，取仍可见的最内层聚合节点。 */
+function queryVisibleAggregateContainer(root: ParentNode, clientId: string): HTMLElement | null {
+  const matches = root.querySelectorAll<HTMLElement>(
+    `[data-message-client-ids~="${CSS.escape(clientId)}"]`,
+  );
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const element = matches[i];
+    if (element.getBoundingClientRect().height > 0) return element;
+  }
+  return null;
+}
+
+/** 精确 id 优先；否则取 data-message-client-ids 的第一个 token（折叠工具块 focus 回退）。 */
+export function readAnchorClientId(element: {
+  dataset: { messageClientId?: string; messageClientIds?: string };
+}): string | undefined {
+  const exact = element.dataset.messageClientId?.trim();
+  if (exact) return exact;
+  return element.dataset.messageClientIds?.trim().split(/\s+/).find(Boolean);
+}
+
+/** 视口子锚点只认已渲染的精确 id；聚合 token 列表留给 queryFocusElement。 */
+export function readViewportChildAnchorClientId(element: {
+  dataset: { messageClientId?: string; messageClientIds?: string };
+}): string | undefined {
+  return element.dataset.messageClientId?.trim() || undefined;
+}
+
+type ChildAnchorRect = {
+  clientId: string;
+  top: number;
+  bottom: number;
+};
+
+/** 树序最后一个跨过容器顶边的子锚点（最内层）。 */
+export function pickIntersectingChildAnchor(
+  candidates: readonly ChildAnchorRect[],
+  containerTop: number,
+): { clientId: string; offset: number } | null {
+  let picked: { clientId: string; offset: number } | null = null;
+  for (const candidate of candidates) {
+    if (candidate.bottom - containerTop <= 0 || candidate.top > containerTop) continue;
+    picked = {
+      clientId: candidate.clientId,
+      offset: Math.max(0, containerTop - candidate.top),
+    };
+  }
+  return picked;
+}
+
+type ViewportTopSnapshot = {
+  viewportTopKey: string;
+  offset: number;
+  messageClientId?: string;
+  messageOffset?: number;
+};
+
+/** 精确子 DOM 不存在时降级到 render-item 锚点，避免隐藏 child 继续触发删除补偿。 */
+export function toRenderItemViewportSnapshot(
+  snapshot: ViewportTopSnapshot,
+  offset = snapshot.offset,
+): ViewportTopSnapshot {
+  return { viewportTopKey: snapshot.viewportTopKey, offset };
+}
+
+/**
+ * 展开工作组 / 工具块被折叠后，精确 child DOM 会消失，但 render-item 数据仍在。
+ * 这时必须重新量测；否则陈旧 messageClientId 会在隐藏 child 被删时误走补偿。
+ */
+export function shouldRefreshHiddenChildViewportAnchor(input: {
+  snapshotMessageClientId: string | undefined;
+  exactChildVisible: boolean;
+  childStillInRenderItems: boolean;
+}): boolean {
+  return (
+    input.snapshotMessageClientId !== undefined &&
+    !input.exactChildVisible &&
+    input.childStillInRenderItems
+  );
+}
+
+/**
+ * 折叠组展开后快照往往只有 render-item key。视口顶 item 里已出现可见的精确
+ * child 时必须重测，否则删这个 child 时补偿看不到 snapshotMessageGone。
+ */
+export function shouldRefreshExpandedChildViewportAnchor(input: {
+  snapshotMessageClientId: string | undefined;
+  viewportTopItemHasVisibleExactChild: boolean;
+}): boolean {
+  return input.snapshotMessageClientId === undefined && input.viewportTopItemHasVisibleExactChild;
+}
+
+function hasVisibleExactChildAnchor(itemElement: HTMLElement): boolean {
+  for (const element of itemElement.querySelectorAll<HTMLElement>('[data-message-client-id]')) {
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom > rect.top) return true;
+  }
+  return false;
 }
 
 /**
@@ -1071,6 +1454,10 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
+    botSessionId?: string;
+    /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
+    markdownImageTargetCache?: MarkdownImageTargetCache;
   },
 ): {
   items: RenderItem[];
@@ -1107,11 +1494,41 @@ export function buildRenderItems(
     if (!hasSubagentInternalMessages) return messages.slice(lo, hi);
     const start = originalIndexByVisible[lo];
     if (start === undefined) return messages.slice(lo, hi);
-    const end = hi < originalIndexByVisible.length
-      ? originalIndexByVisible[hi]
-      : allMessages.length;
+    const end =
+      hi < originalIndexByVisible.length ? originalIndexByVisible[hi] : allMessages.length;
     return allMessages.slice(start, end);
   };
+
+  // Agent 最终正文中的 Markdown 图片是首选排版；tool_result 媒体仍保留为
+  // 确定性兜底。只有同一真实 user turn 内确实嵌入了同一 URL，才压掉兜底卡。
+  const inlineImageUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
+  const recordTurnInlineImages = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const urls = new Set<string>();
+    for (const message of messages.slice(lo, hi)) {
+      if (message.role !== 'assistant' || message.systemCardType || message.isStreaming) continue;
+      const imageTargets = opts?.markdownImageTargetCache
+        ? extractCachedRenderedMarkdownImageTargets(
+            message.content,
+            opts.markdownImageTargetCache,
+            message.clientId,
+          )
+        : extractRenderedMarkdownImageTargets(message.content);
+      for (const url of imageTargets) urls.add(url);
+    }
+    inlineImageUrlsByTurnStart.set(lo, urls);
+  };
+  let inlineTurnStart = 0;
+  for (let index = 0; index <= messages.length; index += 1) {
+    const message = messages[index];
+    const isBoundary =
+      message?.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger;
+    if (isBoundary && index > inlineTurnStart) {
+      recordTurnInlineImages(inlineTurnStart, index);
+      inlineTurnStart = index;
+    }
+    if (index === messages.length) recordTurnInlineImages(inlineTurnStart, index);
+  }
 
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
@@ -1130,6 +1547,49 @@ export function buildRenderItems(
       if (Number.isFinite(resultMs)) resultTsByToolUseId.set(m.toolUseId, resultMs);
       const cardId = extractGhostCardId(m.content);
       if (cardId) settledCardIds.add(cardId);
+    }
+  }
+
+  // ── Pass 1: group plan events into timeline cards ──
+  // 分组与 composer 兜底胶囊共用 maker-shared 的同一口径。历史窗口不完整时
+  // Task* 计划先不画半张卡，等更早页补齐后再由同一 stable key 插入。
+  const planInsertAt = findMessageTodoInsertions(messages, {
+    taskHistoryMayBeIncomplete: opts?.historyWindowIncomplete === true,
+  });
+  // findMessageTodoInsertions 负责完整历史时间线，不会自行裁掉分页窗口里的半截
+  // Task session。不能只检查整窗「最新」计划：后面若已有可解析的新 session，
+  // 较早的半截 Task 卡仍会漏出来。逐个 Task insertion 用其前缀复核，等 prepend
+  // 补齐标题/早期 TaskCreate 后再由同一 stable key 插回。
+  if (opts?.historyWindowIncomplete === true) {
+    for (const [index, insertion] of planInsertAt) {
+      if (insertion.source !== 'task') continue;
+      const prefix = messages.slice(0, index + 1);
+      const prefixPlanToolUseIds = new Set(
+        prefix
+          .filter((message) => isAgentPlanToolName(message.toolName))
+          .map((message) => message.toolUseId)
+          .filter((toolUseId): toolUseId is string => Boolean(toolUseId)),
+      );
+      // TaskList / TaskGet 的权威内容在后续 tool_result 行里。只切到工具行会把
+      // 已完整的 snapshot 重新判成半截；保留当前前缀中计划调用的匹配结果，但
+      // 不把后续计划事件带进来，避免改变「正在复核哪张 insertion」的语义。
+      const validationMessages = [
+        ...prefix,
+        ...messages
+          .slice(index + 1)
+          .filter(
+            (message) =>
+              message.role === 'tool_result' &&
+              typeof message.toolUseId === 'string' &&
+              prefixPlanToolUseIds.has(message.toolUseId),
+          ),
+      ];
+      const stateAtInsertion = getLatestMessageTodoState(validationMessages, {
+        taskHistoryMayBeIncomplete: true,
+      });
+      if (!stateAtInsertion.isResolved || stateAtInsertion.latestInsertionIndex !== index) {
+        planInsertAt.delete(index);
+      }
     }
   }
 
@@ -1268,19 +1728,22 @@ export function buildRenderItems(
     };
     for (const changeSet of changeSets) {
       for (const file of changeSet.files) {
-        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        const resolved = resolveToolFilePath(file.path, changeSet.cwd);
+        exactPaths.add(pathKey(resolved));
         if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
       }
     }
-    for (const changeSet of changeSets) {
-      // Zero-file entries have nothing the user can inspect or act on. Keep their
-      // diagnostic sidecars in Main, but do not add a warning-only chat card.
-      if (!hasReviewableTurnChanges(changeSet)) continue;
-      items.push({
-        type: 'turn_changes',
-        key: `turnchanges-${changeSet.id}`,
-        changeSet,
-      });
+    if (!opts?.botSessionId) {
+      for (const changeSet of changeSets) {
+        // Zero-file entries have nothing the user can inspect or act on. Keep their
+        // diagnostic sidecars in Main, but do not add a warning-only chat card.
+        if (!hasReviewableTurnChanges(changeSet)) continue;
+        items.push({
+          type: 'turn_changes',
+          key: `turnchanges-${changeSet.id}`,
+          changeSet,
+        });
+      }
     }
     // 子代理工具结果里的媒体产物(出图 / 视频 / 音频 / 模型)。这些工具行本身被隐藏,
     // 不进 tool_segment,所以段级的 pendingSegmentMedia 收不到它们;而 AgentTaskUpdate
@@ -1295,6 +1758,9 @@ export function buildRenderItems(
       for (const message of originalTurnSlice(lo, hi)) {
         if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
         for (const item of extractToolResultMedia(message.content)) {
+          if (item.kind === 'image' && inlineImageUrlsByTurnStart.get(lo)?.has(item.url)) {
+            continue;
+          }
           if (seenMediaUrls.has(item.url)) continue;
           seenMediaUrls.add(item.url);
           hiddenMedia.push(item);
@@ -1309,13 +1775,31 @@ export function buildRenderItems(
       }
     }
 
-    const workingDir = opts?.workingDir ?? '';
-    if (!workingDir || hi <= lo) return;
     const slice = originalTurnSlice(lo, hi);
-    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
-      const normalized = pathKey(file.path);
-      return !exactPaths.has(normalized) || changeSets.length === 0;
-    });
+    const generatedByPath = new Map<string, GeneratedFileRef>();
+    if (opts?.botSessionId) {
+      for (const changeSet of changeSets) {
+        for (const file of changeSet.files) {
+          if (file.status !== 'added') continue;
+          const resolved = resolveToolFilePath(file.path, changeSet.cwd);
+          generatedByPath.set(pathKey(resolved), {
+            path: resolved,
+            name: basename(file.path),
+            source: 'tool',
+            ready: true,
+          });
+        }
+      }
+    }
+    const workingDir = opts?.workingDir ?? '';
+    if (workingDir) {
+      for (const file of collectGeneratedFiles(slice, workingDir)) {
+        const normalized = pathKey(file.path);
+        if (exactPaths.has(normalized) && changeSets.length > 0) continue;
+        generatedByPath.set(normalized, file);
+      }
+    }
+    const generatedFiles = [...generatedByPath.values()];
     if (generatedFiles.length === 0) return;
     let turnStartMs: number | null = null;
     for (const message of slice) {
@@ -1325,12 +1809,15 @@ export function buildRenderItems(
       }
     }
     const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
+    const hasFollowingUser = hi < messages.length;
+    const turnSealed = isGeneratedFilesTurnSealed(slice, hasFollowingUser);
     items.push({
       type: 'generated_files',
       key: `genfiles-${messages[lo].clientId}`,
       files: generatedFiles,
       turnStartMs,
       turnEndMs: Number.isFinite(boundaryTimestamp) ? boundaryTimestamp : null,
+      turnSealed,
     });
   };
   let i = 0;
@@ -1366,10 +1853,22 @@ export function buildRenderItems(
         continue;
       }
 
-      // Plan tools (TodoWrite / update_plan / Task*) — swallowed like F7:
-      // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(钉住式常驻面板),
-      // 流内不再插卡;也不切段,周围工具保持聚组,如同调用不存在。
+      // Plan tools (TodoWrite / update_plan / Task*)由流内计划卡取代。只有
+      // session 的最新快照所在行插卡；中间更新只刷新同一 stable-key 卡片。
       if (isAgentPlanToolName(toolName)) {
+        const insertion = planInsertAt.get(i);
+        // 与悬浮胶囊保持一致：单步清单不占计划 UI；没有可画卡片时也不切开
+        // 周围工具段，保留旧的紧凑聚组语义。
+        if (insertion && insertion.todos.length >= 2) {
+          flushSegment();
+          items.push({
+            type: 'agent_plan',
+            key: insertion.key,
+            todos: insertion.todos,
+            sourceClientIds: insertion.sourceClientIds,
+            createdAt: msg.createdAt,
+          });
+        }
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') j++;
         i = j;
@@ -1410,6 +1909,7 @@ export function buildRenderItems(
           key: `task-${msg.clientId}`,
           toolCall: msg,
           update,
+          ...(msg.agentTaskStatus ? { persistedStatus: msg.agentTaskStatus } : {}),
           ...(result !== undefined && !shouldHideToolResult(toolName, result) ? { result } : {}),
           ...(resultTsMs !== undefined ? { resultTsMs } : {}),
         });
@@ -1500,6 +2000,10 @@ export function buildRenderItems(
       // 提交消息被 rewind/异 ghost 伪锚)回退今日行为——本调用位置渲染。
       const collectResultMedia = (result: string): void => {
         let media = extractToolResultMedia(result);
+        const inlineImageUrls = inlineImageUrlsByTurnStart.get(turnStartIdx);
+        if (inlineImageUrls?.size) {
+          media = media.filter((item) => item.kind !== 'image' || !inlineImageUrls.has(item.url));
+        }
         if (media.length === 0) return;
         if (isGhostCallToolName(toolName)) {
           const anchor = extractAnchorCardId(result);
@@ -1626,6 +2130,9 @@ export function buildRenderItems(
     } else if (msg.role === 'tool_result') {
       // Orphan tool_result — skip
       i++;
+    } else if (msg.role === 'assistant' && !msg.systemCardType && msg.content.trim().length === 0) {
+      // A leaked model stop token or other empty wrap-up must not become a bubble.
+      i++;
     } else {
       // Any non-tool message flushes the pending segment first so tool
       // segments appear above their text result, not after it.
@@ -1705,138 +2212,50 @@ export function buildRenderItems(
   return { items, singleResultMap };
 }
 
+type GeneratedFilesRenderItemRef = Extract<RenderItem, { type: 'generated_files' }>;
+
+/**
+ * 产物卡内容没变时沿用上一轮 item。buildRenderItems 每次都 new 一个 files
+ * 数组,不收口的话 memo 住的 GeneratedFilesCard 仍会因 props 引用变化而重渲。
+ */
+export function reuseGeneratedFilesRenderItems(
+  items: RenderItem[],
+  cache: Map<string, GeneratedFilesRenderItemRef>,
+): RenderItem[] {
+  const seen = new Set<string>();
+  let swapped = false;
+  const next = items.map((item) => {
+    if (item.type !== 'generated_files') return item;
+    seen.add(item.key);
+    const previous = cache.get(item.key);
+    if (
+      previous &&
+      generatedFilesCheckKey(
+        previous.files,
+        previous.turnStartMs,
+        previous.turnEndMs,
+        previous.turnSealed,
+      ) === generatedFilesCheckKey(item.files, item.turnStartMs, item.turnEndMs, item.turnSealed)
+    ) {
+      if (previous !== item) swapped = true;
+      return previous;
+    }
+    cache.set(item.key, item);
+    return item;
+  });
+  for (const key of cache.keys()) {
+    if (!seen.has(key)) cache.delete(key);
+  }
+  return swapped ? next : items;
+}
+
 // ---------------------------------------------------------------------------
 // Work-group pass(buildRenderItems 之后的第二层后处理)
 // ---------------------------------------------------------------------------
 
-/** 完成态 work_group 可合并的子项:tool_segment / agent_task / thinking /
- *  assistant 工作文字。运行态只通过 isWorkActivityItem 收动作,所以不会提前
- *  折叠正在输出的 assistant 文字。 */
-function isWorkChild(it: RenderItem): it is WorkChildItem {
-  return (
-    it.type === 'tool_segment' ||
-    it.type === 'agent_task' ||
-    (it.type === 'message' &&
-      (it.message.role === 'thinking' ||
-        (it.message.role === 'assistant' && !it.message.systemCardType)))
-  );
-}
-
-/** 运行中(未到终态)的子 Agent 卡片 —— 折叠时视为"可见锚点",绝不折进
- *  「已工作 Xs」工作组:任务没完成就归档会谎报终态时长(典型:后台 workflow
- *  子 Agent 仍在跑,父 turn 却已产出最终正文)。status 派生口径与 AgentTaskCard
- *  完全一致:配对的最终 result 会把 stale running 收敛为 completed,但不覆盖
- *  failed/stopped 等明确终态,
- *  保证"卡片显示运行中"与"是否折叠"永远同步。 */
-// A paired final result closes a stale running update; this must match AgentTaskCard.
-function isRunningAgentTask(it: RenderItem): boolean {
-  if (it.type !== 'agent_task') return false;
-  const status = deriveAgentTaskStatus(it.update?.status, it.result, {
-    resultIsLaunchReceipt:
-      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined
-      || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
-  });
-  return status === 'running';
-}
-
-/** workflow 卡永远平铺,完成后也不折进工作组:它是后台任务面板的常驻入口,
- *  折叠掉等于把入口藏起来(产品拍板 2026-07-27:完成后保留痕迹、可点击进
- *  面板详情;对齐官方——原版完成的 workflow 行留在对话里)。 */
-function isWorkflowTaskItem(it: RenderItem): boolean {
-  return (
-    it.type === 'agent_task' &&
-    (it.update?.taskType === 'local_workflow' || it.toolCall?.toolName === 'Workflow')
-  );
-}
-
-/** preview 中计为一条真实活动的 render item。assistant 进度文字
- *  始终留在主消息流,不占最近 5 条活动窗口。 */
-function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
-  return (
-    !isRunningAgentTask(it) &&
-    // workflow 卡三条分组路径(answered/legacy/active)统一平铺,见 isWorkflowTaskItem。
-    !isWorkflowTaskItem(it) &&
-    (it.type === 'tool_segment' ||
-      it.type === 'agent_task' ||
-      (it.type === 'message' && it.message.role === 'thinking'))
-  );
-}
-
-/**
- * 交付正文 item —— 无论落在 turn 的哪个位置都不折进「已工作 Xs」。
- *
- * 为什么只靠 seal 位置不够:「最终答复」只认最后一次动作之后的正文,而 agent
- * 常见「先输出正文 → 再执行一个收尾副作用(发通知 / 落库 / 提交) → 再说一句
- * 已完成」。这时真正的交付内容排在收尾动作之前,会被整段折起来,只剩收尾那句
- * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
- * 外面只剩 110 字的「已触发通知」)。
- *
- * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
- * 提供,两端不各写一份。
- */
-function isDeliveryProseItem(it: RenderItem): boolean {
-  return (
-    it.type === 'message' &&
-    it.message.role === 'assistant' &&
-    !it.message.systemCardType &&
-    isDeliveryProseText(it.message.content)
-  );
-}
-
-/** 最终可见正文候选:同一用户 turn 内最后一条普通 assistant 文本。 */
-function isAssistantAnswerCandidate(it: RenderItem): it is MessageRenderItem {
-  return (
-    it.type === 'message' &&
-    it.message.role === 'assistant' &&
-    !it.message.systemCardType &&
-    it.message.content.trim().length > 0
-  );
-}
-
-/** 自动压缩会开始新的 live 工作片段，因此也必须结束压缩前的动作组。 */
-function isCompactBoundaryItem(it: RenderItem): it is MessageRenderItem {
-  return (
-    it.type === 'message' &&
-    it.message.role === 'assistant' &&
-    it.message.systemCardType === 'compact'
-  );
-}
-
-/** 子项的稳定 clientId(group key 派生用)。 */
-function workChildClientId(it: WorkChildItem): string {
-  if (it.type === 'tool_segment') return it.toolCalls[0].clientId;
-  if (it.type === 'agent_task') {
-    return (
-      it.toolCall?.clientId ??
-      it.update?.parentToolUseId ??
-      it.update?.taskId ??
-      (it.key.startsWith('task-update-') ? it.key.slice('task-update-'.length) : it.key)
-    );
-  }
-  return it.message.clientId;
-}
-
-/** group 的身份锚在首个真实活动(tool / thinking / agent task)。
- *  完成后的合并组沿用第一段的锚点,保持该段的手动展开态。 */
-function workGroupClientId(run: WorkChildItem[]): string {
-  const firstActivity = run.find((it) => it.type !== 'message' || it.message.role === 'thinking');
-  return workChildClientId(firstActivity ?? run[0]);
-}
-
-/** 工作组内全部可定位 clientId(嵌套组递归),供组容器的回退锚点使用。 */
+/** 工作组容器回退锚点：与删除补偿同一条 clientId 序列。 */
 function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
-  const ids: string[] = [];
-  for (const child of children) {
-    if (child.type === 'message') ids.push(child.message.clientId);
-    else if (child.type === 'tool_segment') {
-      for (const toolCall of child.toolCalls) ids.push(toolCall.clientId);
-    } else if (child.type === 'agent_task' && child.toolCall) {
-      ids.push(child.toolCall.clientId);
-    } else if (child.type === 'work_group') {
-      ids.push(...collectWorkGroupClientIds(child.children));
-    }
-  }
-  return ids;
+  return collectDeleteAnchorClientIds(children);
 }
 
 function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
@@ -1845,115 +2264,11 @@ function renderItemContainsClientId(item: RenderItem, clientId: string): boolean
   if (item.type === 'tool_segment')
     return item.toolCalls.some((toolCall) => toolCall.clientId === clientId);
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
+  if (item.type === 'agent_plan') return item.sourceClientIds.includes(clientId);
   if (item.type === 'work_group') {
     return item.children.some((child) => renderItemContainsClientId(child, clientId));
   }
   return item.key.endsWith(`-${clientId}`);
-}
-
-function renderItemStartMs(item: RenderItem): number | null {
-  if (item.type === 'message') {
-    const ms = Date.parse(item.message.createdAt ?? '');
-    return Number.isFinite(ms) ? ms : null;
-  }
-  if (item.type === 'tool_segment') {
-    const ms = Date.parse(item.toolCalls[0]?.createdAt ?? '');
-    return Number.isFinite(ms) ? ms : null;
-  }
-  if (item.type === 'agent_task') {
-    const ms = Date.parse(item.toolCall?.createdAt ?? item.update?.createdAt ?? '');
-    return Number.isFinite(ms) ? ms : null;
-  }
-  // ghost_card 是那次调用在流里的**唯一**呈现(工具行被卡片取代),所以它必须
-  // 报出调用时间。漏掉的后果是间隔判定把它当"无时间戳"跳过:空洞后的第一个
-  // 动作恰好是卡片时切不开,卡片还会被归到空洞前那一组里(#676 review)。
-  if (item.type === 'ghost_card') {
-    const ms = Date.parse(item.toolCall.createdAt ?? '');
-    return Number.isFinite(ms) ? ms : null;
-  }
-  if (item.type === 'work_group') {
-    for (const child of item.children) {
-      const childMs = renderItemStartMs(child);
-      if (childMs !== null) return childMs;
-    }
-  }
-  // 剩下两类**故意**不报时间,不是漏:
-  //  - tool_media:段产物,永远紧跟在派生它的 tool_segment 之后(见 flushSegment),
-  //    锚点留在段末正是它自己的时间区间,单独给它一个时间戳没有意义。
-  //  - fork_origin:分叉标记,不是动作,不该参与间隔判定。
-  return null;
-}
-
-/**
- * item 的结束时间戳 —— 空洞判定必须用它,不能用 start。
- *
- * 一个合法连续 turn 里的 tool_segment 本身可能跨半小时以上(段内每次相邻调用都在
- * 阈值内,所以不会被切段)。若拿下一条 item 的 start 去跟这个段的 **start** 比,
- * 差值就等于整段耗时,会把正常长任务误判成历史空洞:该切的没切,不该切的切了,
- * 前面的 assistant 进度文字被留在工作组外,时长也退化成段兜底而非最终答复。
- *
- * 段的结束必须算进 tool_result:单次工具跑半小时以上时(典型:一次长构建 / CI),
- * 段里只有一个 tool_use,它的 createdAt 是"开始执行"的时刻,拿它当段末会把结束
- * 时间低估整个执行时长,紧随其后的最终答复照样被误判成空洞。
- */
-function renderItemEndMs(item: RenderItem): number | null {
-  if (item.type === 'tool_segment') {
-    let latest = Number.NEGATIVE_INFINITY;
-    for (const call of item.toolCalls) {
-      const callMs = Date.parse(call.createdAt ?? '');
-      if (Number.isFinite(callMs)) latest = Math.max(latest, callMs);
-      const resultMs = item.resultTsMap.get(call.clientId);
-      if (resultMs !== undefined) latest = Math.max(latest, resultMs);
-    }
-    return Number.isFinite(latest) ? latest : renderItemStartMs(item);
-  }
-  if (item.type === 'agent_task') {
-    // fallback 顺序:updatedAt → update.createdAt → toolCall.createdAt。
-    // AgentTaskUpdate 可以只有 createdAt 而没有 updatedAt(见 normalizeAgentTaskUpdate),
-    // 那时 update.createdAt 比调用发起时刻更接近任务结束 —— 先取 toolCall.createdAt 会
-    // 低估结束时间,进而误判空洞、低报工作组时长(#676 review)。
-    const ms = Date.parse(
-      item.update?.updatedAt ?? item.update?.createdAt ?? item.toolCall?.createdAt ?? '',
-    );
-    const liveEnd = Number.isFinite(ms) ? ms : renderItemStartMs(item);
-    // 历史会话没有 live update 时,liveEnd 退化成调用的开始时间;result 时间戳才是
-    // 这张卡真正的结束(与 tool_segment 同口径)。两者取更晚的。
-    if (item.resultTsMs === undefined) return liveEnd;
-    return liveEnd === null ? item.resultTsMs : Math.max(liveEnd, item.resultTsMs);
-  }
-  if (item.type === 'ghost_card') {
-    const startMs = renderItemStartMs(item);
-    if (item.resultTsMs === undefined) return startMs;
-    return startMs === null ? item.resultTsMs : Math.max(startMs, item.resultTsMs);
-  }
-  if (item.type === 'work_group') {
-    // 全量取 max,不是"最后一个 child":children 按**发起**时刻排列,并行的 Agent/Task 乱序完成时
-    // 真正的结束时刻可能落在更靠前的 child 上(先发起、更晚 settle)。取最后一个会低估组的结束
-    // 时间,于是空洞判定的锚点变小、把本来连续的 turn 误判成空洞切开 —— 与本函数 tool_segment
-    // 分支、以及 groupWorkRuns 里 prevEndMs 的 Math.max 是同一条理由(#676 review codex P1)。
-    // 手机端同款函数(maker-shared 的 itemEndTimestamp)已按此收敛,#1210 review 指出这里镜像存在。
-    let latest: number | null = null;
-    for (const child of item.children) {
-      const childMs = renderItemEndMs(child);
-      if (childMs === null) continue;
-      latest = latest === null ? childMs : Math.max(latest, childMs);
-    }
-    return latest;
-  }
-  // thinking 的 createdAt 是块**开始**的时刻,真正结束要加 thinkingDurationMs
-  // (与 workRunEndTs 同口径)。一个想了半小时以上的 thinking 块后面紧跟工具或正文时,
-  // 只看 createdAt 会把它误判成历史空洞、切开一个本来连续的 turn。
-  const startMs = renderItemStartMs(item);
-  if (startMs !== null && item.type === 'message' && item.message.role === 'thinking') {
-    // duration 与 mapServerCreatedAt 同口径夹断:该字段可能是负数 / 非有限值(那边就做了
-    // Math.max(0, …) 的防御)。不夹断会得出 end < start,空洞判定与工作组时长都跟着错
-    // (#676 review copilot)。
-    const durationMs = item.message.thinkingDurationMs;
-    const safeDurationMs =
-      typeof durationMs === 'number' && Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
-    return startMs + safeDurationMs;
-  }
-  return startMs;
 }
 
 export function insertForkOriginItem(
@@ -1986,322 +2301,6 @@ export function insertForkOriginItem(
 function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string): string | null {
   const item = items.find((candidate) => renderItemContainsClientId(candidate, clientId));
   return item?.key ?? null;
-}
-
-/** 消息 createdAt → epoch ms,缺失 / 非法返回 null。 */
-function messageTs(msg: ChatMessage): number | null {
-  if (!msg.createdAt) return null;
-  const t = new Date(msg.createdAt).getTime();
-  return Number.isFinite(t) ? t : null;
-}
-
-/** 边界项(用户消息 / assistant 正文)的时间戳;非 message 项(卡片等)返回 null,
- *  让下一段退回段内锚点,避免把已折叠段的时长重复计入。 */
-function boundaryTs(item: RenderItem | undefined): number | null {
-  return item && item.type === 'message' ? messageTs(item.message) : null;
-}
-
-/** run 首子项的起始时间戳。 */
-function workRunStartTs(it: WorkChildItem): number | null {
-  if (it.type === 'tool_segment') return messageTs(it.toolCalls[0]);
-  if (it.type === 'agent_task') return renderItemStartMs(it);
-  return messageTs(it.message);
-}
-
-/**
- * run 末子项的结束时间戳 —— 直接复用 renderItemEndMs,不再自己算一份。
- *
- * 原来这里另算一份:tool_segment 取**最后一次调用的发起时刻**、agent_task 取
- * `updatedAt ?? toolCall.createdAt`,两者都不看 tool_result 时间。于是"一个跑了 40 分钟的
- * 工具 / Task 之后紧跟一段历史空洞、后面没有 assistant 正文"时,createWorkGroup 拿不到
- * nextItem、回落到这里,时长显示成约 0s —— 而 renderItemEndMs 明明已经算得出真正的结束
- * 时间(#676 review codex P1)。两处口径合一,顺带修掉 agent_task 那个把
- * `toolCall.createdAt` 排在 `update.createdAt` 前面的旧 fallback 顺序。
- */
-function workRunEndTs(it: WorkChildItem): number | null {
-  return renderItemEndMs(it);
-}
-
-/**
- * 没有终结正文可用时,run 的结束时间 = **所有子项结束时间的最大值**。
- *
- * 不能"从后往前找第一个有时间的子项就返回":并行的 Agent/Task 会乱序完成(A 跑到 40 分钟,
- * B 紧随其后 2 分钟就结束),末尾那张卡的结束时间可能远早于整段真正的结束。被空洞收尾的组
- * 正好走这条 fallback(没有 nextItem),于是 40 分钟的工作显示成约 2 分钟 —— 而空洞判定那边
- * 用的已经是正确的最大值(#676 review codex P1)。
- */
-function workRunFallbackEndTs(run: WorkChildItem[]): number | null {
-  let latest: number | null = null;
-  for (const item of run) {
-    const ts = workRunEndTs(item);
-    if (ts === null) continue;
-    latest = latest === null ? ts : Math.max(latest, ts);
-  }
-  return latest;
-}
-
-function createWorkGroup(
-  run: WorkChildItem[],
-  nextItem: RenderItem | undefined,
-  isStreaming = false,
-  prevBoundaryTs: number | null = null,
-): Extract<RenderItem, { type: 'work_group' }> {
-  const firstActivity = run.find((it) => it.type !== 'message' || it.message.role === 'thinking');
-  const anchorTs = workRunStartTs(firstActivity ?? run[0]);
-  // 段起点优先锚上一个边界(用户消息 / 上一句正文),与「正在工作…」活表的墙钟
-  // 口径一致:一次性到达的 thinking 块 createdAt≈结束时刻,只用段内锚点会把
-  // 模型思考整段丢掉(实际 6s 显示 1s,内层相加也对不上外层总表)。边界缺失
-  // (窗口截断)或时序异常(rewind 改序)时退回段内锚点。
-  const startTs =
-    prevBoundaryTs !== null && (anchorTs === null || prevBoundaryTs <= anchorTs)
-      ? prevBoundaryTs
-      : anchorTs;
-  const endTs =
-    nextItem && nextItem.type === 'message'
-      ? messageTs(nextItem.message)
-      : workRunFallbackEndTs(run);
-  const durationMs =
-    startTs !== null && endTs !== null && endTs >= startTs ? endTs - startTs : undefined;
-  return {
-    type: 'work_group',
-    key: `work-${workGroupClientId(run)}`,
-    children: run,
-    durationMs,
-    isStreaming,
-    ...(startTs !== null ? { startedAtMs: startTs } : {}),
-  };
-}
-
-/** 完成态时间线:assistant 工作文字直接成为外组子项,文字之间的连续动作
- *  继续复用 createWorkGroup 生成内层「已工作 Xs」。外组使用独立 key,
- *  避免与第一段动作共享展开记忆;内组 key 保持不变,从运行中到完成后连续。 */
-function createCompletedWorkGroup(
-  run: WorkChildItem[],
-  nextItem: RenderItem | undefined,
-  prevBoundaryTs: number | null = null,
-): WorkGroupRenderItem {
-  const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.role === 'assistant',
-  );
-  if (!hasAssistantText) return createWorkGroup(run, nextItem, false, prevBoundaryTs);
-
-  const children: WorkGroupChildItem[] = [];
-  let activityRun: WorkChildItem[] = [];
-  let innerPrevBoundaryTs = prevBoundaryTs;
-  const flushActivityRun = (activityNextItem: RenderItem | undefined) => {
-    if (activityRun.length === 0) return;
-    children.push(createWorkGroup(activityRun, activityNextItem, false, innerPrevBoundaryTs));
-    activityRun = [];
-  };
-
-  for (const item of run) {
-    if (isWorkActivityItem(item)) {
-      activityRun.push(item);
-      continue;
-    }
-    flushActivityRun(item);
-    children.push(item);
-    innerPrevBoundaryTs = boundaryTs(item);
-  }
-  flushActivityRun(nextItem);
-
-  const outer = createWorkGroup(run, nextItem, false, prevBoundaryTs);
-  return {
-    ...outer,
-    key: `work-summary-${workGroupClientId(run)}`,
-    children,
-    isStreaming: false,
-  };
-}
-
-function groupLegacyWorkRuns(items: RenderItem[], turnStartTs: number | null = null): RenderItem[] {
-  const out: RenderItem[] = [];
-  let run: WorkChildItem[] = [];
-  let prevBoundaryTs = turnStartTs;
-
-  const flushRun = (nextItem: RenderItem | undefined) => {
-    if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, false, prevBoundaryTs));
-    run = [];
-  };
-
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    // 运行中的子 Agent 不算可折叠 child —— 触发 flushRun 折掉它之前的 run,
-    // 自身平铺,不被卷入「已工作 Xs」(见 isRunningAgentTask)。
-    if (isWorkActivityItem(it)) {
-      run.push(it);
-    } else {
-      flushRun(it);
-      out.push(it);
-      prevBoundaryTs = boundaryTs(it);
-    }
-  }
-  flushRun(undefined);
-  return out;
-}
-
-/** Active turn 专用分组:
- *  - assistant 文字始终作为普通 message 留在主消息流;
- *  - assistant 文字和自动压缩卡片是动作组的分段边界:边界一出现,
- *    前一段立即变为已完成;
- *  - 最后一段之后还没有新的边界时,该段才标成 streaming,
- *    默认显示 latest-five preview。
- */
-function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = null): RenderItem[] {
-  let lastCompletedRunBoundaryIdx = -1;
-  for (let i = 0; i < items.length; i++) {
-    if (isAssistantAnswerCandidate(items[i]) || isCompactBoundaryItem(items[i])) {
-      lastCompletedRunBoundaryIdx = i;
-    }
-  }
-
-  const out: RenderItem[] = [];
-  let run: WorkChildItem[] = [];
-  let runLastIdx = -1;
-  let prevBoundaryTs = turnStartTs;
-  const flushRun = (nextItem: RenderItem | undefined) => {
-    if (run.length === 0) return;
-    out.push(
-      createWorkGroup(run, nextItem, runLastIdx > lastCompletedRunBoundaryIdx, prevBoundaryTs),
-    );
-    run = [];
-  };
-
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (isWorkActivityItem(it)) {
-      run.push(it);
-      runLastIdx = i;
-    } else {
-      flushRun(it);
-      out.push(it);
-      prevBoundaryTs = boundaryTs(it);
-    }
-  }
-  flushRun(undefined);
-  return out;
-}
-
-/**
- * 已结束的 turn:最终答复阶段之前的 assistant 工作文字收入外层
- * 「已工作 Xs」;文字之间的 tool / thinking / 已结束 agent task 仍各自
- * 聚成内层「已工作 Xs」。最后一个真实动作之后
- * 连续输出的 assistant 文字视为最终答复阶段,留在组外;若整轮没有真实动作,
- * 只保留最后一条 assistant 正文,此前文字仍视作工作过程。
- *
- * 位置判定之外还有一条位置无关的兜底:交付正文(见 isDeliveryProseItem)即使排在
- * 收尾动作之前也不折叠,免得「先出简报 → 再发通知 → 再说一句已完成」把产出藏进组里。
- *
- * 没有最终正文(被中断 / 停在工具)或最终正文后仍有已完成动作时返回
- * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
- * 运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
- */
-function groupAnsweredTurnItems(
-  turnItems: RenderItem[],
-  turnStartTs: number | null = null,
-): {
-  items: RenderItem[];
-  handled: boolean;
-} {
-  const sealedAnswers = new Set<number>();
-  for (let i = 0; i < turnItems.length; i++) {
-    const item = turnItems[i];
-    if (isAssistantAnswerCandidate(item) && isCompletedAssistantMessage(item.message)) {
-      sealedAnswers.add(i);
-    }
-  }
-
-  let lastAnswerIdx = -1;
-  for (let i = turnItems.length - 1; i >= 0; i--) {
-    if (isAssistantAnswerCandidate(turnItems[i])) {
-      lastAnswerIdx = i;
-      break;
-    }
-  }
-  if (lastAnswerIdx < 0) return { items: turnItems, handled: false };
-
-  // 新数据按 SDK done seal 分段；旧数据没有 seal 时继续沿用最后一句回退。
-  if (sealedAnswers.size > 0) {
-    // 每个 seal 只盖 SDK turn 最后一条 assistant；与它连续、且位于本段最后一次真实
-    // 动作之后的前置正文同属正式答复阶段，也必须保留在「已工作」外。
-    let segmentStart = 0;
-    for (const sealedIndex of [...sealedAnswers]) {
-      let lastWorkActivityIdx = -1;
-      for (let i = sealedIndex - 1; i >= segmentStart; i--) {
-        if (isWorkActivityItem(turnItems[i])) {
-          lastWorkActivityIdx = i;
-          break;
-        }
-      }
-      let answerStart = sealedIndex;
-      while (
-        answerStart > lastWorkActivityIdx + 1 &&
-        answerStart > segmentStart &&
-        isAssistantAnswerCandidate(turnItems[answerStart - 1])
-      ) {
-        answerStart--;
-      }
-      for (let i = answerStart; i <= sealedIndex; i++) {
-        if (isAssistantAnswerCandidate(turnItems[i])) sealedAnswers.add(i);
-      }
-      segmentStart = sealedIndex + 1;
-    }
-  } else {
-    const hasWorkAfterLastAnswer = turnItems.some(
-      (item, index) => index > lastAnswerIdx && isWorkActivityItem(item),
-    );
-    if (hasWorkAfterLastAnswer) return { items: turnItems, handled: false };
-
-    let lastWorkActivityIdx = -1;
-    for (let i = lastAnswerIdx - 1; i >= 0; i--) {
-      if (isWorkActivityItem(turnItems[i])) {
-        lastWorkActivityIdx = i;
-        break;
-      }
-    }
-    let finalAnswerStartIdx = lastAnswerIdx;
-    if (lastWorkActivityIdx >= 0) {
-      while (
-        finalAnswerStartIdx > lastWorkActivityIdx + 1 &&
-        isAssistantAnswerCandidate(turnItems[finalAnswerStartIdx - 1])
-      ) {
-        finalAnswerStartIdx--;
-      }
-    }
-    for (let i = finalAnswerStartIdx; i <= lastAnswerIdx; i++) {
-      if (isAssistantAnswerCandidate(turnItems[i])) sealedAnswers.add(i);
-    }
-  }
-
-  const out: RenderItem[] = [];
-  let run: WorkChildItem[] = [];
-  let prevBoundaryTs = turnStartTs;
-  const flushRun = (nextItem: RenderItem | undefined) => {
-    if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem, prevBoundaryTs));
-    run = [];
-  };
-
-  for (let i = 0; i < turnItems.length; i++) {
-    const it = turnItems[i];
-    if (
-      !sealedAnswers.has(i) &&
-      !isRunningAgentTask(it) &&
-      !isWorkflowTaskItem(it) &&
-      !isDeliveryProseItem(it) &&
-      isWorkChild(it)
-    ) {
-      run.push(it);
-    } else {
-      flushRun(it);
-      out.push(it);
-      prevBoundaryTs = boundaryTs(it);
-    }
-  }
-  flushRun(undefined);
-
-  return { items: out, handled: true };
 }
 
 /**
@@ -2397,6 +2396,8 @@ function renderWorkGroupChild(
         toolCall={item.toolCall}
         update={item.update}
         result={item.result}
+        persistedStatus={item.persistedStatus}
+        sessionAgentKind={props.agentKind}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
           item.toolCall?.toolUseId
@@ -2407,113 +2408,35 @@ function renderWorkGroupChild(
     );
   }
 
+  // 工作组里的中间过程文字不挂 assistantAvatar:折叠块里逐条画脸只会变噪音,
+  // 身份标记只属于对话流里真正的那句回复(见 MessageItem 的 assistantAvatar)。
   return (
-    <MessageItem
-      message={item.message}
-      toolResult={props.singleResultMap.get(item.message.clientId)}
-      workingDir={props.workingDir}
-      sessionId={props.sessionId}
-      sessionTitle={props.sessionTitle}
-      agentKind={props.agentKind}
-      remoteHostId={props.remoteHostId}
-      sessionRunning={props.isSessionStreaming}
-      assistantForkBlocked={shouldBlockAssistantFork(
-        props.isSessionStreaming,
-        item.message,
-        props.assistantsWithFollowingUserBoundary,
-      )}
-      assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
-      userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
-      isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
-      isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
-      isLastUserInput={item.message.clientId === props.lastUserInputClientId}
-      isContinuationTurnOwner={item.message.clientId === props.continuationTurnClientId}
-      continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
-      localFileRefs={props.localFileRefs}
-    />
+    <div data-message-client-id={item.message.clientId}>
+      <MessageItem
+        message={item.message}
+        toolResult={props.singleResultMap.get(item.message.clientId)}
+        workingDir={props.workingDir}
+        sessionId={props.sessionId}
+        sessionTitle={props.sessionTitle}
+        agentKind={props.agentKind}
+        remoteHostId={props.remoteHostId}
+        sessionRunning={props.isSessionStreaming}
+        assistantForkBlocked={shouldBlockAssistantFork(
+          props.isSessionStreaming,
+          item.message,
+          props.assistantsWithFollowingUserBoundary,
+        )}
+        assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
+        userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
+        isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
+        isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
+        isLastUserInput={item.message.clientId === props.lastUserInputClientId}
+        isContinuationTurnOwner={item.message.clientId === props.continuationTurnClientId}
+        continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
+        localFileRefs={props.localFileRefs}
+      />
+    </div>
   );
-}
-
-/**
- * 把每个 user turn 内最终 assistant 正文前的工作过程聚成 work_group item。
- *
- * 新规则:assistant 文字在运行中始终持续可见,不进最近 5 条动作窗口;
- * 每次文字出现都结束前一个 live 动作片段,后续动作重新开一组。
- * turn 结束后,最终答复阶段之前的 assistant 工作文字收入外层「已工作 Xs」,
- * 各段动作仍是内层「已工作 Xs」并保持原始顺序。tool_media 不参与折叠。
- *
- * 兼容旧规则:如果 turn 里还没有最终文本(例如正在流式执行),继续按连续的
- * tool_segment + thinking run 分组;正在进行中的尾部 run 也立即成为 work_group,
- * 默认仅展示最近 5 条活动,不再把所有卡片平铺到消息流。
- *
- * key 稳定性:动作段始终使用首个真实活动 clientId,所以从 live 到完成后的
- * 内层组 key 不变;完成态外组另用 `work-summary-*`,避免复用展开记忆。
- * DB prepend 向前合并等场景由 recoverLostAnchorIdx 递归找回锚点。
- *
- * 窗口空洞:除 user 行外,相邻动作间隔超过 HISTORY_GAP_SPLIT_MS 也切断工作组,
- * 见该常量注释。
- *
- * export 仅供单测使用。
- */
-export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
-  const out: RenderItem[] = [];
-  let currentTurn: RenderItem[] = [];
-  // turn 开场边界(用户消息)的时间戳;窗口截断没见到用户消息时为 null,
-  // 各分组路径退回段内锚点。
-  let turnStartTs: number | null = null;
-
-  const flushTurn = (isActiveTail: boolean) => {
-    if (currentTurn.length === 0) return;
-    const activeStreaming = isActiveTail && isSessionStreaming;
-    if (activeStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn, turnStartTs));
-      currentTurn = [];
-      return;
-    }
-    const grouped = groupAnsweredTurnItems(currentTurn, turnStartTs);
-    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn, turnStartTs)));
-    currentTurn = [];
-  };
-
-  // 锚点用上一个 item 的**结束**时间(见 renderItemEndMs):否则一个正常的长时段
-  // tool_segment 会让紧随其后的 item 被误判成空洞。
-  // 无时间戳的 item 不重置锚点:让间隔判定跨过它,继续比对上一个有时间的动作。
-  let prevEndMs: number | null = null;
-
-  for (const it of items) {
-    if (it.type === 'message' && it.message.role === 'user') {
-      flushTurn(false);
-      out.push(it);
-      // 两件事互不相干,合并时都要保留:
-      //  - prevEndMs:空洞判定的锚点(#676);
-      //  - turnStartTs:turn 开场边界,分组算时长用(#598)。
-      prevEndMs = renderItemEndMs(it) ?? prevEndMs;
-      turnStartTs = messageTs(it.message);
-      continue;
-    }
-    const itemStartMs = renderItemStartMs(it);
-    if (
-      prevEndMs !== null &&
-      itemStartMs !== null &&
-      itemStartMs - prevEndMs > HISTORY_GAP_SPLIT_MS
-    ) {
-      flushTurn(false);
-      // 空洞切开的新段没有已知的 turn 开场边界:那条 user 行在空洞的**另一侧**(或压根没加载)。
-      // 继续拿它当起点会让新段的时长横跨整个空洞 —— 正是本 PR 要修的那种谎报(实测 47 小时)。
-      // 置 null 与 #598 里"窗口截断没见到用户消息"同语义:各分组路径退回段内锚点。
-      turnStartTs = null;
-    }
-    currentTurn.push(it);
-    // 取本 turn 内见过的**最大**结束时间,不能无条件覆盖:并行的 Agent/Task 可能乱序完成
-    // (相邻的后一张卡先结束),无条件赋值会让锚点回退到更早的时刻,于是紧随其后的最终答复
-    // 与这个退化锚点相差超过阈值 → 连续 turn 被误切、时长被低报(#676 review)。
-    const itemEndMs = renderItemEndMs(it);
-    if (itemEndMs !== null) {
-      prevEndMs = prevEndMs === null ? itemEndMs : Math.max(prevEndMs, itemEndMs);
-    }
-  }
-  flushTurn(true);
-  return out;
 }
 
 // agent 出图(art / 飞书拉图等)统一走 ChatImageView('tool-output' variant),
@@ -2529,8 +2452,12 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   workingDir,
+  assistantAvatar,
+  simplifiedBotConversation = false,
+  botUnreadBoundaryAt = null,
   messages,
   historyLoaded,
+  historyCleared = false,
   taskUpdates,
   isSessionStreaming = false,
   continuationTurnClientId = null,
@@ -2538,15 +2465,37 @@ export function MessageStream({
   onLoadMore,
   isLoadingMore,
   hasMoreMessages,
+  historyWindowHasIsland = false,
   bottomPadding,
-  composerStackTopOffset,
+  bottomCenterClearanceOffset,
   contentWidth,
+  getContentWidth,
   focusMessageClientId,
   focusMessageRequestId,
   forkOrigin,
   onOpenForkOrigin,
   isLocalUserSend,
+  ownsHardwareScrollActions = true,
+  onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
+  const { i18n, t } = useTranslation();
+  const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
+  const historySnapshot = useSyncExternalStore(
+    historyView?.subscribe ?? (() => () => undefined),
+    historyView?.getSnapshot ?? (() => null),
+    historyView?.getSnapshot ?? (() => null),
+  );
+  const historyHandoff = useMemo(() => new HistoryViewHandoff<HistoryChatMessage>(
+    (row) => row.isStreaming === true,
+  ), [historyView]);
+  // Observe live rows before the first history page too: a stream can finish
+  // while that page is in flight. Local tasks retain their existing path.
+  const historyLiveMessages = useMemo(() => historyView ? messages.map((row) => ({
+    ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '',
+  })) : [], [historyView, messages]);
+  const handoff = useMemo(() => historySnapshot
+    ? historyHandoff.reconcile(historySnapshot, historyLiveMessages) : null,
+  [historyHandoff, historySnapshot, historyLiveMessages]);
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
   // 渲染处会兜底跳过(典型场景:其他视图直接用 MessageStream 但不需要栈)。
@@ -2587,6 +2536,8 @@ export function MessageStream({
   /** Set while we programmatically change scrollTop, so the scroll handler
    *  doesn't misread the assignment as user-initiated up-scroll. */
   const programmaticScrollRef = useRef(false);
+  /** 让旧 rAF 不能清掉后发程序化滚动的状态或覆盖其锚点。 */
+  const programmaticScrollGenerationRef = useRef(0);
   /** F-SYNC-2: remembered scrollHeight snapshot taken at the moment we
    *  trigger `onLoadMore`, used to restore position after prepend. */
   const prevScrollHeightRef = useRef(0);
@@ -2597,12 +2548,32 @@ export function MessageStream({
   const prevScrollTopAtLoadRef = useRef(0);
   /** Track previous scrollTop to detect scroll direction. */
   const prevScrollTopRef = useRef(0);
+  /** 上一帧 render items。全量序列在窗口回退成尾窗时仍能选到删除区后的邻居。 */
+  const prevVisibleItemsRef = useRef<readonly RenderItem[]>([]);
+  const prevAllItemsRef = useRef<readonly RenderItem[]>([]);
+  /** 最近一次滚动/跳转落定的视口顶端。不读 sessionScrollStore（程序化跳转后会陈旧）。 */
+  const lastViewportTopRef = useRef<ViewportTopSnapshot | null>(null);
+  /** 窗口重建后下一提交执行的一次性视口复位。 */
+  const pendingReanchorScrollRef = useRef<ViewportTopSnapshot | null>(null);
+  /** 程序化滚动期间到达的删除，待滚动结束后重放补偿。 */
+  const deferredDeleteCompensationRef = useRef(false);
+  const [deleteCompensationReplay, setDeleteCompensationReplay] = useState(0);
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
-  const lastUserMsg = messages[messages.length - 1];
   const lastUserMsgIdRef = useRef<string | null>(
-    lastUserMsg?.role === 'user' ? lastUserMsg.clientId : null,
+    findLastMatchingId(messages, (message) => (message.role === 'user' ? message.clientId : null)),
   );
+  const knownUserMessageIdsRef = useRef<Set<string>>(
+    collectKnownUserMessageIds(messages, (message) =>
+      message.role === 'user' ? message.clientId : null,
+    ),
+  );
+  const followLatestRequestKey = useSyncExternalStore(
+    subscribeFollowLatestRequests,
+    () => readFollowLatestRequestKey(sessionId),
+    () => 0,
+  );
+  const prevFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
 
   // ── render-window state ──
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
@@ -2627,9 +2598,9 @@ export function MessageStream({
   const restoreDefaultViewportRef = useRef(
     Boolean(
       restoringRef.current &&
-        restoreSnapshotRef.current?.windowAnchorKey === null &&
-        restoreSnapshotRef.current?.isNearBottom === false &&
-        restoreSnapshotRef.current?.viewportTopKey,
+      restoreSnapshotRef.current?.windowAnchorKey === null &&
+      restoreSnapshotRef.current?.isNearBottom === false &&
+      restoreSnapshotRef.current?.viewportTopKey,
     ),
   );
   // 两段式默认窗口的当前尺寸(FIRST_PAINT → 空闲期扩到 INITIAL)。只影响
@@ -2667,6 +2638,17 @@ export function MessageStream({
   } | null>(null);
   const focusScrollTimerRef = useRef<number | null>(null);
   const focusHighlightTimerRef = useRef<number | null>(null);
+  /** 进行中的 focus 跳转。生命周期跨越流式重渲染:接管 / 落定监听在挂载级注册并读
+   *  本 ref 判定,挂在 reactive effect 里会被内容型重渲染的 cleanup 拆掉且早退分支
+   *  不再重挂。keysAtJump 供目标在跳转途中被删时选相邻存活落点。 */
+  const focusJumpRef = useRef<{
+    requestKey: string;
+    clientId: string;
+    targetKey: string;
+    keysAtJump: readonly string[];
+    messageClientIdsAtJump: readonly string[];
+    scrollGeneration: number;
+  } | null>(null);
   useEffect(
     () => () => {
       if (focusScrollTimerRef.current !== null) {
@@ -2715,7 +2697,8 @@ export function MessageStream({
         return next;
       });
     });
-    void window.electronAPI.maker.listTurnChangeSets(sessionId)
+    void window.electronAPI.maker
+      .listTurnChangeSets(sessionId)
       .then((next) => {
         if (cancelled) return;
         setTurnChangeSets((current) => {
@@ -2743,15 +2726,77 @@ export function MessageStream({
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
-  const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () =>
-      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
-        historyWindowIncomplete: Boolean(hasMoreMessages),
-        turnChangeSets,
-        workingDir,
-      }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
+  const generatedFilesItemCacheRef = useRef(
+    new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
   );
+  // Completed assistant bodies are immutable for the rest of a turn, while
+  // the active tail keeps changing on every stream batch. Keep this cache at
+  // MessageStream scope so history pagination and live deltas can share the
+  // parsed image targets without retaining state beyond the session mount.
+  const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
+  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
+    const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+      historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
+      turnChangeSets,
+      workingDir,
+      botSessionId: simplifiedBotConversation ? sessionId : undefined,
+      markdownImageTargetCache: markdownImageTargetCacheRef.current,
+    });
+    if (historyView && historySnapshot?.ready) {
+      const results = new Map(built.singleResultMap);
+      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
+        view: historyView, snapshot: historySnapshot, liveMessages: historyLiveMessages, streaming: isSessionStreaming,
+        isLive: (row) => row.isStreaming === true,
+        pendingHandoff: handoff?.pending,
+        isLocalUser: (row) => row.role === 'user' && (row.isPendingPersist === true || !!row.blockedByGhost),
+        build: (rows) => {
+          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
+            historyWindowIncomplete: true, workingDir,
+            markdownImageTargetCache: markdownImageTargetCacheRef.current,
+          });
+          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
+          return groupWorkRuns(chunk.items, isSessionStreaming);
+        },
+        structure: {
+          placeholder: (summary) => ({ id: summary.firstMessageId,
+            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
+            role: 'thinking', content: '', createdAt: new Date(summary.startedAtMs).toISOString(),
+            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
+            thinkingRedacted: true, isStreaming: summary.isStreaming,
+          }),
+          children: (item) => item.type === 'work_group' ? item.children : undefined,
+          sourceIds: (item) => item.type === 'message' ? [item.message.clientId]
+            : item.type === 'tool_segment' ? item.toolCalls.map((tool) => tool.clientId)
+            : item.type === 'agent_task' && item.toolCall ? [item.toolCall.clientId] : [],
+          rebuild: (item, children, deferred) => item.type === 'work_group'
+            ? { ...item, children: children as WorkGroupChildItem[], deferred } : item,
+        },
+      });
+      const keys = new Set<string>();
+      const unique = items.filter((item) => { if (keys.has(item.key)) return false; keys.add(item.key); return true; });
+      return { items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCacheRef.current), singleResultMap: results };
+    }
+    return {
+      items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
+      singleResultMap: built.singleResultMap,
+    };
+  }, [
+    messages,
+    historyView,
+    historySnapshot,
+    historyLiveMessages,
+    handoff,
+    isSessionStreaming,
+    taskUpdates,
+    ghostCardSnapshot,
+    historyLoaded,
+    hasMoreMessages,
+    historyWindowHasIsland,
+    turnChangeSets,
+    workingDir,
+    simplifiedBotConversation,
+    sessionId,
+  ]);
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
     [visibleMessages],
@@ -2768,9 +2813,62 @@ export function MessageStream({
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
-  const allRenderItems = useMemo(
-    () => insertForkOriginItem(groupWorkRuns(ungroupedRenderItems, isSessionStreaming), forkOrigin),
-    [ungroupedRenderItems, isSessionStreaming, forkOrigin],
+  const allRenderItems = useMemo(() => {
+    const grouped = insertForkOriginItem(
+      historySnapshot?.ready ? ungroupedRenderItems : groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
+      forkOrigin,
+  );
+    return simplifiedBotConversation
+      ? simplifyBotRenderItems(grouped, isSessionStreaming)
+      : grouped;
+  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation, historySnapshot?.ready]);
+  const botMessageTimeGroups = useMemo(() => {
+    if (!simplifiedBotConversation) return new Map<string, number>();
+    return collectBotMessageTimeGroups(
+      allRenderItems.flatMap((item) => {
+        if (
+          item.type !== 'message' ||
+          (item.message.role !== 'user' && item.message.role !== 'assistant')
+        ) {
+          return [];
+        }
+        return [{ clientId: item.message.clientId, createdAt: item.message.createdAt }];
+      }),
+    );
+  }, [allRenderItems, simplifiedBotConversation]);
+  const botUnreadBoundaryClientId = useMemo(() => {
+    if (!simplifiedBotConversation) return null;
+    return findFirstUnreadBotReplyClientId(
+      allRenderItems.flatMap((item) =>
+        item.type === 'message'
+          ? [
+              {
+                clientId: item.message.clientId,
+                createdAt: item.message.createdAt,
+                role: item.message.role,
+                systemCardType: item.message.systemCardType,
+                botPrivateReply: item.message.botPrivateReply,
+              },
+            ]
+          : [],
+      ),
+      botUnreadBoundaryAt,
+    );
+  }, [allRenderItems, botUnreadBoundaryAt, simplifiedBotConversation]);
+  const latestInlinePlan = useMemo(() => {
+    for (let index = allRenderItems.length - 1; index >= 0; index -= 1) {
+      const item = allRenderItems[index];
+      if (item.type === 'agent_plan') return item;
+    }
+    return null;
+  }, [allRenderItems]);
+  const latestInlinePlanKey = latestInlinePlan?.key ?? null;
+  const latestInlinePlanBelongsToActiveTurn = useMemo(
+    () =>
+      latestInlinePlan
+        ? planSessionBelongsToLatestUserTurn(messages, latestInlinePlan.sourceClientIds)
+        : false,
+    [latestInlinePlan, messages],
   );
 
   /**
@@ -2854,23 +2952,26 @@ export function MessageStream({
     }
 
     const startIdx = snapRenderWindowStartIdx(allRenderItems, idx);
-    const windowItemCount = resolveAnchoredWindowItemCount(
-      startIdx,
-      idx,
-      anchoredForwardItems,
-    );
+    const windowItemCount = resolveAnchoredWindowItemCount(startIdx, idx, anchoredForwardItems);
     return {
       items: allRenderItems.slice(startIdx, startIdx + windowItemCount),
       startIdx,
     };
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems, anchoredForwardItems, firstMountDeferred]);
+  }, [
+    allRenderItems,
+    firstVisibleItemKey,
+    defaultWindowItems,
+    anchoredForwardItems,
+    firstMountDeferred,
+  ]);
 
   // If a restored default-tail anchor fell out of the tail while this session
   // was backgrounded, permanently fall back to the bounded default window for
   // this mount. This also prevents expandWindow from treating the stale key as
   // a user-created anchored window.
   useLayoutEffect(() => {
-    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null) return;
+    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null)
+      return;
     const snap = restoreSnapshotRef.current;
     if (!snap?.viewportTopKey) return;
     if (allRenderItems.length === 0) return;
@@ -2920,6 +3021,353 @@ export function MessageStream({
     return () => window.clearTimeout(id);
   }, [defaultWindowItems, firstVisibleItemKey, visibleRenderItems.length, allRenderItems.length]);
 
+  // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
+  const visibleRenderItemsRef = useRef(visibleRenderItems);
+  visibleRenderItemsRef.current = visibleRenderItems;
+  // 量出当前视口顶端 render-item；若它内部还有已渲染的子消息，再记实际跨过视口顶边
+  // 的 message clientId。折叠工作组 / 折叠工具块的聚合 data-message-client-ids 只给
+  // focus 回退用，不参与视口快照，避免把隐藏 child 当成活锚点。
+  const measureViewportTop = useCallback((): ViewportTopSnapshot | null => {
+    const container = scrollRef.current;
+    const items = itemsRef.current;
+    if (!container || !items) return null;
+    const vis = visibleRenderItemsRef.current;
+    const cTop = container.getBoundingClientRect().top;
+    const children = items.children;
+    for (let i = 0; i < children.length; i++) {
+      const rect = (children[i] as HTMLElement).getBoundingClientRect();
+      // 第一条「底边还在容器顶边下方」的 item = 正好跨过视口顶边的那条。
+      if (rect.bottom - cTop > 0) {
+        const key = vis[i]?.key;
+        if (!key) return null;
+        const snapshot: ViewportTopSnapshot = {
+          viewportTopKey: key,
+          offset: Math.max(0, cTop - rect.top),
+        };
+        const itemElement = children[i] as HTMLElement;
+        const childAnchor = pickIntersectingChildAnchor(
+          Array.from(
+            itemElement.querySelectorAll<HTMLElement>('[data-message-client-id]'),
+            (element) => {
+              const clientId = readViewportChildAnchorClientId(element);
+              if (!clientId) return null;
+              const rect = element.getBoundingClientRect();
+              if (rect.bottom <= rect.top) return null;
+              return { clientId, top: rect.top, bottom: rect.bottom };
+            },
+          ).filter((candidate): candidate is ChildAnchorRect => candidate !== null),
+          cTop,
+        );
+        if (childAnchor) {
+          snapshot.messageClientId = childAnchor.clientId;
+          snapshot.messageOffset = childAnchor.offset;
+        }
+        return snapshot;
+      }
+    }
+    return null;
+  }, []);
+  // 量测并写入「删除前快照」，返回结果供同帧复用。用户滚动、非贴底程序化跳转与
+  // focus 落定经它刷新；贴底态由 auto-follow 接管，无需快照。
+  const refreshViewportAnchor = useCallback((): ViewportTopSnapshot | null => {
+    const measured = measureViewportTop();
+    if (measured) lastViewportTopRef.current = measured;
+    return measured;
+  }, [measureViewportTop]);
+  const beginProgrammaticScroll = useCallback((): number => {
+    programmaticScrollRef.current = true;
+    programmaticScrollGenerationRef.current += 1;
+    return programmaticScrollGenerationRef.current;
+  }, []);
+  // true = 触发删除补偿重放；false = 正常结束；null = 已被后发滚动取代的旧回调。
+  const finishProgrammaticScroll = useCallback(
+    (
+      generation: number,
+      { consumeDeferredDelete = false }: { consumeDeferredDelete?: boolean } = {},
+    ): boolean | null => {
+      const decision = resolveProgrammaticScrollEndDecision({
+        generation,
+        activeGeneration: programmaticScrollGenerationRef.current,
+        hasDeferredDelete: deferredDeleteCompensationRef.current,
+        consumeDeferredDelete,
+      });
+      if (decision === 'stale') return null;
+      programmaticScrollGenerationRef.current += 1;
+      programmaticScrollRef.current = false;
+      if (decision === 'finished') return false;
+      deferredDeleteCompensationRef.current = false;
+      if (decision === 'consume-deferred-delete') return false;
+      setDeleteCompensationReplay((version) => version + 1);
+      return true;
+    },
+    [],
+  );
+  const allRenderItemsRef = useRef(allRenderItems);
+  allRenderItemsRef.current = allRenderItems;
+  // 折叠/展开不改 visibleRenderItems。精确 child 被卸掉且数据仍在时降级重测；
+  // 快照没有子锚点但视口顶 item 已露出精确 child 时也重测（折叠→展开）。
+  const refreshHiddenChildViewportAnchor = useCallback(() => {
+    const snapshot = lastViewportTopRef.current;
+    const clientId = snapshot?.messageClientId;
+    if (clientId && snapshot) {
+      const root = scrollRef.current;
+      const exact = root ? queryMessageElement(root, clientId) : null;
+      const rect = exact?.getBoundingClientRect();
+      if (
+        !shouldRefreshHiddenChildViewportAnchor({
+          snapshotMessageClientId: clientId,
+          exactChildVisible: Boolean(rect && rect.bottom > rect.top),
+          childStillInRenderItems: allRenderItemsRef.current.some((item) =>
+            renderItemContainsClientId(item, clientId),
+          ),
+        })
+      ) {
+        return;
+      }
+      lastViewportTopRef.current = toRenderItemViewportSnapshot(snapshot);
+      refreshViewportAnchor();
+      return;
+    }
+    const vis = visibleRenderItemsRef.current;
+    const idx = snapshot ? vis.findIndex((item) => item.key === snapshot.viewportTopKey) : -1;
+    const itemElement =
+      idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
+    if (
+      !shouldRefreshExpandedChildViewportAnchor({
+        snapshotMessageClientId: clientId,
+        viewportTopItemHasVisibleExactChild: Boolean(
+          itemElement && hasVisibleExactChildAnchor(itemElement),
+        ),
+      })
+    ) {
+      return;
+    }
+    refreshViewportAnchor();
+  }, [refreshViewportAnchor]);
+  // 瞬时把 key 对应 item 的顶边摆到「容器顶边下方 offset 处」;key 不在当前窗口或
+  // DOM 未就绪则放弃。删除补偿与 focus 落定共用。
+  const scrollKeyToViewportTop = useCallback(
+    (key: string, offset: number) => {
+      const container = scrollRef.current;
+      const idx = visibleRenderItemsRef.current.findIndex((item) => item.key === key);
+      const child =
+        idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
+      if (!container || !child) return;
+      const delta =
+        child.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
+      if (Math.abs(delta) < 1) return;
+      const generation = beginProgrammaticScroll();
+      container.scrollTop += delta;
+      requestAnimationFrame(() => finishProgrammaticScroll(generation));
+    },
+    [beginProgrammaticScroll, finishProgrammaticScroll],
+  );
+  const scrollMessageToViewportTop = useCallback(
+    (clientId: string, offset: number) => {
+      const container = scrollRef.current;
+      // 视口复位只认已渲染的精确 child。聚合 data-message-client-ids 命中折叠组容器
+      // 会让隐藏 child 继续当活锚点，删除后把组滚到顶。focus 跳转仍走 queryFocusElement。
+      const target = container ? queryMessageElement(container, clientId) : null;
+      if (!container || !target) return false;
+      const delta =
+        target.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
+      if (Math.abs(delta) < 1) return true;
+      const generation = beginProgrammaticScroll();
+      container.scrollTop += delta;
+      requestAnimationFrame(() => finishProgrammaticScroll(generation));
+      return true;
+    },
+    [beginProgrammaticScroll, finishProgrammaticScroll],
+  );
+  const restoreViewportSnapshot = useCallback(
+    (snapshot: ViewportTopSnapshot, itemOffset = snapshot.offset): boolean => {
+      if (
+        snapshot.messageClientId &&
+        scrollMessageToViewportTop(snapshot.messageClientId, snapshot.messageOffset ?? 0)
+      ) {
+        lastViewportTopRef.current = snapshot;
+        return true;
+      }
+      const itemSnapshot = toRenderItemViewportSnapshot(snapshot, itemOffset);
+      lastViewportTopRef.current = itemSnapshot;
+      if (visibleRenderItemsRef.current.some((item) => item.key === itemSnapshot.viewportTopKey)) {
+        scrollKeyToViewportTop(itemSnapshot.viewportTopKey, itemSnapshot.offset);
+        return true;
+      }
+      return false;
+    },
+    [scrollKeyToViewportTop, scrollMessageToViewportTop],
+  );
+  const restoreViewportSnapshotOrRebuildWindow = useCallback(
+    (snapshot: ViewportTopSnapshot, itemOffset = snapshot.offset) => {
+      if (restoreViewportSnapshot(snapshot, itemOffset)) return;
+      pendingReanchorScrollRef.current = lastViewportTopRef.current;
+      const key = lastViewportTopRef.current?.viewportTopKey;
+      if (key) setFirstVisibleItemKey(key);
+    },
+    [restoreViewportSnapshot],
+  );
+  const cancelFocusJump = useCallback(
+    ({
+      consumeDeferredDelete = false,
+      refreshAnchor = false,
+    }: {
+      consumeDeferredDelete?: boolean;
+      refreshAnchor?: boolean;
+    } = {}): boolean => {
+      const jump = focusJumpRef.current;
+      if (!jump) return false;
+      focusJumpRef.current = null;
+      if (focusScrollTimerRef.current !== null) {
+        window.clearTimeout(focusScrollTimerRef.current);
+        focusScrollTimerRef.current = null;
+      }
+      if (focusHighlightTimerRef.current !== null) {
+        window.clearTimeout(focusHighlightTimerRef.current);
+        focusHighlightTimerRef.current = null;
+      }
+      // 只终止仍由这次 focus 拥有的原生 smooth 动画；过期 focus 不得打断后发滚动。
+      if (jump.scrollGeneration === programmaticScrollGenerationRef.current) {
+        const root = scrollRef.current;
+        if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
+      }
+      const replayingDelete = finishProgrammaticScroll(jump.scrollGeneration, {
+        consumeDeferredDelete,
+      });
+      if (refreshAnchor && replayingDelete === false) refreshViewportAnchor();
+      return true;
+    },
+    [finishProgrammaticScroll, refreshViewportAnchor],
+  );
+  // focus 跳转落定收尾(scrollend 主路径与兜底 timer 共用,幂等):途中布局变化
+  // (删除 / 流式)会让 smooth 落点偏离目标,先瞬时校正回目标;目标在跳转途中被删时
+  // 锚到跳转时序列中它之后第一条存活 item(与删除补偿同语义,落点在窗口外则走窗口
+  // 重建 + pending 复位);用户已接管则不校正。下一帧再清 programmatic 标记并刷新
+  // 删除前快照——半途量测会把跳变中的位置误存为锚点。
+  const settleFocusJump = useCallback(() => {
+    const jump = focusJumpRef.current;
+    if (!jump) return;
+    focusJumpRef.current = null;
+    if (focusScrollTimerRef.current !== null) {
+      window.clearTimeout(focusScrollTimerRef.current);
+      focusScrollTimerRef.current = null;
+    }
+    if (focusHighlightTimerRef.current !== null) {
+      window.clearTimeout(focusHighlightTimerRef.current);
+      focusHighlightTimerRef.current = null;
+    }
+    if (jump.scrollGeneration !== programmaticScrollGenerationRef.current) return;
+    // settle 前已观察到的删除由当前目标校正消费；同帧后续删除仍走通用重放。
+    deferredDeleteCompensationRef.current = false;
+    // 邻居锚定分支会显式写入快照(窗口重建的 DOM 下一提交才就绪),此时不得再用
+    // 旧 DOM 量测覆盖。
+    let snapshotPinned = false;
+    const root = scrollRef.current;
+    if (root) {
+      setHighlightMessageClientId(jump.clientId);
+      const all = allRenderItemsRef.current;
+      const target = queryFocusElement(root, jump.clientId);
+      if (target) {
+        target.scrollIntoView({ block: 'center' });
+        const measured = refreshViewportAnchor();
+        const rootTop = root.getBoundingClientRect().top;
+        const targetRect = target.getBoundingClientRect();
+        if (
+          jump.messageClientIdsAtJump.includes(jump.clientId) &&
+          shouldUseFocusedElementAsViewportAnchor({
+            focusClientId: jump.clientId,
+            elementClientId: target.dataset.messageClientId,
+            containerTop: rootTop,
+            elementTop: targetRect.top,
+            elementBottom: targetRect.bottom,
+          })
+        ) {
+          lastViewportTopRef.current = {
+            ...(measured ?? {
+              viewportTopKey: renderItemKeyForClientId(all, jump.clientId) ?? jump.targetKey,
+              offset: 0,
+            }),
+            messageClientId: jump.clientId,
+            messageOffset: Math.max(0, rootTop - targetRect.top),
+          };
+        }
+      } else {
+        const targetExists = all.some((item) => renderItemContainsClientId(item, jump.clientId));
+        const landMessageClientId =
+          !targetExists && jump.messageClientIdsAtJump.includes(jump.clientId)
+            ? pickDeleteCompensationAnchorKey(
+                jump.messageClientIdsAtJump,
+                collectDeleteAnchorClientIds(all),
+                jump.clientId,
+              )
+            : null;
+        let landKey = landMessageClientId
+          ? renderItemKeyForClientId(all, landMessageClientId)
+          : null;
+        if (!landKey) {
+          const recoveredIdx = findRestorableViewportItemIdx(all, jump.targetKey);
+          landKey =
+            recoveredIdx >= 0
+              ? (all[recoveredIdx]?.key ?? null)
+              : pickDeleteCompensationAnchorKey(
+                  jump.keysAtJump,
+                  all.map((item) => item.key),
+                  jump.targetKey,
+                );
+        }
+        if (landKey) {
+          snapshotPinned = true;
+          restoreViewportSnapshotOrRebuildWindow({
+            viewportTopKey: landKey,
+            offset: 0,
+            ...(landMessageClientId
+              ? { messageClientId: landMessageClientId, messageOffset: 0 }
+              : {}),
+          });
+        }
+      }
+    }
+    requestAnimationFrame(() => {
+      const activeJump = focusJumpRef.current;
+      if (activeJump && activeJump.requestKey !== jump.requestKey) return;
+      const replayingDelete = finishProgrammaticScroll(jump.scrollGeneration);
+      if (!snapshotPinned && replayingDelete === false) refreshViewportAnchor();
+    });
+  }, [finishProgrammaticScroll, refreshViewportAnchor, restoreViewportSnapshotOrRebuildWindow]);
+  // 接管 / 落定监听挂载级注册一次,读 focusJumpRef 判定,无活跃跳转时空转。挂在下面
+  // 的 reactive effect 里会被流式重渲染的 cleanup 拆掉且早退分支不再重挂,导致接管
+  // 失灵、兜底 timer 落定时把用户拽回目标。
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    // 用户中途接管(滚轮 / 触摸 / 按住滚动条 / 键盘导航):浏览器已取消 smooth 动画,
+    // 立即恢复用户滚动语义,落定时不再校正回目标。
+    const onUserInput = () => {
+      // finish 路径会重放 focus 期间延期的删除补偿；不能直接清掉，否则用户接管后
+      // 会永久保留删除造成的错误位移。
+      cancelFocusJump();
+    };
+    const onNavigationKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (!isScrollNavigationKey(event.key)) return;
+      if (isEditableKeyboardTarget(event.target)) return;
+      onUserInput();
+    };
+    const onScrollEnd = () => settleFocusJump();
+    root.addEventListener('wheel', onUserInput, { passive: true });
+    root.addEventListener('touchstart', onUserInput, { passive: true });
+    root.addEventListener('mousedown', onUserInput);
+    window.addEventListener('keydown', onNavigationKey);
+    root.addEventListener('scrollend', onScrollEnd);
+    return () => {
+      root.removeEventListener('wheel', onUserInput);
+      root.removeEventListener('touchstart', onUserInput);
+      root.removeEventListener('mousedown', onUserInput);
+      window.removeEventListener('keydown', onNavigationKey);
+      root.removeEventListener('scrollend', onScrollEnd);
+    };
+  }, [cancelFocusJump, settleFocusJump]);
+
   useLayoutEffect(() => {
     const focusRequestKey = focusMessageClientId
       ? `${focusMessageRequestId ?? 0}:${focusMessageClientId}`
@@ -2927,7 +3375,13 @@ export function MessageStream({
     if (!focusMessageClientId || !focusRequestKey) {
       lastAppliedFocusRef.current = null;
       lastMissingFocusRef.current = null;
+      cancelFocusJump({ refreshAnchor: true });
       return;
+    }
+    // 新请求必须在任何 missing / 扩窗 / DOM 未就绪早退前废弃旧跳转，否则旧 timer
+    // 或 scrollend 会继续按上一目标落定。requestId 也纳入 key，支持同消息重复跳转。
+    if (focusJumpRef.current && focusJumpRef.current.requestKey !== focusRequestKey) {
+      cancelFocusJump({ refreshAnchor: true });
     }
     if (lastAppliedFocusRef.current === focusRequestKey) return;
     const lastItemKey = allRenderItems.at(-1)?.key ?? null;
@@ -2958,20 +3412,22 @@ export function MessageStream({
     }
     const root = scrollRef.current;
     if (!root) return;
-    // 精确锚点(message wrapper / 带 toolCall 的任务卡)优先;查不到时退回
-    // 聚合动作块的容器锚点(data-message-client-ids 空格分隔多 clientId)——
-    // 后台 Bash 等工具行渲染在折叠块内,没有独立的行级 DOM 锚点。
-    const el = (root.querySelector(
-      `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
-    ) ??
-      root.querySelector(
-        `[data-message-client-ids~="${CSS.escape(focusMessageClientId)}"]`,
-      )) as HTMLElement | null;
+    const el = queryFocusElement(root, focusMessageClientId);
     if (!el) return;
     restoringRef.current = false;
     isNearBottomRef.current = false;
     setIsNearBottom(false);
-    programmaticScrollRef.current = true;
+    const scrollGeneration = beginProgrammaticScroll();
+    // 新跳直接覆盖未落定的旧跳(用户快速连点两条结果):旧跳转态被替换,旧兜底
+    // timer 一并重设,浏览器的旧 smooth 动画由新 scrollIntoView 接管。
+    focusJumpRef.current = {
+      requestKey: focusRequestKey,
+      clientId: focusMessageClientId,
+      targetKey,
+      keysAtJump: allRenderItems.map((item) => item.key),
+      messageClientIdsAtJump: collectDeleteAnchorClientIds(allRenderItems),
+      scrollGeneration,
+    };
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     lastAppliedFocusRef.current = focusRequestKey;
     if (focusScrollTimerRef.current !== null) {
@@ -2980,32 +3436,27 @@ export function MessageStream({
     if (focusHighlightTimerRef.current !== null) {
       window.clearTimeout(focusHighlightTimerRef.current);
     }
-    // 高亮时机:等平滑滚动**落定后**再点亮,避免目标还在半途就提前闪高亮(用户反馈)。
-    // 优先用 scrollend 精确对齐;拿不到(不支持 / 目标已在视口内滚动距离为 0 不触发)时用兜底延时。
-    // 点亮后**不再自动淡出**——停在搜索命中处,直到下次跳转覆盖或切会话(满足「搜索态高亮不消失」)。
-    let highlightApplied = false;
-    const applyHighlight = () => {
-      if (highlightApplied) return;
-      highlightApplied = true;
-      root.removeEventListener('scrollend', applyHighlight);
-      setHighlightMessageClientId(focusMessageClientId);
-    };
-    root.addEventListener('scrollend', applyHighlight, { once: true });
-    focusScrollTimerRef.current = window.setTimeout(() => {
-      programmaticScrollRef.current = false;
-    }, 800);
-    // 兜底:scrollend 未触发(距离为 0 / 环境不支持)时,~600ms 后强制点亮。
+    // 落定主路径是挂载级 scrollend 监听;有 scrollend 时兜底只是安全网(长距离
+    // smooth 常 >800ms,给足 2.5s),无 scrollend 的环境用 800ms 近似落定。
+    focusScrollTimerRef.current = window.setTimeout(
+      settleFocusJump,
+      'onscrollend' in window ? 2500 : 800,
+    );
+    // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
+    // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
     focusHighlightTimerRef.current = window.setTimeout(() => {
-      applyHighlight();
+      setHighlightMessageClientId(focusMessageClientId);
       focusHighlightTimerRef.current = null;
     }, 600);
-    // 清理:effect 因依赖变化重跑(如用户快速连点两条结果)时,移除尚未触发的旧监听器,
-    // 避免旧 applyHighlight 在下次 scrollend 以上一条 clientId 点亮、造成高亮闪错消息。
-    // 已触发过则监听器已被 { once } 自动移除,这里为幂等空操作。
-    return () => {
-      root.removeEventListener('scrollend', applyHighlight);
-    };
-  }, [allRenderItems, focusMessageClientId, focusMessageRequestId, visibleRenderItems]);
+  }, [
+    allRenderItems,
+    focusMessageClientId,
+    focusMessageRequestId,
+    visibleRenderItems,
+    beginProgrammaticScroll,
+    cancelFocusJump,
+    settleFocusJump,
+  ]);
 
   // 会话内全部图片的有序 src(全量,来自未裁剪的 allRenderItems),下发给
   // ImageLightbox 做翻图。基于全量而非 visibleRenderItems,这样计数 / 翻页
@@ -3092,10 +3543,7 @@ export function MessageStream({
     visibleStartIdx + visibleRenderItems.length >= allRenderItems.length;
 
   // ── 滚动位置 保存 / 还原 的辅助 ──
-  // unmount cleanup 与 ResizeObserver 回调里读不到最新的 visibleRenderItems /
-  // firstVisibleItemKey(闭包会 stale),用 ref 镜像每次 render 同步一份,供它们读取。
-  const visibleRenderItemsRef = useRef(visibleRenderItems);
-  visibleRenderItemsRef.current = visibleRenderItems;
+  // 镜像 ref:unmount cleanup 与 ResizeObserver 回调里读最新值(闭包会 stale)。
   const windowCoversEndRef = useRef(windowCoversEnd);
   windowCoversEndRef.current = windowCoversEnd;
   const firstVisibleItemKeyRef = useRef(firstVisibleItemKey);
@@ -3103,40 +3551,46 @@ export function MessageStream({
   const anchoredForwardItemsRef = useRef(anchoredForwardItems);
   anchoredForwardItemsRef.current = anchoredForwardItems;
 
-  // render-window-bidirectional P1 fix: 新消息导致锚定窗口不再覆盖末尾时，
-  // 重置 near-bottom 以触发未读提示（覆盖末尾→清锚回默认窗的逻辑在 handleScroll 里）。
+  // 新 item 导致锚定窗口不再覆盖末尾时，先保留此前的跟随意图：自动补历史建立的
+  // 锚点只是实现细节，用户仍在跟随就清锚回默认尾窗；用户已经离底才保留历史窗口。
   const prevWindowCoversEndRef = useRef(windowCoversEnd);
   useLayoutEffect(() => {
     const wasCovering = prevWindowCoversEndRef.current;
     prevWindowCoversEndRef.current = windowCoversEnd;
 
-    if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
+    const coverageLossAction = resolveWindowCoverageLossAction({
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      wasCoveringEnd: wasCovering,
+      windowCoversEnd,
+      wasFollowingTail: isNearBottomRef.current,
+    });
+    if (coverageLossAction === 'handoff-to-tail') {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+      setFirstVisibleItemKey(null);
+      return;
+    }
+    if (coverageLossAction === 'preserve-anchor') {
       isNearBottomRef.current = false;
       setIsNearBottom(false);
+      return;
     }
-  }, [firstVisibleItemKey, windowCoversEnd]);
-
-  // 量出当前视口顶端那条 render-item 的 key + 它被滚到视口上方的像素数。
-  // 用 children 索引 ↔ visibleRenderItems 索引的天然对应关系反查(map 一条 item
-  // 产出一个根节点),不需要给每条 item 的 DOM 打 data 标记。stable 引用(无依赖)。
-  const measureViewportTop = useCallback((): { viewportTopKey: string; offset: number } | null => {
-    const container = scrollRef.current;
-    const items = itemsRef.current;
-    if (!container || !items) return null;
-    const vis = visibleRenderItemsRef.current;
-    const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
-    for (let i = 0; i < children.length; i++) {
-      const rect = (children[i] as HTMLElement).getBoundingClientRect();
-      // 第一条「底边还在容器顶边下方」的 item = 正好跨过视口顶边的那条。
-      if (rect.bottom - cTop > 0) {
-        const key = vis[i]?.key;
-        if (!key) return null;
-        return { viewportTopKey: key, offset: Math.max(0, cTop - rect.top) };
+    // 锚定窗向下扩到真正盖住尾部,且用户已经贴在当前窗口底 → 切回默认尾窗并
+    // 恢复跟随。扩窗发生在本次 scroll 之后,同一帧的 handleScroll 还看不到
+    // windowCoversEnd=true,没有下一次滚动时会永远停在「已到底、但不跟」。
+    if (!wasCovering && windowCoversEnd && firstVisibleItemKey !== null) {
+      const el = scrollRef.current;
+      if (!el) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom <= REPIN_AT_BOTTOM_PX) {
+        isNearBottomRef.current = true;
+        setIsNearBottom(true);
+        setUnreadCount(0);
+        setFirstVisibleItemKey(null);
       }
     }
-    return null;
-  }, []);
+  }, [firstVisibleItemKey, windowCoversEnd]);
 
   // 把视口滚回快照记录的「锚点 item + 偏移」。按条目相对定位,所以即使上方图片 /
   // markdown 还没异步渲染完导致高度偏小,也会落在正确的 item 上;settle 期间由
@@ -3154,36 +3608,36 @@ export function MessageStream({
     const rect = child.getBoundingClientRect();
     // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 rect.top 上移 delta。
     const delta = rect.top - (cTop - snap.offset);
-    if (Math.abs(delta) < 1) return;
-    programmaticScrollRef.current = true;
+    if (Math.abs(delta) < 1) {
+      refreshViewportAnchor();
+      return;
+    }
+    const generation = beginProgrammaticScroll();
     container.scrollTop += delta;
     requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
-  }, []);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
   // ResizeObserver 回调用 ref 取最新 applyRestore,避免把它放进 observer 依赖导致
   // 流式每 token(visibleRenderItems 变)都 disconnect/reconnect。
   const applyRestoreRef = useRef(applyRestore);
   applyRestoreRef.current = applyRestore;
 
-  // 保存当前浏览位置到 sessionScrollStore。在用户滚动时(DOM 一定存活)持续调用,
-  // 不依赖 unmount 时机。无 sessionId / 量测失败则跳过。
+  // 保存当前浏览位置到 sessionScrollStore,并同步刷新删除前快照(单次量测)。用户
+  // 滚动时持续调用(DOM 一定存活),unmount cleanup 兜底最后一帧;量测失败则跳过。
   const saveRafRef = useRef<number | null>(null);
   const saveScrollSnapshot = useCallback(() => {
-    if (!sessionId) return;
-    const measured = measureViewportTop();
-    if (!measured) return;
+    const measured = refreshViewportAnchor();
+    if (!sessionId || !measured) return;
     saveSessionScroll(sessionId, {
       windowAnchorKey: firstVisibleItemKeyRef.current,
       viewportTopKey: measured.viewportTopKey,
       offset: measured.offset,
       isNearBottom: isNearBottomRef.current,
       anchoredForwardCount:
-        firstVisibleItemKeyRef.current !== null
-          ? anchoredForwardItemsRef.current
-          : undefined,
+        firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
     });
-  }, [sessionId, measureViewportTop]);
+  }, [sessionId, refreshViewportAnchor]);
 
   // perf-baseline (见 perfLog 注释):
   // 父组件用 key={sessionId} 包了本组件,所以每次切 session 都是全新 mount,
@@ -3372,8 +3826,34 @@ export function MessageStream({
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
     if (!isNearBottomRef.current) return;
+    bumpSendFollowCancelGeneration(sessionId);
     isNearBottomRef.current = false;
     setIsNearBottom(false);
+  }, [sessionId]);
+
+  // 与 unpin 对称:用户已经贴死底部时的向下意图恢复跟随。不经过 scroll 事件 —
+  // 贴死底部后再往下滚通常不再改变 scrollTop。历史切片的底不是会话尾,不能从
+  // 那里开始跟随(与 resolveEffectiveNearBottom 同口径)。覆盖末尾的锚定窗也要
+  // 一并清掉,否则下一条 token 会 uncover 再 unpin。
+  const pinAutoFollowForUserDownIntent = useCallback(() => {
+    if (!windowCoversEndRef.current) return;
+    if (isNearBottomRef.current) return;
+    isNearBottomRef.current = true;
+    setIsNearBottom(true);
+    setUnreadCount(0);
+    setFirstVisibleItemKey(null);
+  }, []);
+
+  // 滚动条拖拽:只记按下时的 scrollTop。单纯 mousedown 不解除;上移过死区才 unpin。
+  // 按下期间停掉流式 pin,避免 programmatic 窗口把拖拽 scroll 吞掉后再钉回。
+  const scrollbarDragStartTopRef = useRef<number | null>(null);
+  const pinToBottomRef = useRef<() => void>(() => {});
+  // 拖拽态必须有界结束:mouseup / blur / pointercancel / 页签隐藏都走这里。
+  // Alt-Tab 后在别处松手收不到 mouseup,不清理则 pinToBottom 会永久提前返回。
+  const endScrollbarDrag = useCallback(() => {
+    if (scrollbarDragStartTopRef.current == null) return;
+    scrollbarDragStartTopRef.current = null;
+    if (isNearBottomRef.current) pinToBottomRef.current();
   }, []);
 
   // ── jump-to-bottom chip ──
@@ -3403,24 +3883,142 @@ export function MessageStream({
   // 动手就立即通行 — 不会卡住"用 chip 连点上翻"或"跳完立刻 wheel 看更老历史"。
   // 3s safety timer 兜底,应对极端 case(用户 click 后既不滚也不动键盘)。
   const chipJumpInProgressRef = useRef<boolean>(false);
+  const chipJumpGenerationRef = useRef<number | null>(null);
+  const chipJumpTargetRef = useRef<ChipJumpTarget | null>(null);
   const chipJumpClearTimerRef = useRef<number | null>(null);
   const userHistoryTouchStartYRef = useRef<number | null>(null);
   const userIntentLoadInFlightRef = useRef<boolean>(false);
-  const clearChipJumpSuppression = useCallback(() => {
-    if (chipJumpInProgressRef.current) {
+  const finishChipJump = useCallback(
+    (
+      generation: number,
+      {
+        consumeDeferredDelete = false,
+        refreshAnchor = false,
+      }: { consumeDeferredDelete?: boolean; refreshAnchor?: boolean } = {},
+    ): boolean | null => {
+      if (chipJumpGenerationRef.current !== generation) return null;
+      chipJumpGenerationRef.current = null;
+      if (chipJumpTargetRef.current?.generation === generation) {
+        chipJumpTargetRef.current = null;
+      }
       chipJumpInProgressRef.current = false;
+      if (chipJumpClearTimerRef.current !== null) {
+        window.clearTimeout(chipJumpClearTimerRef.current);
+        chipJumpClearTimerRef.current = null;
+      }
+      const replayingDelete = finishProgrammaticScroll(generation, { consumeDeferredDelete });
+      if (refreshAnchor && replayingDelete === false) refreshViewportAnchor();
+      return replayingDelete;
+    },
+    [finishProgrammaticScroll, refreshViewportAnchor],
+  );
+  // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
+  const clearChipJumpSuppression = useCallback(() => {
+    // 只在打断真正的导航跳转(chip / focus / 延期删除补偿)时解除跟随。
+    // 流式 pinToBottom 也会打开 programmaticScrollRef,把它算进接管条件会让
+    // 生成期间任意滚轮或点滚动条都把跟随掐死;人已经在底部时再也产生不了
+    // 向下 scroll,跟随就恢复不了。想离开底部走 wheel / 触控 / 键盘的上滚意图。
+    if (
+      deferredDeleteCompensationRef.current ||
+      chipJumpGenerationRef.current !== null ||
+      focusJumpRef.current
+    ) {
+      unpinAutoFollowForUserUpIntent();
     }
+    const generation = chipJumpGenerationRef.current;
+    if (generation !== null) {
+      finishChipJump(generation);
+      const root = scrollRef.current;
+      if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
+      return;
+    }
+    chipJumpInProgressRef.current = false;
     if (chipJumpClearTimerRef.current !== null) {
       window.clearTimeout(chipJumpClearTimerRef.current);
       chipJumpClearTimerRef.current = null;
     }
-  }, []);
+    if (focusJumpRef.current) {
+      cancelFocusJump();
+      return;
+    }
+    if (programmaticScrollRef.current) {
+      finishProgrammaticScroll(programmaticScrollGenerationRef.current);
+      const root = scrollRef.current;
+      if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
+    }
+  }, [cancelFocusJump, finishChipJump, finishProgrammaticScroll, unpinAutoFollowForUserUpIntent]);
+  // 正常落定：删除 / 流式更新可能让 smooth 开始时算出的像素落点失效。必须按本次
+  // generation 保存的目标标识重新查 DOM、瞬时校正后，才能让确定落点消费延期删除补偿。
+  // 目标已被删 / DOM 不可用时不消费，交给通用删除补偿重放。
+  const settleChipJump = useCallback(
+    (expectedGeneration?: number) => {
+      const generation = expectedGeneration ?? chipJumpGenerationRef.current;
+      if (generation === null || chipJumpGenerationRef.current !== generation) return;
+      const target = chipJumpTargetRef.current;
+      let targetResolved = false;
+      const root = scrollRef.current;
+      if (root && target?.generation === generation) {
+        const selectorAttribute =
+          target.selector === 'user-message' ? 'data-user-msg-id' : 'data-message-client-id';
+        const element = root.querySelector<HTMLElement>(
+          `[${selectorAttribute}="${CSS.escape(target.clientId)}"]`,
+        );
+        if (element) {
+          const correctedScrollTop = resolveChipJumpTargetScrollTop({
+            scrollTop: root.scrollTop,
+            containerTop: root.getBoundingClientRect().top,
+            targetTop: element.getBoundingClientRect().top,
+            topOffset: target.topOffset,
+          });
+          if (Math.abs(correctedScrollTop - root.scrollTop) >= 1)
+            root.scrollTop = correctedScrollTop;
+          targetResolved = true;
+        }
+      }
+      // 只消费校正前已观察到的删除；校正后、下一帧 finish 前新到的删除会重新置位，
+      // 仍由 finish 触发重放，不能被这次导航一并吞掉。
+      if (targetResolved) deferredDeleteCompensationRef.current = false;
+      requestAnimationFrame(() => finishChipJump(generation, { refreshAnchor: true }));
+    },
+    [finishChipJump],
+  );
+  const beginChipJump = useCallback(
+    (target: Omit<ChipJumpTarget, 'generation'>) => {
+      if (chipJumpClearTimerRef.current !== null) {
+        window.clearTimeout(chipJumpClearTimerRef.current);
+      }
+      chipJumpInProgressRef.current = true;
+      const generation = beginProgrammaticScroll();
+      chipJumpGenerationRef.current = generation;
+      chipJumpTargetRef.current = { ...target, generation };
+      chipJumpClearTimerRef.current = window.setTimeout(() => {
+        settleChipJump(generation);
+      }, CHIP_JUMP_SAFETY_MS);
+    },
+    [beginProgrammaticScroll, settleChipJump],
+  );
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const onScrollEnd = () => {
+      settleChipJump();
+      if (chipJumpGenerationRef.current !== null) return;
+      if (!programmaticScrollRef.current) return;
+      const generation = programmaticScrollGenerationRef.current;
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
+    };
+    root.addEventListener('scrollend', onScrollEnd);
+    return () => root.removeEventListener('scrollend', onScrollEnd);
+  }, [finishProgrammaticScroll, refreshViewportAnchor, settleChipJump]);
   useEffect(() => {
     return () => {
       if (chipJumpClearTimerRef.current !== null) {
         window.clearTimeout(chipJumpClearTimerRef.current);
         chipJumpClearTimerRef.current = null;
       }
+      chipJumpGenerationRef.current = null;
+      chipJumpTargetRef.current = null;
+      chipJumpInProgressRef.current = false;
     };
   }, []);
   useEffect(() => {
@@ -3489,6 +4087,20 @@ export function MessageStream({
           unpinAutoFollowForUserUpIntent();
         }
         triggerUserIntentFill();
+        return;
+      }
+      if (event.deltaY > 0) {
+        if (hasNestedScrollableAncestorThatCanScrollDown(root, event.target)) return;
+        const distanceFromBottom = root.scrollHeight - root.scrollTop - root.clientHeight;
+        if (
+          shouldRepinOnWheel({
+            deltaX: event.deltaX,
+            deltaY: event.deltaY,
+            distanceFromBottom,
+          })
+        ) {
+          pinAutoFollowForUserDownIntent();
+        }
       }
     };
     const onTouchStart = (event: TouchEvent) => {
@@ -3511,26 +4123,92 @@ export function MessageStream({
           unpinAutoFollowForUserUpIntent();
         }
         triggerUserIntentFill();
+        return;
+      }
+      if (startY - currentY > TOUCH_HISTORY_INTENT_THRESHOLD_PX) {
+        userHistoryTouchStartYRef.current = currentY;
+        if (hasNestedScrollableAncestorThatCanScrollDown(root, event.target)) return;
+        const distanceFromBottom = root.scrollHeight - root.scrollTop - root.clientHeight;
+        if (shouldRepinOnDownIntent({ distanceFromBottom })) {
+          pinAutoFollowForUserDownIntent();
+        }
       }
     };
     const onTouchEnd = () => {
       userHistoryTouchStartYRef.current = null;
+    };
+    const onMouseDown = (event: MouseEvent) => {
+      clearChipJumpSuppression();
+      if (
+        isVerticalScrollbarPress({
+          targetIsRoot: event.target === root,
+          offsetX: event.offsetX,
+          clientWidth: root.clientWidth,
+        })
+      ) {
+        scrollbarDragStartTopRef.current = root.scrollTop;
+      }
+    };
+    const onMouseMove = () => {
+      const startTop = scrollbarDragStartTopRef.current;
+      if (startTop == null) return;
+      if (
+        shouldUnpinOnScrollbarDrag({
+          pointerDown: true,
+          scrollDelta: root.scrollTop - startTop,
+          directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
+        }) &&
+        shouldUnpinOnUpIntent({ scrollHeight: root.scrollHeight, clientHeight: root.clientHeight })
+      ) {
+        unpinAutoFollowForUserUpIntent();
+      }
+    };
+    const onMouseUp = () => {
+      endScrollbarDrag();
+    };
+    const onPointerCancel = () => {
+      endScrollbarDrag();
+    };
+    const onWindowBlur = () => {
+      endScrollbarDrag();
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) endScrollbarDrag();
     };
     root.addEventListener('wheel', onWheel, { passive: true });
     root.addEventListener('touchstart', onTouchStart, { passive: true });
     root.addEventListener('touchmove', onTouchMove, { passive: true });
     root.addEventListener('touchend', onTouchEnd, { passive: true });
     root.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    root.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener('blur', onWindowBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       root.removeEventListener('wheel', onWheel);
       root.removeEventListener('touchstart', onTouchStart);
       root.removeEventListener('touchmove', onTouchMove);
       root.removeEventListener('touchend', onTouchEnd);
       root.removeEventListener('touchcancel', onTouchEnd);
+      root.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      window.removeEventListener('blur', onWindowBlur);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
+  }, [
+    clearChipJumpSuppression,
+    endScrollbarDrag,
+    pinAutoFollowForUserDownIntent,
+    triggerUserIntentFill,
+    unpinAutoFollowForUserUpIntent,
+  ]);
   useEffect(() => {
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
+      if (!ownsHardwareScrollActions) return;
       if (event.defaultPrevented) return;
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
       if (isEditableKeyboardTarget(event.target)) return;
@@ -3548,22 +4226,53 @@ export function MessageStream({
     return () => {
       window.removeEventListener('keydown', onHistoryNavigationKey);
     };
-  }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
-  useNavigationKeyListener(clearChipJumpSuppression);
+  }, [
+    clearChipJumpSuppression,
+    ownsHardwareScrollActions,
+    triggerUserIntentFill,
+    unpinAutoFollowForUserUpIntent,
+  ]);
+  useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions);
 
   const pinToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    programmaticScrollRef.current = true;
+    // 滚动条拖拽中不要钉回,否则滑块上移会被下一帧 pin 吃掉。
+    if (scrollbarDragStartTopRef.current != null) return;
+    const generation = beginProgrammaticScroll();
     suppressScrollbarActivation(el);
     el.scrollTop = el.scrollHeight;
     // Clear the flag on the next frame — after the browser has dispatched
     // the resulting scroll event. We use rAF (not a microtask) because the
     // scroll event is dispatched asynchronously.
     requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
+      if (finishProgrammaticScroll(generation) === false && !isNearBottomRef.current) {
+        refreshViewportAnchor();
+      }
     });
-  }, []);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+  pinToBottomRef.current = pinToBottom;
+
+  // Composer send is an explicit "show me the result" intent. Don't wait for
+  // the tail render item to be a user message — assistant / tool cards often
+  // land in the same commit and used to hide the send from pin detection.
+  // This is the only force-follow path: inference must not pin, because an
+  // optimistic row can appear after the user already scrolled away.
+  useLayoutEffect(() => {
+    if (prevFollowLatestRequestKeyRef.current === followLatestRequestKey) return;
+    prevFollowLatestRequestKeyRef.current = followLatestRequestKey;
+    cancelFocusJump({ consumeDeferredDelete: true });
+    const chipJumpGeneration = chipJumpGenerationRef.current;
+    if (chipJumpGeneration !== null) {
+      finishChipJump(chipJumpGeneration, { consumeDeferredDelete: true });
+    }
+    setFirstVisibleItemKey(null);
+    restoringRef.current = false;
+    isNearBottomRef.current = true;
+    setIsNearBottom(true);
+    setUnreadCount(0);
+    pinToBottom();
+  }, [cancelFocusJump, finishChipJump, followLatestRequestKey, pinToBottom]);
 
   // F3: 平滑滚到底的按钮回调。
   //   - 乐观更新 unreadCount / isNearBottom / isNearBottomRef → 按钮同一 tick fade-out
@@ -3573,14 +4282,106 @@ export function MessageStream({
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // 显式的新导航取代尚未落定的搜索 focus；自身的底部落点会消费此前延期的删除补偿。
+    cancelFocusJump({ consumeDeferredDelete: true });
+    const chipJumpGeneration = chipJumpGenerationRef.current;
+    if (chipJumpGeneration !== null) {
+      finishChipJump(chipJumpGeneration, { consumeDeferredDelete: true });
+    }
     setUnreadCount(0);
     setIsNearBottom(true);
     isNearBottomRef.current = true;
-    programmaticScrollRef.current = true;
+    const generation = beginProgrammaticScroll();
     // render-window-bidirectional: 清除锚点回到默认尾部窗口（chip/jump-down 语义）。
     setFirstVisibleItemKey(null);
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    window.setTimeout(() => {
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
+    }, CHIP_JUMP_SAFETY_MS);
+  }, [
+    beginProgrammaticScroll,
+    cancelFocusJump,
+    finishChipJump,
+    finishProgrammaticScroll,
+    refreshViewportAnchor,
+  ]);
+
+  // ── Codex Micro 摇杆:按住持续滚动 ──
+  // 摇杆推住时主进程持续送 { type:'scroll', intensity },这里逐帧按速度改
+  // scrollTop —— 像拖鼠标滚轮,而不是每拨一下跳一屏。速度走平方曲线(见
+  // shared/workLouderCodexScroll.ts):轻推能微调,推到底才最快。
+  // 不用 behavior:'smooth' —— 逐帧位移叠加缓动会互相打架,松手后还会惯性飘。
+  const joystickScrollRef = useRef<{ direction: 'up' | 'down'; intensity: number } | null>(null);
+  const joystickScrollFrameRef = useRef<number | null>(null);
+  const stopJoystickScroll = useCallback(() => {
+    joystickScrollRef.current = null;
+    if (joystickScrollFrameRef.current !== null) {
+      cancelAnimationFrame(joystickScrollFrameRef.current);
+      joystickScrollFrameRef.current = null;
+    }
   }, []);
+  useEffect(() => stopJoystickScroll, [stopJoystickScroll]);
+
+  useEffect(() => {
+    if (!ownsHardwareScrollActions) stopJoystickScroll();
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'scroll-stop') {
+        stopJoystickScroll();
+        return ownsHardwareScrollActions;
+      }
+      if (!ownsHardwareScrollActions) return false;
+      if (action.type === 'scroll') {
+        joystickScrollRef.current = { direction: action.direction, intensity: action.intensity };
+        if (joystickScrollFrameRef.current !== null) return true;
+        let lastAt = performance.now();
+        const step = (now: number): void => {
+          joystickScrollFrameRef.current = null;
+          const active = joystickScrollRef.current;
+          const el = scrollRef.current;
+          if (!active || !el) return;
+          const delta = joystickScrollDelta(active.intensity, now - lastAt);
+          lastAt = now;
+          if (active.direction === 'up') {
+            // 程序化改 scrollTop 不发 wheel 事件,所以不会自动解除 auto-follow;
+            // 不显式解除的话,向上滚会被跟随逻辑一路拽回底部。
+            unpinAutoFollowForUserUpIntent();
+            el.scrollTop -= delta;
+          } else {
+            el.scrollTop += delta;
+          }
+          joystickScrollFrameRef.current = requestAnimationFrame(step);
+        };
+        joystickScrollFrameRef.current = requestAnimationFrame(step);
+        return true;
+      }
+      if (action.type !== 'command') return false;
+      if (action.commandId === 'conversation.scrollBottom') {
+        scrollToBottomSmooth();
+        return true;
+      }
+      // 键盘快捷键与改绑到其它键的场景仍走这条一次性路径。
+      if (
+        action.commandId !== 'conversation.scrollUp' &&
+        action.commandId !== 'conversation.scrollDown'
+      ) {
+        return false;
+      }
+      const el = scrollRef.current;
+      if (!el) return false;
+      const direction = action.commandId === 'conversation.scrollUp' ? -1 : 1;
+      if (direction < 0) unpinAutoFollowForUserUpIntent();
+      el.scrollBy({
+        top: direction * Math.max(160, el.clientHeight * 0.7),
+        behavior: 'smooth',
+      });
+      return true;
+    });
+  }, [
+    ownsHardwareScrollActions,
+    scrollToBottomSmooth,
+    stopJoystickScroll,
+    unpinAutoFollowForUserUpIntent,
+  ]);
 
   // F2: messages diff → 按角色累计 unreadCount
   //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
@@ -3611,72 +4412,65 @@ export function MessageStream({
   // ResizeObserver below is a safety net for async height growth *after* paint
   // (markdown render finish, image/code-highlight completion).
   //
-  // Special case: when the user hits send, a fresh user-role message appears
-  // at the tail. We force auto-follow back on regardless of whether the user
-  // had scrolled up — committing a new turn is an explicit intent to see the
-  // result land.
+  // Local send force-follow is only followLatestRequestKey. Inference here
+  // must not pin or steal the window: attachment prep can insert the
+  // optimistic row after the user already unpinned.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    const visibleLastItem = visibleRenderItems[visibleRenderItems.length - 1];
-    const realLastItem = allRenderItems[allRenderItems.length - 1];
     const tailUserMessageId = selectTailUserMessageId({
       windowCoversEnd,
-      visibleLastItem,
-      realLastItem,
+      visibleItems: visibleRenderItems,
+      allItems: allRenderItems,
       userMessageId: (item) =>
-        item?.type === 'message' && item.message.role === 'user'
-          ? item.message.clientId
-          : null,
+        item?.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
     });
     const lastUserMsg =
       tailUserMessageId === null
         ? null
-        : realLastItem?.type === 'message' && realLastItem.message.clientId === tailUserMessageId
-          ? realLastItem.message
-          : visibleLastItem?.type === 'message' &&
-              visibleLastItem.message.clientId === tailUserMessageId
-            ? visibleLastItem.message
-            : null;
+        : findLastMatching(allRenderItems, (item) =>
+            item.type === 'message' && item.message.clientId === tailUserMessageId
+              ? item.message
+              : null,
+          );
 
-    // 锚定窗口外检测到真实的新发送：当前 effect 的 visibleRenderItems 仍是旧切片，
-    // 不能同帧 pinToBottom。先清锚并恢复 near-bottom，下一次 render 切回默认尾窗
-    // 后再自然 pin；提前同步 lastUserMsgIdRef，防下一帧重复判成新发送。
-    let windowAnchorClearedOnSend = false;
-    const realTailUserSendOutsideWindow =
-      !restoringRef.current &&
-      firstVisibleItemKey !== null &&
-      !windowCoversEnd &&
-      lastUserMsg !== null &&
-      lastUserMsg.clientId !== lastUserMsgIdRef.current;
-    if (realTailUserSendOutsideWindow) {
+    // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
+    // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
+    // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
+    const sentFromThisRenderer = lastUserMsg
+      ? isLocalUserSend
+        ? isLocalUserSend(lastUserMsg.clientId) === true
+        : true
+      : false;
+    const userMessageObservation = resolveLastUserMessageObservation({
+      restoring: restoringRef.current,
+      tailUserMessageId,
+      previousTailUserMessageId: lastUserMsgIdRef.current,
+      knownUserMessageIds: knownUserMessageIdsRef.current,
+    });
+    for (const id of collectKnownUserMessageIds(allRenderItems, (item) =>
+      item.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
+    )) {
+      knownUserMessageIdsRef.current.add(id);
+    }
+    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    const decision = resolveRenderPinDecision({
+      restoring: restoringRef.current,
+      newUserSend: false,
+      sentFromThisRenderer,
+      nearBottom: isNearBottomRef.current,
+    });
+    const windowHandoff = resolveSendWindowHandoff({
+      isNewUserSend: false,
+      sentFromThisRenderer,
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      windowCoversEnd,
+    });
+    if (windowHandoff.clearWindowAnchor) {
       setFirstVisibleItemKey(null);
       isNearBottomRef.current = true;
       setIsNearBottom(true);
       setUnreadCount(0);
-      lastUserMsgIdRef.current = lastUserMsg.clientId;
-      windowAnchorClearedOnSend = true;
     }
-    const userMessageObservation = resolveLastUserMessageObservation({
-      restoring: restoringRef.current,
-      tailUserMessageId: lastUserMsg?.clientId ?? null,
-      previousTailUserMessageId: lastUserMsgIdRef.current,
-    });
-    if (!windowAnchorClearedOnSend) {
-      lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
-    }
-    const decision = resolveRenderPinDecision({
-      restoring: restoringRef.current,
-      newUserSend: userMessageObservation.isNewUserSend,
-      // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
-      // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
-      // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
-      sentFromThisRenderer: lastUserMsg
-        ? isLocalUserSend
-          ? isLocalUserSend(lastUserMsg.clientId) === true
-          : true
-        : false,
-      nearBottom: isNearBottomRef.current,
-    });
 
     if (userMessageObservation.isNewUserSend && lastUserMsg) {
       lastUserMsgIdRef.current = lastUserMsg.clientId;
@@ -3685,11 +4479,18 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom && !windowAnchorClearedOnSend) pinToBottom();
+    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
-  }, [visibleRenderItems, bottomPadding, pinToBottom, firstVisibleItemKey, windowCoversEnd, allRenderItems]);
+  }, [
+    visibleRenderItems,
+    bottomPadding,
+    pinToBottom,
+    firstVisibleItemKey,
+    windowCoversEnd,
+    allRenderItems,
+  ]);
 
   // ── 还原浏览位置(layout effect,在上面的 pin-to-bottom effect 之后跑) ──
   // mount 首帧 + 还原期间窗口变化时把视口摆回锚点。settle(图片/markdown 异步加载
@@ -3730,14 +4531,30 @@ export function MessageStream({
         return;
       }
       if (performance.now() < suppressPinUntil) return;
-      if (isNearBottomRef.current) pinToBottom();
+      if (isNearBottomRef.current) {
+        pinToBottom();
+        return;
+      }
+      refreshHiddenChildViewportAnchor();
     });
     ro.observe(content);
     return () => {
       content.removeEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
       ro.disconnect();
     };
-  }, [pinToBottom]);
+  }, [pinToBottom, refreshHiddenChildViewportAnchor]);
+
+  // 折叠动画末帧可能已是 0fr，再卸载时内容高度几乎不变，ResizeObserver 不一定
+  // 再触发。精确 child 节点从 items 子树消失时补一次（数据仍在才重测）。
+  useEffect(() => {
+    const items = itemsRef.current;
+    if (!items) return;
+    const observer = new MutationObserver(() => {
+      refreshHiddenChildViewportAnchor();
+    });
+    observer.observe(items, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [refreshHiddenChildViewportAnchor]);
 
   // F-SYNC-2 + render-window: Preserve scroll position after either
   //   (a) DB prepend (messages 数组前端追加,触发 isLoadingMore false → render)
@@ -3785,17 +4602,218 @@ export function MessageStream({
       if (delta > 0 && !anchoringApplied) {
         // anchoring 没生效(viewport 内没合适锚点元素时 Chromium 会跳过自动调整),
         // 由 F-SYNC-2 手动补偿,行为同原版。
-        programmaticScrollRef.current = true;
+        const generation = beginProgrammaticScroll();
         el.scrollTop += delta;
-        requestAnimationFrame(() => {
-          programmaticScrollRef.current = false;
-        });
+        requestAnimationFrame(() => finishProgrammaticScroll(generation));
       }
       // anchoringApplied=true 分支无操作 — 浏览器 anchoring 已把 viewport 摆好。
       prevScrollHeightRef.current = 0;
       prevScrollTopAtLoadRef.current = 0;
     }
-  }, [visibleRenderItems, isLoadingMore]);
+  }, [visibleRenderItems, isLoadingMore, beginProgrammaticScroll, finishProgrammaticScroll]);
+
+  // ── 删除靠前 message 后的视口保位（#2289）──
+  // 快照来自滚动/跳转落定；删除提交后再量会使 delta 恒为 0。贴底交给 pin-to-bottom。
+  useLayoutEffect(() => {
+    const prevVisibleItems = prevVisibleItemsRef.current;
+    const prevAllItems = prevAllItemsRef.current;
+    prevVisibleItemsRef.current = visibleRenderItems;
+    prevAllItemsRef.current = allRenderItems;
+
+    // #3067: turn 完成会把运行中工作组重建为完成态分组，key / 数量都可能变化。
+    // 贴底态必须始终由 auto-follow 接管；若先执行旧锚点恢复，会覆盖上方同一提交里的
+    // pinToBottom，把视口拉回本轮 user 消息。同步消费待重锚，避免用户稍后上滚时重放旧落点。
+    if (
+      consumePendingReanchorForAutoFollow({
+        isNearBottom: isNearBottomRef.current,
+        clearPendingReanchor: () => {
+          pendingReanchorScrollRef.current = null;
+        },
+      })
+    ) {
+      return;
+    }
+
+    const snapshot = lastViewportTopRef.current;
+    const prevSeq = prevAllItems.length > 0 ? prevAllItems : prevVisibleItems;
+
+    const pending = pendingReanchorScrollRef.current;
+    if (pending) {
+      pendingReanchorScrollRef.current = null;
+      restoreViewportSnapshot(pending);
+      return;
+    }
+
+    const shrank = visibleRenderItems.length < prevVisibleItems.length;
+    const snapshotKeyGone =
+      snapshot !== null && !visibleRenderItems.some((it) => it.key === snapshot.viewportTopKey);
+    const snapshotMessageClientId = snapshot?.messageClientId;
+    const snapshotMessageGone =
+      snapshotMessageClientId !== undefined &&
+      !allRenderItems.some((item) => renderItemContainsClientId(item, snapshotMessageClientId));
+    if (!shrank && !snapshotKeyGone && !snapshotMessageGone) return;
+
+    const recoverableMessageClientId = snapshotMessageClientId;
+    const recoverableMessageExists =
+      recoverableMessageClientId !== undefined &&
+      allRenderItems.some((item) => renderItemContainsClientId(item, recoverableMessageClientId));
+
+    const recoveredIdx = snapshot
+      ? findRestorableViewportItemIdx(visibleRenderItems, snapshot.viewportTopKey)
+      : -1;
+    const recoveredKey = recoveredIdx >= 0 ? visibleRenderItems[recoveredIdx]?.key : undefined;
+    const windowAnchorLost =
+      firstVisibleItemKey !== null &&
+      findRestorableViewportItemIdx(allRenderItems, firstVisibleItemKey) < 0;
+    if (snapshot && recoveredKey && !snapshotMessageGone) {
+      if (recoveredKey !== snapshot.viewportTopKey) {
+        const rebased: ViewportTopSnapshot = {
+          ...snapshot,
+          viewportTopKey: recoveredKey,
+          offset: 0,
+          ...(recoverableMessageExists
+            ? {
+                messageClientId: recoverableMessageClientId,
+                messageOffset: snapshot.messageOffset ?? snapshot.offset,
+              }
+            : {}),
+        };
+        lastViewportTopRef.current = rebased;
+        if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) {
+          restoreViewportSnapshot(rebased, 0);
+        }
+      }
+      if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) return;
+    }
+
+    if (!sessionId) return;
+    if (programmaticScrollRef.current || isLoadingMore) {
+      prevVisibleItemsRef.current = prevVisibleItems;
+      prevAllItemsRef.current = prevAllItems;
+      if (programmaticScrollRef.current) deferredDeleteCompensationRef.current = true;
+      return;
+    }
+    let anchor = snapshot;
+    if (restoringRef.current) {
+      const snap = restoreSnapshotRef.current;
+      if (
+        !snap?.viewportTopKey ||
+        findRestorableViewportItemIdx(visibleRenderItems, snap.viewportTopKey) >= 0
+      ) {
+        return;
+      }
+      anchor = { viewportTopKey: snap.viewportTopKey, offset: snap.offset };
+      restoringRef.current = false;
+    }
+    if (!anchor) return;
+    const { viewportTopKey: anchorKey, offset: anchorOffset } = anchor;
+    const anchorItemStillVisible = visibleRenderItems.some((item) => item.key === anchorKey);
+    if (anchor.messageClientId && snapshotMessageGone && anchorItemStillVisible) {
+      const survivorMessageId = pickDeleteCompensationAnchorKey(
+        collectDeleteAnchorClientIds(prevSeq),
+        collectDeleteAnchorClientIds(allRenderItems),
+        anchor.messageClientId,
+      );
+      if (survivorMessageId) {
+        const survivorItemKey = renderItemKeyForClientId(allRenderItems, survivorMessageId);
+        const root = scrollRef.current;
+        const exact = root ? queryMessageElement(root, survivorMessageId) : null;
+        const fallback = root ? queryVisibleAggregateContainer(root, survivorMessageId) : null;
+        const landing = resolveDeleteCompensationLanding({
+          exactVisible: isVisibleDeleteCompensationElement(exact),
+          fallbackContainerVisible: isVisibleDeleteCompensationElement(fallback),
+        });
+        if (landing === 'exact') {
+          const itemOffset = survivorItemKey === anchorKey ? anchorOffset : 0;
+          restoreViewportSnapshotOrRebuildWindow(
+            {
+              viewportTopKey: survivorItemKey ?? anchorKey,
+              offset: itemOffset,
+              messageClientId: survivorMessageId,
+              messageOffset: 0,
+            },
+            itemOffset,
+          );
+          return;
+        }
+        if (landing === 'container' && root && fallback) {
+          // 折叠摘要行可见，隐藏 child 没有精确 DOM。滚摘要到视口顶，不要复用外层旧 offset。
+          const delta = fallback.getBoundingClientRect().top - root.getBoundingClientRect().top;
+          if (Math.abs(delta) >= 1) {
+            const generation = beginProgrammaticScroll();
+            root.scrollTop += delta;
+            requestAnimationFrame(() => finishProgrammaticScroll(generation));
+          }
+          lastViewportTopRef.current = toRenderItemViewportSnapshot({
+            viewportTopKey: survivorItemKey ?? anchorKey,
+            offset: 0,
+          });
+          refreshViewportAnchor();
+          return;
+        }
+        restoreViewportSnapshotOrRebuildWindow(
+          { viewportTopKey: survivorItemKey ?? anchorKey, offset: 0 },
+          0,
+        );
+        return;
+      }
+    }
+    if (anchorItemStillVisible) return;
+
+    if (windowAnchorLost) {
+      const aliveIdx = findRestorableViewportItemIdx(allRenderItems, anchorKey);
+      let targetKey: string | null;
+      let targetOffset = 0;
+      if (aliveIdx >= 0) {
+        targetKey = allRenderItems[aliveIdx]?.key ?? null;
+        if (targetKey === anchorKey) targetOffset = anchorOffset;
+      } else {
+        targetKey = pickDeleteCompensationAnchorKey(
+          prevSeq.map((it) => it.key),
+          allRenderItems.map((it) => it.key),
+          anchorKey,
+        );
+      }
+      if (!targetKey) return;
+      const targetSnapshot: ViewportTopSnapshot = snapshotMessageGone
+        ? { viewportTopKey: targetKey, offset: targetOffset }
+        : {
+            ...anchor,
+            viewportTopKey: targetKey,
+            offset: targetOffset,
+            ...(recoverableMessageExists
+              ? {
+                  messageClientId: recoverableMessageClientId,
+                  messageOffset: anchor.messageOffset ?? anchor.offset,
+                }
+              : {}),
+          };
+      lastViewportTopRef.current = targetSnapshot;
+      pendingReanchorScrollRef.current = targetSnapshot;
+      setFirstVisibleItemKey(targetKey);
+      return;
+    }
+
+    const survivorKey = pickDeleteCompensationAnchorKey(
+      prevVisibleItems.map((it) => it.key),
+      visibleRenderItems.map((it) => it.key),
+      anchorKey,
+    );
+    if (!survivorKey) return;
+    restoreViewportSnapshot({ viewportTopKey: survivorKey, offset: 0 });
+  }, [
+    visibleRenderItems,
+    allRenderItems,
+    firstVisibleItemKey,
+    sessionId,
+    isLoadingMore,
+    deleteCompensationReplay,
+    restoreViewportSnapshot,
+    restoreViewportSnapshotOrRebuildWindow,
+    beginProgrammaticScroll,
+    finishProgrammaticScroll,
+    refreshViewportAnchor,
+  ]);
 
   // ── post-load auto-expand ──
   // 修一类已知 UX 缺口 (跟 render-window 轴换轴无关,老代码同病):
@@ -3841,7 +4859,8 @@ export function MessageStream({
   // 与 pinToBottom 高频竞态(小幅上滚永远越不过距离阈值就被钉回,且
   // programmaticScrollRef 窗口会吞掉部分用户 scroll 事件),距离判定对
   // 「上滚一行就停」不可靠。本 handler 只负责:
-  //   - 离底 >= threshold → 解除(滚动条拖拽等无 wheel 事件路径的兜底);
+  //   - 离底 >= threshold 且明确上滚 → 解除(滚动条拖拽等无 wheel 路径的兜底);
+  //     已在跟时内容在下方长高不得解除,否则发送后第一块新内容会把跟随掐死;
   //   - 已解除 + 明确向下滚回阈值带内 → 恢复跟随。
   // 迁移规则收敛在 resolveNearBottomOnScroll(纯函数,见 autoFollowIntent.ts)。
   // `isNearBottomRef`(auto-follow gate)与 `isNearBottom` state(指示器显隐)
@@ -3859,11 +4878,12 @@ export function MessageStream({
     const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
     const threshold = 100;
 
-    if (!programmaticScrollRef.current) {
+    const draggingScrollbar = scrollbarDragStartTopRef.current != null;
+    if (!programmaticScrollRef.current || draggingScrollbar) {
       // 用户手动滚动 = 接管浏览,退出「还原中」,后续恢复正常 auto-follow 判定。
       restoringRef.current = false;
-      // 持续保存当前浏览位置(rAF 节流,DOM 必然存活)。不依赖 unmount 时机,
-      // 规避「React passive cleanup 在 DOM 移除后才跑、量测拿到 null」的坑。
+      // 持续保存浏览位置（rAF 节流，DOM 必然存活），内含删除前快照刷新——纯滚动后
+      // 快照停在陈旧 key 会让删除补偿失配。
       if (saveRafRef.current === null) {
         saveRafRef.current = requestAnimationFrame(() => {
           saveRafRef.current = null;
@@ -3874,6 +4894,18 @@ export function MessageStream({
       // 覆盖,这里读的还是上一次值)。跟随态迁移与 jump-down chip 共用。
       // programmatic scroll 不进本分支 — auto-follow 自己滚不该参与判定。
       const delta = currentScrollTop - prevScrollTopRef.current;
+      // 滚动条上拖:前 100px 内 resolveNearBottomOnScroll 会保持跟随。流式 pin
+      // 下一帧又钉回,必须在这里按拖拽上移立即解除。
+      if (
+        shouldUnpinOnScrollbarDrag({
+          pointerDown: draggingScrollbar,
+          scrollDelta: delta,
+          directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
+        }) &&
+        shouldUnpinOnUpIntent({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight })
+      ) {
+        unpinAutoFollowForUserUpIntent();
+      }
 
       // F2: 跟随态迁移(规则见 resolveNearBottomOnScroll 注释)。恢复跟随要求
       // 明确向下滚 — 意图解除(wheel 上滚)后紧跟着的上滚 scroll 事件距底仍
@@ -3887,9 +4919,23 @@ export function MessageStream({
         thresholdPx: threshold,
         directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
       });
-      // render-window-bidirectional 要点 3: 窗口未覆盖末尾时强制判为非贴底。
-      // 否则 DOM 距底 <100px 会被误判成"贴底"，auto-follow 拽回底部、jump-down chip 不出现。
-      const effectiveNearBottom = !windowCoversEnd ? false : nowNearBottom;
+      // 历史切片滚到自己的底 ≠ 会话末尾，不能从这里开始跟随。已经在跟
+      // (本端发送 / 跳底)时，窗口还没切回尾窗的迟到 scroll 不得把跟随掐死。
+      const effectiveNearBottom = resolveEffectiveNearBottom({
+        windowCoversEnd,
+        nowNearBottom,
+        wasNearBottom: isNearBottomRef.current,
+      });
+      if (
+        shouldBumpSendFollowCancelOnScroll({
+          wasNearBottom: isNearBottomRef.current,
+          effectiveNearBottom,
+          scrollDelta: delta,
+          directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
+        })
+      ) {
+        bumpSendFollowCancelGeneration(sessionId);
+      }
       if (effectiveNearBottom !== isNearBottomRef.current) {
         isNearBottomRef.current = effectiveNearBottom;
         setIsNearBottom(effectiveNearBottom);
@@ -3931,7 +4977,11 @@ export function MessageStream({
       // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
       // 向下 append 不改变已有内容的滚动偏移，不需要 F-SYNC-2 delta 补偿。
       // 扩到覆盖末尾后直接清除锚点，回到默认贴底窗口。
-      if (!windowCoversEnd && delta > SCROLL_DIRECTION_DEAD_ZONE_PX && distanceFromBottom < threshold) {
+      if (
+        !windowCoversEnd &&
+        delta > SCROLL_DIRECTION_DEAD_ZONE_PX &&
+        distanceFromBottom < threshold
+      ) {
         const nextForward = anchoredForwardItems + RENDER_WINDOW_GROWTH_ITEMS;
         // 最后一批照常渲染：不在此处清除锚点。用户真正滚到窗口底部后，
         // 上面 effectiveNearBottom + windowCoversEnd 分支会自然清除锚点、
@@ -3944,9 +4994,16 @@ export function MessageStream({
     // F3: smooth 滚动完成后清除 programmaticScrollRef，让后续用户滚动能被正确识别。
     //   - 判据：距底 < 5px（smooth 动画收敛后的稳定值）+ 当前处于 programmatic 态
     //   - 用 rAF 推迟一帧，避免连续 smooth 滚动的尾帧事件被误判
-    if (programmaticScrollRef.current && distanceFromBottom < 5) {
+    // 同帧刷新删除前快照：程序化贴底后视口顶端已变，陈旧 key 会让删除补偿早退。
+    if (
+      programmaticScrollRef.current &&
+      focusJumpRef.current === null &&
+      chipJumpGenerationRef.current === null &&
+      distanceFromBottom < 5
+    ) {
+      const generation = programmaticScrollGenerationRef.current;
       requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
+        if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
       });
     }
 
@@ -3985,12 +5042,16 @@ export function MessageStream({
     windowAtTop,
     expandWindow,
     saveScrollSnapshot,
+    refreshViewportAnchor,
+    finishProgrammaticScroll,
     windowCoversEnd,
     anchoredForwardItems,
     visibleStartIdx,
     allRenderItems.length,
     setFirstVisibleItemKey,
     setAnchoredForwardItems,
+    sessionId,
+    unpinAutoFollowForUserUpIntent,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
@@ -4038,22 +5099,22 @@ export function MessageStream({
       `[data-user-msg-id="${CSS.escape(prevUserMsgId)}"]`,
     ) as HTMLElement | null;
     if (!el) return;
+    // portal 不在 scroll root 内，mousedown 接管监听收不到；必须在新 smooth 开始前
+    // 显式废弃旧 focus，避免其 scrollend 把视口拉回搜索结果。
+    cancelFocusJump({ consumeDeferredDelete: true });
     suppressAfterClick();
     // expand/load 抑制:smooth scroll 期间路径如果穿过 scrollTop<50,handleScroll
     // 会触发 expandWindow/onLoadMore + F-SYNC-2 scrollTop+=delta,这条 race 可能
     // 把 viewport 拽飞。设 ref 让 handleScroll 跳过那分支。解抑靠 wheel/touch/
     // keydown(在上面 useEffect 里挂的监听),用户一动手就过去,不会卡"用 chip
     // 连点上翻"或"跳完立刻 wheel 看更老历史"。
-    chipJumpInProgressRef.current = true;
-    if (chipJumpClearTimerRef.current !== null) {
-      window.clearTimeout(chipJumpClearTimerRef.current);
-    }
-    chipJumpClearTimerRef.current = window.setTimeout(() => {
-      chipJumpClearTimerRef.current = null;
-      clearChipJumpSuppression();
-    }, CHIP_JUMP_SAFETY_MS);
+    beginChipJump({
+      clientId: prevUserMsgId,
+      selector: 'user-message',
+      topOffset: 0,
+    });
     el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [prevUserMsgId, suppressAfterClick, clearChipJumpSuppression]);
+  }, [prevUserMsgId, suppressAfterClick, beginChipJump, cancelFocusJump]);
 
   const prevPreview = prevUserMsgId ? firstNonEmptyLine(previewById.get(prevUserMsgId) ?? '') : '';
 
@@ -4134,10 +5195,23 @@ export function MessageStream({
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
   const lastAppliedRailJumpRef = useRef(0);
-  const handleNavRailJump = useCallback((clientId: string) => {
-    railJumpSeqRef.current += 1;
-    setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
-  }, []);
+  const handleNavRailJump = useCallback(
+    (clientId: string) => {
+      // 先废弃旧搜索 focus；目标即使需要下一轮扩窗，旧 scrollend/timer 也不能抢回视口。
+      // 导航条目标要到 layout effect 才能确认仍存在且 DOM 已就绪，因此这里不能提前消费
+      // focus 期间延期的删除补偿：先重放补偿，目标有效时后续导航再覆盖最终落点。
+      cancelFocusJump();
+      // 点击本身就是离开尾部的明确意图，必须在 request 进入下一次 render 前同步写入。
+      // 否则同一批流式 append 的 coverage-loss layout effect 会先按旧跟随态清掉锚点，
+      // 当前窗口内、但默认尾窗外的目标会在后续 rail effect 滚动时被卸载。
+      restoringRef.current = false;
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
+      railJumpSeqRef.current += 1;
+      setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
+    },
+    [cancelFocusJump],
+  );
 
   useLayoutEffect(() => {
     if (!railJumpRequest) return;
@@ -4162,21 +5236,15 @@ export function MessageStream({
     ) as HTMLElement | null;
     if (!el) return;
     lastAppliedRailJumpRef.current = railJumpRequest.seq;
-    // 从贴底态往上跳必须先解除 auto-follow 钉底,否则流式期间 pin effect 会把
-    // 视口拽回底部(focus-jump 同款处理;chip 不需要是因为它只在已上滚时出现)。
-    restoringRef.current = false;
-    isNearBottomRef.current = false;
-    setIsNearBottom(false);
+    // auto-follow 已由点击处理器在 request 进入 render 前解除，避免本轮更早的
+    // coverage-loss effect 清掉当前窗口内、默认尾窗外的导航目标。
     // smooth scroll 途经顶部区域时抑制 expandWindow/onLoadMore(chip-jump 协议,
     // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
-    chipJumpInProgressRef.current = true;
-    if (chipJumpClearTimerRef.current !== null) {
-      window.clearTimeout(chipJumpClearTimerRef.current);
-    }
-    chipJumpClearTimerRef.current = window.setTimeout(() => {
-      chipJumpClearTimerRef.current = null;
-      clearChipJumpSuppression();
-    }, CHIP_JUMP_SAFETY_MS);
+    beginChipJump({
+      clientId: railJumpRequest.id,
+      selector: 'message',
+      topOffset: NAV_RAIL_JUMP_TOP_OFFSET_PX,
+    });
     // 落点手动计算,不走 scrollIntoView:轮次跳转要让视口恰好框住
     // "提问 → 回答",提问顶边停在容器顶下方 12px;消息锚点通用的
     // scroll-mt-20(80px)是搜索跳转的上文语境预留,对本任务是漏出
@@ -4186,7 +5254,7 @@ export function MessageStream({
       (el.getBoundingClientRect().top - root.getBoundingClientRect().top) -
       NAV_RAIL_JUMP_TOP_OFFSET_PX;
     root.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
-  }, [railJumpRequest, allRenderItems, visibleRenderItems, clearChipJumpSuppression]);
+  }, [railJumpRequest, allRenderItems, visibleRenderItems, beginChipJump]);
 
   // 第一条 user 消息没有"上一条 assistant"作为 resumeSessionAt 锚点，
   // rewind 必然抛 NO_PRIOR_ASSISTANT。直接在 UI 层把按钮藏掉，避免无效点击。
@@ -4228,9 +5296,7 @@ export function MessageStream({
   // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
   // 真实的最后一条可见 error 会因为"不是最后一条"而在流内重复渲染一遍。
   const lastMessageClientId =
-    visibleMessages.length > 0
-      ? visibleMessages[visibleMessages.length - 1].clientId
-      : undefined;
+    visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].clientId : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(messages, previousLocalFileRefsRef.current);
@@ -4239,13 +5305,86 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // chip 垂直位置：优先使用父层实测的输入框卡片顶边，避免 RunningStatusBar
-  // 出现 / 收起改变 overlay 总高度后，把按钮带进输入框。旧调用方保留历史兜底。
+  // chip 垂直位置：优先使用父层实测的底部中央避让边界。普通状态行不占中央槽，
+  // 步骤 / 接管胶囊在场时则把按钮抬到它们上方；旧调用方保留历史兜底。
   const resolvedBottomPadding = bottomPadding ?? 200;
   const indicatorBottomOffset = resolveMessageStreamIndicatorBottomOffset({
     bottomPadding,
-    composerStackTopOffset,
+    bottomCenterClearanceOffset,
   });
+
+  const latestInlinePlanRendered = Boolean(
+    latestInlinePlanKey && visibleRenderItems.some((item) => item.key === latestInlinePlanKey),
+  );
+  useLayoutEffect(() => {
+    if (!onInlinePlanVisibilityChange) return;
+    if (!latestInlinePlanKey) {
+      onInlinePlanVisibilityChange(null);
+      return;
+    }
+    // shell-first 的首帧故意不挂消息树。此时保持“未知”而不是误报不可见，避免
+    // 品牌 loading 帧里 composer 胶囊抢先闪一下。
+    if (firstMountDeferred) return;
+
+    const root = scrollRef.current;
+    const card = root
+      ? [...root.querySelectorAll<HTMLElement>('[data-inline-plan-key]')].find(
+          (candidate) => candidate.dataset.inlinePlanKey === latestInlinePlanKey,
+        )
+      : undefined;
+    if (!root || !card || !latestInlinePlanRendered) {
+      onInlinePlanVisibilityChange({ key: latestInlinePlanKey, visible: false });
+      return;
+    }
+
+    const bottomInset = Math.min(
+      Math.max(0, resolvedBottomPadding),
+      Math.max(0, root.clientHeight - 1),
+    );
+    const reportMeasuredVisibility = () => {
+      onInlinePlanVisibilityChange({
+        key: latestInlinePlanKey,
+        visible: isPlanCardVisibleInViewport(
+          card.getBoundingClientRect(),
+          root.getBoundingClientRect(),
+          bottomInset,
+        ),
+      });
+    };
+
+    // 首次结果在 paint 前同步给父层，计划刚出现时不会先闪一次悬浮胶囊。
+    reportMeasuredVisibility();
+
+    if (typeof IntersectionObserver !== 'undefined') {
+      const observer = new IntersectionObserver(reportMeasuredVisibility, {
+        root,
+        rootMargin: `0px 0px -${bottomInset}px 0px`,
+        threshold: 0,
+      });
+      observer.observe(card);
+      return () => observer.disconnect();
+    }
+
+    // Electron 正常支持 IntersectionObserver；测试壳或极老 runtime 缺失时用
+    // 轻量 scroll/resize 兜底，不能因为能力缺失让胶囊永久不出现。
+    root.addEventListener('scroll', reportMeasuredVisibility, { passive: true });
+    window.addEventListener('resize', reportMeasuredVisibility);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reportMeasuredVisibility) : null;
+    resizeObserver?.observe(root);
+    resizeObserver?.observe(card);
+    return () => {
+      root.removeEventListener('scroll', reportMeasuredVisibility);
+      window.removeEventListener('resize', reportMeasuredVisibility);
+      resizeObserver?.disconnect();
+    };
+  }, [
+    firstMountDeferred,
+    latestInlinePlanKey,
+    latestInlinePlanRendered,
+    onInlinePlanVisibilityChange,
+    resolvedBottomPadding,
+  ]);
 
   // 「提及 → 兑现」关联(方案 2):从会话历史现算,软提示卡据此升级为召唤卡。
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
@@ -4297,6 +5436,8 @@ export function MessageStream({
               data-scroll-container=""
               className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
               onScroll={handleScroll}
+              onPointerDownCapture={() => refreshViewportAnchor()}
+              onKeyDownCapture={() => refreshViewportAnchor()}
             >
               <div
                 ref={contentRef}
@@ -4309,6 +5450,7 @@ export function MessageStream({
                   maxWidth: contentWidth ?? 880,
                 }}
               >
+                {historyLoaded && historyCleared && <HistoryClearedMarker />}
                 {/* F-SYNC-2: Loading spinner at top */}
                 {isLoadingMore && (
                   <div className="flex items-center justify-center pb-4">
@@ -4343,6 +5485,21 @@ export function MessageStream({
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
                     }
 
+                    if (item.type === 'agent_plan') {
+                      return (
+                        <div key={item.key} data-inline-plan-key={item.key}>
+                          <InlinePlanCard
+                            todos={item.todos}
+                            animated={
+                              isSessionStreaming &&
+                              latestInlinePlanBelongsToActiveTurn &&
+                              item.key === latestInlinePlanKey
+                            }
+                          />
+                        </div>
+                      );
+                    }
+
                     if (item.type === 'turn_changes') {
                       if (!sessionId) return null;
                       return (
@@ -4361,6 +5518,8 @@ export function MessageStream({
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
+                          turnSealed={item.turnSealed === true}
+                          botArtifacts={simplifiedBotConversation}
                         />
                       );
                     }
@@ -4384,6 +5543,8 @@ export function MessageStream({
                           toolCall={item.toolCall}
                           update={item.update}
                           result={item.result}
+                          persistedStatus={item.persistedStatus}
+                          sessionAgentKind={agentKind}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={
                             item.toolCall?.toolUseId
@@ -4406,6 +5567,7 @@ export function MessageStream({
                             durationMs: child.durationMs,
                             isStreaming: child.isStreaming,
                             startedAtMs: child.startedAtMs,
+                            deferred: child.deferred,
                             childItems: child.children.map(toWorkGroupChild),
                           };
                         }
@@ -4451,6 +5613,7 @@ export function MessageStream({
                         // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
                         // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
                         // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+                        // 视口子锚点不读这个聚合列表，只认已渲染的 data-message-client-id。
                         <div
                           key={item.key}
                           className="scroll-mt-20"
@@ -4466,6 +5629,7 @@ export function MessageStream({
                             isStreaming={item.isStreaming}
                             startedAtMs={item.startedAtMs}
                             childItems={childItems}
+                            deferred={item.deferred}
                           />
                         </div>
                       );
@@ -4535,27 +5699,7 @@ export function MessageStream({
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
                     const shareable =
                       Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-
-                    return (
-                      <div
-                        key={item.key}
-                        data-message-client-id={msg.clientId}
-                        {...(shareable
-                          ? {
-                              [SHARE_SESSION_ATTR]: sessionId,
-                              [SHARE_MESSAGE_ATTR]: msg.clientId,
-                            }
-                          : {})}
-                        className={cn(
-                          'scroll-mt-20 transition-colors',
-                          shareable && 'relative',
-                          highlightMessageClientId === msg.clientId &&
-                            'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
-                        )}
-                      >
-                        {shareable && shareSelectionActive ? (
-                          <ShareMessageCheckbox clientId={msg.clientId} />
-                        ) : null}
+                    const messageNode = (
                         <MessageItem
                           message={msg}
                           toolResult={singleResultMap.get(msg.clientId)}
@@ -4581,7 +5725,78 @@ export function MessageStream({
                           }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
+                          assistantAvatar={assistantAvatar}
+                          simplifiedBotConversation={simplifiedBotConversation}
                         />
+                    );
+                    const highlightClass =
+                      highlightMessageClientId === msg.clientId
+                        ? 'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]'
+                        : undefined;
+                    const shareAttributes = shareable
+                      ? {
+                          [SHARE_SESSION_ATTR]: sessionId,
+                          [SHARE_MESSAGE_ATTR]: msg.clientId,
+                        }
+                      : {};
+                    if (simplifiedBotConversation) {
+                      const groupTimestamp = botMessageTimeGroups.get(msg.clientId);
+                      const startsUnread = botUnreadBoundaryClientId === msg.clientId;
+                      return (
+                        <div
+                          key={item.key}
+                          data-message-client-id={msg.clientId}
+                          className={cn('scroll-mt-20 transition-colors', highlightClass)}
+                        >
+                          {startsUnread ? (
+                            <div
+                              className="mb-3 flex items-center gap-3"
+                              role="separator"
+                              aria-label={t('bots.chat.newMessagesBoundary')}
+                            >
+                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
+                              <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
+                                {t('bots.chat.newMessagesBoundary')}
+                              </span>
+                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
+                            </div>
+                          ) : null}
+                          {groupTimestamp !== undefined ? (
+                            <time
+                              dateTime={new Date(groupTimestamp).toISOString()}
+                              className="mb-3 block text-center text-11 text-[var(--text-tertiary)]"
+                            >
+                              {formatBotMessageGroupTime(
+                                groupTimestamp,
+                                i18n.resolvedLanguage ?? i18n.language,
+                              )}
+                            </time>
+                          ) : null}
+                          <div {...shareAttributes} className={cn(shareable && 'relative')}>
+                            {shareable && shareSelectionActive ? (
+                              <ShareMessageCheckbox clientId={msg.clientId} />
+                            ) : null}
+                            {messageNode}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={item.key}
+                        data-message-client-id={msg.clientId}
+                        {...shareAttributes}
+                        className={cn(
+                          'scroll-mt-20 transition-colors',
+                          shareable && 'relative',
+                          highlightClass,
+                        )}
+                      >
+                        {shareable && shareSelectionActive ? (
+                          <ShareMessageCheckbox clientId={msg.clientId} />
+                        ) : null}
+                        {messageNode}
                       </div>
                     );
                   })}
@@ -4617,7 +5832,8 @@ export function MessageStream({
               <MessageNavRail
                 entries={navRailEntries}
                 scrollRef={scrollRef}
-                contentMaxWidth={contentWidth ?? 880}
+                contentMaxWidth={getContentWidth?.() || 880}
+                getContentMaxWidth={getContentWidth}
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
                 onNavCoverageChange={setNavRailCoversNav}
@@ -4655,6 +5871,24 @@ export function MessageStream({
 // thinking messages are now rendered inline by MessageStream (above) so they
 // can receive the live isSessionStreaming flag without breaking this memo.
 // The thinking branch below is kept as a defensive fallback only.
+/**
+ * Hang an identity mark to the left of an assistant bubble.
+ *
+ * Without a mark (every normal Cindy task) the bubble is returned untouched —
+ * no extra wrapper element, so the existing layout and its measurements are
+ * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
+ * IM shape everyone already knows: avatar, then what they said.
+ */
+function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+  if (!avatar) return bubble;
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="mt-0.5 shrink-0">{avatar}</span>
+      <div className="min-w-0 flex-1">{bubble}</div>
+    </div>
+  );
+}
+
 const MessageItem = memo(function MessageItem({
   message,
   toolResult,
@@ -4674,6 +5908,8 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
+  assistantAvatar,
+  simplifiedBotConversation,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -4721,6 +5957,10 @@ const MessageItem = memo(function MessageItem({
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
+  /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
+  assistantAvatar?: ReactNode;
+  /** 伙伴对话消息操作栏使用轻量常显变体。 */
+  simplifiedBotConversation?: boolean;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -4771,6 +6011,7 @@ const MessageItem = memo(function MessageItem({
           delivery={message.delivery}
           goalBadge={message.goalBadge}
           blockedByGhost={message.blockedByGhost}
+          simplifiedBotConversation={simplifiedBotConversation}
         />
       );
     case 'assistant':
@@ -4784,34 +6025,38 @@ const MessageItem = memo(function MessageItem({
           />
         );
       }
-      return (
-        <AssistantMessage
-          workingDir={workingDir}
-          localFileRefs={localFileRefs}
-          currentSessionId={sessionId}
-          currentSessionTitle={sessionTitle}
-          content={message.content}
-          isStreaming={message.isStreaming}
-          createdAt={message.createdAt}
-          messageClientId={message.clientId}
-          agentKind={agentKind}
-          remoteHostId={remoteHostId}
-          forkBlocked={assistantForkBlocked}
-          sessionRunning={sessionRunning}
-          // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
-          // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
-          showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
-          turnMoney={message.turnMoney}
-          turnCostUsd={message.turnCostUsd}
-          turnCostIsEstimate={message.turnCostIsEstimate}
-          userTurnMoney={message.userTurnMoney}
-          userTurnCostUsd={message.userTurnCostUsd}
-          userTurnCostIsEstimate={message.userTurnCostIsEstimate}
-          turnUsageDetails={message.turnUsageDetails}
-          userTurnUsageDetails={userTurnUsageDetails}
-          modelMismatch={message.modelMismatch}
-          ghostReplyPending={message.ghostReplyPending}
-        />
+      return withAssistantAvatar(
+        assistantAvatar,
+        <>
+          <AssistantMessage
+            workingDir={workingDir}
+            localFileRefs={localFileRefs}
+            currentSessionId={sessionId}
+            currentSessionTitle={sessionTitle}
+            content={message.content}
+            isStreaming={message.isStreaming}
+            createdAt={message.createdAt}
+            messageClientId={message.clientId}
+            agentKind={agentKind}
+            remoteHostId={remoteHostId}
+            forkBlocked={assistantForkBlocked}
+            sessionRunning={sessionRunning}
+            // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
+            // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
+            showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
+            turnMoney={message.turnMoney}
+            turnCostUsd={message.turnCostUsd}
+            turnCostIsEstimate={message.turnCostIsEstimate}
+            userTurnMoney={message.userTurnMoney}
+            userTurnCostUsd={message.userTurnCostUsd}
+            userTurnCostIsEstimate={message.userTurnCostIsEstimate}
+            turnUsageDetails={message.turnUsageDetails}
+            userTurnUsageDetails={userTurnUsageDetails}
+            modelMismatch={message.modelMismatch}
+            ghostReplyPending={message.ghostReplyPending}
+            simplifiedBotConversation={simplifiedBotConversation}
+          />
+        </>,
       );
     case 'tool_use':
       return (
@@ -4854,7 +6099,14 @@ const MessageItem = memo(function MessageItem({
       // 历史里的 turn 失败记录(role='error' 持久化行)——静态时间线卡,
       // live 报错仍走输入框上方的 ErrorBanner,两者不会同时出现
       // (error 行落库时不广播,只在历史加载路径进入消息流)。
-      return <ErrorMessageCard message={message.content} reason={message.errorReason} />;
+      return (
+        <ErrorMessageCard
+          message={message.content}
+          reason={message.errorReason}
+          providerId={message.errorProviderId}
+          toolLoop={message.toolLoop}
+        />
+      );
     case 'thinking':
       // Defensive fallback only — MessageStream renders thinking inline.
       return (

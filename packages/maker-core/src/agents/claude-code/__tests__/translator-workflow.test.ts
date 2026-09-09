@@ -394,4 +394,20 @@ describe('Claude Code translator — workflow / task_updated', () => {
       workflowName: 'parallel-news-scan',
     });
   });
+
+  it('strips internal Web citations from the successful done result', async () => {
+    const citation = '\uE200cite\uE202turn17search1\uE201';
+    const events = await translateOne({
+      type: 'result',
+      is_error: false,
+      result: `Final answer.${citation}`,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 10, output_tokens: 2 },
+    });
+
+    expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+      result: 'Final answer.',
+    });
+  });
 });

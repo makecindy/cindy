@@ -1,4 +1,5 @@
 import type { Transaction } from '@tiptap/pm/state';
+import type { JSONContent } from '@tiptap/core';
 
 import type { UnifiedCommand } from '@/lib/slashCommands';
 
@@ -55,4 +56,15 @@ export function shouldPreservePlanModeComposerDraft(
   browserCommentCount: number,
 ): boolean {
   return attachmentCount > 0 || browserCommentCount > 0;
+}
+
+/** Capture text before consuming `/plan` clears the live editor. */
+export function planModeComposerDraftText(
+  editorOwnsSource: boolean,
+  editorText: JSONContent | null | undefined,
+  storedText: JSONContent | null | undefined,
+  consumedCommand = false,
+): JSONContent | null {
+  if (consumedCommand) return null;
+  return (editorOwnsSource ? editorText : storedText) ?? null;
 }

@@ -200,7 +200,7 @@ describe('ClaudeCodeAgent canUseTool with interactionResolver (unchanged path)',
 
     const result = await canUseTool('Bash', { command: 'rm -rf /' }, { toolUseID: 't-bash' });
     expect(result.behavior).toBe('deny');
-    expect(result.message).toBe('user rejected');
+    expect(result.message).toBe('User denied this tool call via Cindy: user rejected');
     await handle.close();
   });
 });

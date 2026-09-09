@@ -46,6 +46,20 @@ export function isUnsafeMcpServerId(id: string): boolean {
 }
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
+const HTTP_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Claude Code requires custom HTTP header values to be printable ASCII. Keep
+ * this check at the persisted-config boundary so an invalid value cannot be
+ * saved and fail later during a non-interactive MCP startup.
+ */
+function isPrintableAsciiHeaderValue(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code > 0x7e) return false;
+  }
+  return true;
+}
 
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
@@ -105,6 +119,13 @@ export function validateCustomMcpConfig(
       if (typeof k !== 'string' || typeof v !== 'string') {
         return invalid('headers must be string→string');
       }
+      const headerName = k.trim();
+      if (headerName.length > 0 && !HTTP_HEADER_NAME_RE.test(headerName)) {
+        return invalid('header names must be valid HTTP tokens');
+      }
+      if (!isPrintableAsciiHeaderValue(v)) {
+        return invalid('header values must contain printable ASCII characters');
+      }
     }
   }
   return { ok: true };
@@ -162,6 +183,29 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
     .from(customMcpServers)
     .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
   return rows.map(rowToConfig);
+}
+
+/** Secret-free generation markers for freezing a Bot task's MCP capability set. */
+export async function listCustomMcpRuntimeGenerations(): Promise<Array<{
+  id: string;
+  transport: McpTransport;
+  updatedAt: number;
+}>> {
+  const rows = await getDbClient().drizzle
+    .select({
+      id: customMcpServers.id,
+      transport: customMcpServers.transport,
+      updatedAt: customMcpServers.updatedAt,
+    })
+    .from(customMcpServers)
+    .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
+  return rows.map((row) => ({
+    id: row.id,
+    transport: (MCP_TRANSPORTS.includes(row.transport as McpTransport)
+      ? row.transport
+      : 'http') as McpTransport,
+    updatedAt: row.updatedAt,
+  }));
 }
 
 /** 取单个；不存在返回 null。 */

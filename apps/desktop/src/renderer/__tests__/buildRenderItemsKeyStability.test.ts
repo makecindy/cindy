@@ -21,14 +21,24 @@ import { join } from 'node:path';
 import {
   assistantHasFollowingUserBoundary,
   buildRenderItems,
+  collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
   collectTurnFinalAssistantClientIds,
+  hasBotAssistantOutputInCurrentTurn,
+  isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
   groupWorkRuns,
   insertForkOriginItem,
+  isScrollNavigationKey,
+  pickDeleteCompensationAnchorKey,
+  isPlanCardVisibleInViewport,
+  planSessionBelongsToLatestUserTurn,
+  reuseGeneratedFilesRenderItems,
+  simplifyBotRenderItems,
   shouldBlockAssistantFork,
   type RenderItem,
 } from '../components/chat/MessageStream';
+import { shouldHandleNavigationKey } from '../components/chat/useNavigationKeyListener';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
@@ -45,6 +55,79 @@ const mkAssistant = (id: string, content = 'ok'): ChatMessage => ({
   clientId: id,
   role: 'assistant',
   content,
+});
+
+describe('Bot 流式正文呈现', () => {
+  it('运行中隐藏工作卡，但从首字开始保留 assistant 正文', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('t1', 'Bash'),
+      mkResult('r1', 'tu-t1'),
+      { ...mkAssistant('a1', '正在逐字输出'), isStreaming: true },
+    ];
+    const built = buildRenderItems(messages).items;
+    const visible = simplifyBotRenderItems(groupWorkRuns(built, true), true);
+
+    expect(
+      visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
+    ).toEqual(['u1', 'a1']);
+    expect(visible.some((item) => item.type === 'work_group')).toBe(false);
+  });
+
+  it('正文开始前显示思考，正文出现后立即让位，隐藏行不误触发', () => {
+    const user = mkUser('u1');
+    const hiddenSubagent = {
+      ...mkAssistant('sub', '内部结果'),
+      parentToolUseId: 'toolu_01J00000000000000000000000',
+    };
+    const systemCard = { ...mkAssistant('card', '系统状态'), systemCardType: 'status' as const };
+
+    expect(hasBotAssistantOutputInCurrentTurn([user, hiddenSubagent, systemCard])).toBe(false);
+    expect(
+      hasBotAssistantOutputInCurrentTurn([
+        user,
+        hiddenSubagent,
+        systemCard,
+        mkAssistant('a1', '首字'),
+      ]),
+    ).toBe(true);
+    expect(
+      hasBotAssistantOutputInCurrentTurn([user, mkAssistant('a1', '上一轮正文'), mkUser('u2')]),
+    ).toBe(false);
+  });
+
+  it('伙伴私聊往返期间持续保留双方消息戳', () => {
+    const directMessageStamp = (id: string, direction: 'sent' | 'received'): ChatMessage => ({
+      ...mkAssistant(id, ''),
+      systemCardType: 'bot-direct-message',
+      systemCardData: {
+        v: 1,
+        threadId: 'thread-1',
+        viewerBotId: 'bot-a',
+        peerBotId: 'bot-b',
+        peerBotName: '开发Bot',
+        direction,
+        sequence: direction === 'sent' ? 1 : 2,
+        preview: 'hello',
+      },
+    });
+    const messages = [
+      mkUser('u1'),
+      directMessageStamp('dm-sent', 'sent'),
+      { ...mkUser('dm-trigger'), isSyntheticTrigger: true },
+      directMessageStamp('dm-received', 'received'),
+      { ...mkAssistant('a1', '正在回复'), isStreaming: true },
+    ];
+
+    const visible = simplifyBotRenderItems(
+      groupWorkRuns(buildRenderItems(messages).items, true),
+      true,
+    );
+
+    expect(
+      visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
+    ).toEqual(['u1', 'dm-sent', 'dm-received', 'a1']);
+  });
 });
 
 const mkCompactBoundary = (id: string): ChatMessage => ({
@@ -115,6 +198,64 @@ const todoInput = (items: Array<{ content: string; status: 'pending' | 'in_progr
     activeForm: t.content,
     id: `t${idx}`,
   })),
+});
+
+const rect = (top: number, bottom: number, left = 0, right = 100) => ({
+  top,
+  right,
+  bottom,
+  left,
+  width: right - left,
+  height: bottom - top,
+});
+
+describe('isPlanCardVisibleInViewport', () => {
+  const viewport = rect(0, 600, 0, 800);
+
+  it('treats a partially visible card as visible', () => {
+    expect(isPlanCardVisibleInViewport(rect(-20, 40), viewport)).toBe(true);
+  });
+
+  it('treats a card covered by the composer overlay as invisible', () => {
+    expect(isPlanCardVisibleInViewport(rect(520, 580), viewport, 100)).toBe(false);
+  });
+
+  it('keeps the card visible when any pixels remain above the composer overlay', () => {
+    expect(isPlanCardVisibleInViewport(rect(480, 540), viewport, 100)).toBe(true);
+  });
+});
+
+describe('planSessionBelongsToLatestUserTurn', () => {
+  it('does not reactivate an older plan when a later user turn starts', () => {
+    expect(
+      planSessionBelongsToLatestUserTurn(
+        [mkUser('u1'), mkTool('plan1', 'update_plan'), mkUser('u2')],
+        ['plan1'],
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps steer rows inside the current plan turn', () => {
+    expect(
+      planSessionBelongsToLatestUserTurn(
+        [mkUser('u1'), mkTool('plan1', 'update_plan'), { ...mkUser('steer'), delivery: 'steer' }],
+        ['plan1'],
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps synthetic continuation rows inside the current plan turn', () => {
+    expect(
+      planSessionBelongsToLatestUserTurn(
+        [
+          mkUser('u1'),
+          mkTool('plan1', 'update_plan'),
+          { ...mkUser('auto-resume'), isSyntheticTrigger: true },
+        ],
+        ['plan1'],
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('assistant fork boundary detection', () => {
@@ -269,6 +410,58 @@ describe('collectTurnFinalAssistantClientIds', () => {
     // 任务结束:只有收尾正文出现。
     expect(showBar(messages[1], false)).toBe(false);
     expect(showBar(messages[3], false)).toBe(true);
+  });
+});
+
+describe('isGeneratedFilesTurnSealed', () => {
+  it('stays open on the latest turn until the tail sub-turn finishes', () => {
+    const open = [mkUser('u1'), mkTool('write-1', 'Write', { file_path: 'C:/work/a.md' })];
+    expect(isGeneratedFilesTurnSealed(open, false)).toBe(false);
+
+    const sealed = [...open, { ...mkAssistant('done'), turnCompleted: true }];
+    expect(isGeneratedFilesTurnSealed(sealed, false)).toBe(true);
+  });
+
+  it('does not inherit the previous sub-turn seal after auto-continue', () => {
+    const afterContinue = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+    ];
+    expect(isGeneratedFilesTurnSealed(afterContinue, false)).toBe(false);
+
+    const afterSynthetic = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      { ...mkUser('continue'), isSyntheticTrigger: true },
+    ];
+    expect(isGeneratedFilesTurnSealed(afterSynthetic, false)).toBe(false);
+  });
+
+  it('reseals only after the current tail sub-turn finishes', () => {
+    const resealed = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+      mkResult('write-2-result', 'tu-write-2'),
+      { ...mkAssistant('gate-followup'), turnCompleted: true },
+    ];
+    expect(isGeneratedFilesTurnSealed(resealed, false)).toBe(true);
+  });
+
+  it('treats an explicit failed tail sub-turn as sealed', () => {
+    const failedTail = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+      { ...mkAssistant('failed'), turnCompleted: false },
+    ];
+    expect(isGeneratedFilesTurnSealed(failedTail, false)).toBe(true);
+  });
+
+  it('seals historical turns that already have a following user boundary', () => {
+    const historical = [mkUser('u1'), mkTool('write-1', 'Write', { file_path: 'C:/work/a.md' })];
+    expect(isGeneratedFilesTurnSealed(historical, true)).toBe(true);
   });
 });
 
@@ -430,6 +623,166 @@ describe('buildRenderItems — key stability', () => {
     expect(deduped).toHaveLength(0);
   });
 
+  // 真机验收:伙伴对话里只看到工程 diff 卡「已更改 1 个文件 +137 −0 撤销/审查」,
+  // 交付物卡一次都没出现。根因就在这里 —— changeSet 把本轮文件从产出候选里排它
+  // 剔除,再自己渲染成 turn_changes。伙伴会话的方向是反的。
+  describe('bot sessions hand the turn over to deliverables', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('bash-1', 'Bash', { command: 'make report' }),
+      mkResult('bash-result', 'tu-bash-1'),
+      mkUser('u2'),
+    ];
+    const changeSet: TurnChangeSetSummary = {
+      id: 'cs-bot',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'claude-code',
+      providerTurnId: null,
+      cwd: 'C:/work',
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [
+        {
+          id: 'turn-1:out/report.pdf',
+          path: 'out/report.pdf',
+          oldPath: null,
+          status: 'added',
+          additions: 137,
+          deletions: 0,
+        },
+        {
+          id: 'turn-1:src/main.ts',
+          path: 'src/main.ts',
+          oldPath: null,
+          status: 'modified',
+          additions: 3,
+          deletions: 1,
+        },
+      ],
+      fileCount: 2,
+      additions: 140,
+      deletions: 1,
+    };
+    const build = (botSessionId?: string) =>
+      buildRenderItems(messages, undefined, undefined, {
+        workingDir: 'C:/work',
+        turnChangeSets: [changeSet],
+        ...(botSessionId ? { botSessionId } : {}),
+      }).items;
+
+    it('drops the engineering diff card and promotes changeSet creates to deliverables', () => {
+      const items = build('sess-bot');
+      expect(items.filter((item) => item.type === 'turn_changes')).toEqual([]);
+      const generated = items.filter(
+        (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+          item.type === 'generated_files',
+      );
+      expect(generated).toHaveLength(1);
+      expect(generated[0]?.files.map((file) => file.name)).toEqual(['report.pdf']);
+      // checkpoint 的新建是结构化实锤,与文件工具新建同级(不降级成 command 候选)。
+      expect(generated[0]?.files[0]?.source).toBe('tool');
+    });
+
+    it('never turns an edited file into a deliverable', () => {
+      const generated = build('sess-bot').filter(
+        (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+          item.type === 'generated_files',
+      );
+      expect(generated[0]?.files.some((file) => file.name === 'main.ts')).toBe(false);
+    });
+
+    it('leaves ordinary tasks on the diff card, unchanged', () => {
+      const items = build();
+      expect(items.filter((item) => item.type === 'turn_changes')).toHaveLength(1);
+      expect(items.filter((item) => item.type === 'generated_files')).toEqual([]);
+    });
+  });
+
+  it('reuses the generated-files item when only unrelated messages change', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('write-1', 'Write', { file_path: 'C:/work/report.md', content: 'x' }),
+      mkResult('write-result', 'tu-write-1'),
+      mkAssistant('a1', 'done'),
+    ];
+    const first = buildRenderItems(messages, undefined, undefined, { workingDir: 'C:/work' });
+    const cache = new Map();
+    const reusedOnce = reuseGeneratedFilesRenderItems(first.items, cache);
+    const second = buildRenderItems(
+      [...messages.slice(0, -1), { ...messages[3], content: 'done plus more' }],
+      undefined,
+      undefined,
+      { workingDir: 'C:/work' },
+    );
+    const reusedTwice = reuseGeneratedFilesRenderItems(second.items, cache);
+    const firstCard = reusedOnce.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const secondCard = reusedTwice.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    expect(firstCard).toBeDefined();
+    expect(secondCard).toBe(firstCard);
+  });
+
+  it('unseals generated files when the same visible turn auto-continues after turnCompleted', () => {
+    const workingDir = 'C:/work';
+    const firstWrite = mkTool('write-1', 'Write', { file_path: 'C:/work/a.md', content: 'x' });
+    const firstResult = mkResult('write-1-result', 'tu-write-1');
+    const sealed = buildRenderItems(
+      [mkUser('u1'), firstWrite, firstResult, { ...mkAssistant('main-summary'), turnCompleted: true }],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const continued = buildRenderItems(
+      [
+        mkUser('u1'),
+        firstWrite,
+        firstResult,
+        { ...mkAssistant('main-summary'), turnCompleted: true },
+        mkTool('write-2', 'Write', { file_path: 'C:/work/b.md', content: 'y' }),
+      ],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const resealed = buildRenderItems(
+      [
+        mkUser('u1'),
+        firstWrite,
+        firstResult,
+        { ...mkAssistant('main-summary'), turnCompleted: true },
+        mkTool('write-2', 'Write', { file_path: 'C:/work/b.md', content: 'y' }),
+        mkResult('write-2-result', 'tu-write-2'),
+        { ...mkAssistant('gate-followup'), turnCompleted: true },
+      ],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+
+    expect(sealed?.turnSealed).toBe(true);
+    expect(continued?.turnSealed).toBe(false);
+    expect(resealed?.turnSealed).toBe(true);
+  });
+
   it('streaming token append to an assistant message keeps the same item key', () => {
     const m1: ChatMessage = { ...mkAssistant('a1', 'partial'), isStreaming: true };
     const before = buildRenderItems([mkUser('u1'), m1]);
@@ -527,48 +880,247 @@ describe('buildRenderItems — key stability', () => {
     expect(taskItem.update?.summary).toBe('Found the relevant renderer path');
   });
 
-  // ── case 3: plan 工具调用被整体吞掉 —— 流内不再渲染计划卡 ────────────────
-  // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(Codex IDE 扩展式钉住面板)。
+  // ── case 3:plan session 在流内只产一张 stable-key 卡 ─────────────────────
   // session 分组 / 输入解析语义的覆盖在 @cindy/maker-shared 的 messageRender.test.ts;
-  // 这里只锁桌面流内行为:不产 item、不切段、结尾不留无效 tail。
+  // 这里只锁桌面时间线行为:多步骤计划插卡,单步骤计划继续保持紧凑。
 
-  it('plan tool calls are swallowed without splitting the surrounding tool segment', () => {
+  it('inserts a multi-step plan card between surrounding tool segments', () => {
     const seq: ChatMessage[] = [
       mkUser('u1'),
       mkTool('t1', 'Bash'),
-      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }])),
+      mkTool(
+        'tw1',
+        'TodoWrite',
+        todoInput([
+          { content: 'Inspect state', status: 'completed' },
+          { content: 'Patch renderer', status: 'in_progress' },
+        ]),
+      ),
       mkResult('r-tw1', 'tu-tw1', 'ok'),
       mkTool('t2', 'Read'),
       mkAssistant('a1', 'done'),
     ];
     const { items } = buildRenderItems(seq);
 
-    // TodoWrite 及其 tool_result 如同不存在:t1 / t2 仍聚在同一段里。
-    expect(items.map((it) => it.type)).toEqual(['message', 'tool_segment', 'message']);
-    const seg = items[1] as Extract<RenderItem, { type: 'tool_segment' }>;
-    expect(seg.key).toBe('seg-t1');
-    expect(seg.toolCalls.map((tc) => tc.clientId)).toEqual(['t1', 't2']);
+    expect(items.map((it) => it.type)).toEqual([
+      'message',
+      'tool_segment',
+      'agent_plan',
+      'tool_segment',
+      'message',
+    ]);
+    const plan = items[2] as Extract<RenderItem, { type: 'agent_plan' }>;
+    expect(plan.key).toBe('todo-tw1');
+    expect(plan.sourceClientIds).toEqual(['tw1']);
+    expect(plan.todos.map((todo) => todo.content)).toEqual(['Inspect state', 'Patch renderer']);
   });
 
-  it('update_plan and Task* plan calls likewise produce no render items', () => {
-    const plan = mkTool('plan1', 'update_plan', {
-      plan: [{ step: 'Read code', status: 'in_progress' }],
+  it('updates one logical plan card at the latest row while keeping its first key', () => {
+    const first = mkTool('plan1', 'update_plan', {
+      plan: [
+        { step: 'Read code', status: 'in_progress' },
+        { step: 'Patch renderer', status: 'pending' },
+      ],
     });
-    const taskCreate = mkTool('tc1', 'TaskCreate', { subject: 'Collect logs' });
+    const second = mkTool('plan2', 'update_plan', {
+      plan: [
+        { step: 'Read code', status: 'completed' },
+        { step: 'Patch renderer', status: 'in_progress' },
+      ],
+    });
 
-    const { items } = buildRenderItems([mkUser('u1'), plan, taskCreate, mkAssistant('a1', 'On it')]);
-
-    expect(items.map((it) => it.type)).toEqual(['message', 'message']);
-  });
-
-  it('a trailing plan call keeps the tail invariant on the previous valid item', () => {
     const { items } = buildRenderItems([
       mkUser('u1'),
-      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }])),
-      mkResult('r-tw1', 'tu-tw1', 'ok'),
+      first,
+      mkTool('t1', 'Read'),
+      second,
+      mkAssistant('a1', 'On it'),
     ]);
 
-    expect(items.map((it) => it.type)).toEqual(['message']);
+    const plans = items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+    expect(plans).toHaveLength(1);
+    expect(plans[0].key).toBe('todo-plan1');
+    expect(plans[0].sourceClientIds).toEqual(['plan1', 'plan2']);
+    expect(plans[0].todos).toEqual([
+      { content: 'Read code', status: 'completed' },
+      { content: 'Patch renderer', status: 'in_progress' },
+    ]);
+  });
+
+  it('renders a reconstructed multi-step Task plan as one inline card', () => {
+    const first = mkTool('tc1', 'TaskCreate', { subject: 'Collect logs' });
+    const second = mkTool('tc2', 'TaskCreate', { subject: 'Run tests' });
+
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      first,
+      mkResult('r-tc1', 'tu-tc1', 'Task #1 created successfully: Collect logs'),
+      second,
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Run tests'),
+      mkAssistant('a1', 'On it'),
+    ]);
+
+    expect(items.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
+    const plan = items[1] as Extract<RenderItem, { type: 'agent_plan' }>;
+    expect(plan.key).toBe('todo-tc1');
+    expect(plan.todos.map((todo) => todo.content)).toEqual(['Collect logs', 'Run tests']);
+  });
+
+  it('keeps a single-step plan suppressed without splitting the surrounding tool segment', () => {
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      mkTool('t1', 'Bash'),
+      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'Only step', status: 'pending' }])),
+      mkResult('r-tw1', 'tu-tw1', 'ok'),
+      mkTool('t2', 'Read'),
+      mkAssistant('a1', 'done'),
+    ]);
+
+    expect(items.map((it) => it.type)).toEqual(['message', 'tool_segment', 'message']);
+    const segment = items[1] as Extract<RenderItem, { type: 'tool_segment' }>;
+    expect(segment.toolCalls.map((tool) => tool.clientId)).toEqual(['t1', 't2']);
+  });
+
+  it('waits for older Task history before showing a partial inline plan', () => {
+    const first = mkTool('tc2', 'TaskCreate', { subject: 'Fix renderer' });
+    const second = mkTool('tc3', 'TaskCreate', { subject: 'Run tests' });
+    const messages = [
+      first,
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Fix renderer'),
+      second,
+      mkResult('r-tc3', 'tu-tc3', 'Task #3 created successfully: Run tests'),
+    ];
+
+    expect(
+      buildRenderItems(messages, undefined, undefined, { historyWindowIncomplete: true }).items,
+    ).toEqual([]);
+    expect(
+      buildRenderItems(messages, undefined, undefined, {
+        historyWindowIncomplete: false,
+      }).items.map((item) => item.type),
+    ).toEqual(['agent_plan']);
+  });
+
+  it('filters an earlier partial Task card when a later plan session is resolved', () => {
+    const messages = [
+      mkTool('tc2', 'TaskCreate', { subject: 'Fix renderer' }),
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Fix renderer'),
+      mkTool('tc3', 'TaskCreate', { subject: 'Run tests' }),
+      mkResult('r-tc3', 'tu-tc3', 'Task #3 created successfully: Run tests'),
+      mkUser('u2', 'Start a different plan'),
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'in_progress' },
+          { step: 'Patch renderer', status: 'pending' },
+        ],
+      }),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0].key).toBe('todo-plan2');
+  });
+
+  it('keeps an authoritative TaskList card when its result follows the insertion row', () => {
+    const messages = [
+      mkUser('u1', 'Show the current tasks'),
+      mkTool('task-list', 'TaskList'),
+      mkResult(
+        'r-task-list',
+        'tu-task-list',
+        JSON.stringify({
+          tasks: [
+            { id: '1', subject: 'Inspect renderer', status: 'in_progress' },
+            { id: '2', subject: 'Run tests', status: 'pending' },
+          ],
+        }),
+      ),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      key: 'todo-task-list',
+      todos: [
+        { content: 'Inspect renderer', status: 'in_progress' },
+        { content: 'Run tests', status: 'pending' },
+      ],
+    });
+  });
+
+  it('renders a new Task plan after a real user turn despite an older orphan update', () => {
+    const messages = [
+      mkTool('old-update', 'TaskUpdate', { taskId: 'old', status: 'in_progress' }),
+      mkUser('u2', 'Start a new plan'),
+      mkTool('new-task-1', 'TaskCreate', { subject: 'Inspect renderer' }),
+      mkResult(
+        'r-new-task-1',
+        'tu-new-task-1',
+        'Task #new-1 created successfully: Inspect renderer',
+      ),
+      mkTool('new-task-2', 'TaskCreate', { subject: 'Run tests' }),
+      mkResult(
+        'r-new-task-2',
+        'tu-new-task-2',
+        'Task #new-2 created successfully: Run tests',
+      ),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      key: 'todo-new-task-1',
+      todos: [
+        { content: 'Inspect renderer', status: 'pending' },
+        { content: 'Run tests', status: 'pending' },
+      ],
+    });
+  });
+
+  it('recovers an old plan anchor after prepend changes the session key', () => {
+    const oldWindow = buildRenderItems([
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'completed' },
+          { step: 'Patch renderer', status: 'in_progress' },
+        ],
+      }),
+    ]).items;
+    const prepended = buildRenderItems([
+      mkTool('plan1', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'in_progress' },
+          { step: 'Patch renderer', status: 'pending' },
+        ],
+      }),
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'completed' },
+          { step: 'Patch renderer', status: 'in_progress' },
+        ],
+      }),
+    ]).items;
+
+    expect(oldWindow[0]?.key).toBe('todo-plan2');
+    expect(prepended[0]?.key).toBe('todo-plan1');
+    expect(findRestorableViewportItemIdx(prepended, 'todo-plan2')).toBe(0);
   });
 
   // ── case 4: orphan tool_result 补到末尾不产生新 item / 不重 key ─────────
@@ -657,6 +1209,38 @@ describe('buildRenderItems — key stability', () => {
     expect(media?.key).toBe('media-img1');
     // 同源不同 prefix —— 不会撞 key
     expect(seg?.key).not.toBe(media?.key);
+  });
+
+  it('uses tool media as fallback and suppresses it only for an inline image in the same turn', () => {
+    const url = 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png';
+    const firstTool = mkTool('img1', 'image_generate');
+    const firstResult = mkResult(
+      'imgr1',
+      'tu-img1',
+      JSON.stringify({ xdt_image_url: url }),
+    );
+    const secondTool = mkTool('img2', 'image_generate');
+    const secondResult = mkResult(
+      'imgr2',
+      'tu-img2',
+      JSON.stringify({ xdt_image_url: url }),
+    );
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      firstTool,
+      firstResult,
+      mkAssistant('a1', `![生成结果](${url})`),
+      mkUser('u2'),
+      secondTool,
+      secondResult,
+      // 纯文本 URI 不是图片展示，不能压掉可靠兜底；上一轮的 Markdown 也不能跨轮去重。
+      mkAssistant('a2', `文件地址：${url}`),
+    ]);
+
+    const mediaKeys = items
+      .filter((item): item is Extract<RenderItem, { type: 'tool_media' }> => item.type === 'tool_media')
+      .map((item) => item.key);
+    expect(mediaKeys).toEqual(['media-img2']);
   });
 
   // ── case 7: 末尾混合丢弃类型 + 有效 message,末尾仍是有效 item ──────────
@@ -1130,13 +1714,20 @@ describe('groupWorkRuns — work-group collapsing', () => {
     ]);
   });
 
-  it('plan calls stay absent through work-group folding (sole presentation is the pinned panel)', () => {
-    const todo = mkTool('tw1', 'TodoWrite', todoInput([{ content: 'inspect', status: 'completed' }]));
-    // 正文前后各放一次:两个位置都不应折出 work_group,也不应出现任何计划 item。
+  it('keeps inline plan cards outside work-group folding', () => {
+    const todo = mkTool(
+      'tw1',
+      'TodoWrite',
+      todoInput([
+        { content: 'Inspect', status: 'completed' },
+        { content: 'Patch', status: 'in_progress' },
+      ]),
+    );
+    // 正文前后各放一次:两个位置都保留流内计划卡,且不折进 work_group。
     const before = build([mkUser('u1'), todo, mkAssistant('a-final', 'Done.')], false);
     const after = build([mkUser('u1'), mkAssistant('a-final', 'Done.'), todo], false);
-    expect(before.map((it) => it.type)).toEqual(['message', 'message']);
-    expect(after.map((it) => it.type)).toEqual(['message', 'message']);
+    expect(before.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
+    expect(after.map((it) => it.type)).toEqual(['message', 'message', 'agent_plan']);
   });
 
   it('computes durationMs from the previous boundary (user message) to the terminating text createdAt', () => {
@@ -1338,5 +1929,130 @@ describe('collectStableLocalFileRefs — reference stability', () => {
       mkFileRef('foo.ts'),
       mkFileRef('bar.ts'),
     ]);
+  });
+});
+
+// ── pickDeleteCompensationAnchorKey ──────────────────────────────────────────
+
+describe('pickDeleteCompensationAnchorKey', () => {
+  it('picks the first surviving neighbor after the deleted range', () => {
+    // 旧全量: 窗口 [w1,w2,v,w3] 被整段清掉, 邻居 after 是 next, 会话尾是 tail
+    const prevAll = ['head', 'w1', 'w2', 'v', 'w3', 'next', 'mid', 'tail'];
+    const curAll = ['head', 'next', 'mid', 'tail'];
+    expect(pickDeleteCompensationAnchorKey(prevAll, curAll, 'v')).toBe('next');
+  });
+
+  it('falls back to the nearest surviving predecessor when no successor remains', () => {
+    const prevAll = ['head', 'keep', 'v', 'gone1', 'gone2'];
+    const curAll = ['head', 'keep'];
+    expect(pickDeleteCompensationAnchorKey(prevAll, curAll, 'v')).toBe('keep');
+  });
+
+  it('does not rebuild at conversation tail when prev is the full old sequence', () => {
+    // 回归: 窗口整段被清时旧可见窗与 cur 全量无交集, helper 会落到 cur 末项(会话尾);
+    // 调用方必须传旧全量序列才能保住删除区间后的邻居。
+    const prevVisibleOnly = ['w1', 'w2', 'v', 'w3']; // 整窗被清, 无存活邻接
+    const prevAll = ['head', 'w1', 'w2', 'v', 'w3', 'next', 'mid', 'tail'];
+    const curAll = ['head', 'next', 'mid', 'tail'];
+    expect(pickDeleteCompensationAnchorKey(prevVisibleOnly, curAll, 'v')).toBe('tail');
+    expect(pickDeleteCompensationAnchorKey(prevAll, curAll, 'v')).toBe('next');
+  });
+
+  it('returns null when deleted key is absent from prevKeys', () => {
+    expect(pickDeleteCompensationAnchorKey(['a', 'b'], ['a', 'b', 'c'], 'missing')).toBeNull();
+  });
+
+  it('picks the intervening tool row when a focused child is deleted from a surviving work group', () => {
+    const before = groupWorkRuns(
+      buildRenderItems([
+        mkUser('u1'),
+        mkAssistant('a-intro', 'Starting.'),
+        mkTool('t1', 'Read'),
+        mkAssistant('a-draft', 'Progress update.'),
+        mkTool('t2', 'Bash'),
+        mkAssistant('a-final', 'done'),
+      ]).items,
+      false,
+    );
+    const after = groupWorkRuns(
+      buildRenderItems([
+        mkUser('u1'),
+        mkAssistant('a-intro', 'Starting.'),
+        mkTool('t1', 'Read'),
+        mkTool('t2', 'Bash'),
+        mkAssistant('a-final', 'done'),
+      ]).items,
+      false,
+    );
+    const previousAnchorIds = collectDeleteAnchorClientIds(before);
+    const currentAnchorIds = collectDeleteAnchorClientIds(after);
+    const previousGroup = before.find((item) => item.type === 'work_group');
+    const currentGroup = after.find((item) => item.type === 'work_group');
+
+    expect(previousGroup).toBeDefined();
+    expect(currentGroup).toBeDefined();
+    expect(previousGroup?.key).toBe(currentGroup?.key);
+    expect(previousAnchorIds).toEqual(['u1', 'a-intro', 't1', 'a-draft', 't2', 'a-final']);
+    expect(currentAnchorIds).toEqual(['u1', 'a-intro', 't1', 't2', 'a-final']);
+    expect(pickDeleteCompensationAnchorKey(previousAnchorIds, currentAnchorIds, 'a-draft')).toBe(
+      't2',
+    );
+  });
+
+  it('picks the next message when an anchored task card is deleted from a surviving work group', () => {
+    const messagesBefore = [
+      mkUser('u1'),
+      mkTool('t1', 'Read'),
+      mkResult('r-t1', 'tu-t1'),
+      mkTool('task1', 'Agent', { description: 'Review auth flow', prompt: 'Check auth' }),
+      mkResult('r-task1', 'tu-task1', 'done'),
+      mkAssistant('a-final', 'done'),
+    ];
+    const before = groupWorkRuns(buildRenderItems(messagesBefore).items, false);
+    const after = groupWorkRuns(
+      buildRenderItems(
+        messagesBefore.filter((message) => !['task1', 'r-task1'].includes(message.clientId)),
+      ).items,
+      false,
+    );
+    const previousAnchorIds = collectDeleteAnchorClientIds(before);
+    const currentAnchorIds = collectDeleteAnchorClientIds(after);
+    const previousGroup = before.find((item) => item.type === 'work_group');
+    const currentGroup = after.find((item) => item.type === 'work_group');
+
+    expect(previousGroup?.key).toBe('work-t1');
+    expect(currentGroup?.key).toBe(previousGroup?.key);
+    expect(previousAnchorIds).toEqual(['u1', 't1', 'task1', 'a-final']);
+    expect(currentAnchorIds).toEqual(['u1', 't1', 'a-final']);
+    expect(
+      pickDeleteCompensationAnchorKey(previousAnchorIds, currentAnchorIds, 'task1'),
+    ).toBe('a-final');
+  });
+
+  it('keeps an intervening non-message render item after a top-level message is deleted', () => {
+    const previousItemKeys = ['msg-user', 'work-tool', 'msg-assistant'];
+    const currentItemKeys = ['work-tool', 'msg-assistant'];
+    const previousMessageIds = ['user', 'assistant'];
+    const currentMessageIds = ['assistant'];
+
+    expect(
+      pickDeleteCompensationAnchorKey(previousMessageIds, currentMessageIds, 'user'),
+    ).toBe('assistant');
+    expect(
+      pickDeleteCompensationAnchorKey(previousItemKeys, currentItemKeys, 'msg-user'),
+    ).toBe('work-tool');
+  });
+});
+
+describe('focus scroll takeover keys', () => {
+  it('treats Space as user-controlled scrolling', () => {
+    expect(isScrollNavigationKey(' ')).toBe(true);
+    expect(isScrollNavigationKey('Enter')).toBe(false);
+  });
+
+  it('does not treat Space in an editable target as scroll takeover', () => {
+    expect(shouldHandleNavigationKey(' ', null)).toBe(true);
+    expect(shouldHandleNavigationKey('PageUp', null)).toBe(true);
+    expect(shouldHandleNavigationKey('Enter', null)).toBe(false);
   });
 });

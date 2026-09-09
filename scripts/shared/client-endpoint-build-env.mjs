@@ -121,16 +121,44 @@ export function mobileClientBuildEnv({ authRegion, repoRoot } = {}) {
 }
 
 /**
- * Mobile JS bundle 额外需要对端区域清单基址。与 mobileClientBuildEnv 分开，
- * 避免把这个纯 JS 变量加入 app.config 的既有 Expo extra / runtime fingerprint。
+ * Mobile JS bundle 额外需要对端区域清单基址；CindyDev 还需要 CN Release
+ * 清单基址供内部运行时切换。与 mobileClientBuildEnv 分开，避免把这些纯 JS
+ * 变量加入 app.config 的既有 Expo extra / runtime fingerprint。
  */
 export function mobileClientBundleEnv(options = {}) {
   const buildEnv = mobileClientBuildEnv(options);
+  const authRegion = buildEnv.EXPO_PUBLIC_CINDY_AUTH_REGION;
   return {
     ...buildEnv,
     EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL: loadPeerEndpointManifestBaseUrl({
-      authRegion: buildEnv.EXPO_PUBLIC_CINDY_AUTH_REGION,
+      authRegion,
       repoRoot: options.repoRoot,
     }),
+    ...(authRegion === 'dev'
+      ? {
+          EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL:
+            loadEndpointManifestBaseUrl({
+              authRegion: 'cn',
+              repoRoot: options.repoRoot,
+            }),
+        }
+      : {}),
   };
+}
+
+/**
+ * 合并最终传给 Mobile bundling 子进程的环境。正式构建必须主动删除 runner
+ * 可能残留的 CindyDev Release 清单变量，不能只依赖 app.config.js 在子进程内清理。
+ */
+export function mobileClientBundleProcessEnv({
+  authRegion,
+  baseEnv = process.env,
+  repoRoot,
+} = {}) {
+  const bundleEnv = mobileClientBundleEnv({ authRegion, repoRoot });
+  const env = { ...baseEnv, ...bundleEnv };
+  if (bundleEnv.EXPO_PUBLIC_CINDY_AUTH_REGION !== 'dev') {
+    delete env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL;
+  }
+  return env;
 }

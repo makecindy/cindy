@@ -43,6 +43,11 @@ export interface PiSubagentUsage {
   cost: number;
 }
 
+export interface PiSubagentUsageSegment extends PiSubagentUsage {
+  id: string;
+  model?: string;
+}
+
 /**
  * parse 结果:卡片更新 + 可选的委派用量。
  *
@@ -54,6 +59,8 @@ export interface PiSubagentProgress {
   update: AgentTaskUpdateEventData;
   /** 累计值,不是增量。调用方按 taskId 记住上次值再作差。 */
   delegatedUsage?: PiSubagentUsage;
+  /** Request snapshots; preferred over delegatedUsage for request-scoped pricing. */
+  delegatedUsageSegments?: PiSubagentUsageSegment[];
 }
 
 function readUsage(value: unknown): PiSubagentUsage | undefined {
@@ -75,6 +82,21 @@ function readUsage(value: unknown): PiSubagentUsage | undefined {
     return undefined;
   }
   return usage;
+}
+
+function readUsageSegments(value: unknown): PiSubagentUsageSegment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const segments: PiSubagentUsageSegment[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const raw = item as Record<string, unknown>;
+    const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    const usage = readUsage(raw);
+    if (!id || !usage) continue;
+    const model = readString(raw.model, 200);
+    segments.push({ id, ...usage, ...(model ? { model } : {}) });
+  }
+  return segments.length > 0 ? segments : undefined;
 }
 
 function readString(value: unknown, max = MAX_TEXT): string | undefined {
@@ -128,6 +150,7 @@ export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgr
   const model = readString(raw.model, 200);
 
   const delegatedUsage = readUsage(raw.usage);
+  const delegatedUsageSegments = readUsageSegments(raw.usageSegments);
 
   return {
     update: {
@@ -147,6 +170,7 @@ export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgr
       ...(usage ? { usage } : {}),
     },
     ...(delegatedUsage ? { delegatedUsage } : {}),
+    ...(delegatedUsageSegments ? { delegatedUsageSegments } : {}),
   };
 }
 

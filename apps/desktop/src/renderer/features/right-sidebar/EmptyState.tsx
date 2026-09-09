@@ -29,6 +29,7 @@ interface EmptyStateProps {
   onAddReviewTab: () => void;
   onAddSubagentsTab: () => void;
   onAddBackgroundTasksTab: () => void;
+  subagentsAvailable?: boolean;
 }
 
 export function EmptyState({
@@ -38,6 +39,7 @@ export function EmptyState({
   onAddReviewTab,
   onAddSubagentsTab,
   onAddBackgroundTasksTab,
+  subagentsAvailable = false,
 }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
@@ -71,12 +73,14 @@ export function EmptyState({
         />
         {/* 后台任务:顺序与 + dropdown 一致(review order=15 → background-tasks
             order=17 → browser order=20)。 */}
-        <ActionRow
-          icon={Bot}
-          label={t('rightSidebar.tabs.empty.openSubagents')}
-          sub={t('rightSidebar.tabs.empty.subagentsSub')}
-          onClick={onAddSubagentsTab}
-        />
+        {subagentsAvailable && (
+          <ActionRow
+            icon={Bot}
+            label={t('rightSidebar.tabs.empty.openSubagents')}
+            sub={t('rightSidebar.tabs.empty.subagentsSub')}
+            onClick={onAddSubagentsTab}
+          />
+        )}
         <ActionRow
           icon={ListTodo}
           label={t('rightSidebar.tabs.empty.openBackgroundTasks')}

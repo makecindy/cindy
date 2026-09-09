@@ -2,13 +2,19 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Effort } from '@/lib/userPreferences.types';
+
+const modelSelectorI18nRef = vi.hoisted(() => ({
+  language: 'zh-CN',
+  resolvedLanguage: 'zh-CN',
+}));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
+    i18n: modelSelectorI18nRef,
     t: (
       key: string,
       options?: {
@@ -18,6 +24,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         source?: string;
         value?: string;
         model?: string;
+        current?: string;
+        next?: string;
         agent?: string;
         effort?: string;
         price?: string;
@@ -26,6 +34,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
       },
     ) => {
       const translations: Record<string, string> = {
+        'modelDescriptions.complexWork': '适合复杂分析、编程与细致写作。',
+        'modelDescriptions.quickAnswers': '适合简短问答、摘要与短文写作。',
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.xd.title': 'Cindy AI',
@@ -36,6 +46,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.source.unavailable': '模型不可用',
+        'newChat.modelSelector.source.reconnect': '重新连接',
+        'newChat.modelSelector.source.manage': '管理来源',
+        'newChat.modelSelector.meta.fastBadge': '快速',
         'newChat.modelSelector.remoteLoading': '正在从远程设备读取模型…',
         'newChat.modelSelector.remoteLoadFailed': '无法读取远程设备上的模型。请检查连接后重试。',
         'newChat.modelSelector.remoteLoadFailedShort': '模型读取失败',
@@ -54,6 +68,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       if (key === 'newChat.modelSelector.source.viaSource') {
         return `Source: ${options?.source}`;
       }
+      if (key === 'newChat.modelSelector.trigger.currentAndNext') return `Current: ${options?.current}\nNext message: ${options?.next}`;
       if (key === 'newChat.modelSelector.trigger.aria') {
         return `Select model. Current: ${options?.model}`;
       }
@@ -409,7 +424,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/state/providerModelMemory', () => ({
+vi.mock('@/state/providerModelMemory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/state/providerModelMemory')>()),
   useProviderModelMemoryVersion: () => 0,
 }));
 
@@ -418,19 +434,30 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 }));
 
 import {
-  ModelSelector,
-  ModelSelectorContent,
+  ModelSelector as SharedModelSelector,
+  ModelSelectorContent as SharedModelSelectorContent,
+  modelCompactEffortLabel,
   modelEffortLabel,
   modelListMaxHeightForRows,
   modelTagDensityForWidth,
   resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
 } from '@/components/new-chat/ModelSelector';
+// Retain coverage of the capabilities-only compatibility renderer and common trigger.
+// Default A interaction contracts live in unifiedModelPanelRendering.test.tsx.
+const ModelSelector = (props: React.ComponentProps<typeof SharedModelSelector>) =>
+  React.createElement(SharedModelSelector, { unifiedPanel: false, ...props });
+const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSelectorContent>) =>
+  React.createElement(SharedModelSelectorContent, { unifiedPanel: false, ...props });
 import { makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
+afterEach(() => { vi.useRealTimers(); });
+
 beforeEach(() => {
+  modelSelectorI18nRef.language = 'zh-CN';
+  modelSelectorI18nRef.resolvedLanguage = 'zh-CN';
   requestProviderModelsAutoRefresh.mockClear();
   modelVisibilityRef.isEnabled = () => true;
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
@@ -951,6 +978,73 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.getAttribute('aria-label')).not.toContain('Claude Code');
   });
 
+  it.each([
+    ['claude-code', false], ['claude-code', true], ['codex', false], ['codex', true],
+  ] as const)('keeps target identity and current/next context in a narrow composer (current=%s, ultra=%s)', (currentAgent, ultra) => {
+    providersRef.providers = [{
+      id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 1000000, efforts: ['high'], defaultEffort: 'high', supportsFastMode: true }] },
+    }];
+    try {
+      const props = {
+        modelId: 'gpt-6-astra', effort: 'high' as Effort, fastMode: false,
+        onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'cc' as const,
+        currentProviderId: 'openai', actualRoute: true,
+        agentIdentity: resolveModelSelectorAgentIdentity(currentAgent, 'codex'),
+        engineMarkVendor: 'codex' as const, compactToolbar: true, ultraCompactToolbar: ultra,
+        currentSelection: { agentKind: currentAgent, model: 'previous-model', providerId: 'xd', effort: 'high' as const, fastMode: true },
+      };
+      const view = render(React.createElement(ModelSelector, props));
+      const trigger = screen.getByRole('button', { name: /Current:.*previous-model/ });
+      expect(trigger.title).toContain('Next message: Codex · GPT-6 Astra');
+      expect(trigger.title.split('Next message:')[1]).not.toContain('快速');
+      expect(trigger.querySelector('[data-model-selection-pending]')).not.toBeNull();
+      expect(Boolean(trigger.querySelector('[data-composer-engine-mark="codex"]'))).toBe(!ultra);
+      expect(trigger.querySelector('.lucide-zap')).toBeNull();
+      view.rerender(React.createElement(ModelSelector, { ...props, agentIdentity: resolveModelSelectorAgentIdentity('codex', null) }));
+      expect(screen.getByRole('button').title).not.toContain('Next message:');
+      expect(screen.getByRole('button').querySelector('[data-model-selection-pending]')).toBeNull();
+    } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
+  });
+
+  it('keeps pending capabilities on a disconnected explicit source instead of borrowing another source', () => {
+    providersRef.providers = [
+      { id: 'openai', name: 'OpenAI', connected: false, agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 1000000, efforts: ['high'], supportsFastMode: true }] } },
+      { id: 'xd', name: 'Gateway', connected: true, agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'gpt-6-astra', name: 'Gateway GPT-6', contextWindow: 200000, efforts: ['low'], supportsFastMode: false }] } },
+    ];
+    try {
+      render(React.createElement(ModelSelector, {
+        modelId: 'gpt-6-astra', effort: 'high' as Effort, fastMode: true,
+        onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex',
+        currentProviderId: 'openai', actualRoute: true, sourceDisconnected: true,
+        agentIdentity: resolveModelSelectorAgentIdentity('codex', 'codex'),
+        currentSelection: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'xd', effort: 'low', fastMode: false },
+      }));
+      const title = screen.getByRole('button').title;
+      expect(title).toContain('Next message: Codex · GPT-6 Astra');
+      expect(title.split('Next message:')[1]).toContain('快速');
+      expect(title.split('Next message:')[1]).not.toContain('Gateway GPT-6');
+    } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
+  });
+
+  it.each([false, true])('keeps the chosen model and offers the appropriate recovery action (connected=%s)', async (connected) => {
+    providersRef.providers = [{ id: 'openai', name: 'OpenAI', connected, agents: ['codex'], routing: { codex: {} }, models: { codex: connected ? [] : [{ id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 1000000, efforts: ['high'], defaultEffort: 'high' }] } }];
+    const navigate = vi.fn();
+    try {
+      render(React.createElement(ModelSelector, {
+        modelId: 'gpt-6-astra', effort: 'high' as Effort, onModelChange: vi.fn(), onEffortChange: vi.fn(),
+        vendorKey: 'codex', currentProviderId: 'openai', actualRoute: true, sourceDisconnected: true,
+        onProviderChange: vi.fn(), onNavigateToProviders: vi.fn(), onReconnectSource: navigate, unifiedPanel: true,
+      }));
+      const trigger = screen.getByRole('button', { name: connected ? /模型不可用/ : /已断开/ });
+      expect(trigger.textContent).toContain(connected ? 'gpt-6-astra' : 'GPT-6 Astra');
+      fireEvent.click(trigger);
+      const recovery = await screen.findByRole('button', { name: connected ? '管理来源' : '重新连接' });
+      fireEvent.click(recovery);
+      expect(navigate).toHaveBeenCalledOnce();
+    } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
+  });
+
   it('keeps the disconnected status in the compact trigger title', () => {
     render(
       React.createElement(ModelSelector, {
@@ -1432,6 +1526,35 @@ describe('ModelSelector trigger variants', () => {
     );
   });
 
+  it('uses stable English effort ids for compact row and trigger labels', () => {
+    const t = (key: string, options?: { defaultValue?: string }) =>
+      key === 'effortLevels.xhigh' ? '超高' : (options?.defaultValue ?? key);
+
+    expect(
+      modelCompactEffortLabel(
+        'en-US',
+        t,
+        { effortDisplayNames: { xhigh: 'Extra High' } },
+        'xhigh',
+        '特高',
+      ),
+    ).toBe('Extra');
+    expect(modelCompactEffortLabel('en-US', t, null, 'medium', '中')).toBe('Medium');
+    expect(modelCompactEffortLabel('zh-CN', t, null, 'xhigh', 'Extra High')).toBe('超高');
+    expect(
+      modelCompactEffortLabel(
+        'en-US',
+        t,
+        { effortDisplayNames: { 'adaptive-fast': 'Adaptive Fast' } },
+        'adaptive-fast',
+        'Capability Fast',
+      ),
+    ).toBe('Adaptive Fast');
+    expect(modelCompactEffortLabel('en-US', t, null, 'adaptive-safe', 'Adaptive Safe')).toBe(
+      'Adaptive Safe',
+    );
+  });
+
   it.each([
     {
       agentKind: 'claude-code' as const,
@@ -1653,7 +1776,7 @@ describe('ModelSelector trigger variants', () => {
 
     fireEvent.pointerEnter(screen.getByRole('option', { name: /Opus 4\.8/ }));
     const information = screen.getByRole('group', { name: /Opus 4\.8/ });
-    expect(within(information).getByText('Most capable for ambitious work')).toBeTruthy();
+    expect(within(information).getByText('适合复杂分析、编程与细致写作。')).toBeTruthy();
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
@@ -1823,7 +1946,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByTestId('model-options-popover').getAttribute('data-align')).toBe('center');
     expect(screen.getByTestId('model-options-popover').getAttribute('data-side-offset')).toBe('8');
     expect(options).toBeTruthy();
-    expect(within(options).getByText('Most capable for ambitious work')).toBeTruthy();
+    expect(within(options).getByText('适合复杂分析、编程与细致写作。')).toBeTruthy();
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
     const priceTitle = within(options).getByText('newChat.modelSelector.pricing.title');
@@ -1838,7 +1961,7 @@ describe('ModelSelector trigger variants', () => {
       within(options).getByText('newChat.modelSelector.pricing.subscriptionEstimate'),
     ).toBeTruthy();
     const firstChoice = within(options).getByRole('option', { name: 'low' });
-    const description = within(options).getByText('Most capable for ambitious work');
+    const description = within(options).getByText('适合复杂分析、编程与细致写作。');
     expect(
       description.compareDocumentPosition(firstChoice) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -1927,9 +2050,9 @@ describe('ModelSelector trigger variants', () => {
       const subscription = within(tags as HTMLElement).getByText(
         'settings.providers.models.subscription',
       );
-      expect(
-        hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
       expect(row.querySelector('[data-model-hidden-label]')).toBe(hidden);
       expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
     } finally {
@@ -2305,7 +2428,7 @@ describe('ModelSelector trigger variants', () => {
 
     fireEvent.pointerEnter(screen.getByRole('option', { name: /Haiku 4\.5/ }));
     const information = screen.getByRole('group', { name: /Haiku 4\.5/ });
-    expect(within(information).getByText('Fastest for quick answers')).toBeTruthy();
+    expect(within(information).getByText('适合简短问答、摘要与短文写作。')).toBeTruthy();
     expect(within(information).getByText('200K context')).toBeTruthy();
     expect(within(information).queryByRole('option')).toBeNull();
   });
@@ -2641,6 +2764,9 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
       const row = await screen.findByRole('option', { name: /GPT-5\.5/ });
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
+      // 确认门收**本次目标引擎**(Chris 2026-08-19):调用方靠它判「已有指向该目标的意图」,
+      // 不传目标会让确认框在任何残留意图之后永久静默。
+      expect(confirmBrowseSwitch).toHaveBeenCalledWith('codex');
       // 来源 mark 存在说明目标 Agent 仍走 provider sections，而不是退化成 flat。
       expect(row.textContent).toContain('Z');
       // 行尾与悬浮面板同读目标 Agent 的 per-(来源,模型) 记忆，不落模型默认 medium。

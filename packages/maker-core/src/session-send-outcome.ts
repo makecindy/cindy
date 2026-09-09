@@ -4,7 +4,7 @@ export type SessionDispatchOutcome =
   | { dispatched: true }
   | {
       dispatched: false;
-      reason: 'cancelled-before-dispatch';
+      reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
       message: string;
       context: string;
     };
@@ -14,11 +14,14 @@ export function toSessionDispatchOutcome(
   context: string,
 ): SessionDispatchOutcome {
   if (result.accepted) return { dispatched: true };
+  const message = result.reason === 'provider-rejected-before-dispatch'
+    ? `Provider rejected the Session send before dispatch: ${context}`
+    : `Session send was cancelled before vendor dispatch: ${context}`;
   return {
     dispatched: false,
     reason: result.reason,
     context,
-    message: `Session send was cancelled before vendor dispatch: ${context}`,
+    message,
   };
 }
 

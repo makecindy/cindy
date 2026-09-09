@@ -15,6 +15,8 @@
  * 重试,覆盖被控端启动窗口;对**永久**错误(被控开关关 / channel 不允许)立即放弃,不空转。
  */
 
+import { projectScheduleSidebarIndex } from '../scheduler/lib/projectScheduleSidebarIndex';
+import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSidebarIndexRuns';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -168,6 +170,9 @@ function isRemoteSessionListSession(
     (session.extraDirs === undefined ||
       (Array.isArray(session.extraDirs) &&
         session.extraDirs.every((dir) => typeof dir === 'string'))) &&
+    (session.writableDirs === undefined ||
+      (Array.isArray(session.writableDirs) &&
+        session.writableDirs.every((dir) => typeof dir === 'string'))) &&
     (count === undefined ||
       count === null ||
       (isRecord(count) &&
@@ -196,6 +201,7 @@ function backoffMs(attempt: number): number {
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export interface RefreshOptions {
+  scope?: 'sessions' | 'schedule' | 'both';
   /** 注入式 sleep(测试用,默认真实 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
   /** 最大尝试次数(含首次),默认 DEFAULT_MAX_ATTEMPTS。 */
@@ -282,12 +288,16 @@ export async function refreshRemoteDeviceSessions(
     existing.opts = {
       ...existing.opts,
       ...opts,
+      scope:
+        (existing.opts.scope ?? 'sessions') === (opts.scope ?? 'sessions') ? opts.scope : 'both',
       // 显式 replace 是更强的 snapshot 覆盖要求，不能被后续 merge 降级；默认的事件型
       // refresh 则保持安全的有界 merge，并通过上面的强 coalescing 语义确保补跑。
       snapshotMode:
         (existing.opts.snapshotMode ?? 'merge') === 'replace' || requestedSnapshotMode === 'replace'
           ? 'replace'
           : 'merge',
+      // 走到这里的一定不是弱周期 tick；补跑按事件语义带 fresh。
+      coalescingMode: undefined,
     };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
     remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
@@ -395,38 +405,77 @@ async function runRefreshRemoteDeviceSessions(
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
     try {
-      const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
-        listLimit,
-        status,
-        { includePinned: true },
-      ]);
-      // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
-      if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
-      const sessions = parseRemoteSessionList(value, status);
-      if ((opts.snapshotMode ?? 'merge') === 'merge') {
-        const incomingIds = new Set(sessions.map((session) => session.id));
-        const missingSessionIds = remoteProjectsStore
-          .getDeviceSessions(deviceId, status)
-          .filter((session) => !incomingIds.has(session.id))
-          .map((session) => session.id);
-        // archived 使用与本地侧栏一致的 1000 条产品窗口，可直接替换并清掉断线期间的
-        // 删除 / 取消归档陈旧行；active 仍保持 200 条轻量窗口，满窗时有界补查缺席缓存。
-        if (status === 'archived' || sessions.length < LIST_LIMIT) {
-          if (status === 'active') {
-            missingStatusProbeQueues.delete(deviceId);
-            for (const sessionId of missingSessionIds) {
-              removeRemoteSessionActivityEntry(sessionId);
+      if (opts.scope !== 'schedule') {
+        const value = await window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'local-db:sessions:list',
+          [
+            listLimit,
+            status,
+            {
+              includePinned: true,
+              // 周期 tick 保持单飞；created / bootstrap 等事件重拉必须绕开写前查询。
+              ...(opts.coalescingMode === 'weak' ? {} : { fresh: true }),
+            },
+          ],
+        );
+        // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
+        if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
+          return 'superseded';
+        const sessions = parseRemoteSessionList(value, status);
+        if ((opts.snapshotMode ?? 'merge') === 'merge') {
+          const incomingIds = new Set(sessions.map((session) => session.id));
+          const missingSessionIds = remoteProjectsStore
+            .getDeviceSessions(deviceId, status)
+            .filter((session) => !incomingIds.has(session.id))
+            .map((session) => session.id);
+          // archived 使用与本地侧栏一致的 1000 条产品窗口，可直接替换并清掉断线期间的
+          // 删除 / 取消归档陈旧行；active 仍保持 200 条轻量窗口，满窗时有界补查缺席缓存。
+          if (status === 'archived' || sessions.length < LIST_LIMIT) {
+            if (status === 'active') {
+              missingStatusProbeQueues.delete(deviceId);
+              for (const sessionId of missingSessionIds) {
+                removeRemoteSessionActivityEntry(sessionId);
+              }
+            }
+            remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
+          } else {
+            remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions, status);
+            if (status === 'active') {
+              await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
             }
           }
-          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
         } else {
-          remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions, status);
-          if (status === 'active') {
-            await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
-          }
+          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
         }
-      } else {
-        remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
+      }
+      if (opts.scope === 'schedule' || opts.scope === 'both') {
+        try {
+          const raw = await window.electronAPI.deviceLink.invoke(
+            deviceId,
+            'maker:schedule:list-sidebar-index-runs',
+            [],
+          );
+          if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
+            return 'superseded';
+          if (
+            !raw ||
+            typeof raw !== 'object' ||
+            !Array.isArray((raw as ScheduleSidebarIndexSnapshot).runs)
+          ) {
+            throw new Error('Invalid remote schedule index');
+          }
+          remoteProjectsStore.setDeviceScheduleIndex(
+            deviceId,
+            projectScheduleSidebarIndex((raw as ScheduleSidebarIndexSnapshot).runs),
+          );
+        } catch (error) {
+          // Older peers may not expose this existing channel. Keep the last mirror;
+          // failure of optional schedule metadata must not hide a valid session list.
+          if (opts.scope === 'schedule' || String(error).includes(ACCESS_REVOKED_MARKER))
+            throw error;
+          log.debug('remote schedule index unavailable');
+        }
       }
       return 'ok'; // 成功
     } catch (err) {

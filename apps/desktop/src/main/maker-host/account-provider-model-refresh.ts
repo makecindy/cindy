@@ -10,6 +10,7 @@ interface AccountProviderModelRefreshLogger {
 export interface AccountProviderModelRefreshDeps {
   restartCodex(): Promise<void>;
   shutdownCodexEnvironment(): Promise<void>;
+  loadXaiLkg(): Promise<boolean>;
   refreshProviderModels(
     trigger: ProviderModelAutoRefreshTrigger,
     providerIds?: readonly BuiltinRefreshableProviderId[],
@@ -26,9 +27,14 @@ export interface AccountProviderModelRefreshDeps {
  * 刷新且纳入同一账号 barrier，防止切号后旧账号的迟到结果覆盖全局目录；各步骤保持
  * best-effort，失败会留日志，不会把可用的本地 DB 误判成初始化失败。
  */
-export async function refreshProviderModelsAfterAccountReady(
-  deps: AccountProviderModelRefreshDeps,
+export async function resetAccountProviderRuntimes(
+  deps: Pick<
+    AccountProviderModelRefreshDeps,
+    'restartCodex' | 'shutdownCodexEnvironment' | 'log'
+  >,
+  shouldContinue: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldContinue()) return;
   let codexRestarted = false;
   try {
     await deps.restartCodex();
@@ -39,15 +45,33 @@ export async function refreshProviderModelsAfterAccountReady(
     });
   }
 
-  if (codexRestarted) {
-    try {
-      await deps.shutdownCodexEnvironment();
-    } catch (error) {
-      deps.log.warn('shutdownCodexEnvironment on account switch failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  if (!shouldContinue() || !codexRestarted) return;
+  try {
+    await deps.shutdownCodexEnvironment();
+  } catch (error) {
+    deps.log.warn('shutdownCodexEnvironment on account switch failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
+}
+
+export async function discoverAccountProviderModels(
+  deps: Pick<AccountProviderModelRefreshDeps, 'loadXaiLkg' | 'refreshProviderModels' | 'log'>,
+  shouldContinue: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldContinue()) return;
+  try {
+    // Account readiness is also the owner boundary. Restore this owner's authoritative xAI LKG
+    // before the HTTP refresh so an offline/timeout result never exposes the generic fallback in
+    // place of a previously verified account snapshot.
+    await deps.loadXaiLkg();
+  } catch (error) {
+    deps.log.warn('xAI owner LKG load failed; continuing with network discovery', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  if (!shouldContinue()) return;
 
   const backgroundRefresh = deps
     .refreshProviderModels('startup', ['xd', 'openai', 'xai'])
@@ -64,4 +88,11 @@ export async function refreshProviderModelsAfterAccountReady(
   });
 
   await Promise.all([backgroundRefresh, anthropicRefresh]);
+}
+
+export async function refreshProviderModelsAfterAccountReady(
+  deps: AccountProviderModelRefreshDeps,
+): Promise<void> {
+  await resetAccountProviderRuntimes(deps);
+  await discoverAccountProviderModels(deps);
 }

@@ -6,6 +6,7 @@ import * as QRCode from 'qrcode';
 
 import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -32,7 +33,7 @@ export interface MobileRemotePresentation {
   remoteEnabled: boolean;
   linkedMobileCount: number;
   otherDeviceCount: number;
-  selfDeviceId: string | null;
+  selfDeviceName: string | null;
   linkedMobileName: string | null;
   previewDevices: DeviceLinkDeviceView[];
 }
@@ -55,7 +56,7 @@ export function resolveMobileRemotePresentation(
       remoteEnabled: snapshot.enabled,
       linkedMobileCount: 0,
       otherDeviceCount: 0,
-      selfDeviceId: null,
+      selfDeviceName: null,
       linkedMobileName: null,
       previewDevices: [],
     };
@@ -80,7 +81,7 @@ export function resolveMobileRemotePresentation(
     remoteEnabled: snapshot.enabled,
     linkedMobileCount: linkedMobileDevices.length,
     otherDeviceCount: otherDevices.length,
-    selfDeviceId: selfDevice?.deviceId ?? null,
+    selfDeviceName: selfDevice?.name ?? null,
     linkedMobileName: linkedMobileDevices[0]?.name ?? null,
     previewDevices,
   };
@@ -382,20 +383,26 @@ export function MobileDownloadDialog({
           }}
         >
           <Dialog.Close asChild>
-            <button
-              ref={closeActionRef}
-              type="button"
-              aria-label={t('sidebar.mobileDownload.close')}
-              className={cn(
-                'absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full',
-                'text-[var(--confirm-desc)] transition-colors',
-                'hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)]',
-                'active:scale-[0.98]',
-                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              )}
+            <Tip
+              text={t('sidebar.mobileDownload.close')}
+              side="bottom"
+              contentClassName="z-[10001]"
             >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+              <button
+                ref={closeActionRef}
+                type="button"
+                aria-label={t('sidebar.mobileDownload.close')}
+                className={cn(
+                  'absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full',
+                  'text-[var(--confirm-desc)] transition-colors',
+                  'hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)]',
+                  'active:scale-[0.98]',
+                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Tip>
           </Dialog.Close>
 
           <div className="flex flex-col items-center text-center">
@@ -586,13 +593,13 @@ export function MobileDownloadDialog({
                   <span className="text-13 font-medium leading-[1.385] text-[var(--confirm-title)]">
                     {t('sidebar.mobileDownload.allowControl')}
                   </span>
-                  {remotePresentation?.selfDeviceId ? (
+                  {remotePresentation?.selfDeviceName ? (
                     <span
-                      className="mt-0.5 truncate font-mono text-10 leading-[1.4] text-[var(--confirm-desc)]"
-                      title={remotePresentation.selfDeviceId}
+                      className="mt-0.5 truncate text-11 leading-[1.4] text-[var(--confirm-desc)]"
+                      title={remotePresentation.selfDeviceName}
                     >
-                      {t('sidebar.mobileDownload.deviceId', {
-                        id: remotePresentation.selfDeviceId,
+                      {t('sidebar.mobileDownload.deviceName', {
+                        name: remotePresentation.selfDeviceName,
                       })}
                     </span>
                   ) : null}

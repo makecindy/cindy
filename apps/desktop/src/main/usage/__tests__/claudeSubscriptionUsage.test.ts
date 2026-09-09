@@ -89,6 +89,74 @@ describe('parseClaudeOAuthUsageResponse', () => {
     ]);
   });
 
+  it('parses legacy seven_day_fable top-level key into a Fable scoped window (#3244)', () => {
+    // 旧 schema 兜底原先只列了 Opus/Sonnet,漏了 Fable,导致走旧端点或降级
+    // 快照时 Fable 周限不显示(同环境 Opus/Sonnet 正常)。
+    const snapshot = parseClaudeOAuthUsageResponse({
+      five_hour: { utilization: 10, resets_at: '2026-04-11T07:00:00Z' },
+      seven_day: { utilization: 13, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_opus: { utilization: 5, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_sonnet: { utilization: 1, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_fable: { utilization: 87, resets_at: '2026-04-14T07:00:00Z' },
+    }, NOW);
+    expect(snapshot?.scoped).toEqual([
+      expect.objectContaining({ modelDisplayName: 'Opus', utilization: 5 }),
+      expect.objectContaining({ modelDisplayName: 'Sonnet', utilization: 1 }),
+      expect.objectContaining({ modelDisplayName: 'Fable', utilization: 87 }),
+    ]);
+    // 匹配器也能命中这个 legacy Fable 窗口
+    expect(
+      matchScopedWindowForModel(snapshot?.scoped, 'claude-fable-5')?.utilization,
+    ).toBe(87);
+  });
+
+  it('merges legacy per-family fallback when limits[] only covers some families (#3244 Codex P1)', () => {
+    // 混合/降级响应:limits[] 的 weekly_scoped 只给了 Opus,Fable 仅通过顶层
+    // seven_day_fable 下发。旧逻辑用 `scoped.length === 0` 整体门控,有 Opus 时整个
+    // legacy 兜底被跳过,Fable 周限丢失。修复后按家族补(归属判定走共享 helper):
+    // Opus 以 limits[] 为准(utilization 5、保留 severity),缺失的 Fable 从顶层键补入。
+    const snapshot = parseClaudeOAuthUsageResponse({
+      five_hour: { utilization: 10, resets_at: '2026-04-11T07:00:00Z' },
+      seven_day: { utilization: 13, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_fable: { utilization: 87, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_opus: { utilization: 5, resets_at: '2026-04-14T07:00:00Z' },
+      limits: [
+        {
+          kind: 'weekly_scoped', percent: 5, severity: 'normal',
+          resets_at: '2026-04-14T07:00:00Z',
+          scope: { model: { id: null, display_name: 'Opus' } },
+        },
+      ],
+    }, NOW);
+    expect(snapshot?.scoped).toEqual([
+      expect.objectContaining({ modelDisplayName: 'Opus', utilization: 5, severity: 'normal' }),
+      expect.objectContaining({ modelDisplayName: 'Fable', utilization: 87 }),
+    ]);
+    expect(
+      matchScopedWindowForModel(snapshot?.scoped, 'claude-fable-5')?.utilization,
+    ).toBe(87);
+  });
+
+  it('does not let a same-family legacy window override the limits[] scoped window', () => {
+    // 去重以家族为单位:limits[] 已给 Fable(带 severity)时,顶层 seven_day_fable
+    // 即使存在也不覆盖——limits[] 是权威全集。这里 Fable 的 limits[] 值 22、legacy 87,
+    // 解析后必须保留 22 且只有一个 Fable 窗口。
+    const snapshot = parseClaudeOAuthUsageResponse({
+      five_hour: { utilization: 10, resets_at: '2026-04-11T07:00:00Z' },
+      seven_day_fable: { utilization: 87, resets_at: '2026-04-14T07:00:00Z' },
+      limits: [
+        {
+          kind: 'weekly_scoped', percent: 22, severity: 'warning',
+          resets_at: '2026-04-14T07:00:00Z',
+          scope: { model: { id: null, display_name: 'Claude Fable' } },
+        },
+      ],
+    }, NOW);
+    expect(snapshot?.scoped).toEqual([
+      expect.objectContaining({ modelDisplayName: 'Claude Fable', utilization: 22, severity: 'warning' }),
+    ]);
+  });
+
   it('parses enabled extra usage', () => {
     const snapshot = parseClaudeOAuthUsageResponse({
       five_hour: { utilization: 10 },
@@ -247,6 +315,47 @@ describe('claudeModelFamily / matchScopedWindowForModel', () => {
     expect(matchScopedWindowForModel(scoped, 'claude-opus-4-8')?.utilization).toBe(5);
     expect(matchScopedWindowForModel(scoped, 'claude-sonnet-4-6')).toBeNull();
     expect(matchScopedWindowForModel(undefined, 'claude-fable-5')).toBeNull();
+  });
+
+  it('matches Fable scoped window across display_name variants (#3244)', () => {
+    // 端点对 display_name 的口径历史上有 "Fable" / "Claude Fable" / "Fable 5"
+    // 等形态;精确等于会把变体漏掉,导致 Fable 周限不显示而 Opus/Sonnet 正常。
+    const scoped = [
+      { utilization: 30, modelDisplayName: 'Claude Fable' },
+      { utilization: 5, modelDisplayName: 'Opus' },
+    ];
+    expect(matchScopedWindowForModel(scoped, 'claude-fable-5')?.utilization).toBe(30);
+    const scoped2 = [
+      { utilization: 41, modelDisplayName: 'Fable 5' },
+    ];
+    expect(matchScopedWindowForModel(scoped2, 'claude-fable-5-20250101')?.utilization).toBe(41);
+  });
+
+  it('classifies a scoped window by its modelId when present (authoritative over displayName)', () => {
+    // window.modelId 能经 claudeModelFamily 归类时优先用它:即使 displayName 不含家族名
+    // 也能命中。
+    const scoped = [
+      { utilization: 30, modelDisplayName: 'Internal Label', modelId: 'claude-fable-5-20250101' },
+    ];
+    expect(matchScopedWindowForModel(scoped, 'claude-fable-5')?.utilization).toBe(30);
+    // modelId 指向另一家族时以 modelId 为准,不回退 displayName(即使后者含子串也不跨家族误命中)
+    const cross = [
+      { utilization: 99, modelDisplayName: 'Fable-ish', modelId: 'claude-opus-4-8' },
+    ];
+    expect(matchScopedWindowForModel(cross, 'claude-fable-5')).toBeNull();
+  });
+
+  it('falls back to displayName variant matching when modelId is null or unrecognized', () => {
+    // modelId 为 null → 回退 displayName 变体包含
+    const noId = [
+      { utilization: 30, modelDisplayName: 'Claude Fable', modelId: null },
+    ];
+    expect(matchScopedWindowForModel(noId, 'claude-fable-5')?.utilization).toBe(30);
+    // modelId 存在但无法归类(不在已知家族表)→ 同样回退 displayName 变体
+    const unknownId = [
+      { utilization: 41, modelDisplayName: 'Fable 5', modelId: 'internal-fable-foo' },
+    ];
+    expect(matchScopedWindowForModel(unknownId, 'claude-fable-5')?.utilization).toBe(41);
   });
 });
 

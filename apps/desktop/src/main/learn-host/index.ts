@@ -12,12 +12,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { BrowserWindow } from 'electron';
-
 import type { Effort, Maker } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { createLogger } from '../logger.js';
 import { getCurrentDataOwnerId } from '../authManager';
 import { getResolvedMainLocale } from '../i18n.js';
@@ -66,7 +64,7 @@ export interface StartLearnHostDeps {
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** hub 源:拉市场 skill 详情 + 可用已发布文件(bootstrap 注入,/learn hub:<slug>
    *  与 skill hub「学习此技能」共用)。未注入时 hub 源请求报 INVALID_PARAMS(兜底)。 */
-  fetchHubSkill?: (slug: string) => Promise<{
+  fetchHubSkill?: (slug: string, catalogScope?: 'market' | 'team') => Promise<{
     name: string;
     description: string;
     content: string;
@@ -286,19 +284,9 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
         logger,
       );
       // 侧边栏刷新:直连 maker.createSession 不经 renderer 建会话 funnel,不广播
-      // 的话新蒸馏会话要等无关刷新才出现在侧边栏(Codex review)。与 register.ts
-      // broadcastSessionCreated 同款(该 helper 各模块本地复制是既有惯例,见其
-      // 注释);放在 backfill 之后,renderer 重拉时 source='learn' 已就位,直接
-      // 落自动化分组不跳变。
-      tapWindowBroadcast('local-db:sessions:created', { sessionId });
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (win.isDestroyed()) continue;
-        try {
-          win.webContents.send('local-db:sessions:created', { sessionId });
-        } catch {
-          // best-effort UI refresh,失败不影响业务
-        }
-      }
+      // 的话新蒸馏会话要等无关刷新才出现在侧边栏。统一走 emitSessionCreated;
+      // 放在 backfill 之后,renderer 重拉时 source='learn' 已就位,直接落自动化分组。
+      emitSessionCreated(sessionId);
     },
     ...(deps.fetchHubSkill ? { fetchHubSkill: deps.fetchHubSkill } : {}),
     logger,

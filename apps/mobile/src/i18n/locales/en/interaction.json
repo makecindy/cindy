@@ -19,7 +19,8 @@
     "allowOnce": "Allow once",
     "allowOnceAccessibility": "Allow permission request once",
     "allowOnceConfirm": "Confirm allow once",
-    "highRisk": "High risk"
+    "highRisk": "High risk",
+    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action."
   },
   "planMode": {
     "label": "Plan mode",
@@ -36,7 +37,7 @@
     "queuePositionNth": "no. {{index}}",
     "composerBlockedByPending": "Handle the pending request from your computer before typing again.",
     "missingRequestId": "This remote interaction has no requestId, so the decision can't be sent back.",
-    "issueConfirmUnsupported": "Issue submission is confirmed only on your computer. Go back to the desktop app to confirm or cancel.",
+    "desktopConfirmUnsupported": "This confirmation is handled only on the controlled computer. Go back to the desktop app to continue.",
     "unsupportedType": "This remote interaction type isn't supported on mobile yet.",
     "unsupportedKind": "Unsupported",
     "desktopOnlyKind": "On Computer",
@@ -105,6 +106,14 @@
     "issue_confirm": {
       "title": "Issue Needs Confirmation",
       "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "Session Names Need Confirmation",
+      "label": "Rename"
+    },
+    "ghost_grant_confirm": {
+      "title": "File Access Needs Confirmation",
+      "label": "File Access"
     },
     "plugin_setup": {
       "title": "Plugin Setup Needed on Your Computer",
@@ -221,5 +230,46 @@
     },
     "inlineFormAction": "Enter {{label}} on your computer",
     "inlineFormActionGeneric": "Enter one setting on your computer"
+  },
+  "presentation": {
+    "action": { "submitting": "Submitting" },
+    "permission": {
+      "highRiskTitle": "High-risk permission needs confirmation",
+      "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
+      "sessionAllowTitle": "Allow once or always allow for this task",
+      "allowTitle": "The computer will continue after you allow this",
+      "tool": "Tool: {{tool}}",
+      "title": "Allow {{tool}}?",
+      "risk": "This command may change the system, repository, or an external service. Before allowing it, confirm that you trust the current task and command."
+    },
+    "ask": {
+      "progress": "Question {{current}} of {{total}}",
+      "multiSelect": "You can select multiple answers or enter another answer.",
+      "singleSelect": "Select an answer or enter another answer.",
+      "emptyTitle": "No specific question",
+      "emptyDetail": "You can submit an empty answer so the computer can continue.",
+      "waiting": "Agent is waiting for confirmation"
+    },
+    "plan": {
+      "outlineCount": "{{count}} sections",
+      "noOutline": "No outline",
+      "hasFile": "Plan file available",
+      "noFile": "No plan file path",
+      "editedTitle": "Plan edited; approval runs the current version",
+      "approveTitle": "After approval, the computer continues with this plan"
+    },
+    "queue": {
+      "count": "{{count}} requests",
+      "readOnlyHint": "Collaboration is read-only; requests from the computer are shown here.",
+      "empty": "No pending requests",
+      "hint": {
+        "plan_review": "Review the plan and request changes if needed. The computer continues only after approval.",
+        "permission": "Only this decision is sent back to the current task on the computer.",
+        "ask_user_question": "Answers are saved as a draft; the computer continues after submission.",
+        "issue_confirm": "Confirm the title and body before submitting.",
+        "plugin_setup": "Setup must be completed on the computer; you can cancel this request here.",
+        "fallback": "Mobile handles remote requests in the order sent by the desktop."
+      }
+    }
   }
 }

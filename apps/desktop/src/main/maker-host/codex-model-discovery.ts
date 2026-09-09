@@ -1,3 +1,4 @@
+import { pickModelMetadata } from '@cindy/model-providers';
 /**
  * codex-model-discovery —— 从 codex 的 `models_cache.json` 派生出规范化的 Codex 模型快照。
  * active-catalog 再把同一份快照投影到 Codex 与 Claude bridge,避免两边名称、排序各维护一套。
@@ -15,7 +16,7 @@ import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import type { CatalogModel } from '@cindy/model-providers';
+import { defaultEffortForCapabilities, type CatalogModel } from '@cindy/model-providers';
 import type { CodexModelListItem } from '@cindy/maker-core';
 
 import { shouldSuppressLocalCodexAuth } from './codex-auth-invalidation.js';
@@ -26,6 +27,8 @@ interface CodexModelRaw {
   display_name?: unknown;
   description?: unknown;
   context_window?: unknown;
+  max_context_window?: unknown;
+  input_modalities?: unknown;
   visibility?: unknown;
   supported_in_api?: unknown;
   default_reasoning_level?: unknown;
@@ -33,7 +36,6 @@ interface CodexModelRaw {
   priority?: unknown;
   /** [{id:'priority', name:'Fast', ...}] —— 含 priority 即支持 Fast(bridge 映射 service_tier)。 */
   service_tiers?: unknown;
-  input_modalities?: unknown;
 }
 
 /** service_tiers 里是否声明了 priority(=Fast)档。 */
@@ -60,19 +62,13 @@ const DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4-mini']);
 
 /** Cindy 内部路由专用的 Codex 模型 ID，不应出现在任何用户可见模型目录。 */
 const INTERNAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set(['codex-auto-review']);
-const CODEX_INPUT_MODALITIES: ReadonlySet<string> = new Set(['text', 'image', 'audio']);
 
 function isInternalCodexModelId(id: string): boolean {
   return INTERNAL_CODEX_MODEL_IDS.has(id);
 }
 
-/** Only provider-declared, fully understood modality lists may grant image input. */
-function imageInputSupportFromModalities(value: unknown): boolean | undefined {
-  if (!Array.isArray(value)) return undefined;
-  if (!value.every((modality) => typeof modality === 'string' && CODEX_INPUT_MODALITIES.has(modality))) {
-    return undefined;
-  }
-  return value.includes('image');
+function positiveTokens(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function str(v: unknown): string | null {
@@ -129,24 +125,54 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
       : [];
     const displayName = str(m.display_name) ?? slug;
     // cache 明示了才算真实上限;缺字段时补的 272k 只够展示(见下方 app-server mapper 注释)。
-    const contextWindowVerified = typeof m.context_window === 'number';
-    const contextWindow = contextWindowVerified ? (m.context_window as number) : 272_000;
+    const contextWindowVerified = positiveTokens(m.context_window);
+    const contextWindow = contextWindowVerified
+      ? (m.context_window as number)
+      : Math.min(272_000, positiveTokens(m.max_context_window) ? m.max_context_window : 272_000);
+    // Native maximum and working default are separate facts. Never manufacture a
+    // maximum from the working window when the upstream omitted it.
+    const contextWindowMax =
+      positiveTokens(m.max_context_window) &&
+      (!contextWindowVerified || m.max_context_window >= contextWindow)
+        ? m.max_context_window
+        : undefined;
+    const requestedDefault = str(m.default_reasoning_level);
     const defaultEffort =
-      str(m.default_reasoning_level) && CODEX_EFFORTS.has(m.default_reasoning_level as string)
-        ? (m.default_reasoning_level as CatalogModel['defaultEffort'])
-        : efforts.length > 0
-          ? (efforts[efforts.length - 1] as CatalogModel['defaultEffort'])
-          : null;
-    const priority = typeof m.priority === 'number' && Number.isFinite(m.priority) ? m.priority : 50;
+      requestedDefault && efforts.includes(requestedDefault)
+        ? (requestedDefault as CatalogModel['defaultEffort'])
+        : defaultEffortForCapabilities(efforts as CatalogModel['efforts']);
+    const inputModalities =
+      Array.isArray(m.input_modalities) &&
+      m.input_modalities.every((value) => typeof value === 'string')
+        ? (m.input_modalities as string[])
+        : undefined;
+    const priority =
+      typeof m.priority === 'number' && Number.isFinite(m.priority) ? m.priority : 50;
 
     const model: CatalogModel = {
       id: slug,
+      discoveredMetadata: pickModelMetadata({
+        name: str(m.display_name),
+        description: str(m.description),
+        contextWindow: m.context_window,
+        supportsImageInput:
+          inputModalities !== undefined ? inputModalities.includes('image') : undefined,
+        efforts: Array.isArray(m.supported_reasoning_levels) ? efforts : undefined,
+        defaultEffort: m.default_reasoning_level,
+        supportsFastMode: Array.isArray(m.service_tiers)
+          ? hasPriorityTier(m.service_tiers)
+          : undefined,
+      }),
       name: displayName,
       group: 'gpt',
       // 以静态模型的已知 priority/order 为锚点插值；active-catalog 对新增项做稳定排序。
       sortOrder: sortOrderForPriority(priority),
       description: str(m.description) ?? undefined,
       contextWindow,
+      ...(contextWindowMax !== undefined ? { contextWindowMax } : {}),
+      ...(inputModalities !== undefined
+        ? { supportsImageInput: inputModalities.includes('image') }
+        : {}),
       ...(contextWindowVerified ? { contextWindowVerified: true } : {}),
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
@@ -155,9 +181,7 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
       defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
-    if (hasPriorityTier(m.service_tiers)) model.supportsFastMode = true;
-    const supportsImageInput = imageInputSupportFromModalities(m.input_modalities);
-    if (supportsImageInput !== undefined) model.supportsImageInput = supportsImageInput;
+    if (Array.isArray(m.service_tiers)) model.supportsFastMode = hasPriorityTier(m.service_tiers);
     out.push(model);
   }
   return out;
@@ -198,17 +222,24 @@ export function mapCodexAppServerModelsToCatalog(
     const defaultEffort =
       requestedDefault && efforts.includes(requestedDefault)
         ? (requestedDefault as CatalogModel['defaultEffort'])
-        : efforts.length > 0
-          ? (efforts[efforts.length - 1] as CatalogModel['defaultEffort'])
-          : null;
+        : defaultEffortForCapabilities(efforts as CatalogModel['efforts']);
     const tiers = [
       ...(Array.isArray(raw.serviceTiers) ? raw.serviceTiers.map((tier) => tier?.id) : []),
       ...(Array.isArray(raw.additionalSpeedTiers) ? raw.additionalSpeedTiers : []),
     ];
     const supportsFastMode = tiers.some((tier) => tier === 'priority' || tier === 'fast');
-    const supportsImageInput = imageInputSupportFromModalities(raw.inputModalities);
     const model: CatalogModel = {
       id: slug,
+      discoveredMetadata: pickModelMetadata({
+        name: str(raw.displayName),
+        description: str(raw.description),
+        efforts: Array.isArray(raw.supportedReasoningEfforts) ? efforts : undefined,
+        defaultEffort: requestedDefault,
+        supportsFastMode:
+          Array.isArray(raw.serviceTiers) || Array.isArray(raw.additionalSpeedTiers)
+            ? supportsFastMode
+            : undefined,
+      }),
       name: str(raw.displayName) ?? slug,
       group: 'gpt',
       // app-server 已按官方 picker 顺序返回；给每项稳定的小数锚点保住该顺序。
@@ -222,8 +253,9 @@ export function mapCodexAppServerModelsToCatalog(
       defaultEffort,
       status: 'active',
       defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
-      ...(supportsFastMode ? { supportsFastMode: true } : {}),
-      ...(supportsImageInput !== undefined ? { supportsImageInput } : {}),
+      ...(Array.isArray(raw.serviceTiers) || Array.isArray(raw.additionalSpeedTiers)
+        ? { supportsFastMode }
+        : {}),
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
     out.push(model);

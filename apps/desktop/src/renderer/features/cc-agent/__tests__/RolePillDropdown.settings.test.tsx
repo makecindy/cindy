@@ -39,7 +39,7 @@ describe('RolePillDropdown collaboration settings entry', () => {
     cleanup();
   });
 
-  it('hides the collaboration settings link when settings are disabled for detached sidebar windows', () => {
+  it('does not show settings link in the dropdown (moved to + button)', () => {
     const current = worker();
 
     render(
@@ -48,18 +48,14 @@ describe('RolePillDropdown collaboration settings entry', () => {
         workers={[current]}
         selectedWorkerId={current.workerId}
         activeWorkerCount={5}
-        softLimit={5}
-        hardLimit={8}
         onSwitchFocus={vi.fn()}
-        onOpenCreate={vi.fn()}
-        onOpenSettings={vi.fn()}
-        settingsEnabled={false}
         onArchiveWorker={vi.fn()}
       />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: /developer/ }));
 
+    // 设置链接已从下拉菜单中移除
     expect(screen.queryByText('orca.rolePill.settingsCollaboration')).toBeNull();
   });
 
@@ -82,5 +78,53 @@ describe('RolePillDropdown collaboration settings entry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.createWorker' }));
     expect(onOpenCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes the + button to collaboration settings when at the hard limit', () => {
+    const onOpenCreate = vi.fn();
+    const onOpenSettings = vi.fn();
+    render(
+      <WorkerListToolbar
+        worker={null}
+        workers={[]}
+        selectedWorkerId={null}
+        activeWorkerCount={8}
+        softLimit={5}
+        hardLimit={8}
+        onSwitchFocus={vi.fn()}
+        onOpenCreate={onOpenCreate}
+        onOpenSettings={onOpenSettings}
+        onArchiveWorker={vi.fn()}
+      />,
+    );
+
+    // 硬上限下 + 按钮不再 disabled no-op，而是以「设置 · 协同」为可访问名、点击跳转设置。
+    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.settingsCollaboration' }));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the + button disabled at hard limit when settings navigation is unavailable (detached sidebar)', () => {
+    const onOpenCreate = vi.fn();
+    render(
+      <WorkerListToolbar
+        worker={null}
+        workers={[]}
+        selectedWorkerId={null}
+        activeWorkerCount={8}
+        softLimit={5}
+        hardLimit={8}
+        onSwitchFocus={vi.fn()}
+        onOpenCreate={onOpenCreate}
+        // onOpenSettings 省略 → 分离侧栏窗口无法导航到设置路由。
+        onArchiveWorker={vi.fn()}
+      />,
+    );
+
+    // 无设置跳转入口时，硬上限 + 按钮回退为 disabled no-op：不再是「设置 · 协同」，也不触发新建。
+    const button = screen.getByRole('button', { name: 'orca.rolePill.createWorker' });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(button);
+    expect(onOpenCreate).not.toHaveBeenCalled();
   });
 });

@@ -37,6 +37,10 @@ vi.mock('../../../logger.js', () => ({
 }));
 vi.mock('../../../maker-host/codex-local-sessions', () => ({
   importExternalCodexMessagesForSession: vi.fn(async () => undefined),
+  classifyCodexHistoryOversized: vi.fn(async () => false),
+}));
+vi.mock('../../codexHistoryOversizedUpgrade', () => ({
+  maybeUpgradeCodexHistoryOversizedError: vi.fn(async () => ({ result: 'skipped' })),
 }));
 vi.mock('../../../maker-host/claude-local-sessions', () => ({
   importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),

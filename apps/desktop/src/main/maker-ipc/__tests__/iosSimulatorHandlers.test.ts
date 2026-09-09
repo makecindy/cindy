@@ -17,12 +17,14 @@ describe('iOS Simulator IPC handlers', () => {
   function registerTrusted(harness: IpcHarness, deps: Partial<IOSSimulatorHandlerDeps> = {}): void {
     registerIOSSimulatorHandlers(harness, {
       assertTrustedSender: () => undefined,
-      isPluginAvailable: () => true,
+      getPluginAccess: () => ({ allowed: true }),
       getSessionContext: async () => ({ workingDir: '/repo/session-a' }),
       getOwnerScopeKey: () => 'local:owner-a:1',
       isOwnerBoundaryPending: () => false,
       getSessionAccess: () => ({ sessionId: 'session-a', generation: 1 }),
-      hasSessionAccess: (_target, sessionId) => sessionId === 'session-a',
+      getViewerAccess: (_target, sessionId) =>
+        sessionId === 'session-a' ? { sessionId, generation: 1 } : null,
+      hasViewerAccess: (_target, sessionId) => sessionId === 'session-a',
       ...deps,
     });
   }
@@ -32,13 +34,17 @@ describe('iOS Simulator IPC handlers', () => {
   });
 
   it.each([
+    MAKER_INVOKE.IOS_SIMULATOR_GET_PREFERENCES,
+    MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL,
     MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS,
     MAKER_INVOKE.IOS_SIMULATOR_STATUS,
     MAKER_INVOKE.IOS_SIMULATOR_CALL,
     MAKER_INVOKE.IOS_SIMULATOR_SET_AGENT_CONTROL,
     MAKER_INVOKE.IOS_SIMULATOR_SET_MUTATION_CONTROL,
     MAKER_INVOKE.IOS_SIMULATOR_SET_VIEWER_VISIBILITY,
+    MAKER_INVOKE.IOS_SIMULATOR_RETRY_NATIVE_ROUTE,
     MAKER_INVOKE.IOS_SIMULATOR_LATEST_FRAME,
+    MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT,
     MAKER_INVOKE.IOS_SIMULATOR_SET_STREAM_PROFILE,
     MAKER_INVOKE.IOS_SIMULATOR_LIVE_TOUCH,
   ])('checks the trusted sender before parsing %s', async (channel) => {
@@ -56,14 +62,91 @@ describe('iOS Simulator IPC handlers', () => {
     expect(getStatus).not.toHaveBeenCalled();
   });
 
+  it('reads and updates the owner-scoped presentation preference without a task grant', async () => {
+    const harness = new IpcHarness();
+    const getPluginAccess = vi.fn(() => ({ allowed: true as const }));
+    const getPreferences = vi.fn(() => ({ autoOpenEmbeddedPanel: true }));
+    const setAutoOpenEmbeddedPanel = vi.fn(async (enabled: boolean) => ({
+      autoOpenEmbeddedPanel: enabled,
+    }));
+    registerTrusted(harness, {
+      getPluginAccess,
+      getSessionAccess: () => null,
+      getViewerAccess: () => null,
+      hasViewerAccess: () => false,
+      getPreferences,
+      setAutoOpenEmbeddedPanel,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_GET_PREFERENCES),
+    ).resolves.toEqual({ autoOpenEmbeddedPanel: true });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL, {
+        enabled: false,
+      }),
+    ).resolves.toEqual({ autoOpenEmbeddedPanel: false });
+
+    expect(getPreferences).toHaveBeenCalledOnce();
+    expect(setAutoOpenEmbeddedPanel).toHaveBeenCalledWith(false);
+    expect(getPluginAccess).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed preference writes before reaching persistence', async () => {
+    const harness = new IpcHarness();
+    const setAutoOpenEmbeddedPanel = vi.fn();
+    registerTrusted(harness, { setAutoOpenEmbeddedPanel });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL, {
+        enabled: 'false',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(setAutoOpenEmbeddedPanel).not.toHaveBeenCalled();
+  });
+
+  it('drops a preference write when the owner changes while persistence is pending', async () => {
+    const harness = new IpcHarness();
+    let ownerScopeKey = 'local:owner-a:1';
+    let releaseWrite: (() => void) | undefined;
+    const setAutoOpenEmbeddedPanel = vi.fn(
+      () =>
+        new Promise<{ autoOpenEmbeddedPanel: boolean }>((resolve) => {
+          releaseWrite = () => resolve({ autoOpenEmbeddedPanel: false });
+        }),
+    );
+    registerTrusted(harness, {
+      getOwnerScopeKey: () => ownerScopeKey,
+      setAutoOpenEmbeddedPanel,
+    });
+
+    const pending = harness.invokeFrom(
+      17,
+      MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL,
+      { enabled: false },
+    );
+    await vi.waitFor(() => expect(releaseWrite).toBeDefined());
+    ownerScopeKey = 'cloud:owner-b:2';
+    releaseWrite?.();
+
+    await expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
+
   it('rejects every Renderer entry before reaching the Host when the plugin is unavailable', async () => {
     const harness = new IpcHarness();
     const getStatus = vi.fn();
     const requestSessionAccess = vi.fn();
     registerIOSSimulatorHandlers(harness, {
       assertTrustedSender: () => undefined,
-      isPluginAvailable: () => false,
+      getPluginAccess: () => ({
+        allowed: false,
+        errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED',
+        message: 'unavailable',
+        data: { reason: 'session-unavailable' },
+      }),
       getSessionContext: async () => ({ workingDir: '/repo/session-a' }),
+      getViewerAccess: () => null,
+      hasViewerAccess: () => false,
       getStatus,
       requestSessionAccess,
     });
@@ -72,12 +155,12 @@ describe('iOS Simulator IPC handlers', () => {
       harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, {
         sessionId: 'session-a',
       }),
-    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    ).rejects.toMatchObject({ code: 'IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE' });
     await expect(
       harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
         sessionId: 'session-a',
       }),
-    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    ).rejects.toMatchObject({ code: 'IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE' });
     expect(requestSessionAccess).not.toHaveBeenCalled();
     expect(getStatus).not.toHaveBeenCalled();
   });
@@ -95,12 +178,39 @@ describe('iOS Simulator IPC handlers', () => {
     expect(requestSessionAccess).not.toHaveBeenCalled();
   });
 
+  it('does not treat retained Viewer access as an active access request grant', async () => {
+    const harness = new IpcHarness();
+    const requestSessionAccess = vi.fn(async () => false);
+    registerTrusted(harness, {
+      getSessionAccess: () => ({ sessionId: 'session-b', generation: 2 }),
+      getViewerAccess: (_target, sessionId) =>
+        sessionId === 'session-a' ? { sessionId, generation: 1 } : null,
+      hasViewerAccess: (_target, sessionId) => sessionId === 'session-a',
+      requestSessionAccess,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, {
+        sessionId: 'session-a',
+      }),
+    ).resolves.toEqual({ granted: false });
+    expect(requestSessionAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 17 }),
+      'session-a',
+    );
+  });
+
   it('passes the authoritative session workdir to the plugin gate', async () => {
     const harness = new IpcHarness();
-    const isPluginAvailable = vi.fn(() => false);
+    const getPluginAccess = vi.fn(() => ({
+      allowed: false as const,
+      errorCode: 'IOS_SIMULATOR_DISABLED' as const,
+      message: 'disabled',
+      data: { reason: 'disabled-in-workdir' },
+    }));
     const getStatus = vi.fn();
     registerTrusted(harness, {
-      isPluginAvailable,
+      getPluginAccess,
       getSessionContext: async () => ({ workingDir: '/repo/disabled' }),
       getStatus,
     });
@@ -109,8 +219,84 @@ describe('iOS Simulator IPC handlers', () => {
       harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
         sessionId: 'session-a',
       }),
+    ).rejects.toMatchObject({ code: 'IOS_SIMULATOR_DISABLED' });
+    expect(getPluginAccess).toHaveBeenCalledWith('/repo/disabled');
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not-installed', 'IOS_SIMULATOR_PLUGIN_REQUIRED'],
+    ['disabled', 'IOS_SIMULATOR_PLUGIN_DISABLED'],
+    ['disabled-in-workdir', 'IOS_SIMULATOR_DISABLED'],
+    ['session-unavailable', 'IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE'],
+  ] as const)('preserves the plugin access reason %s across IPC', async (reason, code) => {
+    const harness = new IpcHarness();
+    registerTrusted(harness, {
+      getPluginAccess: () => ({
+        allowed: false,
+        errorCode:
+          reason === 'not-installed'
+            ? 'IOS_SIMULATOR_PLUGIN_REQUIRED'
+            : reason === 'disabled-in-workdir'
+              ? 'IOS_SIMULATOR_DISABLED'
+              : 'IOS_SIMULATOR_PLUGIN_DISABLED',
+        message: 'safe plugin gate message',
+        data: { reason },
+      }),
+      getViewerAccess: () => null,
+      hasViewerAccess: () => false,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'session-a',
+      }),
+    ).rejects.toMatchObject({ code });
+  });
+
+  it('still requires Viewer access for status when the plugin is available', async () => {
+    const harness = new IpcHarness();
+    const getPluginAccess = vi.fn(() => ({ allowed: true as const }));
+    const getStatus = vi.fn();
+    registerTrusted(harness, {
+      getPluginAccess,
+      getViewerAccess: () => null,
+      hasViewerAccess: () => false,
+      getStatus,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'session-a',
+      }),
     ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
-    expect(isPluginAvailable).toHaveBeenCalledWith('/repo/disabled');
+    expect(getPluginAccess).toHaveBeenCalledWith('/repo/session-a');
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not expose plugin access for an unknown session', async () => {
+    const harness = new IpcHarness();
+    const getPluginAccess = vi.fn(() => ({
+      allowed: false as const,
+      errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED' as const,
+      message: 'disabled',
+      data: { reason: 'disabled' as const },
+    }));
+    const getStatus = vi.fn();
+    registerTrusted(harness, {
+      getSessionContext: async () => null,
+      getPluginAccess,
+      getViewerAccess: () => null,
+      hasViewerAccess: () => false,
+      getStatus,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'missing-session',
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(getPluginAccess).not.toHaveBeenCalled();
     expect(getStatus).not.toHaveBeenCalled();
   });
 
@@ -122,7 +308,8 @@ describe('iOS Simulator IPC handlers', () => {
       return true;
     });
     registerTrusted(harness, {
-      hasSessionAccess: () => granted,
+      getSessionAccess: () => (granted ? { sessionId: 'session-a', generation: 1 } : null),
+      hasViewerAccess: () => granted,
       requestSessionAccess,
     });
 
@@ -141,7 +328,8 @@ describe('iOS Simulator IPC handlers', () => {
     const harness = new IpcHarness();
     const requestSessionAccess = vi.fn(async () => false);
     registerTrusted(harness, {
-      hasSessionAccess: () => false,
+      getSessionAccess: () => null,
+      hasViewerAccess: () => false,
       requestSessionAccess,
     });
 
@@ -159,7 +347,8 @@ describe('iOS Simulator IPC handlers', () => {
     );
     const reportError = vi.fn();
     registerTrusted(harness, {
-      hasSessionAccess: () => false,
+      getSessionAccess: () => null,
+      hasViewerAccess: () => false,
       requestSessionAccess: vi.fn(async () => {
         throw internalError;
       }),
@@ -193,6 +382,40 @@ describe('iOS Simulator IPC handlers', () => {
       }),
     ).resolves.toMatchObject({ sessionId: 'session-a' });
     expect(getStatus).toHaveBeenCalledWith('session-a');
+  });
+
+  it.each([
+    ['active', { sessionId: 'session-a', generation: 1 }],
+    ['paused', { sessionId: 'session-b', generation: 2 }],
+  ] as const)('projects %s control access from the Main-owned grant', async (expected, grant) => {
+    const harness = new IpcHarness();
+    registerTrusted(harness, {
+      getSessionAccess: () => grant,
+      getStatus: async () => ({
+        ok: true,
+        sessionId: 'session-a',
+        instances: [],
+        deviceGrants: [],
+        mutationStates: [],
+        environment: {
+          platform: 'darwin',
+          supported: true,
+          ready: true,
+          xcodeVersion: 'Xcode 26.4',
+          runtimes: [],
+          devices: [],
+          issue: null,
+          error: null,
+          setupSteps: [],
+        },
+      }),
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'session-a',
+      }),
+    ).resolves.toMatchObject({ controlAccess: expected });
   });
 
   it('rejects a request before calling the host while the owner boundary is pending', async () => {
@@ -302,8 +525,8 @@ describe('iOS Simulator IPC handlers', () => {
       };
     });
     registerTrusted(harness, {
-      hasSessionAccess: () => hasAccess,
-      getSessionAccess: () => (hasAccess ? { sessionId: 'session-a', generation: 1 } : null),
+      hasViewerAccess: () => hasAccess,
+      getViewerAccess: () => (hasAccess ? { sessionId: 'session-a', generation: 1 } : null),
       getStatus,
       reportError,
     });
@@ -330,7 +553,7 @@ describe('iOS Simulator IPC handlers', () => {
       };
     });
     registerTrusted(harness, {
-      getSessionAccess: () => ({ sessionId: 'session-a', generation: grantGeneration }),
+      getViewerAccess: () => ({ sessionId: 'session-a', generation: grantGeneration }),
       getStatus,
       reportError,
     });
@@ -384,9 +607,9 @@ describe('iOS Simulator IPC handlers', () => {
     const callTool = vi.fn();
     registerIOSSimulatorHandlers(harness, {
       assertTrustedSender: () => undefined,
-      isPluginAvailable: () => true,
+      getPluginAccess: () => ({ allowed: true }),
       getSessionContext: async () => ({ workingDir: '/repo/session-a' }),
-      hasSessionAccess: () => false,
+      hasViewerAccess: () => false,
       getStatus,
       callTool,
     });
@@ -407,6 +630,75 @@ describe('iOS Simulator IPC handlers', () => {
     expect(callTool).not.toHaveBeenCalled();
   });
 
+  it('restores retained Viewer access without lending the active mutation grant', async () => {
+    const harness = new IpcHarness();
+    const getStatus = vi.fn(async () => ({
+      ok: false as const,
+      sessionId: 'session-a',
+      errorCode: 'UNSUPPORTED_SESSION_KIND' as const,
+      message: 'viewer status',
+    }));
+    const setViewerVisibility = vi.fn(async () => ({ ok: true as const, data: {} }));
+    const callTool = vi.fn();
+    const updateViewerTouch = vi.fn();
+    registerTrusted(harness, {
+      getSessionAccess: () => ({ sessionId: 'session-b', generation: 2 }),
+      getViewerAccess: (_target, sessionId) =>
+        sessionId === 'session-a' ? { sessionId, generation: 1 } : null,
+      hasViewerAccess: (_target, sessionId) => sessionId === 'session-a',
+      getStatus,
+      setViewerVisibility,
+      callTool,
+      updateViewerTouch,
+    });
+    const route = {
+      sessionId: 'session-a',
+      instanceId: 'instance-a',
+      generation: 3,
+      leaseId: 'lease-a',
+    };
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'session-a',
+      }),
+    ).resolves.toMatchObject({ sessionId: 'session-a' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_SET_VIEWER_VISIBILITY, {
+        ...route,
+        visible: false,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
+        sessionId: 'session-a',
+        name: 'attach_device',
+        args: {},
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_LIVE_TOUCH, {
+        ...route,
+        gestureId: 'gesture-a',
+        phase: 'begin',
+        xRatio: 0.5,
+        yRatio: 0.5,
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_RETRY_NATIVE_ROUTE, {
+        ...route,
+        viewerToken: 'viewer-a',
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+
+    expect(getStatus).toHaveBeenCalledWith('session-a');
+    expect(setViewerVisibility).toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
+    expect(updateViewerTouch).not.toHaveBeenCalled();
+  });
+
   it('validates and routes user lifecycle calls through the shared host', async () => {
     const harness = new IpcHarness();
     const callTool = vi.fn(async () => ({ ok: true as const, data: { instances: [] } }));
@@ -420,6 +712,18 @@ describe('iOS Simulator IPC handlers', () => {
       }),
     ).resolves.toMatchObject({ ok: true });
     expect(callTool).toHaveBeenCalledWith('attach_device', {}, 'session-a');
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
+        sessionId: 'session-a',
+        name: 'delete_instance',
+        args: { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(callTool).toHaveBeenCalledWith(
+      'delete_instance',
+      { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' },
+      'session-a',
+    );
     for (const name of ['build_app', 'open_url', 'push_notification', 'delete_everything']) {
       await expect(
         harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_CALL, {
@@ -429,7 +733,7 @@ describe('iOS Simulator IPC handlers', () => {
         }),
       ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     }
-    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
   });
 
   it('folds tool-call internals behind the same safe Main-to-Renderer boundary', async () => {
@@ -624,8 +928,12 @@ describe('iOS Simulator IPC handlers', () => {
   it('validates exact frame routes before forwarding visibility and frame reads', async () => {
     const harness = new IpcHarness();
     const setViewerVisibility = vi.fn(async () => ({ ok: true as const, data: {} }));
+    const retryNativeRoute = vi.fn(async () => ({
+      ok: true as const,
+      data: { nativeRecovered: true },
+    }));
     const getLatestFrame = vi.fn(async () => ({ ok: true as const, data: { stream: null } }));
-    registerTrusted(harness, { setViewerVisibility, getLatestFrame });
+    registerTrusted(harness, { setViewerVisibility, retryNativeRoute, getLatestFrame });
     const route = {
       sessionId: 'session-a',
       instanceId: 'instance-a',
@@ -650,6 +958,10 @@ describe('iOS Simulator IPC handlers', () => {
       fallbackReason: 'native-decoder-fallback',
     });
     await harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_LATEST_FRAME, route);
+    await harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_RETRY_NATIVE_ROUTE, {
+      ...route,
+      viewerToken: 'viewer-a',
+    });
 
     expect(setViewerVisibility).toHaveBeenCalledWith(
       'session-a',
@@ -686,6 +998,16 @@ describe('iOS Simulator IPC handlers', () => {
         leaseId: 'lease-a',
       },
       17,
+    );
+    expect(retryNativeRoute).toHaveBeenCalledWith(
+      'session-a',
+      {
+        instanceId: 'instance-a',
+        generation: 3,
+        leaseId: 'lease-a',
+      },
+      17,
+      'viewer-a',
     );
     await expect(
       harness.invoke(MAKER_INVOKE.IOS_SIMULATOR_LATEST_FRAME, route),
@@ -724,6 +1046,109 @@ describe('iOS Simulator IPC handlers', () => {
         viewerToken: '',
       }),
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_RETRY_NATIVE_ROUTE, {
+        ...route,
+        viewerToken: '',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+
+  it('captures an exact simulator route and writes the PNG to the clipboard', async () => {
+    const harness = new IpcHarness();
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const captureScreenshotBytes = vi.fn(async () => pngBytes);
+    const writePngToClipboard = vi.fn();
+    registerTrusted(harness, { captureScreenshotBytes, writePngToClipboard });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+        sessionId: 'session-a',
+        instanceId: 'instance-a',
+        generation: 3,
+        leaseId: 'lease-a',
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(captureScreenshotBytes).toHaveBeenCalledWith('session-a', {
+      instanceId: 'instance-a',
+      generation: 3,
+      leaseId: 'lease-a',
+    });
+    expect(writePngToClipboard).toHaveBeenCalledWith(pngBytes);
+  });
+
+  it('does not write a screenshot after the exact task grant changes', async () => {
+    const harness = new IpcHarness();
+    let accessGeneration = 1;
+    let releaseCapture: ((png: Buffer) => void) | undefined;
+    const captureScreenshotBytes = vi.fn(
+      () =>
+        new Promise<Buffer>((resolve) => {
+          releaseCapture = resolve;
+        }),
+    );
+    const writePngToClipboard = vi.fn();
+    registerTrusted(harness, {
+      getSessionAccess: () => ({ sessionId: 'session-a', generation: accessGeneration }),
+      captureScreenshotBytes,
+      writePngToClipboard,
+    });
+
+    const request = harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+      sessionId: 'session-a',
+      instanceId: 'instance-a',
+      generation: 3,
+      leaseId: 'lease-a',
+    });
+    await vi.waitFor(() => expect(captureScreenshotBytes).toHaveBeenCalledOnce());
+    accessGeneration = 2;
+    releaseCapture?.(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    await expect(request).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(writePngToClipboard).not.toHaveBeenCalled();
+  });
+
+  it('validates screenshot routes and reports capture failures without writing clipboard data', async () => {
+    const harness = new IpcHarness();
+    const captureScreenshotBytes = vi.fn(async () => {
+      throw new IOSSimulatorInstanceError(
+        'SCREENSHOT_CAPTURE_FAILED',
+        'private simulator capture detail',
+        true,
+      );
+    });
+    const writePngToClipboard = vi.fn();
+    const reportError = vi.fn();
+    registerTrusted(harness, {
+      captureScreenshotBytes,
+      writePngToClipboard,
+      reportError,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+        sessionId: 'session-a',
+        instanceId: 'instance-a',
+        generation: 0,
+        leaseId: 'lease-a',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, {
+        sessionId: 'session-a',
+        instanceId: 'instance-a',
+        generation: 3,
+        leaseId: 'lease-a',
+      }),
+    ).rejects.toMatchObject({
+      code: 'SCREENSHOT_CAPTURE_FAILED',
+      message: expect.not.stringContaining('private simulator capture detail'),
+    });
+
+    expect(captureScreenshotBytes).toHaveBeenCalledOnce();
+    expect(writePngToClipboard).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith('copy-screenshot', expect.any(Error));
   });
 
   it('validates and routes bounded stream profiles', async () => {

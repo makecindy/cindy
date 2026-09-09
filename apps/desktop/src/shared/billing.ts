@@ -7,6 +7,49 @@
 
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
+export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
+
+/**
+ * Validates the only mailto URL that Desktop may hand to the system shell.
+ * Subject/body are display data from the renderer; recipient-affecting headers
+ * must stay outside this capability boundary.
+ */
+export function isAllowedBillingMailto(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const parsed = new URL(value);
+    const queryKeys = [...parsed.searchParams.keys()];
+    const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
+    const subject = parsed.searchParams.get('subject');
+    const hasSubjectControlCharacter =
+      subject !== null && /[\u0000-\u001f\u007f-\u009f]/u.test(subject);
+    return (
+      parsed.protocol === 'mailto:' &&
+      decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.host &&
+      !parsed.hash &&
+      !hasDuplicateQueryKey &&
+      !hasSubjectControlCharacter &&
+      queryKeys.every((key) => key === 'subject' || key === 'body')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Keeps the sender check explicit at the main-process adapter boundary. The
+ * URL policy alone is not sufficient authorization for a privileged shell call.
+ */
+export function isAllowedBillingMailtoRequest(
+  value: unknown,
+  isTrustedSender: boolean,
+): value is string {
+  return isTrustedSender && isAllowedBillingMailto(value);
+}
+
 export const BILLING_INVOKE = {
   GET_BALANCE: 'billing:get-balance',
   GET_CREDIT_USAGE: 'billing:get-credit-usage',
@@ -20,6 +63,7 @@ export const BILLING_INVOKE = {
   CREATE_SUBSCRIPTION: 'billing:create-subscription',
   GET_CURRENT_SUBSCRIPTION: 'billing:get-current-subscription',
   CANCEL_CURRENT_SUBSCRIPTION: 'billing:cancel-current-subscription',
+  RESUME_CURRENT_SUBSCRIPTION: 'billing:resume-current-subscription',
   REFRESH_SUBSCRIPTION_PURCHASE: 'billing:refresh-subscription-purchase',
   QUOTE_PLAN_CHANGE: 'billing:quote-plan-change',
   CONFIRM_PLAN_CHANGE: 'billing:confirm-plan-change',
@@ -34,8 +78,7 @@ export type BillingPaymentAction =
   | { type: 'REDIRECT'; url: string; expiresAt: string };
 
 export type BillingSubscriptionPortalResult =
-  | { success: true }
-  | { success: false; timedOut?: true };
+  { success: true } | { success: false; timedOut?: true };
 
 export type BillingFulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'SUCCEEDED' | 'FAILED';
 
@@ -117,6 +160,14 @@ export type BillingSubscriptionStatus =
   | 'CANCELED'
   | 'PAUSED';
 
+/**
+ * 这些状态视为已有生效订阅：计费页阻断再买新套餐；供应商页据此把右侧主动作从
+ * 「购买套餐」换成「升级套餐」或「余额充值」。INCOMPLETE / INCOMPLETE_EXPIRED 属于
+ * 未完成首购，只活在当前 checkout 会话里，不算。
+ */
+export const BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: readonly BillingSubscriptionStatus[] =
+  ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID', 'PAUSED'];
+
 export type BillingPlanChangeType = 'UPGRADE' | 'DOWNGRADE';
 
 /**
@@ -165,6 +216,8 @@ export type BillingSubscription = {
   currentPeriodEndAt: string | null;
   entitlementValidUntil: string | null;
   cancelAtPeriodEnd: boolean;
+  /** 取消待到期且账期未过的订阅是否可恢复（服务端下发；旧服务端无此字段）。 */
+  resumable?: boolean;
   effectivePlan: {
     version: 1;
     product: {
@@ -236,6 +289,7 @@ export interface BillingRendererApi {
   }) => Promise<BillingSubscription>;
   getCurrentSubscription: () => Promise<BillingCurrentSubscription>;
   cancelCurrentSubscription: () => Promise<BillingSubscription>;
+  resumeCurrentSubscription: () => Promise<BillingSubscription>;
   refreshSubscriptionPurchase: (payload: {
     purchaseAttemptId: string;
   }) => Promise<BillingSubscription>;

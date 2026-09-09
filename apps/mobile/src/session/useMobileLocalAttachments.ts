@@ -20,6 +20,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   MOBILE_MAX_ATTACHMENTS,
   assertMobileDocumentSize,
@@ -284,7 +285,7 @@ export function useMobileLocalAttachments(
         discardMobileUploadedAttachment(attachment, {
           getToken: () => optionsRef.current.getAccessToken(),
         });
-        if (candidate.cleanupLocalUris) await candidate.cleanupLocalUris(localUris);
+        if (candidate.cleanupLocalUris) void candidate.cleanupLocalUris(localUris).catch(() => undefined);
         return;
       }
       // 发送后气泡的本地缩略图兜底:消息里持久化的是 cindy-oss-attach:// 中转引用,
@@ -312,7 +313,8 @@ export function useMobileLocalAttachments(
         // 只有持久缩略图已经接管 composer / sent-message 预览后才删源文件；
         // 注册失败时保留到页面卸载，不能让已上传附件立刻变成坏图。
         if (deliveredCandidate.uri !== candidate.uri) {
-          await candidate.cleanupLocalUris(localUris);
+          // 附件已交给 composer/outbox，清理失败不能再把成功翻成上传失败。
+          void candidate.cleanupLocalUris(localUris).catch(() => undefined);
         }
       }
     },
@@ -414,15 +416,17 @@ export function useMobileLocalAttachments(
         optionsRef.current.onError(t('composer.upload.simulatorNoCamera'));
         return;
       }
-      const permission = source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
-      if (!isAttachmentScopeActive()) return;
-      if (!permission.granted) {
-        optionsRef.current.onError(source === 'camera'
-          ? t('composer.upload.cameraPermission')
-          : t('composer.upload.photoPermission'));
-        return;
+      if (source === 'camera' || canBrowsePhotoLibraryDirectly(Platform.OS)) {
+        const permission = source === 'camera'
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+        if (!isAttachmentScopeActive()) return;
+        if (!permission.granted) {
+          optionsRef.current.onError(source === 'camera'
+            ? t('composer.upload.cameraPermission')
+            : t('composer.upload.photoPermission'));
+          return;
+        }
       }
 
       const picked = source === 'camera'

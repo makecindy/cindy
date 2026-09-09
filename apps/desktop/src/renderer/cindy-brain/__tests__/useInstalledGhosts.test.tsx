@@ -26,7 +26,6 @@ const ghost = (id: string, name = id): InstalledGhost => ({
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['tool'],
   },
   dir: `/brain/${id}`,
   enabled: true,

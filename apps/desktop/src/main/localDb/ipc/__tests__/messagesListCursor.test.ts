@@ -3,6 +3,9 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
+import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
+import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -39,6 +42,10 @@ const h = vi.hoisted(() => ({
       };
     },
   ),
+}));
+
+vi.mock('../../codexHistoryOversizedUpgrade', () => ({
+  maybeUpgradeCodexHistoryOversizedError: vi.fn(async () => ({ result: 'skipped' })),
 }));
 
 vi.mock('electron', () => ({
@@ -78,17 +85,19 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db, query: h.query, tx: h.tx }),
 }));
 
+import { maybeUpgradeCodexHistoryOversizedError } from '../../codexHistoryOversizedUpgrade';
 import {
   findParkedEngineSession,
   findPendingAgentHandoff,
+  listMessagesForAgentHandoff,
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
   commitMessageDeletion,
-  listPersistedChatAttachmentPaths,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
+  updateMessageContent,
 } from '../messages';
 
 function createDb(): Database.Database {
@@ -146,7 +155,7 @@ function insertCostMessage(
   sqlite: Database.Database,
   input: {
     id: string;
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'ask_user' | 'plan_review';
     createdAt: number;
     agentMeta?: Record<string, unknown>;
     rewindAt?: number | null;
@@ -169,110 +178,129 @@ function insertCostMessage(
     });
 }
 
-describe('staged chat attachment retention', () => {
-  it('extracts distinct protected paths in SQLite without returning message bodies', async () => {
-    const sqlite = createDb();
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('deleted', 'deleted');
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('retained', 'active');
-
-    const sharedPath = 'C:\\chat-attachment-cache\\owner\\shared.bin';
-    const retainedPath = 'C:\\chat-attachment-cache\\owner\\retained.bin';
-    const deletedPath = 'C:\\chat-attachment-cache\\owner\\deleted.bin';
-    const unrelatedContent = JSON.stringify({ text: 'x'.repeat(1024 * 1024) });
-    const insert = sqlite.prepare(`
-      INSERT INTO messages (
-        id, client_id, session_id, role, content, created_at
-      ) VALUES (
-        @id, @id, @sessionId, 'user', @content, @createdAt
-      )
-    `);
-    insert.run({
-      id: 'retained-unrelated',
-      sessionId: 'retained',
-      content: unrelatedContent,
-      createdAt: 1,
-    });
-    insert.run({
-      id: 'retained-attachment',
-      sessionId: 'retained',
-      content: JSON.stringify({
-        files: [
-          { path: sharedPath },
-          'legacy-scalar-entry',
-          { path: retainedPath },
-          { path: sharedPath },
-        ],
-      }),
-      createdAt: 2,
-    });
-    insert.run({
-      id: 'deleted-attachment',
-      sessionId: 'deleted',
-      content: JSON.stringify({ files: [{ path: deletedPath }] }),
-      createdAt: 3,
-    });
-    insert.run({
-      id: 'malformed-attachment',
-      sessionId: 'retained',
-      content: '{"files":[{"path":"chat-attachment-cache',
-      createdAt: 4,
-    });
-
-    h.query.mockClear();
-    await expect(listPersistedChatAttachmentPaths()).resolves.toEqual([
-      sharedPath,
-      retainedPath,
-    ]);
-    expect(h.query).toHaveBeenCalledWith(
-      expect.stringContaining('json_tree'),
-      ['%chat-attachment-cache%'],
-    );
-    expect(h.query.mock.calls[0][0]).toContain('SELECT DISTINCT');
-  });
-
-  it('does not protect staged paths referenced only by deleted sessions', async () => {
-    const sqlite = createDb();
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('active', 'active');
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('deleted', 'deleted');
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('archived', 'archived');
-
-    const insert = sqlite.prepare(`
-      INSERT INTO messages (
-        id, client_id, session_id, role, content, created_at
-      ) VALUES (
-        @id, @id, @sessionId, 'user', @content, @createdAt
-      )
-    `);
-    insert.run({
-      id: 'active-message',
-      sessionId: 'active',
-      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\active.bin' }] }),
-      createdAt: 1,
-    });
-    insert.run({
-      id: 'deleted-message',
-      sessionId: 'deleted',
-      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\deleted.bin' }] }),
-      createdAt: 2,
-    });
-    insert.run({
-      id: 'archived-message',
-      sessionId: 'archived',
-      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\archived.bin' }] }),
-      createdAt: 3,
-    });
-
-    await expect(listPersistedChatAttachmentPaths()).resolves.toEqual([
-      'C:\\chat-attachment-cache\\active.bin',
-      'C:\\chat-attachment-cache\\archived.bin',
-    ]);
-  });
-});
-
 describe('local-db:messages:list cursor', () => {
+  it.each([101, MAX_HISTORY_SCAN_ROWS])('reads all %i live rows from a generated work reference', async (count) => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const live = Array.from({ length: count }, (_, i) => ({ id: `history-live:c${i}`, clientId: `c${i}`,
+      sessionId: 's1', role: 'thinking', content: 'detail', toolUseId: null,
+      agentMeta: { isStreaming: true }, createdAt: new Date(1000 + i).toISOString() })) as ReturnType<NonNullable<Parameters<typeof registerMessageIpc>[1]>>;
+    registerMessageIpc(() => true, () => live);
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', {}) as HistoryViewPage<HistoryMessageSource>;
+    const work = historyViewLeaves(page.items).find(item => item.type === 'work');
+    expect(work?.type).toBe('work');
+    if (work?.type !== 'work') throw new Error('missing work');
+    expect(work.summary.liveMessageIds).toHaveLength(count);
+    const ids: string[] = [];
+    let after: string | undefined;
+    do {
+      const detail = await invoke('local-db:messages:work-details', work.summary, { after }) as HistoryDetailPage<HistoryMessageSource>;
+      ids.push(...detail.messages.map(row => row.id));
+      after = detail.nextCursor ?? undefined;
+    } while (after);
+    expect(ids).toEqual(live.map(row => row.id));
+    sqlite.close();
+  });
+
+  it('rejects a live reference above the scan budget before reading anchors', async () => {
+    const live = vi.fn(() => []);
+    registerMessageIpc(() => true, live);
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel: 'local-db:messages:work-details' },
+      () => h.handlers.get('local-db:messages:work-details')!({}, 's1', { liveMessageIds: Array(MAX_HISTORY_SCAN_ROWS + 1).fill('x') }, {})))
+      .rejects.toThrow('[INVALID_PARAMS]');
+    expect(live).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.handlers.clear();
+  });
+
+  it('does not let metadata IPC mint, replace or remove Host-authored approval text', async () => {
+    const sqlite = createDb();
+    insertCostMessage(sqlite, { id: 'trusted', role: 'user', createdAt: 1000,
+      agentMeta: { autoReviewUserText: 'Do not send.', delivery: 'turn' } });
+    insertCostMessage(sqlite, { id: 'untrusted', role: 'user', createdAt: 1001 });
+    registerMessageIpc();
+    const update = h.handlers.get('local-db:messages:updateAgentMeta')!;
+    const read = (id: string) => JSON.parse((sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get(id) as { agent_meta: string }).agent_meta);
+    await update({}, 's1', 'trusted', { autoReviewUserText: 'Send now.', delivery: 'turn' });
+    expect(read('trusted').autoReviewUserText).toBe('Do not send.');
+    await update({}, 's1', 'trusted', null);
+    expect(read('trusted').autoReviewUserText).toBe('Do not send.');
+    await update({}, 's1', 'untrusted', { autoReviewUserText: 'Send now.', delivery: 'turn' });
+    expect(read('untrusted')).toEqual({ delivery: 'turn' });
+    sqlite.close();
+  });
+
+  it('atomically stores a Host answer and retains it across old renderer card PATCHes', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'card', role: 'ask_user', createdAt: 1 });
+      const receipt = { text: 'Only build. Never src.', acceptedAt: 10 };
+      await updateMessageContent('s1', 'card', { status: 'answered' }, receipt);
+      const read = () => sqlite.prepare('SELECT content, agent_meta FROM messages WHERE id = ?').get('card') as { content: string; agent_meta: string };
+      expect(JSON.parse(read().content)).toEqual({ status: 'answered' });
+      expect(JSON.parse(read().agent_meta).autoReviewUserText).toEqual(receipt);
+      registerMessageIpc();
+      await h.handlers.get('local-db:messages:updateAgentMeta')!({}, 's1', 'card', { autoReviewUserText: { text: 'Delete src', acceptedAt: 20 } });
+      expect(JSON.parse(read().agent_meta).autoReviewUserText).toEqual(receipt);
+      h.tx.mockRejectedValueOnce(new Error('capture display write'));
+      await expect(h.handlers.get('local-db:messages:updateContent')!({}, 's1', 'card', { status: 'answered' })).rejects.toThrow('capture display write');
+      expect(JSON.parse(read().agent_meta).autoReviewUserText).toEqual(receipt);
+    } finally { sqlite.close(); }
+  });
+
+  it('selects a recently answered old card before limiting authorization history', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'old-question', role: 'ask_user', createdAt: 1,
+        agentMeta: { autoReviewUserText: { text: 'Do not send.', acceptedAt: 100 } } });
+      insertCostMessage(sqlite, { id: 'newer-grant', role: 'user', createdAt: 50 });
+      expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['old-question']);
+    } finally { sqlite.close(); }
+  });
+
+  it('strips caller authorization before the IPC create transaction', async () => {
+    const sqlite = createDb();
+    registerMessageIpc();
+    h.tx.mockRejectedValueOnce(new Error('capture insert boundary'));
+    await expect(h.handlers.get('local-db:messages:create')!({}, 's1', {
+      clientId: 'forged', role: 'user', content: 'Send now.',
+      agentMeta: { autoReviewUserText: 'Send now.', delivery: 'turn' },
+    })).rejects.toThrow('capture insert boundary');
+    expect(h.tx).toHaveBeenCalledWith('message.insert', expect.objectContaining({
+      agentMeta: JSON.stringify({ delivery: 'turn' }),
+    }));
+    sqlite.close();
+  });
+
+  it('invalidates old authorization before an IPC history edit, even if the content write fails', async () => {
+    const sqlite = createDb();
+    insertCostMessage(sqlite, { id: 'edited', role: 'user', createdAt: 1000,
+      agentMeta: { autoReviewUserText: 'Send now.', delivery: 'turn' } });
+    registerMessageIpc();
+    h.tx.mockRejectedValueOnce(new Error('content write failed'));
+    await expect(h.handlers.get('local-db:messages:updateContent')!({}, 's1', 'edited', 'Do not send.')).rejects.toThrow('content write failed');
+    const row = sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('edited') as { agent_meta: string };
+    expect(JSON.parse(row.agent_meta)).toEqual({ delivery: 'turn' });
+    sqlite.close();
+  });
+
+  it('restores user history after clear/rewind in stable order without tool rows consuming its limit', async () => {
+    const sqlite = createDb();
+    try {
+      sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1', 999);
+      insertCostMessage(sqlite, { id: 'cleared', role: 'user', createdAt: 999 });
+      insertCostMessage(sqlite, { id: 'grant', role: 'user', createdAt: 1000 });
+      insertCostMessage(sqlite, { id: 'revocation', role: 'user', createdAt: 1000 });
+      insertCostMessage(sqlite, { id: 'rewound', role: 'user', createdAt: 1001, rewindAt: 1002 });
+      insertCostMessage(sqlite, { id: 'tool-noise', role: 'assistant', createdAt: 1002 });
+      const rows = await listMessagesForAgentHandoff('s1', 2, undefined, 'user');
+      expect(rows.map((row) => row.clientId)).toEqual(['grant', 'revocation']);
+    } finally { sqlite.close(); }
   });
 
   it('continues through rows with the same timestamp using insertion order', async () => {
@@ -444,9 +472,247 @@ describe('local-db:messages:list cursor', () => {
     expect(JSON.parse(stored.agent_meta)).toEqual({
       turnCostUsd: 0.777042,
     });
-    // list/session + one visibility scan (plus the direct storage assertion);
-    // never one SQLite query set per SDK segment.
-    expect(prepareSpy).toHaveBeenCalledTimes(5);
+    // list/session + prior-user lookup + bounded visibility scan
+    // (plus the direct storage assertion); never one SQLite query set per SDK segment.
+    expect(prepareSpy).toHaveBeenCalledTimes(6);
+  });
+
+  it('does not scan older user rounds when projecting legacy turn cost', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'old-user', role: 'user', createdAt: 100 });
+    insertCostMessage(sqlite, {
+      id: 'old-assistant',
+      role: 'assistant',
+      createdAt: 200,
+      agentMeta: { turnCostUsd: 9.99 },
+    });
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 2 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const final = rows.find((row) => row.id === 'final');
+    expect(final?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+  });
+
+  it('returns oversized local history rows intact', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const huge = 'x'.repeat(40_000);
+    insertMessage(sqlite, { id: 'huge', createdAt: 1_000, content: huge });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 1 })) as Array<{
+      id: string;
+      content: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content).toBe(huge);
+    expect(rows[0]?.agentMeta).toBeNull();
+  });
+
+  it('returns oversized around windows intact', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const huge = 'y'.repeat(40_000);
+    insertMessage(sqlite, { id: 'huge', createdAt: 1_000, content: huge });
+
+    registerMessageIpc();
+    const aroundHandler = h.handlers.get('local-db:messages:around');
+    const rows = (await aroundHandler?.({}, 's1', 'huge', { radius: 0 })) as Array<{
+      id: string;
+      content: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content).toBe(huge);
+    expect(rows[0]?.agentMeta).toBeNull();
+  });
+
+  it('keeps structured local user content instead of slicing it', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (
+        'user-row', 'user-row', 's1', 'user', @content, NULL, NULL, 1000, NULL
+      )
+    `,
+      )
+      .run({
+        content: JSON.stringify({
+          text: 'see this file',
+          images: [],
+          files: [{ path: '/tmp/notes.md' }],
+        }),
+      });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 1 })) as Array<{
+      id: string;
+      content: unknown;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(rows[0]?.content).toEqual({
+      text: 'see this file',
+      images: [],
+      files: [{ path: '/tmp/notes.md' }],
+    });
+    expect(rows[0]?.agentMeta).toBeNull();
+  });
+
+  it('does not scan newer rounds after the current history page', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'old-final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+    insertCostMessage(sqlite, { id: 'later-user', role: 'user', createdAt: 2_000 });
+    for (let i = 0; i < 20; i += 1) {
+      insertCostMessage(sqlite, {
+        id: `later-${i}`,
+        role: 'assistant',
+        createdAt: 2_100 + i,
+        agentMeta: { turnCostUsd: 1 },
+      });
+    }
+
+    registerMessageIpc();
+    const prepareSpy = vi.spyOn(sqlite, 'prepare');
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', {
+      limit: 2,
+      beforeTs: 1_500,
+    })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const oldFinal = rows.find((row) => row.id === 'old-final');
+    expect(oldFinal?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+    expect(prepareSpy.mock.calls.some((call) => String(call[0]).includes('later-19'))).toBe(false);
+  });
+
+  it('projects legacy turn cost when an older user row has malformed agent_meta', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (
+        'broken-user', 'broken-user', 's1', 'user', '""', NULL, '{not-json', 900, NULL
+      )
+    `,
+      )
+      .run();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 2 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const final = rows.find((row) => row.id === 'final');
+    expect(final?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+  });
+
+  it('isolates malformed nearest prior user with CASE so list and around still hydrate', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (
+        'broken-user', 'broken-user', 's1', 'user', '""', NULL, '{not-json', 900, NULL
+      )
+    `,
+      )
+      .run();
+    insertCostMessage(sqlite, {
+      id: 'final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+
+    registerMessageIpc();
+    const prepareSpy = vi.spyOn(sqlite, 'prepare');
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const aroundHandler = h.handlers.get('local-db:messages:around');
+    const listRows = (await listHandler?.({}, 's1', { limit: 1 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const aroundRows = (await aroundHandler?.({}, 's1', 'final', { radius: 1 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(listRows.find((row) => row.id === 'final')?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+    expect(aroundRows.find((row) => row.id === 'final')?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+    const hydrateSql = prepareSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('autoResume'));
+    expect(hydrateSql).toEqual(expect.stringContaining('CASE WHEN json_valid'));
+    expect(hydrateSql).not.toMatch(/json_valid\([^)]*\) = 0 OR json_extract/);
+  });
+
+  it('only scans oversized-history upgrade on the first page', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'new' });
+    insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'old' });
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    await listHandler?.({}, 's1', { limit: 1 });
+    await listHandler?.({}, 's1', { limit: 1, before: 'row-new' });
+    await listHandler?.({}, 's1', { limit: 1, after: 'row-old' });
+    expect(maybeUpgradeCodexHistoryOversizedError).toHaveBeenCalledTimes(1);
+    expect(maybeUpgradeCodexHistoryOversizedError).toHaveBeenCalledWith('s1');
   });
 });
 

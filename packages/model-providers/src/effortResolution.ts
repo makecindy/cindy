@@ -12,6 +12,33 @@
 
 type Effort = string;
 
+/** Model-level intent, independent of the consuming harness. Old catalogs sometimes put
+ * their defaults inside perAgent; promote their shared value or the lowest declared
+ * depth on conflict. This keeps legacy members usable without picking a harness or
+ * silently increasing effort. An explicit model-level null also wins.
+ */
+export function modelDefaultEffort(model: {
+  defaultEffort?: Effort | null;
+  perAgent?: Partial<Record<string, { defaultEffort?: Effort | null }>>;
+}): Effort | null | undefined {
+  if (model.defaultEffort !== undefined) return model.defaultEffort;
+  const legacy = [...new Set(Object.values(model.perAgent ?? {})
+    .flatMap((override) => override?.defaultEffort !== undefined ? [override.defaultEffort] : []))];
+  if (legacy.length <= 1) return legacy[0];
+  return lowestEffort(legacy.filter((effort): effort is string => effort !== null));
+}
+
+/** Default for a newly discovered model with no Cindy declaration. This is product
+ * policy, not a clamp for explicit user choices: prefer medium and never invent support.
+ */
+export function defaultEffortForCapabilities<T extends string>(efforts: readonly T[]): T | null {
+  for (const preferred of ['medium', 'high', 'low', 'xhigh', 'max', 'minimal', 'ultra']) {
+    const supported = efforts.find((effort) => effort === preferred);
+    if (supported !== undefined) return supported;
+  }
+  return efforts[0] ?? null;
+}
+
 /**
  * 解析「选中某模型后应落到哪一档 effort」—— 纯函数,集中 effort 优先级策略。
  *
@@ -45,6 +72,73 @@ export function resolveEffort(args: {
   // efforts.length === 0 已在上方 early return,这里 efforts[0] 必然存在。
   if (ok(defaultEffort ?? undefined)) return defaultEffort as Effort;
   return efforts[0];
+}
+
+/**
+ * 面板 / 收藏交出来的**显式档** vs 本端再查一遍目录。
+ *
+ * `resolveEffort` 在 efforts 为空时回落占位 `'low'`。那是「模型不可调档」的 UI 占位,
+ * 不能拿来消化一次查找失败:统一选择器已经按目标引擎解析过这一档(收藏副本、行上
+ * 显示的 high),本端若因 wire id 形态(Pi `grok-4.6` vs 订阅 `xai/grok-4.6`)查空,
+ * 再走 `resolveEffort` 就会把用户点的 high 写成 low。
+ *
+ * 面板只在 `config.effort` 非空时才把档交出来(不可调档行传空串,进不了 requested),
+ * 所以查空时信任 requested 不会给「真的没有档位的模型」塞一个假档。
+ *
+ * 目录非空且不含 requested → 不硬塞,回落 `resolveEffort`(目标引擎词表里没有这一档,
+ * 例如 xhigh 落到只有 high 的模型)。
+ */
+export function resolveRequestedEffort(args: {
+  requested?: Effort;
+  efforts: readonly Effort[];
+  defaultEffort: Effort | null;
+  activeEffort: Effort;
+  preferred?: Effort;
+  providerEffort?: Effort;
+  rememberedEffort?: Effort;
+}): Effort {
+  const { requested, efforts, ...rest } = args;
+  if (requested && (efforts.length === 0 || efforts.includes(requested))) {
+    return requested;
+  }
+  return resolveEffort({ efforts, ...rest });
+}
+
+/**
+ * 点选时交给 SET_MODEL 的原子快照。
+ *
+ * `resolveEffort` 在无档模型上会给 UI 占位 `'low'`。那一档不能写进运行时:
+ * 目录 `efforts` 为空的模型运行时语义是 `effort: null`,塞 low 会让胶囊显示
+ * thinking low/high,实际模型却没有思考档。Fast 同样:不支持就必须是 false,
+ * 不能把上一模型的插队状态带到新模型上。
+ */
+export function composeAtomicModelSelection(args: {
+  efforts: readonly Effort[];
+  effort: Effort;
+  fastSupported: boolean;
+  requestedFast: boolean;
+}): { effort: Effort | null; fastMode: boolean } {
+  return {
+    effort: args.efforts.length === 0 ? null : args.effort,
+    fastMode: args.fastSupported && args.requestedFast,
+  };
+}
+
+/**
+ * 意图期内改选模型/来源时,面板交出来的档 vs 旧意图档。
+ *
+ * ModelSelector 对无思考档的行传空串(`rowEffortOf ?? ''`)。空串是「目标明确没有可调档」,
+ * 不能当成 falsy 再回落到旧意图的 high —— 否则会把目标不支持的档登记进意图、下次发送应用。
+ * 调用方没给新档(`undefined`)时才继承旧意图。
+ */
+export function resolveIntentReselectEffort(
+  selectedEffort: string | undefined,
+  intentEffort?: string,
+): string | undefined {
+  if (typeof selectedEffort === 'string') {
+    return selectedEffort || undefined;
+  }
+  return intentEffort || undefined;
 }
 
 /**

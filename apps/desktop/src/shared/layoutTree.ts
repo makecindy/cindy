@@ -127,7 +127,10 @@ export function createDefaultLayout(): Layout {
       id: 'root',
       direction: 'row',
       children: [
-        { fraction: 0.5, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+        {
+          fraction: 0.5,
+          node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+        },
         { fraction: 0.5, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
       ],
     },
@@ -280,7 +283,10 @@ function validateNodeShape(
     if (node.collapsed !== undefined && typeof node.collapsed !== 'boolean') {
       return { ok: false, reason: 'collapsed must be boolean' };
     }
-    if (node.minWidth !== undefined && !(Number.isFinite(node.minWidth) && (node.minWidth as number) > 0)) {
+    if (
+      node.minWidth !== undefined &&
+      !(Number.isFinite(node.minWidth) && (node.minWidth as number) > 0)
+    ) {
       return { ok: false, reason: 'minWidth must be a positive finite number' };
     }
     panes.push(node as unknown as PaneNode);
@@ -335,8 +341,10 @@ export function validateLayout(input: Layout): ValidateResult {
   }
 
   const sidebar = input.sidebar as unknown;
-  if (!isRecord(sidebar) || sidebar.type !== 'pane') return { ok: false, reason: 'sidebar must be a pane' };
-  if (sidebar.panelKind !== 'session-list') return { ok: false, reason: 'sidebar must be session-list' };
+  if (!isRecord(sidebar) || sidebar.type !== 'pane')
+    return { ok: false, reason: 'sidebar must be a pane' };
+  if (sidebar.panelKind !== 'session-list')
+    return { ok: false, reason: 'sidebar must be session-list' };
   if (sidebar.edge !== 'left') return { ok: false, reason: "sidebar edge must be 'left' in v1" };
   if (!isValidId(sidebar.id)) return { ok: false, reason: 'sidebar id invalid' };
 
@@ -347,9 +355,13 @@ export function validateLayout(input: Layout): ValidateResult {
 
   const chatMains = contentPanes.filter((p) => p.panelKind === 'chat-main');
   if (chatMains.length !== 1) {
-    return { ok: false, reason: `content must contain exactly one chat-main (got ${chatMains.length})` };
+    return {
+      ok: false,
+      reason: `content must contain exactly one chat-main (got ${chatMains.length})`,
+    };
   }
-  if (chatMains[0].collapsed === true) return { ok: false, reason: 'chat-main must not be collapsed' };
+  if (chatMains[0].collapsed === true)
+    return { ok: false, reason: 'chat-main must not be collapsed' };
   if (contentPanes.some((p) => p.panelKind === 'session-list')) {
     return { ok: false, reason: 'session-list must stay outside the content tree' };
   }
@@ -393,7 +405,11 @@ function finishOp(original: Layout, mutated: Layout, reason: string): LayoutOpRe
  * 设置某个 pane 的折叠态。chat-main 不可折叠(由出口校验兜底拒绝)。
  * 注意:能否折叠(是否贴边)是渲染层的位置判定,本函数只负责状态写入的合法性。
  */
-export function setPaneCollapsed(layout: Layout, paneId: string, collapsed: boolean): LayoutOpResult {
+export function setPaneCollapsed(
+  layout: Layout,
+  paneId: string,
+  collapsed: boolean,
+): LayoutOpResult {
   if (!findPaneById(layout, paneId)) {
     return { layout, applied: false, reason: `pane not found: ${paneId}` };
   }
@@ -434,7 +450,10 @@ export function setSplitChildFraction(
   const remainder = 1 - fraction;
   for (let i = 0; i < siblings.length; i++) {
     if (i === childIndex) continue;
-    siblings[i].fraction = siblingSum > 0 ? (siblings[i].fraction / siblingSum) * remainder : remainder / (siblings.length - 1);
+    siblings[i].fraction =
+      siblingSum > 0
+        ? (siblings[i].fraction / siblingSum) * remainder
+        : remainder / (siblings.length - 1);
   }
   normalizeSplitFractions(split);
   return finishOp(layout, next, 'setSplitChildFraction rejected');
@@ -491,9 +510,9 @@ export function removeRootSplitPaneByKind(layout: Layout, kind: PanelKind): Layo
 }
 
 /**
- * 交换 content 根分割中两个 panelKind 对应 child 的位置(N 面板拖拽换位的
- * 提交操作)。child 整体交换 —— fraction 随面板走(换位不改变各自宽度份额)。
- * 任一 kind 不在根分割里则拒绝。
+ * 交换 content 根分割中两个 panelKind 所在 child 的位置(N 面板拖拽换位的
+ * 提交操作)。kind 可以是根 pane，也可以位于根级插件 column 内；后者交换整列，
+ * 避免把内置面板塞进 ghost-only column。child 整体交换，fraction 随区域走。
  */
 export function swapRootSplitChildrenByKind(
   layout: Layout,
@@ -503,18 +522,336 @@ export function swapRootSplitChildrenByKind(
   if (layout.content.type !== 'split') {
     return { layout, applied: false, reason: 'content is not a split' };
   }
-  const indexOf = (kind: PanelKind) =>
-    layout.content.type === 'split'
-      ? layout.content.children.findIndex((c) => c.node.type === 'pane' && c.node.panelKind === kind)
-      : -1;
-  const a = indexOf(kindA);
-  const b = indexOf(kindB);
-  if (a < 0 || b < 0) return { layout, applied: false, reason: `pane kind not found: ${a < 0 ? kindA : kindB}` };
-  if (a === b) return { layout, applied: false, reason: 'cannot swap a pane with itself' };
+  const a = rootChildIndexContainingKind(layout, kindA);
+  const b = rootChildIndexContainingKind(layout, kindB);
+  if (a < 0 || b < 0)
+    return { layout, applied: false, reason: `pane kind not found: ${a < 0 ? kindA : kindB}` };
+  if (a === b) return { layout, applied: false, reason: 'cannot swap within the same root child' };
   const next = structuredClone(layout);
   const split = next.content as SplitNode;
   [split.children[a], split.children[b]] = [split.children[b], split.children[a]];
   return finishOp(layout, next, 'swapRootSplitChildrenByKind rejected');
+}
+
+/** 插件面板二维停靠只使用一层纵向分组，避免把主界面演化成任意深度的自由网格。 */
+interface RootGhostPaneLocation {
+  rootIndex: number;
+  columnIndex: number | null;
+}
+
+function isGhostPanelKind(kind: PanelKind): boolean {
+  return kind.startsWith('ghost:');
+}
+
+function findRootGhostPaneLocation(layout: Layout, kind: PanelKind): RootGhostPaneLocation | null {
+  if (layout.content.type !== 'split' || layout.content.direction !== 'row') return null;
+  for (let rootIndex = 0; rootIndex < layout.content.children.length; rootIndex++) {
+    const node = layout.content.children[rootIndex].node;
+    if (node.type === 'pane' && node.panelKind === kind) {
+      return { rootIndex, columnIndex: null };
+    }
+    if (node.type !== 'split' || node.direction !== 'column') continue;
+    const columnIndex = node.children.findIndex(
+      (child) => child.node.type === 'pane' && child.node.panelKind === kind,
+    );
+    if (columnIndex >= 0) return { rootIndex, columnIndex };
+  }
+  return null;
+}
+
+function rootChildIndexContainingKind(layout: Layout, kind: PanelKind): number {
+  if (layout.content.type !== 'split' || layout.content.direction !== 'row') return -1;
+  const contains = (node: LayoutNode): boolean => {
+    if (node.type === 'pane') return node.panelKind === kind;
+    return node.children.some((child) => contains(child.node));
+  };
+  return layout.content.children.findIndex((child) => contains(child.node));
+}
+
+function collectLayoutNodeIds(node: LayoutNode, ids: Set<string>): void {
+  ids.add(node.id);
+  if (node.type === 'split') {
+    for (const child of node.children) collectLayoutNodeIds(child.node, ids);
+  }
+}
+
+function nextGridSplitId(layout: Layout, targetId: string): string {
+  const ids = new Set<string>([layout.sidebar.id]);
+  collectLayoutNodeIds(layout.content, ids);
+  const base = `grid-${targetId}`.slice(0, 120);
+  if (!ids.has(base)) return base;
+  for (let suffix = 2; suffix < 10_000; suffix++) {
+    const candidate = `${base.slice(0, 127 - String(suffix).length)}-${suffix}`;
+    if (!ids.has(candidate)) return candidate;
+  }
+  return `grid-${targetId.slice(0, 110)}-fallback`;
+}
+
+function removeGhostPaneFromColumn(
+  root: SplitNode,
+  location: RootGhostPaneLocation,
+): PaneNode | null {
+  if (location.columnIndex === null) return null;
+  const rootChild = root.children[location.rootIndex];
+  if (!rootChild || rootChild.node.type !== 'split' || rootChild.node.direction !== 'column') {
+    return null;
+  }
+  const [removed] = rootChild.node.children.splice(location.columnIndex, 1);
+  if (!removed || removed.node.type !== 'pane') return null;
+  if (rootChild.node.children.length === 1) {
+    rootChild.node = rootChild.node.children[0].node;
+  } else {
+    normalizeSplitFractions(rootChild.node);
+  }
+  return removed.node;
+}
+
+/**
+ * 把一个插件面板停靠到另一个插件面板的上方/下方。
+ *
+ * 根布局始终保持横向；纵向 grid 只存在于根 child 的一层 column split 中，且只包含
+ * `ghost:*` pane。两个根级插件合并时，目标列继承双方宽度份额之和，画面不会突然变窄。
+ */
+export function stackGhostPaneByKind(
+  layout: Layout,
+  sourceKind: PanelKind,
+  targetKind: PanelKind,
+  placement: 'before' | 'after',
+): LayoutOpResult {
+  if (!isGhostPanelKind(sourceKind) || !isGhostPanelKind(targetKind)) {
+    return { layout, applied: false, reason: 'vertical grid only supports ghost panels' };
+  }
+  if (sourceKind === targetKind) {
+    return { layout, applied: false, reason: 'cannot stack a pane with itself' };
+  }
+  if (layout.content.type !== 'split' || layout.content.direction !== 'row') {
+    return { layout, applied: false, reason: 'content root must be a row split' };
+  }
+  const source = findRootGhostPaneLocation(layout, sourceKind);
+  const target = findRootGhostPaneLocation(layout, targetKind);
+  if (!source || !target) {
+    return {
+      layout,
+      applied: false,
+      reason: `ghost pane not found: ${!source ? sourceKind : targetKind}`,
+    };
+  }
+
+  const next = structuredClone(layout);
+  const root = next.content as SplitNode;
+
+  // 同一列内只做顺序调整，份额随面板走。
+  if (
+    source.rootIndex === target.rootIndex &&
+    source.columnIndex !== null &&
+    target.columnIndex !== null
+  ) {
+    const column = root.children[source.rootIndex].node;
+    if (column.type !== 'split' || column.direction !== 'column') return { layout, applied: false };
+    const [sourceChild] = column.children.splice(source.columnIndex, 1);
+    const targetIndex = column.children.findIndex(
+      (child) => child.node.type === 'pane' && child.node.panelKind === targetKind,
+    );
+    if (!sourceChild || targetIndex < 0) return { layout, applied: false };
+    column.children.splice(placement === 'before' ? targetIndex : targetIndex + 1, 0, sourceChild);
+    return finishOp(layout, next, 'stackGhostPaneByKind reorder rejected');
+  }
+
+  let sourceNode: PaneNode | null = null;
+  let transferredRootFraction = 0;
+  if (source.columnIndex === null) {
+    const [sourceRootChild] = root.children.splice(source.rootIndex, 1);
+    if (!sourceRootChild || sourceRootChild.node.type !== 'pane') return { layout, applied: false };
+    sourceNode = sourceRootChild.node;
+    transferredRootFraction = sourceRootChild.fraction;
+  } else {
+    sourceNode = removeGhostPaneFromColumn(root, source);
+  }
+  if (!sourceNode) return { layout, applied: false, reason: `ghost pane not found: ${sourceKind}` };
+
+  // source 移除后目标 rootIndex 可能左移，重新寻址。
+  const targetAfterRemoval = findRootGhostPaneLocation(next, targetKind);
+  if (!targetAfterRemoval)
+    return { layout, applied: false, reason: `ghost pane not found: ${targetKind}` };
+  const targetRootChild = root.children[targetAfterRemoval.rootIndex];
+  targetRootChild.fraction += transferredRootFraction;
+
+  if (targetAfterRemoval.columnIndex === null) {
+    if (targetRootChild.node.type !== 'pane') return { layout, applied: false };
+    const targetNode = targetRootChild.node;
+    targetRootChild.node = {
+      type: 'split',
+      id: nextGridSplitId(next, targetNode.id),
+      direction: 'column',
+      children:
+        placement === 'before'
+          ? [
+              { fraction: 0.5, node: sourceNode },
+              { fraction: 0.5, node: targetNode },
+            ]
+          : [
+              { fraction: 0.5, node: targetNode },
+              { fraction: 0.5, node: sourceNode },
+            ],
+    };
+  } else {
+    const column = targetRootChild.node;
+    if (column.type !== 'split' || column.direction !== 'column') return { layout, applied: false };
+    const targetIndex = targetAfterRemoval.columnIndex;
+    const targetChild = column.children[targetIndex];
+    const half = targetChild.fraction / 2;
+    targetChild.fraction = half;
+    column.children.splice(placement === 'before' ? targetIndex : targetIndex + 1, 0, {
+      fraction: half,
+      node: sourceNode,
+    });
+    normalizeSplitFractions(column);
+  }
+
+  normalizeSplitFractions(root);
+  return finishOp(layout, next, 'stackGhostPaneByKind rejected');
+}
+
+/**
+ * 把插件面板从纵向列中抽出（或移动现有根 pane），停到某个根级区域左/右侧。
+ * 从 column 抽出时按它在列中的高度份额拆分外层列宽；两块 50/50 的列可因此恢复为
+ * 合并前近似相同的两列宽度。
+ */
+export function moveGhostPaneToRootByKind(
+  layout: Layout,
+  sourceKind: PanelKind,
+  targetKind: PanelKind,
+  placement: 'before' | 'after',
+): LayoutOpResult {
+  if (!isGhostPanelKind(sourceKind)) {
+    return { layout, applied: false, reason: 'only ghost panels can leave a grid column' };
+  }
+  if (sourceKind === targetKind) {
+    return { layout, applied: false, reason: 'cannot move a pane relative to itself' };
+  }
+  if (layout.content.type !== 'split' || layout.content.direction !== 'row') {
+    return { layout, applied: false, reason: 'content root must be a row split' };
+  }
+  const source = findRootGhostPaneLocation(layout, sourceKind);
+  if (!source) return { layout, applied: false, reason: `ghost pane not found: ${sourceKind}` };
+  if (rootChildIndexContainingKind(layout, targetKind) < 0) {
+    return { layout, applied: false, reason: `target pane not found: ${targetKind}` };
+  }
+
+  const next = structuredClone(layout);
+  const root = next.content as SplitNode;
+  let sourceRootChild: { fraction: number; node: LayoutNode } | null = null;
+
+  if (source.columnIndex === null) {
+    [sourceRootChild] = root.children.splice(source.rootIndex, 1);
+  } else {
+    const rootChild = root.children[source.rootIndex];
+    if (rootChild.node.type !== 'split' || rootChild.node.direction !== 'column') {
+      return { layout, applied: false };
+    }
+    const sourceColumnChild = rootChild.node.children[source.columnIndex];
+    if (!sourceColumnChild || sourceColumnChild.node.type !== 'pane')
+      return { layout, applied: false };
+    const ideal = rootChild.fraction * sourceColumnChild.fraction;
+    const maxTransfer = rootChild.fraction - MIN_SPLIT_CHILD_FRACTION;
+    if (maxTransfer < MIN_SPLIT_CHILD_FRACTION) {
+      return { layout, applied: false, reason: 'grid column is too narrow to split' };
+    }
+    const extractedFraction = Math.min(maxTransfer, Math.max(MIN_SPLIT_CHILD_FRACTION, ideal));
+    const sourceNode = removeGhostPaneFromColumn(root, source);
+    if (!sourceNode) return { layout, applied: false };
+    rootChild.fraction -= extractedFraction;
+    sourceRootChild = { fraction: extractedFraction, node: sourceNode };
+  }
+  if (!sourceRootChild) return { layout, applied: false };
+
+  const targetRootIndex = rootChildIndexContainingKind(next, targetKind);
+  if (targetRootIndex < 0)
+    return { layout, applied: false, reason: `target pane not found: ${targetKind}` };
+  root.children.splice(
+    placement === 'before' ? targetRootIndex : targetRootIndex + 1,
+    0,
+    sourceRootChild,
+  );
+  normalizeSplitFractions(root);
+  return finishOp(layout, next, 'moveGhostPaneToRootByKind rejected');
+}
+
+function findPanePath(node: LayoutNode, kind: PanelKind, path: number[] = []): number[] | null {
+  if (node.type === 'pane') return node.panelKind === kind ? path : null;
+  for (let index = 0; index < node.children.length; index++) {
+    const found = findPanePath(node.children[index].node, kind, [...path, index]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function nodeAtPath(root: LayoutNode, path: number[]): LayoutNode | null {
+  let node = root;
+  for (const index of path) {
+    if (node.type !== 'split' || !node.children[index]) return null;
+    node = node.children[index].node;
+  }
+  return node;
+}
+
+function setNodeAtPath(root: LayoutNode, path: number[], value: LayoutNode): LayoutNode | null {
+  if (path.length === 0) return value;
+  let node = root;
+  for (let depth = 0; depth < path.length - 1; depth++) {
+    if (node.type !== 'split' || !node.children[path[depth]]) return null;
+    node = node.children[path[depth]].node;
+  }
+  const index = path[path.length - 1];
+  if (node.type !== 'split' || !node.children[index]) return null;
+  node.children[index].node = value;
+  return root;
+}
+
+/** 交换任意两个 pane 的停靠槽位；份额属于槽位，不随面板移动。 */
+export function swapPanesByKind(
+  layout: Layout,
+  kindA: PanelKind,
+  kindB: PanelKind,
+): LayoutOpResult {
+  if (kindA === kindB) return { layout, applied: false, reason: 'cannot swap a pane with itself' };
+  const rootA = rootChildIndexContainingKind(layout, kindA);
+  const rootB = rootChildIndexContainingKind(layout, kindB);
+  const aIsRootPane =
+    layout.content.type === 'split' &&
+    rootA >= 0 &&
+    layout.content.children[rootA].node.type === 'pane';
+  const bIsRootPane =
+    layout.content.type === 'split' &&
+    rootB >= 0 &&
+    layout.content.children[rootB].node.type === 'pane';
+  if ((!aIsRootPane || !bIsRootPane) && (!isGhostPanelKind(kindA) || !isGhostPanelKind(kindB))) {
+    return {
+      layout,
+      applied: false,
+      reason: 'built-in panes cannot enter a ghost grid column',
+    };
+  }
+  const pathA = findPanePath(layout.content, kindA);
+  const pathB = findPanePath(layout.content, kindB);
+  if (!pathA || !pathB) {
+    return { layout, applied: false, reason: `pane kind not found: ${!pathA ? kindA : kindB}` };
+  }
+  const next = structuredClone(layout);
+  const nodeA = nodeAtPath(next.content, pathA);
+  const nodeB = nodeAtPath(next.content, pathB);
+  if (!nodeA || !nodeB || nodeA.type !== 'pane' || nodeB.type !== 'pane') {
+    return { layout, applied: false };
+  }
+  const cloneA = structuredClone(nodeA);
+  const cloneB = structuredClone(nodeB);
+  const withA = setNodeAtPath(next.content, pathA, cloneB);
+  if (!withA) return { layout, applied: false };
+  next.content = withA;
+  const withB = setNodeAtPath(next.content, pathB, cloneA);
+  if (!withB) return { layout, applied: false };
+  next.content = withB;
+  return finishOp(layout, next, 'swapPanesByKind rejected');
 }
 
 /**
@@ -541,8 +878,10 @@ export function transferSplitFraction(
   const split = findSplitById(next.content, splitId);
   if (!split) return { layout, applied: false, reason: `split not found: ${splitId}` };
   if (
-    fromIndex < 0 || fromIndex >= split.children.length ||
-    toIndex < 0 || toIndex >= split.children.length
+    fromIndex < 0 ||
+    fromIndex >= split.children.length ||
+    toIndex < 0 ||
+    toIndex >= split.children.length
   ) {
     return { layout, applied: false, reason: 'child index out of range' };
   }
@@ -561,6 +900,77 @@ export function transferSplitFraction(
   to.fraction += amount;
   normalizeSplitFractions(split);
   return finishOp(layout, next, 'transferSplitFraction rejected');
+}
+
+/**
+ * 多来源接力的份额转移:amount 全额从 sources(按下标顺序)转移到 toIndex,每个
+ * 来源各自保住 MIN_SPLIT_CHILD_FRACTION 下限 —— 前一个扣到下限后,剩余差额由
+ * 后面的继续接;接力走完仍有缺口则整单拒绝(返回原树)。
+ *
+ * 为什么需要(2026-08-17 实测):压缩 chat 的拖缝松手要把**像素口径**的增量写回
+ * 账本,但 chat 的画面宽(flex 吸收折叠邻居让出的空间)可以远大于自己的树份额,
+ * 两方转移会被 0.05 账本地板整单拒绝 —— chat 树份额被拖到 0.05 后那条缝彻底
+ * 冻住,压不到 400px 产品下限。差额改由"渲染宽为 0 却占着账"的折叠兄弟接力出账
+ * (画面上那块本就被弹性 chat 吸收),账本与画面重新对齐。调用方(LayoutRoot)
+ * 按"实测宽为 0"挑来源;本函数只管写树合法,不理解折叠语义。
+ */
+export function transferSplitFractionRelay(
+  layout: Layout,
+  splitId: string,
+  sources: number[],
+  toIndex: number,
+  amount: number,
+): LayoutOpResult {
+  if (!(Number.isFinite(amount) && amount > 0)) {
+    return { layout, applied: false, reason: 'amount must be a positive finite number' };
+  }
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return { layout, applied: false, reason: 'sources must be a non-empty array' };
+  }
+  if (!Number.isInteger(toIndex)) {
+    return { layout, applied: false, reason: `toIndex must be an integer: ${toIndex}` };
+  }
+  const seen = new Set<number>();
+  for (const index of sources) {
+    if (!Number.isInteger(index)) {
+      return { layout, applied: false, reason: `source index must be an integer: ${index}` };
+    }
+    if (index === toIndex) {
+      return { layout, applied: false, reason: 'toIndex must not appear in sources' };
+    }
+    if (seen.has(index)) {
+      return { layout, applied: false, reason: `duplicate source index: ${index}` };
+    }
+    seen.add(index);
+  }
+  const next = structuredClone(layout);
+  const split = findSplitById(next.content, splitId);
+  if (!split) return { layout, applied: false, reason: `split not found: ${splitId}` };
+  const bounds = split.children.length;
+  if (toIndex < 0 || toIndex >= bounds || sources.some((index) => index < 0 || index >= bounds)) {
+    return { layout, applied: false, reason: 'child index out of range' };
+  }
+  // 容差与两方转移同款:夹到下限的合法接力不能被浮点残差判死。
+  const floor = MIN_SPLIT_CHILD_FRACTION - FRACTION_TOLERANCE;
+  let remaining = amount;
+  for (const index of sources) {
+    if (remaining <= FRACTION_TOLERANCE) break;
+    const child = split.children[index];
+    const take = Math.min(remaining, child.fraction - floor);
+    if (take <= 0) continue;
+    child.fraction -= take;
+    remaining -= take;
+  }
+  if (remaining > FRACTION_TOLERANCE) {
+    return {
+      layout,
+      applied: false,
+      reason: `sources cannot cover the transfer, short by ${remaining}`,
+    };
+  }
+  split.children[toIndex].fraction += amount - remaining;
+  normalizeSplitFractions(split);
+  return finishOp(layout, next, 'transferSplitFractionRelay rejected');
 }
 
 function findSplitById(node: LayoutNode, splitId: string): SplitNode | null {

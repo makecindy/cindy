@@ -23,4 +23,13 @@ describe('slash palette empty-result keyboard guard', () => {
       selectionBlock.indexOf('if (\n              atOpen'),
     );
   });
+
+  it('inserts the human command name so Pi runtime aliases stay off the display layer', () => {
+    const insertBlock = chatInputSource.slice(
+      chatInputSource.indexOf('const insertSlashCommand = useCallback'),
+      chatInputSource.indexOf('const resolveEffectiveAtRange'),
+    );
+    expect(insertBlock).toContain('cmd.name');
+    expect(insertBlock).not.toContain('slashCommandInvocationName');
+  });
 });

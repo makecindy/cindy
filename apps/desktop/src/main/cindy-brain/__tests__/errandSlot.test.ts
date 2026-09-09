@@ -21,7 +21,11 @@ import {
 } from '../../../shared/ghost';
 
 function fakeGhost(
-  overrides: { enabled?: boolean; slots?: string[]; agent?: Record<string, unknown> | null } = {},
+  overrides: {
+    enabled?: boolean;
+    agentCapability?: boolean;
+    agent?: Record<string, unknown> | null;
+  } = {},
 ): InstalledGhost {
   return {
     manifest: {
@@ -31,8 +35,9 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'agent'],
-      ...(overrides.agent === null ? {} : { agent: overrides.agent ?? { errand: true } }),
+      ...(overrides.agentCapability === false || overrides.agent === null
+        ? {}
+        : { agent: overrides.agent ?? { errand: true } }),
     },
     dir: '/fake/brain/helper',
     enabled: overrides.enabled ?? true,
@@ -68,9 +73,9 @@ function makeSlot(overrides: Partial<GhostErrandSlotDeps> = {}): {
 const RUN = { type: 'agent-errand-request', kind: 'run', task: '总结 README' };
 
 describe('资格审', () => {
-  it('未声明 agent 槽 / 未声明 errand / 未启用 → PERMISSION_DENIED', async () => {
+  it('未声明 agent 能力 / 未声明 errand / 未启用 → PERMISSION_DENIED', async () => {
     for (const ghost of [
-      fakeGhost({ slots: ['tool'] }),
+      fakeGhost({ agentCapability: false }),
       fakeGhost({ agent: null }),
       fakeGhost({ agent: { background: true } }),
       fakeGhost({ enabled: false }),
@@ -387,5 +392,188 @@ describe('clearGhost', () => {
     // 节流状态一并清:立刻可再次提交(不受最小间隔限制)。
     void clock;
     expect(await slot.handleRequest('helper', RUN)).toMatchObject({ ok: true, status: 'running' });
+  });
+});
+
+describe('可见任务自动切过去', () => {
+  it('onSession 只回填 id，投递成功后再切；收口不再切第二次', async () => {
+    const reveal = vi.fn();
+    let hooks: {
+      onSession?: (sid: string) => void;
+      onDispatched?: (sid: string) => void;
+    } | undefined;
+    let finish: (() => void) | null = null;
+    const runner = vi.fn(
+      (_req: unknown, h?: { onSession?: (sid: string) => void; onDispatched?: (sid: string) => void }) => {
+        hooks = h;
+        return new Promise((resolve) => {
+          finish = () => resolve({ ok: true, sessionId: 'sess-9', text: 'done' });
+        });
+      },
+    );
+    const { slot } = makeSlot({
+      runner: runner as unknown as GhostErrandRunner,
+      onRevealSession: reveal,
+    });
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', RUN);
+    hooks?.onSession?.('sess-9');
+    expect(reveal).not.toHaveBeenCalled();
+    hooks?.onDispatched?.('sess-9');
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledWith('sess-9');
+    finish!();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('runner 没回调 onSession、只在收口给 sessionId 也切一次', async () => {
+    const reveal = vi.fn();
+    const { slot } = makeSlot({ onRevealSession: reveal });
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('只回填了 onSession、随后失败不切', async () => {
+    const reveal = vi.fn();
+    const runner = vi.fn(
+      async (_req: unknown, h?: { onSession?: (sid: string) => void }) => {
+        h?.onSession?.('sess-busy');
+        return {
+          ok: false as const,
+          errorCode: 'BUSY' as const,
+          message: '正忙',
+        };
+      },
+    );
+    const { slot } = makeSlot({
+      runner: runner as unknown as GhostErrandRunner,
+      onRevealSession: reveal,
+    });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('runner 失败且从未给出 sessionId 不切', async () => {
+    const reveal = vi.fn();
+    const { slot } = makeSlot({
+      onRevealSession: reveal,
+      runner: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: 'TIMEOUT' as const,
+        message: '超时了',
+      })) as unknown as GhostErrandRunner,
+    });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('setRevealSession 可以后接线', async () => {
+    const reveal = vi.fn();
+    const { slot } = makeSlot();
+    slot.setRevealSession(reveal);
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('没有主机点击凭据的派活不切任务', async () => {
+    const reveal = vi.fn();
+    const runner = vi.fn(async (_req: { origin?: string }, h?: { onDispatched?: (sid: string) => void }) => {
+      h?.onDispatched?.('sess-bg');
+      return { ok: true as const, sessionId: 'sess-bg', text: 'done' };
+    });
+    const { slot } = makeSlot({
+      runner: runner as unknown as GhostErrandRunner,
+      onRevealSession: reveal,
+    });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[0][0].origin).toBe('background');
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('Host 铸造的卡片点击票可以把派活标成 user-action，且一次作废', async () => {
+    const reveal = vi.fn();
+    const live = new Set(['click-1']);
+    const { slot, runner, clock } = makeSlot({
+      onRevealSession: reveal,
+      consumeUserActionToken: (token, ghostId) => {
+        if (ghostId !== 'helper' || !live.has(token)) return false;
+        live.delete(token);
+        return true;
+      },
+    });
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[0][0]).toMatchObject({ origin: 'user-action' });
+    expect(reveal).toHaveBeenCalledOnce();
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS + 1;
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[1][0].origin).toBe('background');
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('假票或过期票不能切任务', async () => {
+    const reveal = vi.fn();
+    const { slot, runner } = makeSlot({
+      onRevealSession: reveal,
+      consumeUserActionToken: () => false,
+    });
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'forged' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[0][0].origin).toBe('background');
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('面板点击手势只够切一次', async () => {
+    const reveal = vi.fn();
+    const { slot, clock } = makeSlot({ onRevealSession: reveal });
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledOnce();
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS + 1;
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('消费卡片票时顺手清掉同一次点击留下的面板手势', async () => {
+    const reveal = vi.fn();
+    const live = new Set(['click-1']);
+    const { slot, clock } = makeSlot({
+      onRevealSession: reveal,
+      consumeUserActionToken: (token) => {
+        if (!live.has(token)) return false;
+        live.delete(token);
+        return true;
+      },
+    });
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledOnce();
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS + 1;
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('过期的面板手势不能再切任务', async () => {
+    const reveal = vi.fn();
+    const { slot, clock } = makeSlot({ onRevealSession: reveal });
+    slot.noteUserGesture('helper');
+    clock.now += 3_001;
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).not.toHaveBeenCalled();
   });
 });

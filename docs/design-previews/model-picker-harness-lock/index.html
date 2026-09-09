@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN" data-mode="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HTML 预览 · 统一模型选择器（非实机）</title>
+<style>
+  :root {
+    --bg: #e8e8ea;
+    --surface: #f6f6f7;
+    --surface-elevated: #ffffff;
+    --surface-chip: #f0f0f2;
+    --text-primary: #3c3f43;
+    --text-secondary: #6b6e74;
+    --text-tertiary: #8c8e94;
+    --border: #d5d7db;
+    --chip-border: #c6c9ce;
+    --accent: #3b82f6;
+    --warn: #b45309;
+    --shadow: 0 8px 28px rgba(0,0,0,.12);
+  }
+  html[data-mode="dark"] {
+    --bg: #1f1e1e;
+    --surface: #2a2828;
+    --surface-elevated: #312f2f;
+    --surface-chip: #3a3838;
+    --text-primary: #d4d4d4;
+    --text-secondary: #9a9a9a;
+    --text-tertiary: #6f6f6f;
+    --border: #434343;
+    --chip-border: #555;
+    --accent: #60a5fa;
+    --warn: #fbbf24;
+    --shadow: 0 12px 32px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .banner {
+    margin: 16px 20px 8px;
+    padding: 10px 14px;
+    border: 1px dashed var(--warn);
+    border-radius: 10px;
+    color: var(--warn);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 20px 16px;
+  }
+  .toolbar button {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .toolbar button[aria-pressed="true"] {
+    border-color: var(--text-primary);
+  }
+  .stage {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 0 20px 32px;
+  }
+  @media (max-width: 960px) { .stage { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px;
+    min-height: 420px;
+  }
+  .card h2 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .card p.note {
+    margin: 0 0 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+  .composer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--chip-border);
+    background: var(--surface-chip);
+    font-size: 12px;
+  }
+  .pending {
+    color: var(--text-secondary);
+    font-size: 11px;
+  }
+  .mark {
+    width: 14px; height: 14px; border-radius: 4px;
+    background: #d97757; display: inline-block;
+  }
+  .panel {
+    margin-top: 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .rail {
+    display: flex;
+    gap: 6px;
+    padding: 10px 10px 0;
+  }
+  .rail .tab {
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .rail .tab.active {
+    background: var(--surface-chip);
+    color: var(--text-primary);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--chip-border);
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  .row.hover { background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
+  .row .name { flex: 1; }
+  .icon {
+    width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); border-radius: 6px;
+  }
+  .row.hover .icon.customize { color: var(--text-secondary); opacity: 1; }
+  .icon.customize { opacity: 0; }
+  .row.hover .icon.customize { opacity: 1; }
+  .meta { color: var(--text-tertiary); font-size: 12px; margin-left: auto; }
+  .flyout {
+    margin-top: 10px;
+    width: 240px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-elevated);
+    box-shadow: var(--shadow);
+    font-size: 12px;
+  }
+  .flyout h3 { margin: 0 0 8px; font-size: 13px; }
+  .capsule {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 8px;
+    background: var(--surface-chip);
+    box-shadow: inset 0 0 0 1px var(--chip-border);
+    font-weight: 500;
+  }
+  .footer {
+    margin-top: 10px;
+    color: var(--text-tertiary);
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+  <div class="banner">
+    <strong>HTML 预览 · 不是实机截图。</strong>
+    本轮按任务要求未启动 Desktop，也没有实机 Light/Dark 截图或录屏。
+    颜色按 DESIGN.md 语义层级手写近似（surface / text-primary / text-secondary / chip）。
+    未覆盖的实机范围：跑着 Opus 5 → Cindy 打折 / Fable、Pi 轨钉死、跨引擎确认关选单。
+  </div>
+  <div class="toolbar">
+    <button type="button" id="light" aria-pressed="true">Light</button>
+    <button type="button" id="dark" aria-pressed="false">Dark</button>
+  </div>
+  <div class="stage">
+    <section class="card">
+      <h2>胶囊「下条：」+ 同引擎轨</h2>
+      <p class="note">确认跨引擎后选单关闭。胶囊用意图模型标下一条；再打开默认停在正在跑的 Claude 轨。行 hover 只露出「自定义」，不自动弹出浮层。</p>
+      <div class="composer">
+        <span class="pill">
+          <span class="pending">下条：</span>
+          <span class="mark" title="正在跑：Claude"></span>
+          Grok 4.6
+        </span>
+      </div>
+      <div class="panel" aria-label="模型列表">
+        <div class="rail">
+          <span class="tab active"><span class="mark"></span>Claude</span>
+          <span class="tab">全部</span>
+          <span class="tab">供应商</span>
+        </div>
+        <div class="row hover">
+          <span class="name">Opus 5</span>
+          <span class="icon" title="收藏">☆</span>
+          <span class="icon customize" title="自定义">☰</span>
+          <span class="meta">Claude · 高</span>
+        </div>
+        <div class="row">
+          <span class="name">GPT-5.5</span>
+          <span class="icon" title="收藏">☆</span>
+          <span class="icon customize" title="自定义">☰</span>
+          <span class="meta">Claude · 中</span>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>自定义浮层：同引擎轨钉死 Harness</h2>
+      <p class="note">点「自定义」/ 右键 / ← 打开。同引擎轨（含收藏行）只展示当前轨引擎静态块，不提供切换。推荐勾 / 描边已去掉。</p>
+      <div class="flyout">
+        <h3>GPT-5.5</h3>
+        <div class="capsule"><span class="mark"></span>Claude</div>
+        <div class="footer">推荐配置 · 同引擎轨不可改 Harness</div>
+      </div>
+      <p class="note" style="margin-top:16px">收藏行与普通行同一把锁。要换 Harness 仍走「全部 / 供应商」。</p>
+    </section>
+  </div>
+  <script>
+    const root = document.documentElement;
+    const light = document.getElementById('light');
+    const dark = document.getElementById('dark');
+    const setMode = (mode) => {
+      root.dataset.mode = mode;
+      light.setAttribute('aria-pressed', String(mode === 'light'));
+      dark.setAttribute('aria-pressed', String(mode === 'dark'));
+    };
+    light.addEventListener('click', () => setMode('light'));
+    dark.addEventListener('click', () => setMode('dark'));
+    if (new URLSearchParams(location.search).get('mode') === 'dark') setMode('dark');
+  </script>
+</body>
+</html>

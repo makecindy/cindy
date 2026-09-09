@@ -7,20 +7,6 @@ export interface WindowsTrayWindow {
   setFullScreen(fullScreen: boolean): void;
 }
 
-/** BrowserWindow surface needed to reveal the renderer-owned first-close dialog. */
-export interface WindowsClosePromptWindow {
-  focus(): void;
-  isDestroyed(): boolean;
-  isMinimized(): boolean;
-  isVisible(): boolean;
-  restore(): void;
-  show(): void;
-  webContents: {
-    isDestroyed(): boolean;
-    send(channel: string): void;
-  };
-}
-
 /** Dependencies for applying the same active-turn protection to tray-menu quit. */
 export interface WindowsTrayQuitDependencies {
   hasActiveTurn(): boolean;
@@ -110,18 +96,6 @@ export function hideWindowToWindowsTray(window: WindowsTrayWindow): void {
     if (!window.isDestroyed()) window.hide();
   });
   window.setFullScreen(false);
-}
-
-/** Keep the main window visible and ask its renderer to show the Cindy-styled chooser. */
-export function requestWindowsCloseBehavior(
-  window: WindowsClosePromptWindow,
-  channel: string,
-): void {
-  if (window.isDestroyed() || window.webContents.isDestroyed()) return;
-  if (window.isMinimized()) window.restore();
-  if (!window.isVisible()) window.show();
-  window.focus();
-  window.webContents.send(channel);
 }
 
 /** Quit directly while idle, but require explicit confirmation during an active turn. */

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   normalizeFingerprintHash,
   pickIpaFingerprintEntry,
+  readEmbeddedRuntimeVersionFromAab,
   readEmbeddedRuntimeVersionFromApk,
   readEmbeddedRuntimeVersionFromIpa,
 } from '../../scripts/lib/embedded-runtime.mjs';
@@ -100,6 +101,31 @@ describe('readEmbeddedRuntimeVersionFromApk', () => {
     try {
       const apk = makeZip(root, { 'classes.dex': 'x' });
       expect(() => readEmbeddedRuntimeVersionFromApk(apk)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('readEmbeddedRuntimeVersionFromAab', () => {
+  itWithZip('从 AAB base module 的 assets/fingerprint 读出内嵌 runtimeVersion', () => {
+    const root = mkdtempSync(join(tmpdir(), 'xdt-aab-'));
+    try {
+      const aab = makeZip(root, {
+        'base/assets/fingerprint': `${HASH}\n`,
+        'base/manifest/AndroidManifest.xml': 'protobuf',
+      });
+      expect(readEmbeddedRuntimeVersionFromAab(aab)).toBe(HASH);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  itWithZip('AAB 缺 base/assets/fingerprint 时抛错', () => {
+    const root = mkdtempSync(join(tmpdir(), 'xdt-aab-'));
+    try {
+      const aab = makeZip(root, { 'base/manifest/AndroidManifest.xml': 'protobuf' });
+      expect(() => readEmbeddedRuntimeVersionFromAab(aab)).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

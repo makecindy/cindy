@@ -58,7 +58,6 @@ function makeGhost(
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['tool'],
     command,
   };
   return {

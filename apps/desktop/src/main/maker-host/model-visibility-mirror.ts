@@ -18,6 +18,8 @@
 
 import type { AgentKind } from '@cindy/model-providers';
 
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+
 /** override 表:key=`${agent}:${providerId}:${modelId}` → 用户显式设定的可见性。 */
 type VisibilityMap = Record<string, boolean>;
 
@@ -68,6 +70,28 @@ export function syncModelVisibilityMirror(
 }
 
 /**
+ * 只接受当前稳定 owner 的 renderer 快照。账号切换期间或旧 generation 的迟到 invoke 必须
+ * fail closed，否则 A 的内存镜像会在 B 登录后继续影响 IM /model 与 device-link 控制端。
+ */
+export function syncModelVisibilityMirrorForOwner(
+  raw: unknown,
+  requestedOwner: unknown,
+  activeOwner: DataOwnerPushStamp,
+  boundaryPending: boolean,
+  onChanged: () => void,
+): boolean {
+  if (
+    boundaryPending
+    || !isDataOwnerPushStamp(requestedOwner)
+    || requestedOwner.dataOwnerId !== activeOwner.dataOwnerId
+    || requestedOwner.ownerGeneration !== activeOwner.ownerGeneration
+  ) {
+    return false;
+  }
+  return syncModelVisibilityMirror(raw, onChanged);
+}
+
+/**
  * 取某 (agent, 来源, 模型) 的可见性 override(用户没显式开关过 ⇒ undefined,调用方回落目录默认)。
  * 与共享包 `isModelVisible(override, defaultEnabled)` 配合得到最终可见性。
  */
@@ -87,7 +111,12 @@ export function getModelVisibilityMirrorSnapshot(): Record<string, boolean> {
   return { ...mirror };
 }
 
+/** Clear the process-global mirror at an account boundary before the next owner is committed. */
+export function clearModelVisibilityMirror(): void {
+  mirror = {};
+}
+
 /** 测试用 —— 重置镜像。 */
 export function __resetModelVisibilityMirrorForTest(): void {
-  mirror = {};
+  clearModelVisibilityMirror();
 }

@@ -29,10 +29,12 @@
  */
 
 import {
+  isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
+  parseToolLoopErrorDetails,
 } from '@cindy/maker-core';
 
 /**
@@ -46,10 +48,14 @@ import {
  * 中文、不进 renderer locale(与本文件其它渠道文案同规)。
  */
 function autoReviewUnavailableNotice(message: string): string | null {
-  return isAutoReviewUnavailableNotice(message)
-    ? '自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。'
-      + '想少被打断，可以把这个任务切到「默认权限」自行掌控。'
-    : null;
+  if (isAutoReviewUnavailableNotice(message)) {
+    return '自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。'
+      + '想少被打断，可以把这个任务切到「默认权限」自行掌控。';
+  }
+  if (isAutoReviewConfirmUndeliveredNotice(message)) {
+    return '自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。';
+  }
+  return null;
 }
 
 /** 已知的非终止自动重试事件 -> 渠道侧本地化进度；其它错误保持静默。 */
@@ -120,6 +126,35 @@ export function overloadFailureNotice(
 }
 
 /**
+ * 终态 tool-loop 保护 -> 渠道可读的安全说明。
+ *
+ * maker-core 同时保留了稳定 reason 和受限 toolLoop 结构, 但 message 仍可能带有
+ * `missing_required_field` 等内部分类。IM 渠道没有 renderer 的 i18n 映射, 所以这里
+ * 只根据白名单后的 kind/count 生成安全文案, 绝不把原始 loopHint 外发。
+ */
+function toolLoopFailureNotice(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const record = data as { reason?: unknown; toolLoop?: unknown };
+  if (record.reason !== 'tool_use_loop_detected') return null;
+
+  const details = parseToolLoopErrorDetails(record.toolLoop);
+  if (!details) {
+    return '模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。';
+  }
+
+  switch (details.kind) {
+    case 'consecutive':
+      return `模型重复调用同一个工具 ${details.count} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。`;
+    case 'pingpong':
+      return `模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 ${details.count} 次调用后停止了本轮。可以发送新消息继续。`;
+    case 'rotation':
+      return `模型持续轮转调用多个工具，Cindy 检测到本轮已有 ${details.count} 次调用后停止了本轮。可以发送新消息继续。`;
+    case 'contract':
+      return `模型连续触发了无效的工具调用，Cindy 已在 ${details.count} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。`;
+  }
+}
+
+/**
  * 终态 error 事件的 data -> 渠道要展示的失败文案: 过载类换成上面那条可操作说明,
  * 其它错误沿用上游原文。
  *
@@ -144,5 +179,9 @@ export function terminalErrorText(data: unknown): string {
   const errorStatus = typeof record?.errorStatus === 'number' ? record.errorStatus : undefined;
   const codexErrorInfo =
     typeof record?.codexErrorInfo === 'string' ? record.codexErrorInfo : undefined;
-  return overloadFailureNotice(message, errorStatus, codexErrorInfo) ?? message;
+  return (
+    toolLoopFailureNotice(data) ??
+    overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
+    message
+  );
 }

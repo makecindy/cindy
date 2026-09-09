@@ -40,7 +40,7 @@ function frequencyText(
 ): string {
   return schedule.manual
     ? t('scheduler.detail.manualTrigger')
-    : summarizeConfig(cronToConfig(schedule.cronExpr));
+    : summarizeConfig(cronToConfig(schedule.cronExpr), t);
 }
 
 export function ScheduleBindingBadge({

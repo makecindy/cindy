@@ -83,6 +83,24 @@ export interface PickedConnectedModel {
   providerId: string;
 }
 
+/**
+ * 在当前已连接来源中挑真正可新建路由的第一项。
+ *
+ * 「第一项」沿用新对话既有口径：供应商先按订阅优先，再取该供应商目录排序第一的
+ * 默认可见聊天模型。这里不处理 preferred / newSessionDefault；调用方明确要求纯 fallback
+ * 时用它，避免服务端 marker 把“第一项”改写成另一项。
+ */
+export function pickFirstConnectedModelForAgent(
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+): PickedConnectedModel | null {
+  for (const provider of providersByPreference(providers, agent)) {
+    const first = firstModelByOrder(provider, agent);
+    if (first) return { model: first.id, providerId: provider.id };
+  }
+  return null;
+}
+
 /** 按正常来源优先级找出区域 / 目录明确标记的新对话默认模型。 */
 function markedDefaultModelIdForAgent(
   providers: readonly ProviderView[],
@@ -163,11 +181,7 @@ export function pickConnectedModelForAgent(
       return { model: preferredModelId, providerId: provider.id };
     }
   }
-  for (const provider of ranked) {
-    const first = firstModelByOrder(provider, agent);
-    if (first) return { model: first.id, providerId: provider.id };
-  }
-  return null;
+  return pickFirstConnectedModelForAgent(ranked, agent);
 }
 
 export interface DraftModelCalibrationInput {
@@ -267,6 +281,13 @@ export function resolveDraftSessionProviderId({
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;
+  // 预设通过「添加供应商」落地后同样属于 user provider。即使它是当前模型唯一的
+  // 已连接来源，也不能省略 providerId：main / maker-core 的 null 语义是沿用各 harness
+  // 的原生认证 fallback（Claude → Cindy gateway / Claude OAuth），不会反查目录里唯一的
+  // BYOM 来源。省略后 UI 虽显示该来源，首轮 auth gate 却会去读 gateway key，最终报
+  // `not authenticated: no_key`。用户来源必须始终显式钉住，保证其代理路由与密钥生效。
+  const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
+  if (effectiveProvider?.source === 'user') return effectiveProviderId;
   const modelDefaultProviderId = effectiveSourceIdForModel([...providers], null, model, agent);
   // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
   // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含

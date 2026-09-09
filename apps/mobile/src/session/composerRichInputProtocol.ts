@@ -1,3 +1,5 @@
+export interface ComposerSelectionPrefix { textLength: number; atomCount: number }
+
 export type ComposerWebMessage =
   /**
    * focus 只代表「编辑器现在有 DOM 焦点」,**不代表用户点了输入框**:WKWebView 在输入区
@@ -7,7 +9,8 @@ export type ComposerWebMessage =
    */
   | { type: 'ready' | 'focus' | 'blur' }
   | { type: 'height'; height: number }
-  | { type: 'change'; document: unknown }
+  | { type: 'change'; document: unknown; documentId?: number }
+  | { type: 'selection'; documentId: number; before: ComposerSelectionPrefix; through: ComposerSelectionPrefix }
   | { type: 'paste-text-request'; requestId: string; text?: string }
   | { type: 'paste-images-start'; requestId: string; count: number }
   | { type: 'paste-image'; requestId: string; base64: string; mimeType: string; name: string; index: number }
@@ -47,7 +50,13 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
         : null;
     }
     if (message.type === 'change') {
-      return { type: 'change', document: message.document };
+      if (message.documentId !== undefined && !isOffset(message.documentId)) return null;
+      return { type: 'change', document: message.document,
+        ...(message.documentId === undefined ? {} : { documentId: message.documentId as number }) };
+    }
+    if (message.type === 'selection') {
+      if (!isOffset(message.documentId) || !isPrefix(message.before) || !isPrefix(message.through)) return null;
+      return { type: 'selection', documentId: message.documentId, before: message.before, through: message.through };
     }
     if (message.type === 'paste-text-request') {
       if (
@@ -100,6 +109,16 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
   } catch {
     return null;
   }
+}
+
+function isOffset(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isPrefix(value: unknown): value is ComposerSelectionPrefix {
+  if (!value || typeof value !== 'object') return false;
+  const prefix = value as Record<string, unknown>;
+  return isOffset(prefix.textLength) && isOffset(prefix.atomCount);
 }
 
 function isValidRequestId(value: unknown): value is string {

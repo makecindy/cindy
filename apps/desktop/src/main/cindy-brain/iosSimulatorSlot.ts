@@ -109,10 +109,10 @@ export class GhostIOSSimulatorSlot {
 
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeIOSSimulatorResult> {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('ios-simulator')) {
+    if (!ghost?.enabled || ghost.manifest.iosSimulator !== true) {
       return fail(
         'PERMISSION_DENIED',
-        '插件未申请内置 iOS 模拟器权限(ios-simulator 槽),或当前未启用',
+        '插件未申请内置 iOS 模拟器权限(iosSimulator),或当前未启用',
       );
     }
     if (!isRecord(payload) || typeof payload.kind !== 'string') {

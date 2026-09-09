@@ -10,6 +10,7 @@
 
 import { useRef, useState } from 'react';
 import { ChevronRight, FileText } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
@@ -19,6 +20,10 @@ import { Collapse } from '@/components/ui/collapse';
 import { Tip } from '@/components/ui/tooltip';
 import { DiffView } from './DiffView';
 import { TextLightbox } from './TextLightbox';
+import {
+  formatToolResultCompactionBytes,
+  parseToolResultCompactionMarker,
+} from '@cindy/maker-shared/tool-result-compaction';
 
 // text-lightbox F1: only these 4 tools get the preview entry chip-row.
 // Bash/Grep/Glob etc. are explicitly out of scope per the spec's 非目标 list.
@@ -84,7 +89,14 @@ export function getToolSummary(toolName: string, input: unknown): string {
 }
 
 export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolCallCardProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const displayedToolResult = compactedToolResult
+    ? t('chat.toolResultCompacted', {
+        size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
+      })
+    : toolResult;
   // 会话文件来源:remote 时文件 chip 点击走远程分流(取回缓存副本),不直打本机 fs。
   const fileCtx = useChatSessionFile();
   // text-lightbox F1/F3: open TextLightbox on chip click.
@@ -228,7 +240,7 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
             )}
 
             {/* Result section */}
-            {toolResult && (
+            {displayedToolResult && (
               <div>
                 <div className="mb-1 text-xs font-medium text-[var(--msg-tool-card-chevron)]">
                   Result
@@ -243,7 +255,7 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
                     'select-text',
                   )}
                 >
-                  {toolResult}
+                  {displayedToolResult}
                 </pre>
               </div>
             )}

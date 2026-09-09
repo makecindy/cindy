@@ -11,16 +11,19 @@
  *
  * 纯内存;keyed by xdt sessionId(与 session-provider-store 同键)。未记录的会话 → effort 读到
  * null(bridge 回退默认档)、fast 读到 false(不发 service_tier)。条目是 sessionId → 短字符串 /
- * 布尔,量级 = 本次运行触过的会话数,不做关闭清理(与 session-provider-store 同取舍;重启即清,
- * 复开会话由 bootstrapSession / IM turnRunner 从 DB 重新 hydrate 覆盖)。
+ * 布尔,量级 = 本次运行触过的会话数。普通进程关闭不清理,使 runtime override 能跨 lazy
+ * rehydrate 保留；任务归档/删除的终态边界会清理,复开后由 bootstrapSession / IM turnRunner
+ * 从 DB baseline 重新 hydrate。
  */
 
 const bySession = new Map<string, string>();
 const fastBySession = new Set<string>();
 
-/** 记下某会话当前 effort(SET_EFFORT / hydrate 时调用)。 */
-export function setSessionEffort(sessionId: string, effort: string): void {
-  if (effort && effort.trim()) bySession.set(sessionId, effort.trim());
+/** 记下某会话当前 effort(SET_EFFORT / hydrate 时调用); nullish/空值显式清除。 */
+export function setSessionEffort(sessionId: string, effort: string | null | undefined): void {
+  const normalized = effort?.trim();
+  if (normalized) bySession.set(sessionId, normalized);
+  else bySession.delete(sessionId);
 }
 
 /** 读取某会话 effort;未记录返回 null(bridge 走默认档)。 */
@@ -37,4 +40,10 @@ export function setSessionFastMode(sessionId: string, enabled: boolean): void {
 /** 读取某会话 Fast 模式;未记录返回 false(bridge 不发 service_tier)。 */
 export function getSessionFastMode(sessionId: string): boolean {
   return fastBySession.has(sessionId);
+}
+
+/** 账户 / app-session 边界清理全部 owner-scoped 运行时轴。 */
+export function clearAllSessionRuntimeAxes(): void {
+  bySession.clear();
+  fastBySession.clear();
 }

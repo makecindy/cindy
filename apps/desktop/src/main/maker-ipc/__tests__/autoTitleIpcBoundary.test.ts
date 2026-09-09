@@ -60,9 +60,9 @@ vi.mock('../../localDb/latestMessageText.js', () => ({
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: vi.fn(),
 }));
-vi.mock('../../maker-host/title-one-shot.js', () => ({
-  generateTitleViaProvider: h.generateTitle,
-  generateTitleViaProviderResult: h.generateTitleResult,
+vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
+  generateTitleWithAuxiliaryModel: h.generateTitle,
+  generateTitleWithAuxiliaryModelResult: h.generateTitleResult,
 }));
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
@@ -75,6 +75,11 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
       throw err;
     }
   },
+}));
+// title.ts imports promptPrediction statically; this boundary suite does not
+// exercise prediction itself, so keep the maker-host graph out of collection.
+vi.mock('../promptPrediction.js', () => ({
+  generatePromptPrediction: vi.fn(),
 }));
 
 import { registerMakerTitleIpc } from '../title.js';
@@ -166,6 +171,7 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
       's-running',
       expect.any(Number),
       expect.any(Function),
+      { preferHookUserText: true },
     );
   });
 
@@ -192,6 +198,7 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
       's-completed',
       expect.any(Number),
       expect.any(Function),
+      { preferHookUserText: true },
     );
   });
 
@@ -222,6 +229,7 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
       's-new-turn',
       expect.any(Number),
       expect.any(Function),
+      { preferHookUserText: true },
     );
   });
 
@@ -247,6 +255,7 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
       's-snapshot-race',
       expect.any(Number),
       expect.any(Function),
+      { preferHookUserText: true },
     );
   });
 });

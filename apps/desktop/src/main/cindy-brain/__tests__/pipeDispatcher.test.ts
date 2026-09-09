@@ -19,7 +19,6 @@ function fakeGhost(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['tool', 'model', 'panel'],
       tools: [{ name: 'gen_image', description: '生成图片' }],
     },
     dir: '/fake/brain/art',

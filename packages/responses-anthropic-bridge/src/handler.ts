@@ -353,6 +353,35 @@ export function createResponsesAnthropicHandler(
         return;
       }
 
+      // 最终上游响应的元数据旁路 —— 重试链已经结束(401/403 换凭据、413 压图的中间
+      // 响应都在上面 continue 掉了), 这里的 upstream 就是要回给调用方的那一个。
+      //
+      // 放在读 body / 翻译之前: headers 与 body 消费无关, 早取一步, 流式路径下也不
+      // 会因为 body 还没开始读就拿不到。同步发起、不 await —— 回调是 best-effort 的
+      // 观测通道, 既不能延后首字节, 也不能让它的失败影响响应本身。
+      if (provider.onUpstreamResponse) {
+        try {
+          const result = provider.onUpstreamResponse({
+            status: upstream.status,
+            responseHeaders: upstream.headers,
+            requestHeaders: providerHeaders,
+          });
+          if (result && typeof (result as Promise<void>).catch === 'function') {
+            (result as Promise<void>).catch((error: unknown) => {
+              log.warn?.('responses-anthropic bridge onUpstreamResponse failed', {
+                model: incoming.model,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
+        } catch (error) {
+          log.warn?.('responses-anthropic bridge onUpstreamResponse failed', {
+            model: incoming.model,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       const reportUpstreamError = async (status: number, body: string): Promise<void> => {
         if (!provider.onUpstreamError) return;
         try {

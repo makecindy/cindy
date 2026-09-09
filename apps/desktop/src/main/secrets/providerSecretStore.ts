@@ -2,6 +2,8 @@ import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { storedCustomProviderId } from '@cindy/model-providers';
+
 import { createLogger } from '../logger.js';
 import {
   providerSecretStorageKey,
@@ -17,6 +19,7 @@ import {
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
+  PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
@@ -275,6 +278,7 @@ export function createProviderSecretStore(
     // SSH 远端 daemon 直连 MCP bridge 的 persistent token 同清:同机换账号后,
     // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
     io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
+    io.remove(PI_PROXY_DERIVATION_KEY_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -388,8 +392,9 @@ export function getProviderSecretStore(): ProviderSecretStore {
  * 与 renderer 经通用 safe-storage IPC 写入的 .enc 文件字节级互通。
  */
 export function readCustomProviderKey(providerId: string, agent: string): string | null {
+  const storageProviderId = storedCustomProviderId(providerId);
   try {
-    return electronSecretIo.read(customProviderSecretStorageKey(providerId, agent));
+    return electronSecretIo.read(customProviderSecretStorageKey(storageProviderId, agent));
   } catch (err) {
     log.warn(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
@@ -416,8 +421,9 @@ export function readCustomProviderHeaders(
   providerId: string,
   agent: string,
 ): Record<string, string> | null {
+  const storageProviderId = storedCustomProviderId(providerId);
   try {
-    const raw = electronSecretIo.read(customProviderHeaderStorageKey(providerId, agent));
+    const raw = electronSecretIo.read(customProviderHeaderStorageKey(storageProviderId, agent));
     return raw === null ? null : parseCustomProviderHeaders(raw);
   } catch (err) {
     log.warn(
@@ -429,14 +435,23 @@ export function readCustomProviderHeaders(
 }
 
 /**
+ * 严格快照的第三态：密文文件存在，但用当前 safeStorage 主密钥解不开（钥匙串条目变更、
+ * 由另一签名 / 构建写入等，见 #871）。重试无意义，只有显式替换值才允许覆盖它；回滚时
+ * 不尝试恢复这份旧 blob，而是删掉本次写入的新值（#3821）。
+ */
+export const UNRECOVERABLE_PROVIDER_CREDENTIAL = Symbol('unrecoverable-provider-credential');
+export type UnrecoverableProviderCredential = typeof UNRECOVERABLE_PROVIDER_CREDENTIAL;
+
+/**
  * 配置 CRUD 回滚前的严格 API key 快照读取。
- * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
- * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
+ * 仅 ENOENT 表示“没有旧 key”；密文存在但解不开返回 UNRECOVERABLE_PROVIDER_CREDENTIAL；
+ * owner / 加密不可用、文件读取失败都必须抛错，防止调用方把暂时不可读的现有凭证误判为空
+ * 并永久删除。
  */
 export function readCustomProviderKeyForMutation(
   providerId: string,
   agent: string,
-): string | null {
+): string | null | UnrecoverableProviderCredential {
   const logicalKey = customProviderSecretStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -463,15 +478,19 @@ export function readCustomProviderKeyForMutation(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'decrypt custom provider key snapshot failed',
     );
-    throw new Error('existing provider credential is unreadable');
+    return UNRECOVERABLE_PROVIDER_CREDENTIAL;
   }
 }
 
-/** Strict mutation snapshot for an encrypted runtime header blob. */
+/**
+ * Strict mutation snapshot for an encrypted runtime header blob. Same three states as
+ * readCustomProviderKeyForMutation: a blob that exists but cannot be decrypted (or parsed)
+ * is reported as UNRECOVERABLE_PROVIDER_CREDENTIAL instead of thrown.
+ */
 export function readCustomProviderHeadersForMutation(
   providerId: string,
   agent: string,
-): Record<string, string> | null {
+): Record<string, string> | null | UnrecoverableProviderCredential {
   const logicalKey = customProviderHeaderStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -494,7 +513,7 @@ export function readCustomProviderHeadersForMutation(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'decrypt custom provider headers snapshot failed',
     );
-    throw new Error('existing provider header credentials are unreadable');
+    return UNRECOVERABLE_PROVIDER_CREDENTIAL;
   }
 }
 
@@ -561,6 +580,32 @@ export function writeRemoteMcpBridgeToken(value: string): boolean {
     log.warn(
       { err: err instanceof Error ? err.message : String(err) },
       'write remote mcp bridge token failed',
+    );
+    return false;
+  }
+}
+
+/** Read the host-only HMAC key used to derive remote Pi proxy session tokens. */
+export function readPiProxyDerivationKey(): string | null {
+  try {
+    return electronSecretIo.read(PI_PROXY_DERIVATION_KEY_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'read pi proxy derivation key failed',
+    );
+    return null;
+  }
+}
+
+/** Persist the host-only remote Pi proxy derivation key on first use. */
+export function writePiProxyDerivationKey(value: string): boolean {
+  try {
+    return electronSecretIo.write(PI_PROXY_DERIVATION_KEY_STORAGE_KEY, value);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'write pi proxy derivation key failed',
     );
     return false;
   }
@@ -634,6 +679,30 @@ export function readGhostSecret(ghostId: string, secretKey: string): string | nu
     );
     return null;
   }
+}
+
+/**
+ * Strict Ghost secret read for owner-stable repair jobs. Absence is still a
+ * normal null result, while keychain, IO, and decrypt failures remain errors
+ * so the durable coordinator can retry instead of memoizing a false no-op.
+ */
+export function readGhostSecretStrict(ghostId: string, secretKey: string): string | null {
+  const physicalKey = resolveOwnerScopedSecretStorageKey(
+    ghostSecretStorageKey(ghostId, secretKey),
+  );
+  if (!physicalKey) return null;
+  const filepath = path.join(secretDir(), `${physicalKey}.enc`);
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(filepath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('safeStorage is unavailable');
+  }
+  return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
 }
 
 /**

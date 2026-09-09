@@ -30,6 +30,18 @@ describe('provider branding', () => {
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
   });
 
+  it.each([
+    ['ollama', 'ollama'],
+    ['cindy-local-ollama', 'ollama'],
+    ['lmstudio', 'lmstudio'],
+    ['cindy-local-lmstudio', 'lmstudio'],
+    ['llamacpp', 'llamacpp'],
+    ['vllm', 'vllm'],
+  ] as const)('maps local runtime %s to %s', (providerId, logoKind) => {
+    expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
+    expect(hasProviderLogo(providerId)).toBe(true);
+  });
+
   it('only infers Vercel branding from the exact AI Gateway host', () => {
     expect(resolveProviderLogoKind('renamed', {
       codex: { upstream: 'https://ai-gateway.vercel.sh/v1' },

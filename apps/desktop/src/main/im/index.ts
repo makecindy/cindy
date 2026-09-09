@@ -211,7 +211,14 @@ export function startImOrchestrators(): void {
 
   ipcMain.on('desktop:cc-prefs-changed', (_e: IpcMainEvent, prefs: unknown) => {
     if (prefs && typeof prefs === 'object') {
-      _desktopCcPrefs = prefs as DesktopCcPrefs;
+      // providerId 是新增字段，老 renderer 版本不推；非字符串的脏值（renderer 不可信）
+      // 会一路流到路由裁决的 .trim() 调用，在这里归一成 string | null | undefined。
+      const p = prefs as Partial<DesktopCcPrefs>;
+      _desktopCcPrefs = {
+        ...(prefs as DesktopCcPrefs),
+        providerId:
+          typeof p.providerId === 'string' ? p.providerId : p.providerId === null ? null : undefined,
+      };
     }
   });
 

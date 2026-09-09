@@ -26,6 +26,10 @@ import {
   Target,
 } from 'lucide-react';
 import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
+import {
+  projectSlashCommandsInText,
+  slashCommandDisplayLabel,
+} from '@cindy/maker-shared/composer-palette';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
@@ -135,6 +139,16 @@ interface UserMessageProps {
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
    *  Stable per-session — only changes on session switch. */
   workingDir: string;
+  /**
+   * Whether `workingDir` names paths on *this* machine.
+   *
+   * False for a device-link or SSH task, where an inline @-chip would otherwise
+   * resolve the remote author's path against the control side's filesystem and
+   * open a local file. Chips then render inert — the same shape a collapsed
+   * long message already uses. Default true keeps every existing caller, which
+   * renders local sessions, exactly as it was.
+   */
+  allowPrivilegedLinks?: boolean;
   content: string;
   /** Resolved range summaries for session links in this user message. */
   sessionReferences?: PersistedSessionReferenceMetadata[];
@@ -176,6 +190,8 @@ interface UserMessageProps {
    *  edit-last-message: 只有最后一条 user 消息显示编辑入口(编辑 = rewind 到
    *  这条 + 重发,更早的消息编辑会静默丢弃后续轮次,v1 不开放)。 */
   isLastUserMessage?: boolean;
+  /** 伙伴对话使用常显、无 Fork 的轻量消息操作栏。 */
+  simplifiedBotConversation?: boolean;
   /** scheduler 注入的消息来源标记;存在时在气泡上方渲染"由自动化任务发送"标签。 */
   automationOrigin?: MessageAutomationOrigin;
   /** Hook 来源元数据;存在时渲染左对齐 Cindy 署名任务卡片(替代右对齐气泡)。 */
@@ -526,11 +542,12 @@ function renderContentWithoutPastedText(
     // Check for /command at line start — only if it looks like a real command
     const slashMatch = line.match(/^\/(\S+)/);
     if (renderLegacySlashCommands && slashMatch && looksLikeCommand(slashMatch[1])) {
+      const slashLabel = `/${slashMatch[1]}`;
       nodes.push(
         <InlineReferenceChip
           key={`s-${li}`}
-          label={`/${slashMatch[1]}`}
-          tooltip={`/${slashMatch[1]}`}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
@@ -857,11 +874,12 @@ export function renderContent(
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
   return tokens.map((token, index) => {
     if (token.kind === 'slash') {
+      const slashLabel = slashCommandDisplayLabel(token.text);
       return (
         <InlineReferenceChip
           key={`slash-chip-${index}`}
-          label={token.text}
-          tooltip={token.text}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
@@ -922,6 +940,7 @@ export function renderContent(
 
 export function UserMessage({
   workingDir,
+  allowPrivilegedLinks = true,
   content,
   sessionReferences,
   quotesEncoded,
@@ -939,6 +958,7 @@ export function UserMessage({
   delivery,
   isFirstUserMessage,
   isLastUserMessage,
+  simplifiedBotConversation = false,
   automationOrigin,
   hookSource,
   goalBadge,
@@ -1081,8 +1101,8 @@ export function UserMessage({
   // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
   const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
   const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostMentionFulfilled;
-  const ghostChipDisplay = ghostPillForm ? null : ghostCardDisplay;
-  const ghostPillDisplay = ghostPillForm ? ghostDirective : null;
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
+  const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
   const displayBubbleBody = ghostCmdToken ? ghostPromptBody : bubbleBody;
@@ -1139,7 +1159,16 @@ export function UserMessage({
   // copy text per V1.2: original text + (if files) "\n\n附件：a.md, b.md"
   // ghost-summon-card:copy 给用户的是"他自己的话"(剥离机器追加段);
   // 追加段原文在卡片展开区可查可选中。
-  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  // Project on the persisted wire text first so slashCommandRanges stay valid,
+  // then strip private quote markers for copy / edit display.
+  const projectedSource = projectSlashCommandsInText(ghostBody, slashCommandRanges);
+  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
+  const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  const editSubmitText = quotesEncoded
+    ? ghostBody
+    : copyBody !== visibleSource
+      ? visibleSource
+      : undefined;
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
@@ -1317,8 +1346,8 @@ export function UserMessage({
 
   const orcaCardTitle =
     orcaCommunication?.orcaSource === 'lead'
-      ? 'Orca Lead: dispatched task'
-      : 'Orca Worker: reported result';
+      ? t('chat.userMessage.orcaFromLead')
+      : t('chat.userMessage.orcaFromWorker');
 
   // Attachments belong to the user message independently of its visual shell.
   // Define each renderer once, then place it inside the hook / ordinary branch
@@ -1467,7 +1496,7 @@ export function UserMessage({
                 sessionId={sessionId}
                 messageClientId={messageClientId}
                 initialText={copyBody}
-                initialSubmitText={quotesEncoded ? ghostBody : undefined}
+                initialSubmitText={editSubmitText}
                 images={images}
                 files={files}
                 workingDir={workingDir}
@@ -1579,7 +1608,7 @@ export function UserMessage({
                               {renderContent(
                                 segment.text,
                                 workingDir,
-                                longMessageCollapsed
+                                longMessageCollapsed || !allowPrivilegedLinks
                                   ? undefined
                                   : async (abs, name, chip) => {
                                       if (
@@ -1592,7 +1621,7 @@ export function UserMessage({
                                       activeFileChipRef.current = chip;
                                       setTextLightboxFile({ path: abs, name });
                                     },
-                                longMessageCollapsed
+                                longMessageCollapsed || !allowPrivilegedLinks
                                   ? undefined
                                   : (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
                                 t,
@@ -1665,16 +1694,20 @@ export function UserMessage({
                           : renderContent(
                               displayBubbleBody,
                               workingDir,
-                              async (abs, name, chip) => {
-                                if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
-                                  return;
-                                // F2 / F6: stash the clicked chip so the lightbox can
-                                // return focus on close. State + ref are shared with the
-                                // Chip-Row above ("most recent trigger wins" semantics).
-                                activeFileChipRef.current = chip;
-                                setTextLightboxFile({ path: abs, name });
-                              },
-                              (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
+                              allowPrivilegedLinks
+                                ? async (abs, name, chip) => {
+                                    if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
+                                      return;
+                                    // F2 / F6: stash the clicked chip so the lightbox can
+                                    // return focus on close. State + ref are shared with the
+                                    // Chip-Row above ("most recent trigger wins" semantics).
+                                    activeFileChipRef.current = chip;
+                                    setTextLightboxFile({ path: abs, name });
+                                  }
+                                : undefined,
+                              allowPrivilegedLinks
+                                ? (xdtFileUrl) => setLightboxSrc(xdtFileUrl)
+                                : undefined,
                               t,
                               sessionId,
                               isRemoteFileOrigin(sessionFileCtx.origin),
@@ -1744,6 +1777,7 @@ export function UserMessage({
                   copyLinkText={messageDeepLink}
                   align="right"
                   hovered={hovered}
+                  simplifiedBotConversation={simplifiedBotConversation}
                   onFork={!isBlocked && canFork ? handleFork : undefined}
                   onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
                   onShareAsImage={handleShareAsImage}

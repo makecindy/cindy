@@ -89,10 +89,14 @@ export async function resolveVoiceInputStartGuards(
     ? cachedSystemPermissions.accessibility
     : ({ ok: true, status: 'not-required' } as const);
   const cachedReadiness = window.electronAPI.voiceInput.getReadinessCached();
-  // Windows permission can be revoked while Cindy is running. Probe the
-  // renderer before every start so a stale positive main cache cannot let ASR
-  // connect before getUserMedia reports the denial.
-  const shouldVerifyPermission = window.electronAPI.platform === 'win32' || !cachedPermission.ok;
+  // A positive OS permission snapshot is sufficient for the start guard. The
+  // real capture engine calls getUserMedia immediately after this gate and is
+  // the authoritative revocation check; opening a second, short-lived stream
+  // here made every Windows recording pay the microphone cold-start cost twice.
+  // Keep the async path for missing/negative/unknown snapshots so newly granted
+  // permission still takes effect without restarting the app.
+  const shouldVerifyPermission = !cachedPermission.ok
+    || cachedPermission.status !== 'granted';
   const permissionSource = shouldVerifyPermission ? 'async' : 'cache';
   const readinessSource = cachedReadiness?.ok ? 'cache' : 'async';
 

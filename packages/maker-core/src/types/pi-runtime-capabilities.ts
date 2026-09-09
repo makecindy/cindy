@@ -45,6 +45,15 @@ export interface PiRuntimeCommand {
   sourceInfo: PiRuntimeCommandSourceInfo;
 }
 
+/** Launch-time Cindy-managed skill snapshot for one Pi runtime. */
+export interface PiManagedPackageSkillRuntimeSnapshot {
+  sourcePath: string;
+  name: string;
+  description?: string;
+  /** Present only when this session's get_commands proves the skill loaded. */
+  runtimeCommandName?: string;
+}
+
 /** Startup-only Cindy approval/assembly fact for this isolated Pi runtime. */
 export interface PiProjectResourceRuntimeDiagnostic {
   status: import('./pi-project-trust.js').PiProjectTrustStatus;
@@ -81,6 +90,10 @@ export interface PiRuntimeCapabilityManifest {
   status: PiRuntimeCapabilityStatus;
   source: PiRuntimeCapabilitySource;
   commands: readonly PiRuntimeCommand[];
+  /** Commands whose get_commands provenance resolves inside an enabled Cindy-managed Pi package. */
+  managedPackageCommandNames?: readonly string[];
+  /** Exact managed skills passed to this runtime at launch; never re-read from the global store. */
+  managedPackageSkills?: readonly PiManagedPackageSkillRuntimeSnapshot[];
   error?: PiRuntimeCapabilityError;
   /** Does not imply loaded; only `commands` from this session's get_commands can do that. */
   projectResources?: PiProjectResourceRuntimeDiagnostic;

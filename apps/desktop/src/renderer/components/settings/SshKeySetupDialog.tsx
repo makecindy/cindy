@@ -774,6 +774,7 @@ interface PasswordInputProps {
 function PasswordInput({
   label, value, onChange, disabled, visible, onToggleVisible, errorText, autoFocus, onSubmit,
 }: PasswordInputProps) {
+  const { t } = useTranslation();
   return (
     <label className="flex flex-col gap-1">
       <span className="text-12 font-medium"
@@ -808,7 +809,9 @@ function PasswordInput({
           type="button"
           onClick={onToggleVisible}
           disabled={disabled}
-          aria-label={visible ? 'Hide' : 'Show'}
+          aria-label={
+            visible ? t('sessionShare.export.hidePassword') : t('sessionShare.export.showPassword')
+          }
           className="flex h-8 w-8 items-center justify-center"
           style={{ color: 'var(--settings-integration-subtitle)' }}
         >

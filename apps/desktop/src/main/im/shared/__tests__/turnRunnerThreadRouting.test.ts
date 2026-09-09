@@ -522,21 +522,23 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
         }),
       }),
     });
-    mocks.generateAndPersistFbotTitle.mockResolvedValue('FBot · 新功能');
+    mocks.generateAndPersistFbotTitle.mockResolvedValue('Slack · 新功能');
     await runTurn('400.4', '帮我做个新功能');
     await vi.waitFor(() => {
       expect(mocks.slackIm.updateInteractiveCard).toHaveBeenCalledWith(
         'C1|anchor',
         expect.objectContaining({
-          title: slackUi.thread!.takeoverCard('FBot · 新功能', 'desktop-wd').title,
+          title: slackUi.thread!.takeoverCard('Slack · 新功能', 'desktop-wd').title,
           buttons: [expect.objectContaining({ id: 'control:thread-exit' })],
         }),
       );
     });
-    // 接管路径不带渠道前缀(沿用 FBot 默认)
+    // 接管路径与渠道默认会话同名族: 无渠道拼装(slack)时透传渠道前缀,
+    // 与「标题生成后: 名片卡升级」用例的 'Slack · ' 前缀一致。
     expect(mocks.generateAndPersistFbotTitle).toHaveBeenCalledWith(
       'desktop-new-1',
       '帮我做个新功能',
+      'Slack · ',
     );
   });
 });

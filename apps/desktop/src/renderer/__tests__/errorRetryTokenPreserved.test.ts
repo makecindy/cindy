@@ -100,6 +100,7 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
     const before = {
       ...EMPTY_SESSION_STATE,
       errorRetryText: PROJECTION_TOKEN,
+      errorPersistId: 'old-persist',
       isStreaming: true,
     };
 
@@ -110,6 +111,127 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
     } as Parameters<typeof handleStreamEvent>[1]);
 
     expect(next.errorRetryText).toBeNull();
+    expect(next.errorPersistId).toBeNull();
     expect(next.recoverableError).toBe('transient');
+  });
+
+  it('copies persistId from the terminal error event', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      { ...terminalError(), persistId: 'err_persist_1' },
+    );
+
+    expect(next.error).toBe('Request timed out');
+    expect(next.errorPersistId).toBe('err_persist_1');
+    // persistId 只绑定即将落库的 error 行，不是 Retry 依据。
+    expect(next.errorRetryText).toBeNull();
+  });
+
+  it('keeps an existing persistId when a duplicate terminal event omits it', () => {
+    const before = {
+      ...EMPTY_SESSION_STATE,
+      error: 'Request timed out',
+      errorPersistId: 'err_persist_1',
+      isStreaming: true,
+    };
+
+    const next = handleStreamEvent(before, terminalError());
+
+    expect(next.errorPersistId).toBe('err_persist_1');
+  });
+
+  it('replaces the binding when a later terminal event carries a new persistId', () => {
+    const before = {
+      ...EMPTY_SESSION_STATE,
+      error: 'old error',
+      errorPersistId: 'old-id',
+      isStreaming: true,
+    };
+
+    const next = handleStreamEvent(before, {
+      ...terminalError(),
+      persistId: 'err_persist_2',
+    });
+
+    expect(next.errorPersistId).toBe('err_persist_2');
+  });
+
+  it('projects structured tool-loop details from terminal guard errors', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'contract', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toEqual({ kind: 'contract', count: 3 });
+  });
+
+  it('preserves tool-loop details when the trailing done event follows the terminal error', () => {
+    const afterError = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'contract', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    const afterDone = handleStreamEvent(afterError, {
+      sessionId: SESSION_ID,
+      type: 'done',
+      data: {},
+    } as Parameters<typeof handleStreamEvent>[1]);
+
+    expect(afterDone.error).toBe('tool loop stopped');
+    expect(afterDone.toolLoop).toEqual({ kind: 'contract', count: 3 });
+  });
+
+  it('clears stale tool-loop details on a clean done event', () => {
+    const next = handleStreamEvent(
+      {
+        ...EMPTY_SESSION_STATE,
+        error: null,
+        toolLoop: { kind: 'contract', count: 3 },
+        isStreaming: true,
+      },
+      {
+        sessionId: SESSION_ID,
+        type: 'done',
+        data: {},
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toBeNull();
+  });
+
+  it('rejects malformed tool-loop details before they reach renderer state', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'missing_required_field', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toBeNull();
   });
 });

@@ -1,56 +1,60 @@
-/**
- * useChatEmbedding — React 包装, 订阅 chatEmbeddingStore 的变化。
- *
- * 真正 storage 在 lib/chatEmbeddingStore.ts, 本 hook 只接入 React 状态。
- * 形态与 useCompatMode 完全一致。
- */
+/** React subscription and mutation helpers for the owner-scoped chat embedding mirror. */
 
 import { useCallback, useEffect, useState } from 'react';
 
 import {
-  getChatEmbeddingEnabled,
-  setChatEmbeddingEnabled,
-  subscribeChatEmbeddingEnabled,
+  beginChatEmbeddingMutation,
+  completeChatEmbeddingMutation,
+  getChatEmbeddingSnapshot,
+  refreshChatEmbeddingFromMain,
+  rollbackChatEmbeddingMutation,
+  subscribeChatEmbeddingSnapshot,
+  type ChatEmbeddingMutationToken,
+  type ChatEmbeddingSnapshot,
 } from '@/lib/chatEmbeddingStore';
+import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 
-export function useChatEmbedding(): {
-  enabled: boolean;
-  isCustomized: boolean;
-  setEnabled: (next: boolean) => void;
-  setIsCustomized: (next: boolean) => void;
+export function useChatEmbedding(): ChatEmbeddingSnapshot & {
+  beginMutation: (optimisticEnabled?: boolean) => ChatEmbeddingMutationToken;
+  completeMutation: (token: ChatEmbeddingMutationToken, settings: ChatEmbeddingSnapshot) => boolean;
+  rollbackMutation: (token: ChatEmbeddingMutationToken) => boolean;
 } {
-  const [enabled, setEnabledState] = useState<boolean>(getChatEmbeddingEnabled);
-  const [isCustomized, setIsCustomized] = useState(false);
-
-  const setEnabled = useCallback((next: boolean) => {
-    setChatEmbeddingEnabled(next);
-  }, []);
+  const [snapshot, setSnapshot] = useState<ChatEmbeddingSnapshot>(getChatEmbeddingSnapshot);
 
   useEffect(() => {
-    let cancelled = false;
-    let refreshVersion = 0;
-    const refresh = async () => {
-      const version = ++refreshVersion;
-      try {
-        const settings = await window.electronAPI.maker.chatEmbeddingGet();
-        if (cancelled || version !== refreshVersion) return;
-        setChatEmbeddingEnabled(settings.enabled);
-        setIsCustomized(Boolean(settings.isCustomized));
-      } catch {
-        // Main may still be starting; the next provider change or mount retries.
-      }
-    };
-    const unsubscribe = subscribeChatEmbeddingEnabled(setEnabledState);
+    const unsubscribe = subscribeChatEmbeddingSnapshot(setSnapshot);
     const unsubscribeProviders = window.electronAPI.maker.onProvidersChanged(() => {
-      void refresh();
+      void refreshChatEmbeddingFromMain();
     });
-    void refresh();
+    const unsubscribeSettings = window.electronAPI.maker.onChatEmbeddingChanged((stamp) => {
+      if (isDataOwnerPushStampCurrent(stamp)) void refreshChatEmbeddingFromMain();
+    });
+    void refreshChatEmbeddingFromMain();
     return () => {
-      cancelled = true;
       unsubscribe();
       unsubscribeProviders();
+      unsubscribeSettings();
     };
   }, []);
 
-  return { enabled, isCustomized, setEnabled, setIsCustomized };
+  const beginMutation = useCallback(
+    (optimisticEnabled?: boolean) => beginChatEmbeddingMutation(optimisticEnabled),
+    [],
+  );
+  const completeMutation = useCallback(
+    (token: ChatEmbeddingMutationToken, settings: ChatEmbeddingSnapshot) =>
+      completeChatEmbeddingMutation(token, settings),
+    [],
+  );
+  const rollbackMutation = useCallback(
+    (token: ChatEmbeddingMutationToken) => rollbackChatEmbeddingMutation(token),
+    [],
+  );
+
+  return {
+    ...snapshot,
+    beginMutation,
+    completeMutation,
+    rollbackMutation,
+  };
 }

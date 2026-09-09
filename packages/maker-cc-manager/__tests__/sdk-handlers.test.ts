@@ -427,6 +427,22 @@ describe('sdk-handlers end-to-end', () => {
     expect(latestFactoryOptions?.hooks?.PreToolUse?.[0]?.hooks[0]).toBeDefined();
   });
 
+  it('query/start accepts a root-only guard for the native AskUserQuestion tool', async () => {
+    await ctx!.client.request('query/start', {
+      sessionId: 's-root-only-ask-user-question',
+      cwd: '/a',
+      model: 'm',
+      env: {},
+      toolGuards: [{
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+      }],
+    });
+    await waitFor(() => ctx!.notifications.length >= 1);
+    expect(latestFactoryOptions?.hooks?.PreToolUse?.[0]?.hooks[0]).toBeDefined();
+  });
+
   it('query/close ends consume loop → session.alive=false + closed notification', async () => {
     await ctx!.client.request('query/start', { sessionId: 's1', cwd: '/a', model: 'm', env: {} });
     await waitFor(() => ctx!.notifications.length >= 1);

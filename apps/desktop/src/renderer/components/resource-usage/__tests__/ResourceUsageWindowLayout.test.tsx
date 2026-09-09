@@ -7,6 +7,7 @@ let resourceBodyProps: {
   shellVisible?: boolean;
   onFirstSample?: () => void;
 } | null = null;
+const fullscreenState = vi.hoisted(() => ({ isMac: false, isFullscreen: false }));
 
 vi.mock('@/features/right-sidebar/plugins/resource-usage/ResourceUsageBody', () => ({
   ResourceUsageBody: (props: typeof resourceBodyProps) => {
@@ -16,7 +17,10 @@ vi.mock('@/features/right-sidebar/plugins/resource-usage/ResourceUsageBody', () 
 }));
 
 vi.mock('@/components/title-bar/WindowControls', () => ({
-  WindowControls: () => <button data-testid="window-controls" />,
+  // #3183: 暴露 onClose 触发,验证标题栏 X 走资源窗口专用关闭通道
+  WindowControls: ({ onClose }: { onClose?: () => void }) => (
+    <button data-testid="window-controls" onClick={onClose} />
+  ),
 }));
 
 vi.mock('@/hooks/useTheme', () => ({ ThemeProvider: ({ children }: React.PropsWithChildren) => children }));
@@ -29,6 +33,7 @@ vi.mock('@/hooks/useLocale', () => ({
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ ConfirmDialogProvider: ({ children }: React.PropsWithChildren) => children }));
 vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
+vi.mock('@/hooks/useMacFullscreen', () => ({ useMacFullscreen: () => fullscreenState }));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
 }));
@@ -44,6 +49,7 @@ afterEach(() => {
 describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
   const rendererReady = vi.fn(() => Promise.resolve());
   const presentationReady = vi.fn(() => Promise.resolve());
+  const resourceClose = vi.fn(() => Promise.resolve());
   let samplingListener: ((active: boolean) => void) | null = null;
   let localeListener: ((locale: 'zh-CN' | 'en') => void) | null = null;
 
@@ -54,12 +60,15 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     setLocale.mockClear();
     rendererReady.mockClear();
     presentationReady.mockClear();
+    resourceClose.mockClear();
+    fullscreenState.isMac = false;
+    fullscreenState.isFullscreen = false;
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
         platform: 'win32',
         resourceUsageWindow: {
-          close: vi.fn(() => Promise.resolve()),
+          close: resourceClose,
           rendererReady,
           presentationReady,
           onSamplingActiveChanged: (cb: (active: boolean) => void) => {
@@ -75,17 +84,34 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     });
   });
 
-  it('mounts hidden prewarm sampling, reports renderer readiness, then follows main visibility', async () => {
+  it('renders the process-usage window title from the standing menu item copy', () => {
+    render(<ResourceUsageWindowRoot />);
+
+    expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
+  });
+
+  it('removes the macOS traffic-light inset in native fullscreen', () => {
+    fullscreenState.isMac = true;
+    fullscreenState.isFullscreen = true;
+
+    render(<ResourceUsageWindowRoot />);
+
+    expect(screen.getByTestId('resource-window-title-spacer').className).toContain('w-3');
+    expect(screen.getByTestId('resource-window-title-spacer').className).not.toContain('w-20');
+  });
+
+  it('keeps Windows hidden prewarm idle, then samples only after Main activates it', async () => {
     render(<ResourceUsageWindowRoot />);
 
     expect(rendererReady).toHaveBeenCalledOnce();
+    expect(resourceBodyProps).toMatchObject({ active: false, shellVisible: false });
+    expect(presentationReady).not.toHaveBeenCalled();
+
+    await act(async () => samplingListener?.(true));
     expect(resourceBodyProps).toMatchObject({ active: true, shellVisible: true });
 
     await act(async () => samplingListener?.(false));
     expect(resourceBodyProps).toMatchObject({ active: false, shellVisible: false });
-
-    await act(async () => samplingListener?.(true));
-    expect(resourceBodyProps).toMatchObject({ active: true, shellVisible: true });
   });
 
   it('applies locale changes received while the window is prewarmed', async () => {
@@ -126,6 +152,18 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     });
 
     expect(presentationReady).toHaveBeenCalledOnce();
+  });
+
+  it('closes the resource window via the dedicated close channel when the title-bar X is clicked (#3183)', () => {
+    render(<ResourceUsageWindowRoot />);
+
+    act(() => {
+      screen.getByTestId('window-controls').click();
+    });
+
+    // 必须走 resourceUsageWindow.close(controller 隐藏窗口 + 焦点回归主窗口),
+    // 而不是通用 windowClose,否则用户点 X 后看起来"回不去"。
+    expect(resourceClose).toHaveBeenCalledOnce();
   });
 
   it('retries a transient presentation-ready IPC failure', async () => {

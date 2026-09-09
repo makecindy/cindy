@@ -49,6 +49,9 @@ const PROTECTED_IDS = new Set<string>([
   'process-renderer-icon',
   'process-gpu-icon',
   'process-utility-icon',
+  // 侧栏 PR open 绿(按表面,主题无关;2026-08-17)
+  'pr-open-on-light',
+  'pr-open-on-dark',
   // 无障碍焦点环与文字选中提示色
   'focus-ring',
   'focus-ring-soft',

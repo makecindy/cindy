@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import { summarizeSessionOverview } from '@/session/sessionOverview';
 import type { RemoteSession } from '@/session/types';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function session(patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -84,7 +89,7 @@ describe('sessionOverview', () => {
     expect(overview.stateChips).toEqual([
       { id: 'read-only', label: '只读', strong: true },
     ]);
-    expect(overview.runtimeSubtitle).toBe('协作 Worker · Worktree app-worker · Codex · claude-sonnet-4-6 · plan · Fast');
+    expect(overview.runtimeSubtitle).toBe('协同 Worker · Worktree app-worker · Codex · claude-sonnet-4-6 · plan · Fast');
   });
 
   it('marks archived sessions without surfacing usage in the main overview', () => {

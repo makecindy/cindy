@@ -46,11 +46,13 @@ export function effectivePublishedStatus(source: PublishedStatusSource | null | 
 }
 
 export type PublishedStatusLabelKey =
+  | 'skillhub.publishedStatus.waitingReview'
   | 'skillhub.publishedStatus.machineReviewing'
   | 'skillhub.publishedStatus.manualReviewing'
   | 'skillhub.publishedStatus.rejected';
 
 export function publishedStatusLabelKey(status: SpecialPublishedStatus): PublishedStatusLabelKey {
+  if (status === 'pending') return 'skillhub.publishedStatus.waitingReview';
   if (status === 'quarantine') return 'skillhub.publishedStatus.manualReviewing';
   if (status === 'rejected') return 'skillhub.publishedStatus.rejected';
   return 'skillhub.publishedStatus.machineReviewing';

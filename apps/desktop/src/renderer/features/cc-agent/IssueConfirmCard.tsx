@@ -55,6 +55,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
   const titleInputId = useId();
   const bodyInputId = useId();
   const publicNameInputId = useId();
+  const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const legacyFixedGithubIdentity =
     pending.submissionIdentity.kind === 'github-user' ? pending.submissionIdentity : null;
   const [draft, setDraft] = useState<IssueConfirmDraft>(() => {
@@ -84,6 +85,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
   const confirmedPublicName =
     selectedIdentity.kind === 'platform' ? normalizeIssuePublicName(publicName) : null;
   const canSubmit =
+    privacyConfirmed &&
     title.trim().length > 0 &&
     body.trim().length > 0 &&
     (selectedIdentity.kind !== 'platform' || confirmedPublicName !== null);
@@ -104,6 +106,9 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       // cannot unmount the card before its latest edit reaches the draft slot.
       saveIssueConfirmDraft(sessionId, pending.requestId, next);
       setDraft(next);
+      // The checkbox approves the previous public payload. Any content,
+      // identity, attribution, or type change requires a fresh review.
+      setPrivacyConfirmed(false);
     },
     [draft, pending.requestId, sessionId],
   );
@@ -356,9 +361,28 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           appVersion: pending.env.appVersion,
           platform: pending.env.platform,
           arch: pending.env.arch,
+          osVersion: pending.env.osVersion,
           uiLanguage: i18n.language,
         })}
       </p>
+      {pending.env.harness && pending.env.modelId && (
+        <p className="mt-1 [overflow-wrap:anywhere] text-12 leading-tight text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.runtimeLine', {
+            harness: pending.env.harness,
+            modelId: pending.env.modelId,
+          })}
+        </p>
+      )}
+
+      <label className="mt-3 flex cursor-pointer items-start gap-2 text-12 leading-snug text-[var(--chat-input-text)]">
+        <input
+          type="checkbox"
+          checked={privacyConfirmed}
+          onChange={(event) => setPrivacyConfirmed(event.target.checked)}
+          className="mt-0.5 size-3.5 shrink-0 accent-[var(--accent-cta-bg)]"
+        />
+        <span>{t('issueAgent.confirm.privacyConfirm')}</span>
+      </label>
 
       {/* Action buttons */}
       <div className="mt-4 flex items-center justify-end gap-2">

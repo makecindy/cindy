@@ -71,14 +71,26 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     }
   });
 
-  it('win32 × Win11 × CINDY:默认 acrylic + 透明底', () => {
+  it('win32 × Win11 × CINDY:默认 acrylic + 浅色侧栏 backing', () => {
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
         getSystemVersion: () => '10.0.22631',
       }),
     ).toEqual({
       vibrancy: null,
-      backgroundColor: '#00000000',
+      backgroundColor: 'rgba(238, 238, 233, 0.85)',
+      backgroundMaterial: 'acrylic',
+    });
+  });
+
+  it('win32 × Win11 × CINDY:深色 acrylic 使用深色侧栏 backing', () => {
+    expect(
+      resolveVibrancyConfig('cindy', true, 'win32', {
+        getSystemVersion: () => '10.0.22631',
+      }),
+    ).toEqual({
+      vibrancy: null,
+      backgroundColor: 'rgba(5, 5, 5, 0.85)',
       backgroundMaterial: 'acrylic',
     });
   });
@@ -118,7 +130,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       }),
     ).toEqual({
       vibrancy: null,
-      backgroundColor: '#00000000',
+      backgroundColor: 'rgba(5, 5, 5, 0.85)',
       backgroundMaterial: 'acrylic',
     });
     // 走统一 logger.warn,不再是裸 console.warn;文案不再带 [main] 前缀(scope 由 logger 注入)

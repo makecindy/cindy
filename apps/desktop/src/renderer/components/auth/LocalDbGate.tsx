@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { LocalDbFatalScreen } from '@/components/error/LocalDbFatalScreen';
 import { createLogger } from '@/lib/logger';
+import { toast } from '@/lib/toast';
+import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 
 const log = createLogger('LocalDbGate');
+const shownDbSlimmingResultIds = new Set<string>();
 
 /**
  * 路由层 localDb 就绪门（前身 MigrationGate；chat-data 云端迁移已随主 server
@@ -35,7 +40,9 @@ const MAX_DECISION_RETRIES = 2;
 const DECISION_RETRY_DELAY_MS = 1_000;
 
 export function LocalDbGate() {
+  const { t } = useTranslation();
   const { dataOwnerId, mode, logout, exitLocalMode } = useAuth();
+  const { reportLocalDbGate } = useAppShellCover();
   const navigate = useNavigate();
   const [decision, setDecision] = useState<GateDecision>({ phase: 'checking' });
   const [retryNonce, setRetryNonce] = useState(0);
@@ -78,6 +85,31 @@ export function LocalDbGate() {
         rendererUptimeMs: Math.round(performance.now()),
       });
 
+      try {
+        const maintenanceResult = await window.electronAPI.localDb.maintenance.getLastResult();
+        if (
+          maintenanceResult &&
+          !shownDbSlimmingResultIds.has(maintenanceResult.id)
+        ) {
+          shownDbSlimmingResultIds.add(maintenanceResult.id);
+          if (maintenanceResult.status === 'completed') {
+            toast.success(
+              t('settings.about.storage.dbSlimmingToastCompleted', {
+                size: formatBytes(maintenanceResult.reclaimedBytes),
+              }),
+            );
+          } else {
+            toast.error(
+              t(`settings.about.storage.dbSlimmingFailure.${maintenanceResult.reason}`, {
+                defaultValue: t('settings.about.storage.dbSlimmingFailure.unknown'),
+              }),
+            );
+          }
+        }
+      } catch (error) {
+        log.warn('database slimming result read failed (non-fatal)', error);
+      }
+
       // Signal main "user logged in + localDb is open" so account integrations can
       // come online after provider discovery. Gated and idempotent in main — re-mounts
       // and account switches are no-ops after the first call.
@@ -113,10 +145,24 @@ export function LocalDbGate() {
     };
     // 依赖 user.id——切账号 blank;同账号 refresh 不因对象引用变化卸载 Outlet。
     // retryNonce 驱动失败后的有限重试重跑。
-  }, [dataOwnerId, retryNonce]);
+  }, [dataOwnerId, retryNonce, t]);
+
+  useEffect(() => {
+    if (!dataOwnerId || decision.phase === 'checking') {
+      reportLocalDbGate('pending');
+    } else if (decision.phase === 'fatal') {
+      reportLocalDbGate('fatal');
+    } else {
+      reportLocalDbGate('ready');
+    }
+    return () => {
+      reportLocalDbGate('pending');
+    };
+  }, [dataOwnerId, decision, reportLocalDbGate]);
 
   if (!dataOwnerId || decision.phase === 'checking') {
-    // 短暂检查窗口（通常 < 100ms）；返回 null 即可，App 已有 splash 兜底视觉
+    // 主界面还不能画。视觉盖由 AppShellCover + Splash / 品牌层承接
+    // (DESIGN.md §10),这里返回 null 避免先露出空壳再盖上。
     return null;
   }
 

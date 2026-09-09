@@ -4,8 +4,14 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
-import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
 import {
+  PROTOCOL_VERSION,
+  DeviceLinkError,
+  type Envelope,
+  type LinkAcceptPayload,
+} from '../protocol.js';
+import {
+  DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
@@ -15,6 +21,7 @@ import {
   TRANSPORT_RETRY_PASS_BUDGET,
   encodeReliableFrames,
   makeTransportSkipPayload,
+  parseTransportAck,
   parseTransportPayload,
 } from '../transport.js';
 import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
@@ -74,6 +81,7 @@ function makeHarness(opts?: {
   token?: string | null;
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'];
   logger?: ConstructorParameters<typeof DeviceLinkClient>[0]['logger'];
+  peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -92,6 +100,7 @@ function makeHarness(opts?: {
       sockets.push(ws);
       return ws;
     },
+    peerFailurePolicy: opts?.peerFailurePolicy,
     timing: {
       reconnectBaseMs: 5,
       reconnectMaxMs: 40,
@@ -104,7 +113,77 @@ function makeHarness(opts?: {
   return { client, sockets, current: () => sockets[sockets.length - 1] };
 }
 
-const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('network change probes', () => {
+  it.each([true, false])('debounces hints and retains only a responsive socket (responsive=%s)', async (responsive) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      socket.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(499);
+      expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(1);
+      // More hints cannot extend the probe deadline.
+      h.client.notifyNetworkChanged();
+      if (responsive) socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.sockets).toHaveLength(responsive ? 1 : 2);
+      expect(socket.closed !== null).toBe(!responsive);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it.each([15_000, 25_000])('retains a slow healthy relay within its %s ms latency tolerance', async (handshakeTimeoutMs) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, handshakeTimeoutMs } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(handshakeTimeoutMs - 1_000);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.closed).toBeNull();
+      socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('cancels a pending probe on stop and ignores an old socket after restart', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const old = h.current(); old.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      h.client.restartConnection('test');
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(500);
+      old.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.sockets).toHaveLength(3);
+      h.current().ack();
+      h.client.notifyNetworkChanged();
+      h.client.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sockets).toHaveLength(3);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+});
+
 let inboundLinkId = 0;
 
 async function establishInboundReliableLink(
@@ -112,8 +191,9 @@ async function establishInboundReliableLink(
   streamId: string,
   transportBaseSeq = 1,
   src = 'dev-b',
-  // 默认模拟新版控制端(addLocalCapabilities 会自动声明两项);传入仅
-  // RELIABLE 可模拟旧版控制端(不认识 transport-timeout 的瞬时重置语义)。
+  // 默认模拟当前已发布、尚未声明 reliable-link-confirm-v1 的控制端；这样既有
+  // 测试继续覆盖独立升级兼容路径。传入仅 RELIABLE 可进一步模拟不认识
+  // transport-timeout 瞬时重置语义的更老控制端。
   capabilities: string[] = [
     DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
     DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
@@ -169,6 +249,7 @@ class MemoryRelay {
   /** 按目的地记录实际投递给对端的帧（不含 hello-ack/pong 控制帧）。 */
   readonly deliveredTo = new Map<string, Envelope[]>();
   private readonly members = new Map<string, { ws: RelayWs | null }>();
+  private readonly dropNextPredicates: Array<(senderId: string, env: Envelope) => boolean> = [];
   private readonly queue: Array<
     | { kind: 'direct'; ws: RelayWs; env: Envelope }
     | { kind: 'routed'; dstId: string; env: Envelope }
@@ -195,6 +276,10 @@ class MemoryRelay {
     ws.emit('close', 1006, 'network lost');
   }
 
+  dropNext(predicate: (senderId: string, env: Envelope) => boolean): void {
+    this.dropNextPredicates.push(predicate);
+  }
+
   route(senderId: string, ws: RelayWs, env: Envelope): void {
     if (env.kind === 'hello') {
       this.queue.push({
@@ -213,19 +298,24 @@ class MemoryRelay {
       return;
     }
     if (!env.dst) return;
+    const dropIndex = this.dropNextPredicates.findIndex((predicate) => predicate(senderId, env));
+    if (dropIndex >= 0) {
+      this.dropNextPredicates.splice(dropIndex, 1);
+      return;
+    }
     // 入口即判定在线与否：离线目的地直接丢帧，不缓存、不重排
     if (!this.members.get(env.dst)?.ws) return;
     this.queue.push({ kind: 'routed', dstId: env.dst, env: { ...env, src: senderId } });
   }
 
   /** 按顺序逐帧投递直到静默；每帧之间让微任务（drain/ACK）跑完。 */
-  async settle(): Promise<void> {
+  async settle(yieldControl: () => Promise<void> = () => tick()): Promise<void> {
     let idle = 0;
     while (idle < 3) {
       const entry = this.queue.shift();
       if (!entry) {
         idle += 1;
-        await tick();
+        await yieldControl();
         continue;
       }
       idle = 0;
@@ -243,7 +333,7 @@ class MemoryRelay {
           member.ws.push(entry.env);
         }
       }
-      await tick();
+      await yieldControl();
     }
   }
 
@@ -259,7 +349,11 @@ class MemoryRelay {
   }
 }
 
-function makeRelayClient(relay: MemoryRelay, deviceId: string): DeviceLinkClient {
+function makeRelayClient(
+  relay: MemoryRelay,
+  deviceId: string,
+  timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'],
+): DeviceLinkClient {
   return new DeviceLinkClient({
     getWsUrl: () => 'ws://test/api/device-link/ws',
     getToken: async () => 'jwt-token',
@@ -278,11 +372,83 @@ function makeRelayClient(relay: MemoryRelay, deviceId: string): DeviceLinkClient
       pongMissLimit: 4,
       requestTimeoutMs: 2_000,
       transportRetryIntervalMs: 60_000,
+      ...timing,
     },
   });
 }
 
 describe('DeviceLinkClient', () => {
+  it('gives hello/ack a full window after a slow but successful socket upgrade', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { handshakeTimeoutMs: 15, pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      await vi.advanceTimersByTimeAsync(12);
+      socket.emit('open');
+      await vi.advanceTimersByTimeAsync(12);
+      expect(socket.terminated).toBe(false);
+      socket.push({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+        serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'dev-self', userId: 'u1',
+      } });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(h.client.getStatus()).toBe('online');
+      expect(h.sockets).toHaveLength(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off large response copies for a slow controller without blocking a healthy controller', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current();
+      socket.ack();
+      for (const peer of ['ctrl-slow', 'ctrl-healthy']) {
+        const opening = establishInboundReliableLink(h, `${peer}-stream`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opening;
+      }
+      const acknowledge = (peer: string, id: string) => {
+        const frame = socket.sent.find(e => e.kind === 'invoke-result' && e.id === id)!;
+        const meta = parseTransportPayload(frame.payload)!.meta;
+        socket.push({ v: PROTOCOL_VERSION, kind: 'push', src: peer, payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        } });
+      };
+      h.client.sendInvokeResult('ctrl-slow', 'large', { ok: true, result: 'x'.repeat(240_000) });
+      const copies = () => socket.sent.filter(e => e.kind === 'invoke-result' && e.id === 'large');
+      const firstBytes = copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0);
+      expect(copies()).toHaveLength(2);
+      // The local socket is drained, but the downstream controller needs ten seconds.
+      expect(socket.bufferedAmount).toBe(0);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(copies()).toHaveLength(2); // The first two segments are still in transit.
+      h.client.sendInvokeResult('ctrl-healthy', 'healthy', { ok: true, result: 'ok' });
+      acknowledge('ctrl-healthy', 'healthy');
+      expect(h.client.getReliableSendQueueDepth('ctrl-healthy')).toBe(0);
+      expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      acknowledge('ctrl-slow', 'large');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(copies()).toHaveLength(2);
+      expect(copies().reduce((sum, e) => sum + JSON.stringify(e).length, 0)).toBe(firstBytes);
+      expect(h.client.getReliableSendQueueDepth('ctrl-slow')).toBe(0);
+      expect(h.client.isLinkReady('ctrl-slow')).toBe(true);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.terminated).toBe(false);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('start → open 后第一帧是 hello,hello-ack 后 online', async () => {
     const h = makeHarness();
     const statuses: string[] = [];
@@ -756,7 +922,254 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('Mobile opt-in:出站 peer ACK 超时只复位该 peer,旧 Desktop 可用既有 link-open 恢复且邻居零感知', async () => {
+    const h = makeHarness({
+      peerFailurePolicy: 'isolate-peer',
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    const resets: Array<{
+      deviceId: string;
+      reason: 'ack-timeout';
+      connectionEpoch: number;
+      linkGeneration: number;
+      seq: number;
+    }> = [];
+    h.client.onPeerTransportReset((change) => resets.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const establishOutbound = async (deviceId: string, remoteStreamId: string): Promise<void> => {
+      const opening = h.client.openLink(deviceId, {
+        controllerName: 'Mobile',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 1_000);
+      const openFrame = h.current().sent
+        .filter((env) => env.kind === 'link-open' && env.dst === deviceId)
+        .at(-1)!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: openFrame.id,
+        src: deviceId,
+        payload: {
+          appVersion: 'old-desktop',
+          allowlistHash: 'hash',
+          // 旧 Desktop 只理解既有 reliable transport,不声明
+          // transport-timeout-close-v1；Mobile 仍不得靠新 wire 值恢复。
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: remoteStreamId,
+          transportBaseSeq: 1,
+        },
+      });
+      await opening;
+    };
+
+    await establishOutbound('peer-broken', 'old-desktop-broken-stream');
+    await establishOutbound('peer-healthy', 'old-desktop-healthy-stream');
+    const socket = h.current();
+    const socketCount = h.sockets.length;
+
+    const brokenRequest = h.client.invoke(
+      'peer-broken',
+      { channel: 'local-db:sessions:list', args: [10] },
+      60_000,
+    );
+    // 防测试失败提前退出时产生未处理 rejection；正常路径在下方以真实结果收口。
+    void brokenRequest.catch(() => {});
+    const brokenFrame = socket.sent
+      .filter((env) => env.kind === 'invoke' && env.dst === 'peer-broken')
+      .at(-1)!;
+    const brokenMeta = parseTransportPayload(brokenFrame.payload)!.meta;
+
+    const healthyRequest = h.client.invoke(
+      'peer-healthy',
+      { channel: 'local-db:sessions:list', args: [10] },
+      60_000,
+    );
+    const healthyFrame = socket.sent
+      .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+      .at(-1)!;
+    const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'peer-healthy',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: healthyMeta.streamId,
+          ackSeq: healthyMeta.seq,
+        },
+      },
+    });
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: healthyFrame.id,
+      src: 'peer-healthy',
+      payload: { ok: true, result: ['healthy'] },
+    });
+    await expect(healthyRequest).resolves.toMatchObject({ ok: true, result: ['healthy'] });
+
+    // broken peer 永不 ACK；达到预算后只产生本地 peer reset 事件。
+    await vi.waitFor(() => expect(resets).toHaveLength(1));
+    expect(resets[0]).toMatchObject({
+      deviceId: 'peer-broken',
+      reason: 'ack-timeout',
+      connectionEpoch: h.client.getConnectionEpoch(),
+      linkGeneration: expect.any(Number),
+      seq: brokenMeta.seq,
+    });
+    expect(h.client.isLinkReady('peer-broken')).toBe(false);
+    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+    expect(socket.terminated).toBe(false);
+    expect(socket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(socketCount);
+    expect(socket.sent.some((env) => (
+      env.kind === 'link-close'
+      && env.dst === 'peer-broken'
+    ))).toBe(false);
+
+    // host 用旧版本也支持的 link-open 重建同一 peer；共享 socket 与邻居不动。
+    const sentBeforeReopen = socket.sent.length;
+    await establishOutbound('peer-broken', 'old-desktop-broken-stream');
+    expect(h.client.isLinkReady('peer-broken')).toBe(true);
+    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+    expect(h.sockets).toHaveLength(socketCount);
+
+    const replay = socket.sent.slice(sentBeforeReopen).find((env) => (
+      env.kind === 'invoke'
+      && env.dst === 'peer-broken'
+      && parseTransportPayload(env.payload)?.meta.seq === brokenMeta.seq
+    ));
+    expect(replay).toBeDefined();
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'peer-broken',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: brokenMeta.streamId,
+          ackSeq: brokenMeta.seq,
+        },
+      },
+    });
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: brokenFrame.id,
+      src: 'peer-broken',
+      payload: { ok: true, result: ['recovered'] },
+    });
+    await expect(brokenRequest).resolves.toMatchObject({ ok: true, result: ['recovered'] });
+    h.client.stop();
+  });
+
+  it.each([16, 300 * 1024])('≥2 控制端共享同一被控端:停止 ACK 的 %i 字节响应只复位该 peer,邻居零感知', async (bytes) => {
+    // 故障半径要求的拓扑是「多个控制端共用一台被控桌面」,不是「一个控制端连两台桌面」。
+    // 本用例站在被控 Desktop:ctrl-silent 永不 ACK,ctrl-healthy 的在途 invoke 必须仍能完成,
+    // 且共享 WSS 不得被拆掉。
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    const inboundInvokes: Envelope[] = [];
+    const resetDevices: string[] = [];
+    h.client.onPeerTransportReset(({ deviceId }) => resetDevices.push(deviceId));
+    h.client.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src === 'ctrl-healthy') inboundInvokes.push(env);
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'silent-controller-stream', 1, 'ctrl-silent');
+    await establishInboundReliableLink(h, 'healthy-controller-stream', 1, 'ctrl-healthy');
+    const socket = h.current();
+    const socketCount = h.sockets.length;
+
+    h.client.sendInvokeResult('ctrl-silent', 'silent-req', { ok: true, result: 's'.repeat(bytes) });
+    h.client.sendInvokeResult('ctrl-healthy', 'healthy-inflight', { ok: true, result: ['healthy'] });
+    const healthyFrame = socket.sent
+      .filter((env) => env.kind === 'invoke-result' && env.dst === 'ctrl-healthy')
+      .at(-1)!;
+    const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'ctrl-healthy',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: healthyMeta.streamId,
+          ackSeq: healthyMeta.seq,
+        },
+      },
+    });
+
+    socket.push(encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'healthy-followup',
+      src: 'ctrl-healthy',
+      payload: { channel: 'local-db:sessions:list', args: [10] },
+    }, 'healthy-controller-stream', 1)[0]);
+    await tick();
+    expect(inboundInvokes).toHaveLength(1);
+
+    await vi.waitFor(() => {
+      expect(socket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'ctrl-silent'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    expect(h.client.isLinkReady('ctrl-silent')).toBe(false);
+    // A mutual-control view must also invalidate locally, even though the
+    // remote controller receives transport-timeout and owns reopening the link.
+    expect(resetDevices).toEqual(['ctrl-silent']);
+    expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+    expect(socket.terminated).toBe(false);
+    expect(socket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(socketCount);
+
+    h.client.sendInvokeResult('ctrl-healthy', 'healthy-followup', { ok: true, result: ['followup'] });
+    const followupFrame = socket.sent
+      .filter((env) => env.kind === 'invoke-result' && env.id === 'healthy-followup')
+      .at(-1)!;
+    const followupMeta = parseTransportPayload(followupFrame.payload)!.meta;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'ctrl-healthy',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: followupMeta.streamId,
+          ackSeq: followupMeta.seq,
+        },
+      },
+    });
+    expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+    expect(h.client.getReliableSendQueueDepth('ctrl-healthy')).toBe(0);
+    h.client.stop();
+  });
+
   it('入站 link 的可靠重试耗尽只重置该 peer link:relay 连接不拆,发 transport-timeout link-close,重开后 live 帧按原 seq 重放', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
     const h = makeHarness({
       timing: {
         pingIntervalMs: 60_000,
@@ -765,70 +1178,79 @@ describe('DeviceLinkClient', () => {
         transportRetryIntervalMs: 5,
         transportMaxRetryAttempts: 2,
       },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     });
-    h.client.start();
-    await tick();
-    h.current().ack();
-    await establishInboundReliableLink(h, 'inbound-timeout-stream');
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const initialOpen = establishInboundReliableLink(h, 'inbound-timeout-stream');
+      await vi.advanceTimersByTimeAsync(0);
+      await initialOpen;
 
-    const firstSocket = h.current();
-    // 可丢弃前缀(陈旧实时镜像) + 不可丢弃的 live invoke-result
-    h.client.sendPush('dev-b', 'maker:event', { drop: 'me' });
-    h.client.sendInvokeResult('dev-b', 'keep-me', { ok: true, result: [] });
-    const firstReliable = firstSocket.sent.find((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ))!;
-    const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
+      const firstSocket = h.current();
+      // 可丢弃前缀(陈旧实时镜像) + 不可丢弃的 live invoke-result
+      h.client.sendPush('dev-b', 'maker:event', { drop: 'me' });
+      h.client.sendInvokeResult('dev-b', 'keep-me', { ok: true, result: [] });
+      const firstReliable = firstSocket.sent.find((env) => (
+        env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+      ))!;
+      const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
 
-    // 对端永不 ACK → 重试耗尽 → 只重置该 peer 的 link 并通知对端
-    await vi.waitFor(() => {
+      // 对端永不 ACK → 重试耗尽 → 只重置该 peer 的 link 并通知对端
+      await vi.advanceTimersByTimeAsync(50);
       expect(firstSocket.sent.some((env) => (
         env.kind === 'link-close'
         && env.dst === 'dev-b'
         && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
       ))).toBe(true);
-    });
-    // relay 连接毫发无损:既没 terminate,也没新建 socket(其它 peer 零感知)
-    expect(firstSocket.terminated).toBe(false);
-    expect(firstSocket.closed).toBeNull();
-    expect(h.sockets).toHaveLength(1);
+      // relay 连接毫发无损:既没 terminate,也没新建 socket(其它 peer 零感知)
+      expect(firstSocket.terminated).toBe(false);
+      expect(firstSocket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(
+        /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
+      ));
 
-    // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
-    const sentBefore = firstSocket.sent.length;
-    await establishInboundReliableLink(h, 'inbound-timeout-stream');
-    // 模拟真实接收端:重放帧已写入 socket FIFO 后立即回 ACK(见 client.ts
-    // sendTransportAck 的交付即确认语义)。不 ACK 的话,重放后 retryTimer
-    // 会在 Windows 低精度计时器(≈12ms>配置 5ms)下把同一帧再发一遍,慢 CI
-    // runner 上断言窗口跨过该周期时会把「重试重发」误判成「重放两次」。
-    const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ));
-    if (justReplayed.length > 0) {
-      const meta = parseTransportPayload(justReplayed[0].payload)!.meta;
-      h.current().push({
-        v: PROTOCOL_VERSION,
-        kind: 'push',
-        src: 'dev-b',
-        payload: {
-          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-          payload: { streamId: meta.streamId, ackSeq: meta.seq },
-        },
+      // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
+      const sentBefore = firstSocket.sent.length;
+      const reopened = establishInboundReliableLink(h, 'inbound-timeout-stream');
+      await vi.advanceTimersByTimeAsync(0);
+      await reopened;
+      // 受控时钟保持在重开时刻:真实计时器可能在 tick 等待期间已跨过 5ms
+      // 重试窗口,此时再 ACK 也来不及阻止第二帧。确认重放后再 ACK,不放宽数量断言。
+      const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
+        env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+      ));
+      if (justReplayed.length > 0) {
+        const meta = parseTransportPayload(justReplayed[0].payload)!.meta;
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'push',
+          src: 'dev-b',
+          payload: {
+            channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+            payload: { streamId: meta.streamId, ackSeq: meta.seq },
+          },
+        });
+      }
+      const replayed = firstSocket.sent.slice(sentBefore);
+      const replays = replayed.filter((env) => (
+        env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+      ));
+      expect(replays).toHaveLength(1);
+      expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
+        streamId: firstMeta.streamId,
+        seq: firstMeta.seq,
       });
+      expect(replayed.filter((env) => (
+        env.kind === 'push'
+        && parseTransportPayload(env.payload)
+      ))).toHaveLength(0);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
     }
-    const replayed = firstSocket.sent.slice(sentBefore);
-    const replays = replayed.filter((env) => (
-      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
-    ));
-    expect(replays).toHaveLength(1);
-    expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
-      streamId: firstMeta.streamId,
-      seq: firstMeta.seq,
-    });
-    expect(replayed.filter((env) => (
-      env.kind === 'push'
-      && parseTransportPayload(env.payload)
-    ))).toHaveLength(0);
-    h.client.stop();
   });
 
   it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {
@@ -842,6 +1264,8 @@ describe('DeviceLinkClient', () => {
         requestTimeoutMs: 5_000,
       },
     });
+    const onReset = vi.fn();
+    h.client.onPeerTransportReset(onReset);
     h.client.start();
     await tick();
     h.current().ack();
@@ -885,6 +1309,11 @@ describe('DeviceLinkClient', () => {
       ))).toBe(true);
     });
     // 共享 relay 连接完好:没有因互控覆盖误走整连接重连
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onReset).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'dev-b', reason: 'ack-timeout',
+    }));
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     expect(socket.terminated).toBe(false);
     expect(h.sockets).toHaveLength(1);
     h.client.stop();
@@ -1243,6 +1672,122 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站撤权取消待确认超时,同时保留此前已就绪的出站控制方向', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 先建立本机主动控制对方的可靠方向,确认 sendPhase 已经 ready。
+    const outboundOpen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const outboundFrame = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: outboundFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-remote-stream',
+      },
+    });
+    await outboundOpen;
+
+    // 再接受对方入站 link-open,但不回 confirmation ACK,制造待确认 timer。
+    const inboundId = 'inbound-confirmation-revoke';
+    const off = h.client.onFrame((env) => {
+      if (env.kind !== 'link-open' || env.id !== inboundId || !env.src) return;
+      h.client.sendLinkAccept(env.src, env.id, {
+        appVersion: '1',
+        allowlistHash: 'hash',
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-open',
+      id: inboundId,
+      src: 'dev-b',
+      payload: {
+        controllerName: 'Remote',
+        protocolVersion: 1,
+        appVersion: '1',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'inbound-remote-stream',
+        transportBaseSeq: 1,
+      },
+    });
+    await tick();
+    off();
+
+    // 确认尚未完成时再次收到同方向 open:新 confirmation 替换旧对象,但必须继承
+    // 旧对象记录的 outbound ready 状态。
+    const replacementId = 'inbound-confirmation-revoke-replacement';
+    const offReplacement = h.client.onFrame((env) => {
+      if (env.kind !== 'link-open' || env.id !== replacementId || !env.src) return;
+      h.client.sendLinkAccept(env.src, env.id, {
+        appVersion: '1',
+        allowlistHash: 'hash',
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-open',
+      id: replacementId,
+      src: 'dev-b',
+      payload: {
+        controllerName: 'Remote',
+        protocolVersion: 1,
+        appVersion: '1',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'inbound-remote-stream',
+        transportBaseSeq: 1,
+      },
+    });
+    await tick();
+    offReplacement();
+
+    const socket = h.current();
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+    await tick(30);
+
+    // 撤权后旧确认 timer 不得再触发 transport-timeout 或拆共享 relay。
+    expect(socket.terminated).toBe(false);
+    expect(socket.sent.filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ))).toHaveLength(0);
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string }>;
+    };
+    expect(internals.peerTransport.get('dev-b')?.sendPhase).toBe('ready');
+
+    // 原有出站控制方向仍可继续写可靠帧,而不是被 pending confirmation 留在 awaiting。
+    const depthBefore = h.client.getReliableSendQueueDepth('dev-b');
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { still: 'alive' })).not.toThrow();
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBeGreaterThan(depthBefore);
+    h.client.stop();
+  }, 10_000);
+
   it('本地 closeLink 后迟到的 transport-timeout 被拦截:不交 app 层、不触发重建、不改变已关闭状态', async () => {
     const h = makeHarness({
       timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
@@ -1576,6 +2121,53 @@ describe('DeviceLinkClient', () => {
       payload: { ok: true, result: ['session-1'] },
     });
     await expect(listing).resolves.toMatchObject({ ok: true, result: ['session-1'] });
+    h.client.stop();
+  });
+
+  it('显式 close 后词典只读快照 push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const sentOpen = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
+    );
+    const sentBefore = h.current().sent.length;
+    expect(() => h.client.sendPush(
+      'dev-b',
+      'device-link:voice:dictionary:snapshot',
+      { ok: true, entries: [] },
+    )).not.toThrow();
+    const sent = h.current().sent.at(-1)!;
+    expect(h.current().sent.length).toBeGreaterThan(sentBefore);
+    expect(sent).toMatchObject({
+      kind: 'push',
+      dst: 'dev-b',
+      payload: { channel: 'device-link:voice:dictionary:snapshot' },
+    });
+    expect(parseTransportPayload(sent.payload)).toBeNull();
     h.client.stop();
   });
 
@@ -2174,7 +2766,9 @@ describe('DeviceLinkClient', () => {
       (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
     );
     let meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
-    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
+    // Prefix eviction immediately admits the next unsent message in the
+    // receive window, while the new tail stays in bounded local pending.
+    expect(meta.seq).toBe(17);
     expect(meta.baseSeq).toBe(2);
 
     // 连续洪峰：每条新 push 轮换掉一条最旧帧，队列保持满员而不再抛背压
@@ -2182,8 +2776,29 @@ describe('DeviceLinkClient', () => {
       h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' }),
     ).not.toThrow();
     meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
-    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 2);
+    expect(meta.seq).toBe(18);
     expect(meta.baseSeq).toBe(3);
+    h.client.stop();
+  });
+
+  it('可靠 push 被 latest-wins 驱逐后释放路由账本额度', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'route-ledger-eviction-stream');
+
+    // 不发送 transport ACK：队列保持在 64 条，但每次 latest-wins 驱逐的
+    // 可靠帧都必须从 active route ledger 转入 settled history；否则第
+    // 1025 个唯一 ID 会把后续发送永久打成 BACKPRESSURE。
+    expect(() => {
+      for (let index = 0; index < 1_025; index += 1) {
+        h.client.sendPush('dev-b', 'maker:event', { index });
+      }
+    }).not.toThrow();
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(MAX_TRANSPORT_PENDING_MESSAGES);
     h.client.stop();
   });
 
@@ -2711,17 +3326,26 @@ describe('DeviceLinkClient', () => {
     expect(() =>
       h.client.sendInvokeResult('dev-b', 'queued-result', { ok: true, result: [] }),
     ).not.toThrow();
-    const resultFrame = h.current().sent.find(
+    expect(h.current().sent.find(
       (env) => env.kind === 'invoke-result' && env.id === 'queued-result',
-    )!;
-    const meta = parseTransportPayload(resultFrame.payload)!.meta;
-    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
-    expect(meta.baseSeq).toBe(2);
+    )).toBeUndefined();
 
     // 再次满员且队头已是 live invoke：前缀为空，维持 BACKPRESSURE，不死循环不死锁
     expect(() => h.client.sendInvokeResult('dev-b', 'r2', { ok: true, result: [] })).toThrow(
       expect.objectContaining({ code: 'BACKPRESSURE' }),
     );
+    // Drain the admitted prefixes; the queued result must eventually emerge
+    // without waiting for a retry timer or crossing the live invoke.
+    for (let i = 0; i < 8; i++) {
+      const last = h.current().sent.filter(e => parseTransportPayload(e.payload)).at(-1)!;
+      const meta = parseTransportPayload(last.payload)!.meta;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: meta.streamId, ackSeq: meta.seq },
+      } });
+    }
+    const resultFrame = h.current().sent.find(e => e.id === 'queued-result')!;
+    expect(parseTransportPayload(resultFrame.payload)!.meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
     h.client.stop();
   });
 
@@ -2822,6 +3446,8 @@ describe('DeviceLinkClient', () => {
 
   it('同 id relay-error → 带 code reject', async () => {
     const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
     h.client.start();
     await tick();
     h.current().ack();
@@ -2835,6 +3461,706 @@ describe('DeviceLinkClient', () => {
       payload: { code: 'REMOTE_DISABLED', message: 'off' },
     });
     await expect(p).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+    expect(routeChanges).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('pending DEVICE_OFFLINE 在 reject 前发出 peer route offline 事件', async () => {
+    const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const invoke = h.client.invoke('dev-b', { channel: 'x', args: [] });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: sent.id,
+      payload: { code: 'DEVICE_OFFLINE', message: 'offline' },
+    });
+
+    expect(routeChanges).toHaveLength(1);
+    expect(routeChanges[0]).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      connectionEpoch: expect.any(Number),
+      linkGeneration: expect.any(Number),
+    });
+    await expect(invoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    h.client.stop();
+  });
+
+  it('无 pending 的 DEVICE_OFFLINE 也发出单次 peer route offline 事件', async () => {
+    const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.client.sendPush('dev-b', 'maker:event', { stale: true });
+    const error = {
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      payload: { code: 'DEVICE_OFFLINE', message: 'offline', dst: 'dev-b' },
+    } as const;
+    h.current().push(error);
+    h.current().push(error);
+
+    expect(routeChanges).toHaveLength(1);
+    expect(routeChanges[0]).toMatchObject({ deviceId: 'dev-b', state: 'offline' });
+    h.client.stop();
+  });
+
+  it('已移出发送额度的当前代 best-effort 帧仍能用带 id 错误收口 peer', async () => {
+    const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.client.sendPush('dev-b', 'maker:event', { current: true });
+    const sent = h.current().sent.find((env) => env.kind === 'push' && env.dst === 'dev-b')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: sent.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current best-effort route failed',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges).toHaveLength(1);
+    expect(routeChanges[0]).toMatchObject({ deviceId: 'dev-b', state: 'offline' });
+    h.client.stop();
+  });
+
+  it('同一 WebSocket 内旧可靠帧的迟到 DEVICE_OFFLINE 保留原 link 代次', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-old');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'route-generation-replay', {
+      ok: true,
+      result: 'stale',
+    });
+    const oldFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'route-generation-replay'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+    expect(oldFrame.id).toBeTruthy();
+
+    await establishInboundReliableLink(h, 'controller-stream-new');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'delayed old route error',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: oldGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current replay route error',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
+  it('路由账本按 peer 限流且不淘汰仍未决的旧代归属', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const internals = h.client as unknown as {
+      markPeerRouteOnline(deviceId: string): number;
+      rememberOutboundRouteGeneration(
+        id: string,
+        deviceId: string,
+        linkGeneration: number,
+      ): void;
+    };
+    const oldGeneration = internals.markPeerRouteOnline('dev-a');
+    const oldestRouteId = 'route-cap-0';
+    for (let index = 0; index < 1_024; index += 1) {
+      internals.rememberOutboundRouteGeneration(`route-cap-${index}`, 'dev-a', oldGeneration);
+    }
+
+    expect(() => {
+      internals.rememberOutboundRouteGeneration('route-cap-overflow', 'dev-a', oldGeneration);
+    }).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(() => {
+      internals.rememberOutboundRouteGeneration('route-cap-independent', 'dev-b', 1);
+    }).not.toThrow();
+
+    const currentGeneration = internals.markPeerRouteOnline('dev-a');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldestRouteId,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'delayed oldest route error after per-peer capacity is reached',
+        dst: 'dev-a',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-a',
+      state: 'offline',
+      linkGeneration: oldGeneration,
+    });
+    h.client.stop();
+  });
+
+  it('健康可靠链路在 ACK 后释放路由历史，不会把 1024 个成功 ID 变成永久配额', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'route-history-release');
+
+    for (let index = 0; index < 1_025; index += 1) {
+      const requestId = `route-history-success-${index}`;
+      h.client.sendInvokeResult('dev-b', requestId, { ok: true, result: index });
+      const frame = h.current().sent.filter((env) => (
+        env.kind === 'invoke-result'
+        && env.id === requestId
+        && parseTransportPayload(env.payload) !== null
+      )).at(-1)!;
+      const meta = parseTransportPayload(frame.payload)!.meta;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        },
+      });
+    }
+
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+    expect(() => {
+      h.client.sendInvokeResult('dev-b', 'route-history-after-cap', {
+        ok: true,
+        result: 'still-sending',
+      });
+    }).not.toThrow();
+    h.client.stop();
+  });
+
+  it('健康 best-effort 链路持续发送超过 1024 个唯一 ID 也不会永久停发', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    expect(() => {
+      for (let index = 0; index < 1_025; index += 1) {
+        h.client.sendPush('dev-b', 'maker:event', { index });
+      }
+    }).not.toThrow();
+    expect(h.current().sent.filter((env) => env.kind === 'push' && env.dst === 'dev-b'))
+      .toHaveLength(1_025);
+    h.client.stop();
+  });
+
+  it('新代重放已 ACK 后迟到的旧代 DEVICE_OFFLINE 仍不拆当前 link', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-before-ack');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'acked-replay-with-late-error', {
+      ok: true,
+      result: 'pending',
+    });
+    const oldFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'acked-replay-with-late-error'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+
+    await establishInboundReliableLink(h, 'controller-stream-after-ack');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === oldFrame.id
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+    const replayedMeta = parseTransportPayload(replayedFrame.payload)!.meta;
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: replayedMeta.streamId,
+          ackSeq: replayedMeta.seq,
+        },
+      },
+    });
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'delayed old route error after current ACK',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges).toHaveLength(0);
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
+    h.client.stop();
+  });
+
+  it.each(['DEVICE_OFFLINE', 'REMOTE_DISABLED'] as const)(
+    '旧代 %s 不终止新代正在重放的可靠 invoke',
+    async (code) => {
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 1_000 } });
+      h.client.start();
+      await tick();
+      h.current().ack();
+
+      await establishInboundReliableLink(h, 'invoke-route-generation-old');
+      const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+      const invoke = h.client.invoke('dev-b', { channel: 'maker:write-once', args: ['value'] });
+      let settled = false;
+      void invoke.finally(() => { settled = true; });
+      const oldFrame = h.current().sent.filter((env) => (
+        env.kind === 'invoke'
+        && parseTransportPayload(env.payload) !== null
+      )).at(-1)!;
+
+      await establishInboundReliableLink(h, 'invoke-route-generation-new');
+      const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+      expect(currentGeneration).toBeGreaterThan(oldGeneration);
+      expect(h.current().sent.filter((env) => (
+        env.kind === 'invoke'
+        && env.id === oldFrame.id
+        && parseTransportPayload(env.payload) !== null
+      )).length).toBeGreaterThanOrEqual(2);
+
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'relay-error',
+        id: oldFrame.id,
+        payload: {
+          code,
+          message: 'delayed old invoke route error',
+          dst: 'dev-b',
+        },
+      });
+      await tick();
+
+      expect(settled).toBe(false);
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(1);
+
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: oldFrame.id,
+        src: 'dev-b',
+        payload: { ok: true, result: 'applied-once' },
+      });
+      await expect(invoke).resolves.toMatchObject({ ok: true, result: 'applied-once' });
+      h.client.stop();
+    },
+  );
+
+  it('入站 link confirmation 屏障清掉旧代成功尝试，当前重放错误按当前代收口', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 1_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const establishConfirmedInboundLink = async (streamId: string): Promise<void> => {
+      const sentBefore = h.current().sent.length;
+      await establishInboundReliableLink(h, streamId, 1, 'dev-b', [
+        DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+      ]);
+      const accept = h.current().sent.slice(sentBefore).find(
+        (env) => env.kind === 'link-accept',
+      );
+      expect(accept?.id).toBeTruthy();
+      const accepted = accept!.payload as LinkAcceptPayload;
+      expect(accepted.transportStreamId).toBeTruthy();
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: accepted.transportStreamId!,
+            ackSeq: (accepted.transportBaseSeq ?? 1) - 1,
+            linkRequestId: accept!.id,
+          },
+        },
+      });
+      await tick();
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+    };
+
+    await establishConfirmedInboundLink('confirmed-inbound-old');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'confirmed-inbound-replay', {
+      ok: true,
+      result: 'pending',
+    });
+    const originalFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'confirmed-inbound-replay'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+
+    const sentBeforeReopen = h.current().sent.length;
+    await establishConfirmedInboundLink('confirmed-inbound-new');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = h.current().sent.slice(sentBeforeReopen).find((env) => (
+      env.kind === 'invoke-result'
+      && env.id === originalFrame.id
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: originalFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current replay route error after confirmed inbound reopen',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
+  it('出站 link-accept 屏障清掉旧代成功尝试，当前重放的 DEVICE_OFFLINE 按当前代收口', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 1_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-route-old',
+      },
+    });
+    await open;
+
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    const invoke = h.client.invoke('dev-b', { channel: 'maker:current-route-error', args: [] });
+    const originalFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+
+    const sentBeforeReopen = h.current().sent.length;
+    const reopen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const reopenFrame = h.current().sent.slice(sentBeforeReopen).find(
+      (env) => env.kind === 'link-open',
+    )!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: reopenFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-route-old',
+      },
+    });
+    await reopen;
+
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = h.current().sent.slice(sentBeforeReopen).find((env) => (
+      env.kind === 'invoke'
+      && env.id === originalFrame.id
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: originalFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current replay route error',
+        dst: 'dev-b',
+      },
+    });
+
+    await expect(invoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
+  it('link down 时排队的可靠帧按首次物理发送代次处理 DEVICE_OFFLINE', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-before-queue');
+    const queuedGeneration = h.client.getPeerLinkGeneration('dev-b');
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+    internals.peerTransport.get('dev-b')!.receiveReady = false;
+
+    const sentBeforeQueue = h.current().sent.length;
+    const queuedInvoke = h.client.invoke(
+      'dev-b',
+      { channel: 'maker:queued-before-reopen', args: [] },
+      1_000,
+    );
+    expect(h.current().sent.slice(sentBeforeQueue).some((env) => env.kind === 'invoke')).toBe(false);
+
+    await establishInboundReliableLink(h, 'controller-stream-after-queue');
+    const sentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(sentGeneration).toBeGreaterThan(queuedGeneration);
+    const replayedFrame = h.current().sent.slice(sentBeforeQueue).find((env) => (
+      env.kind === 'invoke'
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: replayedFrame!.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'first physical send failed',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: sentGeneration,
+    });
+    await expect(queuedInvoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
+  it('WebSocket 重连后重放帧的 DEVICE_OFFLINE 不消费旧连接发送代次', async () => {
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        pingIntervalMs: 60_000,
+      },
+    });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-before-reconnect');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'replayed-after-websocket-reconnect', {
+      ok: true,
+      result: 'pending',
+    });
+    expect(h.current().sent.some((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'replayed-after-websocket-reconnect'
+      && parseTransportPayload(env.payload) !== null
+    ))).toBe(true);
+
+    const oldSocketCount = h.sockets.length;
+    h.current().emit('close', 1006);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(oldSocketCount + 1));
+    const reconnectedSocket = h.current();
+    reconnectedSocket.ack();
+    await tick();
+
+    await establishInboundReliableLink(h, 'controller-stream-after-reconnect');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = reconnectedSocket.sent.find((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'replayed-after-websocket-reconnect'
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    reconnectedSocket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: replayedFrame!.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'replay target offline',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
   });
 
@@ -2953,6 +4279,7 @@ describe('DeviceLinkClient', () => {
 
     expect(h.current().terminated).toBe(false);
     expect(h.client.getStatus()).toBe('online');
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
   });
 
@@ -3126,6 +4453,28 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it.each([1, 9, 11, 19])('last valid frame at %sms receives the full heartbeat idle budget', async (offset) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 10, pongMissLimit: 1 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      await vi.advanceTimersByTimeAsync(offset);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(19);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      // Still bounded: the first heartbeat tick after two full idle periods closes it.
+      await vi.advanceTimersByTimeAsync(11);
+      expect(ws.terminated).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('pong 持续回应则不判僵死', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
@@ -3144,6 +4493,278 @@ describe('DeviceLinkClient', () => {
     expect(ws.terminated).toBe(false);
     expect(h.client.getStatus()).toBe('online');
     h.client.stop();
+  });
+
+  it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
+    // 这条验证的是 heartbeat tick 与入站活动的逻辑顺序，不是宿主定时器精度。
+    // Windows 高负载 runner 会把 4ms/8ms 真实 timer 一起推迟，再先执行较早注册的
+    // heartbeat，制造测试自身的假空闲窗口；用 fake timers 固定每个周期的先后关系。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      // 模拟 relay 仍在持续推送 presence，但 pong 偶发丢失；有效业务帧证明
+      // 共享 socket 仍有入站流量，不应因单独的 pong 计数拆掉所有 peer。
+      const activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'dev-b', online: true, deviceName: 'Test' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer 心跳:一个 peer 静默时健康 peer 的 link 与在途请求零感知', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 8,
+        pongMissLimit: 1,
+        requestTimeoutMs: 200,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    let healthyPending: Promise<unknown> | null = null;
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      const silentLink = establishInboundReliableLink(
+        h,
+        'heartbeat-silent-stream',
+        1,
+        'peer-silent',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await silentLink;
+      const healthyLink = establishInboundReliableLink(
+        h,
+        'heartbeat-healthy-stream',
+        1,
+        'peer-healthy',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await healthyLink;
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+      // peer-silent 此后不再发送任何帧；peer-healthy 上保留一个真实在途请求。
+      healthyPending = h.client.invoke('peer-healthy', {
+        channel: 'local-db:sessions:list',
+        args: [10],
+      }, 200);
+      const healthyInvoke = ws.sent
+        .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+        .at(-1)!;
+      const socketsBefore = h.sockets.length;
+
+      // relay 仍持续报告健康 peer 的有效入站活动，但 pong 丢失。heartbeat 必须按
+      // 共享 socket 的真实活性判断，不能因另一 peer 静默拆掉所有 link。
+      activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'peer-healthy', online: true, deviceName: 'Healthy' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      activity = null;
+
+      expect(ws.terminated).toBe(false);
+      expect(h.sockets).toHaveLength(socketsBefore);
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: healthyInvoke.id,
+        src: 'peer-healthy',
+        payload: { ok: true, result: ['healthy-ok'] },
+      });
+      await expect(healthyPending).resolves.toMatchObject({
+        ok: true,
+        result: ['healthy-ok'],
+      });
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      await healthyPending?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it('可解析但协议无效的入站帧不会刷新 heartbeat 活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const invalidFrames = [
+      { v: PROTOCOL_VERSION + 1, kind: 'pong' },
+      { v: PROTOCOL_VERSION, kind: 'future-kind' },
+      {
+        v: PROTOCOL_VERSION,
+        kind: 'presence-changed',
+        payload: { online: true },
+      },
+    ] as unknown as Envelope[];
+    let index = 0;
+    const activity = setInterval(() => {
+      ws.push(invalidFrames[index % invalidFrames.length]);
+      index += 1;
+    }, 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('畸形 invoke 继续分发但不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    h.client.onFrame((env) => frames.push(env));
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const malformed = {
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-heartbeat-invoke',
+      src: 'dev-b',
+      payload: { args: [] },
+    } as unknown as Envelope;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的 legacy invoke 不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'invoke',
+        payload: { channel: 'maker:valid-looking', args: [] },
+      } as unknown as Envelope;
+      const activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('可靠 invoke 分片在重组前也算入站活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 50, pongMissLimit: 2 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-fragment-stream');
+
+    const frames = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'fragmented-heartbeat-invoke',
+      src: 'dev-b',
+      dst: 'dev-self',
+      payload: { channel: 'maker:large', args: ['x'.repeat(150_000)] },
+    }, 'heartbeat-fragment-stream', 1);
+    expect(frames.length).toBeGreaterThan(1);
+
+    const activity = setInterval(() => {
+      for (const frame of frames) h.current().push(frame);
+    }, 10);
+    await tick(180);
+    clearInterval(activity);
+
+    expect(h.current().terminated).toBe(false);
+    expect(h.client.getStatus()).toBe('online');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的可靠 invoke 不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-missing-id-stream');
+    const ws = h.current();
+
+    const malformed = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      payload: { channel: 'maker:valid-looking', args: [] },
+    }, 'heartbeat-missing-id-stream', 1)[0]!;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('heartbeat idle 使用单调时钟，不受系统时间回拨影响', async () => {
+    const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+    let monotonicMs = 100;
+    const monotonic = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => monotonicMs);
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await tick();
+      const ws = h.current();
+      ws.ack();
+      wallClock.mockReturnValue(-1_000_000);
+
+      for (let i = 0; i < 40 && !ws.terminated; i++) {
+        monotonicMs += 10;
+        await tick(10);
+      }
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      wallClock.mockRestore();
+      monotonic.mockRestore();
+    }
   });
 
   it('getToken 返回 null:不建连,按退避重试', async () => {
@@ -3189,8 +4810,68 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('畸形 invoke 仍交给业务层生成结构化拒绝', async () => {
+    const h = makeHarness();
+    const frames: Envelope[] = [];
+    h.client.onFrame((e) => frames.push(e));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      src: 'dev-a',
+      payload: { channel: 'maker:send' },
+    });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      payload: { channel: 'maker:send' },
+    });
+    h.client.stop();
+  });
+
+  it('畸形 link-close 仍交给业务层收口但不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.onFrame((env) => frames.push(env));
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        src: 'dev-a',
+        payload: {},
+      } as unknown as Envelope;
+      activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      if (activity) clearInterval(activity);
+      activity = null;
+
+      expect(frames.length).toBeGreaterThan(0);
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('epoch 守卫:过期 socket 的迟到 close/message 回调被忽略,不触发额外重连', async () => {
     const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
     h.client.start();
     await tick();
     h.current().ack();
@@ -3205,8 +4886,16 @@ describe('DeviceLinkClient', () => {
     // 把 this.ws=socket2 误清并再排一次重连 → socket3)。
     stale.emit('close', 1006);
     stale.emit('message', { toString: () => 'garbage-from-stale' });
+    stale.emit('message', {
+      toString: () => JSON.stringify({
+        v: PROTOCOL_VERSION,
+        kind: 'relay-error',
+        payload: { code: 'DEVICE_OFFLINE', message: 'stale', dst: 'dev-b' },
+      }),
+    });
     await tick(25);
     expect(h.sockets.length).toBe(2); // 没有因 stale 迟到事件多建连
+    expect(routeChanges).toHaveLength(0); // 旧 connection epoch 不能清新链路
 
     fresh.ack();
     expect(h.client.getStatus()).toBe('online'); // fresh 不受 stale 影响,正常 online
@@ -3606,7 +5295,7 @@ describe('DeviceLinkClient', () => {
     h.current().ack();
     await tick();
     expect(h.client.getStatus()).toBe('online');
-    // 建一条 reliable link:重建后它的 linkReady 必须被复位,host 才会重新 openLink
+    // 建一条 reliable link:重建后它的收发 ready 必须被复位,host 才会重新 openLink
     await establishInboundReliableLink(h, 'resume-stream', 1, 'ctrl-resume');
 
     const before = h.sockets.length;
@@ -3616,8 +5305,8 @@ describe('DeviceLinkClient', () => {
     h.current().ack();
     await tick();
     expect(h.client.getStatus()).toBe('online');
-    // linkReady 已复位:relay 在线 + link 未就绪 → invoke-result 走 legacy 裸帧
-    // (若 linkReady 残留 true,这里会被包进 transport wrapper 走旧 stream)
+    // 发送方向已复位:relay 在线 + link 未就绪 → invoke-result 走 legacy 裸帧
+    // (若 sendPhase 残留 ready,这里会被包进 transport wrapper 走旧 stream)
     h.client.sendInvokeResult('ctrl-resume', 'req-after-resume', { ok: true, result: 1 });
     const resent = h.current().sent.filter((e) => e.kind === 'invoke-result');
     expect(resent).toHaveLength(1);
@@ -3901,7 +5590,7 @@ describe('DeviceLinkClient', () => {
   });
 
   describe('可靠传输死锁自愈(2026-08-03 线上实锤:被控端回程队列冻结)', () => {
-    /** 建 reliable link 后经历一次 relay 断线重连:peer.reliable=true 而 linkReady=false。 */
+    /** 建 reliable link 后经历一次 relay 断线重连:peer.reliable=true 而收发方向未 ready。 */
     async function makeLinkDownPeer(h: Harness, src = 'ctrl-1'): Promise<void> {
       await tick();
       h.current().ack();
@@ -4241,12 +5930,207 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
 });
 
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  it('excludes idle and inbound-closed peers while admitting a new active target', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (let i = 0; i < 12; i++) {
+        const peer = `peer-${i}`;
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+        if (i < 6) h.client.closeLink(peer, 'user', 'inbound');
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      for (let i = 0; i < 8; i++) h.client.sendPush('peer-11', 'maker:event', { part: i });
+      expect(socket.sent).toHaveLength(8);
+      const last = parseTransportPayload(socket.sent.at(-1)!.payload)!.meta;
+      socket.push({ v: 1, kind: 'push', src: 'peer-11', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: last.streamId, ackSeq: last.seq },
+      } });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(h.client.getReliableSendQueueDepth('peer-11')).toBe(0);
+      // A previously idle target must be included before initial admission, even
+      // for an oversized response, without waiting for historical peers' turns.
+      const before = socket.sent.length;
+      h.client.sendInvokeResult('peer-10', 'large-active', { ok: true, result: 'x'.repeat(12 * 128 * 1024) });
+      expect(socket.sent.length - before).toBeGreaterThan(8);
+      expect(socket.sent.slice(before).every((env) => env.dst === 'peer-10')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('queues paced sends despite a full socket and refunds failed retry capacity checks', async () => {
+    vi.useFakeTimers();
+    const debug = vi.fn();
+    const h = makeHarness({ logger: { debug, warn: vi.fn(), info: vi.fn(), error: vi.fn() }, timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+      }
+      const socket = h.current();
+      // Keep b genuinely active so a receives half of the shared window.
+      h.client.sendPush('b', 'maker:event', { pending: true });
+      socket.sent.length = 0;
+      for (let i = 0; i < 4; i++) h.client.sendPush('a', 'maker:event', { part: i });
+      expect(socket.sent).toHaveLength(4);
+      const last = parseTransportPayload(socket.sent.at(-1)!.payload)!.meta;
+      socket.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+      expect(() => h.client.sendPush('a', 'maker:event', { part: 'queued' })).not.toThrow();
+      expect(() => h.client.sendInvokeResult('a', 'queued-result', { ok: true, result: 'ok' })).not.toThrow();
+      expect(h.client.getReliableSendQueueDepth('a')).toBe(6);
+      // A peer with remaining credit still checks capacity and preserves its old queue.
+      expect(() => h.client.sendInvokeResult('b', 'full', { ok: true, result: 'ok' })).toThrow();
+      expect(h.client.getReliableSendQueueDepth('b')).toBe(1);
+      debug.mockClear();
+      socket.push({ v: 1, kind: 'push', src: 'a', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: last.streamId, ackSeq: last.seq },
+      } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(debug.mock.calls.some(([message]) => String(message).includes('retry failed'))).toBe(false);
+      // The next window permits a retry but the full socket rejects it; no credit
+      // may remain charged when capacity subsequently recovers in the same window.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(debug.mock.calls.some(([message]) => String(message).includes('retry failed'))).toBe(true);
+      socket.bufferedAmount = 0;
+      const before = socket.sent.length;
+      for (let i = 0; i < 4; i++) h.client.sendPush('a', 'maker:event', { afterCapacity: i });
+      expect(socket.sent.length - before).toBe(4);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(socket.sent.some((env) => env.id === 'queued-result')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it.each([0, 2])('refunds a failed fragmented send after %s physical frames so another peer can reply', async (written) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      const send = socket.send.bind(socket);
+      let sent = 0;
+      socket.send = (data) => {
+        const env = JSON.parse(data) as Envelope;
+        if (env.dst === 'a' && parseTransportPayload(env.payload)) {
+          if (sent === written) throw new Error('socket raced');
+          sent++;
+        }
+        send(data);
+      };
+      const attempt = () => h.client.sendInvokeResult('a', 'large', { ok: true, result: 'x'.repeat(12 * 128 * 1024) });
+      if (written === 0) expect(attempt).toThrow('socket raced');
+      else expect(attempt).not.toThrow();
+      expect(sent).toBe(written);
+      socket.send = send;
+      h.client.sendInvokeResult('b', 'healthy', { ok: true, result: 'ok' });
+      expect(socket.sent.some((env) => env.dst === 'b' && env.kind === 'invoke-result')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('paces all reliable sends after 1013 without starving another peer or control ACKs', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+        expect(h.client.canSendPush(peer)).toBe(true);
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendPush('a', 'local-db:sessions:patched', { sessionId: String(i), patch: { title: 'new' } });
+      h.client.sendInvokeResult('b', 'healthy-result', { ok: true, result: 'ok' });
+      const reliable = () => socket.sent.filter((env) => parseTransportPayload(env.payload));
+      expect(reliable().length).toBeLessThanOrEqual(8);
+      // b became active after a used the idle window; it progresses next window.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(reliable().some((env) => env.dst === 'b' && env.kind === 'invoke-result')).toBe(true);
+      socket.push(encodeReliableFrames({ v: 1, kind: 'push', src: 'a', payload: { channel: 'maker:event', payload: {} } }, 'stream-a', 1)[0]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.sent.some((env) => (env.payload as { channel?: string })?.channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL)).toBe(true);
+      for (let window = 0; window < 8; window++) {
+        for (const peer of ['a', 'b']) {
+          const last = reliable().filter((env) => env.dst === peer).at(-1);
+          if (!last) continue;
+          const { streamId, seq } = parseTransportPayload(last.payload)!.meta;
+          socket.push({ v: 1, kind: 'push', src: peer, payload: {
+            channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId, ackSeq: seq },
+          } });
+        }
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      expect(new Set(reliable().filter((env) => env.dst === 'a').map((env) => parseTransportPayload(env.payload)!.meta.seq)).size).toBe(24);
+      expect(h.client.getStatus()).toBe('online');
+      expect(socket.closed).toBeNull();
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('allows legacy listing pushes but pauses a known reliable peer after reset', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    try {
+      expect(h.client.canSendPush('listing-only')).toBe(true);
+      await establishInboundReliableLink(h, 'remote-stream');
+      expect(h.client.canSendPush('dev-b')).toBe(true);
+      h.current().push({ v: 1, kind: 'link-close', src: 'dev-b', payload: { reason: 'transport-timeout' } });
+      expect(h.client.canSendPush('dev-b')).toBe(false);
+      expect(h.client.canSendPush('listing-only')).toBe(true);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); }
+  });
+
   it('1013 计入拥塞连击,握手成功不清零,稳定在线满窗口才清零;普通断线不计入', async () => {
     const h = makeHarness({
       timing: {
         reconnectBaseMs: 1,
         reconnectMaxMs: 5,
         reconnectStableResetMs: 20,
+        congestionStableResetMs: 80,
         congestionBackoffBaseMs: 2,
         congestionBackoffMaxMs: 8,
         pingIntervalMs: 60_000,
@@ -4268,8 +6152,12 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     expect(h.client.getStatus()).toBe('online');
     expect(internals.congestionCloseStreak).toBe(1);
 
-    // 稳定在线满 reconnectStableResetMs 后清零
-    await tick(100);
+    // 普通稳定窗过了,拥塞连击仍在:现场 1013 间隔远大于 10s
+    await tick(40);
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 稳定在线满 congestionStableResetMs 后才清零
+    await tick(80);
     expect(internals.congestionCloseStreak).toBe(0);
 
     // 普通断线(1006)不计入拥塞连击
@@ -4433,6 +6321,582 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
   const retriedSeqs = (counts: Map<number, number>): number[] =>
     [...counts.entries()].filter(([, n]) => n > 1).map(([seq]) => seq).sort((a, b) => a - b);
 
+  it('新确认阶段:首个 link-accept 丢失时不提前发可靠帧,同 stream 重开确认后恢复小帧', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const controller = makeRelayClient(relay, 'ios');
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'small-live-result' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => senderId === 'desktop' && env.kind === 'link-accept');
+    const firstOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 50);
+    const firstOpenRejection = expect(firstOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    await relay.settle();
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:small-live-request',
+      args: [],
+    }, 1_000);
+    await relay.settle();
+    const rawBeforeConfirm = relay.deliveredTo.get('ios') ?? [];
+    expect(rawBeforeConfirm.some((env) => parseTransportPayload(env.payload) !== null)).toBe(false);
+    await firstOpenRejection;
+
+    const secondOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    await expect(secondOpen).resolves.toMatchObject({
+      capabilities: expect.arrayContaining([
+        DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      ]),
+    });
+    expect(receivedInvokes[0]).toMatchObject({
+      kind: 'invoke',
+      payload: { channel: 'maker:small-live-request', args: [] },
+    });
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'small-live-result' });
+    expect(host.getReliableSendQueueDepth('ios')).toBe(0);
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:迟到的旧 request id 不跨代放行,只接受当前 link-open 的确认', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const controller = makeRelayClient(relay, 'ios');
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'confirmed-current' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => senderId === 'desktop' && env.kind === 'link-accept');
+    const staleOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 50);
+    // Attach the rejection handler before yielding to the relay/timer. On
+    // Windows the short timeout can fire before the later assertion, which
+    // turns the expected rejection into an unhandled-rejection failure.
+    const staleOpenRejection = expect(staleOpen).rejects.toMatchObject({
+      code: 'INVOKE_TIMEOUT',
+    });
+    await relay.settle();
+    const staleRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(staleRequestId).toBeTruthy();
+    await staleOpenRejection;
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:cross-generation-request',
+      args: [],
+    }, 1_000);
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const currentOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    const accepted = await currentOpen;
+    const currentRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(currentRequestId).toBeTruthy();
+    expect(currentRequestId).not.toBe(staleRequestId);
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: Number.MAX_SAFE_INTEGER,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settle();
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: staleRequestId,
+    });
+    await relay.settle();
+    expect(host.isLinkReady('ios')).toBe(false);
+    expect(receivedInvokes).toHaveLength(0);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    expect(host.isLinkReady('ios')).toBe(true);
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'confirmed-current' });
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:同 stream 可靠业务帧不能替代当前代确认 ACK', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 1_000,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 1_000,
+      transportMaxRetryAttempts: 3,
+    });
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      } else if (env.kind === 'invoke' && env.src && env.id) {
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: 'host-ready' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'reopened' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const firstOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    const accepted = await firstOpen;
+    const currentRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(currentRequestId).toBeTruthy();
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:held-until-reopen',
+      args: [],
+    }, 1_000);
+    await relay.settle();
+    expect(receivedInvokes).toHaveLength(0);
+
+    const inboundEvidence = controller.invoke('desktop', {
+      channel: 'maker:prove-accept-was-processed',
+      args: [],
+    }, 500);
+    await relay.settleUntil(() => (
+      relay.deliveredTo.get('ios') ?? []
+    ).some((env) => env.kind === 'invoke-result'));
+    await expect(inboundEvidence).resolves.toEqual({ ok: true, result: 'host-ready' });
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'reopened' });
+    expect(host.isLinkReady('ios')).toBe(true);
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:确认 ACK 丢失后自动有界重发,无需等待下一条控制端业务', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'retry-confirmed' });
+      }
+    });
+    const settleRelay = () => relay.settle(() => Promise.resolve());
+    try {
+      host.start();
+      controller.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await settleRelay();
+      expect(host.getStatus()).toBe('online');
+      expect(controller.getStatus()).toBe('online');
+
+      relay.dropNext((senderId, env) => (
+        senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      const opened = controller.openLink('desktop', {
+        controllerName: 'iPhone',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 500);
+      await settleRelay();
+      await expect(opened).resolves.toBeTruthy();
+      expect(host.isLinkReady('ios')).toBe(false);
+
+      const linkRequestId = (relay.deliveredTo.get('desktop') ?? [])
+        .filter((env) => env.kind === 'link-open')
+        .at(-1)?.id;
+      expect(linkRequestId).toBeTruthy();
+
+      await vi.advanceTimersByTimeAsync(20);
+      await settleRelay();
+      expect(host.isLinkReady('ios')).toBe(true);
+      const retryConfirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(retryConfirmationAcks).toHaveLength(1);
+      expect(parseTransportAck(retryConfirmationAcks[0])?.linkRequestId).toBe(linkRequestId);
+
+      // 首次立即发送已被丢弃，剩余预算只允许再发送两次。推进到第三次尝试后的
+      // 下一个重试窗口，确认计时器已经停止，且所有确认仍属于当前 request 代际。
+      await vi.advanceTimersByTimeAsync(40);
+      await settleRelay();
+      const boundedConfirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(boundedConfirmationAcks).toHaveLength(2);
+      expect(boundedConfirmationAcks.every((env) => (
+        parseTransportAck(env)?.linkRequestId === linkRequestId
+      ))).toBe(true);
+
+      const liveInvoke = host.invoke('ios', {
+        channel: 'maker:confirmed-by-retry',
+        args: [],
+      }, 500);
+      await settleRelay();
+      expect(receivedInvokes).toHaveLength(1);
+      await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'retry-confirmed' });
+
+      const confirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(confirmationAcks).toHaveLength(3);
+      expect(confirmationAcks.every((env) => (
+        parseTransportAck(env)?.linkRequestId === linkRequestId
+      ))).toBe(true);
+    } finally {
+      offHost();
+      offController();
+      host.stop();
+      controller.stop();
+      vi.useRealTimers();
+    }
+  }, 10_000);
+
+  it('新确认阶段:旧帧执行完才提交的新基线会刷新确认 ACK,不复用首次 stale ackSeq', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        transportRetryIntervalMs: 50,
+        transportMaxRetryAttempts: 3,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const openLink = async (transportBaseSeq: number): Promise<string> => {
+      const opening = h.client.openLink('dev-b', {
+        controllerName: 'Test iPhone',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 500);
+      const requestId = h.current().sent.filter((env) => env.kind === 'link-open').at(-1)!.id!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: requestId,
+        src: 'dev-b',
+        payload: {
+          appVersion: '1',
+          allowlistHash: 'hash',
+          capabilities: [
+            DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+            DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          ],
+          transportStreamId: 'remote-stream',
+          transportBaseSeq,
+        },
+      });
+      await opening;
+      return requestId;
+    };
+
+    await openLink(1);
+    let release: (() => void) | undefined;
+    h.client.onFrame((env) => {
+      if (env.kind !== 'push') return;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    h.current().push(encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: { channel: 'maker:event', payload: { text: 'old-running-frame' } },
+    }, 'remote-stream', 1)[0]);
+    await tick();
+    expect(release).toBeTypeOf('function');
+
+    const reopenedRequestId = await openLink(2);
+    const confirmationAcks = () => h.current().sent
+      .map((env) => parseTransportAck(env))
+      .filter((ack) => ack?.linkRequestId === reopenedRequestId);
+    expect(confirmationAcks().at(-1)).toMatchObject({ ackSeq: 0 });
+
+    release?.();
+    await tick();
+    expect(confirmationAcks().at(-1)).toMatchObject({ ackSeq: 1 });
+
+    h.client.stop();
+  }, 10_000);
+
+  it('新确认阶段:确认重试全部丢失后超时重置 peer,通知控制端重开而非永久等待', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    for (let i = 0; i < 3; i++) {
+      relay.dropNext((senderId, env) => (
+        senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+    }
+    const opened = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    await expect(opened).resolves.toBeTruthy();
+    await relay.settleUntil(() => (
+      (relay.deliveredTo.get('ios') ?? []).some((env) => (
+        env.kind === 'link-close'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))
+    ));
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    offHost();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:对端进程换 stream 后按新基线确认并重放 live 请求', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const firstController = makeRelayClient(relay, 'ios');
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    host.start();
+    firstController.start();
+    await relay.settleUntil(() => (
+      host.getStatus() === 'online' && firstController.getStatus() === 'online'
+    ));
+
+    const firstOpen = firstController.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => host.isLinkReady('ios'));
+    await expect(firstOpen).resolves.toBeTruthy();
+
+    relay.disconnect('ios');
+    firstController.stop();
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:survive-controller-restart',
+      args: [],
+    }, 1_000);
+    await relay.settle();
+    expect(host.getReliableSendQueueDepth('ios')).toBe(1);
+
+    const restartedController = makeRelayClient(relay, 'ios');
+    const receivedInvokes: Envelope[] = [];
+    const offRestarted = restartedController.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        restartedController.sendInvokeResult(env.src, env.id, {
+          ok: true,
+          result: 'new-stream-result',
+        });
+      }
+    });
+    restartedController.start();
+    await relay.settleUntil(() => restartedController.getStatus() === 'online');
+    const reopened = restartedController.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '2',
+    }, 500);
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+
+    await expect(reopened).resolves.toBeTruthy();
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'new-stream-result' });
+    expect(host.isLinkReady('ios')).toBe(true);
+    expect(host.getReliableSendQueueDepth('ios')).toBe(0);
+
+    offHost();
+    offRestarted();
+    host.stop();
+    restartedController.stop();
+  }, 10_000);
+
+  it('新确认阶段:一个 peer 卡在确认不影响另一个 peer 的发送与 ACK', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const stalledController = makeRelayClient(relay, 'ios-stalled');
+    const healthyController = makeRelayClient(relay, 'ios-healthy');
+    const stalledInvokes: Envelope[] = [];
+    const healthyInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offStalled = stalledController.onFrame((env) => {
+      if (env.kind === 'invoke') stalledInvokes.push(env);
+    });
+    const offHealthy = healthyController.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        healthyInvokes.push(env);
+        healthyController.sendInvokeResult(env.src, env.id, { ok: true, result: 'healthy' });
+      }
+    });
+    host.start();
+    stalledController.start();
+    healthyController.start();
+    await relay.settleUntil(() => (
+      host.getStatus() === 'online'
+      && stalledController.getStatus() === 'online'
+      && healthyController.getStatus() === 'online'
+    ));
+
+    const healthyOpen = healthyController.openLink('desktop', {
+      controllerName: 'Healthy iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => host.isLinkReady('ios-healthy'));
+    await expect(healthyOpen).resolves.toBeTruthy();
+
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios-stalled' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const stalledOpen = stalledController.openLink('desktop', {
+      controllerName: 'Stalled iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    await expect(stalledOpen).resolves.toBeTruthy();
+    expect(host.isLinkReady('ios-stalled')).toBe(false);
+
+    const stalledInvoke = host.invoke('ios-stalled', {
+      channel: 'maker:must-stay-held',
+      args: [],
+    }, 5_000);
+    const stalledOutcome = stalledInvoke.catch((err: unknown) => err);
+    const healthyInvoke = host.invoke('ios-healthy', {
+      channel: 'maker:must-stay-independent',
+      args: [],
+    }, 1_000);
+    await relay.settleUntil(() => healthyInvokes.length === 1);
+
+    await expect(healthyInvoke).resolves.toEqual({ ok: true, result: 'healthy' });
+    expect(stalledInvokes).toHaveLength(0);
+    expect(host.getReliableSendQueueDepth('ios-stalled')).toBe(1);
+    expect(host.getReliableSendQueueDepth('ios-healthy')).toBe(0);
+
+    offHost();
+    offStalled();
+    offHealthy();
+    host.stop();
+    stalledController.stop();
+    healthyController.stop();
+    await expect(stalledOutcome).resolves.toMatchObject({ code: 'NOT_CONNECTED' });
+  }, 10_000);
+
   /**
    * 这两条断言的是「**每一趟**发多少」,所以必须用 fake timers 逐趟驱动:真实定时器下
    * 回调会在负载高的 runner 上挤在一起(CI 上实测把「只压队头 2 条」跑成 4 条),那不是
@@ -4461,7 +6925,211 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }
   }
 
-  it('对端停止 ACK 时,一趟定时重发只发预算内的最旧几条(而不是整个窗口)', async () => {
+  it('holds a large future response locally until ACK frees receive slots, then sends without the 30s retry wait', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      for (let i = 0; i < 16; i++) {
+        h.client.sendInvokeResult('dev-b', `before-${i}`, { ok: true, result: i });
+      }
+      // This was previously sent into a full receiver and all three chunks
+      // could be rejected, even though the business timeout is only 12s.
+      h.client.sendInvokeResult('dev-b', 'large-future', { ok: true, result: 'x'.repeat(322_115) });
+      h.client.sendInvokeResult('dev-b', 'after-large', { ok: true, result: 'latest' });
+      expect(ws.sent.filter(e => e.id === 'large-future')).toHaveLength(0);
+      expect(ws.sent.filter(e => e.id === 'after-large')).toHaveLength(0);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(18);
+      const meta = parseTransportPayload(ws.sent.find(e => e.id === 'before-15')!.payload)!.meta;
+      await advance(100);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: meta.streamId, ackSeq: meta.seq },
+      } });
+      expect(ws.sent.filter(e => e.id === 'large-future')).toHaveLength(3);
+      expect(ws.sent.filter(e => e.id === 'after-large')).toHaveLength(1);
+      await advance(18_000);
+      expect(ws.sent.filter(e => e.id === 'large-future')).toHaveLength(3);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('a full receive window queues locally even with a full socket and does not block another peer', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      const linked = establishInboundReliableLink(h, 'healthy-stream', 1, 'healthy');
+      await advance(1);
+      await linked;
+      for (let i = 0; i < 16; i++) h.client.sendInvokeResult('dev-b', `held-${i}`, { ok: true, result: null });
+      ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+      expect(() => h.client.sendInvokeResult('dev-b', 'local-only', { ok: true, result: null })).not.toThrow();
+      expect(ws.sent.some(e => e.id === 'local-only')).toBe(false);
+      ws.bufferedAmount = 0;
+      h.client.sendInvokeResult('healthy', 'healthy-result', { ok: true, result: null });
+      expect(ws.sent.some(e => e.id === 'healthy-result')).toBe(true);
+      expect(h.client.isLinkReady('healthy')).toBe(true);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('a timed-out invoke outside the receive window becomes a skip delivered when ACK advances', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      for (let i = 0; i < 16; i++) h.client.sendInvokeResult('dev-b', `held-${i}`, { ok: true, result: null });
+      const outcome = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 100)
+        .catch((error: unknown) => error);
+      await advance(101);
+      expect(await outcome).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(ws.sent.some(e => e.kind === 'invoke')).toBe(false);
+      const meta = parseTransportPayload(ws.sent.find(e => e.id === 'held-15')!.payload)!.meta;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: meta.streamId, ackSeq: meta.seq },
+      } });
+      const skip = ws.sent.find(e => e.kind === 'invoke')!;
+      expect(parseTransportPayload(skip.payload)!.meta.seq).toBe(meta.seq + 1);
+      expect(parseTransportPayload(skip.payload)!.data).toBe(JSON.stringify(makeTransportSkipPayload()));
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('a large response delivered after 18s is not duplicated while waiting for its first ACK', async () => {
+    await withFakeTimers(async (h, advance) => {
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      const ws = h.current();
+      const first = ws.sent.find((env) => env.kind === 'invoke-result')!;
+      const meta = parseTransportPayload(first.payload)!.meta;
+      await advance(18_000);
+      expect([...sendsBySeq(ws).values()]).toEqual([1]);
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        },
+      });
+      await advance(40_000);
+      expect([...sendsBySeq(ws).values()]).toEqual([1]);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it('retries an eligible small request while a large head frame is cooling down', async () => {
+    await withFakeTimers(async (h, advance) => {
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(2);
+
+      // The large head waits for its byte-based interval (~26s), but the
+      // small tail is eligible on the first retry tick and must not be starved.
+      await advance(2_000);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[1]]);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  }, 10_000);
+
+  it('a small tail cannot reset a slow large head after 35s without ACK or disturb another peer', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const resets = vi.fn();
+      h.client.onPeerTransportReset(resets);
+      const healthyLink = establishInboundReliableLink(h, 'healthy-stream', 1, 'dev-healthy');
+      await advance(1);
+      await healthyLink;
+      const ws = h.current();
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const healthyRequest = h.client.invoke('dev-healthy', { channel: 'maker:healthy', args: [] }, 60_000);
+      void healthyRequest.catch(() => {});
+      const healthyFrame = ws.sent.find((env) => env.kind === 'invoke' && env.dst === 'dev-healthy')!;
+      const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+      ws.push({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-healthy',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: {
+          streamId: healthyMeta.streamId, ackSeq: healthyMeta.seq,
+        } },
+      });
+
+      await advance(25_999);
+      expect(sendsBySeq(ws).get(seqs[0])).toBe(1);
+      await advance(9_001);
+      // The existing 26s size budget permits one head retry, not an early
+      // reset/replay. The tail's cumulative ACK is still blocked by that head.
+      expect(resets).not.toHaveBeenCalled();
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+      expect(h.client.isLinkReady('dev-healthy')).toBe(true);
+      expect(ws.sent.filter((env) => env.kind === 'link-close')).toHaveLength(0);
+      expect(sendsBySeq(ws).get(seqs[0])).toBe(2);
+      expect(sendsBySeq(ws).get(seqs[1])).toBe(2);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-healthy',
+        id: healthyFrame.id, payload: { ok: true, result: 'healthy' } });
+      await expect(healthyRequest).resolves.toEqual({ ok: true, result: 'healthy' });
+
+      // A genuinely silent head must still exhaust its own bounded budget.
+      await advance(100_000);
+      expect(resets).toHaveBeenCalledTimes(1);
+      expect(resets.mock.calls[0][0]).toMatchObject({ deviceId: 'dev-b', seq: seqs[0] });
+      expect(h.client.isLinkReady('dev-healthy')).toBe(true);
+      expect(ws.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it.each([true, false])('a small tail resumes bounded retries after its large head is acknowledged (tail ACK=%s)', async (ackTail) => {
+    await withFakeTimers(async (h, advance) => {
+      const resets = vi.fn();
+      h.client.onPeerTransportReset(resets);
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const first = ws.sent.find((env) => env.kind === 'invoke-result')!;
+      const meta = parseTransportPayload(first.payload)!.meta;
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      await advance(35_000);
+      expect(resets).not.toHaveBeenCalled();
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: {
+          streamId: meta.streamId, ackSeq: seqs[0],
+        } } });
+      await advance(2_000);
+      expect(sendsBySeq(ws).get(seqs[1])).toBe(3);
+      if (ackTail) {
+        ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+          payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: {
+            streamId: meta.streamId, ackSeq: seqs[1],
+          } } });
+      }
+      await advance(35_000);
+      if (ackTail) {
+        expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+        expect(resets).not.toHaveBeenCalled();
+      } else {
+        expect(resets).toHaveBeenCalledTimes(1);
+        expect(resets.mock.calls[0][0]).toMatchObject({ deviceId: 'dev-b', seq: seqs[1] });
+      }
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  it.each([1, 2])('a small tail respects a retry limit of %s behind a large head', async (transportMaxRetryAttempts) => {
+    await withFakeTimers(async (h, advance) => {
+      const resets = vi.fn();
+      h.client.onPeerTransportReset(resets);
+      h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
+      h.client.sendInvokeResult('dev-b', 'small-request', { ok: true, result: 'ok' });
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      await advance(25_999);
+      expect(resets).not.toHaveBeenCalled();
+      expect(sendsBySeq(ws).get(seqs[0])).toBe(1);
+      expect(sendsBySeq(ws).get(seqs[1])).toBe(transportMaxRetryAttempts);
+      await advance(30_001);
+      expect(resets).toHaveBeenCalledTimes(1);
+      expect(resets.mock.calls[0][0]).toMatchObject({ deviceId: 'dev-b', seq: seqs[0] });
+      expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000, transportMaxRetryAttempts });
+  });
+
+  it('队头冷却时仍允许后续小请求重传', async () => {
     // 2026-08-08 线上:一趟重发遍历整个 pending 窗口(上限 64 条)、同步全部写进 ws,
     // 对端 relay 路由已失效时逐帧弹回 DEVICE_OFFLINE —— 单簇 213 条就是这个形状。
     // 既有两道刹车都拦不住本趟:per-peer 制动要等 relay-error 回来(异步),ws 容量
@@ -4479,9 +7147,12 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       await advance(200);
       expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
 
-      // 再一趟:对端仍未 ACK,预算继续压在同样的队头 3 条上(不铺满窗口)
+      // 后续小帧不再被队头冷却冻结；本趟预算继续限制单趟发送量。
       await advance(200);
-      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 6));
+      expect(seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq))).toEqual([2, 2, 2]);
+      // 队头继续按退避间隔重发，后续序号则可独立获得重试机会。
+      await advance(200);
       const headCounts = seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq));
       expect(headCounts).toEqual([3, 3, 3]); // 首发 + 两趟重发
     }, {
@@ -4548,7 +7219,8 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       // 预算 4 帧、每条 3 片:队头那条发完(3 帧)后,第二条会超预算 → 发送前就被拦下,
       // 留到下一趟。所以本趟只重发队头 1 条、只写出 3 帧。
       const framesBefore = framesSent(ws);
-      await advance(200);
+      // Large messages first receive a bounded transmission budget (15 ticks).
+      await advance(3_000);
       const retried = retriedSeqs(sendsBySeq(ws));
       expect(retried).toEqual([seqs[0]]);
       // 本趟真实写出的帧数不超过 max(预算, 队头分片数) —— 这才是「上限」的准确表述
@@ -4573,14 +7245,9 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       }
       const ws = h.current();
       const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
-      const framesBefore = framesSent(ws);
-
-      await advance(200);
-      // 只有队头那条大消息被重发,5 条小消息一条都没被带出去
-      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[0]]);
-      // 溢出被限制在「队头这一条的分片数」内,而不是预算 + 队头
-      const passFrames = framesSent(ws) - framesBefore;
-      expect(passFrames).toBeLessThanOrEqual(6);
+      await advance(3_000);
+      // 队头仍受分片预算约束；小消息不会因队头冷却而饥饿。
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs);
     }, {
       pingIntervalMs: 600_000,
       transportRetryIntervalMs: 200,
@@ -4652,11 +7319,11 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     });
   }, 10_000);
 
-  it('link 重建后的 replay 不受预算限制:可达性刚被对端 link-accept 证明过', async () => {
+  it('同连接代重复 link-open 不再全量 replay', async () => {
     const h = makeHarness({
       timing: {
         pingIntervalMs: 60_000,
-        transportRetryIntervalMs: 60_000, // 定时器不参与,只看 replay 那一趟
+        transportRetryIntervalMs: 60_000,
         transportRetryPassBudget: 2,
         transportMaxRetryAttempts: 50,
       },
@@ -4672,12 +7339,493 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     const ws = h.current();
     expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
 
-    // 对端重新 link-open → 本端 link-accept → replay:一趟把 7 条全部重放
-    await establishInboundReliableLink(h, 'remote-stream-2');
+    await establishInboundReliableLink(h, 'remote-stream');
     await tick();
-    expect(retriedSeqs(sendsBySeq(ws)).length).toBe(7);
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
 
     h.client.stop();
+  }, 10_000);
+
+  it('同连接同 stream 重复 link-open 确认后恢复 pending retry timer', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const capabilities = [
+      DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+      DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+    ];
+    const sendInboundOpen = async (id: string): Promise<void> => {
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities,
+          transportStreamId: 'same-remote-stream',
+          transportBaseSeq: 1,
+        },
+      });
+      await tick();
+      off();
+    };
+    const confirmInboundOpen = (id: string): void => {
+      const accept = h.current().sent.filter((env) => (
+        env.kind === 'link-accept' && env.id === id
+      )).at(-1)!;
+      const payload = accept.payload as { transportStreamId?: string };
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: payload.transportStreamId,
+            ackSeq: 0,
+            linkRequestId: id,
+          },
+        },
+      });
+    };
+
+    await sendInboundOpen('duplicate-open-1');
+    confirmInboundOpen('duplicate-open-1');
+
+    h.client.sendInvokeResult('dev-b', 'pending-before-duplicate', {
+      ok: true,
+      result: 'pending',
+    });
+    const ws = h.current();
+    const first = ws.sent.filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    )).at(-1)!;
+    const firstMeta = parseTransportPayload(first.payload)!.meta;
+
+    // 在原 retry interval 到期前立刻处理同连接同 stream 的重复 open。
+    await sendInboundOpen('duplicate-open-2');
+    confirmInboundOpen('duplicate-open-2');
+
+    await vi.waitFor(() => {
+      const retries = ws.sent.filter((env) => {
+        const parsed = parseTransportPayload(env.payload);
+        return env.kind === 'invoke-result'
+          && parsed?.meta.seq === firstMeta.seq;
+      });
+      expect(retries.length).toBeGreaterThan(1);
+    }, { timeout: 500 });
+
+    h.client.stop();
+  }, 10_000);
+
+  it('对端换 stream 视为真正恢复,按探测预算 replay', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+    await establishInboundReliableLink(h, 'remote-stream-restarted');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+    h.client.stop();
+  }, 10_000);
+
+  it('真正恢复时 replay 受探测预算约束,ACK 后再继续 drain', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+    expect(seqs).toHaveLength(7);
+
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+    internals.peerTransport.get('dev-b')!.receiveReady = false;
+
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+    h.client.sendInvokeResult('dev-b', 'extra-during-recovery', { ok: true, result: 'x' });
+    expect([...sendsBySeq(ws).keys()]).toHaveLength(7);
+
+    const streamId = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!.meta.streamId;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId, ackSeq: seqs[1] },
+      },
+    });
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([...seqs.slice(0, 2), ...seqs.slice(2, 4)]);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复预算还剩一点时,放不下的大消息先入队不发出', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 3,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'small-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'small-1', { ok: true, result: 1 });
+    const ws = h.current();
+    const before = framesSent(ws);
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+    internals.peerTransport.get('dev-b')!.receiveReady = false;
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+
+    const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+    h.client.sendInvokeResult('dev-b', 'too-big', { ok: true, result: chunky });
+    expect(framesSent(ws)).toBe(before + 2);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('空队列恢复后新入队流量仍走探测预算', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    const before = framesSent(ws);
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `after-${i}`, { ok: true, result: i });
+    }
+    expect(framesSent(ws)).toBe(before + 2);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复期 hold 时不因共享 ws 缓冲满而 BACKPRESSURE', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendInvokeResult('dev-b', 'probe', { ok: true, result: 0 })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+
+    ws.bufferedAmount = 0;
+    h.client.sendInvokeResult('dev-b', 'probe-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'probe-1', { ok: true, result: 1 });
+    const before = framesSent(ws);
+    ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendInvokeResult('dev-b', 'held', { ok: true, result: 2 })).not.toThrow();
+    expect(framesSent(ws)).toBe(before);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('已发探针被驱逐后恢复期允许再发一帧换 ACK', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'probe-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'probe-1', { ok: true, result: 1 });
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, {
+        pending: Map<number, { sent: boolean; bytes: number }>;
+        pendingBytes: number;
+      }>;
+    };
+    const peer = internals.peerTransport.get('dev-b')!;
+    for (const [seq, pending] of [...peer.pending]) {
+      if (!pending.sent) continue;
+      peer.pending.delete(seq);
+      peer.pendingBytes -= pending.bytes;
+    }
+
+    const before = framesSent(ws);
+    h.client.sendInvokeResult('dev-b', 'reprobe', { ok: true, result: 2 });
+    expect(framesSent(ws)).toBe(before + 1);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复期内部分写出的分片也计入探测预算', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 3,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    const before = framesSent(ws);
+    const origSend = ws.send.bind(ws);
+    let reliableFrames = 0;
+    ws.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'invoke-result' && parseTransportPayload(env.payload)) {
+        reliableFrames += 1;
+        if (reliableFrames >= 2) throw new Error('socket raced');
+      }
+      origSend(data);
+    };
+    const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+    h.client.sendInvokeResult('dev-b', 'partial', { ok: true, result: chunky });
+    expect(framesSent(ws)).toBe(before + 1);
+
+    ws.send = origSend;
+    for (let i = 0; i < 5; i += 1) {
+      h.client.sendInvokeResult('dev-b', `after-${i}`, { ok: true, result: i });
+    }
+    expect(framesSent(ws)).toBe(before + 3);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复探测未 ACK 时定时器仍重发已发出的探针,不放行新帧', async () => {
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 7; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const internals = h.client as unknown as {
+        peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+      };
+      internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+      internals.peerTransport.get('dev-b')!.receiveReady = false;
+
+      const id = `inbound-link-${++inboundLinkId}`;
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities: [
+            DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+            DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+          ],
+          transportStreamId: 'remote-stream-2',
+          transportBaseSeq: 1,
+        },
+      });
+      await advance(1);
+      off();
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+      expect(seqs.slice(0, 2).map((seq) => sendsBySeq(ws).get(seq))).toEqual([3, 3]);
+      expect(seqs.slice(2).every((seq) => sendsBySeq(ws).get(seq) === 1)).toBe(true);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
   }, 10_000);
 
   it('多 peer 拓扑:一个 peer 停止 ACK 被限流,另一个 peer 的投递零感知', async () => {

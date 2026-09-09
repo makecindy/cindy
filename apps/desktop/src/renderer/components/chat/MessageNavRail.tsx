@@ -83,6 +83,8 @@ export interface MessageNavRailProps {
   scrollRef: { readonly current: HTMLDivElement | null };
   /** 内容列 maxWidth(与 MessageStream contentRef 的 maxWidth 同值)。 */
   contentMaxWidth: number;
+  /** ResizeObserver 测量时读取最新宽度，避免把连续像素变化回灌给 React。 */
+  getContentMaxWidth?: () => number;
   /** 底部输入 overlay 高度(resolvedBottomPadding),刻度带避开这段。 */
   bottomOffset: number;
   /** 点击刻度 → 跳到该提问。目标可能在渲染窗口外,由父级扩窗后滚动。 */
@@ -102,6 +104,7 @@ export function MessageNavRail({
   entries,
   scrollRef,
   contentMaxWidth,
+  getContentMaxWidth,
   bottomOffset,
   onJump,
   onNavCoverageChange,
@@ -150,6 +153,8 @@ export function MessageNavRail({
   }
   const contentMaxWidthRef = useRef(contentMaxWidth);
   contentMaxWidthRef.current = contentMaxWidth;
+  const getContentMaxWidthRef = useRef(getContentMaxWidth);
+  getContentMaxWidthRef.current = getContentMaxWidth;
   const bottomOffsetRef = useRef(bottomOffset);
   bottomOffsetRef.current = bottomOffset;
 
@@ -189,7 +194,8 @@ export function MessageNavRail({
     if (!root) return;
     const containerRect = root.getBoundingClientRect();
     containerLeftRef.current = containerRect.left;
-    const roomOk = hasNavRailRoom(containerRect.width, contentMaxWidthRef.current);
+    const liveContentMaxWidth = getContentMaxWidthRef.current?.() || contentMaxWidthRef.current;
+    const roomOk = hasNavRailRoom(containerRect.width, liveContentMaxWidth);
     setHasRoom(roomOk);
     const avail = Math.max(
       0,
@@ -289,7 +295,7 @@ export function MessageNavRail({
   // availHeight 与纵向出场门槛会停在旧值直到下次滚动(PR #830 review)。
   useEffect(() => {
     scheduleMeasure();
-  }, [entries, bottomOffset, contentMaxWidth, scheduleMeasure]);
+  }, [entries, bottomOffset, contentMaxWidth, getContentMaxWidth, scheduleMeasure]);
 
   // 挂载亮相的那次也要按空闲节奏淡出。
   useEffect(() => {
@@ -543,8 +549,10 @@ export function MessageNavRail({
           const isActive = entry.id === displayActiveId;
           const fullIdx = plan.startIndex + i;
           const interactionId = scrubId ?? hoveredId;
-          const interactionIndex = interactionId == null ? -1 : entries.findIndex((item) => item.id === interactionId);
-          const interactionDistance = interactionIndex < 0 ? null : Math.abs(fullIdx - interactionIndex);
+          const interactionIndex =
+            interactionId == null ? -1 : entries.findIndex((item) => item.id === interactionId);
+          const interactionDistance =
+            interactionIndex < 0 ? null : Math.abs(fullIdx - interactionIndex);
           // 该轮次的内容当前正显示在视口里 → 提亮"屏上内容高亮";
           // 当前项在提亮之上再加长,两个信号分工:范围 = 在看什么,长刻度 = 读到哪。
           const inView = rangeStartIdx >= 0 && fullIdx >= rangeStartIdx && fullIdx <= rangeEndIdx;
@@ -615,7 +623,8 @@ export function MessageNavRail({
                       'ease-[var(--motion-ease-move)]',
                       tickWidthClass,
                       tickOpacityClass,
-                      interactionDistance === 0 || (interactionDistance === null && (isActive || inView))
+                      interactionDistance === 0 ||
+                        (interactionDistance === null && (isActive || inView))
                         ? 'bg-[var(--text-primary)]'
                         : 'bg-[var(--text-secondary)] group-hover:bg-[var(--text-primary)]',
                     )}

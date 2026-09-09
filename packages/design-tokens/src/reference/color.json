@@ -1,0 +1,492 @@
+{
+  "$description": "DS-3/DS-4 reference 层：semantic 与 component 角色实际引用的冻结色值。",
+  "hex-f8f8f6": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.972549,
+        0.972549,
+        0.964706
+      ]
+    }
+  },
+  "hex-1f1f1e": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.121569,
+        0.121569,
+        0.117647
+      ]
+    }
+  },
+  "hsl-60-12-5pct-97pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        60,
+        12.5,
+        97
+      ]
+    }
+  },
+  "hsl-60-2pct-12pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        60,
+        2,
+        12
+      ]
+    }
+  },
+  "hex-ffffff": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  "hex-2c2c2a": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.172549,
+        0.172549,
+        0.164706
+      ]
+    }
+  },
+  "hex-e5e5e5": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.898039,
+        0.898039,
+        0.898039
+      ]
+    }
+  },
+  "hex-faf9f5": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.980392,
+        0.976471,
+        0.960784
+      ]
+    }
+  },
+  "hex-3c3c3a": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.235294,
+        0.235294,
+        0.227451
+      ]
+    }
+  },
+  "hsl-0-0pct-90pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        0,
+        0,
+        90
+      ]
+    }
+  },
+  "hsl-60-2pct-17pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        60,
+        2,
+        17
+      ]
+    }
+  },
+  "hex-d7d7d4": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.843137,
+        0.843137,
+        0.831373
+      ]
+    }
+  },
+  "hsl-60-3pct-84pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        60,
+        3,
+        84
+      ]
+    }
+  },
+  "hsl-60-2pct-23pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        60,
+        2,
+        23
+      ]
+    }
+  },
+  "hsl-30-4pct-28pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        30,
+        4,
+        28
+      ]
+    }
+  },
+  "transparent": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0,
+        0,
+        0
+      ],
+      "alpha": 0
+    }
+  },
+  "hex-262626": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.14902,
+        0.14902,
+        0.14902
+      ]
+    }
+  },
+  "hex-d4d4d4": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.831373,
+        0.831373,
+        0.831373
+      ]
+    }
+  },
+  "hsl-0-0pct-9pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        0,
+        0,
+        9
+      ]
+    }
+  },
+  "hsl-0-0pct-83pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        0,
+        0,
+        83
+      ]
+    }
+  },
+  "hex-1a1a1a": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.101961,
+        0.101961,
+        0.101961
+      ]
+    }
+  },
+  "hex-525252": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.321569,
+        0.321569,
+        0.321569
+      ]
+    }
+  },
+  "hex-737373": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.45098,
+        0.45098,
+        0.45098
+      ]
+    }
+  },
+  "hex-a3a3a3": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.639216,
+        0.639216,
+        0.639216
+      ]
+    }
+  },
+  "hsl-0-0pct-45pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        0,
+        0,
+        45
+      ]
+    }
+  },
+  "hex-c4c4c4": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.768627,
+        0.768627,
+        0.768627
+      ]
+    }
+  },
+  "hex-000000": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "hex-417cdd": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.254902,
+        0.486275,
+        0.866667
+      ]
+    }
+  },
+  "rgba-65-124-221-0-5": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.254902,
+        0.486275,
+        0.866667
+      ],
+      "alpha": 0.5
+    }
+  },
+  "hsl-0-84pct-60pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        0,
+        84,
+        60
+      ]
+    }
+  },
+  "hsl-0-72pct-63pct": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "hsl",
+      "components": [
+        0,
+        72,
+        63
+      ]
+    }
+  },
+  "hex-ef4444": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.937255,
+        0.266667,
+        0.266667
+      ]
+    }
+  },
+  "hex-fef2f2": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.996078,
+        0.94902,
+        0.94902
+      ]
+    }
+  },
+  "hex-3a2222": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.227451,
+        0.133333,
+        0.133333
+      ]
+    }
+  },
+  "rgba-220-38-38-0-4": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.862745,
+        0.14902,
+        0.14902
+      ],
+      "alpha": 0.4
+    }
+  },
+  "hex-7f1d1d": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.498039,
+        0.113725,
+        0.113725
+      ]
+    }
+  },
+  "hex-dc2626": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.862745,
+        0.14902,
+        0.14902
+      ]
+    }
+  },
+  "hex-f87171": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.972549,
+        0.443137,
+        0.443137
+      ]
+    }
+  },
+  "hex-991b1b": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.6,
+        0.105882,
+        0.105882
+      ]
+    }
+  },
+  "hex-fca5a5": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.988235,
+        0.647059,
+        0.647059
+      ]
+    }
+  },
+  "hex-ea6b17": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.917647,
+        0.419608,
+        0.090196
+      ]
+    }
+  },
+  "hex-f3a115": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.952941,
+        0.631373,
+        0.082353
+      ]
+    }
+  },
+  "rgba-234-107-23-0-12": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.917647,
+        0.419608,
+        0.090196
+      ],
+      "alpha": 0.12
+    }
+  },
+  "rgba-234-107-23-0-18": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.917647,
+        0.419608,
+        0.090196
+      ],
+      "alpha": 0.18
+    }
+  }
+}

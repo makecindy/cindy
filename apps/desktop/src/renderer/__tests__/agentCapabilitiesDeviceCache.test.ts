@@ -21,6 +21,7 @@ interface Caps {
   hasFastMode: boolean;
   effortLevels: unknown[];
   permissionModes: unknown[];
+  writableDirs?: { supported: boolean };
 }
 const caps = (label: string, ctx = 1): Caps => ({
   availableModels: [
@@ -234,6 +235,84 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
   });
 
+  it('旧被控端缺少 writableDirs 时安全降级，新端声明后保留能力', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'codex'
+        ? { ...caps('dev-1:codex'), writableDirs: { supported: true } }
+        : caps(`dev-1:${String(args[0])}`),
+    );
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')?.writableDirs).toBeUndefined();
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.writableDirs).toEqual({
+      supported: true,
+    });
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: false } },
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('codex', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: true } },
+        deviceId: null,
+        remoteHostId: 'ssh-host',
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: null,
+        deviceId: null,
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('拒绝畸形 writableDirs 能力而不开放远端入口', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`dev-1:${String(args[0])}`),
+      writableDirs: true,
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')).toBeNull();
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+  });
+
   it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {
     const explicitPiCaps: Caps = {
       ...caps('dev-1:pi'),
@@ -283,9 +362,9 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(mod.getCachedCapabilities('codex', 'dev-invalid')).toBeNull();
   });
 
-  it('capabilities 模型数组混入非法元素时整份进入 error，不得部分发布或落缓存', async () => {
+  it('capabilities 模型数组混入非法元素时丢掉坏项，保留合法模型', async () => {
     const invoke = vi.fn(async () => ({
-      ...caps('invalid'),
+      ...caps('valid'),
       availableModels: [...caps('valid').availableModels, null],
     }));
     const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
@@ -298,18 +377,22 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await mod.prefetchDeviceCapabilities('dev-invalid-item');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid agent capabilities response',
-    });
-    expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')).toBeNull();
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')?.availableModels).toHaveLength(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        capabilities: expect.objectContaining({
+          availableModels: [expect.objectContaining({ displayName: 'valid' })],
+        }),
+      }),
+    );
   });
 
   it.each([
     { label: '空数组', value: [] },
     { label: '未知 agent', value: ['future-agent'] },
     { label: '重复 agent', value: ['codex', 'codex'] },
-  ])('newSessionDefault 非法（$label）时整份 capabilities fail closed', async ({ value }) => {
+  ])('newSessionDefault 非法（$label）时丢掉该模型，不整表失败', async ({ value }) => {
     const invoke = vi.fn(async () => ({
       ...caps('invalid-default'),
       availableModels: [
@@ -329,11 +412,13 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await mod.prefetchDeviceCapabilities('dev-invalid-default');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid agent capabilities response',
-    });
-    expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')).toBeNull();
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')?.availableModels).toEqual([]);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        capabilities: expect.objectContaining({ availableModels: [] }),
+      }),
+    );
   });
 
   it('接受 v3 的 Pi 新任务默认标记', async () => {
@@ -358,7 +443,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     ).toEqual(['pi']);
   });
 
-  it('模型默认 effort 不在可用列表中时不得落缓存', async () => {
+  it('模型默认 effort 不在可用列表中时丢掉该行，不整表失败', async () => {
     const invoke = vi.fn(async () => ({
       ...caps('invalid-effort'),
       availableModels: [
@@ -381,11 +466,13 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await mod.prefetchDeviceCapabilities('dev-invalid-effort');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid agent capabilities response',
-    });
-    expect(mod.getCachedCapabilities('codex', 'dev-invalid-effort')).toBeNull();
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-effort')?.availableModels).toEqual([]);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        capabilities: expect.objectContaining({ availableModels: [] }),
+      }),
+    );
   });
 
   it.each(['effortLevels', 'permissionModes'] as const)(

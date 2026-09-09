@@ -39,6 +39,10 @@ export function createRightSidebarWindow(): BrowserWindow {
     defaultWidth: 520,
     defaultHeight: 860,
     file: 'right-sidebar-window-state.json',
+    // The window is prewarmed while hidden on every launch. Restoring either
+    // presentation mode can make Electron show it before the controller opens it.
+    maximize: false,
+    fullScreen: false,
   });
 
   const win = new BrowserWindow({

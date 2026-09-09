@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/config-dir';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
@@ -94,6 +96,7 @@ const devFlags = resolveDevCliFlags({
   isPackaged: app.isPackaged,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
   defaultUserDataDir: app.getPath('userData'),
+  appDataDir: app.getPath('appData'),
   envIsolated: process.env.XDT_ISOLATED,
   envIsolationName: process.env.XDT_ISOLATED_NAME,
   envUserDataDirEpoch: process.env.XDT_USER_DATA_DIR_EPOCH,
@@ -101,6 +104,24 @@ const devFlags = resolveDevCliFlags({
   envSchedulerPassive: process.env.XDT_SCHEDULER_PASSIVE,
   envEndpointsCdn: process.env.XDT_ENDPOINTS_CDN,
 });
+if (devFlags.isolatedOnProductionProfile) {
+  // isolated 身份会换独立 deviceId；正式 profile 上的 refresh token 属于正式版设备。
+  // 两者叠在同一目录 = 必然 DEVICE_MISMATCH，再删盘会把正式版踢下线(2026-08-16)。
+  // 报实际目标目录：可能是当前区域，也可能是另一地区的正式 profile。
+  const targetDir = devFlags.userDataDirOverride ?? app.getPath('userData');
+  stderr.write(
+    `[cindy] FATAL: --isolated cannot use the official Cindy profile (${targetDir}). ` +
+      'Use the default sandbox, --isolated=<name>, or a directory that is not an official userData.\n',
+  );
+  exit(1);
+}
+if (!app.isPackaged && devFlags.profileKind === 'production-shared') {
+  // 正式 profile 上的 unpackaged writer 不得应用 pending migration。
+  // 已合入 main、但安装包还没带上的序号会把安装版打挂（2026-08-16 schema 91）。
+  process.env.XDT_OFFICIAL_SHARED_PROFILE = '1';
+} else {
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+}
 if (devFlags.schedulerPassive) {
   // 统一收敛到 env:scheduler-host 只认 XDT_SCHEDULER_PASSIVE,不重复解析 argv。
   process.env.XDT_SCHEDULER_PASSIVE = '1';
@@ -109,7 +130,7 @@ if (devFlags.schedulerPassive) {
 if (shouldEnforcePassiveMigrationCompatibility({
   isPackaged: app.isPackaged,
   schedulerPassive: devFlags.schedulerPassive,
-  isolated: devFlags.isolated,
+  profileKind: devFlags.profileKind,
 })) {
   // 内部启动契约：共享 userData 的 passive dev 只能打开与当前 checkout migration
   // 完全一致的数据库，且不得自行迁移。localDb 在用户数据库首次打开时消费本标记。
@@ -201,7 +222,7 @@ if (devFlags.needsIsolatedDeviceId) {
 // userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
 // 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
 // dev 实例会在 release 实例仍存活时误判独占并搬走 legacy 配置。
-{
+const desktopDevInstanceOptions = (() => {
   const rootDir = app.isPackaged
     ? path.resolve(app.getAppPath())
     : path.resolve(app.getAppPath(), '..', '..');
@@ -221,19 +242,34 @@ if (devFlags.needsIsolatedDeviceId) {
   const mode: DesktopDevMode = declaredMode === 'remote' || declaredMode === 'local'
     ? declaredMode
     : 'unknown';
-  const cleanupDevInstance = beginDesktopDevInstance({
+  return {
     userDataDir: app.getPath('userData'),
+    dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     rootDir,
     commit,
     mode,
     region: CURRENT_CINDY_REGION,
     passive: devFlags.schedulerPassive,
-    isolated: Boolean(devFlags.userDataDirOverride),
-  });
-  app.once('will-quit', cleanupDevInstance);
+    isolated: devFlags.profileKind === 'isolated-sandbox',
+    isolationIntent: devFlags.isolated,
+    profileKind: devFlags.profileKind,
+  };
+})();
+
+// Pin after the last userData setPath. Vite's main bundle require()s
+// @cindy/browser-control-runtime at chunk load (before this body), so
+// CONFIG_DIR is already the ~/.xdt-maker fallback. Setting env is not
+// enough — refresh the live binding Chrome launch actually joins.
+if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
+  process.env.XDT_BROWSER_RUNTIME_DIR = path.join(app.getPath('userData'), 'browser-runtime');
 }
+refreshBrowserRuntimeConfigDir();
 
 async function dispatch(): Promise<void> {
+  const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
+  // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
+  process.once('exit', cleanupDevInstance);
+  app.once('will-quit', cleanupDevInstance);
   const mod = await import('./bootstrap-electron.js');
   await mod.bootstrapElectron();
 }

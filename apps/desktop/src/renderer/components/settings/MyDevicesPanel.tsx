@@ -132,9 +132,11 @@ function ControlRow({
 export function MyDevicesPanel({
   s,
   variant = 'all',
+  selfSettings,
 }: {
   s: DeviceLinkSettings;
   variant?: 'all' | 'self' | 'others';
+  selfSettings?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -303,6 +305,7 @@ export function MyDevicesPanel({
               />
             </ControlRow>
           </div>
+          {s.enabled && selfSettings && <div className="mt-3">{selfSettings}</div>}
         </li>
         )}
 

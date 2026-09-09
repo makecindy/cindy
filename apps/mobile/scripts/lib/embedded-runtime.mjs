@@ -87,6 +87,13 @@ export function readEmbeddedRuntimeVersionFromApk(apkPath) {
   return normalizeFingerprintHash(text, { source: `APK 内嵌 assets/fingerprint(${apkPath})` });
 }
 
+// Android App Bundle:base module 的 assets 位于 base/assets/。Google Play 最终拆包时
+// 会把该文件放回 base APK 的 assets/fingerprint,与直接构建 APK 的运行时读取位置一致。
+export function readEmbeddedRuntimeVersionFromAab(aabPath) {
+  const text = unzipEntryText(aabPath, 'base/assets/fingerprint');
+  return normalizeFingerprintHash(text, { source: `AAB 内嵌 base/assets/fingerprint(${aabPath})` });
+}
+
 // iOS:读 .ipa 内 Payload/<App>.app/fingerprint —— 客户端运行时实际使用的 runtimeVersion。
 // 用出包时的本地 ipa 读取即可:NPKG 企业重签只换签名、不改 bundle 内的 fingerprint 文件。
 export function readEmbeddedRuntimeVersionFromIpa(ipaPath) {

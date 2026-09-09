@@ -32,6 +32,8 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { OwnerBoundaryPendingError } from './owner-boundary-error.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import type { XaiBridgeAuthRecoveryOutcome } from './xai-bridge-auth-invalidation.js';
 
@@ -84,8 +86,23 @@ interface GrokTokenBlob {
 // writeBlob / logoutGrok 时更新。undefined = 尚未从磁盘读过。
 let _blobCache: GrokTokenBlob | null | undefined;
 
+// 视频任务会跨越数分钟轮询。仅靠 Cindy app-session owner 无法识别同一 owner
+// 内的 SuperGrok 登出/换号，所以用进程内单调代际把任务绑定到“提交时那次登录”。
+// 常规 access_token 刷新不推进代际：它仍属于同一登录，不能误杀正常在途任务。
+let _credentialGeneration = 0;
+
+function advanceGrokOAuthCredentialGeneration(): void {
+  _credentialGeneration += 1;
+}
+
+/** 当前 SuperGrok 登录代际；只用于比较，不包含任何凭证材料。 */
+export function getGrokOAuthCredentialGeneration(): number {
+  return _credentialGeneration;
+}
+
 /** Drop the process-local xAI OAuth blob cache after an owner boundary. */
 export function resetGrokOAuthMemoryCache(): void {
+  advanceGrokOAuthCredentialGeneration();
   _blobCache = undefined;
   _refreshChain = Promise.resolve();
   _lastForcedRefreshAt = 0;
@@ -125,6 +142,9 @@ export function hasGrokOAuthLoginUnbound(): boolean {
 
 /** 登出:清掉本机 xAI 凭证。 */
 export function logoutGrok(): void {
+  // 用户一旦发起登出，旧视频任务就必须立即失效；即使后续存储/解绑异常让
+  // UI 报错，也不能继续拿登出前的任务跨凭证边界执行。
+  advanceGrokOAuthCredentialGeneration();
   // remove() 的失败结果这里不阻断登出(用户意图优先),但正因为凭证可能没删掉,解绑必须
   // 带撤销标记 —— 否则下一次读连接态会把残留凭证自动认领回来(PR #548 review)。
   getProviderSecretStore().remove(SECRET_ID);
@@ -278,11 +298,12 @@ export class CallbackListener {
   private resolve: ((code: string) => void) | null = null;
   private reject: ((err: Error) => void) | null = null;
 
-  constructor() {
+  // 运行期始终使用默认固定端口；单测注入 0，让系统分配隔离的 loopback 端口。
+  constructor(private readonly listenPort = REDIRECT_PORT) {
     this.server = createServer();
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server.once('error', (err: NodeJS.ErrnoException) =>
         reject(
@@ -293,8 +314,11 @@ export class CallbackListener {
           ),
         ),
       );
-      // 必须监听固定端口 + 回环;xAI 只接受 http://127.0.0.1:56121/callback。
-      this.server.listen(REDIRECT_PORT, '127.0.0.1', () => resolve());
+      // 运行期必须监听固定端口 + 回环；xAI 只接受 http://127.0.0.1:56121/callback。
+      this.server.listen(this.listenPort, '127.0.0.1', () => {
+        const address = this.server.address();
+        resolve(typeof address === 'object' && address ? address.port : this.listenPort);
+      });
     });
   }
 
@@ -483,6 +507,11 @@ export interface GrokOAuthLoginResult {
 /** 跑一次 xAI 订阅 OAuth 浏览器登录。成功后把可刷新凭证写进 safeStorage('xai')。 */
 export async function runGrokOAuthLogin(opts?: {
   onProgress?: (msg: string) => void;
+  /** Host-only callback; URL must never be persisted in chat. */
+  onAuthorizationUrl?: (url: string) => void;
+  /** Main-only caller boundary, rechecked after token exchange before persistence. */
+  assertCurrent?: () => void;
+  beforeCommit?: () => Promise<void>;
 }): Promise<GrokOAuthLoginResult> {
   cancelGrokOAuthLogin(); // 同一时刻只允许一个登录流
 
@@ -528,6 +557,7 @@ export async function runGrokOAuthLogin(opts?: {
     });
 
     opts?.onProgress?.('opening-browser');
+    opts?.onAuthorizationUrl?.(authUrl);
     log.info('opening browser for xai oauth', { port: REDIRECT_PORT });
     await shell.openExternal(authUrl);
 
@@ -559,9 +589,12 @@ export async function runGrokOAuthLogin(opts?: {
 
     // token exchange 的 fetch 带 signal,但 res.json() / nonce 校验期间到达的 abort
     // 不会中断已 resolve 的响应体 —— 落盘前最后检查,保证"已取消"的登录绝不写凭证。
+    await opts?.beforeCommit?.();
     if (abort.signal.aborted) throw new Error('login_cancelled');
+    opts?.assertCurrent?.();
     writeBlob(blobFromTokenResponse(tok));
     bindNativeProviderAuth('xai');
+    advanceGrokOAuthCredentialGeneration();
     listener.succeed();
     log.info('xai oauth login success', { scope: tok.scope });
     return { ok: true };
@@ -749,17 +782,29 @@ async function refreshIfNeeded(current: GrokTokenBlob): Promise<GrokTokenBlob> {
   return (await refreshBlob(current, false)).blob;
 }
 
+function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
+    throw new OwnerBoundaryPendingError();
+  }
+}
+
 /**
  * 取当前可用的 xAI access_token(过期则先刷新)。bridge 的 buildHeaders 调用。
- * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502)。
+ * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502 authentication_error)。
+ * owner-boundary pending 或 await 期间 owner generation 变了时抛 OwnerBoundaryPendingError:
+ * 订阅桥 catch 必须收成 503,不得写成 authentication_error。
+ * peekGrokAccessToken 只读、不抛,失效等值用。
  */
 export async function getGrokAccessToken(): Promise<string> {
+  const scopeAtStart = activeOwnerScopeKey();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!isNativeProviderAuthBound('xai')) {
     throw new Error('xAI OAuth is not bound to the active data owner');
   }
   const blob = readBlob();
   if (!blob) throw new Error('xAI 未登录:请先在「设置 → 模型供应商」登录 xAI(SuperGrok)');
   const fresh = await refreshIfNeeded(blob);
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!fresh.access_token) throw new Error('xAI access_token 不可用,请重新登录');
   return fresh.access_token;
 }

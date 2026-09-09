@@ -38,6 +38,7 @@ export type {
   ResponsesAnthropicHandler,
   ResponsesAnthropicLogger,
   ResponsesAnthropicProviderConfig,
+  ResponsesAnthropicResponseInfo,
   ResponsesRequest,
   ToolCallKind,
   ToolCallMapping,

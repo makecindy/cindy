@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isPassingScanStatus,
+  isPendingManualReviewStatus,
   isScanStatusUnavailable,
   isTerminalScanStatus,
   normalizeScanStatus,
@@ -25,6 +26,17 @@ describe('scan status helpers', () => {
 
     expect(isTerminalScanStatus('blocked')).toBe(true);
     expect(isPassingScanStatus('blocked')).toBe(false);
+  });
+
+  it('treats the server approved release status as a passing terminal state', () => {
+    expect(isTerminalScanStatus('approved')).toBe(true);
+    expect(isPassingScanStatus('approved')).toBe(true);
+  });
+
+  it('distinguishes pending manual review from an active machine scan', () => {
+    expect(isPendingManualReviewStatus(' Pending ')).toBe(true);
+    expect(isPendingManualReviewStatus('scanning')).toBe(false);
+    expect(isTerminalScanStatus('pending')).toBe(false);
   });
 
   it('normalizes whitespace and case from API responses', () => {

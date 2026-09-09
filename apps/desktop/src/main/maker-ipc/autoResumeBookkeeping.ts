@@ -35,12 +35,28 @@ export interface SuppressedTurnErrorOwner {
   clientId: string;
 }
 
+/**
+ * Orca worker 在 L2（auto-resume 仍拥有这次失败）时压住的 terminal 收口参数。
+ * 只有 surface 成产品失败（L3）才交给 host 调一次 `handleWorkerTerminalTurn`。
+ */
+export interface OrcaSuppressedTerminal {
+  status: 'done' | 'error';
+  finalText: string;
+  diagnostic?: string;
+  capture?: unknown;
+}
+
 interface SuppressedTurnErrorEntry {
   detail: SuppressedTurnError;
   /** Runtime owner of this suppressed error; null is bound by beginAttempt for deferred paths. */
   attemptToken: number | null;
   /** Deferred terminal-error owner; null for already-decided auto-resume paths. */
   deferredOwner: SuppressedTurnErrorOwner | null;
+  /**
+   * Orca worker terminal 与这条被压住的 error 共用 owner。
+   * flush / discard 只丢掉它；surface 才让 host 收口。
+   */
+  orcaTerminal: OrcaSuppressedTerminal | null;
   /** The retry queue item that will replace the failed turn. */
   retryOwnerClientId: string | null;
   /**
@@ -62,6 +78,11 @@ export interface AutoResumeBookkeepingDeps {
   persistSuppressedError: (sessionId: string, detail: SuppressedTurnError) => void;
   /** 这条错误已确定需要呈现给用户；由 host 同步到聊天之外的错误表面（如 Agent Island）。 */
   surfaceSuppressedError?: (sessionId: string, detail: SuppressedTurnError) => void;
+  /**
+   * 被压住的 Orca worker 终态已确定是产品失败。host 用当初的 capture 恰好一次
+   * 调用 `handleWorkerTerminalTurn`；flush/discard 不得走这条。
+   */
+  finalizeOrcaSuppressedTerminal?: (sessionId: string, payload: OrcaSuppressedTerminal) => void;
   /** 回填一条自动续跑记录的结果（`agentMeta.autoResumeOutcome`）。 */
   markOutcome: (sessionId: string, clientId: string, outcome: AutoResumeOutcome) => void;
   /** 回滚守卫的 pendingResume（不回滚会让该会话之后的中断永远被判成「上一次还在路上」）。 */
@@ -104,6 +125,18 @@ export class AutoResumeBookkeeping {
     string,
     { timer: ReturnType<typeof setTimeout> | null; token: number; attemptToken: number | null }
   >();
+
+  /**
+   * 失败轮随后那条 unclaimed `done` 的 session 级尾巴，按失败轮的
+   * `sessionTurnGeneration` 配对。
+   *
+   * 独立于 suppressed-error entry 与 persist-id pairing：零输出 / 纯 tool 轮没有
+   * assistant persist id，用户接手还会 force-flush 掉 entry 并清 pending。这条
+   * 标记必须活到**同一代**配对 done 被消费；新 attempt 的 token-bearing running
+   * 才丢掉它。不同代的 `done`（普通用户 / Orca 新 turn，常常没有
+   * `turnAttemptToken`）不是这条尾巴，不得 skip。
+   */
+  private readonly failedTurnCompletionTails = new Map<string, number>();
 
   /** 排期令牌自增源（全局单调；只用来判「是不是我那次」，跨会话共享无妨）。 */
   private scheduleSeq = 0;
@@ -166,6 +199,7 @@ export class AutoResumeBookkeeping {
         ...(typeof d.reason === 'string' ? { reason: d.reason } : {}),
         ...(typeof d.sdkError === 'string' ? { sdkError: d.sdkError } : {}),
       },
+      orcaTerminal: null,
       retryOwnerClientId: null,
       islandReplacementPreviewed: false,
       replacementDispatching: false,
@@ -175,28 +209,29 @@ export class AutoResumeBookkeeping {
     }
   }
 
-  /** Bind a tokenized automatic queue item to the suppressed error it will replace. */
-  bindSuppressedErrorToClient(
-    sessionId: string,
-    attemptToken: number,
-    clientId: string,
-  ): void {
+  /**
+   * 把 Orca worker 的 L2 terminal 挂到当前被压住的 error 上。必须紧跟
+   * `stashSuppressedError`：同一条 entry、同一个 attemptToken / deferredOwner。
+   * 没有对应 error 时是 no-op（返回 false），调用方应回退到立即收口，避免 worker 永远 running。
+   */
+  stashOrcaSuppressedTerminal(sessionId: string, payload: OrcaSuppressedTerminal): boolean {
     const entry = this.suppressedErrors.get(sessionId);
-    if (
-      this.isCurrentAttempt(sessionId, attemptToken) &&
-      entry?.attemptToken === attemptToken
-    ) {
+    if (!entry) return false;
+    entry.orcaTerminal = payload;
+    return true;
+  }
+
+  /** Bind a tokenized automatic queue item to the suppressed error it will replace. */
+  bindSuppressedErrorToClient(sessionId: string, attemptToken: number, clientId: string): void {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (this.isCurrentAttempt(sessionId, attemptToken) && entry?.attemptToken === attemptToken) {
       this.suppressedErrorClients.set(sessionId, clientId);
       entry.retryOwnerClientId = clientId;
     }
   }
 
   /** Whether the exact token/client still owns either side of the retry lifecycle. */
-  hasPendingLifecycleForClient(
-    sessionId: string,
-    attemptToken: number,
-    clientId: string,
-  ): boolean {
+  hasPendingLifecycleForClient(sessionId: string, attemptToken: number, clientId: string): boolean {
     if (!this.isCurrentAttempt(sessionId, attemptToken)) return false;
     const entry = this.suppressedErrors.get(sessionId);
     const pending = this.pendingOutcomes.get(sessionId);
@@ -333,12 +368,23 @@ export class AutoResumeBookkeeping {
     const entry = this.suppressedErrors.get(sessionId);
     if (!entry) return false;
     const attemptToken = entry.attemptToken;
+    const orcaTerminal = entry.orcaTerminal;
     this.suppressedErrors.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
     this.deps.persistSuppressedError(sessionId, entry.detail);
     if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, entry.detail);
+    this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, surfaceError);
     if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
     return true;
+  }
+
+  private releaseOrcaSuppressedTerminal(
+    sessionId: string,
+    payload: OrcaSuppressedTerminal | null,
+    surfaceError: boolean,
+  ): void {
+    if (!surfaceError || !payload) return;
+    this.deps.finalizeOrcaSuppressedTerminal?.(sessionId, payload);
   }
 
   private releaseSuppressedErrorForRetry(
@@ -408,6 +454,38 @@ export class AutoResumeBookkeeping {
     return this.suppressedErrors.has(sessionId);
   }
 
+  /** Product terminal error（非 continuation）记下随后那条同一代 unclaimed done。 */
+  noteFailedTurnCompletionTail(sessionId: string, generation: number): void {
+    this.failedTurnCompletionTails.set(sessionId, generation);
+  }
+
+  /**
+   * 只有 `done` 的 generation 与记下的失败轮相同才消费。
+   * 更大的 generation 是后续产品 turn：丢掉陈旧尾巴并返回 false。
+   * 更小的 generation 是迟到的旧 done：保留当前尾巴。
+   * 未盖 generation 的 done 不能当配对证明，也不当产品 turn 清尾巴。
+   */
+  consumeFailedTurnCompletionTail(sessionId: string, generation?: number): boolean {
+    const noted = this.failedTurnCompletionTails.get(sessionId);
+    if (noted === undefined) return false;
+    if (typeof generation !== 'number') return false;
+    if (generation === noted) {
+      this.failedTurnCompletionTails.delete(sessionId);
+      return true;
+    }
+    if (generation > noted) this.failedTurnCompletionTails.delete(sessionId);
+    return false;
+  }
+
+  /** 新 attempt 已证明启动，或会话拆除：丢掉未消费的尾巴。 */
+  clearFailedTurnCompletionTail(sessionId: string): void {
+    this.failedTurnCompletionTails.delete(sessionId);
+  }
+
+  hasFailedTurnCompletionTail(sessionId: string): boolean {
+    return this.failedTurnCompletionTails.has(sessionId);
+  }
+
   /** Before preview, bookkeeping itself must keep the failed turn's completion tail out. */
   shouldSuppressAgentIslandCompletionTail(sessionId: string): boolean {
     const entry = this.suppressedErrors.get(sessionId);
@@ -465,7 +543,8 @@ export class AutoResumeBookkeeping {
     const entry = this.suppressedErrors.get(sessionId);
     const ownsEntry = token === undefined || entry?.attemptToken === token;
     const detail = ownsEntry ? entry?.detail : undefined;
-    const entryAttemptToken = ownsEntry ? entry?.attemptToken ?? null : null;
+    const orcaTerminal = ownsEntry ? (entry?.orcaTerminal ?? null) : null;
+    const entryAttemptToken = ownsEntry ? (entry?.attemptToken ?? null) : null;
     if (ownsEntry) {
       this.suppressedErrors.delete(sessionId);
       this.suppressedErrorClients.delete(sessionId);
@@ -473,12 +552,9 @@ export class AutoResumeBookkeeping {
         this.deps.persistSuppressedError(sessionId, detail);
         if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, detail);
       }
+      this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, surfaceError);
     }
-    this.deps.abandonTakeover(
-      sessionId,
-      surfaceError ? detail?.message : undefined,
-      token,
-    );
+    this.deps.abandonTakeover(sessionId, surfaceError ? detail?.message : undefined, token);
     this.deps.onAutoResumeFailed?.(sessionId, token);
     if (entryAttemptToken !== null) this.releaseAttemptIfUnowned(sessionId, entryAttemptToken);
     if (token !== undefined) this.releaseAttemptIfUnowned(sessionId, token);
@@ -551,10 +627,7 @@ export class AutoResumeBookkeeping {
     outcome: AutoResumeOutcome,
   ): boolean {
     const pending = this.pendingOutcomes.get(sessionId);
-    if (
-      pending?.clientId !== clientId ||
-      pending.attemptToken !== attemptToken
-    ) {
+    if (pending?.clientId !== clientId || pending.attemptToken !== attemptToken) {
       return false;
     }
     return this.settleOutcome(sessionId, attemptToken, outcome);
@@ -588,7 +661,9 @@ export class AutoResumeBookkeeping {
     maybeRun?: (attempt: AutoResumeScheduleAttempt) => void | Promise<void>,
   ): void {
     const tokenized = typeof delayOrRun === 'number';
-    const attemptToken = tokenized ? attemptOrDelayMs : this.currentAttempts.get(sessionId) ?? null;
+    const attemptToken = tokenized
+      ? attemptOrDelayMs
+      : (this.currentAttempts.get(sessionId) ?? null);
     const delayMs = tokenized ? delayOrRun : attemptOrDelayMs;
     const run = tokenized ? maybeRun : delayOrRun;
     if (typeof run !== 'function') return;
@@ -597,7 +672,9 @@ export class AutoResumeBookkeeping {
     const timer = setTimeout(() => {
       const scheduled = this.schedules.get(sessionId);
       if (scheduled?.token !== token || scheduled.attemptToken !== attemptToken) {
-        this.deps.log?.('interrupted-turn auto-resume callback superseded; ignoring', { sessionId });
+        this.deps.log?.('interrupted-turn auto-resume callback superseded; ignoring', {
+          sessionId,
+        });
         return;
       }
       if (tokenized) {
@@ -678,7 +755,9 @@ export class AutoResumeBookkeeping {
     if (!scheduled) return;
     if (scheduled.timer !== null) clearTimeout(scheduled.timer);
     this.schedules.delete(sessionId);
-    this.deps.log?.('interrupted-turn auto-resume schedule superseded by a newer one', { sessionId });
+    this.deps.log?.('interrupted-turn auto-resume schedule superseded by a newer one', {
+      sessionId,
+    });
   }
 
   /** 终止当前 attempt 并回滚守卫的 pendingResume；没有 attempt 时是 no-op。 */
@@ -734,7 +813,9 @@ export class AutoResumeBookkeeping {
    */
   teardown(sessionId: string): void {
     const attemptToken =
-      this.currentAttempts.get(sessionId) ?? this.pendingOutcomes.get(sessionId)?.attemptToken ?? null;
+      this.currentAttempts.get(sessionId) ??
+      this.pendingOutcomes.get(sessionId)?.attemptToken ??
+      null;
     this.flushSuppressedError(sessionId, { force: true });
     const hadSchedule = this.cancelSchedule(sessionId);
     if (!hadSchedule && attemptToken !== null) {
@@ -746,6 +827,7 @@ export class AutoResumeBookkeeping {
     else this.settleOutcome(sessionId, 'failed');
     this.currentAttempts.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
+    this.failedTurnCompletionTails.delete(sessionId);
     this.deps.onAutoResumeFailed?.(sessionId, attemptToken ?? undefined);
   }
 }
@@ -755,4 +837,39 @@ function sameSuppressedTurnErrorOwner(
   right: SuppressedTurnErrorOwner,
 ): boolean {
   return left?.generation === right.generation && left.clientId === right.clientId;
+}
+
+/**
+ * Whether this vendor event must not call `handleWorkerTerminalTurn`.
+ *
+ * Codex / Claude 失败轮是 terminal error 后再发 unclaimed `done`。error 上的
+ * `deferredOrcaWorkerTerminal` 是局部变量，done 到达时已经重置；必须看同轮 pairing、
+ * 仍在的 suppressed-error owner、auto-resume pending/deferred，以及活过 flush、
+ * 且 generation 对得上的失败轮 completion tail（零输出轮没有 persist id，用户
+ * 接手会清掉前几项；不同代的 done 不能靠这条尾巴 skip）。
+ */
+export interface OrcaWorkerTerminalSkipInput {
+  isContinuationBoundary: boolean;
+  /** This error event just stashed the Orca payload (L2). */
+  stashedThisErrorEvent: boolean;
+  eventType: string;
+  isPairedFailedTurnDone: boolean;
+  /** Consumed failed-turn completion tail; independent of persist id / suppressed entry. */
+  isFailedTurnCompletionTail: boolean;
+  hasSuppressedError: boolean;
+  isAutoResumePending: boolean;
+  isAutoResumeDeferred: boolean;
+}
+
+export function shouldSkipOrcaWorkerTerminal(input: OrcaWorkerTerminalSkipInput): boolean {
+  if (input.isContinuationBoundary) return true;
+  if (input.stashedThisErrorEvent) return true;
+  if (input.eventType !== 'done') return false;
+  return (
+    input.isPairedFailedTurnDone ||
+    input.isFailedTurnCompletionTail ||
+    input.hasSuppressedError ||
+    input.isAutoResumePending ||
+    input.isAutoResumeDeferred
+  );
 }

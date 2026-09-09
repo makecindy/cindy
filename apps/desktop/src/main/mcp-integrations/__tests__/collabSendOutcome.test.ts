@@ -137,6 +137,13 @@ function createCollabService(overrides: Record<string, ReturnType<typeof vi.fn>>
     getWorkspaceInfo: vi.fn(),
     getWorkerStatus: vi.fn(),
     readWorker: vi.fn(),
+    listSessionQueue: vi.fn(),
+    listSessionQueuedCounts: vi.fn(),
+    updateSessionQueuedMessage: vi.fn(),
+    cancelSessionQueuedMessage: vi.fn(),
+    steerSession: vi.fn(),
+    stopSessionTurn: vi.fn(),
+    getSessionRuntime: vi.fn(),
     ...overrides,
   };
 }
@@ -478,5 +485,85 @@ describe('collab send outcome semantics', () => {
     });
     expect(mockState.collabService.startTeam).not.toHaveBeenCalled();
     expect(mockState.collabService.createWorker).not.toHaveBeenCalled();
+  });
+
+  it('exposes arbitrary session queue reads through cindy_helper without Lead ownership', async () => {
+    mockState.collabService = createCollabService({
+      listSessionQueue: vi.fn().mockResolvedValue({
+        ok: true,
+        messages: [{ queuedMessageId: 'q-1', position: 0 }],
+      }),
+      listSessionQueuedCounts: vi.fn().mockResolvedValue({
+        ok: true,
+        counts: { 'session-1': 1 },
+      }),
+    });
+
+    createDesktopMcpProviders({
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      sessionQueue: {
+        listSessionQueue: (sessionId: string) => Promise<Record<string, unknown>>;
+        listSessionQueuedCounts: (sessionIds: string[]) => Promise<Record<string, unknown>>;
+      };
+    };
+
+    await expect(xdtHelper.sessionQueue.listSessionQueue('session-1')).resolves.toMatchObject({
+      ok: true,
+      messages: [{ queuedMessageId: 'q-1', position: 0 }],
+    });
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueuedCounts(['session-1']),
+    ).resolves.toEqual({ ok: true, counts: { 'session-1': 1 } });
+    expect(mockState.collabService.listSessionQueue).toHaveBeenCalledWith('session-1');
+    expect(mockState.collabService.listSessionQueuedCounts).toHaveBeenCalledWith(['session-1']);
+  });
+
+  it('preserves retryable host-readiness errors at the cindy_helper control boundary', async () => {
+    mockState.collabService = createCollabService({
+      listSessionQueue: vi.fn().mockRejectedValue(new Error('DbClient not ready')),
+      listSessionQueuedCounts: vi.fn().mockRejectedValue(new Error('localDb not ready')),
+      stopSessionTurn: vi.fn().mockRejectedValue({
+        code: 'HOST_NOT_READY',
+        message: 'database owner unavailable',
+      }),
+      getSessionRuntime: vi.fn().mockRejectedValue(new Error('storage read failed')),
+    });
+
+    createDesktopMcpProviders({
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      sessionQueue: {
+        listSessionQueue: (sessionId: string) => Promise<Record<string, unknown>>;
+        listSessionQueuedCounts: (sessionIds: string[]) => Promise<Record<string, unknown>>;
+      };
+      sessionControl: {
+        stopSessionTurn: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
+        getSessionRuntime: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
+      };
+    };
+
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueue('session-1'),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueuedCounts(['session-1']),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionControl.stopSessionTurn({ targetSessionId: 'session-1' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionControl.getSessionRuntime({ targetSessionId: 'session-1' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
 });

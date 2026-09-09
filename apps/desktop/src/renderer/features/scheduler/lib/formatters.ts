@@ -10,6 +10,7 @@
  */
 
 import type { AgentKind } from '@cindy/maker-scheduler';
+import type { TFunction } from 'i18next';
 
 import { stripTrailingPathSeparators } from '../../../../shared/pathText';
 
@@ -54,15 +55,25 @@ function startOfLocalDay(d: Date): Date {
  *   - 跨天同年     → "Last 04-30 14:23"
  *   - 跨年         → "Last 2025-04-12 14:23"
  */
-export function formatLastRun(lastFiredAt?: number, now: number = Date.now()): string | null {
+export function formatLastRun(
+  lastFiredAt?: number,
+  now: number = Date.now(),
+  translate?: TFunction,
+): string | null {
   if (!lastFiredAt) return null;
   const fired = new Date(lastFiredAt);
   const today = startOfLocalDay(new Date(now));
   const firedDay = startOfLocalDay(fired);
   const time = hm(fired);
-  if (firedDay.getTime() === today.getTime()) return `Last ${time}`;
-  if (fired.getFullYear() === new Date(now).getFullYear()) return `Last ${md(fired)} ${time}`;
-  return `Last ${ymd(fired)} ${time}`;
+  const value = firedDay.getTime() === today.getTime()
+    ? time
+    : fired.getFullYear() === new Date(now).getFullYear()
+      ? `${md(fired)} ${time}`
+      : `${ymd(fired)} ${time}`;
+  return translate?.('scheduler.presentation.time.last', {
+    defaultValue: `Last ${value}`,
+    value,
+  }) ?? `Last ${value}`;
 }
 
 /**
@@ -72,7 +83,11 @@ export function formatLastRun(lastFiredAt?: number, now: number = Date.now()): s
  *   - 7d 以内   → '3 days ago, 09:00:09'
  *   - 7d 以外   → '2025-04-12 09:00:11'
  */
-export function formatRunTimestamp(firedAt: number, now: number = Date.now()): string {
+export function formatRunTimestamp(
+  firedAt: number,
+  now: number = Date.now(),
+  translate?: TFunction,
+): string {
   const fired = new Date(firedAt);
   const today = startOfLocalDay(new Date(now));
   const firedDay = startOfLocalDay(fired);
@@ -80,9 +95,25 @@ export function formatRunTimestamp(firedAt: number, now: number = Date.now()): s
   const time = hms(fired);
   // 用中点分隔，避免 'Today,' 小写 x-height 和 '09:25:47' 数字 cap-height
   // 在同一行被视觉对比时显得 "数字偏高"。中点把两段隔成并列块，眼睛不再比顶边。
-  if (diffDays <= 0) return `Today · ${time}`;
-  if (diffDays === 1) return `Yesterday · ${time}`;
-  if (diffDays < 7) return `${diffDays} days ago · ${time}`;
+  if (diffDays <= 0) {
+    return translate?.('scheduler.presentation.time.today', {
+      defaultValue: `Today · ${time}`,
+      time,
+    }) ?? `Today · ${time}`;
+  }
+  if (diffDays === 1) {
+    return translate?.('scheduler.presentation.time.yesterday', {
+      defaultValue: `Yesterday · ${time}`,
+      time,
+    }) ?? `Yesterday · ${time}`;
+  }
+  if (diffDays < 7) {
+    return translate?.('scheduler.presentation.time.daysAgo', {
+      defaultValue: `${diffDays} days ago · ${time}`,
+      count: diffDays,
+      time,
+    }) ?? `${diffDays} days ago · ${time}`;
+  }
   return `${ymd(fired)} ${time}`;
 }
 
@@ -105,11 +136,31 @@ export function formatUsd(costUsd: number): string {
 }
 
 /** Running 中的 run 用："Started 12s ago" / "Started 4m ago" / "Started 2h ago"。 */
-export function formatStartedAgo(start: number, now: number = Date.now()): string {
+export function formatStartedAgo(
+  start: number,
+  now: number = Date.now(),
+  translate?: TFunction,
+): string {
   const diff = Math.max(0, now - start);
-  if (diff < MS_MIN) return `Started ${Math.floor(diff / 1000)}s ago`;
-  if (diff < MS_HOUR) return `Started ${Math.floor(diff / MS_MIN)}m ago`;
-  return `Started ${Math.floor(diff / MS_HOUR)}h ago`;
+  if (diff < MS_MIN) {
+    const count = Math.floor(diff / 1000);
+    return translate?.('scheduler.presentation.time.startedSeconds', {
+      defaultValue: `Started ${count}s ago`,
+      count,
+    }) ?? `Started ${count}s ago`;
+  }
+  if (diff < MS_HOUR) {
+    const count = Math.floor(diff / MS_MIN);
+    return translate?.('scheduler.presentation.time.startedMinutes', {
+      defaultValue: `Started ${count}m ago`,
+      count,
+    }) ?? `Started ${count}m ago`;
+  }
+  const count = Math.floor(diff / MS_HOUR);
+  return translate?.('scheduler.presentation.time.startedHours', {
+    defaultValue: `Started ${count}h ago`,
+    count,
+  }) ?? `Started ${count}h ago`;
 }
 
 /**
@@ -122,24 +173,51 @@ export function formatStartedAgo(start: number, now: number = Date.now()): strin
  * - 跨天同年 → "Next 05-11 09:00 (in 2d)"
  * - 跨年   → "Next 2027-01-02 09:00 (in 1d)"
  */
-export function formatNextRun(nextFireAt?: number, now: number = Date.now()): string | null {
+export function formatNextRun(
+  nextFireAt?: number,
+  now: number = Date.now(),
+  translate?: TFunction,
+): string | null {
   if (!nextFireAt) return null;
   const diff = nextFireAt - now;
-  if (diff <= 0) return 'Next less than 1 min';
-  if (diff < MS_MIN) return 'Next less than 1 min';
+  if (diff <= 0 || diff < MS_MIN) {
+    return translate?.('scheduler.presentation.time.nextLessThanMinute', {
+      defaultValue: 'Next less than 1 min',
+    }) ?? 'Next less than 1 min';
+  }
   const next = new Date(nextFireAt);
   const today = startOfLocalDay(new Date(now));
   const nextDay = startOfLocalDay(next);
   let interval: string;
-  if (diff < MS_HOUR) interval = `${Math.floor(diff / MS_MIN)}m`;
-  else if (diff < MS_DAY) interval = `${Math.floor(diff / MS_HOUR)}h`;
-  else interval = `${Math.floor(diff / MS_DAY)}d`;
+  if (diff < MS_HOUR) {
+    const count = Math.floor(diff / MS_MIN);
+    interval = translate?.('scheduler.presentation.time.intervalMinutes', {
+      defaultValue: `${count}m`,
+      count,
+    }) ?? `${count}m`;
+  } else if (diff < MS_DAY) {
+    const count = Math.floor(diff / MS_HOUR);
+    interval = translate?.('scheduler.presentation.time.intervalHours', {
+      defaultValue: `${count}h`,
+      count,
+    }) ?? `${count}h`;
+  } else {
+    const count = Math.floor(diff / MS_DAY);
+    interval = translate?.('scheduler.presentation.time.intervalDays', {
+      defaultValue: `${count}d`,
+      count,
+    }) ?? `${count}d`;
+  }
   const time = hm(next);
   let when: string;
   if (nextDay.getTime() === today.getTime()) when = time;
   else if (next.getFullYear() === new Date(now).getFullYear()) when = `${md(next)} ${time}`;
   else when = `${ymd(next)} ${time}`;
-  return `Next ${when} (in ${interval})`;
+  return translate?.('scheduler.presentation.time.next', {
+    defaultValue: `Next ${when} (in ${interval})`,
+    interval,
+    when,
+  }) ?? `Next ${when} (in ${interval})`;
 }
 
 /** Working dir 用 …/<parent>/<basename> 简显，避免一长串绝对路径撑爆 pane header。 */
@@ -180,10 +258,36 @@ export function describeDestination(s: {
   workspaceKind?: 'project' | 'dialogue';
   workingDir?: string;
   useWorktree: boolean;
-}): { prefix: string; workingDir?: string } {
-  if (s.targetSessionId) return { prefix: `Heartbeat to session ${s.targetSessionId.slice(0, 8)}` };
-  if (s.workspaceKind === 'dialogue') return { prefix: 'New dialogue' };
-  const base = s.useWorktree ? 'New worktree session' : 'New session';
+}, translate?: TFunction): { prefix: string; workingDir?: string } {
+  if (s.targetSessionId) {
+    const id = s.targetSessionId.slice(0, 8);
+    return {
+      prefix: translate?.('scheduler.presentation.destination.boundSession', {
+        defaultValue: `Heartbeat to session ${id}`,
+        id,
+      }) ?? `Heartbeat to session ${id}`,
+    };
+  }
+  if (s.workspaceKind === 'dialogue') {
+    return {
+      prefix: translate?.('scheduler.presentation.destination.newDialogue', {
+        defaultValue: 'New dialogue',
+      }) ?? 'New dialogue',
+    };
+  }
+  const base = s.useWorktree
+    ? translate?.('scheduler.presentation.destination.newWorktreeSession', {
+        defaultValue: 'New worktree session',
+      }) ?? 'New worktree session'
+    : translate?.('scheduler.presentation.destination.newSession', {
+        defaultValue: 'New session',
+      }) ?? 'New session';
   if (!s.workingDir) return { prefix: base };
-  return { prefix: `${base} in `, workingDir: s.workingDir };
+  return {
+    prefix: translate?.('scheduler.presentation.destination.inDirectory', {
+      defaultValue: `${base} in `,
+      base,
+    }) ?? `${base} in `,
+    workingDir: s.workingDir,
+  };
 }
