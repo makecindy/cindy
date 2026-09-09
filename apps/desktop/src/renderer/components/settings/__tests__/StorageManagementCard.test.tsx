@@ -37,6 +37,8 @@ function render(ui: ReactElement) {
   );
 }
 
+type StorageStatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
+
 function storageApi() {
   return {
     reportDraftUrls: vi.fn(),
@@ -44,10 +46,14 @@ function storageApi() {
     clearLegacyImagesDir: vi.fn(async () => ({ cleared: true })),
     openChatAttachmentsDir: vi.fn(async () => ({ opened: true })),
     clearChatAttachmentsDir: vi.fn(async () => ({ cleared: true })),
-    stats: vi.fn(async () => ({
+    stats: vi.fn(async (): Promise<StorageStatsResult> => ({
       success: true,
       blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
-            fixedCaches: { legacyImages: { bytes: 0, fileCount: 0 }, chatAttachments: { bytes: 0, fileCount: 0 } },
+      legacy: { bytes: 0, fileCount: 0 },
+      fixedCaches: {
+        legacyImages: { bytes: 0, fileCount: 0 },
+        chatAttachments: { bytes: 0, fileCount: 0 },
+      },
       deadDirs: [],
     })),
     scan: vi.fn(),
@@ -185,12 +191,48 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
   });
 
+  it('queues a refresh requested while the current refresh is running', async () => {
+    let resolveStats!: (value: StorageStatsResult) => void;
+    const api = storageApi();
+    vi.mocked(api.stats).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveStats = resolve; }),
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        cindyMediaStorage: api,
+        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+      },
+    });
+    render(<StorageManagementCard />);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.legacyImagesClearButton' }),
+    );
+    expect(api.stats).toHaveBeenCalledTimes(1);
+    resolveStats({
+      success: true,
+      blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
+      legacy: { bytes: 0, fileCount: 0 },
+      fixedCaches: {
+        legacyImages: { bytes: 0, fileCount: 0 },
+        chatAttachments: { bytes: 0, fileCount: 0 },
+      },
+      deadDirs: [],
+    });
+    await waitFor(() => expect(api.stats).toHaveBeenCalledTimes(2));
+  });
+
   it('shows unknown storage values when stats returns a business failure', async () => {
     const api = storageApi();
     vi.mocked(api.stats).mockResolvedValueOnce({
       success: false,
       blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
-            fixedCaches: { legacyImages: { bytes: 0, fileCount: 0 }, chatAttachments: { bytes: 0, fileCount: 0 } },
+      legacy: { bytes: 0, fileCount: 0 },
+      fixedCaches: {
+        legacyImages: { bytes: 0, fileCount: 0 },
+        chatAttachments: { bytes: 0, fileCount: 0 },
+      },
       deadDirs: [],
     });
     Object.defineProperty(window, 'electronAPI', {

@@ -67,11 +67,15 @@ export function StorageManagementCard() {
   const reconcileBusyRef = useRef(false);
   const directoryCleanupBusyRef = useRef(false);
   const statsBusyRef = useRef(false);
+  const statsRefreshQueuedRef = useRef(false);
   const [statsRefreshing, setStatsRefreshing] = useState(false);
   const [statsFailed, setStatsFailed] = useState(false);
 
   const refreshStats = async () => {
-    if (statsBusyRef.current) return;
+    if (statsBusyRef.current) {
+      statsRefreshQueuedRef.current = true;
+      return;
+    }
     statsBusyRef.current = true;
     setStatsRefreshing(true);
     try {
@@ -89,6 +93,10 @@ export function StorageManagementCard() {
     } finally {
       statsBusyRef.current = false;
       setStatsRefreshing(false);
+      if (statsRefreshQueuedRef.current) {
+        statsRefreshQueuedRef.current = false;
+        void refreshStats();
+      }
     }
   };
 

@@ -4061,6 +4061,14 @@ function collectCurrentDatabaseSizeWarningStatus(): DatabaseSizeWarningStatus {
   });
 }
 
+function broadcastDatabaseSizeWarningChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('database-size-warning:changed');
+    }
+  }
+}
+
 /** Capture the database size once after the first local DB startup completes. */
 function checkDatabaseSizeWarningAtStartup(): void {
   const ownerScope = activeOwnerScopeKey();
@@ -4075,9 +4083,7 @@ function checkDatabaseSizeWarningAtStartup(): void {
     'database size warning startup check completed',
     startupDatabaseSizeWarningStatus,
   );
-  if (mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()) {
-    mainWindowRef.webContents.send('database-size-warning:changed');
-  }
+  broadcastDatabaseSizeWarningChanged();
 }
 
 /** Run market discovery and automatic updates for the current stable owner. */
@@ -4130,6 +4136,7 @@ const registerIpcHandlers = () => {
     if ('error' in parsed) throwIpcError('INVALID_PARAMS', parsed.error);
     await writeDatabaseSizeWarningSettings(parsed.patch);
     const state = readDatabaseSizeWarningSettingsState();
+    broadcastDatabaseSizeWarningChanged();
     return {
       ...state.value,
       isCustomized: state.isCustomized,
@@ -4140,6 +4147,7 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     await resetDatabaseSizeWarningSettings();
     const state = readDatabaseSizeWarningSettingsState();
+    broadcastDatabaseSizeWarningChanged();
     return {
       ...state.value,
       isCustomized: state.isCustomized,
