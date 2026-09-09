@@ -79,6 +79,7 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     listActiveSessions: vi.fn(async () => []),
   };
   const bindings = {
+    mobileDebugLog: vi.fn(),
     remoteHistoryAvailable,
     deviceId: 'd1', deviceName: 'test', sessionId: 's1',
     historyView: { snapshot: { ready: false }, view: { refresh: async (): Promise<void> => undefined, getSnapshot: (): { ready: boolean; error: unknown } => ({ ready: false, error: new Error('[CHANNEL_NOT_ALLOWED] legacy host') }) } },

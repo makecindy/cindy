@@ -1412,7 +1412,7 @@ describe('远程交互接线不变式', () => {
 
   it('F8: 周期对账从实际 link status 启动，且状态 push 不被迟到快照覆盖', () => {
     const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
-    expect(src).toContain('let linkOnline = false');
+    expect(src).toContain('let linkOnline: boolean | null = null');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
     // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。

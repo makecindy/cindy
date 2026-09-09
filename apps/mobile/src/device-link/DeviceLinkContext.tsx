@@ -839,6 +839,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
     });
     clientRef.current = client;
+    mobileDebugLog('debug', 'device-link', 'runtime identity', {
+      commit: /^[a-f0-9]{7,40}$/i.test(process.env.EXPO_PUBLIC_XDT_GIT_COMMIT ?? '')
+        ? process.env.EXPO_PUBLIC_XDT_GIT_COMMIT : 'unknown',
+      version: Constants.nativeAppVersion ?? 'unknown',
+      build: Constants.nativeBuildVersion ?? 'unknown',
+    });
     const diagnostics = createRecoveryDiagnostics(
       (event) => mobileDeviceLinkLogger.info('recovery phase', event),
       () => connectionEpochRef.current,
@@ -1178,6 +1184,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       graceMs: BACKGROUND_STOP_GRACE_MS,
       releaseWaitMs: BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS,
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
+      report: (event) => mobileDebugLog('debug', 'device-link', 'background lifecycle', event),
     });
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
