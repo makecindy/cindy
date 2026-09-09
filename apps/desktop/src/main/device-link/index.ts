@@ -817,12 +817,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 入队与每次尝试都过同一个方向判据(见 hasOutboundControlIntent):只对本机
   // 确实在控制的设备重建,被控端方向的入站帧自然忽略。
   client.onReliableFrameBeforeLink((deviceId) => {
-    if (!hasOutboundControlIntent(deviceId)) return;
-    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
+    if (!hasOutboundControlIntent(deviceId)) return false;
+    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return false;
     log.info(
       `re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`,
     );
     transportTimeoutReopen.trigger(deviceId);
+    return true;
   });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);

@@ -1485,6 +1485,98 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).isLoadingMore).toBe(false);
   });
 
+  it('远程会话:streaming 期间的修复对账只追加缺失持久化消息', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: {
+          type: 'status',
+          source: 'claude-code',
+          data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 },
+        },
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'repaired', 'message whose push was lost', '2026-06-15T00:00:02.000Z'),
+    ];
+    await makerChatStore.reconcileRemoteMessages(s, { repair: true });
+
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual([
+      'client-seed',
+      'client-repaired',
+    ]);
+    expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+  });
+
+  it.each([false, true])('远程会话:session-sync 补回持久化行并保留在途文本 (queued=%s)', async (queued) => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: {
+          type: 'status',
+          source: 'claude-code',
+          data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 },
+        },
+      },
+    });
+
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'recovered-assistant', 'assistant row recovered from the host', '2026-06-15T00:00:02.000Z'),
+      { ...dbMessage(s, 'in-flight-assistant', 'older persisted text', '2026-06-15T00:00:03.000Z'), clientId: 'in-flight-assistant' },
+    ];
+
+    const firstRead = deferred<Message[]>();
+    let pending: Promise<boolean> | undefined;
+    if (queued) {
+      remoteListResolver = () => firstRead.promise;
+      pending = makerChatStore.reconcileRemoteMessages(s, { repair: true });
+      await flush();
+    }
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:session-sync',
+      payload: {
+        sessionId: s,
+        persistId: 'in-flight-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'current in-flight text', isFinal: false, isFullText: true },
+        },
+        resyncRequired: true,
+      },
+    });
+    if (queued) {
+      remoteListResolver = null;
+      firstRead.resolve(remoteList);
+      await pending;
+    }
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain(
+      'client-recovered-assistant',
+    );
+    expect(
+      makerChatStore.getSnapshot(s).messages.find((m) => m.clientId === 'in-flight-assistant')?.content,
+    ).toBe('current in-flight text');
+  });
+
   it('远程会话:权威重建没保留任何晚到的行时,孤岛标记清零', async () => {
     // review #676(codex P1):这种情况下新窗口**完全**由本次从最新连续翻回来的页组成,按构造
     // 没有孤岛。留着标记的代价不是"多做一次补齐":标记只由整窗重建清零,而窗口内的目标比重建

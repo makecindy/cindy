@@ -678,7 +678,7 @@ export class DeviceLinkClient {
   // —— host 订阅 ——
   private statusHandlers = new Set<(s: DeviceLinkStatus) => void>();
   /** 收到「link 未就绪」可靠帧的通知(30s/peer 节流);host 据此主动重建控制链路。 */
-  private staleLinkHandlers = new Set<(deviceId: string) => void>();
+  private staleLinkHandlers = new Set<(deviceId: string) => unknown>();
   private staleLinkNotifiedAt = new Map<string, number>();
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
@@ -1092,8 +1092,10 @@ export class DeviceLinkClient {
    * 两套节流参数)。刻意只报 deviceId、不附带 peer 的 explicitlyClosed:那是双向
    * 共享位(互控时对端仅关闭它控制本机的方向也会置位),不能用来判断本机的出站
    * 方向该不该恢复 —— 方向判据在 host 侧(是否持有该设备的出站订阅)。
+   * Return false when the host has no recovery intent; ignored notifications
+   * do not consume the per-peer throttle. Other return values mean handled.
    */
-  onReliableFrameBeforeLink(cb: (deviceId: string) => void): () => void {
+  onReliableFrameBeforeLink(cb: (deviceId: string) => unknown): () => void {
     this.staleLinkHandlers.add(cb);
     return () => this.staleLinkHandlers.delete(cb);
   }
@@ -1103,14 +1105,20 @@ export class DeviceLinkClient {
     const now = this.monotonicNow();
     const last = this.staleLinkNotifiedAt.get(deviceId);
     if (last !== undefined && now - last < STALE_LINK_NOTIFY_THROTTLE_MS) return;
-    this.staleLinkNotifiedAt.set(deviceId, now);
+    // A stale frame may arrive before the host has any outbound intent (for
+    // example while a fresh owner is taking over). Do not consume the
+    // per-peer throttle in that case: a later invoke/subscribe would
+    // otherwise be unable to wake the host until the full throttle window
+    // elapsed and could time out while the peer's reliable result is held.
+    let handled = false;
     for (const cb of this.staleLinkHandlers) {
       try {
-        cb(deviceId);
+        if (cb(deviceId) !== false) handled = true;
       } catch (err) {
         this.log.error('reliable-frame-before-link handler threw', err);
       }
     }
+    if (handled) this.staleLinkNotifiedAt.set(deviceId, now);
   }
 
   // ─── 出站 API ───────────────────────────────────────────────────────────────
@@ -2463,7 +2471,7 @@ export class DeviceLinkClient {
         if (
           bytes > MAX_TRANSPORT_CHUNK_BYTES ||
           assembly.bytes + bytes > assembly.totalBytes
-          || !this.ensureReceiveCapacity(stream, meta.seq, bytes)
+          || !this.ensureReceiveCapacity(stream, meta.seq, bytes, true)
         ) {
           this.removeReceiveEntry(stream, meta.seq);
           this.log.warn(`dropping reliable payload beyond declared size seq=${meta.seq}`);
@@ -2586,19 +2594,27 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 接收缓存满时优先保住当前队头。否则未来 seq 占满 16 个槽位或字节预算后，
+   * Complete messages occupy the bounded sequence window, not unfinished
+   * reassembly slots. Recovery can deliver a full window before a missing
+   * prefix; sharing the 16-assembly limit drops valid replies until their
+   * byte-paced retry (often after the invoke timeout).
+   * 接收缓存满时优先保住当前队头。否则未来 seq 占满槽位或字节预算后，
    * 用来补缺口的分片/skip 也进不来，累计 ACK 将永久停住。
    */
   private ensureReceiveCapacity(
     stream: ReceiveStreamState,
     seq: number,
     additionalBytes: number,
+    assembling = false,
   ): boolean {
     const fits = (): boolean => {
       const hasSlot = stream.ready.has(seq) || stream.assemblies.has(seq);
       const slots = stream.ready.size + stream.assemblies.size + (hasSlot ? 0 : 1);
+      const assemblies = stream.assemblies.size
+        + (assembling && !stream.assemblies.has(seq) ? 1 : 0);
       return (
-        slots <= MAX_TRANSPORT_REASSEMBLIES
+        slots <= MAX_TRANSPORT_SEQUENCE_WINDOW
+        && assemblies <= MAX_TRANSPORT_REASSEMBLIES
         && stream.bufferedBytes + additionalBytes <= MAX_TRANSPORT_REASSEMBLY_BYTES
       );
     };

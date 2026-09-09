@@ -6929,6 +6929,25 @@ const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const backgroundTaskReconcileEpoch = new Map<string, number>();
 
+// A remote `messages:created` push can be lost while the controlled session
+// keeps streaming.  Keep a small, per-session repair debounce so any later
+// remote event can heal the missing durable row without turning the live
+// stream into a polling loop.
+const REMOTE_MESSAGE_REPAIR_DELAY_MS = 1_500;
+const remoteMessageRepairTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const REMOTE_SESSION_SYNC_CHANNEL = 'maker:session-sync';
+
+function scheduleRemoteMessageRepair(sessionId: string): void {
+  if (!sessionId || remoteMessageRepairTimers.has(sessionId)) return;
+  remoteMessageRepairTimers.set(
+    sessionId,
+    setTimeout(() => {
+      remoteMessageRepairTimers.delete(sessionId);
+      void reconcileRemoteMessages(sessionId, { repair: true }).catch(() => undefined);
+    }, REMOTE_MESSAGE_REPAIR_DELAY_MS),
+  );
+}
+
 function invalidateBackgroundTaskReconcile(sessionId: string): number {
   const next = (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) + 1;
   backgroundTaskReconcileEpoch.set(sessionId, next);
@@ -7053,8 +7072,13 @@ function bindIpc(
 
 function isTextDeltaEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
   if (event?.type !== 'text') return false;
-  const data = event.data as { text?: unknown; isFinal?: unknown } | null;
-  return data?.isFinal === false && typeof data.text === 'string';
+  const data = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
+  // Full-text snapshots are authoritative recovery/calibration events.  The
+  // main-side batching path deliberately keeps them out of coalescing, so the
+  // renderer must apply them immediately as well; otherwise a session-sync
+  // snapshot can sit behind the 32 ms delta timer and be overwritten by a
+  // concurrent history reconcile.
+  return data?.isFinal === false && data.isFullText !== true && typeof data.text === 'string';
 }
 
 function isHighFrequencyStreamEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
@@ -8432,8 +8456,48 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       }
       // stall 看门狗信号:只用重会话流刷新 lastInboundEventAt。列表级轻量 activity/patch
       // 可能仍在持续抵达,但 maker:event 重 topic 已经断流;若这里也刷新会掩盖卡死。
+      const inboundHasPersistId =
+        typeof (push.payload as { persistId?: unknown } | null)?.persistId === 'string';
+      const isDurableMessagePush =
+        push.channel === 'local-db:messages:created' ||
+        (push.channel === 'maker:event' && inboundHasPersistId);
+      if (push.deviceId && inboundSid && isDurableMessagePush) {
+        scheduleRemoteMessageRepair(inboundSid);
+      }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
       switch (push.channel) {
+        case REMOTE_SESSION_SYNC_CHANNEL: {
+          // The controlled host emits this channel when maker:event frames were
+          // dropped by backpressure.  It is an authoritative recovery signal:
+          // apply an in-flight full-text snapshot through the normal event
+          // reducer.  Only a payload marked resyncRequired also asks for a
+          // history read; text-only loss must not cause a needless page reload
+          // while a turn is still streaming.
+          const sync = push.payload as {
+            sessionId?: unknown;
+            persistId?: unknown;
+            event?: unknown;
+            resyncRequired?: unknown;
+          } | null;
+          if (typeof sync?.sessionId !== 'string' || sync.sessionId !== inboundSid) break;
+          if (sync.event && typeof sync.persistId === 'string') {
+            handleMakerEventRaw(
+              {
+                sessionId: sync.sessionId,
+                persistId: sync.persistId,
+                event: sync.event,
+              },
+              remoteIngress,
+            );
+          }
+          if (sync.resyncRequired === true) {
+            void reconcileRemoteMessages(sync.sessionId, {
+              force: true,
+              repair: true,
+            }).catch(() => undefined);
+          }
+          break;
+        }
         case 'maker:event':
           handleMakerEventRaw(push.payload, remoteIngress);
           break;
@@ -9011,6 +9075,8 @@ function __teardownGlobalListeners(): void {
   pendingTextDeltaBatches.clear();
   for (const timer of backgroundTaskReconcileTimers.values()) clearTimeout(timer);
   backgroundTaskReconcileTimers.clear();
+  for (const timer of remoteMessageRepairTimers.values()) clearTimeout(timer);
+  remoteMessageRepairTimers.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
@@ -11396,23 +11462,25 @@ function reconcileOpenSessionOrigins(): void {
  */
 const _remoteReconcileInFlight = new Map<
   string,
-  { run: Promise<boolean>; rerun: boolean; rerunForce: boolean }
+  { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean }
 >();
 
-function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }): Promise<boolean> {
+function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean; repair?: boolean }): Promise<boolean> {
   // 返回完成 promise 供调用方需要时等待;既有调用方均按 fire-and-forget 使用。
   if (!sessionId || !isRemoteSession(sessionId)) return Promise.resolve(false);
   const inFlight = _remoteReconcileInFlight.get(sessionId);
   if (inFlight) {
     inFlight.rerun = true;
     if (opts?.force) inFlight.rerunForce = true;
+    if (opts?.repair) inFlight.rerunRepair = true;
     void reconcilePendingInteractions(sessionId).catch(() => undefined);
     return inFlight.run;
   }
-  const entry: { run: Promise<boolean>; rerun: boolean; rerunForce: boolean } = {
+  const entry: { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean } = {
     run: Promise.resolve(false),
     rerun: false,
     rerunForce: false,
+    rerunRepair: false,
   };
   _remoteReconcileInFlight.set(sessionId, entry);
   entry.run = (async () => {
@@ -11422,10 +11490,14 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }):
     } finally {
       const rerun = entry.rerun;
       const rerunForce = entry.rerunForce;
+      const rerunRepair = entry.rerunRepair;
       // 先摘掉在飞标记,再补跑 —— 补跑会自己建新的 entry,期间来的触发继续被那一份合并。
       _remoteReconcileInFlight.delete(sessionId);
       if (rerun && sessions.has(sessionId)) {
-        applied = await reconcileRemoteMessages(sessionId, rerunForce ? { force: true } : undefined);
+        applied = await reconcileRemoteMessages(
+          sessionId,
+          { force: rerunForce, repair: rerunRepair },
+        );
       }
     }
     return applied;
@@ -11438,7 +11510,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }):
   return entry.run;
 }
 
-function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Promise<boolean> {
+function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?: boolean }): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
@@ -11446,7 +11518,10 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
   const interactionsSync = reconcilePendingInteractions(sessionId);
   const state = sessions.get(sessionId);
-  if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force)) {
+  // A repair started while streaming is deliberately additive: it may insert
+  // durable rows whose push was lost, but it must never hydrate or replace the
+  // live row that the stream is still producing.
+  if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force && !opts?.repair)) {
     // 消息对账被守卫挡下,但交互重建照跑。为它单独开一代:turn 进行中的
     // needs-interaction 未读,其「内容」就是权限 / ask / plan 提示本身——提示真实
     // 重建(count>0)才算一代完成,挂起的 passive 回执随之放行,不必等 turn 结束。
@@ -11559,6 +11634,11 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
         // 丢弃合并 = 拉回的窗口没进 UI:置 windowApplied=false,本次不得上报同步完成
         // (否则挂起的远程已读回执会在缺帧内容尚未展示时被放行),等 turn 结束的下一轮。
+        if (s.isStreaming && opts?.repair) {
+          const repaired = mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first');
+          if (repaired === s.messages) return s;
+          return { ...s, messages: repaired };
+        }
         if (s.isStreaming && !opts?.force) {
           windowApplied = false;
           return s;
@@ -16080,7 +16160,8 @@ export const makerChatStore = {
   /**
    * device-link:对账打开的远程会话消息(重拉最近一页 + 合并去重,补回 push 丢失的消息)。
    * 由 useRemoteSessionSync 在重连 / 被控端回在线 / turn 结束 / 聚焦 / 手动同步时调用。
-   * `opts.force` 仅供 stall 看门狗在确认被控端 not-running 后放行 isStreaming 守卫。
+   * `opts.force` 仅供 stall 看门狗在确认被控端 not-running 后放行 isStreaming 守卫；
+   * `opts.repair` 仅供 durable message push 丢失后的限频补读，streaming 时只追加缺失行。
    */
   reconcileRemoteMessages,
   /** stall 看门狗:读某 session 最近入站事件时刻(ms),判「卡死 Generating 但久未收 push」。 */

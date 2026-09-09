@@ -16,6 +16,8 @@ import {
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
+  MAX_TRANSPORT_REASSEMBLIES,
+  MAX_TRANSPORT_REASSEMBLY_BYTES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
   TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
   TRANSPORT_RETRY_PASS_BUDGET,
@@ -617,6 +619,101 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('buffers a resumed 64-message window including a fragmented result without waiting for its retry', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 1_000 } });
+    try {
+      h.client.start();
+      await tick();
+      h.current().ack();
+      const streamId = 'resumed-host-stream';
+      const base = 7_176;
+      await establishInboundReliableLink(h, streamId, base);
+      await establishInboundReliableLink(h, 'healthy-stream', 1, 'dev-c');
+      const received: number[] = [];
+      h.client.onFrame((env) => {
+        if (env.kind === 'push' && env.src === 'dev-b') {
+          received.push((env.payload as { payload: { seq: number } }).payload.seq);
+        }
+      });
+      const result = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+      const request = h.current().sent.filter((env) => env.kind === 'invoke' && env.dst === 'dev-b').at(-1)!;
+      const response = { ok: true, result: 'x'.repeat(188_000) };
+      const resultSeq = base + 33;
+      const frames = (seq: number) => encodeReliableFrames(seq === resultSeq ? {
+        v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-b', id: request.id, payload: response,
+      } : {
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: 'maker:event', payload: { seq } },
+      }, streamId, seq, base);
+      const deliver = (seq: number) => frames(seq).forEach((frame) => h.current().push(frame));
+      // XD-PC: the first recovery pass sends 8. Fresh snapshots overtake the
+      // next 8 retained entries, followed by a two-fragment sessions response.
+      for (let seq = base; seq < base + 8; seq++) deliver(seq);
+      await tick();
+      for (let seq = base + 16; seq < base + MAX_TRANSPORT_PENDING_MESSAGES; seq++) deliver(seq);
+      await tick();
+      expect(received).toHaveLength(8);
+
+      // The same socket continues serving a second peer while the gap remains.
+      const healthy = h.client.invoke('dev-c', { channel: 'local-db:sessions:list', args: [] });
+      const healthyRequest = h.current().sent.filter((env) => env.kind === 'invoke' && env.dst === 'dev-c').at(-1)!;
+      encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-c', id: healthyRequest.id,
+        payload: { ok: true, result: ['healthy'] },
+      }, 'healthy-stream', 1).forEach((frame) => h.current().push(frame));
+      await expect(healthy).resolves.toMatchObject({ result: ['healthy'] });
+
+      // Deliver only the missing old prefix; never resend the large response.
+      for (let seq = base + 8; seq < base + 16; seq++) deliver(seq);
+      await expect(result).resolves.toEqual(response);
+      await tick();
+      expect(received).toEqual(Array.from({ length: MAX_TRANSPORT_PENDING_MESSAGES }, (_, i) => base + i)
+        .filter((seq) => seq !== resultSeq));
+      expect(h.current().sent.map(parseTransportAck).filter((ack) => ack?.streamId === streamId).at(-1))
+        .toMatchObject({ ackSeq: base + MAX_TRANSPORT_PENDING_MESSAGES - 1 });
+      expect(h.sockets).toHaveLength(1);
+      expect(h.current().closed).toBeNull();
+    } finally { h.client.stop(); }
+  });
+
+  it('keeps the unfinished-assembly limit while admitting complete messages into the sequence window', async () => {
+    const warn = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 }, logger: { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } });
+    try {
+      h.client.start();
+      await tick();
+      h.current().ack();
+      const streamId = 'bounded-assemblies';
+      await establishInboundReliableLink(h, streamId);
+      const received: number[] = [];
+      h.client.onFrame((env) => {
+        if (env.kind === 'push') received.push((env.payload as { payload: { seq: number } }).payload.seq);
+      });
+      const make = (seq: number, text = '') => encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: 'maker:event', payload: { seq, text } },
+      }, streamId, seq);
+      const unfinished = Array.from({ length: MAX_TRANSPORT_REASSEMBLIES + 1 }, (_, i) => make(i + 2, 'x'.repeat(140_000)));
+      for (const parts of unfinished.slice(0, MAX_TRANSPORT_REASSEMBLIES)) h.current().push(parts[0]);
+      const overflow = unfinished.at(-1)!;
+      overflow.forEach((part) => h.current().push(part));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('beyond declared size'));
+      const tail = MAX_TRANSPORT_REASSEMBLIES + 3;
+      make(tail).forEach((part) => h.current().push(part));
+      make(1).forEach((part) => h.current().push(part));
+      await tick();
+      // Complete the 16 admitted assemblies. The 17th still needs retransmission.
+      for (const parts of unfinished.slice(0, MAX_TRANSPORT_REASSEMBLIES)) {
+        parts.slice(1).forEach((part) => h.current().push(part));
+        await tick();
+      }
+      expect(received).toEqual(Array.from({ length: MAX_TRANSPORT_REASSEMBLIES + 1 }, (_, i) => i + 1));
+      overflow.forEach((part) => h.current().push(part));
+      await tick();
+      expect(received).toEqual(Array.from({ length: tail }, (_, i) => i + 1));
+    } finally { h.client.stop(); }
+  });
+
   it('接收缓存被未来 seq 占满时，队头 skip 仍可进入并解除永久堵塞', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
@@ -642,7 +739,7 @@ describe('DeviceLinkClient', () => {
     expect(firstFrames.length).toBeGreaterThan(1);
     h.current().push(firstFrames[0]);
 
-    for (let seq = 2; seq <= 16; seq++) {
+    for (let seq = 2; seq <= MAX_TRANSPORT_PENDING_MESSAGES; seq++) {
       h.current().push(encodeReliableFrames({
         v: PROTOCOL_VERSION,
         kind: 'push',
@@ -660,14 +757,50 @@ describe('DeviceLinkClient', () => {
     }, streamId, 1)[0]);
     await tick();
 
-    expect(received).toEqual(Array.from({ length: 15 }, (_, index) => index + 2));
+    expect(received).toEqual(Array.from({ length: MAX_TRANSPORT_PENDING_MESSAGES - 1 }, (_, index) => index + 2));
     expect(h.current().sent.filter((env) => (
       env.kind === 'push'
       && (env.payload as { channel?: string }).channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL
     )).at(-1)).toMatchObject({
-      payload: { payload: { ackSeq: 16 } },
+      payload: { payload: { ackSeq: MAX_TRANSPORT_PENDING_MESSAGES } },
     });
     h.client.stop();
+  });
+
+  it('bounds receive bytes across complete messages and assemblies while reserving progress for the head', async () => {
+    const warn = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 }, logger: { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } });
+    try {
+      h.client.start();
+      await tick();
+      h.current().ack();
+      const streamId = 'bounded-receive-bytes';
+      await establishInboundReliableLink(h, streamId);
+      const received: number[] = [];
+      h.client.onFrame((env) => {
+        if (env.kind === 'push') received.push((env.payload as { payload: { seq: number } }).payload.seq);
+      });
+      // Four complete 3.2MB messages fit, a fifth exceeds the unchanged 16MB
+      // byte cap once JSON overhead is included. No unfinished-assembly limit
+      // is involved: each logical message is delivered as a complete burst.
+      const text = 'x'.repeat(Math.floor(MAX_TRANSPORT_REASSEMBLY_BYTES / 5));
+      const deliver = (seq: number) => encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: 'maker:event', payload: { seq, text } },
+      }, streamId, seq).forEach((frame) => h.current().push(frame));
+      for (let seq = 2; seq <= 6; seq++) deliver(seq);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('beyond declared size'));
+      expect(received).toEqual([]);
+      deliver(1); // Must evict a future entry to fit; cannot deadlock the head.
+      await tick();
+      expect(received).toEqual([1, 2, 3, 4]);
+      deliver(5);
+      deliver(6);
+      await tick();
+      expect(received).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(h.current().sent.map(parseTransportAck).filter((ack) => ack?.streamId === streamId).at(-1))
+        .toMatchObject({ ackSeq: 6 });
+    } finally { h.client.stop(); }
   });
 
   it('乱序分片只在缺口补齐后按 seq 交付，重复帧不重复触发 host', async () => {
@@ -5802,6 +5935,54 @@ describe('DeviceLinkClient', () => {
 
       h.client.stop();
       await Promise.allSettled([pending, linkPending, reopen]);
+    });
+
+    it('C1: stale frame without outbound intent does not consume the throttle window', async () => {
+      const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+      const nowMs = 3_000_000;
+      const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+      try {
+        const h = makeHarness({
+          timing: { reconnectBaseMs: 5, reconnectMaxMs: 10, requestTimeoutMs: 60_000, pingIntervalMs: 60_000 },
+        });
+        const handled: string[] = [];
+        h.client.onReliableFrameBeforeLink((deviceId) => {
+          if (!h.client.hasPendingRequestsTo(deviceId)) return false;
+          handled.push(deviceId);
+          return true;
+        });
+        h.client.start();
+        await makeLinkDownPeer(h, 'dev-stale');
+
+        const staleFrame = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-stale',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-stale',
+          1,
+          1,
+        )[0]!;
+        h.current().push({ ...staleFrame, src: 'dev-stale' });
+        await tick();
+        expect(handled).toEqual([]);
+
+        const pending = h.client.invoke('dev-stale', {
+          channel: 'local-db:sessions:list',
+          args: [],
+        });
+        h.current().push({ ...staleFrame, src: 'dev-stale' });
+        await tick();
+        expect(handled).toEqual(['dev-stale']);
+
+        h.client.stop();
+        await expect(pending).rejects.toBeDefined();
+      } finally {
+        clock.mockRestore();
+      }
     });
 
     it('C2:link 恢复即清节流 —— 恢复后 30s 内再次丢 link 时新帧立刻再通知一次', async () => {
