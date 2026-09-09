@@ -138,7 +138,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import { applyPiDisabledSkillSettings, filterPiDisabledProjectSkills, piDisabledDiscoveryPaths } from './skill-activation.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
-import { buildMemoryScopeKey } from '../../memory/storage.js';
+import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import type {
   Capabilities,
@@ -2129,6 +2129,16 @@ export class PiAgent extends BaseAgent {
     const sessionMemoryEnabled = !reviewMode
       && (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
       && (botMemoryScope || (this.memoryOverride ?? true));
+    const compactionMemoryEnabled = sessionMemoryEnabled && !!this.deps.makerMemory;
+    const makerMemoryPromptEnabled =
+      sessionMemoryEnabled &&
+      (opts.makerMemoryIndexSnapshot !== undefined || !!this.deps.makerMemory);
+    // Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1): 解析结果不会被用。
+    // 解析必须发生在 MCP ctx 注册之前, 并把结果冻进 ctx, 避免工具侧 60s TTL
+    // 后再解析漂移到 raw worktree 路径 (Codex #2399 P2)。
+    const memoryScopeKey = (compactionMemoryEnabled || makerMemoryPromptEnabled)
+      ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
+      : (opts.makerMemoryScopeKey ?? opts.workingDir);
     const remote = Boolean(opts.remoteHostId);
     const sessionPiAutoCompactPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
 
@@ -3057,9 +3067,9 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
-          // Bot 会话的 scope key 必须随 ctx 走 — prompt 注入用的是同一个 key
-          // (见上方 memoryScopeKey), 丢掉会让 cindy_memory 工具写进 workdir 记忆。
-          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
+          // 冻进启动时解析的 scope key (含 bot: / 归一化后的主仓路径), 工具侧
+          // 不得再二次 resolve (Codex #2399 P2)。
+          ...((sessionMemoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
           memoryEnabled: sessionMemoryEnabled,
           ...(opts.botRuntimeProfile?.mcpPolicy
             ? { botMcpPolicy: opts.botRuntimeProfile.mcpPolicy }
@@ -3090,14 +3100,7 @@ export class PiAgent extends BaseAgent {
     // 压缩即记忆:makerMemory 开启时,把 pi 压缩上下文时丢弃内容的摘要沉淀成 `digest`
     // 记忆(进 FTS 可 memory_search 检索,但排除出 MEMORY.md / system prompt,不污染
     // curated 记忆)。gate 与 CC 同口径;best-effort,失败只 warn,绝不阻断会话。
-    const compactionMemoryEnabled =
-      sessionMemoryEnabled &&
-      !!this.deps.makerMemory;
-    const makerMemoryPromptEnabled =
-      sessionMemoryEnabled &&
-      (opts.makerMemoryIndexSnapshot !== undefined || !!this.deps.makerMemory);
-    const memoryScopeKey =
-      opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    // memoryScopeKey / compactionMemoryEnabled 已在 MCP 注册前解析并冻进 ctx。
     let makerMemoryIndex = '';
     if (makerMemoryPromptEnabled) {
       try {

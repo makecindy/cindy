@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MakerMemoryManager } from './manager.js';
 import { buildBotMemoryScopeKey, memoryScopeDirName } from './storage.js';
@@ -28,6 +28,12 @@ const noopLogger: Logger = {
 const WORKDIR = 'D:/repo/workdir';
 const SCOPE_DIR = memoryScopeDirName(WORKDIR); // Windows: 'D--repo-workdir'
 const memoryDirFor = (root: string) => path.join(root, 'maker-memory', SCOPE_DIR);
+
+// This file opens real better-sqlite3 databases and rebuilds FTS indexes. On
+// Windows runners, Defender can make that synchronous file work exceed
+// Vitest's default 5s timeout; keep the migration assertions unchanged while
+// giving the test the same bounded Windows allowance as the contacts tests.
+vi.setConfig({ testTimeout: process.platform === 'win32' ? 30_000 : 5_000 });
 
 let rootA: string;
 let rootB: string;

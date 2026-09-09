@@ -22,7 +22,7 @@ import { readBotAuthorizationCard } from '../../shared/botAuthorization';
  * - User-initiated stopSession (NOT called on session switch anymore)
  */
 
-import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
+import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
@@ -3923,7 +3923,7 @@ function enterView(sessionId: string): () => void {
   if (resumingHistory) {
     // A repair push may have arrived after leaveView, when refresh is inactive.
     // Reuse the normal resume read to hand off unchanged streaming rows too.
-    void reconcileRemoteMessages(sessionId, { repair: true }).then(() => {
+    void reconcileRemoteMessages(sessionId, { force: true, repair: true, freshHistory: false }).then(() => {
       if (!view.getSnapshot().error) scheduleIdlePlanDiscoveryIfNeeded(sessionId);
     }).catch(() => undefined);
   } else scheduleIdlePlanDiscoveryIfNeeded(sessionId);
@@ -5301,6 +5301,30 @@ export function handleStreamEvent(
       if (snapshot && event.persistId && state.messages.some((message) =>
         message.clientId === event.persistId && message.role === 'assistant' && !message.isStreaming)) return state;
 
+      // A full-text snapshot can be non-final while the item is still streaming.
+      // It is authoritative for the current block and must replace the delta
+      // prefix rather than being appended as another delta.
+      if (
+        !isFinal &&
+        isFullText === true &&
+        event.persistId &&
+        event.persistId === state.streamingClientId &&
+        typeof text === 'string'
+      ) {
+        const id = state.streamingClientId;
+        return {
+          ...state,
+          streamingText: text,
+          lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
+          messages: replaceMessage(
+            state.messages,
+            (message) => message.clientId === id,
+            (message) => ({ ...message, content: text, ...assistantMetaFields,
+              ...(snapshot?.createdAt ? { createdAt: snapshot.createdAt } : {}) }),
+          ),
+        };
+      }
+
       // A DB/history snapshot can beat the first batched delta, or an old item's
       // final event can arrive after a newer item starts. Identity, not tail
       // position/content equality, decides whether this is a new bubble.
@@ -5311,7 +5335,28 @@ export function handleStreamEvent(
         if (existing) {
           // Persisted/finalized text already includes these late deltas. Only an
           // explicitly authoritative full-text event may calibrate it again.
-          if (!isFinal) return state;
+          if (!isFinal) {
+            if (isFullText !== true || typeof text !== 'string') return state;
+            const updated = {
+              ...existing,
+              content: text,
+              ...assistantMetaFields,
+            };
+            const isCurrentStream = state.streamingClientId === event.persistId;
+            const lastAgentMeta = state.streamingClientId
+              ? state.lastAgentMeta
+              : incomingMeta ?? state.lastAgentMeta;
+            const unchanged = shallowEqualChatMessage(existing, updated);
+            if (unchanged && !isCurrentStream && lastAgentMeta === state.lastAgentMeta) return state;
+            return {
+              ...state,
+              ...(isCurrentStream ? { streamingText: text } : {}),
+              lastAgentMeta,
+              messages: unchanged
+                ? state.messages
+                : replaceMessage(state.messages, (message) => message === existing, () => updated),
+            };
+          }
           const updated = {
             ...existing,
             ...(isFullText === true && text ? { content: text } : {}),
@@ -6963,6 +7008,24 @@ const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const backgroundTaskReconcileEpoch = new Map<string, number>();
 
+// A remote `messages:created` push can be lost while the controlled session
+// keeps streaming.  Keep a small, per-session repair debounce so any later
+// remote event can heal the missing durable row without turning the live
+// stream into a polling loop.
+const REMOTE_MESSAGE_REPAIR_DELAY_MS = 1_500;
+const remoteMessageRepairTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleRemoteMessageRepair(sessionId: string): void {
+  if (!sessionId || remoteMessageRepairTimers.has(sessionId)) return;
+  remoteMessageRepairTimers.set(
+    sessionId,
+    setTimeout(() => {
+      remoteMessageRepairTimers.delete(sessionId);
+      void reconcileRemoteMessages(sessionId, { repair: true }).catch(() => undefined);
+    }, REMOTE_MESSAGE_REPAIR_DELAY_MS),
+  );
+}
+
 function invalidateBackgroundTaskReconcile(sessionId: string): number {
   const next = (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) + 1;
   backgroundTaskReconcileEpoch.set(sessionId, next);
@@ -8469,20 +8532,48 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // 可能仍在持续抵达,但 maker:event 重 topic 已经断流;若这里也刷新会掩盖卡死。
       if (push.channel === SESSION_SYNC_CHANNEL
         && (!inboundSid || remoteProjectsStore.getSessionDeviceId(inboundSid) !== push.deviceId)) return;
+      const inboundHasPersistId =
+        typeof (push.payload as { persistId?: unknown } | null)?.persistId === 'string';
+      const isDurableMessagePush =
+        push.channel === 'local-db:messages:created' ||
+        (push.channel === 'maker:event' && inboundHasPersistId);
+      const inboundEvent = (push.payload as { event?: unknown } | null)?.event as
+        | { type?: unknown; data?: { isFinal?: unknown; isFullText?: unknown } }
+        | null
+        | undefined;
+      const isOrdinaryStreamingTextDelta =
+        push.channel === 'maker:event' &&
+        inboundEvent?.type === 'text' &&
+        inboundEvent.data?.isFinal === false &&
+        inboundEvent.data?.isFullText !== true;
+      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta) {
+        scheduleRemoteMessageRepair(inboundSid);
+      }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
       if (inboundSid) {
         const view = getRemoteHistoryView(inboundSid);
         if (view && ['maker:history-view-changed', 'local-db:messages:created', 'maker:status-changed'].includes(push.channel)) view.invalidate();
       }
       switch (push.channel) {
-        case SESSION_SYNC_CHANNEL:
+        case SESSION_SYNC_CHANNEL: {
+          let preserveClientIds: ReadonlySet<string> | undefined;
           consumeRemoteSessionSync(push.payload, {
-            applyEvent: (event) => handleMakerEventRaw(event, remoteIngress),
+            applyEvent: (event) => {
+              handleMakerEventRaw(event, remoteIngress);
+              const row = sessions.get(event.sessionId as string)?.messages.find(
+                (message) => message.clientId === event.persistId && message.isStreaming,
+              );
+              if (row) preserveClientIds = new Set([row.clientId]);
+            },
             invalidateHistory: (sessionId) => {
               const state = sessions.get(sessionId);
               if (!state) return;
               if (getRemoteHistoryView(sessionId)) {
-                void reconcileRemoteMessages(sessionId, { repair: true, freshHistory: true });
+                // resyncRequired also repairs unrelated durable rows; a full
+                // text snapshot only protects its own live block.
+                void reconcileRemoteMessages(sessionId, {
+                  force: true, repair: true, freshHistory: true, preserveClientIds,
+                });
                 return;
               }
               if (!state.historyLoaded) {
@@ -8492,10 +8583,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
                 ensureInitialMessages(sessionId);
                 return;
               }
-              void reconcileRemoteMessages(sessionId, { repair: true });
+              void reconcileRemoteMessages(sessionId, {
+                force: true, repair: true, preserveClientIds,
+              });
             },
           });
           break;
+        }
         case 'maker:event':
           handleMakerEventRaw(push.payload, remoteIngress);
           break;
@@ -9080,6 +9174,8 @@ function __teardownGlobalListeners(): void {
   pendingTextDeltaBatches.clear();
   for (const timer of backgroundTaskReconcileTimers.values()) clearTimeout(timer);
   backgroundTaskReconcileTimers.clear();
+  for (const timer of remoteMessageRepairTimers.values()) clearTimeout(timer);
+  remoteMessageRepairTimers.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
@@ -11604,51 +11700,177 @@ function reconcileOpenSessionOrigins(): void {
  */
 const _remoteReconcileInFlight = new Map<
   string,
-  { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean }
+  { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean; preserveClientIds: Set<string> }
 >();
 
-function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean; freshHistory?: boolean; repair?: boolean }): Promise<boolean> {
+type HistoryViewForceFlight = {
+  run: Promise<boolean>;
+  rerun: boolean;
+  rowsAtStart: Map<string, ChatMessage>;
+  latestOpts: {
+    force?: boolean;
+    repair?: boolean;
+    freshHistory?: boolean;
+    preserveClientIds?: ReadonlySet<string>;
+  };
+};
+
+const _historyViewForceInFlight = new Map<string, HistoryViewForceFlight>();
+
+function reconcileRemoteMessages(sessionId: string, opts?: {
+  force?: boolean;
+  repair?: boolean;
+  freshHistory?: boolean;
+  preserveClientIds?: ReadonlySet<string>;
+}): Promise<boolean> {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
   const view = getRemoteHistoryView(sessionId);
-  const repairRows = opts?.repair && view
-    ? new Map(sessions.get(sessionId)?.messages.map((row) => [row.clientId, row])) : undefined;
-  if (view && (view.getSnapshot().ready || opts?.freshHistory || opts?.repair)) return Promise.all([view.refresh(false, opts?.freshHistory), reconcilePendingInteractions(sessionId)]).then(() => {
-    if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
-    if (isHistoryViewUnavailable(view.getSnapshot().error)) {
-      releaseRemoteHistoryView(sessionId, view);
-      return reconcileRemoteMessages(sessionId, { force: true });
+  if (view && (view.getSnapshot().ready || opts?.freshHistory || opts?.repair)) {
+    const runHistoryView = (flight?: HistoryViewForceFlight) => {
+      const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
+      const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
+      const noteHydration = (before: readonly ChatMessage[], after: readonly ChatMessage[]) => {
+        if (!flight) return;
+        const previous = new Map(before.map((row) => [row.clientId, row]));
+        for (const row of after) {
+          // Advance only our own writes. A row changed by live ingress must
+          // keep its old baseline so the trailing read still protects it.
+          if (flight.rowsAtStart.get(row.clientId) === previous.get(row.clientId)) {
+            flight.rowsAtStart.set(row.clientId, row);
+          }
+        }
+      };
+      // Force needs a post-signal page, even when a normal repair is in flight.
+      // Keep this view and its expansion state instead of falling back to raw history.
+      return Promise.all([
+        view.refresh(false, opts?.freshHistory ?? opts?.force),
+        reconcilePendingInteractions(sessionId),
+      ]).then(async () => {
+        if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
+        if (isHistoryViewUnavailable(view.getSnapshot().error)) {
+          releaseRemoteHistoryView(sessionId, view);
+          return runRemoteReconcile(sessionId, { ...opts, force: true }, noteHydration);
+        }
+        if (opts?.force) {
+          // readPage starts expanded details without awaiting them. Join those
+          // same reads before hydrating; their cached display may still be old.
+          await Promise.all(historyWorkSummaries(view.getSnapshot().items)
+            .map((summary) => view.loadDetails(summary, { allowCollapsed: true })));
+          if (getRemoteHistoryView(sessionId) !== view || !view.isActive()
+            || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
+          const detailsSnapshot = view.getSnapshot();
+          const incompleteDetails = historyWorkSummaries(detailsSnapshot.items).some((summary) => {
+            const detail = detailsSnapshot.details.get(summary.key);
+            return !detail?.complete || !!detail.error || detail.revision !== summary.revision;
+          });
+          if (incompleteDetails) {
+            // Collapse can cancel a joined detail read without rejecting it.
+            // Missing, partial, failed or stale details cannot certify recovery.
+            // Use the same authoritative fallback as a transient read failure;
+            // if that read also fails, preserve rejection.
+            return runRemoteReconcile(sessionId, opts, noteHydration);
+          }
+        }
+        if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
+        const snapshot = view.getSnapshot();
+        if (snapshot.error) throw snapshot.error;
+        if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
+        if (opts?.force && snapshot.ready) {
+          // Host thinking snapshots use synthetic IDs and carry no terminal
+          // marker. Only durable rows may seal an existing live row; provisional
+          // rows already participate in the ordinary add-only subscription.
+          const details = historyWorkSummaries(snapshot.items).flatMap((summary) => {
+            const detail = snapshot.details.get(summary.key);
+            return detail?.complete
+              && !detail.error && detail.revision === summary.revision ? detail.messages : [];
+          });
+          const available = details.concat(historyViewLeaves(snapshot.items)
+            .flatMap((item) => item.type === 'messages' ? item.messages : []))
+            .filter((row) => !row.id.startsWith('history-live:')
+              && !opts?.preserveClientIds?.has(row.clientId));
+          setState(sessionId, (state) => {
+            // The ordinary view subscriber is add-only. Explicit recovery must
+            // hydrate stale live shells, or their handoff keeps masking sealed rows.
+            // Preserve rows changed by live events while this read was pending.
+            const untouched = new Set(state.messages.filter((row) => rowsAtStart.get(row.clientId) === row).map((row) => row.clientId));
+            const messages = mergeMessages(available, state.messages, { addOnly: true, addOnlyExcept: untouched });
+            noteHydration(state.messages, messages);
+            return messages === state.messages ? state : { ...state, messages };
+          });
+        }
+        return snapshot.ready;
+      });
+    };
+    if (!opts?.force) return runHistoryView();
+    const existing = _historyViewForceInFlight.get(sessionId);
+    if (existing) {
+      existing.rerun = true;
+      existing.latestOpts = opts;
+      return existing.run;
     }
-    if (view.getSnapshot().error) throw view.getSnapshot().error;
-    if (repairRows && view.getSnapshot().ready) {
-      const snapshot = view.getSnapshot();
-      const available = historyViewLeaves(snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : []);
-      // The projection's add-only subscription preserves live rows. Complete
-      // this repair only for unchanged assistant streams. Cached work details
-      // refresh separately and cannot prove that their contents are current.
-      setState(sessionId, (state) => ({ ...state, messages: mergeMessages(available, state.messages, {
-        addOnly: true,
-        addOnlyExcept: new Set(state.messages.filter((row) => row.role === 'assistant'
-          && row.isStreaming === true && repairRows.get(row.clientId) === row).map((row) => row.clientId)),
-      }) }));
-    }
-    return view.getSnapshot().ready;
-  });
+    const entry: HistoryViewForceFlight = {
+      run: Promise.resolve(false),
+      rerun: false,
+      rowsAtStart: new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row])),
+      latestOpts: opts,
+    };
+    _historyViewForceInFlight.set(sessionId, entry);
+    entry.run = (async () => {
+      try {
+        let applied: boolean;
+        try {
+          applied = await runHistoryView(entry);
+        } catch (error) {
+          // Replacing the view while its page is in flight rejects the old
+          // controller read. A coalesced force signal still needs to retry on
+          // the replacement view; without a pending force, preserve the
+          // original error for callers that explicitly await this promise.
+          if (!entry.rerun || !sessions.has(sessionId)) throw error;
+          applied = false;
+        }
+        if (entry.rerun && sessions.has(sessionId)) {
+          _historyViewForceInFlight.delete(sessionId);
+          const preserveClientIds = new Set(entry.latestOpts.preserveClientIds);
+          for (const row of sessions.get(sessionId)?.messages ?? []) {
+            if (entry.rowsAtStart.has(row.clientId) && entry.rowsAtStart.get(row.clientId) !== row) {
+              preserveClientIds.add(row.clientId);
+            }
+          }
+          applied = await reconcileRemoteMessages(sessionId, {
+            ...entry.latestOpts,
+            preserveClientIds,
+          });
+        }
+        return applied;
+      } finally {
+        if (_historyViewForceInFlight.get(sessionId) === entry) _historyViewForceInFlight.delete(sessionId);
+      }
+    })();
+    void entry.run.catch(() => undefined);
+    return entry.run;
+  }
   // 返回完成 promise 供调用方需要时等待;既有调用方均按 fire-and-forget 使用。
   if (!sessionId || !isRemoteSession(sessionId)) return Promise.resolve(false);
   const inFlight = _remoteReconcileInFlight.get(sessionId);
   if (inFlight) {
     inFlight.rerun = true;
-    if (opts?.force) inFlight.rerunForce = true;
+    if (opts?.force) {
+      inFlight.rerunForce = true;
+      // The latest forced signal identifies the current live block. A later
+      // snapshot-less resync can authoritatively seal the previous block.
+      inFlight.preserveClientIds = new Set(opts.preserveClientIds);
+    }
     if (opts?.repair) inFlight.rerunRepair = true;
     void reconcilePendingInteractions(sessionId).catch(() => undefined);
     return inFlight.run;
   }
-  const entry: { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean } = {
+  const entry: { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean; preserveClientIds: Set<string> } = {
     run: Promise.resolve(false),
     rerun: false,
     rerunForce: false,
     rerunRepair: false,
+    preserveClientIds: new Set(),
   };
   _remoteReconcileInFlight.set(sessionId, entry);
   entry.run = (async () => {
@@ -11658,10 +11880,14 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean; fr
     } finally {
       const rerun = entry.rerun;
       const rerunForce = entry.rerunForce;
+      const rerunRepair = entry.rerunRepair;
       // 先摘掉在飞标记,再补跑 —— 补跑会自己建新的 entry,期间来的触发继续被那一份合并。
       _remoteReconcileInFlight.delete(sessionId);
       if (rerun && sessions.has(sessionId)) {
-        applied = await reconcileRemoteMessages(sessionId, { force: rerunForce, repair: entry.rerunRepair });
+        applied = await reconcileRemoteMessages(
+          sessionId,
+          { force: rerunForce, repair: rerunRepair, preserveClientIds: entry.preserveClientIds },
+        );
       }
     }
     return applied;
@@ -11674,7 +11900,11 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean; fr
   return entry.run;
 }
 
-function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?: boolean }): Promise<boolean> {
+function runRemoteReconcile(sessionId: string, opts?: {
+  force?: boolean;
+  repair?: boolean;
+  preserveClientIds?: ReadonlySet<string>;
+}, noteHydration?: (before: readonly ChatMessage[], after: readonly ChatMessage[]) => void): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
@@ -11682,6 +11912,9 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
   const interactionsSync = reconcilePendingInteractions(sessionId);
   const state = sessions.get(sessionId);
+  // A repair without force started while streaming is deliberately additive: it may insert
+  // durable rows whose push was lost, but it must never hydrate or replace the
+  // live row that the stream is still producing.
   if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force && !opts?.repair)) {
     // 消息对账被守卫挡下,但交互重建照跑。为它单独开一代:turn 进行中的
     // needs-interaction 未读,其「内容」就是权限 / ask / plan 提示本身——提示真实
@@ -11773,7 +12006,9 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
         return;
       }
       if (collected.length === 0) return;
-      const mapped = mapServerMessages(collected);
+      const mapped = mapServerMessages(collected).filter(
+        (message) => !opts?.preserveClientIds?.has(message.clientId),
+      );
       // 翻满上限仍没接回已知区段 → 下面走权威重建分支:整片旧窗口被换掉、oldestMessageId
       // 也被改写。这是第八条"整体重建窗口"的路径,必须 bump epoch 作废 in-flight 的翻页 /
       // 跳转补齐 —— 否则那些请求会带着**重建前**的游标返回,把一段脱离上下文的旧历史接到
@@ -11795,7 +12030,15 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
         // 丢弃合并 = 拉回的窗口没进 UI:置 windowApplied=false,本次不得上报同步完成
         // (否则挂起的远程已读回执会在缺帧内容尚未展示时被放行),等 turn 结束的下一轮。
-        if (s.isStreaming && !opts?.force && !opts?.repair) {
+        // Snapshot repairs are additive; force recovery instead uses the
+        // reference-guarded authoritative merge below, including when a
+        // force signal was coalesced with an earlier repair.
+        if (s.isStreaming && opts?.repair && !opts.force) {
+          const repaired = mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first');
+          if (repaired === s.messages) return s;
+          return { ...s, messages: repaired };
+        }
+        if (s.isStreaming && !opts?.force) {
           windowApplied = false;
           return s;
         }
@@ -11824,6 +12067,7 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
               'newest-first',
             )
           : mergeAuthoritativeRemoteWindow(mapped, lateArrivals, 'newest-first');
+        noteHydration?.(s.messages, messages);
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
         if (messages === s.messages) return s;
         if (isContiguous) return { ...s, messages };
@@ -16365,7 +16609,8 @@ export const makerChatStore = {
   /**
    * device-link:对账打开的远程会话消息(重拉最近一页 + 合并去重,补回 push 丢失的消息)。
    * 由 useRemoteSessionSync 在重连 / 被控端回在线 / turn 结束 / 聚焦 / 手动同步时调用。
-   * `opts.force` 仅供 stall 看门狗在确认被控端 not-running 后放行 isStreaming 守卫。
+   * `opts.force` 仅供 stall 看门狗在确认被控端 not-running 后放行 isStreaming 守卫；
+   * `opts.repair` 仅供 durable message push 丢失后的限频补读，streaming 时只追加缺失行。
    */
   reconcileRemoteMessages,
   /** stall 看门狗:读某 session 最近入站事件时刻(ms),判「卡死 Generating 但久未收 push」。 */

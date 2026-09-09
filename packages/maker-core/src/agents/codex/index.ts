@@ -203,7 +203,7 @@ import {
   CONTACTS_RULES_ENABLED,
 } from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
-import { buildMemoryScopeKey } from '../../memory/storage.js';
+import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
 import {
   canReuseCodexHostForCredentialMode,
@@ -3211,10 +3211,13 @@ export class CodexAgent extends BaseAgent {
       : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
-    // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
-    // 键规则与理由见 buildMemoryScopeKey (memory/storage.ts)。
-    const memoryScopeKey =
-      opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key;
+    // 本地会话额外做 git worktree 归一化 (#2379)。已注入的 makerMemoryScopeKey
+    // (含 bot:) 原样透传。Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1):
+    // 解析结果本就不会被用, 失败还能空耗 3s timeout。
+    const memoryScopeKey = makerMemoryEnabled
+      ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
+      : (opts.makerMemoryScopeKey ?? opts.workingDir);
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
@@ -5084,7 +5087,7 @@ export class CodexAgent extends BaseAgent {
           mcpCallerAttested: true,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
-          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
+          ...((makerMemoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
           vendorOptions: vo,
