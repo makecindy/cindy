@@ -142,6 +142,7 @@ import {
 } from './lib/projectBulkArchiveAction';
 import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
+import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import {
@@ -606,64 +607,9 @@ export function CCAgentSidebarUpper() {
     // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
     // 但会改渲染顺序 —— 跟序号徽标同样的做法,靠 DOM 变化跟住。
     if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
-    // 观察面是整个 document(展开态与 rail 是两个组件),流式输出时 mutation 会非常
-    // 密集 —— 每帧最多重算一次,别让它变成热路径。
-    let frame: number | null = null;
-    const schedulePublish = () => {
-      if (frame !== null) return;
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        publishSidebarTasks();
-      });
-    };
-    const observerOptions: MutationObserverInit = {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'hidden', 'aria-hidden'],
-    };
-    const observer = new MutationObserver(schedulePublish);
     const sidebarRoot = sidebarRootRef.current;
     if (!sidebarRoot) return;
-    observer.observe(sidebarRoot, observerOptions);
-    const portalObservers = new Map<Element, MutationObserver>();
-    const portalSelector =
-      '[data-rail-panel],[data-conversation-search-overlay],[data-radix-popper-content-wrapper]';
-    const attachPortalObserver = (portal: Element) => {
-      if (portalObservers.has(portal)) return;
-      const portalObserver = new MutationObserver(schedulePublish);
-      portalObserver.observe(portal, observerOptions);
-      portalObservers.set(portal, portalObserver);
-    };
-    const syncPortalObservers = () => {
-      for (const portal of document.querySelectorAll(portalSelector)) attachPortalObserver(portal);
-      for (const [portal, portalObserver] of portalObservers) {
-        if (!portal.isConnected) {
-          portalObserver.disconnect();
-          portalObservers.delete(portal);
-        }
-      }
-    };
-    syncPortalObservers();
-    const portalLifecycleObserver = new MutationObserver((records) => {
-      if (
-        records.some((record) =>
-          [...record.addedNodes, ...record.removedNodes].some(
-            (node) => node instanceof Element && (node.matches(portalSelector) || node.querySelector(portalSelector)),
-          ),
-        )
-      ) {
-        syncPortalObservers();
-        schedulePublish();
-      }
-    });
-    portalLifecycleObserver.observe(document.body, { childList: true });
-    return () => {
-      observer.disconnect();
-      portalLifecycleObserver.disconnect();
-      for (const portalObserver of portalObservers.values()) portalObserver.disconnect();
-      if (frame !== null) cancelAnimationFrame(frame);
-    };
+    return observeSidebarTaskChanges(sidebarRoot, publishSidebarTasks);
   }, [publishSidebarTasks]);
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
