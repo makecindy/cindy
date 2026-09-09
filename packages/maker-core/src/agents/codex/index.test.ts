@@ -29085,7 +29085,12 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
-  it.each([false, true])('settles oversized recovery after ACK and respects cancellation=%s', async (cancelled) => {
+  it.each([
+    { cancelled: false, completion: undefined, rejectAck: false },
+    { cancelled: true, completion: undefined, rejectAck: false },
+    ...(['completed', 'failed', 'interrupted'] as const).flatMap((completion) =>
+      [false, true].map((rejectAck) => ({ cancelled: false, completion, rejectAck }))),
+  ])('settles oversized recovery: %j', async ({ cancelled, completion, rejectAck }) => {
     vi.useFakeTimers();
     const agent = new CodexAgent(createDeps());
     const proto = Object.getPrototypeOf(agent) as {
@@ -29105,9 +29110,14 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       });
     try {
       let acknowledge!: (value: unknown) => void;
-      const ack = new Promise((resolve) => { acknowledge = resolve; });
+      let reject!: (reason: Error) => void;
+      const ack = new Promise((resolve, rejectPromise) => { acknowledge = resolve; reject = rejectPromise; });
       const cancellation = new AbortController();
       const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal);
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { id: 'answer-1', type: 'agentMessage', text: 'Work finished.', phase: 'final_answer' },
+      } as never);
       emitReconnect(handlers, 1);
       await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
       await Promise.resolve();
@@ -29119,17 +29129,31 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       expect(seen.some((event) => event.type === 'error' &&
         (event.data as { reason?: string }).reason === 'codex_history_oversized')).toBe(false);
       if (cancelled) cancellation.abort();
-      acknowledge({});
+      if (completion) {
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id', turn: { id: 'turn-1', status: completion },
+        } as never);
+        expect(handle.isTurnRunning?.()).toBe(true);
+      }
+      if (rejectAck) reject(new Error('turn already ended'));
+      else acknowledge({});
       await vi.advanceTimersByTimeAsync(1);
       expect(handle.isTurnRunning?.()).toBe(false);
       const oversizedIndex = seen.findIndex((event) => event.type === 'error' &&
         (event.data as { reason?: string }).reason === 'codex_history_oversized');
-      if (cancelled) expect(oversizedIndex).toBe(-1);
+      if (cancelled || completion === 'completed') expect(oversizedIndex).toBe(-1);
       else {
         expect(oversizedIndex).toBeGreaterThanOrEqual(0);
         expect(seen[oversizedIndex + 1]).toMatchObject({
           type: 'status', data: { isRunning: false },
         });
+      }
+      if (completion === 'completed') {
+        const done = seen.filter((event) => event.type === 'done');
+        expect(done).toHaveLength(1);
+        expect(done[0]).toMatchObject({ data: { result: 'Work finished.' } });
+        await handle.send({ type: 'user', content: 'next task' });
+        expect(handle.isTurnRunning?.()).toBe(true);
       }
       await handle.close();
     } finally {

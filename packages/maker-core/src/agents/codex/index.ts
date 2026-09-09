@@ -7834,16 +7834,21 @@ export class CodexAgent extends BaseAgent {
         const interrupted = await interruptTurnForPermissionTighten(turnId, {
           suppressFailureEvent: true,
         });
+        const completedNormally = deferOversizedError
+          && reconnectStallDeferredTurnCompletion?.turn.status === 'completed';
+        // No error has been published for oversized recovery yet. An
+        // authoritative success wins over the watchdog and settles normally.
+        if (completedNormally) terminalErroredTurnIds.delete(turnId);
         if (interrupted) {
           if (!settleReconnectStallCleanup(turnId, {
               threadId,
               turn: { id: turnId, status: 'failed' },
             } as TurnCompletedParams)) clearReconnectStallCleanup(turnId);
-          if (deferOversizedError) emitTimeout(true);
+          if (deferOversizedError && !completedNormally) emitTimeout(true);
           return;
         }
         if (settleReconnectStallCleanup(turnId)) {
-          if (deferOversizedError) emitTimeout(true);
+          if (deferOversizedError && !completedNormally) emitTimeout(true);
           log.info('reconnect-stall turn completed while interrupt was settling; keeping shared host', {
             threadId,
             turnId,
@@ -9725,6 +9730,16 @@ export class CodexAgent extends BaseAgent {
       // including the paths that defer UI settlement or return early. Item
       // history is only needed while approval attribution is still mutable.
       observedModelItemIdsByTurn.delete(turn.id);
+      if (reconnectStallCleanupTurnId === turn.id) {
+        // Retain the authoritative terminal and its reply until the interrupt
+        // handshake settles; do not consume data needed by normal completion.
+        reconnectStallDeferredTurnCompletion ??= params;
+        log.debug('deferring reconnect-stall turn completion until interrupt settles', {
+          threadId,
+          turnId: turn.id,
+        });
+        return;
+      }
       const assistantReply = assistantReplyByTurn.get(turn.id);
       assistantReplyByTurn.delete(turn.id);
       const finalAssistantText = assistantReply?.finalText ?? assistantReply?.lastText ?? '';
@@ -9764,19 +9779,6 @@ export class CodexAgent extends BaseAgent {
           type: 'status',
           data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
           source: 'codex',
-        });
-        return;
-      }
-      if (reconnectStallCleanupTurnId === turn.id) {
-        // The watchdog already published the terminal error and is still
-        // waiting for turn/interrupt. Keep the local busy guard until the
-        // handshake settles, but retain this authoritative completion: it
-        // proves the old turn ended and the host event path is alive, so a
-        // double interrupt rejection must not retire healthy sibling sessions.
-        reconnectStallDeferredTurnCompletion ??= params;
-        log.debug('deferring reconnect-stall turn completion until interrupt settles', {
-          threadId,
-          turnId: turn.id,
         });
         return;
       }
