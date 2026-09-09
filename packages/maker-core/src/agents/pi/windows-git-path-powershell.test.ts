@@ -68,7 +68,9 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).toContain('Write-ProbeOutput $operation.Process');
     expect(script).toContain('$budgetMs = 2750');
     expect(script).toContain('if ($nextGroupIndex -lt $groups.Count -or $operations.Count -gt 0) {');
-    expect(script).toContain('WriteLine("__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__`tpath-process")');
+    for (const phase of ['output', 'start', 'exit', 'complete', 'timeout', 'budget', 'coordinator', 'cleanup']) {
+      expect(script).toContain(`WriteLine("__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__\`tpath-process-${phase}")`);
+    }
     expect(script).not.toContain('foreach ($candidate in $paths)');
     expect(script).not.toContain('[RunspaceFactory]');
     expect(script.indexOf('$clock = [Diagnostics.Stopwatch]::StartNew()'))
