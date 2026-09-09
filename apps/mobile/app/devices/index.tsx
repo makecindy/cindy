@@ -371,6 +371,7 @@ function HomeScreenContent() {
     connectionIssue,
     invoke,
     lastPresenceSnapshot,
+    recoveringDeviceIds,
     status,
     subscribe,
     unsubscribe,
@@ -839,6 +840,8 @@ function HomeScreenContent() {
       return existing.promise;
     }
 
+    // Mark the hand-off before entering the limiter: reseed can queue behind another peer.
+    updateDeviceConnectionState(device.deviceId, 'syncing');
     const promise = hydrateDeviceSessionsOnce(
       device,
       expectedAccountGeneration,
@@ -870,7 +873,7 @@ function HomeScreenContent() {
       () => settle(false),
     );
     return promise;
-  }, [accountGeneration, hydrateDeviceSessionsOnce, isCurrentHomeSyncTarget]);
+  }, [accountGeneration, hydrateDeviceSessionsOnce, isCurrentHomeSyncTarget, updateDeviceConnectionState]);
   hydrateDeviceSessionsRef.current = hydrateDeviceSessions;
 
   const probeRevokedDeviceAccess = useCallback(async (
@@ -1813,8 +1816,9 @@ function HomeScreenContent() {
     metricCount: 3,
     screenWidth,
   });
-  const homeRecoveringDeviceIds = new Set(homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)));
-  const homeDeviceUnresponsive = homeRecoveringDeviceIds.size > 0;
+  const homeRecoveringDeviceIds = new Set(homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)
+    || recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'));
+  const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
   const { error: connectionError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
@@ -1842,7 +1846,7 @@ function HomeScreenContent() {
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const showConnectionRow = homeDeviceUnresponsive || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const showConnectionRow = homeRecoveringDeviceIds.size > 0 || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
@@ -1859,11 +1863,11 @@ function HomeScreenContent() {
     : homeDeviceRecovery ? 'busy' : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const connectionTitle = activeConnectionIssue
     ? connectionIssueTitle(activeConnectionIssue.kind)
-    : homeDeviceRecovery ? t('deviceLink.deviceUnresponsiveTitle')
+    : homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')
       : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
   const connectionCopy = activeConnectionIssue
     ? connectionIssueHint(activeConnectionIssue.kind)
-    : homeDeviceRecovery ? t('deviceLink.deviceUnresponsiveHint') : connectionError;
+    : homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveHint' : 'deviceLink.recovery.syncingHint') : connectionError;
   const emptyStateTitle = initialHomeError ? t('devices.list.syncFailed') : home.emptyTitle;
   const emptyStateCopy = initialHomeError ? (connectionError ?? t('devices.list.requestFailed')) : home.emptyCopy;
   // 无可控制电脑的引导态(landing)可见性,与 ListEmptyComponent 的分支同口径。

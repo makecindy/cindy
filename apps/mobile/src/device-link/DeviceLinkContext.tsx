@@ -27,7 +27,7 @@ import {
   type RemoteResourceChangedPayload,
   type Topic,
 } from '@cindy/device-link';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { deviceLinkWsUrl } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
@@ -147,6 +147,8 @@ import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
+  /** Peers with queued, running, or retrying recovery work. Read-only UI projection. */
+  recoveringDeviceIds: ReadonlySet<string>;
   /** 连接层可分类的失败原因(鉴权失效/被顶号/超限/版本不符);null = 无异常 */
   connectionIssue: DeviceLinkConnectionIssue | null;
   presenceVersion: number;
@@ -346,6 +348,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
     );
   }
+  const recoveringDeviceIds = useSyncExternalStore(
+    peerRecoverySchedulerRef.current.subscribe,
+    peerRecoverySchedulerRef.current.getActiveDeviceIds,
+  );
   const presenceWipeTimersRef = useRef(
     new Map<string, PresenceWipeTimerEntry>(),
   );
@@ -1279,6 +1285,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     status,
+    recoveringDeviceIds,
     connectionIssue,
     presenceVersion,
     connectionEpoch,
@@ -1295,6 +1302,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     onRemoteResourceChanged: subscribeRemoteResourceChanged,
   }), [
     closeLink,
+    recoveringDeviceIds,
     connectionEpoch,
     connectionIssue,
     getPresenceAvailability,

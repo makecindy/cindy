@@ -26,8 +26,11 @@ describe('mobile Home connection feedback', () => {
     expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
     expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
     expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
-    expect(source).toContain('const showConnectionRow = homeDeviceUnresponsive ||');
-    expect(source).toContain("homeDeviceRecovery ? t('deviceLink.deviceUnresponsiveTitle')");
+    expect(source).toContain('const showConnectionRow = homeRecoveringDeviceIds.size > 0 ||');
+    expect(source).toContain("homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')");
+    expect(source).toContain("recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'");
+    const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
+    expect(hydrate.indexOf("updateDeviceConnectionState(device.deviceId, 'syncing')")).toBeLessThan(hydrate.indexOf('const promise = hydrateDeviceSessionsOnce('));
     const row = source.slice(source.indexOf('{showConnectionRow ? ('), source.indexOf('<SectionList'));
     expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
     const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
@@ -493,9 +496,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
     expect(source).toContain(
-      "const showConnectionRow = homeDeviceUnresponsive || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+      "const showConnectionRow = homeRecoveringDeviceIds.size > 0 || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
     );
-    expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id))');
+    expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
