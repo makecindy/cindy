@@ -1,3 +1,4 @@
+import { pickModelMetadata } from '@cindy/model-providers';
 import {
   mergeDiscoveredRuntimeModels,
   validModelMetadata,
@@ -240,6 +241,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
     if (typeof mm.name !== 'string' || mm.name.trim().length === 0) {
       return invalid(`runtime '${agent}' model.name required`);
+    }
+    for (const field of ['mode', 'modalities', 'officialDocs'] as const) {
+      if (mm[field] !== undefined && !validModelMetadata({ [field]: mm[field] })) return invalid(`runtime '${agent}' model.${field} invalid`);
     }
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
@@ -552,6 +556,7 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
+      ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
       ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -748,6 +753,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
             return {
               id: String(m.id),
               name: String(m.name ?? ''),
+              ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),
               ...(validModelMetadata(m.discoveredMetadata)

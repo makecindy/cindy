@@ -8,6 +8,9 @@ import type {
 
 /** Data only. Membership, credentials, routing and billed prices never inherit. */
 export interface ModelMetadata {
+  mode?: string;
+  modalities?: { input: string[]; output: string[] };
+  officialDocs?: string;
   name?: string;
   description?: string;
   group?: string;
@@ -24,6 +27,9 @@ export interface BaseModel {
   defaults: ModelMetadata;
 }
 export const MODEL_METADATA_FIELDS = [
+  "mode",
+  "modalities",
+  "officialDocs",
   "name",
   "description",
   "group",
@@ -48,6 +54,34 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
   return Object.entries(value).every(([key, v]) => {
     if (!(MODEL_METADATA_FIELDS as readonly string[]).includes(key))
       return false;
+    if (key === "mode")
+      return typeof v === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(v);
+    if (key === "modalities") {
+      if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+      const m = v as Record<string, unknown>;
+      return (
+        Object.keys(m).every((k) => k === "input" || k === "output") &&
+        [m.input, m.output].every(
+          (list) =>
+            Array.isArray(list) &&
+            list.length <= 16 &&
+            list.every(
+              (item) =>
+                typeof item === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(item),
+            ) &&
+            new Set(list).size === list.length,
+        )
+      );
+    }
+    if (key === "officialDocs") {
+      if (typeof v !== "string" || v.length > 2048) return false;
+      try {
+        const url = new URL(v);
+        return url.protocol === "https:" && !url.username && !url.password;
+      } catch {
+        return false;
+      }
+    }
     if (["name", "description", "group"].includes(key)) {
       const maxLength = key === "name" ? 256 : key === "group" ? 128 : 2000;
       return (
@@ -376,6 +410,11 @@ export function runtimeUserModelMetadata(
   m: import("./types.js").ProviderRuntimeModelConfig,
 ): ModelMetadata {
   return pickModelMetadata({
+    ...pickModelMetadata({
+      mode: m.mode,
+      modalities: m.modalities,
+      officialDocs: m.officialDocs,
+    }),
     ...(!m.discoveredMetadata || m.nameExplicit ? { name: m.name } : {}),
     ...(m.contextWindow !== undefined
       ? { contextWindow: m.contextWindow }

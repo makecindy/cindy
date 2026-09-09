@@ -53,6 +53,9 @@ const OVERRIDE_STATUSES: ReadonlySet<string> = new Set(['active', 'preview', 'de
 
 /** 可 override 的字段面(与三根既有轴零交集;defaultEnabled/价格/routing 均排除)。 */
 export interface ModelCatalogOverrideFields {
+  mode?: ModelMetadata['mode'];
+  modalities?: ModelMetadata['modalities'];
+  officialDocs?: ModelMetadata['officialDocs'];
   name?: string;
   group?: string;
   description?: string;
@@ -160,6 +163,12 @@ function sanitizeFields(
       return null;
     }
     switch (k) {
+      case 'mode':
+      case 'modalities':
+      case 'officialDocs':
+        if (!validModelMetadata({ [k]: v })) return null;
+        Object.assign(out, { [k]: v });
+        break;
       case 'name':
         if (typeof v !== 'string' || v.length === 0 || v.length > 256) return null;
         out.name = v;
@@ -417,6 +426,9 @@ function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): Cata
     ...(f.group !== undefined ? { group: f.group } : {}),
     ...(f.description !== undefined ? { description: f.description } : {}),
     ...(f.sortOrder !== undefined ? { sortOrder: f.sortOrder } : {}),
+    ...(f.mode !== undefined ? { mode: f.mode } : {}),
+    ...(f.modalities !== undefined ? { modalities: f.modalities } : {}),
+    ...(f.officialDocs !== undefined ? { officialDocs: f.officialDocs } : {}),
     ...(f.contextWindow !== undefined
       ? { contextWindow: f.contextWindow, contextWindowVerified: true }
       : {}),

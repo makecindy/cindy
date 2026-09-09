@@ -190,16 +190,20 @@ describe('XD 网关权威模型清单重建', () => {
       {
         id: 'openai/gpt-image-2',
         name: 'GPT Image 2',
+        mode: 'image_generation',
+        discoveredMetadata: { name: 'GPT Image 2', mode: 'image_generation', modalities: { input: ['text', 'image'], output: ['image'] } },
         modalities: { input: ['text', 'image'], output: ['image'] },
       },
     ]);
     expect(activeXd?.imageDefaults).toEqual({ standard: 'openai/gpt-image-2' });
-    expect(activeXd?.embeddingModels).toEqual([{ id: 'voyage/voyage-4', name: 'Voyage 4' }]);
+    expect(activeXd?.embeddingModels).toEqual([{ id: 'voyage/voyage-4', name: 'Voyage 4', mode: 'embedding', discoveredMetadata: { name: 'Voyage 4', mode: 'embedding' } }]);
     expect(activeXd?.embeddingDefaults).toEqual({ standard: 'voyage/voyage-4' });
     expect(activeXd?.videoModels).toEqual([
       {
         id: 'bytedance/seedance-2.5',
         name: 'Seedance 2.5',
+        mode: 'video_generation',
+        discoveredMetadata: { name: 'Seedance 2.5', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } },
         modalities: { input: ['text', 'image'], output: ['video'] },
       },
     ]);

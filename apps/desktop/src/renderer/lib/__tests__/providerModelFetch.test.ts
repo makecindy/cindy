@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  firstProviderChatModel,
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
   connectionTestCanUseSaved,
@@ -480,4 +481,14 @@ describe('connectionTestCanUseSaved', () => {
       ),
     ).toBe(true);
   });
+});
+
+it('uses the same eligible chat model for probe ID, route and request signature', () => {
+  const media = { id: 'image', mode: 'image_generation', route: { baseUrl: 'https://image.example', wireProtocol: 'openai-chat' as const } };
+  const chat = { id: 'flux-image-x', route: { baseUrl: 'https://chat.example', wireProtocol: 'openai-chat' as const } };
+  const input = { ...fields, wireProtocol: 'openai-chat' as const, models: [media, chat] };
+  expect(firstProviderChatModel(input.models)).toBe(chat);
+  expect(resolveProviderConnectionProbeRoute('codex', input)?.baseUrl).toBe('https://chat.example');
+  expect(providerConnectionTestRequestSignature(input, 'apiKey')).toBe(providerConnectionTestRequestSignature({ ...input, models: [chat] }, 'apiKey'));
+  expect(firstProviderChatModel([media])).toBeUndefined();
 });

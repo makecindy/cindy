@@ -456,7 +456,14 @@ export interface CatalogModel {
 }
 
 /** Provider 自己执行的媒体模型；modalities 是能力判断的唯一依据。 */
-export interface ProviderMediaModel {
+export interface ProviderMediaModel extends Pick<
+  ModelMetadata,
+  "mode" | "description" | "group"
+> {
+  nativeApi?: import("./modelAccessBean.js").ModelNativeApi | null;
+  discoveredMetadata?: ModelMetadata;
+  /** Local projection provenance; not part of the public Registry metadata. */
+  sourceAgent?: AgentKind;
   id: string;
   name: string;
   availability?: "available" | "requires_payment";
@@ -521,6 +528,8 @@ export interface Provider {
    * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
    */
   videoModels?: ProviderMediaModel[];
+  /** Speech, transcription and realtime audio; each entry retains its explicit mode. */
+  audioModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
@@ -536,7 +545,7 @@ export interface Provider {
    * 用户停用);本字段是"哪些型号可以被当作向量能力的后端派单",要显式声明。
    * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
    */
-  embeddingModels?: { id: string; name: string; disabled?: boolean }[];
+  embeddingModels?: ProviderMediaModel[];
   /**
    * 向量能力的默认选型(与 embeddingModels 配套;值必须是 embeddingModels 里的
    * id;语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
@@ -556,7 +565,10 @@ export interface Provider {
  * contextWindow 缺省时由 `buildUserProvider` 使用保守默认；预设可显式携带厂商文档确认的值，
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
-export interface ProviderRuntimeModelConfig {
+export interface ProviderRuntimeModelConfig extends Pick<
+  ModelMetadata,
+  "mode" | "modalities" | "officialDocs"
+> {
   discoveredMetadata?: ModelMetadata;
   nameExplicit?: boolean;
   id: string;

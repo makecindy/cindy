@@ -362,7 +362,7 @@ describe('active-catalog discovered augment', () => {
     ]);
   });
 
-  it('xAI 媒体发现按官方存在性收敛，静态同 id 保持 first-wins', () => {
+  it('xAI 媒体发现按官方存在性收敛，实报资料覆盖目录默认', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setDiscoveredProviderMediaModels('xai', {
       imageModels: [
@@ -372,12 +372,13 @@ describe('active-catalog discovered augment', () => {
       videoModels: [{ id: 'xai/future-video', name: 'Future Video' }],
     });
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.imageModels).toContainEqual({
+    expect(xai?.imageModels).toContainEqual(expect.objectContaining({
       id: 'xai/grok-imagine-image',
-      name: 'Grok Imagine Image',
-    });
-    expect(xai?.imageModels).toContainEqual({ id: 'xai/future-image', name: 'Future Image' });
-    expect(xai?.videoModels).toContainEqual({ id: 'xai/future-video', name: 'Future Video' });
+      name: 'Remote Rename Must Not Win',
+      mode: 'image_generation',
+    }));
+    expect(xai?.imageModels).toContainEqual(expect.objectContaining({ id: 'xai/future-image', name: 'Future Image' }));
+    expect(xai?.videoModels).toContainEqual(expect.objectContaining({ id: 'xai/future-video', name: 'Future Video' }));
     expect(xai?.imageModels?.some((model) => model.id === 'xai/grok-imagine-image-quality')).toBe(
       false,
     );
@@ -410,8 +411,8 @@ describe('active-catalog discovered augment', () => {
       videoModels: [{ id: 'xai/second-video', name: 'Second Video' }],
     });
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.imageModels).toEqual([{ id: 'xai/first-image', name: 'First Image' }]);
-    expect(xai?.videoModels).toEqual([{ id: 'xai/second-video', name: 'Second Video' }]);
+    expect(xai?.imageModels).toEqual([{ id: 'xai/first-image', name: 'First Image', discoveredMetadata: { name: 'First Image' } }]);
+    expect(xai?.videoModels).toEqual([{ id: 'xai/second-video', name: 'Second Video', discoveredMetadata: { name: 'Second Video' } }]);
   });
 
   it('xAI 官方成功返回空清单时清掉该类旧型号', () => {

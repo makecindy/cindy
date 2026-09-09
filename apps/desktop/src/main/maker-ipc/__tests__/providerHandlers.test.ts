@@ -480,6 +480,27 @@ describe('model-disable:set handler', () => {
     expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['seedream-5', 'seedance-2'], true);
   });
 
+  it.each(['audioModels', 'embeddingModels'] as const)(
+    'accepts media-only members in %s and rejects unknown IDs',
+    async (field) => {
+      const harness = new IpcHarness();
+      const provider = { ...catalogView('xd', {}), [field]: [{ id: 'media-only', name: 'Media' }] };
+      const deps = makeDeps({ listProviders: async () => [provider] });
+      registerProviderHandlers(harness, deps);
+
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['media-only'], disabled: true,
+      })).resolves.toEqual({ ok: true });
+      expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['media-only'], true);
+      expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['unknown'], disabled: true,
+      })).rejects.toThrow(/INVALID_PARAMS/);
+      expect(deps.setModelsDisabled).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('停用按目录成员校验:未知 providerId / 未知 modelId → INVALID_PARAMS,不写', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps({ listProviders: async () => xdCatalog() });

@@ -369,11 +369,11 @@ describe("model access catalog contract", () => {
     }
   });
 
-  it("v4/v5 允许 provider-level embedding 模型使用空 agents 且省略 contextWindow", () => {
+  it.each(["embedding", "audio_generation", "audio_speech", "audio_transcription", "realtime"])("v4/v5 允许 provider-level %s 模型使用空 agents 且省略 contextWindow", (mode) => {
     const embeddingModel = {
       id: "voyage/voyage-4",
       name: "Voyage 4",
-      mode: "embedding",
+      mode,
       currency: "CNY",
       agents: [],
     } as const;
@@ -401,6 +401,14 @@ describe("model access catalog contract", () => {
       {
         schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
         models: [{ ...embeddingModel, agents: ["codex"] }],
+      },
+      "response.models[0].agents must be empty",
+    );
+    expectReject(
+      {
+        schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
+        accountTier: "paid",
+        models: [{ ...embeddingModel, agents: ["codex"], availability: "available" }],
       },
       "response.models[0].agents must be empty",
     );

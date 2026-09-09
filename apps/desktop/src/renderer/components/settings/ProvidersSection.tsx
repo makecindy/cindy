@@ -125,6 +125,7 @@ function providerHasModels(provider: ProviderView): boolean {
     provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0) ||
     (provider.imageModels?.length ?? 0) > 0 ||
     (provider.videoModels?.length ?? 0) > 0 ||
+    (provider.audioModels?.length ?? 0) > 0 ||
     (provider.embeddingModels?.length ?? 0) > 0
   );
 }

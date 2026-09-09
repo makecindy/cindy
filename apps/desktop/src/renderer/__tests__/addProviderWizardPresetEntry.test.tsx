@@ -924,3 +924,46 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.queryByText('settings.providers.wizard.nameLabel')).toBeNull();
   });
 });
+
+it.each(['audioModels', 'embeddingModels'] as const)('opens key setup for a disconnected media-only builtin with %s', async (field) => {
+  const mediaProvider = {
+    ...anthropicProvider, id: 'gemini', name: 'Media Only', agents: [], models: {},
+    auth: { method: 'apiKey' as const }, [field]: [{ id: 'media', name: 'Media' }],
+  } as ProviderView;
+  const store = vi.fn(async () => undefined);
+  window.electronAPI.builtinApiKeyStore = store;
+  const onDone = vi.fn();
+  const view = render(<AddProviderWizard providers={[mediaProvider]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+  fireEvent.click(await screen.findByText('Media Only'));
+  expect(await screen.findByText('settings.providers.wizard.builtinApiKey.subtitle')).toBeTruthy();
+  const keyInput = view.container.querySelector('input[type="password"]');
+  expect(keyInput).not.toBeNull();
+  fireEvent.change(keyInput!, { target: { value: 'test-media-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
+  await waitFor(() => expect(store).toHaveBeenCalledWith('gemini', 'test-media-key'));
+  expect(onDone).toHaveBeenCalledWith('gemini');
+});
+
+
+it('preserves each runtime preset media type when discovery is unavailable', async () => {
+  const image = { id: 'shared-media', name: 'Media', mode: 'image_generation' as const,
+    modalities: { input: ['text'], output: ['image'] }, officialDocs: 'https://example.test/image' };
+  const video = { ...image, mode: 'video_generation' as const,
+    modalities: { input: ['image'], output: ['video'] }, officialDocs: 'https://example.test/video' };
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [{
+    id: 'media-preset', name: 'Media Preset', runtimes: {
+      'claude-code': { baseUrl: 'https://example.test/anthropic', models: [image] },
+      codex: { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const, models: [video] },
+    },
+  }] }));
+  renderWizard('media-preset');
+  await screen.findByDisplayValue('Media Preset');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await screen.findByText('Media');
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  expect(config.runtimes['claude-code']?.models[0]).toMatchObject(image);
+  expect(config.runtimes.codex?.models[0]).toMatchObject(video);
+});

@@ -1,3 +1,4 @@
+import { projectProviderMediaModels } from '@cindy/model-providers';
 import {
   applyExistingModelLocalPatch,
   applyLocalModelCatalogOverrides,
@@ -411,9 +412,20 @@ function resolveXdPiGatewayServerModelApi(
 function nativeApiForRoute(providerId: string, modelId: string): PiModelApi | null | undefined {
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
   const declared = resolveModelNativeApi(registry, providerId, modelId);
-  return declared !== undefined
-    ? declared
-    : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, modelId);
+  const resolved =
+    declared !== undefined
+      ? declared
+      : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, modelId);
+  return resolved == null
+    ? resolved
+    : [
+          'anthropic-messages',
+          'openai-responses',
+          'openai-completions',
+          'google-generative-ai',
+        ].includes(resolved)
+      ? (resolved as PiModelApi)
+      : undefined;
 }
 
 function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi | null {
@@ -608,8 +620,19 @@ function applyMediaDiscovery(
   // 必须清掉旧快照／静态兜底，不能继续展示一个账号实际不可用的型号。
   if (discovered.length === 0) return { ...provider, [key]: [] };
   const discoveredById = new Map(discovered.map((model) => [model.id, model]));
-  const retained = existing.filter((model) => discoveredById.delete(model.id));
-  const next = [...retained, ...discoveredById.values()];
+  const retained = existing.flatMap((model) => {
+    const reported = discoveredById.get(model.id);
+    if (!reported) return [];
+    discoveredById.delete(model.id);
+    return [{ ...model, ...reported, discoveredMetadata: pickModelMetadata(reported) }];
+  });
+  const next = [
+    ...retained,
+    ...[...discoveredById.values()].map((model) => ({
+      ...model,
+      discoveredMetadata: pickModelMetadata(model),
+    })),
+  ];
   const unchanged =
     next.length === existing.length && next.every((model, index) => model === existing[index]);
   return unchanged ? provider : { ...provider, [key]: next };
@@ -1003,16 +1026,20 @@ function projectXdGatewayMediaModels(
   const imageModels = gatewayModels
     .filter((model) => model.mode === 'image_generation')
     .map((model) => ({
+      ...pickModelMetadata(model),
       id: model.id,
       name: model.name ?? model.id,
+      discoveredMetadata: pickModelMetadata(model),
       ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const videoModels = gatewayModels
     .filter((model) => model.mode === 'video_generation')
     .map((model) => ({
+      ...pickModelMetadata(model),
       id: model.id,
       name: model.name ?? model.id,
+      discoveredMetadata: pickModelMetadata(model),
       ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
@@ -1022,8 +1049,25 @@ function projectXdGatewayMediaModels(
   const embeddingModels = gatewayModels
     .filter((model) => model.mode === 'embedding' && model.availability === 'available')
     .map((model) => ({
+      ...pickModelMetadata(model),
       id: model.id,
       name: model.name ?? model.id,
+      discoveredMetadata: pickModelMetadata(model),
+    }));
+  const audioModels = gatewayModels
+    .filter((model) =>
+      ['audio_speech', 'audio_transcription', 'audio_generation', 'realtime'].includes(
+        model.mode ?? '',
+      ),
+    )
+    .map((model) => ({
+      ...pickModelMetadata(model),
+      id: model.id,
+      name: model.name ?? model.id,
+      mode: model.mode,
+      ...(model.availability ? { availability: model.availability } : {}),
+      ...(model.modalities ? { modalities: model.modalities } : {}),
+      discoveredMetadata: pickModelMetadata(model),
     }));
   const hasEmbeddingEntries = gatewayModels.some((model) => model.mode === 'embedding');
   const identity = { ...provider };
@@ -1039,6 +1083,7 @@ function projectXdGatewayMediaModels(
     ...identity,
     imageModels,
     videoModels,
+    audioModels,
     ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
@@ -1074,7 +1119,11 @@ function computeMerged(): Catalog {
   const xdShell = catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
-  const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
+  const providerSources = b.providers
+    .filter((provider) => provider.id !== 'xd')
+    .map((provider) =>
+      projectProviderMediaModels(provider, b.modelRegistry, { addDeclared: true }),
+    );
   if (xdShell) providerSources.splice(Math.max(0, remoteXdIndex), 0, xdShell);
   let providers: Provider[] = providerSources;
 
@@ -1619,6 +1668,26 @@ function computeMerged(): Catalog {
   const modelRegistry = b.modelRegistry
     ? { ...b.modelRegistry, localModels: effectiveLocalModels }
     : undefined;
+  providers = providers.map((provider) =>
+    projectProviderMediaModels(provider, b.modelRegistry, {
+      userMetadata: (modelId, mediaModel) => {
+        const identity =
+          findModelRegistryRoute(b.modelRegistry, provider.id, modelId)?.entry.modelRef ??
+          findBaseModel(b.modelRegistry, modelId)?.id;
+        const key = `${encodeURIComponent(provider.id)}:${modelId}`;
+        const userModel =
+          provider.source === 'user' && mediaModel.sourceAgent
+            ? provider.models[mediaModel.sourceAgent]
+                ?.find((m) => m.id === modelId)?.userModelConfig
+            : undefined;
+        return {
+          ...(identity ? localOverrides.baseModels?.[identity] : {}),
+          ...(userModel ? runtimeUserModelMetadata(userModel) : {}),
+          ...pickModelMetadata(localOverrides.patches[key]?.base),
+        };
+      },
+    }),
+  );
   return { ...b, modelRegistry, providers };
 }
 

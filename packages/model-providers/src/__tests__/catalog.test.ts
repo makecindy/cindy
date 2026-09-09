@@ -238,17 +238,18 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
 
   it("xai ships both Grok Imagine subscription image models", () => {
     expect(provider("xai").imageModels).toEqual([
-      { id: "xai/grok-imagine-image", name: "Grok Imagine Image" },
+      { id: "xai/grok-imagine-image", name: "Grok Imagine Image", mode: "image_generation", nativeApi: "openai-images", modalities: { input: ["text", "image"], output: ["image"] } },
       {
         id: "xai/grok-imagine-image-quality",
         name: "Grok Imagine Image (Quality)",
+        mode: "image_generation", nativeApi: "openai-images", modalities: { input: ["text", "image"], output: ["image"] },
       },
     ]);
   });
 
   it("xai ships the Grok Imagine subscription video model", () => {
     expect(provider("xai").videoModels).toEqual([
-      { id: "xai/grok-imagine-video", name: "Grok Imagine Video" },
+      { id: "xai/grok-imagine-video", name: "Grok Imagine Video", mode: "video_generation", nativeApi: "xai-videos", modalities: { input: ["text", "image"], output: ["video"] } },
     ]);
   });
 

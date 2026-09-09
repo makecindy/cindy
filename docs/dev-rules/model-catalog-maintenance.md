@@ -27,6 +27,14 @@
 `routes[].defaults` 保存供应商默认差异，只有显式 `forceOverrides` 才能纠正供应商实报。
 同一 ID/alias 必须唯一；公共模型不继承供应商价格、地址、凭证或成员资格。
 
+### V4 媒体类型
+
+图像、视频、音频生成、语音合成、识别、实时音频与向量使用同一 V4 公共资料和
+路由结构；不再增加独立媒体 Registry 或为补类型递增版本。类型与输入输出模态
+分别用 `mode` 和 `modalities` 表达，媒体路由 `agents: []`，聊天路由保持非空。
+Provider 的媒体数组是现有消费接口，由 V4 资料投影；用户成员、账号发现和 Gateway
+实价保持原权威。完整字段及兼容边界见 [V4 全类型规范](../model-registry-v4-media.md)。
+
 ## 2. 核对真实发布链路
 
 客户端入口是 `packages/model-providers/src/source.ts` 的 `loadCatalog`，Desktop 由

@@ -45,6 +45,7 @@ import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 
 import {
+  PROVIDER_MEDIA_FIELDS,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -474,7 +475,7 @@ export function AddProviderWizard({
       ),
     [providers],
   );
-  // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目,今天只有 gemini 图像来源):
+  // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目):
   // 已连接的不再进向导;声明了媒体清单才展示(纯占位条目没有可配置的能力面)。
   const builtinApiKeyChoices = useMemo(
     () =>
@@ -483,7 +484,7 @@ export function AddProviderWizard({
           p.source === 'builtin' &&
           p.auth.method === 'apiKey' &&
           !p.connected &&
-          ((p.imageModels?.length ?? 0) > 0 || (p.videoModels?.length ?? 0) > 0),
+          PROVIDER_MEDIA_FIELDS.some((field) => (p[field]?.length ?? 0) > 0),
       ),
     [providers],
   );
@@ -1126,6 +1127,9 @@ export function AddProviderWizard({
               id: m.id,
               name: m.name,
               discoveredMetadata,
+              ...(presetModel?.mode ? { mode: presetModel.mode } : {}),
+              ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
+              ...(presetModel?.officialDocs ? { officialDocs: presetModel.officialDocs } : {}),
               ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
               ...((presetModel?.route ?? m.routes?.[agent])
                 ? { route: presetModel?.route ?? m.routes?.[agent] }

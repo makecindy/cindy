@@ -17,7 +17,6 @@ import { createLogger } from '../logger.js';
 
 const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 const HOST_MODEL = 'gpt-5.5';
-const IMAGE_MODEL = 'gpt-image-2';
 const USER_AGENT = `codex_cli_rs/cindy (${process.platform}; ${process.arch})`;
 const SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n){2}/;
 const SSE_LINE_ENDING = /\r\n|\r|\n/;
@@ -147,7 +146,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     aspectRatio?: '1:1' | '3:2' | '2:3';
     signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
-    if (params.model !== `openai/${IMAGE_MODEL}`) {
+    if (!params.model.startsWith('openai/') || !params.model.slice(7).trim()) {
       throw new Error(`Codex 图像通道不支持模型:${params.model}`);
     }
     // 先在 token 刷新 / 本地参考图读取之前拦停，后面的二次检查继续覆盖
@@ -171,7 +170,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       tools: [
         {
           type: 'image_generation',
-          model: IMAGE_MODEL,
+          model: params.model.slice('openai/'.length),
           ...(params.aspectRatio ? { size: SIZE_BY_ASPECT[params.aspectRatio] } : {}),
           quality: 'medium',
           output_format: 'png',

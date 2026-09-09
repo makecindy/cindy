@@ -20,6 +20,7 @@
  * 选择器分段顺序与 deriveAvailableModels 的 first-wins 去重优先级,不要改动。
  */
 
+import { projectProviderMediaModels } from './providerMediaModels.js';
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
@@ -161,14 +162,6 @@ const OPENAI_PROVIDER: Provider = {
   // image_generation tool;用户另配 `openai-images` Platform key 时优先走 public
   // Images API。id 带 openai/ 前缀(跨供应商数据契约,防 first-wins 归属漂移);
   // 不声明 imageDefaults(xd 默认地位不动)。
-  imageModels: [
-    {
-      id: 'openai/gpt-image-2',
-      name: 'GPT Image 2',
-      modalities: { input: ['text', 'image'], output: ['image'] },
-      officialDocs: 'https://platform.openai.com/docs/guides/image-generation',
-    },
-  ],
   routing: {
     codex: {
       upstream: 'https://chatgpt.com/backend-api/codex',
@@ -258,10 +251,6 @@ const GEMINI_PROVIDER: Provider = {
   agents: [],
   auth: { method: 'apiKey' },
   access: { kind: 'api' },
-  imageModels: [
-    { id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
-    { id: 'gemini/gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image' },
-  ],
   routing: {},
   models: {},
 };
@@ -273,7 +262,7 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   XAI_PROVIDER,
   XD_PROVIDER,
   GEMINI_PROVIDER,
-];
+].map((provider) => projectProviderMediaModels(provider, bundledModelRegistry, { addDeclared: true }));
 
 /** 打包进 App 的内置目录(离线兜底 / 远端拉取失败时使用)。 */
 export const BUNDLED_CATALOG: Catalog = {

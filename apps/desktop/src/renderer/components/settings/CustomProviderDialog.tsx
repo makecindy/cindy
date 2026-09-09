@@ -1,3 +1,5 @@
+import { classifyModel, isChatEligible, isAgentSelectableModel } from '@cindy/model-providers';
+import { CATEGORY_LABEL_KEY } from '@/components/new-chat/sourceSwitch';
 /**
  * CustomProviderDialog —— 自定义供应商「新建 / 编辑」表单弹窗（按 .pen pQrpu/Fxstc 还原）。
  *
@@ -79,6 +81,7 @@ import {
   canSendHydratedApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
+  firstProviderChatModel,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
   resolveProviderConnectionProbeRoute,
@@ -212,7 +215,7 @@ interface ModelPickerState {
 type DialogChildLayer =
   | { kind: 'preset-menu' }
   | { kind: 'model-picker'; value: ModelPickerState }
-  | { kind: 'model-protocol'; agent: DialogAgentKind; index: number }
+  | { kind: 'model-protocol' | 'model-type'; agent: DialogAgentKind; index: number }
   | null;
 interface HeaderRow {
   name: string;
@@ -829,7 +832,7 @@ export function CustomProviderDialog({
       }
       // 单选协议菜单由 Radix 自己完成键盘关闭和焦点归还；这里只保留表单层级
       // 记录，避免 window capture 抢先吞掉它的 Escape。
-      if (childLayerRef.current?.kind === 'model-protocol') return;
+      if (childLayerRef.current?.kind === 'model-protocol' || childLayerRef.current?.kind === 'model-type') return;
       // 在 Radix 的 document capture 之前由唯一 owner 结算；否则菜单的 80ms
       // 退场层仍可能 preventDefault，吞掉刚打开的模型选择器的 Escape。
       event.preventDefault();
@@ -953,9 +956,9 @@ export function CustomProviderDialog({
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
         ...(agent === 'pi'
-          ? { modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi }
+          ? { modelPiApi: firstProviderChatModel(rc.models)?.piApi }
           : {}),
-        modelRoute: rc.models.find((model) => model.id.trim().length > 0)?.route,
+        modelRoute: firstProviderChatModel(rc.models)?.route,
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
@@ -1039,6 +1042,9 @@ export function CustomProviderDialog({
                   id: m.id,
                   name: m.name,
                   discoveredMetadata: {},
+                  ...(m.mode ? { mode: m.mode } : {}),
+                  ...(m.modalities ? { modalities: { input: [...m.modalities.input], output: [...m.modalities.output] } } : {}),
+                  ...(m.officialDocs ? { officialDocs: m.officialDocs } : {}),
                   ...(m.piApi ? { piApi: m.piApi } : {}),
                   ...(m.route ? { route: m.route } : {}),
                 }))
@@ -1392,7 +1398,7 @@ export function CustomProviderDialog({
     const rf = rt[agent];
     const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
     const defaultBaseUrl = rf.baseUrl.trim();
-    const firstModelConfig = rf.models.find((model) => model.id.trim().length > 0);
+    const firstModelConfig = firstProviderChatModel(rf.models);
     const firstModel = firstModelConfig?.id.trim();
     if (!defaultBaseUrl || !firstModel) {
       toast.error(t('settings.providers.custom.test.needFields'));
@@ -1550,6 +1556,9 @@ export function CustomProviderDialog({
           .map((m) => ({
             id: m.id.trim(),
             name: m.name.trim(),
+            mode: m.mode,
+            modalities: m.modalities,
+            officialDocs: m.officialDocs,
             discoveredMetadata: m.discoveredMetadata,
             nameExplicit: m.nameExplicit,
             ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -1587,6 +1596,9 @@ export function CustomProviderDialog({
               id: m.id,
               name: cur?.name || m.name,
               discoveredMetadata: m.discoveredMetadata ?? { contextWindow: m.contextWindow },
+              mode: cur?.mode,
+              modalities: cur?.modalities,
+              officialDocs: cur?.officialDocs,
               nameExplicit: cur ? (cur.nameExplicit ?? !cur.discoveredMetadata) : undefined,
               ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
               ...(cur?.route ? { route: { ...cur.route } } : {}),
@@ -1669,6 +1681,9 @@ export function CustomProviderDialog({
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
+        mode: latest ? latest.mode : m.mode,
+        modalities: latest?.modalities ?? m.modalities,
+        officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
@@ -1691,6 +1706,9 @@ export function CustomProviderDialog({
         merged.push({
           id,
           name: m.name.trim() || id,
+          mode: m.mode,
+          modalities: m.modalities,
+          officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
           nameExplicit: m.nameExplicit,
           ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -1799,6 +1817,10 @@ export function CustomProviderDialog({
       if (!rf.baseUrl.trim()) continue;
       const row = rf.models[Number(draftKey.slice(sep + 1))];
       if (!row || !row.id.trim() || !row.name.trim()) continue;
+      if (!isAgentSelectableModel(
+        { id: row.id, group: 'custom', mode: row.mode ?? row.discoveredMetadata?.mode },
+        { userProvider: true },
+      )) continue;
       setActiveTab(draftAgent);
       // OAuth 鉴权模式下模型列表(含窗口输入)折在「高级」里;不展开的话用户看不到
       // 需要修的这个输入框,报错后无从下手,只能瞎猜着点开(review P1)。
@@ -1835,6 +1857,9 @@ export function CustomProviderDialog({
         .map((m) => ({
           id: m.id.trim(),
           name: m.name.trim(),
+          mode: m.mode,
+          modalities: m.modalities,
+          officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
           nameExplicit: m.nameExplicit,
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -2722,8 +2747,71 @@ export function CustomProviderDialog({
                           )}
                         </FormField>
                       </div>
+                      <DropdownMenu
+                        open={childLayer?.kind === 'model-type' && childLayer.agent === activeTab && childLayer.index === i}
+                        onOpenChange={(open) => setChildLayer(open ? { kind: 'model-type', agent: activeTab, index: i } : null)}
+                      >
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="lg"
+                            aria-label={t('settings.providers.custom.fields.modelType')}
+                          >
+                            {m.mode === undefined
+                              ? t('settings.providers.custom.modelProtocol.inherit')
+                              : isChatEligible({ id: m.id, mode: m.mode })
+                                ? t('settings.providers.models.kindFilter.chat')
+                                : t(CATEGORY_LABEL_KEY[classifyModel({ id: m.id, mode: m.mode })])}
+                            <ChevronDown className="size-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="z-[10001]">
+                          <DropdownMenuRadioGroup
+                            value={m.mode ?? 'inherit'}
+                            onValueChange={(value) =>
+                              patch(activeTab, (x) => ({
+                                ...x,
+                                models: x.models.map((y, j) =>
+                                  j === i
+                                    ? { ...y, mode: value === 'inherit' ? undefined : value }
+                                    : y,
+                                ),
+                              }))
+                            }
+                          >
+                            <DropdownMenuRadioItem value="inherit">
+                              {t('settings.providers.custom.modelProtocol.inherit')}
+                            </DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="chat">
+                              {t('settings.providers.models.kindFilter.chat')}
+                            </DropdownMenuRadioItem>
+                            {(
+                              [
+                                ['image_generation', 'image'],
+                                ['video_generation', 'video'],
+                                ['audio_generation', 'audio'],
+                                ['audio_speech', 'tts'],
+                                ['audio_transcription', 'stt'],
+                                ['realtime', 'realtime'],
+                                ['embedding', 'embedding'],
+                              ] as const
+                            ).map(([mode, category]) => (
+                              <DropdownMenuRadioItem key={mode} value={mode}>
+                                {t(CATEGORY_LABEL_KEY[category])}
+                              </DropdownMenuRadioItem>
+                            ))}
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <div
                         className="w-28 shrink-0"
+                        hidden={
+                          !isAgentSelectableModel(
+                            { id: m.id, group: 'custom', mode: m.mode ?? m.discoveredMetadata?.mode },
+                            { userProvider: true },
+                          )
+                        }
                         title={t('settings.providers.custom.fields.modelContextWindowTitle')}
                       >
                         {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。整体校验:
@@ -2824,7 +2912,7 @@ export function CustomProviderDialog({
                           type="button"
                           onClick={() => {
                             setChildLayer((layer) => {
-                              if (layer?.kind !== 'model-protocol' || layer.agent !== activeTab) {
+                              if ((layer?.kind !== 'model-protocol' && layer?.kind !== 'model-type') || layer.agent !== activeTab) {
                                 return layer;
                               }
                               if (layer.index === i) return null;

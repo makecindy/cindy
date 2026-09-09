@@ -1,4 +1,4 @@
-import { expandedRegistryEntries } from '@cindy/model-providers';
+import { expandedRegistryEntries, providerMediaField } from '@cindy/model-providers';
 /**
  * modelPlanePolicy —— 内置供应商模型平面的**表驱动 policy**(纯逻辑,零 IO)。
  *
@@ -281,6 +281,8 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
     for (const route of entry.routes) {
       const policy = MODEL_PLANE_POLICIES.get(route.providerId);
       if (!policy) continue;
+      // V4 media routes belong to media projections, not the chat root plane.
+      if (route.agents.length === 0 && providerMediaField(entry.mode)) continue;
       const routeAgents = route.agents as readonly RootAgentKind[];
       const memberRoots = policy.roots.filter((agent) => routeAgents.includes(agent));
       const canonicalPrefix = `${route.providerId}/`;

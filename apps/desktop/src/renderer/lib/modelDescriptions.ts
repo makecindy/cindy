@@ -47,7 +47,7 @@ export function modelDescriptionKey(model: { id: string; group?: string; mode?: 
     ? inferredCategory : classifyModel(model);
   if (Object.hasOwn(categoryKeys, category)) return categoryKeys[category];
   // An explicitly non-chat/unknown mode must not inherit a chat-family blurb.
-  if (category === 'other') return undefined;
+  if (category === 'other' || category === 'audio') return undefined;
   let id = model.id.toLowerCase().split('/').at(-1) ?? '';
   // Registry internal XD IDs have flattened route prefixes. Wire IDs usually don't.
   if (model.id.startsWith('xd/')) {

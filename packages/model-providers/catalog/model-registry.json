@@ -1,6 +1,6 @@
 {
   "schemaVersion": 4,
-  "updatedAt": "2026-09-08T07:58:08.918Z",
+  "updatedAt": "2026-09-09T10:02:19.831Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -2949,6 +2949,96 @@
       ],
       "nativeApi": "openai-completions",
       "modelRef": "xd/tencent-hy4-preview"
+    },
+    {
+      "id": "openai/gpt-image-2",
+      "name": "GPT Image 2",
+      "modelRef": "openai/gpt-image-2",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "gemini/gemini-3-pro-image",
+      "name": "Gemini 3 Pro Image",
+      "modelRef": "gemini/gemini-3-pro-image",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "gemini",
+          "modelId": "gemini/gemini-3-pro-image",
+          "agents": []
+        }
+      ],
+      "nativeApi": "google-generative-ai"
+    },
+    {
+      "id": "gemini/gemini-3.1-flash-image",
+      "name": "Gemini 3.1 Flash Image",
+      "modelRef": "gemini/gemini-3.1-flash-image",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "gemini",
+          "modelId": "gemini/gemini-3.1-flash-image",
+          "agents": []
+        }
+      ],
+      "nativeApi": "google-generative-ai"
+    },
+    {
+      "id": "xai/grok-imagine-image",
+      "name": "Grok Imagine Image",
+      "modelRef": "xai/grok-imagine-image",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-imagine-image",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "xai/grok-imagine-image-quality",
+      "name": "Grok Imagine Image (Quality)",
+      "modelRef": "xai/grok-imagine-image-quality",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-imagine-image-quality",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "xai/grok-imagine-video",
+      "name": "Grok Imagine Video",
+      "modelRef": "xai/grok-imagine-video",
+      "mode": "video_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-imagine-video",
+          "agents": []
+        }
+      ],
+      "nativeApi": "xai-videos"
     }
   ],
   "nativeApiRules": [
@@ -4234,6 +4324,138 @@
       "aliases": [],
       "defaults": {
         "name": "Qwen3.8 Flash-Next"
+      }
+    },
+    {
+      "id": "openai/gpt-image-2",
+      "aliases": ["gpt-image-2"],
+      "defaults": {
+        "name": "GPT Image 2",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
+      }
+    },
+    {
+      "id": "gemini/gemini-3-pro-image",
+      "aliases": ["gemini-3-pro-image"],
+      "defaults": {
+        "name": "Gemini 3 Pro Image",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
+      }
+    },
+    {
+      "id": "gemini/gemini-3.1-flash-image",
+      "aliases": ["gemini-3.1-flash-image"],
+      "defaults": {
+        "name": "Gemini 3.1 Flash Image",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
+      }
+    },
+    {
+      "id": "xai/grok-imagine-image",
+      "aliases": ["grok-imagine-image"],
+      "defaults": {
+        "name": "Grok Imagine Image",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
+      }
+    },
+    {
+      "id": "xai/grok-imagine-image-quality",
+      "aliases": ["grok-imagine-image-quality"],
+      "defaults": {
+        "name": "Grok Imagine Image (Quality)",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
+      }
+    },
+    {
+      "id": "xai/grok-imagine-video",
+      "aliases": ["grok-imagine-video"],
+      "defaults": {
+        "name": "Grok Imagine Video",
+        "mode": "video_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["video"]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-tts",
+      "aliases": ["gpt-4o-mini-tts"],
+      "defaults": {
+        "name": "GPT-4o mini TTS",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        }
+      }
+    },
+    {
+      "id": "openai/whisper-1",
+      "aliases": ["whisper-1"],
+      "defaults": {
+        "name": "Whisper",
+        "mode": "audio_transcription",
+        "modalities": {
+          "input": ["audio"],
+          "output": ["text"]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-whisper",
+      "aliases": ["gpt-realtime-whisper"],
+      "defaults": {
+        "name": "GPT Realtime Whisper",
+        "mode": "realtime",
+        "modalities": {
+          "input": ["audio"],
+          "output": ["text"]
+        }
+      }
+    },
+    {
+      "id": "openai/text-embedding-3-small",
+      "aliases": ["text-embedding-3-small"],
+      "defaults": {
+        "name": "Text Embedding 3 Small",
+        "mode": "embedding",
+        "modalities": {
+          "input": ["text"],
+          "output": ["embedding"]
+        }
+      }
+    },
+    {
+      "id": "openai/text-embedding-3-large",
+      "aliases": ["text-embedding-3-large"],
+      "defaults": {
+        "name": "Text Embedding 3 Large",
+        "mode": "embedding",
+        "modalities": {
+          "input": ["text"],
+          "output": ["embedding"]
+        }
       }
     }
   ]
