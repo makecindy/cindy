@@ -1017,6 +1017,7 @@ export async function executePiNativeManagementCommand(
     };
     let packagesUpdated = false;
     let output = { stdout: '', stderr: '' };
+    let listedPackages: ListedPackage[] = [];
     try {
       // Pi --all updates packages first. Keep that phase outside core fallback:
       // a package's stderr must never be mistaken for an unsupported updater.
@@ -1026,8 +1027,12 @@ export async function executePiNativeManagementCommand(
         progress.phase = 'native-core';
       }
       try {
-        output = await runPiPackageCommand(piNativeManagementArgs(command.kind === 'all'
-          ? { kind: 'self', force: command.force } : command));
+        if (command.kind === 'list') {
+          listedPackages = await runPiPackageListCommand();
+        } else {
+          output = await runPiPackageCommand(piNativeManagementArgs(command.kind === 'all'
+            ? { kind: 'self', force: command.force } : command));
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : '';
         if (!core || !/cannot self-update this installation|self-update on Windows is only supported/.test(message)) throw error;
@@ -1067,7 +1072,7 @@ export async function executePiNativeManagementCommand(
       ...(command.kind === 'version' ? { version: afterVersion } : {}),
       ...(['help', 'list'].includes(command.kind)
         ? { output: command.kind === 'list'
-          ? JSON.stringify(parsePiPackageListOutput(output.stdout).map(pkg => ({
+          ? JSON.stringify(listedPackages.map(pkg => ({
               source: projectPiListSource(pkg.source),
               filtered: pkg.filtered === true,
             })))

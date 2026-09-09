@@ -4431,6 +4431,18 @@ describe('Pi package executable-code boundary', () => {
 
 
 describe('native Pi core management', () => {
+  it('streams the full list before projecting a receipt beyond the diagnostic stdout limit', async () => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    const sources = Array.from({ length: 160 }, (_, index) => `npm:package-${index}`);
+    runtime.listOutput = 'User packages:\n' + sources.map(source =>
+      `  ${source}\n    /private/installation/${'x'.repeat(1000)}\n`).join('');
+    expect(Buffer.byteLength(runtime.listOutput)).toBeGreaterThan(128 * 1024);
+    const result = await executePiNativeManagementCommand({ kind: 'list' });
+    expect(JSON.parse(String(result.output))).toEqual(sources.map(source => ({ source, filtered: false })));
+    expect(String(result.output)).not.toContain('/private/installation');
+    expect(runtime.spawns.map(call => call.args)).toEqual([['list', '--no-approve']]);
+  });
+
   it.each([
     ['file:/home/alice/private-extension', 'private-extension'],
     ['file:///Users/alice/private-extension', 'private-extension'],
