@@ -5009,7 +5009,10 @@ assertRouteCurrent();
         } catch (error) {
           releaseHostBindingLeaseIfNeeded();
           startupRouteSignal.throwIfAborted();
-          if (!(error instanceof CodexRouteSelectionChangedError) || attempt >= 7) throw error;
+          if (!(error instanceof CodexRouteSelectionChangedError)) throw error;
+          if (!error.retryable || attempt >= 7) {
+            throw new CodexRouteSelectionChangedError('Codex route changed repeatedly during host preparation', false);
+          }
           routeSelection = await this.resolveLocalAuthSelection(opts.providerId, opts.model);
           localAuthPolicy = routeSelection.policy;
           credentialMode = requestedCredentialMode ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
@@ -5235,6 +5238,7 @@ assertRouteCurrent();
         };
       } catch (error) {
         releaseHostBindingLeaseIfNeeded();
+        if (error instanceof CodexRouteSelectionChangedError) throw error;
         throw new Error(
           `Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -5346,6 +5350,7 @@ assertRouteCurrent();
         assertCurrentHost('Review capability isolation');
       } catch (error) {
         releaseHostBindingLeaseIfNeeded();
+        if (error instanceof CodexRouteSelectionChangedError) throw error;
         throw new Error(
           `Cannot start Codex Review safely because Cindy could not disable local Skills, plugins, and MCP servers: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -5383,6 +5388,7 @@ assertRouteCurrent();
         }
       } catch (error) {
         releaseHostBindingLeaseIfNeeded();
+        if (error instanceof CodexRouteSelectionChangedError) throw error;
         throw new Error(`Cannot prepare Codex Bot MCP configuration: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -5413,6 +5419,7 @@ assertRouteCurrent();
         );
       } catch (error) {
         releaseHostBindingLeaseIfNeeded();
+        if (error instanceof CodexRouteSelectionChangedError) throw error;
         throw new Error(`Cannot prepare local Skill configuration: ${error instanceof Error ? error.message : String(error)}`);
       }
     }

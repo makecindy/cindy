@@ -6,6 +6,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
 import { AppServerHost } from '../../../../../../packages/maker-core/src/agents/codex/app-server/host.js';
+import { Maker } from '../../../../../../packages/maker-core/src/maker.js';
+import type { SessionMeta, SessionStorage } from '../../../../../../packages/maker-core/src/interfaces/session-storage.js';
 import { CodexAgent } from '../../../../../../packages/maker-core/src/agents/codex/index.js';
 import { buildUserProvider } from '@cindy/model-providers';
 import { setCustomProviders } from '../active-catalog.js';
@@ -20,10 +22,10 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each(['A', 'B', 'C', 'initialize', 'capability', 'resume'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))))('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
-    const lateWindow = ['initialize', 'capability', 'resume'].includes(window);
+    const lateWindow = ['initialize', 'capability', 'resume', 'skills', 'config', 'restricted', 'bot', 'local-skill'].includes(window);
     const revoked = !lateWindow;
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-host-auth-'));
     const home = path.join(root, 'codex');
@@ -80,6 +82,8 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     const agent = new CodexAgent({
       binaryPath: binaryPath!, logger, runtimeConfig: {},
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
+      ...(window === 'restricted' ? { capabilityRouting: { overrides: [{ capabilityId: 'computer-use', source: { kind: 'harness-plugin' as const, harness: 'codex' as const, surface: 'skill' as const, id: 'computer-use:computer-use', artifactId: 'computer-use', containerId: 'computer-use@openai-bundled' }, invocation: 'disabled' as const }] } } : {}),
+      ...(window === 'local-skill' ? { getDisabledSkillPaths: () => [path.join(root, 'disabled-skill')] } : {}),
       resolveCapabilityRouting: async () => { if (window === 'capability') await latePreparation?.(); return undefined; },
       prepareCodexResumeSession: async () => { preparationEntered(); if (window === 'resume') await latePreparation?.(); if (!delaySecondPreparation || preparationEntered.mock.calls.length >= 2) await preparationGate; return undefined; },
       prepareCodexExtraSpawnConfig: async (_providers, ctx) => { spawnConfigs.push(ctx?.localAuthPolicy ?? 'legacy-shared'); return { extraArgs: [], extraEnv: {}, codexProxyActive: true }; },
@@ -112,10 +116,13 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         const accepted: Array<{ host: AppServerHost; method: string }> = [];
         const request = AppServerHost.prototype.request;
         spies.push(vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
-          return request.call(this, method, params, { ...opts, beforeDispatch: () => {
+          const result = request.call(this, method, params, { ...opts, beforeDispatch: () => {
             opts?.beforeDispatch?.();
             if (['thread/start', 'thread/resume'].includes(method)) accepted.push({ host: this, method });
           } });
+          const pauseMethod = ['skills', 'restricted'].includes(window) ? 'skills/list'
+            : ['config', 'bot', 'local-skill'].includes(window) ? 'config/read' : undefined;
+          return pauseMethod === method ? result.then(async (response) => { await latePreparation?.(); return response; }) : result;
         }));
         let entered!: () => void;
         let release!: () => void;
@@ -129,7 +136,23 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           await latePreparation?.();
           return result;
         }));
-        const target = agent.startSession({ sessionId: 'late-target', providerId: 'cprov-fixture', model: 'fixture-model', workingDir,
+        const rows = new Map<string, SessionMeta>();
+        const storage: SessionStorage = {
+          create: async (meta) => { const row = { ...meta, createdAt: 0, updatedAt: 0 }; rows.set(row.id, row); return row; },
+          get: async (id) => rows.get(id) ?? null,
+          list: async () => [...rows.values()],
+          update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+          compareAndClearSdkSessionId: async () => false,
+          delete: async (id) => { rows.delete(id); },
+        };
+        let startupGuard = false;
+        const failed = vi.fn();
+        const maker = new Maker({ agents: { codex: agent }, storage, logger, lifecycleHooks: {
+          onBeforeStart: async () => { startupGuard = true; },
+          onStartSucceeded: async () => { startupGuard = false; }, onStartFailed: failed,
+        } });
+        const target = maker.createSession({ id: 'late-target', agentKind: 'codex', providerId: 'cprov-fixture', model: 'fixture-model', workingDir,
+          ...(window === 'bot' ? { botRuntimeProfile: { botId: 'fixture', profileVersion: 1, skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] }, toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] }, mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] } } } : {}),
           ...(reviewMode ? { reviewMode: true as const } : {}), ...(window === 'resume' ? { resumeSessionId: sibling.id } : {}),
         });
         try {
@@ -142,12 +165,16 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           finish.commit(); finish();
           const handle = await target;
           expect(handle.codexHostKey).toContain('external-auth');
+          expect(startupGuard).toBe(false);
+          expect(failed).not.toHaveBeenCalled();
           expect(accepted).toHaveLength(1);
+          expect(accepted[0].host).not.toBe(siblingHost);
+          if (reviewMode) expect(hostMap.has('local-review:late-target')).toBe(false);
           expect(spawnConfigs.at(-1)).toBe('isolated');
           // No forced retirement or cleanup of the live sibling on the shared host.
           expect(hostMap.get('local')).toBe(siblingHost);
           expect(siblingHost.getConnectionId()).toBe(siblingConnection);
-          await handle.close();
+          await maker.closeSession('late-target');
           await sibling.close();
         } finally { release(); }
         return;
