@@ -835,6 +835,36 @@ function publicPiManagedPackageCommand(command: ParsedPiManagedPackageCommand): 
     .slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
 }
 
+function piManagedCommandOutputSummary(record: Record<string, unknown>): Record<string, unknown> {
+  if (typeof record.output !== 'string') return {};
+  const limit = 6000;
+  if (record.kind !== 'list') return { output: record.output.slice(0, limit) };
+  // Keep the existing JSON-array output contract, including for bounded lists.
+  // Never cut serialized JSON inside an entry or hide an incomplete roster.
+  let entries: unknown;
+  try { entries = JSON.parse(record.output); } catch { /* report unavailable output below */ }
+  if (!Array.isArray(entries)) {
+    return { output: '[]', outputTruncated: true, detailsOmitted: 'invalid-list-output' };
+  }
+  const included: string[] = [];
+  let length = 2; // array brackets
+  for (const entry of entries) {
+    const serialized = JSON.stringify(entry);
+    const nextLength = length + serialized.length + (included.length > 0 ? 1 : 0);
+    if (nextLength > limit) break;
+    included.push(serialized);
+    length = nextLength;
+  }
+  return {
+    output: '[' + included.join(',') + ']',
+    ...(included.length < entries.length ? {
+      outputTruncated: true, totalPackages: entries.length,
+      omittedPackages: entries.length - included.length,
+      detailsOmitted: 'receipt-size-limit',
+    } : {}),
+  };
+}
+
 function piManagedPackageResultSummary(
   result: unknown,
   requestedSource: string,
@@ -849,7 +879,7 @@ function piManagedPackageResultSummary(
       version: version(record.version), versionVerified: record.versionVerified === true,
       activeTasksPreserved: record.activeTasksPreserved === true,
       activation: record.activation === 'new-pi-processes' ? record.activation : undefined,
-      output: typeof record.output === 'string' ? record.output.slice(0, 6000) : undefined };
+      ...piManagedCommandOutputSummary(record) };
   }
   const affected = record.affectedPackage;
   if (!affected || typeof affected !== 'object') {

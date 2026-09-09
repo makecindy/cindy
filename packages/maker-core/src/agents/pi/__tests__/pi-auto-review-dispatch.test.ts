@@ -721,6 +721,32 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     } finally { await handle.close(); }
   });
 
+  it.each(['desktop', 'tool'] as const)('keeps long list receipts parseable and explicit for the %s caller', async origin => {
+    const packages = Array.from({ length: 150 }, (_, i) => ({ source: `npm:package-${i}-` + 'x'.repeat(80), filtered: i % 2 === 0 }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({ kind: 'list', nativeSucceeded: true, output: JSON.stringify(packages) }));
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'list-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    try {
+      let receipt;
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi list' }, desktopCommandOptions('pi list'));
+        const message = String(captured.requests.find(request => request.type === 'prompt')?.message ?? '');
+        receipt = JSON.parse(message.split('\n')[0].replace('[Cindy Pi command receipt] ', ''));
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'long-list', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['list'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        receipt = JSON.parse(String((await waitForResponse('long-list')).value));
+      }
+      const result = receipt.result;
+      const entries = JSON.parse(result.output);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries).toEqual(packages.slice(0, entries.length));
+      expect(result.output.length).toBeLessThanOrEqual(6000);
+      expect(result).toMatchObject({ outputTruncated: true, totalPackages: packages.length,
+        omittedPackages: packages.length - entries.length, detailsOmitted: 'receipt-size-limit' });
+    } finally { await handle.close(); }
+  });
+
   it.each(['desktop', 'tool'] as const)('delivers partial Host-update failure to the %s caller without retiring it', async origin => {
     const deps = buildDeps();
     const details = { phase: 'host-binary-update', hostStage: 'download', packagesUpdated: true,
