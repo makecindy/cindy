@@ -5,12 +5,12 @@ import { spacing } from '@/theme/tokens';
 import { updateConnectionNoticeVisibility } from './connectionNoticeDelay';
 
 /** Each continuous incident gets one delay; clearing it cancels pending display. */
-export function useDelayedConnectionNotice(active: boolean): boolean {
+export function useDelayedConnectionNotice(active: boolean, immediate = false): boolean {
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    return updateConnectionNoticeVisibility(active, ready, setReady);
-  }, [active, ready]);
-  return active && ready;
+    return updateConnectionNoticeVisibility(active, ready, setReady, immediate);
+  }, [active, ready, immediate]);
+  return active && (immediate || ready);
 }
 
 type Notice = { top: number; children: ReactNode };

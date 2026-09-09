@@ -11,7 +11,12 @@ export function updateConnectionNoticeVisibility(
   active: boolean,
   visible: boolean,
   setVisible: (visible: boolean) => void,
+  immediate = false,
 ): (() => void) | undefined {
+  if (active && immediate) {
+    setVisible(true);
+    return;
+  }
   if (active) return visible ? undefined : scheduleConnectionNotice(() => setVisible(true));
   setVisible(false);
 }

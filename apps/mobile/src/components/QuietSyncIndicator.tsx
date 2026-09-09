@@ -9,8 +9,7 @@ import { useDelayedConnectionNotice } from './ConnectionNoticeOverlay';
 
 /** Same working glyph and cadence as the task list; no idle placeholder. */
 export function QuietSyncIndicator({ active, immediate = false }: { active: boolean; immediate?: boolean }) {
-  const delayed = useDelayedConnectionNotice(active);
-  const visible = active && (immediate || delayed);
+  const visible = useDelayedConnectionNotice(active, immediate);
   const reduceMotion = useReduceMotionEnabled();
   const { colors } = useTheme();
   const { t } = useTranslation();

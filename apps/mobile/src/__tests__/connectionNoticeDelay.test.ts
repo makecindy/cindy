@@ -31,6 +31,34 @@ describe('floating connection notice', () => {
     expect(banner).toContain('useDelayedConnectionNotice(cachedOnly || active)');
     expect(banner).toContain('<ConnectionNoticeOverlay>');
   });
+  it('keeps immediate feedback visible through preview alignment until the active interval ends', () => {
+    vi.useFakeTimers();
+    let visible = false;
+    let cancel: (() => void) | undefined;
+    const update = (active: boolean, immediate = false) => {
+      cancel?.();
+      cancel = updateConnectionNoticeVisibility(active, visible, (next) => { visible = next; }, immediate);
+    };
+    update(true);
+    vi.advanceTimersByTime(100);
+    update(true, true);
+    expect(visible).toBe(true);
+    vi.advanceTimersByTime(400);
+    update(true); // Preview aligned, but other content is still synchronizing.
+    expect(visible).toBe(true);
+    vi.advanceTimersByTime(3_000);
+    expect(visible).toBe(true);
+    update(false);
+    expect(visible).toBe(false);
+    update(true);
+    vi.advanceTimersByTime(2_999);
+    expect(visible).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(visible).toBe(true);
+    update(false);
+    vi.runAllTimers();
+    expect(visible).toBe(false);
+  });
   it('clears immediately on completion and delays each new incident independently', () => {
     vi.useFakeTimers();
     let visible = false;
