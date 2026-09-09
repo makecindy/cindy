@@ -251,6 +251,23 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.queryByTestId('login-local-mode')).toBeNull();
   });
 
+  it.each([false, true])('登录更多账号首屏返回会退出流程（loading=%s）', async (isLoading) => {
+    const onClose = vi.fn();
+    mount(await identifierState('providers:both'), { isLoading }, 'add-account', onClose);
+
+    const back = screen.getByRole('button', { name: 'login.back' });
+    expect(screen.getByTestId('login-panel-identifier').contains(back)).toBe(true);
+    expect((back as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(back);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('普通登录首屏不提供退出流程的返回按钮', async () => {
+    mount(await identifierState('providers:both'));
+    expect(screen.queryByRole('button', { name: 'login.back' })).toBeNull();
+  });
+
   it.each([
     ['darwin', 'mr-2'],
     ['win32', 'mr-1'],

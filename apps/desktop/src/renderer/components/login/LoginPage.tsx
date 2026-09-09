@@ -724,6 +724,9 @@ export function LoginPage({
     return (
       <>
         <LoginPanel testId="login-panel-identifier">
+          {isAddAccount && onClose ? (
+            <LoginBackButton label={t('login.back')} onClick={onClose} />
+          ) : null}
           {/* noValidate:关掉浏览器对 type="email" 的原生约束校验气泡(英文系统提示,
               不受主题控制),改由下方本地校验渲染设计稿定义的红边+红字错误态。 */}
           <form onSubmit={submitIdentifier} noValidate>
