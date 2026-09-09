@@ -27,6 +27,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import { acquireOrcaTeamDispatchLease } from '../orcaTeamDispatchLease.js';
+
 import {
   canHostControlPiSubagentRun,
   controlPiSubagentRuns,
@@ -239,6 +241,8 @@ import {
   commitContextRebuild,
   commitMessageDeletion,
   createMessage as createDbMessage,
+  finalizeRewoundOrcaPreVendorCleanupRows,
+  rewindOrcaPreVendorCleanupRows,
   findLatestContextRebuildMeta,
   rewindPersistedUserMessageAfterClear,
   findParkedEngineSession,
@@ -329,6 +333,7 @@ import {
   getSessionOrcaRole,
   getWorkerLink,
   isActiveWorkerStatus,
+  isOrcaTeamActive,
   isOrphanedTeamInit,
   listWorkersByLead,
   markTeamEnded,
@@ -340,10 +345,12 @@ import {
   removeWorker,
   renewWorkerCreationReservation,
   reserveWorkerCreation,
+  setOrcaDuplicateTeamReconciliationHandler,
   setSessionOrcaRole,
   setWorkerFocus,
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
+import { orcaTeamTerminalFence } from '../orcaTeamTerminalFence.js';
 import {
   botLifecycleEvents,
   botProfileVersions,
@@ -586,7 +593,10 @@ import { registerAndroidAutomationHandlers } from './androidHandlers.js';
 import { registerIOSSimulatorHandlers } from './iosSimulatorHandlers.js';
 import { cancelIOSSimulatorSessionOperations } from '../mcp-integrations/ios-simulator.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
-import type { CollabDispatchOutcome } from './collabSendOutcome.js';
+import {
+  isTurnDispatchUnconfirmedSendError,
+  type CollabDispatchOutcome,
+} from './collabSendOutcome.js';
 import {
   AcceptedCallbackDispatchCancelled,
   runAcceptedCallback,
@@ -646,6 +656,7 @@ import {
   type OrcaInterAgentDispatcher,
   type OrcaInterAgentMessageSource,
 } from './orcaInterAgentDispatcher.js';
+import { resolveOrcaQueueItemTeamId } from './orcaQueueItem.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -1682,6 +1693,8 @@ type SendToSessionInternalResult =
         | 'WORKTREE_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
+      /** Provider acceptance may have happened; callers must preserve accepted state. */
+      dispatchUnconfirmed?: true;
     };
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
@@ -2901,8 +2914,8 @@ export function applyDirectoryGrants(
     }
     const persistOnly = !sess;
     const workDir = persistOnly
-      ? (await readSessionWorkingDirFromDb(sessionId) ?? undefined)
-      : (sess.workDir || undefined);
+      ? ((await readSessionWorkingDirFromDb(sessionId)) ?? undefined)
+      : sess.workDir || undefined;
     let dirsToApply = requestedDirs;
     if (axis === 'extraDirs') {
       const persisted = await readSessionExtraDirsFromDb(sessionId);
@@ -3169,7 +3182,8 @@ function settlePendingCredentialSwitch(sessionId: string, source: string): void 
 let refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null = null;
 let deferredCodexRestartHolder: DeferredCodexRestartService | null = null;
 let pendingAgentSwitchApplyHolder:
-  ((sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
+  | ((sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection,
+    ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
@@ -3486,7 +3500,8 @@ export interface SchedulerQueuedPromptRequest {
   persistedContent: string;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
   /** 排队项被 drain 派发、turn 已被会话接受时回调(等价直发路径的 send onAccepted)。 */
-  onAccepted: (queuedPermissions?: { permissionMode?: string; planMode?: boolean }) => void | Promise<void>;
+  onAccepted: (queuedPermissions?: { permissionMode?: string; planMode?: boolean;
+  }) => void | Promise<void>;
   /** 派发已 accept 但最终未成为运行 turn(取消/回滚)时回调。 */
   onAcceptedRollback?: () => void | Promise<void>;
   /** 排队项未派发即被丢弃(用户删除队列行 / stop 清队列 / 会话清理)时回调。 */
@@ -3987,7 +4002,8 @@ export function installDesktopInteractionListener(session: {
         persistId: interactionPersistId,
       });
       handleAgentIslandInteractionAfterBroadcast(
-        session as { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown },
+        session as { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown;
+          },
         boundaryRequest,
         agentIslandInteractionEpoch,
       );
@@ -4610,8 +4626,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       withSessionLock: withSendToSessionLock,
       hasPendingSelection: (sessionId) => {
         const pending = getPendingSessionRuntimeMutation(sessionId);
-        return !!agentSwitchPending.get(sessionId) ||
-          (!!pending && isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation));
+        return (
+            !!agentSwitchPending.get(sessionId) ||
+          (!!pending && isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation))
+          );
       },
       assertCurrent: () => {
         if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during context configuration');
@@ -6500,10 +6518,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { session, didInjectOrcaInstructions, didInjectProjectContext };
   }
 
+  async function readActiveOrcaWorkerSessionForResume(target: {
+    id: string;
+    teamId: string;
+    leadSessionId: string;
+    sessionId: string;
+  }): Promise<typeof sessions.$inferSelect | null> {
+    const [activeResume] = await getDbClient()
+      .drizzle.select({ session: sessions })
+      .from(orcaWorkers)
+      .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+      .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+      .where(and(
+        eq(orcaWorkers.id, target.id),
+        eq(orcaWorkers.teamId, target.teamId),
+        eq(orcaWorkers.sessionId, target.sessionId),
+        eq(orcaTeams.leadSessionId, target.leadSessionId),
+        eq(orcaTeams.status, 'active'),
+        eq(sessions.status, 'active'),
+      ),
+      )
+      .limit(1);
+    return activeResume?.session ?? null;
+  }
+
+  function inactiveOrcaWorkerResumeError(target: { teamId: string; sessionId: string }): Error {
+    return new Error(
+      `ORCA_TEAM_INACTIVE: team ${target.teamId} or worker session ${target.sessionId} is no longer active`,
+    );
+  }
+
   async function recordBotCompactRuntimeLifecycle(input: {
     botId: string;
     sessionId: string;
-    eventType: 'compact-runtime-refresh-requested' | 'compact-runtime-refresh-applied' |
+    eventType:
+      | 'compact-runtime-refresh-requested' | 'compact-runtime-refresh-applied' |
       'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed';
     boundary: BotCompactBoundary;
     profileVersion: number;
@@ -6811,13 +6860,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const live = maker.getSession(target.sessionId);
     if (live) return false;
 
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, target.sessionId))
-      .limit(1);
-    if (!row) return false;
+    // listWorkersByLead can become stale when another Desktop instance shares
+    // userData. Re-read both lifecycle rows here instead of reviving an archived
+    // session from an id-only lookup.
+    const row = await readActiveOrcaWorkerSessionForResume(target);
+    if (!row) throw inactiveOrcaWorkerResumeError(target);
 
     const workerVendorOptions = {
       orcaRole: 'worker' as const,
@@ -6848,7 +6895,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
+    // Remote preparation may wait long enough for another instance to end the
+    // team. Recheck immediately before local rehydration.
+    if (!(await readActiveOrcaWorkerSessionForResume(target))) {
+      throw inactiveOrcaWorkerResumeError(target);
+    }
     const { session: resumedSession } = await bootstrapSession(opts);
+    // If the terminal write won during bootstrap, do not leave the archived
+    // Worker live in this process while the later dispatch fence rejects it.
+    if (!(await readActiveOrcaWorkerSessionForResume(target))) {
+      await maker.closeSession(resumedSession.id).catch((closeError) => {
+        log.warn('resumeOrcaWorkerSessionIfMissing: failed to close stale resumed worker', {
+          sessionId: resumedSession.id,
+          error: closeError instanceof Error ? closeError.message : String(closeError),
+        });
+      });
+      throw inactiveOrcaWorkerResumeError(target);
+    }
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;
   }
@@ -8284,11 +8347,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return sendResult;
     } catch (err) {
-      if (turnChangeSetStarted) {
+      const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
+      if (turnChangeSetStarted && !dispatchUnconfirmed) {
         clearPendingTurnChangeSets(session.id);
       }
-      if (baselineStarted) {
+      if (baselineStarted && !dispatchUnconfirmed) {
         gitSnapshotCoordinator?.onTurnAbort(session.id);
+      }
+      if (dispatchUnconfirmed && pendingHandoff && turnChangeSetStarted) {
+        agentHandoffPending.consume(session.id);
       }
       throw err;
     }
@@ -8332,6 +8399,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createDefaults,
       inheritSourcePermissionMode,
     } = params;
+    const orcaOriginTeamId =
+      origin?.kind === 'orca' && typeof origin.teamId === 'string'
+        ? origin.teamId
+        : null;
+    let originVendorDispatchCleanupTarget: { sessionId: string; clientId: string } | undefined;
+    const acquireOriginVendorDispatchLease = orcaOriginTeamId
+      ? (intent?: 'initial' | 'retry-after-confirmed-rejection') =>
+          acquireOrcaTeamDispatchLease(
+            orcaOriginTeamId,
+            originVendorDispatchCleanupTarget,
+            intent)
+      : undefined;
     const queuedOrigin = sessionQueueOriginForDispatcher({
       dispatcherSessionId,
       message,
@@ -8539,6 +8618,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         }
         const clientId = createId();
+        originVendorDispatchCleanupTarget = { sessionId: session.id, clientId };
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {
@@ -8553,15 +8633,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               clientId,
               role: 'user',
               content: persistedContent ?? message,
-              ...(queuedOrigin ? { agentMeta: { origin: queuedOrigin } as AgentMeta } : {}),
-            });
+              ...(orcaOriginTeamId || queuedOrigin ? { agentMeta: {
+                        ...(queuedOrigin ? { origin: queuedOrigin } : {}),
+                        ...(orcaOriginTeamId
+                          ? { orcaPreVendorCleanup: { teamId: orcaOriginTeamId } }
+                          : {}),
+                      } as AgentMeta,
+                    }
+                : {}),
+            }, orcaOriginTeamId ? { expectedOrcaTeamId: orcaOriginTeamId } : undefined,
+            );
             // F4: send_to_session 的 create 分支也建了一条用户可见新会话(有 title + 落了 user
             // 消息),同属"新建会话需同步所有窗侧栏"的 purpose。广播跟 user row 持久化
             // 保持同一个 accepted 边界,避免后续 handle.send 失败时侧栏漏刷新。
             // (jump/resume 分支是既有 session 重建,不在此发,见 wakeKind:'resumed' 分支。)
             broadcastSessionCreated(session.id);
           },
-          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),
+          acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
+          onDispatching: () => {
+            assertOrcaQueueOriginActive(origin);
+            dispatchAgentIslandUserPrompt(session.id);
+          },
         });
         if (createdPreviewStarted) {
           if (sendResult.accepted) {
@@ -8694,12 +8786,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
       const clientId = explicitClientId ?? createId();
       let userPromptPreviewStarted = false;
+      let userMessagePersisted = false;
+      let orcaCleanupRecoveryItem: AgentInputQueuedMessage | null = null;
       const previewSessionMeta = {
         id: targetSessionId,
         agentKind: meta.agentKind,
         workDir: meta.workDir,
       };
       const persistUserMessage = async (): Promise<void> => {
+        if (orcaOriginTeamId && !orcaCleanupRecoveryItem) {
+          orcaCleanupRecoveryItem = await buildSessionControlInputItem({
+            targetSessionId,
+            message,
+            persistedContent: persistedContent ?? message,
+            clientId,
+            meta,
+            origin,
+          });
+        }
         // 同 sendPersistedUserMessageToSession 的顺序硬约束: durable write 失败则不启动
         // turn,业务 accepted 副作用不生效。灵动岛 preview 提前到落库前以贴近用户发送
         // 瞬间;失败或未 dispatch 时由外层 rollback 恢复,避免留下假的 running card。
@@ -8712,10 +8816,90 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clientId,
           role: 'user',
           content: persistedContent ?? message,
-          ...(queuedOrigin ? { agentMeta: { origin: queuedOrigin } as AgentMeta } : {}),
-        });
+          ...(orcaOriginTeamId || queuedOrigin ? { agentMeta: {
+                    ...(queuedOrigin ? { origin: queuedOrigin } : {}),
+                    ...(orcaOriginTeamId
+                      ? { orcaPreVendorCleanup: { teamId: orcaOriginTeamId } }
+                      : {}),
+                  } as AgentMeta,
+                }
+            : {}),
+        }, orcaOriginTeamId ? { expectedOrcaTeamId: orcaOriginTeamId } : undefined,
+        );
+        userMessagePersisted = true;
+        if (orcaCleanupRecoveryItem) {
+          trackPersistedOrcaPreVendorInput(targetSessionId, orcaCleanupRecoveryItem);
+        }
         await runAcceptedCallback(onAccepted, targetSessionId, clientId);
       };
+      const rewindPersistedUserMessageAfterFailedDispatch = async (): Promise<void> => {
+        if (!userMessagePersisted) return;
+        userMessagePersisted = false;
+        try {
+          await enqueueDurableWrite(
+            `send-to-session-user-rewind:${targetSessionId}:${clientId}`,
+            () => rewindPersistedUserMessageAfterClear(targetSessionId, clientId),
+          );
+        } catch (error) {
+          if (orcaCleanupRecoveryItem) {
+            await inputCoordinator.retainPersistedOrcaCleanupRecovery(
+              targetSessionId,
+              orcaCleanupRecoveryItem,
+              error,
+            );
+          }
+          throw error;
+        } finally {
+          untrackPersistedOrcaPreVendorInput(clientId);
+        }
+      };
+      const finalizeConfirmedOrcaUserMessageRewind = async (): Promise<void> => {
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await rewindPersistedUserMessageAfterClear(targetSessionId, clientId, {
+              finalizeAlreadyRewound: true,
+            });
+            return;
+          } catch (error) {
+            lastError = error;
+            if (attempt < 3) {
+              await new Promise((resolve) => setTimeout(resolve, attempt * 10));
+            }
+          }
+        }
+        log.warn('send_to_session Orca rewind finalization failed after tombstone commit', {
+          sessionId: targetSessionId,
+          clientId,
+          error: lastError instanceof Error ? lastError.message : String(lastError),
+        });
+      };
+      const acquireTrackedOriginVendorDispatchLease = orcaOriginTeamId
+        ? async (intent?: 'initial' | 'retry-after-confirmed-rejection') => {
+            const release = await acquireOrcaTeamDispatchLease(orcaOriginTeamId, {
+              sessionId: targetSessionId,
+              clientId,
+            }, intent,
+            );
+            return async (
+              outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched') => {
+              if (outcome !== 'confirmed-undispatched') {
+                // Stop exposing the row to same-process terminal snapshots
+                // before the cross-process writer lease is released.
+                untrackPersistedOrcaPreVendorInput(clientId);
+                await release(outcome);
+                return;
+              }
+
+              // The lease release commits the exact rewind before another
+              // instance can commit end_team. Only then is local tracking safe
+              // to remove; media cleanup and broadcast may follow afterward.
+              await release(outcome);
+              untrackPersistedOrcaPreVendorInput(clientId);
+              await finalizeConfirmedOrcaUserMessageRewind();
+            };
+          }
+        : undefined;
 
       lockStage = 'prepare-unhealthy-session';
       await contextOverflowRolloverHolder?.prepareUnhealthySession(targetSessionId);
@@ -8821,7 +9005,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const sendResult = await sendUserMessageWithAwaitedGitBaseline(live, message, clientId, {
             planMode: false,
             onAccepted: persistUserMessage,
-            onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
+              acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,
+              onDispatching: () => {
+                assertOrcaQueueOriginActive(origin);
+                dispatchAgentIslandUserPrompt(targetSessionId);
+              },
           });
           if (userPromptPreviewStarted) {
             if (sendResult.accepted) {
@@ -8845,6 +9033,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
           };
         } catch (err) {
+          const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
+          if (!dispatchUnconfirmed) {
+            await rewindPersistedUserMessageAfterFailedDispatch();
+          }
           if (isSessionRunningError(err)) {
             if (userPromptPreviewStarted) {
               rollbackAgentIslandUserPrompt(
@@ -8877,16 +9069,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             };
           }
           if (userPromptPreviewStarted) {
-            rollbackAgentIslandUserPrompt(
+            if (dispatchUnconfirmed) {
+              commitAgentIslandUserPrompt(targetSessionId, clientId);
+            } else {
+              rollbackAgentIslandUserPrompt(
               targetSessionId,
               clientId,
               'send_to_session:live:failed-before-dispatch',
             );
+            }
           }
           return {
             ok: false as const,
             errorCode: 'INTERNAL' as const,
             message: err instanceof Error ? err.message : String(err),
+            ...(dispatchUnconfirmed ? { dispatchUnconfirmed: true as const } : {}),
           };
         }
       }
@@ -8930,7 +9127,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {
           planMode: false,
           onAccepted: persistUserMessage,
-          onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
+            acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,
+            onDispatching: () => {
+              assertOrcaQueueOriginActive(origin);
+              dispatchAgentIslandUserPrompt(targetSessionId);
+            },
         });
         if (userPromptPreviewStarted) {
           if (sendResult.accepted) {
@@ -8954,6 +9155,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
         };
       } catch (err) {
+        const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
+        if (!dispatchUnconfirmed) {
+          await rewindPersistedUserMessageAfterFailedDispatch();
+        }
         if (isSessionRunningError(err)) {
           if (userPromptPreviewStarted) {
             rollbackAgentIslandUserPrompt(
@@ -8986,16 +9191,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           };
         }
         if (userPromptPreviewStarted) {
-          rollbackAgentIslandUserPrompt(
+          if (dispatchUnconfirmed) {
+            commitAgentIslandUserPrompt(targetSessionId, clientId);
+          } else {
+            rollbackAgentIslandUserPrompt(
             targetSessionId,
             clientId,
             'send_to_session:resumed:failed-before-dispatch',
           );
+          }
         }
         return {
           ok: false as const,
           errorCode: 'AGENT_NOT_READY' as const,
           message: err instanceof Error ? err.message : String(err),
+          ...(dispatchUnconfirmed ? { dispatchUnconfirmed: true as const } : {}),
         };
       }
     });
@@ -9193,10 +9403,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         clientId,
         onAccepted,
       }),
-    abortSession: (async (sessionId) => {
+    abortSession: async (sessionId) => {
       const session = maker.getSession(sessionId);
       if (session?.isTurnRunning?.()) await session.abort();
-    }),
+    },
     closeSession: (sessionId) => maker.closeSession(sessionId),
     broadcastSessionCreated,
     onChanged: (payload) => {
@@ -9246,7 +9456,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     MAKER_INVOKE.BOT_DELEGATIONS_LIST,
     async (event, parentSessionId: unknown) => {
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-      if (typeof parentSessionId !== 'string' || (parentSessionId.length === 0 || parentSessionId.length > 128)) {
+      if (typeof parentSessionId !== 'string' ||
+      parentSessionId.length === 0 || parentSessionId.length > 128
+    ) {
         throwIpcError('INVALID_PARAMS', 'parentSessionId required');
       }
       const result = await delegationForRestore.listDelegations(parentSessionId);
@@ -9275,9 +9487,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (
         typeof parentSessionId !== 'string'
-        || (parentSessionId.length === 0 || parentSessionId.length > 128)
-        || typeof delegationId !== 'string'
-        || (delegationId.length === 0 || delegationId.length > 128)
+        ||
+        parentSessionId.length === 0 || parentSessionId.length > 128 || typeof delegationId !== 'string'
+        ||
+        delegationId.length === 0 || delegationId.length > 128
       ) {
         throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
       }
@@ -9530,6 +9743,86 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
+  // Team start/end must serialize with each other, but must not queue behind the
+  // Lead input-send lock: end_team needs to mark the team terminal while an old
+  // Worker -> Lead send is still inside its asynchronous pre-vendor hooks.
+  const orcaLeadLifecycleLocks = new Map<string, Promise<void>>();
+  const persistedOrcaPreVendorInputs = new Map<
+    string,
+    { teamId: string; sessionId: string; item: AgentInputQueuedMessage }
+  >();
+
+  function trackPersistedOrcaPreVendorInput(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ): void {
+    const teamId = resolveOrcaQueueItemTeamId(item);
+    if (!teamId) throw new Error('cannot track a non-Orca pre-vendor input');
+    persistedOrcaPreVendorInputs.set(item.clientId, { teamId, sessionId, item });
+  }
+
+  function untrackPersistedOrcaPreVendorInput(clientId: string): void {
+    persistedOrcaPreVendorInputs.delete(clientId);
+  }
+
+  function persistedOrcaPreVendorInputsForTeam(
+    teamId: string,
+    sessionIds: Set<string>,
+  ): Map<string, AgentInputQueuedMessage[]> {
+    const bySession = new Map<string, AgentInputQueuedMessage[]>();
+    for (const tracked of persistedOrcaPreVendorInputs.values()) {
+      if (tracked.teamId !== teamId || !sessionIds.has(tracked.sessionId)) continue;
+      const items = bySession.get(tracked.sessionId) ?? [];
+      items.push(tracked.item);
+      bySession.set(tracked.sessionId, items);
+    }
+    return bySession;
+  }
+
+  function reserveOrcaTeamPreVendorDispatch(teamId: string): () => void {
+    assertOrcaQueueOriginActive({ kind: 'orca', teamId, senderLabel: 'Orca' });
+    const reservation = orcaTeamTerminalFence.reserveDispatch(teamId);
+    return () => orcaTeamTerminalFence.releaseDispatch(reservation);
+  }
+
+  function withOrcaLeadLifecycleLock<T>(
+    leadSessionId: string,
+    task: () => Promise<T>): Promise<T> {
+    const previous = orcaLeadLifecycleLocks.get(leadSessionId) ?? Promise.resolve();
+    const run = previous.then(() => task());
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    orcaLeadLifecycleLocks.set(leadSessionId, tail);
+    void tail.then(() => {
+      if (orcaLeadLifecycleLocks.get(leadSessionId) === tail) {
+        orcaLeadLifecycleLocks.delete(leadSessionId);
+      }
+    });
+    return run;
+  }
+
+  function assertOrcaQueueOriginActive(origin: AgentInputQueuedMessage['origin']): void {
+    if (origin?.kind !== 'orca' || !origin.teamId) return;
+    const fenceState = orcaTeamTerminalFence.getState(origin.teamId);
+    if (fenceState === 'open') return;
+    if (fenceState === 'pending') {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        `ORCA_TEAM_TERMINATING: team ${origin.teamId} terminal transition is still pending`,
+      );
+    }
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      `ORCA_TEAM_INACTIVE: team ${origin.teamId} has already ended`,
+    );
+  }
+
+  function isOrcaTeamDurablyTerminal(teamId: string): boolean {
+    return orcaTeamTerminalFence.getState(teamId) === 'terminal';
+  }
+
   async function buildCreateOptsForQueuedSession(
     sessionId: string,
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>,
@@ -9603,26 +9896,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     authorizationGuard?: BotAuthorizationInputGuard;
   }): Promise<void> {
     const queued = await buildSessionControlInputItem(params);
-    if (params.onAccepted) {
-      orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
-        params.clientId,
-        () => params.onAccepted?.({
-          permissionMode: queued.createOpts.permissionMode,
-          planMode: queued.createOpts.planMode,
-        }),
-        params.onAcceptedRollback,
-        params.onAcceptedCommit,
-      );
-    }
     // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
     // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
-    if (params.authorizationGuard) {
-      await commitBotAuthorizationInput(params.authorizationGuard, () => {
-        inputCoordinator.enqueue(params.targetSessionId, queued);
-      });
-    } else {
+    const enqueue = (): void => {
+      // Restore and authorization may yield while this team enters its terminal state.
+      assertOrcaQueueOriginActive(params.origin);
+      if (params.onAccepted) {
+        orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
+          params.clientId,
+          () =>
+            params.onAccepted?.({
+              permissionMode: queued.createOpts.permissionMode,
+              planMode: queued.createOpts.planMode,
+            }),
+          params.onAcceptedRollback,
+          params.onAcceptedCommit,
+        );
+      }
       inputCoordinator.enqueue(params.targetSessionId, queued);
+    };
+    if (params.authorizationGuard) {
+      await commitBotAuthorizationInput(params.authorizationGuard, enqueue);
+    } else {
+      enqueue();
     }
     log.info('send_to_session queued while target busy', {
       targetSessionId: params.targetSessionId,
@@ -9703,23 +10000,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prepareUnhealthySession: (sessionId) =>
       contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
     buildCreateOptsForQueuedSession,
-    enqueueQueuedMessage: (sessionId, item) => {
+    enqueueQueuedMessage: async (sessionId, item) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
       // 队列处于 paused 态不会被新消息的 getDrainableHead 立刻 drain。
-      void (async () => {
-        await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-        inputCoordinator.enqueue(sessionId, item);
-      })();
+      await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
+      assertOrcaQueueOriginActive(item.origin);
+      inputCoordinator.enqueue(sessionId, item);
     },
     reserveNextQueuedMessage: async (sessionId, item, onReserved) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
       if (!inputCoordinator.isQueueRestored(sessionId)) {
         throw new Error(`queue restore incomplete for ${sessionId}`);
       }
+      assertOrcaQueueOriginActive(item.origin);
       return inputCoordinator.reserveNextInput(sessionId, item, { onReserved }).reserved;
     },
     sendToSessionInternal,
     createDbMessage,
+    rewindPersistedUserMessage: (sessionId, clientId) =>
+      enqueueDurableWrite(`orca-direct-user-rewind:${sessionId}:${clientId}`, () =>
+        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+      ).then(() => undefined),
+    finalizePersistedUserMessageRewind: (sessionId, clientId) =>
+      enqueueDurableWrite(`orca-direct-user-rewind-finalize:${sessionId}:${clientId}`, () =>
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, {
+          finalizeAlreadyRewound: true,
+        }),
+      ).then(() => undefined),
+    retainPersistedUserMessageCleanup: (sessionId, item, error) =>
+      inputCoordinator.retainPersistedOrcaCleanupRecovery(sessionId, item, error),
+    trackPersistedUserMessageBeforeVendorDispatch: trackPersistedOrcaPreVendorInput,
+    untrackPersistedUserMessageBeforeVendorDispatch: untrackPersistedOrcaPreVendorInput,
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
       const liveSession = maker.getSession(sessionId);
       if (!liveSession) {
@@ -9734,6 +10045,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const worker = (await listWorkersByLead(link.leadSessionId)).find((w) => w.id === workerId);
       return worker?.role ?? fallback;
     },
+    // The reservation owns process-local pending/terminal fencing. Keep this
+    // query focused on durable DB state so a rollback-capable pending window is
+    // not collapsed into a permanent inactive result.
+    isOrcaTeamActive,
+    reserveOrcaTeamPreVendorDispatch,
+    waitForOrcaTeamTerminalTransition: (teamId) =>
+      orcaTeamTerminalFence.waitForPendingTransition(teamId),
+    acquireVendorDispatchLease: acquireOrcaTeamDispatchLease,
+    assertOrcaTeamActiveBeforeVendorDispatch: (teamId) =>
+      assertOrcaQueueOriginActive({ kind: 'orca', teamId, senderLabel: 'Orca' }),
     isSessionRunningError,
     log,
   });
@@ -9787,7 +10108,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (body.deferDelegateTask !== undefined && typeof body.deferDelegateTask !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'deferDelegateTask must be a boolean');
       }
-      return enableOrcaInternal(leadSessionId, {
+      return enableOrcaWithLeadLifecycleLock(leadSessionId, {
         workerAgent,
         delegateTask,
         role: typeof body.role === 'string' ? body.role : undefined,
@@ -9894,6 +10215,133 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  type OrcaTeamCleanupScope = {
+    teamId: string;
+    sessionIds: string[];
+    expectedDbClient: ReturnType<typeof getDbClient>;
+  };
+
+  function assertOrcaTeamCleanupOwner(input: OrcaTeamCleanupScope): void {
+    if (getDbClient() !== input.expectedDbClient) {
+      throw new Error('ORCA_CLEANUP_OWNER_CHANGED: database owner changed during terminal cleanup');
+    }
+  }
+
+  async function discardOrcaTeamQueuedInputs(input: OrcaTeamCleanupScope): Promise<void> {
+    assertOrcaTeamCleanupOwner(input);
+    const sessionIds = [...new Set(input.sessionIds)];
+    const results = await Promise.allSettled(
+      sessionIds.map((sessionId) =>
+        inputCoordinator.discardQueuedItemsWhere(
+          sessionId,
+          (item) => resolveOrcaQueueItemTeamId(item) === input.teamId,
+        ),
+      ),
+    );
+    assertOrcaTeamCleanupOwner(input);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+  }
+
+  async function prepareOrcaTeamCleanupIntents(input: OrcaTeamCleanupScope): Promise<void> {
+    assertOrcaTeamCleanupOwner(input);
+    const sessionIds = new Set(input.sessionIds);
+    const directItems = persistedOrcaPreVendorInputsForTeam(input.teamId, sessionIds);
+    const results = await Promise.allSettled(
+      [...sessionIds].map((sessionId) =>
+        inputCoordinator.persistOrcaCleanupIntentWhere(
+          sessionId,
+          (item) => resolveOrcaQueueItemTeamId(item) === input.teamId,
+          directItems.get(sessionId),
+        ),
+      ),
+    );
+    assertOrcaTeamCleanupOwner(input);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+  }
+
+  async function prepareOrcaTeamTerminalCommit(input: OrcaTeamCleanupScope): Promise<void> {
+    assertOrcaTeamCleanupOwner(input);
+    // markTeamEnded / duplicate reconciliation raises the terminal fence before
+    // invoking this hook. Drain every ingress attempt that reserved settlement
+    // before that fence, then snapshot the exact rows/recovery items they left.
+    // Do not wait after the terminal write: a crash in that gap would strand a
+    // late persisted row without durable cleanup intent.
+    await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);
+    assertOrcaTeamCleanupOwner(input);
+    await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds, input.expectedDbClient);
+    assertOrcaTeamCleanupOwner(input);
+    await prepareOrcaTeamCleanupIntents(input);
+    assertOrcaTeamCleanupOwner(input);
+  }
+
+  async function settleOrcaTeamQueuedInputs(input: OrcaTeamCleanupScope): Promise<void> {
+    assertOrcaTeamCleanupOwner(input);
+    await discardOrcaTeamQueuedInputs(input);
+    assertOrcaTeamCleanupOwner(input);
+    await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);
+    assertOrcaTeamCleanupOwner(input);
+    await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds, input.expectedDbClient);
+    assertOrcaTeamCleanupOwner(input);
+
+    // A direct attempt may finish after the first invalidation pass. If it
+    // remained before onDispatching, adopt and rewind its exact row now that
+    // every team-scoped dispatch settlement has closed.
+    const sessionIds = new Set(input.sessionIds);
+    const remainingDirectItems = persistedOrcaPreVendorInputsForTeam(
+      input.teamId,
+      sessionIds);
+    if (remainingDirectItems.size > 0) {
+      await prepareOrcaTeamCleanupIntents(input);
+      assertOrcaTeamCleanupOwner(input);
+      await discardOrcaTeamQueuedInputs(input);
+      assertOrcaTeamCleanupOwner(input);
+      for (const items of remainingDirectItems.values()) {
+        for (const item of items) untrackPersistedOrcaPreVendorInput(item.clientId);
+      }
+    }
+  }
+
+  async function markOrcaTeamEndedWithCleanup(input: {
+    teamId: string;
+    status: 'completed' | 'cancelled' | 'failed';
+    sessionIds: string[];
+  }): Promise<void> {
+    const cleanupDbClient = getDbClient();
+    const assertCleanupOwnerCurrent = () => {
+      if (getDbClient() !== cleanupDbClient) {
+        throw new Error('ORCA_CLEANUP_OWNER_CHANGED: database owner changed during terminal cleanup');
+      }
+    };
+    const cleanupScope = {
+      teamId: input.teamId,
+      sessionIds: [...new Set(input.sessionIds)],
+      expectedDbClient: cleanupDbClient,
+    };
+    const atomicallyRewoundRows = await markTeamEnded(input.teamId, input.status, {
+      beforeTerminalCommit: async () => {
+        assertCleanupOwnerCurrent();
+        await prepareOrcaTeamTerminalCommit(cleanupScope);
+        assertCleanupOwnerCurrent();
+      },
+      terminalCleanupSessionIds: cleanupScope.sessionIds,
+      onTerminalCommitFailed: () => {
+        assertCleanupOwnerCurrent();
+        return settleOrcaTeamQueuedInputs(cleanupScope);
+      },
+    });
+    assertCleanupOwnerCurrent();
+    await finalizeRewoundOrcaPreVendorCleanupRows(atomicallyRewoundRows, cleanupDbClient);
+    assertCleanupOwnerCurrent();
+    await settleOrcaTeamQueuedInputs(cleanupScope);
+    assertCleanupOwnerCurrent();
+  }
+
   /**
    * disableOrcaInternal — 关闭 lead session 当前的协同模式。
    *   1. 查 active team;不存在则尝试兜底修复悬空 lead(见下),再返回
@@ -9948,6 +10396,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
+    await markOrcaTeamEndedWithCleanup({
+      teamId: team.id,
+      sessionIds: [leadSessionId, ...activeWorkers.map((worker) => worker.sessionId)],
+      status: 'completed',
+    });
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
       await cancelIOSSimulatorSessionOperations(w.sessionId);
@@ -9976,7 +10429,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       forgetKnownOrcaWorkerSession(w.sessionId);
     }
 
-    await markTeamEnded(team.id, 'completed');
     await markWorkersStatusByTeam(team.id, 'done');
     const workerRecycleScope = captureSessionRecycleScope();
     const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id);
@@ -9996,10 +10448,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { ok: true };
   }
 
+  function enableOrcaWithLeadLifecycleLock(
+    leadSessionId: string,
+    opts: EnableOrcaOptions) {
+    return withOrcaLeadLifecycleLock(leadSessionId, () =>
+      enableOrcaInternal(leadSessionId, opts));
+  }
+
+  function disableOrcaWithLeadLifecycleLock(leadSessionId: string) {
+    return withOrcaLeadLifecycleLock(leadSessionId, () => disableOrcaInternal(leadSessionId));
+  }
+
   ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string')
       throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    return disableOrcaInternal(leadSessionId);
+    return disableOrcaWithLeadLifecycleLock(leadSessionId);
   });
 
   // ─── Orca worker IPC handlers ────────────────────────────────────────────
@@ -10109,7 +10572,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.TEAM_END, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string')
       throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    const result = await disableOrcaInternal(leadSessionId);
+    const result = await disableOrcaWithLeadLifecycleLock(leadSessionId);
     broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, {
       leadSessionId: leadSessionId as string,
     });
@@ -10132,9 +10595,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getWorkerLinkByWorkerId: (workerId) => getWorkerLink({ workerId }),
     listWorkersByLead,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
-    resumeWorkerSession: async (target) => {
-      await resumeOrcaWorkerSessionIfMissing(target);
-    },
+    reserveTeamDispatchSettlement: (teamId) =>
+      orcaInterAgentDispatcher.reserveTeamDispatchSettlement(teamId),
+    waitForOrcaTeamTerminalTransition: (teamId) =>
+      orcaTeamTerminalFence.waitForPendingTransition(teamId),
+    resumeWorkerSession: (target) => resumeOrcaWorkerSessionIfMissing(target),
     updateWorkerStatus,
     markWorkerIdle: async (workerId) => {
       const now = Date.now();
@@ -10184,6 +10649,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     dispatchWorkerMessage: async ({
       targetSessionId,
+      teamId,
+      deferTerminalTransitionRetry,
       message,
       workerId,
       dispatchMeta,
@@ -10193,6 +10660,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }) => {
       const result = await dispatchOrEnqueueOrcaInterAgentMessage({
         targetSessionId,
+        teamId,
+        deferTerminalTransitionRetry,
         rawContent: message,
         source: 'lead',
         senderLabel: 'Lead',
@@ -10203,7 +10672,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         onAcceptedCommit,
       });
       if (!result.ok) {
-        return { ok: false, dispatchOutcome: result.dispatchOutcome };
+        return result;
       }
       return {
         ok: true,
@@ -10216,6 +10685,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     reserveWorkerMessage: async ({
       targetSessionId,
+      teamId,
+      deferTerminalTransitionRetry,
       message,
       workerId,
       dispatchMeta,
@@ -10226,6 +10697,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }) => {
       const result = await orcaInterAgentDispatcher.reserveNextOrcaInterAgentMessage({
         targetSessionId,
+        teamId,
+        deferTerminalTransitionRetry,
         rawContent: message,
         source: 'lead',
         senderLabel: 'Lead',
@@ -10236,7 +10709,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         onAcceptedRollback,
         onAcceptedCommit,
       });
-      if (!result.ok) return { ok: false, dispatchOutcome: result.dispatchOutcome };
+      if (!result.ok) return result;
       return {
         ok: true,
         mode: result.mode,
@@ -10313,9 +10786,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
     mergeQueuedMessages: (sessionId, clientIds, buildReplacement) =>
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
-    sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
+    sendAutoBridgeToLead: async (leadSessionId, message, workerId, teamId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
+        teamId,
         rawContent: message,
         source: 'worker',
         senderLabel: 'Worker',
@@ -10427,7 +10901,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setWorkerPermissionMode: applyWorkerPermissionModePreference,
     createWorkerInTeam: (params) => orcaWorkerCreationService.createWorkerInTeam(params),
     dispatchWorkerTask: (params) => orcaTeamService.dispatchWorkerTask(params),
-    markTeamEnded,
+    markTeamEndedWithCleanup: markOrcaTeamEndedWithCleanup,
     setSessionOrcaRole,
     clearKnownNonOrcaSession: (sessionId) => {
       knownNonOrcaSessionIds.delete(sessionId);
@@ -10815,7 +11289,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentKind: live?.agentKind ?? dbToMakerAgentKind(row.agentKind),
           model: live?.model ?? row.model ?? '',
           providerId: live && hasSessionProvider(sessionId)
-            ? getSessionProvider(sessionId) ?? null : row.providerId,
+            ? (getSessionProvider(sessionId) ?? null)
+              : row.providerId,
           effort: (live ? getSessionEffort(sessionId) : row.effort) ?? null,
           fastMode: live ? getSessionFastMode(sessionId) : !!row.fastMode,
         },
@@ -11036,9 +11511,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return recorded;
       };
       const advanceConfiguredBotRoute = async (
-        failed: SessionRuntimeProfile,
-      ): Promise<boolean> => {
-        if (!await recordFailedCandidate(failed) || !botFallback.isBot) return false;
+        failed: SessionRuntimeProfile): Promise<boolean> => {
+        if (!(await recordFailedCandidate(failed)) || !botFallback.isBot) return false;
         const next = await readBotFallbackCandidate(sessionId, currentForFallback);
         candidate = next.candidate;
         return candidate !== null;
@@ -11371,8 +11845,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: sendToSessionInternal,
-    enableOrca: enableOrcaInternal,
-    disableOrca: disableOrcaInternal,
+    enableOrca: enableOrcaWithLeadLifecycleLock,
+    disableOrca: disableOrcaWithLeadLifecycleLock,
     // MCP worker 派活必须经 OrcaTeamService，确保 running、resume idle、广播和
     // 公开错误码映射都与 IPC handler WORKER_SEND_TO 保持同一套状态机。
     sendToWorker: (params) => orcaTeamService.sendToWorker(params),
@@ -11395,7 +11869,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 title: t('newChat.chatInput.fullAccessConfirmation.title'),
                 description: `${t('newChat.chatInput.fullAccessConfirmation.description')} ${t('newChat.chatInput.fullAccessConfirmation.note')}`,
               }),
-            startTeam: (params) => orcaLifecycleService.startTeam(params),
+            startTeam: (params) =>
+              withOrcaLeadLifecycleLock(params.leadSessionId, () =>
+                orcaLifecycleService.startTeam(params),
+              ),
           },
         );
       } catch (err) {
@@ -11565,7 +12042,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     endTeam: async ({ leadSessionId }) => {
       try {
-        await disableOrcaInternal(leadSessionId);
+        await disableOrcaWithLeadLifecycleLock(leadSessionId);
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true };
       } catch (err) {
@@ -11678,8 +12155,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : message;
         // session-agent-switch:user 行逐行 stamp 当前引擎(见 messages.agent_kind 注释)。
         const agentKind = getSessionDbAgentKind(sessionId);
+        const orcaPreVendorCleanup = message.agentMeta?.orcaPreVendorCleanup;
+        const expectedOrcaTeamId =
+          orcaPreVendorCleanup && typeof orcaPreVendorCleanup.teamId === 'string'
+            ? orcaPreVendorCleanup.teamId
+            : undefined;
         const scopedOpts = {
           ...(opts ?? {}),
+          ...(expectedOrcaTeamId ? { expectedOrcaTeamId } : {}),
           // Keep a committed user row durable across an owner switch, while
           // preventing createMessage from relabelling its broadcast to the
           // next owner after the media-ref await.
@@ -11754,7 +12237,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId),
-      ),
+      ).then(() => undefined),
     isClearBoundaryCurrent: (sessionId, expected, expectedGeneration) => {
       const coordinator = agentInputCoordinatorHolder;
       if (!coordinator) return true;
@@ -11771,6 +12254,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
+    isOrcaTeamInputActive: async (_sessionId, teamId) =>
+      !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
+    acquireVendorDispatchLease: (_sessionId, sendOpts, cleanupTarget, intent) => {
+      const orcaTeamId =
+        sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+          ? (sendOpts as { orcaTeamId?: unknown }).orcaTeamId
+          : undefined;
+      return typeof orcaTeamId === 'string'
+        ? acquireOrcaTeamDispatchLease(orcaTeamId, cleanupTarget, intent)
+        : undefined;
+    },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
@@ -11779,6 +12273,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputClearBoundary(sessionId, precondition.expected);
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
+      const orcaTeamId =
+        sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+          ? (sendOpts as { orcaTeamId?: unknown }).orcaTeamId
+          : undefined;
+      if (typeof orcaTeamId === 'string') {
+        assertOrcaQueueOriginActive({
+          kind: 'orca',
+          teamId: orcaTeamId,
+          senderLabel: 'Orca',
+        });
+      }
     },
     onUndispatchedDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
     ackInterruptedTurnDispatched: async (sessionId, endedAt) => {
@@ -12363,11 +12868,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? record.content
         : undefined;
     const opts = sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
-      ? sendOpts as Record<string, unknown>
-      : undefined;
+      ? (sendOpts as Record<string, unknown>)
+        : undefined;
     const persisted = opts?.persistUserMessage && typeof opts.persistUserMessage === 'object'
-      ? opts.persistUserMessage as Record<string, unknown>
-      : undefined;
+      ? (opts.persistUserMessage as Record<string, unknown>)
+        : undefined;
     if (rawChannelText === undefined
       || (expectedText !== undefined && rawChannelText !== expectedText)
       || containsManagedAttachment(message)
@@ -12378,7 +12883,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       || opts?.fromMobileClient === true) return sendOpts;
     return {
       ...(sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
-        ? sendOpts as Record<string, unknown>
+        ? (sendOpts as Record<string, unknown>)
         : {}),
       [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' as const }, rawChannelText },
     };
@@ -13180,13 +13685,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
       return meta?.sdkSessionId;
     },
+    reserveOrcaTeamPreVendorDispatch,
+    isOrcaTeamInputActive: async (teamId) =>
+      !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
     // Coordinator steer/drain persistence must use the same FIFO writer and
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.
     createUserMessage: createUserMessageDurably,
-    rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
+    rewindPersistedUserMessageAfterClear: (sessionId, clientId, options) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
-        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, options),
       ),
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch: async (item) => {
@@ -13459,9 +13967,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     loadClearBoundary: async (sessionId) =>
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: (sessionId) => loadAgentInputQueueSnapshot(sessionId),
+    isQueueSnapshotItemCurrent: async (_sessionId, item) => {
+      if (item.origin?.kind !== 'orca') return true;
+      const teamId = resolveOrcaQueueItemTeamId(item);
+      return Boolean(
+        teamId && !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
+      );
+    },
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
+  setOrcaDuplicateTeamReconciliationHandler(async (reconciliation, phase) => {
+    const sessionIds = [
+      reconciliation.leadSessionId,
+      ...reconciliation.staleWorkerSessionIds];
+    if (phase === 'prepare') {
+      for (const teamId of reconciliation.staleTeamIds) {
+        await prepareOrcaTeamTerminalCommit({
+          teamId, sessionIds, expectedDbClient: reconciliation.expectedDbClient,
+        });
+      }
+      return;
+    }
+    for (const teamId of reconciliation.staleTeamIds) {
+      await settleOrcaTeamQueuedInputs({
+        teamId, sessionIds, expectedDbClient: reconciliation.expectedDbClient,
+      });
+    }
+    log.warn('discarded inputs for reconciled stale duplicate orca teams', {
+      phase,
+      leadSessionId: reconciliation.leadSessionId,
+      keptTeamId: reconciliation.keptTeamId,
+      staleTeamIds: reconciliation.staleTeamIds,
+      staleWorkerSessionIds: reconciliation.staleWorkerSessionIds,
+    });
+  });
   getAgentIslandService()?.setCompletionDeferResolver((sessionId) =>
     inputCoordinator.hasPendingQueuedWork(sessionId),
   );
@@ -15358,7 +15898,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetAgentKind: dbToMakerAgentKind(runtimeStatus.agentKind),
           model,
           providerId: effectiveProviderId === undefined ? currentProviderId : effectiveProviderId,
-          effort: atomicSelection ? atomicSelection.effort ?? undefined : runtimeStatus.effort ?? undefined,
+          effort: atomicSelection ? (atomicSelection.effort ?? undefined)
+            : (runtimeStatus.effort ?? undefined),
           fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
         };
         agentSwitchPending.set(sessionId, intent);
@@ -17592,7 +18133,7 @@ async function checkWorkDirExists(
       }
     }
     if (getManagedWorktreeBasePath(normalizedWorkingDir) === null) {
-      if (!await workingDirectoryRecovery.recover(sessionId, workingDir)) return false;
+      if (!(await workingDirectoryRecovery.recover(sessionId, workingDir))) return false;
       await workingDirectoryRecovery.observe(sessionId, workingDir);
     }
     return true;
@@ -17615,13 +18156,14 @@ async function checkWorkDirExists(
       !suppress &&
       ((error as NodeJS.ErrnoException).code === 'ENOENT' || unavailable) &&
       getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
-      await workingDirectoryRecovery.recover(sessionId, workingDir, async () => {
+      (await workingDirectoryRecovery.recover(sessionId, workingDir, async () => {
         similar = await findSimilarDirOnDisk(workingDir);
         return similar;
       },
         getMaker().listActiveSessions()
           .filter((session) => !session.remoteHostId)
-          .map((session) => ({ id: session.id, workingDir: session.workDir })))
+          .map((session) => ({ id: session.id, workingDir: session.workDir })),
+      ))
     ) {
       log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
       return true;

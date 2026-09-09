@@ -348,6 +348,12 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     });
   });
 
+  it('剥掉 wire 伪造的 Orca team lifecycle fence', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', orcaTeamId: 'team-forged' })).toEqual({
+      messageUuid: 'u',
+    });
+  });
+
   it('剥掉 Renderer/device-link 自报的 IM permission policy', () => {
     expect(stripMainOnlySendOpts({
       messageUuid: 'u',

@@ -922,6 +922,57 @@ describe('db worker tx handlers', () => {
   });
 
   it.each([false, true])(
+    'Orca guards and selective cleanup preserve list projections across transports (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        await client.exec(
+          'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          ['team-1', 's1', 'active', 1, 1],
+        );
+        const insert = (clientId: string, guarded: boolean, phase = 'pre-vendor') =>
+          client.tx('message.insert', {
+            id: clientId, clientId, sessionId: 's1', role: 'user', content: clientId,
+            toolUseId: null, agentKind: 'codex', createdAt: 2,
+            agentMeta: JSON.stringify({ orcaPreVendorCleanup: { teamId: 'team-1', phase } }),
+            guarded, expectedClearBoundaryMs: null, expectedOrcaTeamId: 'team-1',
+          });
+        await expect(insert('pending', false)).resolves.toEqual({ changes: 1 });
+        await expect(insert('submitted', true, 'submitted')).resolves.toEqual({ changes: 1 });
+        const seedCache = () => client.exec(
+          "UPDATE sessions SET list_preview = 'cached', list_preview_role = 'user' WHERE id = 's1'",
+        );
+        const readCache = () => client.queryOne(
+          "SELECT list_preview, list_preview_role FROM sessions WHERE id = 's1'",
+        );
+        await seedCache();
+        await expect(client.tx('message.rewindUserAfterClear', {
+          sessionId: 's1', clientId: 'submitted', rewoundAt: 3, preserveSubmittedOrca: true,
+        })).resolves.toEqual({ changes: 0 });
+        await expect(readCache()).resolves.toEqual({ list_preview: 'cached', list_preview_role: 'user' });
+
+        await expect(client.tx('orca.rewindPreVendorCleanup', {
+          teamId: 'team-1', cleanupSessionIds: ['s1'], now: 4,
+        })).resolves.toEqual([{ sessionId: 's1', clientId: 'pending' }]);
+        await expect(readCache()).resolves.toEqual({ list_preview: null, list_preview_role: null });
+        await expect(insert('pending-terminal', false)).resolves.toEqual({ changes: 1 });
+        await seedCache();
+        await expect(client.tx('orca.endTeam', {
+          teamId: 'team-1', cleanupSessionIds: ['s1'], status: 'completed', now: 5,
+        })).resolves.toEqual([{ sessionId: 's1', clientId: 'pending-terminal' }]);
+        await expect(readCache()).resolves.toEqual({ list_preview: null, list_preview_role: null });
+        await expect(client.queryOne(
+          "SELECT rewind_at FROM messages WHERE client_id = 'submitted'",
+        )).resolves.toEqual({ rewind_at: null });
+        await seedCache();
+        await expect(insert('late-unguarded', false)).resolves.toEqual({ changes: 0 });
+        await expect(insert('late-clear-guarded', true)).resolves.toEqual({ changes: 0 });
+        await expect(readCache()).resolves.toEqual({ list_preview: 'cached', list_preview_role: 'user' });
+      }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
     'message.insert invalidates list projection in the same transaction (inline=%s)',
     async (useInlineWorker) => {
       await withClient(

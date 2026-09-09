@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { transpileModule, ScriptTarget } from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Read a source file with line endings normalised.
@@ -15,6 +16,48 @@ function readSourceNormalized(relativePath: string): string {
 }
 
 const source = readSourceNormalized('../bootstrap-electron.ts');
+
+type ShutdownReport = { piSessionFailures: number };
+
+/** Execute only the production quit callbacks, with provider shutdown and disposal injected. */
+function createShutdownHarness(shutdownMaker: () => Promise<ShutdownReport>) {
+  const sharedStart = source.indexOf('let shutdownMakerPromise:');
+  const sharedEnd = source.indexOf('function readGitText(', sharedStart);
+  const hookStart = source.indexOf("onQuit(\n  'shutdown-maker',");
+  const hookEnd = source.indexOf("  'async',\n);", hookStart);
+  expect(sharedStart).toBeGreaterThan(-1);
+  expect(sharedEnd).toBeGreaterThan(sharedStart);
+  expect(hookStart).toBeGreaterThan(-1);
+  expect(hookEnd).toBeGreaterThan(hookStart);
+  const shared = source.slice(sharedStart, sharedEnd);
+  const hook = source.slice(hookStart, hookEnd + "  'async',\n);".length);
+  const dispose = vi.fn(async () => {});
+  const error = vi.fn();
+  const js = transpileModule(`
+    let makerShutdownSettled = false;
+    let runQuit;
+    const onQuit = (_name, run) => { runQuit = run; };
+    ${shared}
+    ${hook}
+    return {
+      runQuit,
+      releaseLease: disposeOrcaTeamDispatchLeaseAfterMakerShutdown,
+      isSettled: () => makerShutdownSettled,
+    };
+  `, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  const runtime = new Function(
+    'shutdownMaker',
+    'disposeOrcaTeamDispatchLeaseCoordinator',
+    'piSubagentLog',
+    js,
+  )(shutdownMaker, dispose, { error }) as {
+    runQuit: () => Promise<void>;
+    releaseLease: () => Promise<void>;
+    isSettled: () => boolean;
+  };
+  return { ...runtime, dispose, error };
+}
+
 
 /**
  * The quit hook is Electron wiring in a module that cannot be imported under
@@ -184,7 +227,7 @@ describe('PI Subagent quit sweep', () => {
     const start = source.indexOf("onQuit(\n  'shutdown-maker',");
     expect(start).toBeGreaterThanOrEqual(0);
     const hook = source.slice(start, source.indexOf("  'async',\n);", start));
-    const awaited = hook.indexOf('await shutdownMaker();');
+    const awaited = hook.indexOf('await shutdownMakerOnce();');
     const marked = hook.indexOf('makerShutdownSettled = true;');
     expect(awaited).toBeGreaterThan(-1);
     expect(marked).toBeGreaterThan(awaited);
@@ -206,6 +249,54 @@ describe('PI Subagent quit sweep', () => {
     // Ordered ahead of the bridge and the SSH pool teardown.
     expect(start).toBeLessThan(source.indexOf("onQuit('pi-env'"));
     expect(start).toBeLessThan(source.indexOf("onQuit('remote-ssh-pool'"));
+  });
+
+  it('shares one pending provider shutdown between the quit hook and lease disposal', async () => {
+    let finish!: (report: ShutdownReport) => void;
+    const pending = new Promise<ShutdownReport>((resolve) => { finish = resolve; });
+    const shutdown = vi.fn(() => pending);
+    const harness = createShutdownHarness(shutdown);
+    const quit = harness.runQuit();
+    const disposal = harness.releaseLease();
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(harness.dispose).not.toHaveBeenCalled();
+    expect(harness.isSettled()).toBe(false);
+
+    finish({ piSessionFailures: 0 });
+    await Promise.all([quit, disposal]);
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(harness.dispose).toHaveBeenCalledOnce();
+    expect(harness.isSettled()).toBe(true);
+  });
+
+  it('retains the shared rejection without marking shutdown settled or releasing the lease', async () => {
+    const failure = new Error('turn changeset actions failed before provider shutdown');
+    const shutdown = vi.fn(async (): Promise<ShutdownReport> => { throw failure; });
+    const harness = createShutdownHarness(shutdown);
+    const results = await Promise.allSettled([harness.runQuit(), harness.releaseLease()]);
+    expect(results).toEqual([
+      { status: 'rejected', reason: failure },
+      { status: 'rejected', reason: failure },
+    ]);
+    await expect(harness.runQuit()).rejects.toBe(failure);
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(harness.dispose).not.toHaveBeenCalled();
+    expect(harness.isSettled()).toBe(false);
+  });
+
+  it('keeps both the quit fence and dispatch lease when shared shutdown reports a live Pi parent', async () => {
+    const shutdown = vi.fn(async () => ({ piSessionFailures: 1 }));
+    const harness = createShutdownHarness(shutdown);
+    const results = await Promise.allSettled([harness.runQuit(), harness.releaseLease()]);
+    expect(results[0]).toEqual({ status: 'fulfilled', value: undefined });
+    expect(results[1]).toMatchObject({
+      status: 'rejected',
+      reason: new Error('Cannot release Orca dispatch lease while Pi sessions remain attached'),
+    });
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(harness.dispose).not.toHaveBeenCalled();
+    expect(harness.error).toHaveBeenCalledOnce();
+    expect(harness.isSettled()).toBe(false);
   });
 
   it('leaves a stop budget that fits inside the bounded async quit phase', () => {

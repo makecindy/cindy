@@ -53,6 +53,13 @@ export interface RpcRequestOptions {
   timeoutMs?: number;
 }
 
+export interface RpcPendingRequest<R = unknown> {
+  /** Resolves once the local Duplex accepts the encoded NDJSON request. */
+  submitted: Promise<void>;
+  /** Resolves or rejects with the later correlated RPC response. */
+  response: Promise<R>;
+}
+
 export class RpcClientError extends Error {
   constructor(public readonly rpcError: RpcError) {
     super(`[${rpcError.code}] ${rpcError.message}`);
@@ -63,6 +70,8 @@ export class RpcClientError extends Error {
 interface PendingEntry {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
+  resolveSubmitted: () => void;
+  rejectSubmitted: (err: Error) => void;
   timer?: NodeJS.Timeout;
 }
 
@@ -130,32 +139,83 @@ export class RpcClient {
     params: unknown,
     opts: RpcRequestOptions = {},
   ): Promise<R> {
+    const pending = this.requestWithSubmission<R>(method, params, opts);
+    // Existing callers wait on the response, which also rejects on write
+    // failure. Observe the auxiliary submission promise to avoid an unhandled
+    // rejection when only the compatibility API is used.
+    void pending.submitted.catch(() => undefined);
+    return pending.response;
+  }
+
+  requestWithSubmission<R = unknown>(
+    method: string,
+    params: unknown,
+    opts: RpcRequestOptions = {},
+  ): RpcPendingRequest<R> {
     if (this.disposed || this.closedFired || this.stream.destroyed) {
-      throw new Error('RpcClient is disposed or stream closed');
+      const failed: Promise<never> = Promise.reject(
+        new Error('RpcClient is disposed or stream closed'),
+      );
+      return { submitted: failed, response: failed };
     }
     const id = this.nextId++;
-    return await new Promise<R>((resolve, reject) => {
+    let payload: string;
+    try {
+      payload = encodeMessage({ type: 'request', id, method, params });
+    } catch (error) {
+      const failed: Promise<never> = Promise.reject(error);
+      return { submitted: failed, response: failed };
+    }
+
+    let resolveSubmitted!: () => void;
+    let rejectSubmitted!: (err: Error) => void;
+    const submitted = new Promise<void>((resolve, reject) => {
+      resolveSubmitted = resolve;
+      rejectSubmitted = reject;
+    });
+    const response = new Promise<R>((resolve, reject) => {
       const entry: PendingEntry = {
         resolve: resolve as (v: unknown) => void,
         reject,
+        resolveSubmitted,
+        rejectSubmitted,
       };
       if (opts.timeoutMs && opts.timeoutMs > 0) {
         entry.timer = setTimeout(() => {
           if (this.pending.delete(id)) {
-            reject(new Error(`RPC ${method} timed out after ${opts.timeoutMs}ms`));
+            const error = new Error(`RPC ${method} timed out after ${opts.timeoutMs}ms`);
+            // Response timeout does not cancel an already queued Duplex write.
+            // Keep submitted pending until the raw write callback settles so a
+            // caller cannot release a dispatch lease while bytes may still land.
+            reject(error);
           }
         }, opts.timeoutMs);
       }
       this.pending.set(id, entry);
       try {
-        this.stream.write(encodeMessage({ type: 'request', id, method, params }));
+        this.stream.write(payload, (error?: Error | null) => {
+          if (!error) {
+            resolveSubmitted();
+            return;
+          }
+          rejectSubmitted(error);
+          if (this.pending.get(id) === entry) {
+            this.pending.delete(id);
+            if (entry.timer) clearTimeout(entry.timer);
+            reject(error);
+          }
+        });
       } catch (err) {
-        if (this.pending.delete(id)) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        rejectSubmitted(error);
+        if (this.pending.get(id) === entry) {
+          this.pending.delete(id);
           if (entry.timer) clearTimeout(entry.timer);
-          reject(err as Error);
+          reject(error);
         }
       }
     });
+    return { submitted, response };
   }
 
   /**
@@ -236,7 +296,9 @@ export class RpcClient {
     this.listeners.length = 0;
     for (const [, entry] of this.pending) {
       if (entry.timer) clearTimeout(entry.timer);
-      entry.reject(new Error('RpcClient disposed'));
+      const error = new Error('RpcClient disposed');
+      entry.rejectSubmitted(error);
+      entry.reject(error);
     }
     this.pending.clear();
     this.fireClose();
@@ -252,7 +314,9 @@ export class RpcClient {
       // Reject pending — but keep dispose flag so request() refuses new sends.
       for (const [, entry] of this.pending) {
         if (entry.timer) clearTimeout(entry.timer);
-        entry.reject(new Error('RPC stream closed'));
+        const error = new Error('RPC stream closed');
+        entry.rejectSubmitted(error);
+        entry.reject(error);
       }
       this.pending.clear();
       this.onClose?.();
@@ -337,6 +401,9 @@ export class RpcClient {
     }
     this.pending.delete(msg.id);
     if (entry.timer) clearTimeout(entry.timer);
+    // A correlated response proves the request crossed the transport even if
+    // a custom Duplex has not invoked its write callback yet.
+    entry.resolveSubmitted();
     if (msg.error) {
       entry.reject(new RpcClientError(msg.error));
     } else {

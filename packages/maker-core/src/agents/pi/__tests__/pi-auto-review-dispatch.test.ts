@@ -156,6 +156,12 @@ vi.mock('../rpc-client.js', () => ({
       }
       return { success: true, data: { entries: [] } };
     }
+    requestWithSubmission(cmd: Record<string, unknown> & { type: string }) {
+      return {
+        submitted: Promise.resolve(),
+        response: this.request(cmd),
+      };
+    }
     send(msg: Record<string, unknown>): void {
       captured.sent.push(msg);
     }
@@ -2448,6 +2454,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       logger: noopLogger,
     });
     const sessionEvents: unknown[] = [];
+    const leaseOutcomes: string[] = [];
     let resolveTerminal!: () => void;
     const terminal = new Promise<void>((resolve) => {
       resolveTerminal = resolve;
@@ -2460,9 +2467,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       captured.failPrompt = true;
       await expect(session.send(
         { type: 'user', content: 'pi install npm:context-mode' },
-        desktopCommandOptions('pi install npm:context-mode'),
+        {
+          ...desktopCommandOptions('pi install npm:context-mode'),
+          acquireVendorDispatchLease: async () => (outcome) => {
+            leaseOutcomes.push(String(outcome));
+          },
+        },
       )).resolves.toEqual({ accepted: true });
       await terminal;
+      expect(leaseOutcomes).toEqual(['submitted', 'accepted']);
 
       expect(sessionEvents).toContainEqual(expect.objectContaining({
         type: 'text',

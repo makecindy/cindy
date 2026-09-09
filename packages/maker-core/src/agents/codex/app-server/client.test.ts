@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerClient, detectAuthInvalidationReason } from './client.js';
+import { AppServerClient, AppServerRpcError, detectAuthInvalidationReason } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
@@ -59,6 +59,60 @@ const logger: Logger = {
   fatal: vi.fn(),
   child: () => logger,
 };
+
+describe('AppServerRpcError deferred settlement', () => {
+  it('shares an in-flight failure and retries the retained callback until success', async () => {
+    const error = new AppServerRpcError(Method.TurnStart, { code: -32000, message: 'rejected' });
+    let rejectFirst!: (error: Error) => void;
+    const firstAttempt = new Promise<void>((_resolve, reject) => { rejectFirst = reject; });
+    const settle = vi.fn()
+      .mockImplementationOnce(() => firstAttempt)
+      .mockResolvedValue(undefined);
+    error.deferVendorDispatchRejectionSettlement(settle);
+
+    const first = error.settleVendorDispatchRejection();
+    const concurrent = error.settleVendorDispatchRejection();
+    const outcomes = Promise.allSettled([first, concurrent]);
+    const failure = new Error('database busy');
+    rejectFirst(failure);
+    expect(await outcomes).toEqual([
+      { status: 'rejected', reason: failure },
+      { status: 'rejected', reason: failure },
+    ]);
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(concurrent).toBe(first);
+
+    const retry = error.settleVendorDispatchRejection();
+    const concurrentRetry = error.settleVendorDispatchRejection();
+    await expect(Promise.all([retry, concurrentRetry])).resolves.toEqual([true, true]);
+    expect(settle).toHaveBeenCalledTimes(2);
+    expect(concurrentRetry).toBe(retry);
+    await expect(error.settleVendorDispatchRejection()).resolves.toBe(false);
+    expect(settle).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['different callback', 'same callback'] as const)('retains a replacement registered while settlement is in flight (%s)', async (replacementKind) => {
+    const error = new AppServerRpcError(Method.TurnStart, { code: -32000, message: 'rejected' });
+    let finishFirst!: () => void;
+    const firstAttempt = new Promise<void>((resolve) => { finishFirst = resolve; });
+    const original = vi.fn()
+      .mockImplementationOnce(() => firstAttempt)
+      .mockResolvedValue(undefined);
+    const replacement = replacementKind === 'same callback' ? original : vi.fn().mockResolvedValue(undefined);
+    error.deferVendorDispatchRejectionSettlement(original);
+    const first = error.settleVendorDispatchRejection();
+    error.deferVendorDispatchRejectionSettlement(replacement);
+    const concurrent = error.settleVendorDispatchRejection();
+    finishFirst();
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([true, true]);
+    expect(original).toHaveBeenCalledTimes(1);
+    if (replacementKind === 'different callback') expect(replacement).not.toHaveBeenCalled();
+
+    await expect(error.settleVendorDispatchRejection()).resolves.toBe(true);
+    expect(replacement).toHaveBeenCalledTimes(replacementKind === 'same callback' ? 2 : 1);
+    await expect(error.settleVendorDispatchRejection()).resolves.toBe(false);
+  });
+});
 
 describe('detectAuthInvalidationReason', () => {
   const revokedRateLimitsError = {

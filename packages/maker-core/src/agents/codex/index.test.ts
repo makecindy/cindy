@@ -7,6 +7,7 @@ import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
 import { CodexForkError } from './fork-error.js';
 import { Method } from './app-server/protocol.js';
+import { AppServerRpcError } from './app-server/client.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -3674,10 +3675,16 @@ describe('CodexAgent reference directories', () => {
   it('reapplies roots and the profile when a stale daemon requires resume + retry', async () => {
     const agent = new CodexAgent(createDeps());
     let turnStartCount = 0;
+    const rejectionSettlement = vi.fn(async () => {});
+    const retryableRejection = new AppServerRpcError(Method.TurnStart, {
+      code: -32000,
+      message: 'thread not found',
+    });
+    retryableRejection.deferVendorDispatchRejectionSettlement(rejectionSettlement);
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
         turnStartCount += 1;
-        if (turnStartCount === 1) throw new Error('thread not found');
+        if (turnStartCount === 1) throw retryableRejection;
         return { turn: { id: 'turn-retry' } };
       }
       return undefined;
@@ -3688,8 +3695,12 @@ describe('CodexAgent reference directories', () => {
       workingDir: '/repo',
       extraDirs: ['/shared-retry'],
     });
+    const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
 
-    await handle.send({ type: 'user', content: 'retry after restart' });
+    await handle.send(
+      { type: 'user', content: 'retry after restart' },
+      { acquireVendorDispatchLease },
+    );
 
     const resumeCalls = host.request.mock.calls.filter(
       ([method]) => method === Method.ThreadResume,
@@ -3709,7 +3720,197 @@ describe('CodexAgent reference directories', () => {
       expect('permissions' in params).toBe(false);
       expect('sandboxPolicy' in params).toBe(false);
     }
+    const initialLease = (turnCalls[0] as unknown[])[2] as {
+      acquireSubmissionLease?: () => Promise<unknown>;
+      deferCorrelatedRejectionSettlement?: boolean;
+    };
+    const retryLease = (turnCalls[1] as unknown[])[2] as {
+      acquireSubmissionLease?: () => Promise<unknown>;
+      deferCorrelatedRejectionSettlement?: boolean;
+    };
+    expect(initialLease.acquireSubmissionLease).toBe(acquireVendorDispatchLease);
+    expect(initialLease.deferCorrelatedRejectionSettlement).toBe(true);
+    expect(retryLease.acquireSubmissionLease).not.toBe(acquireVendorDispatchLease);
+    expect(retryLease.deferCorrelatedRejectionSettlement).toBe(true);
+    await retryLease.acquireSubmissionLease?.();
+    expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+      'retry-after-confirmed-rejection',
+    );
+    expect(rejectionSettlement).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  it('settles a deferred correlated rejection when no replacement retry is selected', async () => {
+    const agent = new CodexAgent(createDeps());
+    const rejectionSettlement = vi.fn(async () => {});
+    const terminalRejection = new AppServerRpcError(Method.TurnStart, {
+      code: -32602,
+      message: 'invalid model',
+    });
+    terminalRejection.deferVendorDispatchRejectionSettlement(rejectionSettlement);
+    installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) throw terminalRejection;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-terminal-correlated-rejection',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await expect(
+      handle.send(
+        { type: 'user', content: 'do not retry this rejection' },
+        {
+          acquireVendorDispatchLease: async () => vi.fn(),
+          throwOnStartFailure: true,
+        },
+      ),
+    ).rejects.toThrow('turn/start failed');
+    expect(rejectionSettlement).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it.each(['initial', 'stale-daemon replacement'] as const)(
+    'retains failed %s rejection cleanup for send and close retries',
+    async (path) => {
+      const agent = new CodexAgent(createDeps());
+      const databaseFailure = new Error('SQLITE_BUSY: tombstone retries exhausted');
+      let cleanupAvailable = false;
+      const rejectionSettlement = vi.fn(async () => {
+        if (!cleanupAvailable) throw databaseFailure;
+      });
+      const rejection = new AppServerRpcError(Method.TurnStart, {
+        code: -32602,
+        message: 'invalid model',
+      });
+      rejection.deferVendorDispatchRejectionSettlement(rejectionSettlement);
+      const originalSettlement = vi.fn(async () => {});
+      const staleRejection = new AppServerRpcError(Method.TurnStart, {
+        code: -32000,
+        message: 'thread not found',
+      });
+      staleRejection.deferVendorDispatchRejectionSettlement(originalSettlement);
+      let turnStarts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method !== Method.TurnStart) return undefined;
+        if (++turnStarts === 1 && path === 'stale-daemon replacement') throw staleRejection;
+        throw rejection;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-failed-rejection-cleanup',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      try {
+        const sending = handle.send(
+          { type: 'user', content: 'rejected request' },
+          { acquireVendorDispatchLease: async () => vi.fn() },
+        );
+        await expect(sending).rejects.toMatchObject({
+          name: 'CodexDispatchRejectionCleanupError',
+          code: 'CODEX_DISPATCH_REJECTION_CLEANUP_FAILED',
+          cause: databaseFailure,
+          rejection,
+        });
+        expect(rejectionSettlement).toHaveBeenCalledTimes(1);
+        expect(originalSettlement).not.toHaveBeenCalled();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        const previousTurnStarts = turnStarts;
+        await expect(handle.send({ type: 'user', content: 'must wait for cleanup' }))
+          .rejects.toMatchObject({ code: 'CODEX_DISPATCH_REJECTION_CLEANUP_FAILED' });
+        expect(turnStarts).toBe(previousTurnStarts);
+        expect(rejectionSettlement).toHaveBeenCalledTimes(2);
+
+        await expect(handle.close()).rejects.toMatchObject({
+          code: 'CODEX_DISPATCH_REJECTION_CLEANUP_FAILED',
+        });
+        expect(host.subscribeThread.mock.results[0]?.value.release).toHaveBeenCalledOnce();
+        expect(rejectionSettlement).toHaveBeenCalledTimes(3);
+        cleanupAvailable = true;
+        await handle.close();
+        expect(rejectionSettlement).toHaveBeenCalledTimes(4);
+        await handle.close();
+        expect(rejectionSettlement).toHaveBeenCalledTimes(4);
+      } finally {
+        cleanupAvailable = true;
+        await handle.close();
+      }
+    },
+  );
+
+  it.each([
+    ['overload', 'active'], ['overload', 'aborted'], ['overload', 'closed'],
+    ['HTTP recovery', 'active'], ['HTTP recovery', 'aborted'], ['HTTP recovery', 'closed'],
+  ] as const)('retains %s rejection cleanup when the retry is %s', async (retryKind, lifecycle) => {
+    vi.useFakeTimers();
+    let cleanupAvailable = false;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      const agent = new CodexAgent(createDeps({}, retryKind === 'HTTP recovery'
+        ? { armCodexHttpRecovery: vi.fn(() => 'encrypted_content') }
+        : {}));
+      const retryStart = deferred<unknown>();
+      let turnStarts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method !== Method.TurnStart) return undefined;
+        return ++turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+      });
+      handle = await agent.startSession({
+        sessionId: 'session-background-rejection-cleanup', model: 'gpt-5.4', workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => { for await (const event of handle!.events()) events.push(event); })();
+      await handle.send({ type: 'user', content: 'retry then fail cleanup' });
+      const handlers = host.getThreadHandlers()!;
+      const recoveryMessage = 'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content';
+      handlers.error!({
+        threadId: 'start-thread-id', turnId: 'turn-1', willRetry: false,
+        error: retryKind === 'overload'
+          ? { message: 'Selected model is at capacity. Please try a different model.' }
+          : { message: 'Bad request', additionalDetails: recoveryMessage, codexErrorInfo: 'badRequest' },
+      });
+      if (retryKind === 'HTTP recovery') {
+        handlers.turnCompleted!({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'failed', error: { message: recoveryMessage } },
+        });
+      }
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(turnStarts).toBe(2);
+      if (lifecycle === 'aborted') await handle.abort();
+      if (lifecycle === 'closed') await handle.close();
+      await vi.advanceTimersByTimeAsync(0);
+      const terminalCount = () => events.filter((event) => event.type === 'error' && event.data.isTerminal).length;
+      const beforeRejection = terminalCount();
+      const rejection = new AppServerRpcError(Method.TurnStart, { code: -32602, message: 'invalid model' });
+      const rejectionSettlement = vi.fn(async () => {
+        if (!cleanupAvailable) throw new Error('tombstone unavailable');
+      });
+      rejection.deferVendorDispatchRejectionSettlement(rejectionSettlement);
+      retryStart.reject(rejection);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rejectionSettlement).toHaveBeenCalledOnce();
+      expect(handle.isTurnRunning?.()).toBe(false);
+      if (lifecycle === 'active') {
+        expect(events.some((event) => event.type === 'error'
+          && event.data.isTerminal && event.data.message.includes('rejected turn cleanup failed'))).toBe(true);
+      } else {
+        expect(terminalCount()).toBe(beforeRejection);
+      }
+      await expect(handle.close()).rejects.toMatchObject({
+        code: 'CODEX_DISPATCH_REJECTION_CLEANUP_FAILED',
+      });
+      expect(rejectionSettlement).toHaveBeenCalledTimes(2);
+      expect(host.subscribeThread.mock.results.at(-1)?.value.release).toHaveBeenCalledOnce();
+      cleanupAvailable = true;
+      await handle.close();
+      expect(rejectionSettlement).toHaveBeenCalledTimes(3);
+    } finally {
+      cleanupAvailable = true;
+      await handle?.close();
+      vi.useRealTimers();
+    }
   });
 
   it('accepts lower usage totals after stale-daemon resume starts a new execution generation', async () => {
@@ -5921,6 +6122,65 @@ describe('CodexAgent send', () => {
       await handle.close();
     },
   );
+
+  it.each([
+    ['initial', 'signal'],
+    ['initial', 'stop'],
+    ['stale retry', 'signal'],
+    ['stale retry', 'stop'],
+  ] as const)('does not submit %s after %s during a deferred vendor lease', async (stage, cancellation) => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-deferred-lease-cancel',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const transport = createdTransports[0];
+    transport.setMockResponse(Method.TurnStart, stage === 'initial'
+      ? { result: { turn: { id: 'cancelled-turn' } } }
+      : { error: { code: -32000, message: 'thread not found' } });
+    const controller = new AbortController();
+    const acquiring = deferred<void>();
+    const leaseReady = deferred<void>();
+    const releaseInitial = vi.fn();
+    const releaseCancelled = vi.fn();
+    const acquireVendorDispatchLease = vi.fn(async (intent?: string) => {
+      if (stage === 'stale retry' && intent === undefined) return releaseInitial;
+      acquiring.resolve();
+      await leaseReady.promise;
+      return releaseCancelled;
+    });
+    const send = handle.send({ type: 'user', content: 'hello' }, {
+      signal: controller.signal,
+      throwOnStartFailure: true,
+      acquireVendorDispatchLease,
+    }).catch((error: unknown) => error);
+    try {
+      await acquiring.promise;
+      if (cancellation === 'signal') controller.abort();
+      else await handle.abort();
+      transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'cancelled-turn' } } });
+      leaseReady.resolve();
+      const result = await send;
+      const starts = transport.lines.filter((line) => JSON.parse(line).method === Method.TurnStart);
+      expect(starts).toHaveLength(stage === 'initial' ? 0 : 1);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toMatch(/Codex send cancelled before acceptance/);
+      expect(releaseCancelled.mock.calls).toEqual([['confirmed-undispatched']]);
+      if (stage === 'stale retry') {
+        expect(acquireVendorDispatchLease.mock.calls).toEqual([
+          [], ['retry-after-confirmed-rejection'],
+        ]);
+        expect(releaseInitial.mock.calls).toEqual([['submitted']]);
+      }
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally {
+      leaseReady.resolve();
+      await send;
+      await handle.close();
+      await agent.dispose();
+    }
+  });
 
   it('rejects turn/start failures when the caller needs accepted-or-rejected semantics', async () => {
     const agent = new CodexAgent(createDeps());
@@ -9521,6 +9781,61 @@ describe('CodexAgent MCP thread context hooks', () => {
   //  2. 重投预算不会被"重投自己开出的新 turn"续满（否则容量故障期烧光额度）；
   //  3. 已有产出的 turn 绝不自动重放（会让模型重做已完成的工作）。
   describe('overload auto-retry', () => {
+    it.each(['signal', 'stop'] as const)('does not submit an overload retry after %s during a deferred vendor lease', async (cancellation) => {
+      vi.useFakeTimers();
+      const agent = new CodexAgent(createDeps());
+      const leaseReady = deferred<void>();
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-lease-cancel',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const transport = createdTransports[0];
+        transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'turn-before-retry' } } });
+        const controller = new AbortController();
+        const releaseInitial = vi.fn();
+        const releaseCancelled = vi.fn();
+        const acquireVendorDispatchLease = vi.fn(async (intent?: string) => {
+          if (intent === undefined) return releaseInitial;
+          await leaseReady.promise;
+          return releaseCancelled;
+        });
+        await handle.send({ type: 'user', content: 'hello' }, {
+          signal: controller.signal,
+          acquireVendorDispatchLease,
+        });
+        transport.emitMockLine({
+          method: 'error',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-before-retry',
+            willRetry: false,
+            error: { message: 'Selected model is at capacity. Please try a different model.' },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(acquireVendorDispatchLease.mock.calls).toEqual([
+          [], ['retry-after-confirmed-rejection'],
+        ]);
+        if (cancellation === 'signal') controller.abort();
+        else await handle.abort();
+        leaseReady.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(transport.lines.filter((line) => JSON.parse(line).method === Method.TurnStart)).toHaveLength(1);
+        expect(releaseCancelled.mock.calls).toEqual([['confirmed-undispatched']]);
+        expect(releaseInitial.mock.calls).toEqual([['submitted']]);
+        expect(handle.isTurnRunning?.()).toBe(false);
+      } finally {
+        leaseReady.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await handle?.close();
+        await agent.dispose();
+        vi.useRealTimers();
+      }
+    });
+
     /** 只让 turn/start 计数并返回递增 turn id，便于断言重投次数。 */
     function installCapacityHost(agent: CodexAgent): ReturnType<typeof installFakeHost> {
       let turnSeq = 0;
@@ -9596,7 +9911,11 @@ describe('CodexAgent MCP thread context hooks', () => {
           model: 'gpt-5.4',
           workingDir: '/repo',
         });
-        await handle.send({ type: 'user', content: 'hello' });
+        const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
+        await handle.send(
+          { type: 'user', content: 'hello' },
+          { acquireVendorDispatchLease },
+        );
         expect(turnStartCount(host)).toBe(1);
 
         const handlers = host.getThreadHandlers();
@@ -9628,6 +9947,22 @@ describe('CodexAgent MCP thread context hooks', () => {
         // 退避（首档 2s ±25%）后重投同一份 turnParams。
         await vi.advanceTimersByTimeAsync(3_000);
         expect(turnStartCount(host)).toBe(2);
+        const turnStartOptions = host.request.mock.calls
+          .filter(([method]) => method === Method.TurnStart)
+          .map((call) => (call as unknown[])[2] as {
+            acquireSubmissionLease?: unknown;
+          });
+        expect(turnStartOptions).toHaveLength(2);
+        expect(turnStartOptions[0]?.acquireSubmissionLease).toBe(acquireVendorDispatchLease);
+        expect(turnStartOptions[1]?.acquireSubmissionLease).not.toBe(
+          acquireVendorDispatchLease,
+        );
+        await (turnStartOptions[1]?.acquireSubmissionLease as
+          | (() => Promise<unknown>)
+          | undefined)?.();
+        expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+          'retry-after-confirmed-rejection',
+        );
 
         await handle.close();
       } finally {

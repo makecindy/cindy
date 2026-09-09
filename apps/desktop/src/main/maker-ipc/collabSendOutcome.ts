@@ -12,6 +12,8 @@ import {
 export type CollabHostSendOutcome = HostSendOutcome & {
   source: string;
   context: string;
+  /** Provider acceptance may have happened; callers must not rewind or replay automatically. */
+  dispatchUnconfirmed?: true;
 };
 
 export type CollabDispatchSuccessOutcome = Extract<DesktopSessionDispatchOutcome, { dispatched: true }>;
@@ -50,15 +52,27 @@ function isSessionRunningSendError(err: unknown): boolean {
   return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
 }
 
+export function isTurnDispatchUnconfirmedSendError(err: unknown): boolean {
+  return Boolean(
+    err
+    && typeof err === 'object'
+    && (err as { code?: unknown }).code === 'TURN_DISPATCH_UNCONFIRMED',
+  );
+}
+
 function hostOutcomeForSendError(err: unknown, meta: CollabDispatchMeta): CollabHostSendOutcome {
+  const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
   const code = isSessionRunningSendError(err) ? 'SESSION_RUNNING' : 'SEND_FAILED';
   return {
     ...createHostSendFailure(
       code,
-      `Collab delegate send failed before vendor dispatch: ${meta.context}`,
+      dispatchUnconfirmed
+        ? `Collab delegate provider acceptance is unconfirmed: ${meta.context}`
+        : `Collab delegate send failed before vendor dispatch: ${meta.context}`,
     ),
     source: meta.source,
     context: meta.context,
+    ...(dispatchUnconfirmed ? { dispatchUnconfirmed: true as const } : {}),
   };
 }
 

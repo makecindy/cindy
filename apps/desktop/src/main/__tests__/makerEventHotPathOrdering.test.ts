@@ -466,7 +466,14 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('marks Agent Island stopped before provider abort tails can arrive', () => {
-    const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
+    const inputCoordinatorStart = source.indexOf(
+      'const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({',
+    );
+    expect(inputCoordinatorStart).toBeGreaterThanOrEqual(0);
+    const coordinatorAbortStart = source.indexOf(
+      'abortSession: async (sessionId) => {',
+      inputCoordinatorStart,
+    );
     const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
     const coordinatorAbortSource = source.slice(coordinatorAbortStart, coordinatorAbortEnd);
     const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
@@ -552,7 +559,14 @@ describe('maker:event hot path ordering', () => {
     const resetEnd =
       source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
     const resetSource = source.slice(resetStart, resetEnd);
-    const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
+    const inputCoordinatorStart = source.indexOf(
+      'const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({',
+    );
+    expect(inputCoordinatorStart).toBeGreaterThanOrEqual(0);
+    const coordinatorAbortStart = source.indexOf(
+      'abortSession: async (sessionId) => {',
+      inputCoordinatorStart,
+    );
     const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
     const coordinatorAbortSource = source.slice(coordinatorAbortStart, coordinatorAbortEnd);
     const inputStopStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.INPUT_STOP');

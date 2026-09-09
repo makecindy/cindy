@@ -165,6 +165,23 @@ async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
   return { piSessionFailures };
 }
 
+// Both quit phases must await the same provider shutdown before releasing the DB lease.
+let shutdownMakerPromise: ReturnType<typeof shutdownMaker> | null = null;
+function shutdownMakerOnce(): ReturnType<typeof shutdownMaker> {
+  shutdownMakerPromise ??= shutdownMaker();
+  return shutdownMakerPromise;
+}
+
+async function disposeOrcaTeamDispatchLeaseAfterMakerShutdown(): Promise<void> {
+  // A submitted provider request may still be running. Keep its writer lease and
+  // persistence retries alive until shutdown confirms every Pi session detached.
+  const { piSessionFailures } = await shutdownMakerOnce();
+  if (piSessionFailures > 0) {
+    throw new Error('Cannot release Orca dispatch lease while Pi sessions remain attached');
+  }
+  await disposeOrcaTeamDispatchLeaseCoordinator();
+}
+
 function readGitText(args: string[]): string | null {
   try {
     const value = execFileSync('git', args, {
@@ -361,6 +378,7 @@ import {
   getDbPathForUser,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
+import { disposeOrcaTeamDispatchLeaseCoordinator } from './orcaTeamDispatchLease';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import {
   clearCurrentDbClient,
@@ -1923,6 +1941,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
             err,
           );
         }
+        await disposeOrcaTeamDispatchLeaseCoordinator();
         await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
@@ -1948,6 +1967,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     );
   }
   try {
+    await disposeOrcaTeamDispatchLeaseCoordinator();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -9241,7 +9261,7 @@ onQuit(
   async () => {
     // Not try/finally: a rejection here can predate `maker.shutdown` entirely
     // (see `makerShutdownSettled`), so it must not read as "the parent is down".
-    const { piSessionFailures } = await shutdownMaker();
+    const { piSessionFailures } = await shutdownMakerOnce();
     // Fulfilment alone was never quite the proof this claims to be: shutdown
     // collects per-session detach failures instead of throwing, so a PI session
     // could have been left with a live process. Now that it reports them, a
@@ -9256,6 +9276,11 @@ onQuit(
     makerShutdownSettled = true;
   },
   'async',
+);
+onQuit(
+  'orca-team-dispatch-lease',
+  disposeOrcaTeamDispatchLeaseAfterMakerShutdown,
+  'post-async',
 );
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 // LSP 不占用 Agent 正常保存和退出的时间窗口。

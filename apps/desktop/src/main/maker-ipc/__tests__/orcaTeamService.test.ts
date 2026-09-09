@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
+import { resolveCollabDispatchResult } from '../collabSendOutcome';
 import {
   createOrcaTeamService,
   findFocusTargetWorker,
@@ -107,7 +108,9 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       workers.filter((worker) => worker.leadSessionId === leadSessionId),
     ),
     getLiveSession: vi.fn(() => null),
-    resumeWorkerSession: vi.fn(async () => {}),
+    reserveTeamDispatchSettlement: vi.fn(() => vi.fn()),
+    waitForOrcaTeamTerminalTransition: vi.fn(async () => 'open' as const),
+    resumeWorkerSession: vi.fn(async () => true),
     updateWorkerStatus: vi.fn(async (workerId, status) => {
       calls.push(`updateWorkerStatus:${status}`);
       workers = workers.map((worker) =>
@@ -335,6 +338,204 @@ describe('OrcaTeamService', () => {
     expect(vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(deps.dispatchWorkerMessage).mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('holds the team settlement reservation across dormant worker resume', async () => {
+    let notifyResumeEntered!: () => void;
+    let releaseResume!: () => void;
+    const resumeEntered = new Promise<void>((resolve) => {
+      notifyResumeEntered = resolve;
+    });
+    const resumeRelease = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const releaseTeamDispatch = vi.fn();
+    const { deps, service } = createDeps({
+      reserveTeamDispatchSettlement: vi.fn(() => releaseTeamDispatch),
+      resumeWorkerSession: vi.fn(async () => {
+        notifyResumeEntered();
+        await resumeRelease;
+        return true;
+      }),
+    });
+
+    const dispatch = service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1',
+      message: 'resume safely',
+      dispatchMeta: { source: 'test-source', context: 'team-resume-reservation' },
+    });
+    await resumeEntered;
+
+    expect(deps.reserveTeamDispatchSettlement).toHaveBeenCalledWith('team-1');
+    expect(vi.mocked(deps.reserveTeamDispatchSettlement).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]!,
+    );
+    expect(releaseTeamDispatch).not.toHaveBeenCalled();
+
+    releaseResume();
+    await expect(dispatch).resolves.toMatchObject({ dispatched: true });
+    expect(releaseTeamDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('releases its resume settlement before waiting on a terminal transition and revalidates before retry', async () => {
+    let reservations = 0;
+    let pending = false;
+    let resumeCalls = 0;
+    let releaseUnexpectedWait!: () => void;
+    const unexpectedWait = new Promise<void>((resolve) => { releaseUnexpectedWait = resolve; });
+    const waitForOrcaTeamTerminalTransition = vi.fn(async () => {
+      // end_team cannot commit or roll back until the service's ingress has settled.
+      expect(reservations).toBe(0);
+      pending = false;
+      return 'open' as const;
+    });
+    const { deps, service } = createDeps({
+      reserveTeamDispatchSettlement: vi.fn(() => {
+        reservations += 1;
+        return () => { reservations -= 1; };
+      }),
+      resumeWorkerSession: vi.fn(async () => {
+        resumeCalls += 1;
+        if (resumeCalls === 1) pending = true;
+        return true;
+      }),
+      waitForOrcaTeamTerminalTransition,
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        if (pending) {
+          // Model the nested dispatcher waiting for a transition whose owner waits on this service.
+          if (!params.deferTerminalTransitionRetry) await unexpectedWait;
+          return {
+            ok: false,
+            dispatchOutcome: {
+              kind: 'host-send', accepted: false, code: 'SEND_FAILED',
+              message: 'ORCA_TEAM_TERMINATING: team team-1 terminal transition is still pending',
+              source: params.dispatchMeta.source, context: params.dispatchMeta.context,
+            },
+          } satisfies DispatchWorkerMessageResult;
+        }
+        await params.onAccepted?.();
+        return {
+          ok: true, mode: 'dispatched', clientId: 'retry-1',
+          dispatchOutcome: { kind: 'session-dispatch', source: 'test-source', dispatched: true },
+          targetTitle: 'Worker', targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    const dispatch = service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1', message: 'resume through rollback',
+      dispatchMeta: { source: 'test-source', context: 'nested-terminal-wait' },
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        dispatch,
+        new Promise<'deadlocked'>((resolve) => { timer = setTimeout(() => resolve('deadlocked'), 250); }),
+      ]);
+      expect(result).toMatchObject({ dispatched: true });
+      expect(waitForOrcaTeamTerminalTransition).toHaveBeenCalledOnce();
+      expect(deps.reserveTeamDispatchSettlement).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(deps.listWorkersByLead).mock.invocationCallOrder[1]).toBeLessThan(
+        vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[1]!,
+      );
+      expect(deps.resumeWorkerSession).toHaveBeenCalledTimes(2);
+    } finally {
+      if (timer) clearTimeout(timer);
+      releaseUnexpectedWait();
+      await dispatch;
+    }
+  });
+
+  it('retries a direct pending transition after the dispatch adapter normalizes its error message', async () => {
+    let attempt = 0;
+    const { deps, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        attempt += 1;
+        const direct = await resolveCollabDispatchResult(async () => {
+          await params.onAccepted?.();
+          if (attempt === 1) {
+            throw new Error('ORCA_TEAM_TERMINATING: team team-1 terminal transition is still pending');
+          }
+          return { accepted: true };
+        }, params.dispatchMeta);
+        if (!direct.dispatched) {
+          expect(direct.dispatchOutcome.message).not.toContain('ORCA_TEAM_TERMINATING');
+          await params.onAcceptedRollback?.();
+          return {
+            ok: false,
+            dispatchOutcome: direct.dispatchOutcome,
+            retryAfterTerminalTransition: true,
+          } satisfies DispatchWorkerMessageResult;
+        }
+        return {
+          ok: true, mode: 'dispatched', clientId: 'retry-normalized',
+          dispatchOutcome: direct.dispatchOutcome,
+          targetTitle: 'Worker', targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+
+    await expect(service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1', message: 'retry after rollback',
+      dispatchMeta: { source: 'test-source', context: 'normalized-pending' },
+    })).resolves.toMatchObject({ dispatched: true });
+    expect(deps.waitForOrcaTeamTerminalTransition).toHaveBeenCalledWith('team-1');
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledTimes(2);
+    expect(deps.reserveTeamDispatchSettlement).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not resume a dormant worker when the team reservation is rejected', async () => {
+    const { deps, service } = createDeps({
+      reserveTeamDispatchSettlement: vi.fn(() => {
+        throw new Error('ORCA_TEAM_INACTIVE: team team-1 has already ended');
+      }),
+    });
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: 'too late',
+        dispatchMeta: { source: 'test-source', context: 'terminal-team-resume' },
+      }),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      dispatchOutcome: expect.objectContaining({
+        kind: 'host-send',
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      }),
+    });
+    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+  });
+
+  it('closes a worker revived during a cross-instance terminal transition', async () => {
+    const { deps, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => ({
+        ok: false,
+        dispatchOutcome: {
+          kind: 'host-send',
+          accepted: false,
+          code: 'SEND_FAILED',
+          message: 'ORCA_TEAM_INACTIVE: team team-1 has already ended',
+          source: params.dispatchMeta.source,
+          context: params.dispatchMeta.context,
+        },
+      } satisfies DispatchWorkerMessageResult)),
+    });
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: 'too late after resume',
+        dispatchMeta: { source: 'test-source', context: 'cross-instance-terminal-race' },
+      }),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      dispatchOutcome: expect.objectContaining({
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      }),
+    });
+    expect(deps.resumeWorkerSession).toHaveBeenCalledOnce();
+    expect(deps.closeWorkerSession).toHaveBeenCalledWith('worker-session-1');
   });
 
   it('does not resume a running worker that still has a live session', async () => {
@@ -931,6 +1132,47 @@ describe('OrcaTeamService', () => {
       finalText: '不应 bridge',
     });
     expect(leadMessages).toEqual([]);
+  });
+
+  it('preserves accepted lifecycle on unconfirmed dispatch and allows the later terminal to settle', async () => {
+    const { deps, getWorker, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        await params.onAccepted?.();
+        return {
+          ok: false,
+          dispatchOutcome: {
+            kind: 'host-send',
+            source: params.dispatchMeta.source,
+            context: params.dispatchMeta.context,
+            accepted: false,
+            code: 'SEND_FAILED',
+            message: 'provider acceptance could not be confirmed; diagnostic mentioned ORCA_TEAM_INACTIVE',
+            dispatchUnconfirmed: true,
+          },
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+
+    await expect(service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1',
+      message: 'Possibly accepted task',
+      dispatchMeta: { source: 'test-source', context: 'unconfirmed-test' },
+    })).resolves.toMatchObject({ dispatched: false, dispatchOutcome: { dispatchUnconfirmed: true } });
+    expect(getWorker().status).toBe('running');
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith('worker-1', 'idle');
+    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'Provider eventually completed',
+    });
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledWith(
+      'lead-1',
+      expect.stringContaining('Provider eventually completed'),
+      'worker-1',
+      'team-1',
+    );
   });
 
   it('rolls back running status and pending auto-bridge when accepted dispatch throws', async () => {

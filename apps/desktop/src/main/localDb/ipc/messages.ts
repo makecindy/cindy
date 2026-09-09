@@ -6,6 +6,7 @@
  * - `updateContent(sessionId, clientId, content)` —— 用于 ask_user 的 answered 状态等
  */
 
+import { setTimeout as delay } from 'node:timers/promises';
 import { ipcMain, BrowserWindow } from 'electron';
 import {
   and,
@@ -26,6 +27,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 
 import { getDbClient } from '../client/current';
+import type { DbClient } from '../client/DbClient';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
@@ -88,6 +90,27 @@ type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 type DataOwnerBroadcastScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
 
+function hasReusableOrcaPreVendorMarker(
+  row: MessageRow | undefined,
+  expectedTeamId: string,
+): boolean {
+  if (!row?.agentMeta) return false;
+  try {
+    const marker = (JSON.parse(row.agentMeta) as AgentMeta).orcaPreVendorCleanup;
+    return marker?.teamId === expectedTeamId && marker.phase !== 'submitted';
+  } catch {
+    return false;
+  }
+}
+
+function throwOrcaSubmittedMessageConflict(teamId: string, clientId: string): never {
+  const error = new Error(
+    `ORCA_MESSAGE_ALREADY_SUBMITTED: team ${teamId} message ${clientId} may already be executing`,
+  ) as Error & { code?: string };
+  error.code = 'TURN_DISPATCH_UNCONFIRMED';
+  throw error;
+}
+
 function captureOwnerBroadcastScope(): DataOwnerBroadcastScope | null {
   try {
     const capture = broadcastTap.captureDataOwnerBroadcastScope;
@@ -95,6 +118,14 @@ function captureOwnerBroadcastScope(): DataOwnerBroadcastScope | null {
   } catch {
     // Narrow unit-test mocks may intentionally expose only the legacy tap API.
     return null;
+  }
+}
+
+function isDbClientCurrent(client: DbClient): boolean {
+  try {
+    return getDbClient() === client;
+  } catch {
+    return false;
   }
 }
 
@@ -1202,9 +1233,9 @@ export function broadcastMessageDeleted(
 }
 
 /**
- * Hide a user row that was persisted after the session crossed `/clear`.
+ * Hide a user row that was persisted before a clear or selective pre-vendor cancellation won.
  *
- * This is deliberately narrower than `commitMessageDeletion`: a clear-race
+ * This is deliberately narrower than `commitMessageDeletion`: pre-vendor
  * cleanup must not create a context-rebuild marker, reset the native session,
  * or touch any other turn.  The row stays as a rewind tombstone so the same
  * clientId remains idempotent across a weak-link retry.
@@ -1212,40 +1243,72 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
-): Promise<void> {
+  options: {
+    finalizeAlreadyRewound?: boolean;
+    preserveSubmittedOrca?: boolean;
+    expectedDbClient?: DbClient;
+  } = {},
+): Promise<boolean> {
   const ownerScope = captureOwnerBroadcastScope();
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  const dbClient = getDbClient();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return true;
+  const dbClient = options.expectedDbClient ?? getDbClient();
+  const isCurrent = () =>
+    isDbClientCurrent(dbClient) && isOwnerBroadcastScopeCurrent(ownerScope);
+  if (!isCurrent()) return true;
   const db = dbClient.drizzle;
+  const filters = [
+    eq(messages.sessionId, sessionId),
+    eq(messages.clientId, clientId),
+    eq(messages.role, 'user'),
+  ];
+  if (!options.finalizeAlreadyRewound) filters.push(isNull(messages.rewindAt));
   const [row] = await db
-    .select({ id: messages.id, clientId: messages.clientId, content: messages.content })
+    .select({
+      id: messages.id,
+      clientId: messages.clientId,
+      content: messages.content,
+      rewindAt: messages.rewindAt,
+    })
     .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, clientId),
-        eq(messages.role, 'user'),
-        isNull(messages.rewindAt),
-      ),
-    )
+    .where(and(...filters))
     .limit(1);
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (!row) return;
+  if (!isCurrent()) return true;
+  if (!row) return true;
 
-  const rewoundAt = Date.now();
-  const updated = await dbClient.tx('message.rewindUserAfterClear', {
-    sessionId,
-    clientId,
-    rewoundAt,
-  });
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (updated.changes === 0) return;
+  const updated =
+    row.rewindAt === null
+      ? await dbClient.tx('message.rewindUserAfterClear', {
+          sessionId,
+          clientId,
+          rewoundAt: Date.now(),
+          preserveSubmittedOrca: options.preserveSubmittedOrca,
+        })
+      : { changes: 0 };
+  if (!isCurrent()) return true;
+  if (updated.changes === 0 && !options.finalizeAlreadyRewound) {
+    if (options.preserveSubmittedOrca) {
+      const submitted = await dbClient.queryOne<{ submitted: number }>(
+        `SELECT 1 AS submitted
+           FROM messages
+          WHERE session_id = ?
+            AND client_id = ?
+            AND role = 'user'
+            AND rewind_at IS NULL
+            AND json_extract(agent_meta, '$.orcaPreVendorCleanup.phase') = 'submitted'
+          LIMIT 1`,
+        [sessionId, clientId],
+      );
+      if (submitted) return false;
+    }
+    return true;
+  }
 
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>
-      removeMediaRefs({ refKind: 'message', refId }),
+      removeMediaRefs({ refKind: 'message', refId }, db),
     ),
   );
+  if (!isCurrent()) return true;
   for (const [index, cleanup] of mediaCleanup.entries()) {
     if (cleanup.status === 'fulfilled') continue;
     log.warn('clear-race user media ref cleanup failed', {
@@ -1258,9 +1321,10 @@ export async function rewindPersistedUserMessageAfterClear(
   const mediaHashes = collectCindyMediaHashes(row.content);
   const mediaHashCleanup = await Promise.allSettled(
     mediaHashes.map((hash) =>
-      removeSessionAttachmentRefIfUnreferencedByLiveMessage({ sessionId, hash }),
+      removeSessionAttachmentRefIfUnreferencedByLiveMessage({ sessionId, hash }, db),
     ),
   );
+  if (!isCurrent()) return true;
   for (const [index, cleanup] of mediaHashCleanup.entries()) {
     if (cleanup.status === 'fulfilled') continue;
     log.warn('clear-race session media ref reconcile failed', {
@@ -1272,6 +1336,67 @@ export async function rewindPersistedUserMessageAfterClear(
   }
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
+  return true;
+}
+
+/** Complete media cleanup and UI broadcast without undoing durable terminal success. */
+export async function finalizeRewoundOrcaPreVendorCleanupRows(
+  rows: Array<{ sessionId: string; clientId: string }>,
+  expectedDbClient: DbClient = getDbClient(),
+): Promise<void> {
+  if (!isDbClientCurrent(expectedDbClient)) return;
+  const maxAttempts = 3;
+  const results = await Promise.allSettled(
+    rows.map(async ({ sessionId, clientId }) => {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (!isDbClientCurrent(expectedDbClient)) return;
+        try {
+          await rewindPersistedUserMessageAfterClear(sessionId, clientId, {
+            finalizeAlreadyRewound: true,
+            expectedDbClient,
+          });
+          return;
+        } catch (error) {
+          if (!isDbClientCurrent(expectedDbClient)) return;
+          if (attempt === maxAttempts) throw error;
+          await delay(attempt * 10);
+        }
+      }
+    }),
+  );
+  if (!isDbClientCurrent(expectedDbClient)) return;
+  // The row is already durably rewound. Exhausted media/UI finalization must
+  // not skip queue settlement, worker shutdown or Lead role cleanup. Report
+  // the exact failed receipt after every row has finished its bounded retries.
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'fulfilled') continue;
+    log.warn('post-commit Orca row finalization failed', {
+      ...rows[index],
+      attempts: maxAttempts,
+      error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+    });
+  }
+}
+
+/** Conditionally rewind only explicit, still-pre-vendor Orca cleanup markers. */
+export async function rewindOrcaPreVendorCleanupRows(
+  teamId: string,
+  sessionIds: string[],
+  expectedDbClient: DbClient = getDbClient(),
+): Promise<Array<{ sessionId: string; clientId: string }>> {
+  const uniqueSessionIds = [...new Set(sessionIds)];
+  if (uniqueSessionIds.length === 0) return [];
+  const dbClient = expectedDbClient;
+  if (!isDbClientCurrent(dbClient)) {
+    throw new Error('ORCA_CLEANUP_OWNER_CHANGED: database owner changed before recovery cleanup');
+  }
+  const rows = await dbClient.tx('orca.rewindPreVendorCleanup', {
+    teamId,
+    cleanupSessionIds: uniqueSessionIds,
+    now: Date.now(),
+  });
+  await finalizeRewoundOrcaPreVendorCleanupRows(rows, dbClient);
+  return rows;
 }
 
 export async function dismissErrorMessage(
@@ -1552,6 +1677,8 @@ export async function createMessage(
      * durable user row.
      */
     expectedClearBoundaryMs?: number | null;
+    /** Atomically require this Orca team to remain active while inserting the row. */
+    expectedOrcaTeamId?: string;
     /**
      * Owner scope captured before an async main-side write.  A stale scope
      * must not broadcast a row into the next signed-in owner.
@@ -1564,6 +1691,16 @@ export async function createMessage(
   const guarded =
     opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
   const expected = guarded ? opts?.expectedClearBoundaryMs : undefined;
+  const expectedOrcaTeamId = opts?.expectedOrcaTeamId;
+  const orcaGuarded = typeof expectedOrcaTeamId === 'string';
+  const isExpectedOrcaTeamActive = async (): Promise<boolean> => {
+    if (!orcaGuarded) return true;
+    const row = await dbClient.queryOne<{ status: string }>(
+      'SELECT status FROM orca_teams WHERE id = ? LIMIT 1',
+      [expectedOrcaTeamId],
+    );
+    return row?.status === 'active';
+  };
   if (
     guarded &&
     expected !== null &&
@@ -1575,7 +1712,7 @@ export async function createMessage(
   // The unguarded API keeps its historical fast idempotency read. Guarded
   // optimistic sends must skip it: a pre-clear row can otherwise be returned
   // before the compare-and-set boundary is checked.
-  if (!guarded) {
+  if (!guarded && !orcaGuarded) {
     const existing = await db
       .select()
       .from(messages)
@@ -1604,6 +1741,7 @@ export async function createMessage(
       createdAt: insertRow.createdAt,
       guarded,
       expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+      expectedOrcaTeamId,
     });
     if (guarded && inserted.changes === 0) {
       const [existingAfterGuard] = await db
@@ -1617,9 +1755,13 @@ export async function createMessage(
         .where(eq(sessions.id, sessionId))
         .limit(1);
       const actual = sessionAfterGuard?.clearedAt ?? null;
+      const orcaTeamActive = await isExpectedOrcaTeamActive();
       if (
         existingAfterGuard &&
         actual === expected &&
+        orcaTeamActive &&
+        (!orcaGuarded ||
+          hasReusableOrcaPreVendorMarker(existingAfterGuard, expectedOrcaTeamId!)) &&
         existingAfterGuard.rewindAt === null &&
         (expected === null || existingAfterGuard.createdAt > expected)
       ) {
@@ -1633,7 +1775,38 @@ export async function createMessage(
           { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
         );
       }
+      if (!orcaTeamActive) {
+        throw new Error(
+          `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+        );
+      }
+      if (existingAfterGuard && orcaGuarded) {
+        throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
+      }
       throw new Error('Message insert skipped without a clear-boundary change');
+    } else if (orcaGuarded && inserted.changes === 0) {
+      const [existingAfterGuard] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+        .limit(1);
+      const orcaTeamActive = await isExpectedOrcaTeamActive();
+      if (
+        existingAfterGuard?.rewindAt === null &&
+        orcaTeamActive &&
+        hasReusableOrcaPreVendorMarker(existingAfterGuard, expectedOrcaTeamId!)
+      ) {
+        return messageToCamel(existingAfterGuard);
+      }
+      if (!orcaTeamActive) {
+        throw new Error(
+          `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+        );
+      }
+      if (existingAfterGuard) {
+        throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
+      }
+      throw new Error('Message insert skipped without an Orca lifecycle change');
     }
   } catch (err) {
     const after = await db
@@ -1649,9 +1822,13 @@ export async function createMessage(
         .limit(1);
       const actual = sessionAfterError?.clearedAt ?? null;
       const existingAfterError = after[0];
+      const orcaTeamActive = await isExpectedOrcaTeamActive();
       if (
         existingAfterError &&
         actual === expected &&
+        orcaTeamActive &&
+        (!orcaGuarded ||
+          hasReusableOrcaPreVendorMarker(existingAfterError, expectedOrcaTeamId!)) &&
         existingAfterError.rewindAt === null &&
         (expected === null || existingAfterError.createdAt > expected)
       ) {
@@ -1665,6 +1842,20 @@ export async function createMessage(
           { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
         );
       }
+      if (!orcaTeamActive) {
+        throw new Error(
+          `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+        );
+      }
+      if (existingAfterError && orcaGuarded) {
+        throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
+      }
+    } else if (orcaGuarded && !(await isExpectedOrcaTeamActive())) {
+      throw new Error(
+        `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+      );
+    } else if (orcaGuarded && after[0]) {
+      throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
     } else if (after.length > 0) {
       return messageToCamel(after[0]);
     }

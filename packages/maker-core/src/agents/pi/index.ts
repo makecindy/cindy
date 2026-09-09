@@ -84,6 +84,7 @@ import {
   type PiSubagentRunnerLaunchRequest,
   type PiSubagentRunnerProcess,
   type SendOptions,
+  type VendorDispatchLeaseRelease,
   type StartSessionOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
@@ -6112,17 +6113,66 @@ export class PiAgent extends BaseAgent {
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
-          promptRequestStarted = true;
+          const dispatchLease: { release?: VendorDispatchLeaseRelease } = {};
+          const settleAcceptedDispatch = async (): Promise<void> => {
+            providerAccepted = true;
+            if (typeof dispatchLease.release === 'function') {
+              try {
+                await dispatchLease.release('accepted');
+              } catch (error) {
+                deps.logger.warn('Pi accepted dispatch cleanup settlement failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+          };
           try {
             doctorCommandActivity.enter(isDoctorCommand);
-            const resp = await runExclusivePiRpc(() => proc.request(command, {
-              timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
-              // Prompt acceptance may legitimately span multiple compaction
-              // retries. Bound each silent interval, not the whole progressing
-              // preflight, so a healthy long compaction is not killed at 10m.
-              refreshTimeoutOnEvent: (event) =>
-                PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
-            }));
+            const resp = await runExclusivePiRpc(async () => {
+              // The RPC queue may wait behind compact/model changes. Acquire the
+              // durable dispatch lease only at the actual transport boundary.
+              if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
+              const acquired = await sendOpts?.acquireVendorDispatchLease?.();
+              dispatchLease.release = typeof acquired === 'function' ? acquired : undefined;
+              try {
+                // Stop can win while another writer holds the dispatch lease.
+                if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
+              } catch (error) {
+                await dispatchLease.release?.('confirmed-undispatched');
+                throw error;
+              }
+              promptRequestStarted = true;
+              const pendingRequest = proc.requestWithSubmission(command, {
+                timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
+                // Prompt acceptance may legitimately span multiple compaction
+                // retries. Bound each silent interval, not the whole progressing
+                // preflight, so a healthy long compaction is not killed at 10m.
+                refreshTimeoutOnEvent: (event) =>
+                  PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
+              });
+              // A timeout cannot cancel a pending write. Let the response fail
+              // promptly while this task retains the lease until the raw write
+              // settles; otherwise a stalled write also blocks the RPC queue.
+              const releaseAfterSubmission = (async () => {
+                try {
+                  await pendingRequest.submitted;
+                } catch (error) {
+                  await dispatchLease.release?.(
+                    managedPackageRoute.accepted ? 'accepted' : 'confirmed-undispatched',
+                  );
+                  throw error;
+                }
+                await dispatchLease.release?.('submitted');
+              })();
+              void releaseAfterSubmission.catch((error: unknown) => {
+                deps.logger.warn('Pi dispatch submission settlement failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
+              const response = await pendingRequest.response;
+              await releaseAfterSubmission;
+              return response;
+            });
             if (!resp.success) {
               rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
               if (managedPackageRoute.accepted) {
@@ -6130,7 +6180,7 @@ export class PiAgent extends BaseAgent {
                 // receipt already crossed the dispatch boundary. The follow-up
                 // prompt only lets Pi/model restate that receipt; rejecting it
                 // must not advertise the completed mutation as safe to retry.
-                providerAccepted = true;
+                await settleAcceptedDispatch();
                 deps.logger.warn('pi managed package receipt prompt rejected after mutation', {
                   message: resp.error ?? 'unknown',
                 });
@@ -6178,11 +6228,22 @@ export class PiAgent extends BaseAgent {
               if (resp.command !== command.type) {
                 throw new Error('pi prompt rejection response missing matching command');
               }
+              let cleanupSettlementError: unknown;
+              if (typeof dispatchLease.release === 'function') {
+                try {
+                  await dispatchLease.release('confirmed-undispatched');
+                } catch (error) {
+                  cleanupSettlementError = error;
+                }
+              }
               throw new TurnDispatchRejectedError(
                 `pi prompt rejected before acceptance: ${resp.error ?? 'unknown'}`,
+                cleanupSettlementError === undefined
+                  ? undefined
+                  : { cause: cleanupSettlementError },
               );
             }
-            providerAccepted = true;
+            await settleAcceptedDispatch();
             await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
             if (managedExtensionCommand && piAgentLifecycleSequence === lifecycleSequenceBeforePrompt) {
               try {
@@ -6248,6 +6309,7 @@ export class PiAgent extends BaseAgent {
               }
             }
           } finally {
+            if (!promptRequestStarted) rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
             }

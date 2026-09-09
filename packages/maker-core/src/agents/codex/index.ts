@@ -188,7 +188,7 @@ import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
-import { AppServerRequestTimeoutError } from './app-server/client.js';
+import { AppServerRequestTimeoutError, AppServerRpcError } from './app-server/client.js';
 import {
   isTerminalRateLimitRetryExhaustion,
   TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS,
@@ -1793,6 +1793,18 @@ function composeTurnDiffBlocks(
   return { block: `${header}${body ? `\n${body}` : ''}\n`, complete: true };
 }
 
+class CodexDispatchRejectionCleanupError extends Error {
+  readonly code = 'CODEX_DISPATCH_REJECTION_CLEANUP_FAILED';
+
+  constructor(readonly rejection: AppServerRpcError, reason: string, cause: unknown) {
+    super(
+      `Codex rejected turn cleanup failed (${reason}): ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = 'CodexDispatchRejectionCleanupError';
+  }
+}
+
 // ── Agent 实现 ────────────────────────────────────────────────────────────────
 
 export class CodexAgent extends BaseAgent {
@@ -3175,6 +3187,33 @@ export class CodexAgent extends BaseAgent {
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
+    const pendingVendorDispatchRejections = new Set<AppServerRpcError>();
+    const settleDeferredVendorDispatchRejection = async (
+      error: unknown,
+      reason: string,
+    ): Promise<boolean> => {
+      if (!(error instanceof AppServerRpcError)) return false;
+      pendingVendorDispatchRejections.add(error);
+      try {
+        const settled = await error.settleVendorDispatchRejection();
+        pendingVendorDispatchRejections.delete(error);
+        return settled;
+      } catch (settlementError) {
+        log.error('deferred vendor dispatch rejection settlement failed', {
+          reason,
+          error:
+            settlementError instanceof Error
+              ? settlementError.message
+              : String(settlementError),
+        });
+        throw new CodexDispatchRejectionCleanupError(error, reason, settlementError);
+      }
+    };
+    const settlePendingVendorDispatchRejections = async (reason: string): Promise<void> => {
+      for (const rejection of pendingVendorDispatchRejections) {
+        await settleDeferredVendorDispatchRejection(rejection, reason);
+      }
+    };
     const reviewMode = opts.reviewMode === true;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
@@ -9587,7 +9626,12 @@ export class CodexAgent extends BaseAgent {
           }
         }
         await state.retry(continueHistory);
-      })().catch((retryError) => {
+      })().catch(async (retryError) => {
+        try {
+          await settleDeferredVendorDispatchRejection(retryError, 'HTTP recovery retry declined');
+        } catch (cleanupError) {
+          retryError = cleanupError;
+        }
         if (closed || overloadRetry !== state || state.isCancelled()) {
           log.info('codex HTTP recovery retry rejected after cancellation — not surfacing', {
             threadId,
@@ -10767,7 +10811,12 @@ export class CodexAgent extends BaseAgent {
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
-        void state.retry(continueSummaryHistory).catch((error) => {
+        void state.retry(continueSummaryHistory).catch(async (error) => {
+          try {
+            await settleDeferredVendorDispatchRejection(error, 'overload retry declined');
+          } catch (cleanupError) {
+            error = cleanupError;
+          }
           // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
           // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
           // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
@@ -12117,6 +12166,10 @@ export class CodexAgent extends BaseAgent {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
         }
+        if (pendingVendorDispatchRejections.size > 0) {
+          await settlePendingVendorDispatchRejections('before next send');
+          if (rejectClosedOrCancelledSend(sendOpts, 'after rejection cleanup')) return;
+        }
         const internalOpts = sendOpts as CodexInternalSendOptions | undefined;
         const yieldAttempt = internalOpts?.[CODEX_YIELD_CONTINUATION];
         if (yieldAttempt == null && internalOpts?.[CODEX_INTERNAL_CONTINUATION] !== true) {
@@ -12285,6 +12338,18 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
+        // Both stale-daemon recovery and the bounded overload retry are entered
+        // only after Codex has authoritatively rejected the previous turn/start.
+        // Tell the host-owned lease that this is an intentional replacement of
+        // the same logical prompt, rather than an unrelated replay of an
+        // ambiguous submitted row.
+        const acquireConfirmedRetrySubmissionLease =
+          sendOpts?.acquireVendorDispatchLease
+            ? () =>
+                sendOpts.acquireVendorDispatchLease?.(
+                  'retry-after-confirmed-rejection',
+                )
+            : undefined;
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableCatalogModel;
@@ -12547,6 +12612,10 @@ export class CodexAgent extends BaseAgent {
               const resp = await host.request<TurnStartResponse>(Method.TurnStart,
                 { ...turnParams, threadId, ...(continueNativeHistory ? { input: [] } : {}) }, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+                acquireSubmissionLease: acquireConfirmedRetrySubmissionLease,
+                beforeSubmission: beforeTurnStartSubmission,
+                deferCorrelatedRejectionSettlement:
+                  acquireConfirmedRetrySubmissionLease !== undefined,
               });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
               // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
@@ -12610,6 +12679,16 @@ export class CodexAgent extends BaseAgent {
         // 退避里继续 isTurnRunning()===true —— 最多 30s 内后续排队消息全被挡住, 上层
         // 派发闩也不释放(review #844 greptile P1)。
         const armedRetryState = overloadRetry;
+        const beforeTurnStartSubmission = (): void => {
+          // Lease acquisition can wait across Stop, close, or a replacement send.
+          // The host and the client's queued write both check this before submitting.
+          if (
+            rejectClosedOrCancelledSend(sendOpts, 'before turn/start submission')
+            || overloadRetry !== armedRetryState
+          ) {
+            throw new Error('Codex send cancelled before acceptance');
+          }
+        };
         const sendSignal = sendOpts?.signal;
         if (armedRetryState && sendSignal) {
           const onSendAbort = (): void => {
@@ -12648,6 +12727,10 @@ export class CodexAgent extends BaseAgent {
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
             timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+            acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
+            beforeSubmission: beforeTurnStartSubmission,
+            deferCorrelatedRejectionSettlement:
+              sendOpts?.acquireVendorDispatchLease !== undefined,
           });
           markTurnConfigAccepted();
           adoptUnidentifiedDeadTurn(resp, initialStartSeq);
@@ -12750,6 +12833,10 @@ export class CodexAgent extends BaseAgent {
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+                acquireSubmissionLease: acquireConfirmedRetrySubmissionLease,
+                beforeSubmission: beforeTurnStartSubmission,
+                deferCorrelatedRejectionSettlement:
+                  acquireConfirmedRetrySubmissionLease !== undefined,
               });
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, initialStartSeq);
@@ -12761,14 +12848,36 @@ export class CodexAgent extends BaseAgent {
               initialStartSettledOk = true;
             } catch (retryErr) {
               if (isLocalAcceptBoundaryError(retryErr)) throw retryErr;
+              finalErr = retryErr;
+              try {
+                const retrySettlementOwned = await settleDeferredVendorDispatchRejection(
+                  retryErr,
+                  'thread resume replacement declined',
+                );
+                if (!retrySettlementOwned) {
+                  await settleDeferredVendorDispatchRejection(
+                    e,
+                    'thread resume failed before replacement acquired the row',
+                  );
+                }
+              } catch (cleanupError) {
+                finalErr = cleanupError;
+              }
               log.error('thread/resume + retry turn/start failed', {
                 originalError: String(e),
                 retryError: String(retryErr),
               });
-              finalErr = retryErr;
             }
           } else {
             finalErr = e;
+            try {
+              await settleDeferredVendorDispatchRejection(
+                e,
+                'initial turn/start rejection not retried',
+              );
+            } catch (cleanupError) {
+              finalErr = cleanupError;
+            }
           }
         } finally {
           // 条目即将被删, 先把"已由取消收口"取出来供下面的 finalErr 分支判断。
@@ -12847,6 +12956,7 @@ export class CodexAgent extends BaseAgent {
               source: 'codex',
             });
           }
+          if (finalErr instanceof CodexDispatchRejectionCleanupError) throw finalErr;
           if (sendOpts?.throwOnStartFailure) {
             throw new Error(`Codex turn/start failed: ${String(finalErr)}`);
           }
@@ -13168,6 +13278,7 @@ export class CodexAgent extends BaseAgent {
       async close() {
         await closeSessionHandle();
         await retireSingleSessionHost();
+        await settlePendingVendorDispatchRejections('session close');
       },
 
       events(): AsyncIterable<AgentEvent> {

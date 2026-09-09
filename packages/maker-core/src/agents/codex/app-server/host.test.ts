@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { AppServerHost } from './host.js';
+import { AppServerRpcError } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 
@@ -148,6 +149,123 @@ class NotificationTransport implements Transport {
   }
 
   emit(message: unknown): void {
+    const line = JSON.stringify(message);
+    for (const handler of this.lineHandlers) handler(line);
+  }
+}
+
+class ManualResponseTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+  readonly lines: string[] = [];
+
+  async writeLine(line: string): Promise<void> {
+    this.lines.push(line);
+    const message = JSON.parse(line) as { id?: unknown; method?: string };
+    if (message.id == null || message.method !== 'initialize') return;
+    this.emit({
+      id: message.id,
+      result: {
+        userAgent: 'mock-codex/test',
+        codexHome: '/tmp/codex-home',
+        platformOs: 'linux',
+      },
+    });
+  }
+
+  respond(method: string, result: unknown): void {
+    const request = this.lines
+      .map((line) => JSON.parse(line) as { id?: unknown; method?: string })
+      .find((message) => message.method === method);
+    if (request?.id == null) throw new Error(`request not found: ${method}`);
+    this.emit({ id: request.id, result });
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(_handler: StderrHandler): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+
+  private emit(message: unknown): void {
+    const line = JSON.stringify(message);
+    for (const handler of this.lineHandlers) handler(line);
+  }
+}
+
+class DeferredTurnStartSubmissionTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+  private releaseTurnStartWrite: (() => void) | null = null;
+  private turnStartRequestId: unknown = null;
+  readonly turnStartWriteBegan = vi.fn();
+
+  async writeLine(line: string): Promise<void> {
+    const message = JSON.parse(line) as { id?: unknown; method?: string };
+    if (message.method === 'turn/start') {
+      this.turnStartRequestId = message.id;
+      this.turnStartWriteBegan();
+      await new Promise<void>((resolve) => {
+        this.releaseTurnStartWrite = resolve;
+      });
+      return;
+    }
+    if (message.id == null || message.method !== 'initialize') return;
+    this.emit({
+      id: message.id,
+      result: {
+        userAgent: 'mock-codex/test',
+        codexHome: '/tmp/codex-home',
+        platformOs: 'linux',
+      },
+    });
+  }
+
+  settleTurnStartWrite(): void {
+    this.releaseTurnStartWrite?.();
+    this.releaseTurnStartWrite = null;
+  }
+
+  rejectTurnStart(code: number, message: string): void {
+    if (this.turnStartRequestId == null) throw new Error('turn/start request not found');
+    this.emit({
+      id: this.turnStartRequestId,
+      error: { code, message },
+    });
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    this.settleTurnStartWrite();
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+
+  private emit(message: unknown): void {
     const line = JSON.stringify(message);
     for (const handler of this.lineHandlers) handler(line);
   }
@@ -455,6 +573,207 @@ const logger: Logger = {
 };
 
 describe('AppServerHost.request startup timeout', () => {
+  it.each([undefined, 1_000])('rechecks cancellation after a deferred submission lease (timeout=%s)', async (timeoutMs) => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    const controller = new AbortController();
+    const release = vi.fn();
+    let grantLease!: () => void;
+    const leaseReady = new Promise<void>((resolve) => { grantLease = resolve; });
+    let markAcquiring!: () => void;
+    const acquiring = new Promise<void>((resolve) => { markAcquiring = resolve; });
+    const request = host.request('turn/start', {}, {
+      timeoutMs,
+      acquireSubmissionLease: async () => {
+        markAcquiring();
+        await leaseReady;
+        return release;
+      },
+      beforeSubmission: () => {
+        if (controller.signal.aborted) throw new Error('cancelled before submission');
+      },
+    });
+    const result = request.catch((error: unknown) => error);
+    try {
+      await acquiring;
+      controller.abort();
+      grantLease();
+      expect(await result).toEqual(new Error('cancelled before submission'));
+      expect(transport.lines.some((line) => JSON.parse(line).method === 'turn/start')).toBe(false);
+      expect(release.mock.calls).toEqual([['confirmed-undispatched']]);
+    } finally {
+      grantLease();
+      await host.shutdown();
+    }
+  });
+
+  it('holds a submission lease only through the local transport write, not the provider response', async () => {
+    const transport = new ManualResponseTransport();
+    const order: string[] = [];
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      acquireSubmissionLease: async () => {
+        order.push('acquire');
+        return (outcome) => {
+          order.push(`release:${outcome}`);
+        };
+      },
+    });
+    const settled = vi.fn();
+    void request.then(settled, settled);
+
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release:submitted']));
+    expect(
+      transport.lines.some((line) => JSON.parse(line).method === 'turn/start'),
+    ).toBe(true);
+    expect(settled).not.toHaveBeenCalled();
+
+    transport.respond('turn/start', { turn: { id: 'turn-1' } });
+    await expect(request).resolves.toEqual({ turn: { id: 'turn-1' } });
+    await host.shutdown();
+  });
+
+  it('rechecks cancellation in the queued transport write after host admission', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    const controller = new AbortController();
+    const release = vi.fn();
+    try {
+      const result = await host.request('turn/start', {}, {
+        acquireSubmissionLease: async () => release,
+        beforeSubmission: () => {
+          if (controller.signal.aborted) throw new Error('cancelled before submission');
+          // Another microtask can cancel after the host check and before the
+          // client's queued write reaches the transport.
+          queueMicrotask(() => controller.abort());
+        },
+      }).catch((error: unknown) => error);
+      expect(result).toEqual(new Error('cancelled before submission'));
+      expect(transport.lines.some((line) => JSON.parse(line).method === 'turn/start')).toBe(false);
+      await vi.waitFor(() => expect(release.mock.calls).toEqual([['confirmed-undispatched']]));
+    } finally {
+      await host.shutdown();
+    }
+  });
+
+  it('keeps the submission lease after response timeout until a backpressured write settles', async () => {
+    const transport = new DeferredTurnStartSubmissionTransport();
+    const release = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      timeoutMs: 25,
+      acquireSubmissionLease: async () => release,
+    });
+    const timedOut = expect(request).rejects.toThrow(/timed out after \d+ms/);
+    await vi.waitFor(() => expect(transport.turnStartWriteBegan).toHaveBeenCalledOnce());
+    await timedOut;
+    expect(release).not.toHaveBeenCalled();
+
+    transport.settleTurnStartWrite();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledWith('submitted'));
+    await host.shutdown();
+  });
+
+  it('terminally settles a correlated turn/start rejection after submission', async () => {
+    const transport = new DeferredTurnStartSubmissionTransport();
+    const release = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      acquireSubmissionLease: async () => release,
+    });
+    await vi.waitFor(() => expect(transport.turnStartWriteBegan).toHaveBeenCalledOnce());
+    transport.rejectTurnStart(-32602, 'invalid model');
+
+    await expect(request).rejects.toMatchObject({
+      name: 'AppServerRpcError',
+      code: -32602,
+    });
+    expect(release.mock.calls).toEqual([
+      ['submitted'],
+      ['confirmed-undispatched'],
+    ]);
+    transport.settleTurnStartWrite();
+    await host.shutdown();
+  });
+
+  it('defers tombstoning a correlated rejection until the caller declines retry', async () => {
+    const transport = new DeferredTurnStartSubmissionTransport();
+    const release = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      acquireSubmissionLease: async () => release,
+      deferCorrelatedRejectionSettlement: true,
+    });
+    await vi.waitFor(() => expect(transport.turnStartWriteBegan).toHaveBeenCalledOnce());
+    transport.rejectTurnStart(-32000, 'thread not found');
+
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerRpcError);
+    expect(release.mock.calls).toEqual([['submitted']]);
+
+    await expect(
+      (error as AppServerRpcError).settleVendorDispatchRejection(),
+    ).resolves.toBe(true);
+    expect(release.mock.calls).toEqual([
+      ['submitted'],
+      ['confirmed-undispatched'],
+    ]);
+    await expect(
+      (error as AppServerRpcError).settleVendorDispatchRejection(),
+    ).resolves.toBe(false);
+
+    transport.settleTurnStartWrite();
+    await host.shutdown();
+  });
+
+  it('releases the submission lease when request construction fails synchronously', async () => {
+    const host = new AppServerHost({
+      createTransport: () => new ManualResponseTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    const release = vi.fn();
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+
+    await expect(
+      host.request('turn/start', circular, {
+        acquireSubmissionLease: async () => release,
+      }),
+    ).rejects.toThrow(/circular/i);
+    expect(release).toHaveBeenCalledWith('confirmed-undispatched');
+
+    await host.shutdown();
+  });
+
   it('bounds a hung ensureStarted by the caller-provided timeoutMs (greptile R6 P1)', async () => {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 — 调用方显式
     // 给的 timeoutMs 必须同样覆盖启动路径, 否则「关键 RPC 加超时」形同虚设。

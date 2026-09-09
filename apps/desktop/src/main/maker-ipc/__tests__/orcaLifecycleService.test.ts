@@ -80,8 +80,8 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
         targetLastUserSendAt: null,
       } satisfies DispatchWorkerTaskResult;
     }),
-    markTeamEnded: vi.fn(async (teamId, status) => {
-      calls.push(`markTeamEnded:${teamId}:${status}`);
+    markTeamEndedWithCleanup: vi.fn(async ({ teamId, status, sessionIds }) => {
+      calls.push(`markTeamEndedWithCleanup:${teamId}:${status}:${sessionIds.join(',')}`);
     }),
     setSessionOrcaRole: vi.fn(async (sessionId, role) => {
       calls.push(`setSessionOrcaRole:${sessionId}:${role ?? 'null'}`);
@@ -224,7 +224,7 @@ describe('OrcaLifecycleService', () => {
     expect(calls).toEqual([
       'createActiveTeam:lead-1',
       'setSessionOrcaRole:lead-1:lead',
-      'markTeamEnded:team-1:failed',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -248,7 +248,7 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:undefined',
-      'markTeamEnded:team-1:failed',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -737,8 +737,8 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:worker-session-1',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1,worker-session-1',
       'rollbackCreatedWorker:worker-1:worker-session-1',
-      'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -771,8 +771,8 @@ describe('OrcaLifecycleService', () => {
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:worker-session-1',
       'sendWorkerReadyPlaceholder:enable_collab_mode:enable_collab_mode/worker-session-1/worker-ready-placeholder',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1,worker-session-1',
       'rollbackCreatedWorker:worker-1:worker-session-1',
-      'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
       'clearLeadVendorOptions:lead-1',
     ]);
@@ -845,7 +845,7 @@ describe('OrcaLifecycleService', () => {
 
     expect(calls).toEqual([
       'createActiveTeam:lead-1',
-      'markTeamEnded:team-1:failed',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -875,8 +875,8 @@ describe('OrcaLifecycleService', () => {
       'createActiveTeam:lead-1',
       'createWorkerInTeam:team-1:reviewer',
       'setSessionOrcaRole:lead-1:lead',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1,worker-session-1',
       'rollbackCreatedWorker:worker-1:worker-session-1',
-      'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -900,7 +900,11 @@ describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
       workerId: 'worker-1',
     });
     expect(deps.isOrphanedTeamInit).toHaveBeenCalledWith('team-existing');
-    expect(deps.markTeamEnded).toHaveBeenCalledWith('team-existing', 'failed');
+    expect(deps.markTeamEndedWithCleanup).toHaveBeenCalledWith({
+      teamId: 'team-existing',
+      status: 'failed',
+      sessionIds: ['lead-1'],
+    });
     expect(calls).toContain('createActiveTeam:lead-1');
   });
 
@@ -913,7 +917,7 @@ describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
       ok: false,
       errorCode: 'ALREADY_EXISTS',
     });
-    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+    expect(deps.markTeamEndedWithCleanup).not.toHaveBeenCalled();
   });
 
   it('孤儿判定抛错 → 保守维持 ALREADY_EXISTS,绝不误收可能有内容的 team', async () => {
@@ -927,7 +931,7 @@ describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
       ok: false,
       errorCode: 'ALREADY_EXISTS',
     });
-    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+    expect(deps.markTeamEndedWithCleanup).not.toHaveBeenCalled();
   });
 
   it('并发 enableTeam:in-flight 初始化中的 team 不会被误判孤儿收口(review P1)', async () => {
@@ -969,7 +973,7 @@ describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
     });
     expect(second).toMatchObject({ ok: false, errorCode: 'ALREADY_EXISTS' });
     expect(deps.isOrphanedTeamInit).not.toHaveBeenCalled();
-    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+    expect(deps.markTeamEndedWithCleanup).not.toHaveBeenCalled();
 
     releaseCreate();
     await expect(first).resolves.toMatchObject({ teamId: 'team-a' });

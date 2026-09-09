@@ -106,6 +106,12 @@ vi.mock("../rpc-client.js", () => ({
       }
       return { success: true, data: { entries: [] } };
     }
+    requestWithSubmission(command: Record<string, unknown>) {
+      return {
+        submitted: Promise.resolve(),
+        response: this.request(command),
+      };
+    }
     send(): void {}
     async close(): Promise<void> {
       knobs.closeCalls += 1;
@@ -413,6 +419,29 @@ describe("PiAgent native auto-compaction ownership", () => {
       await handle.close();
     },
   );
+
+  it("waits for compact before acquiring the prompt dispatch lease", async () => {
+    const handle = await start();
+    const { release, compactDone } = await startHeldManualCompact(handle);
+    const outcomes: string[] = [];
+    const acquireVendorDispatchLease = vi.fn(async () => (outcome?: string) => {
+      outcomes.push(String(outcome));
+    });
+    const sending = handle.send(
+      { type: "user", content: "continue after compact" },
+      { acquireVendorDispatchLease },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(acquireVendorDispatchLease).not.toHaveBeenCalled();
+    expect(knobs.rpcCalls.some((call) => call.type === "prompt")).toBe(false);
+
+    release();
+    await Promise.all([compactDone, sending]);
+    expect(acquireVendorDispatchLease).toHaveBeenCalledOnce();
+    expect(outcomes).toEqual(["submitted", "accepted"]);
+    await handle.close();
+  });
 
   function readLatestPiSettings(): { compaction?: { reserveTokens?: number }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
     const files: string[] = [];

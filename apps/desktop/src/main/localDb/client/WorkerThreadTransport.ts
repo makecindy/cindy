@@ -438,6 +438,10 @@ function dispatchTx(readyDb, payload) {
       return orcaSetWorkerFocus(readyDb, request.args);
     case 'orca.removeWorker':
       return orcaRemoveWorker(readyDb, request.args);
+    case 'orca.endTeam':
+      return orcaEndTeam(readyDb, request.args);
+    case 'orca.rewindPreVendorCleanup':
+      return readyDb.transaction(() => rewindOrcaPreVendorCleanup(readyDb, request.args))();
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(readyDb, request.args);
     case 'orca.archiveWorkersByTeam':
@@ -682,6 +686,7 @@ function messageInsert(readyDb, args) {
   const agentKind = nullableString(payload.agentKind);
   const createdAt = expectNumber(payload.createdAt, 'createdAt');
   const guarded = payload.guarded === true;
+  const expectedOrcaTeamId = nullableString(payload.expectedOrcaTeamId);
   const expected =
     payload.expectedClearBoundaryMs === undefined || payload.expectedClearBoundaryMs === null
       ? null
@@ -690,8 +695,12 @@ function messageInsert(readyDb, args) {
     let changes = 0;
     if (guarded) {
       changes = readyDb.prepare(
-        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions AS s WHERE s.id = ? AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1) ON CONFLICT(session_id, client_id) DO NOTHING',
-      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, sessionId, expected).changes;
+        "INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions AS s WHERE s.id = ? AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1) AND (? IS NULL OR EXISTS (SELECT 1 FROM orca_teams AS t WHERE t.id = ? AND t.status = 'active')) ON CONFLICT(session_id, client_id) DO NOTHING",
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, sessionId, expected, expectedOrcaTeamId, expectedOrcaTeamId).changes;
+    } else if (expectedOrcaTeamId !== null) {
+      changes = readyDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM orca_teams AS t WHERE t.id = ? AND t.status = 'active') ON CONFLICT(session_id, client_id) DO NOTHING",
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, expectedOrcaTeamId).changes;
     } else {
       changes = readyDb.prepare(
         'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -776,10 +785,11 @@ function messageRewindUserAfterClear(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const preserveSubmittedOrca = payload.preserveSubmittedOrca === true;
   return readyDb.transaction(() => {
     const changes = readyDb.prepare(
-      "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
-    ).run(rewoundAt, sessionId, clientId).changes;
+      "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL AND (? = 0 OR COALESCE(json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'), 'pre-vendor') != 'submitted')",
+    ).run(rewoundAt, sessionId, clientId, preserveSubmittedOrca ? 1 : 0).changes;
     if (changes > 0) {
       readyDb.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
@@ -1244,14 +1254,63 @@ function orcaRemoveWorker(readyDb, args) {
   })();
 }
 
+function orcaEndTeam(readyDb, args) {
+  const payload = asRecord(args, 'orca.endTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'completed' && status !== 'cancelled' && status !== 'failed') {
+    throw invalidArgs('status must be completed, cancelled, or failed');
+  }
+  const now = expectNumber(payload.now, 'now');
+  const endTeam = readyDb.prepare(
+    'UPDATE orca_teams SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?',
+  );
+  return readyDb.transaction(() => {
+    const rewoundRows = rewindOrcaPreVendorCleanup(readyDb, payload);
+    endTeam.run(status, now, now, teamId);
+    return rewoundRows;
+  })();
+}
+
+function rewindOrcaPreVendorCleanup(readyDb, args) {
+  const payload = asRecord(args, 'orca.rewindPreVendorCleanup args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const cleanupSessionIds = [...new Set(
+    expectArray(payload.cleanupSessionIds, 'cleanupSessionIds').map((sessionId) =>
+      expectString(sessionId, 'cleanupSessionIds[]'),
+    ),
+  )];
+  const now = expectNumber(payload.now, 'now');
+  if (cleanupSessionIds.length === 0) return [];
+  const placeholders = cleanupSessionIds.map(() => '?').join(', ');
+  const rewoundRows = readyDb.prepare(
+    "UPDATE messages SET rewind_at = ? WHERE role = 'user' AND rewind_at IS NULL "
+      + 'AND session_id IN (' + placeholders + ') '
+      + "AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ? "
+      + "AND COALESCE(json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'), 'pre-vendor') = 'pre-vendor' "
+      + 'RETURNING session_id AS sessionId, client_id AS clientId',
+  ).all(now, ...cleanupSessionIds, teamId);
+  const invalidatePreview = readyDb.prepare(
+    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+  );
+  for (const sessionId of new Set(rewoundRows.map((row) => row.sessionId))) {
+    invalidatePreview.run(sessionId);
+  }
+  return rewoundRows;
+}
+
 function orcaCancelStaleTeams(readyDb, args) {
   const payload = asRecord(args, 'orca.cancelStaleTeams args');
   const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
-  const keepTeamId = expectString(payload.keepTeamId, 'keepTeamId');
+  const staleTeamIds = expectArray(payload.staleTeamIds, 'staleTeamIds').map((teamId) =>
+    expectString(teamId, 'staleTeamIds[]'),
+  );
   const now = expectNumber(payload.now, 'now');
-  const cancel = readyDb.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id != ?");
+  const cancel = readyDb.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id = ?");
   readyDb.transaction(() => {
-    cancel.run(now, now, leadSessionId, keepTeamId);
+    for (const teamId of staleTeamIds) {
+      cancel.run(now, now, leadSessionId, teamId);
+    }
   })();
 }
 

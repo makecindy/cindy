@@ -147,6 +147,8 @@ async function startHarness(args: {
   resumeSessionId?: string;
   transcriptExists: boolean;
   onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'];
+  promptConsumptionGate?: Promise<void>;
+  onPromptConsumed?: () => void;
 }) {
   const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
@@ -168,7 +170,11 @@ async function startHarness(args: {
     if (prompt) {
       void (async () => {
         try {
-          for await (const input of prompt) consumed.push(input);
+          await args.promptConsumptionGate;
+          for await (const input of prompt) {
+            consumed.push(input);
+            args.onPromptConsumed?.();
+          }
         } catch {
           /* query replacement closes the old prompt */
         }
@@ -215,6 +221,348 @@ afterEach(async () => {
 });
 
 describe('Claude invalid-resume recovery', () => {
+  it('does not enqueue a cancelled send after its dispatch lease becomes available', async () => {
+    let finishLeaseAcquisition!: () => void;
+    const leaseGate = new Promise<void>((resolve) => {
+      finishLeaseAcquisition = resolve;
+    });
+    let markLeaseRequested!: () => void;
+    const leaseRequested = new Promise<void>((resolve) => {
+      markLeaseRequested = resolve;
+    });
+    const release = vi.fn();
+    const controller = new AbortController();
+    const h = await startHarness({
+      transcriptExists: false,
+      onInvalidResumeSession: undefined,
+    });
+    try {
+      const sending = h.handle.send(
+        { type: 'user', content: 'cancel while waiting for lease' },
+        {
+          signal: controller.signal,
+          acquireVendorDispatchLease: async () => {
+            markLeaseRequested();
+            await leaseGate;
+            return release;
+          },
+        },
+      );
+      await leaseRequested;
+      controller.abort();
+      await h.handle.abort();
+      finishLeaseAcquisition();
+
+      await expect(sending).rejects.toThrow('Claude send cancelled before acceptance');
+      expect(release).toHaveBeenCalledExactlyOnceWith('confirmed-undispatched');
+      expect(h.consumedInputs.flat()).toEqual([]);
+
+      await h.handle.send({ type: 'user', content: 'next turn after cancellation' });
+      await vi.waitFor(() => expect(h.consumedInputs.flat()).toHaveLength(1));
+      expect(h.consumedInputs.flat()[0]).toMatchObject({
+        message: { content: 'next turn after cancellation' },
+      });
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      await h.handle.close();
+      h.streams[0].end();
+      await h.collected;
+    }
+  });
+
+  it('holds the host dispatch lease until the local SDK consumes the queued message', async () => {
+    let allowPromptConsumption!: () => void;
+    const promptConsumptionGate = new Promise<void>((resolve) => {
+      allowPromptConsumption = resolve;
+    });
+    const order: string[] = [];
+    const h = await startHarness({
+      transcriptExists: false,
+      onInvalidResumeSession: undefined,
+      promptConsumptionGate,
+      onPromptConsumed: () => order.push('consume'),
+    });
+
+    await h.handle.send(
+      { type: 'user', content: 'lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => {
+          order.push('acquire');
+          return (outcome) => {
+            order.push(`release:${outcome}`);
+          };
+        },
+      },
+    );
+
+    expect(order).toEqual(['acquire']);
+    allowPromptConsumption();
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'consume', 'release:submitted']));
+    expect(h.consumedInputs[0]).toHaveLength(1);
+    await h.handle.close();
+    h.streams[0].end();
+    await h.collected;
+  });
+
+  it('releases a queued host dispatch lease when Claude closes before consumption', async () => {
+    const promptConsumptionGate = new Promise<void>(() => {});
+    const h = await startHarness({
+      transcriptExists: false,
+      onInvalidResumeSession: undefined,
+      promptConsumptionGate,
+    });
+    const release = vi.fn();
+
+    await h.handle.send(
+      { type: 'user', content: 'discard lease boundary' },
+      { acquireVendorDispatchLease: async () => release },
+    );
+    expect(release).not.toHaveBeenCalled();
+
+    await h.handle.close();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    expect(release).toHaveBeenCalledWith('confirmed-undispatched');
+    h.streams[0].end();
+    await h.collected;
+  });
+
+  it('holds the host dispatch lease until the remote transport send settles', async () => {
+    const workingDir = await makeTempDir();
+    const stream = createControlledStream();
+    let finishRemoteSubmission!: () => void;
+    const remoteSubmissionGate = new Promise<void>((resolve) => {
+      finishRemoteSubmission = resolve;
+    });
+    let finishRemoteResponse!: () => void;
+    const remoteResponseGate = new Promise<void>((resolve) => {
+      finishRemoteResponse = resolve;
+    });
+    const remoteQuery = {
+      ...createFakeQuery(stream),
+      send: vi.fn(async () => remoteResponseGate),
+      sendWithSubmission: vi.fn(() => ({
+        submitted: remoteSubmissionGate,
+        response: remoteResponseGate,
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
+      remoteCcQueryFactory: vi.fn(async () => remoteQuery as never),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'remote-lease-session',
+      remoteHostId: 'remote-host',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+    const collected = (async () => {
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      while (!(await iterator.next()).done) {
+        // Drain session events until close.
+      }
+    })();
+    const order: string[] = [];
+
+    await handle.send(
+      { type: 'user', content: 'remote lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => {
+          order.push('acquire');
+          return (outcome) => {
+            order.push(`release:${outcome}`);
+          };
+        },
+      },
+    );
+    await vi.waitFor(() => expect(remoteQuery.sendWithSubmission).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(['acquire']);
+
+    await handle.close();
+    expect(order).toEqual(['acquire']);
+    finishRemoteSubmission();
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release:submitted']));
+    finishRemoteResponse();
+    await vi.waitFor(() => expect(order).toEqual([
+      'acquire',
+      'release:submitted',
+      'release:accepted',
+    ]));
+    stream.end();
+    await collected;
+  });
+
+  it.each(['submitted', 'confirmed-undispatched'] as const)(
+    'closes a timed-out remote query before its pending write becomes %s',
+    async (lateOutcome) => {
+      const workingDir = await makeTempDir();
+      const stream = createControlledStream();
+      let finishRemoteSubmission!: () => void;
+      let failRemoteSubmission!: (error: Error) => void;
+      const remoteSubmissionGate = new Promise<void>((resolve, reject) => {
+        finishRemoteSubmission = resolve;
+        failRemoteSubmission = reject;
+      });
+      let rejectRemoteResponse!: (error: Error) => void;
+      const remoteResponseGate = new Promise<void>((_resolve, reject) => {
+        rejectRemoteResponse = reject;
+      });
+      const remoteQuery = {
+        ...createFakeQuery(stream),
+        send: vi.fn(async () => remoteResponseGate),
+        sendWithSubmission: vi.fn(() => ({
+          submitted: remoteSubmissionGate,
+          response: remoteResponseGate,
+        })),
+        isAuthoritativeResponseError: vi.fn(() => false),
+      };
+      const agent = new ClaudeCodeAgent(createDeps({
+        runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
+        remoteCcQueryFactory: vi.fn(async () => remoteQuery as never),
+      }));
+      const handle = await agent.startSession({
+        sessionId: 'remote-timeout-before-submission',
+        remoteHostId: 'remote-host',
+        model: 'claude-opus-4-6',
+        workingDir,
+        permissionMode: 'acceptEdits',
+      });
+      const release = vi.fn();
+      try {
+        await handle.send(
+          { type: 'user', content: 'backpressured remote prompt' },
+          { acquireVendorDispatchLease: async () => release },
+        );
+        await vi.waitFor(() => expect(remoteQuery.sendWithSubmission).toHaveBeenCalledOnce());
+        rejectRemoteResponse(new Error('RPC query/send timed out after 15000ms'));
+        await vi.waitFor(() => expect(remoteQuery.close).toHaveBeenCalled());
+        expect(release).not.toHaveBeenCalled();
+
+        if (lateOutcome === 'submitted') finishRemoteSubmission();
+        else failRemoteSubmission(new Error('late remote write failure'));
+        await vi.waitFor(() => expect(release).toHaveBeenCalledExactlyOnceWith(lateOutcome));
+      } finally {
+        finishRemoteSubmission();
+        await handle.close();
+        stream.end();
+      }
+    },
+  );
+
+  it('settles an explicit remote rejection after transport submission', async () => {
+    const workingDir = await makeTempDir();
+    const stream = createControlledStream();
+    let finishRemoteSubmission!: () => void;
+    const remoteSubmissionGate = new Promise<void>((resolve) => {
+      finishRemoteSubmission = resolve;
+    });
+    let rejectRemoteResponse!: (error: Error) => void;
+    const remoteResponseGate = new Promise<void>((_resolve, reject) => {
+      rejectRemoteResponse = reject;
+    });
+    const authoritativeRejection = new Error('SESSION_NOT_FOUND: remote session is closed');
+    const remoteQuery = {
+      ...createFakeQuery(stream),
+      send: vi.fn(async () => remoteResponseGate),
+      sendWithSubmission: vi.fn(() => ({
+        submitted: remoteSubmissionGate,
+        response: remoteResponseGate,
+      })),
+      isAuthoritativeResponseError: vi.fn(
+        (error: unknown) => error === authoritativeRejection,
+      ),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
+      remoteCcQueryFactory: vi.fn(async () => remoteQuery as never),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'remote-rejection-lease-session',
+      remoteHostId: 'remote-host',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+    const order: string[] = [];
+
+    await handle.send(
+      { type: 'user', content: 'remote rejected lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => (outcome) => {
+          order.push(`release:${outcome}`);
+        },
+      },
+    );
+    await vi.waitFor(() => expect(remoteQuery.sendWithSubmission).toHaveBeenCalledOnce());
+    finishRemoteSubmission();
+    await vi.waitFor(() => expect(order).toEqual(['release:submitted']));
+    rejectRemoteResponse(authoritativeRejection);
+    await vi.waitFor(() => expect(order).toEqual([
+      'release:submitted',
+      'release:confirmed-undispatched',
+    ]));
+    expect(remoteQuery.isAuthoritativeResponseError).toHaveBeenCalledWith(
+      authoritativeRejection,
+    );
+
+    await handle.close();
+    stream.end();
+  });
+
+  it('preserves submitted settlement when a remote response fails ambiguously', async () => {
+    const workingDir = await makeTempDir();
+    const stream = createControlledStream();
+    let finishRemoteSubmission!: () => void;
+    const remoteSubmissionGate = new Promise<void>((resolve) => {
+      finishRemoteSubmission = resolve;
+    });
+    let rejectRemoteResponse!: (error: Error) => void;
+    const remoteResponseGate = new Promise<void>((_resolve, reject) => {
+      rejectRemoteResponse = reject;
+    });
+    const remoteQuery = {
+      ...createFakeQuery(stream),
+      send: vi.fn(async () => remoteResponseGate),
+      sendWithSubmission: vi.fn(() => ({
+        submitted: remoteSubmissionGate,
+        response: remoteResponseGate,
+      })),
+      isAuthoritativeResponseError: vi.fn(() => false),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
+      remoteCcQueryFactory: vi.fn(async () => remoteQuery as never),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'remote-ambiguous-lease-session',
+      remoteHostId: 'remote-host',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+    const order: string[] = [];
+
+    await handle.send(
+      { type: 'user', content: 'remote ambiguous lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => (outcome) => {
+          order.push(`release:${outcome}`);
+        },
+      },
+    );
+    await vi.waitFor(() => expect(remoteQuery.sendWithSubmission).toHaveBeenCalledOnce());
+    finishRemoteSubmission();
+    await vi.waitFor(() => expect(order).toEqual(['release:submitted']));
+    const timeout = new Error('RPC query/send timed out after 15000ms');
+    rejectRemoteResponse(timeout);
+    await vi.waitFor(() => expect(remoteQuery.close).toHaveBeenCalled());
+    expect(remoteQuery.isAuthoritativeResponseError).toHaveBeenCalledWith(timeout);
+    expect(order).toEqual(['release:submitted']);
+
+    await handle.close();
+    stream.end();
+  });
+
   it('preflight missing clears the old id and starts fresh before any turn is sent', async () => {
     const clear = vi.fn(async () => true);
     const h = await startHarness({
@@ -592,15 +940,79 @@ describe('Claude invalid-resume recovery', () => {
     await h.collected;
   });
 
+  it('does not replay an invalid resume after Stop wins its retry lease wait', async () => {
+    let finishRetryLease!: () => void;
+    const retryLeaseGate = new Promise<void>((resolve) => { finishRetryLease = resolve; });
+    let markRetryLeaseRequested!: () => void;
+    const retryLeaseRequested = new Promise<void>((resolve) => { markRetryLeaseRequested = resolve; });
+    const initialRelease = vi.fn();
+    const retryRelease = vi.fn();
+    const h = await startHarness({
+      resumeSessionId: 'sdk-old',
+      transcriptExists: true,
+      onInvalidResumeSession: async () => true,
+    });
+    let attempt = 0;
+    try {
+      await h.handle.send(
+        { type: 'user', content: 'cancel the invalid resume retry' },
+        {
+          acquireVendorDispatchLease: async () => {
+            if (++attempt === 1) return initialRelease;
+            markRetryLeaseRequested();
+            await retryLeaseGate;
+            return retryRelease;
+          },
+        },
+      );
+      await vi.waitFor(() => expect(initialRelease).toHaveBeenCalledWith('submitted'));
+      h.streams[0].fail(new Error('No conversation found with session ID: sdk-old'));
+      await retryLeaseRequested;
+      await h.handle.abort();
+      finishRetryLease();
+
+      await vi.waitFor(() => expect(retryRelease).toHaveBeenCalledExactlyOnceWith('confirmed-undispatched'));
+      expect(h.consumedInputs.map((inputs) => inputs.length)).toEqual([1, 0]);
+      expect(h.handle.isTurnRunning?.()).toBe(false);
+      expect(h.events.filter((event) => event.type === 'error')).toEqual([]);
+    } finally {
+      finishRetryLease();
+      await h.handle.close();
+      h.streams[1].end();
+      await h.collected;
+    }
+  });
+
   it('suppresses the failed resume boundary, replays one input, and finishes on a fresh query', async () => {
     const clear = vi.fn(async () => true);
+    const leaseOrder: string[] = [];
+    let consumedInputs = 0;
     const h = await startHarness({
       resumeSessionId: 'sdk-old',
       transcriptExists: true,
       onInvalidResumeSession: clear,
+      onPromptConsumed: () => {
+        consumedInputs += 1;
+        leaseOrder.push(`consume-${consumedInputs}`);
+      },
     });
 
-    await h.handle.send({ type: 'user', content: 'hello once' });
+    let leaseAttempt = 0;
+    const acquireVendorDispatchLease = vi.fn(async () => {
+      leaseAttempt += 1;
+      const attempt = leaseAttempt;
+      leaseOrder.push(`acquire-${attempt}`);
+      return () => {
+        leaseOrder.push(`release-${attempt}`);
+      };
+    });
+    await h.handle.send(
+      { type: 'user', content: 'hello once' },
+      { acquireVendorDispatchLease },
+    );
+    await vi.waitFor(() => {
+      expect(leaseOrder).toEqual(['acquire-1', 'consume-1', 'release-1']);
+    });
     h.streams[0].emit({
       type: 'result',
       is_error: true,
@@ -612,6 +1024,22 @@ describe('Claude invalid-resume recovery', () => {
       new Error('Claude Code returned an error result: No conversation found with session ID: sdk-old'),
     );
     await vi.waitFor(() => expect(h.queryOptions).toHaveLength(2));
+    await vi.waitFor(() => {
+      expect(leaseOrder).toEqual([
+        'acquire-1',
+        'consume-1',
+        'release-1',
+        'acquire-2',
+        'consume-2',
+        'release-2',
+      ]);
+    });
+    expect(acquireVendorDispatchLease).toHaveBeenCalledTimes(2);
+    expect(acquireVendorDispatchLease).toHaveBeenNthCalledWith(1);
+    expect(acquireVendorDispatchLease).toHaveBeenNthCalledWith(
+      2,
+      'retry-after-confirmed-rejection',
+    );
     h.streams[1].emit({
       type: 'system',
       subtype: 'init',

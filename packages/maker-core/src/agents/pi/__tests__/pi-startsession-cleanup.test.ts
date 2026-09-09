@@ -98,6 +98,12 @@ vi.mock('../rpc-client.js', () => ({
       // switch_session / set_thinking_level / set_auto_compaction / get_entries 等一律成功。
       return { success: true, data: { entries: [] } };
     }
+    requestWithSubmission(command: { type: string }) {
+      return {
+        submitted: Promise.resolve(),
+        response: this.request(command),
+      };
+    }
     send(message: unknown): void {
       knobs.sent.push(message as Record<string, unknown>);
     }

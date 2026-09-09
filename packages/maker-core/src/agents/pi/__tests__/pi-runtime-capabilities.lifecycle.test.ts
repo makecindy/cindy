@@ -90,6 +90,12 @@ vi.mock('../rpc-client.js', () => ({
       if (command.type === 'clone') return { success: true, data: {} };
       return { success: true, data: { entries: [] } };
     }
+    requestWithSubmission(command: Record<string, unknown>) {
+      return {
+        submitted: Promise.resolve(),
+        response: this.request(command),
+      };
+    }
     send(): void {}
     async close(): Promise<void> {
       this.isClosed = true;
