@@ -1,3 +1,5 @@
+import { registerRoutineRemoteResources } from '../../routines/remote.js';
+import { registerRoutinesIpc } from '../../routines/service.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -255,6 +257,8 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerMessageIpc();
   registerRemoteHistoryIpc();
   registerBotIpc();
+  registerRoutinesIpc();
+  registerRoutineRemoteResources();
   registerBotRemoteResourceProvider();
   registerSessionImportIpc();
   registerSessionShareIpc();

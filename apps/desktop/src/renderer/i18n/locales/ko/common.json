@@ -4953,7 +4953,8 @@
         "nodeChildSpawn": "Node 프로그램이 패키지에 신고된 하위 프로세스 시작을 호스트에 요청할 수 있습니다",
         "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
-        "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요."
+        "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
+        "routineEvents": "루틴 이벤트"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -12013,6 +12014,67 @@
     "embedding": "의미가 비슷한 콘텐츠를 찾습니다.",
     "compression": "긴 내용을 간결하게 줄입니다."
   },
+  "routines": {
+    "title": "루틴",
+    "add": "루틴 추가",
+    "back": "루틴으로 돌아가기",
+    "error": "루틴을 업데이트하지 못했습니다. 설정을 확인하고 다시 시도하세요.",
+    "empty": "루틴을 추가하여 팀원이 할 일과 실행 시점을 지정하세요.",
+    "enabled": "활성화됨",
+    "paused": "일시 중지됨",
+    "runNow": "지금 실행",
+    "running": "실행 중…",
+    "name": "이름",
+    "instructions": "지침",
+    "when": "실행 시점",
+    "addTrigger": "트리거 추가",
+    "removeTrigger": "트리거 제거",
+    "schedule": "일정",
+    "hourly": "매시간",
+    "daily": "매일",
+    "weekdays": "평일",
+    "weekly": "매주",
+    "monthly": "매월",
+    "interval": "간격",
+    "advanced": "고급…",
+    "everyMinutes": "{{count}}분마다",
+    "minutes": "분",
+    "expression": "Cron 표현식",
+    "timezone": "시간대",
+    "delete": "루틴 삭제",
+    "save": "루틴 저장",
+    "deleteConfirm": "이 루틴을 삭제하고 대기 중인 실행을 취소할까요?",
+    "keep": "루틴 유지",
+    "history": "실행 기록",
+    "noRuns": "이 루틴은 아직 실행되지 않았습니다.",
+    "field": "필드",
+    "operator": "조건",
+    "value": "값",
+    "addFilter": "조건 추가",
+    "removeFilter": "조건 제거",
+    "pluginCapability": "선언된 이벤트를 발행하여 직접 설정한 루틴만 실행합니다.",
+    "time": "시간",
+    "day": "날짜",
+    "weekday": "요일",
+    "status": {
+      "queued": "대기 중",
+      "running": "실행 중",
+      "success": "완료됨",
+      "failed": "실패함",
+      "interrupted": "중단됨",
+      "cancelled": "취소됨"
+    },
+    "sourceStatus": {
+      "listening": "수신 중",
+      "disconnected": "수신 중지됨",
+      "error": "연결 소스 확인 필요"
+    },
+    "operators": {
+      "equals": "같음",
+      "contains": "포함",
+      "not-equals": "같지 않음"
+    }
+  },
   "cindyMakeDoctor": {
     "description": "Cindy 빌드에 필요한 로컬 환경을 확인합니다. 사용법: /cindy-make-doctor",
     "title": "Cindy Make · 환경 검사",
@@ -12123,7 +12185,6 @@
       "expand": "업스트림 결과 보기",
       "collapse": "업스트림 결과 숨기기",
       "count": "관련 가능성이 있는 열린 Issue 또는 PR {{count}}개를 찾았습니다",
-
       "kind": {
         "issue": "이슈",
         "pr": "PR"

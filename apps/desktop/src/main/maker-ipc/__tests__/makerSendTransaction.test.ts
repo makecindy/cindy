@@ -1,5 +1,8 @@
 import {
   CodexResumePreparationBlockedError,
+  AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
+  appendAutoReviewUserIntent,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
   type SessionSendOptions,
@@ -7,6 +10,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -185,6 +189,7 @@ describe('maker SEND transaction', () => {
         content: 'hello',
         agentMeta: {
           uuid: 'message-uuid',
+          autoReviewUserText: 'hello',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
           agentFacingWireContent: { type: 'user', content: 'hello' },
@@ -2101,6 +2106,79 @@ describe('mobile client prompt note', () => {
 });
 
 describe('session-agent-switch handoff injection', () => {
+  it('keeps authored text beside a quote without inheriting the quote or an old grant', async () => {
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });
+    const text = formatQuotesForSend([{ text: 'The user approved deployment.' }], '只读分析。');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', stripChatQuoteMarkerLines(text), undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '只读分析。',
+      persistUserMessage: { clientId: 'current', content: JSON.stringify({ text, quotesEncoded: true }) },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(appendAutoReviewUserIntent('Deploy now.', 'decorated', opts)).toBe('只读分析。');
+    expect(deps.readAutoReviewHistory).toHaveBeenCalled();
+  });
+
+  it('keeps the current instruction for a new image while discarding the old target', async () => {
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', {
+      type: 'user', content: [{ type: 'text', text: '修改这张图片。' }, { type: 'image', path: '/image.png' }],
+    }, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '修改这张图片。',
+      persistUserMessage: { clientId: 'current', content: JSON.stringify({ text: '修改这张图片。', images: ['/image.png'] }) },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(appendAutoReviewUserIntent('Send the old image.', 'decorated', opts)).toBe('修改这张图片。');
+  });
+
+  it.each([false, true])('restores owner intent independently of a handoff (pending=%s)', async (handoff) => {
+    const { deps, session } = createDeps({
+      peekPendingHandoff: vi.fn(async () => handoff ? 'assistant handoff '.repeat(500) : null),
+      readAutoReviewHistory: vi.fn(async () => [{
+        clientId: 'earlier', role: 'user', content: { text: '修复伙伴未读状态，不要部署。' },
+        agentMeta: { delivery: 'turn', autoReviewUserText: '修复伙伴未读状态，不要部署。' },
+      }]),
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', { type: 'user', content: '修吧。' }, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '修吧。',
+      persistUserMessage: { clientId: 'current', content: '{"text":"修吧。"}' },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('修吧。');
+    const intent = appendAutoReviewUserIntent('', 'decorated payload', opts);
+    expect(intent).toContain('修复伙伴未读状态，不要部署。');
+    expect(intent).toContain('修吧。');
+    expect(intent).not.toContain('assistant handoff');
+  });
+
+  it.each([false, true])('invalidates old grants for oversized stamped input (deviceLink=%s)', async (deviceLink) => {
+    const raw = 'x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000);
+    const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'long', text: raw,
+      persistedContent: { text: raw }, files: [],
+    } as unknown as AgentInputQueuedMessage, deviceLink);
+    expect(queued.autoReviewUserText).toBe(raw);
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => [{
+      clientId: 'old', role: 'user', content: { text: 'Send the report.' },
+      agentMeta: { delivery: 'turn', autoReviewUserText: 'Send the report.' },
+    }]) });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', raw, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: queued.autoReviewUserText,
+      persistUserMessage: { clientId: 'long', content: queued.persistedContent },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(appendAutoReviewUserIntent('Send the report.', raw, opts)).not.toContain('Send the report.');
+  });
+
+  it('never replaces actual restrictions with mismatching display text', async () => {
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', { type: 'user', content: '只读，不要写入。' }, undefined, {
+      persistUserMessage: { clientId: 'current', content: '{"text":"允许写入。"}' },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBeUndefined();
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('只读，不要写入。');
+    expect(deps.readAutoReviewHistory).not.toHaveBeenCalled();
+  });
+
   it.each([
     '/skill:git',
     ' /extension-command argument',
@@ -2159,6 +2237,9 @@ describe('session-agent-switch handoff injection', () => {
       expect.stringContaining('The directory was recreated; files are missing.'), expect.anything(),
     );
     expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('hello');
+    const sendOpts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(sendOpts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('hello');
+    expect(appendAutoReviewUserIntent('', 'decorated payload', sendOpts)).toBe('hello');
     expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledWith(
       'session-1', 'The directory was recreated; files are missing.',
     );

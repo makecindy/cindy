@@ -69,9 +69,9 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
-  async deleteRun(id: string): Promise<ScheduleRun | null> {
+  async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
-    if (!ex) return null;
+    if (!ex || (options?.excludeBotSchedules && this.schedules.get(ex.scheduleId)?.source === 'bot')) return null;
     this.runs.delete(id);
     return { ...ex };
   }
@@ -4468,4 +4468,64 @@ describe('Scheduler: attempt 生命周期状态机(#1016)', () => {
     expect(second.runId).toBeTruthy();
     await h.scheduler.stop();
   });
+});
+
+describe('caller-owned deferred dispatch', () => {
+  it('returns deferred without arming a manual schedule or recording a failure', async () => {
+    const canDispatch = vi.fn(() => false);
+    const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      expect(ctx.deferToCaller).toBe(true);
+      expect(ctx.canDispatch).toBe(canDispatch);
+      expect(ctx.canDispatch?.()).toBe(false);
+      return { sessionId: 'bot-task', deferred: true, deferRetryMs: 1000 };
+    } });
+    const schedule = await h.scheduler.create({ ...baseInput, manual: true });
+    await h.scheduler.start();
+    const failed = vi.fn();
+    h.scheduler.on('failed', failed);
+    const result = await h.scheduler.runNow(schedule.id, { deferToCaller: true, canDispatch });
+    expect(result.deferred).toBe(true);
+    expect(await h.storage.listRuns(schedule.id)).toEqual([]);
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      nextFireAt: undefined, lastFiredAt: undefined,
+    });
+    h.clock.advance(120000);
+    await h.scheduler.tick();
+    expect(h.runner.fire).toHaveBeenCalledTimes(1);
+    expect(failed).not.toHaveBeenCalled();
+    await h.scheduler.stop();
+  });
+});
+
+it('keeps internal routine schedules out of public management while retaining host execution and cleanup', async () => {
+  const h = makeHarness();
+  const publicSchedule = await h.scheduler.create(baseInput);
+  const internal = { ...publicSchedule, id: 'routine-owned', source: 'bot' as const, manual: true, nextFireAt: undefined };
+  await h.storage.insert(internal);
+  expect(await h.scheduler.list()).toEqual([publicSchedule]);
+  expect(await h.scheduler.get(internal.id)).toBeNull();
+  const buildPatch = vi.fn(async () => ({ name: 'changed' }));
+  const actions = [
+    () => h.scheduler.listRuns(internal.id),
+    () => h.scheduler.update(internal.id, { name: 'changed' }),
+    () => h.scheduler.updateFromCurrent(internal.id, buildPatch),
+    () => h.scheduler.pause(internal.id),
+    () => h.scheduler.resume(internal.id),
+    () => h.scheduler.delete(internal.id),
+    () => h.scheduler.runNow(internal.id),
+  ];
+  for (const action of actions) await expect(action()).rejects.toThrow('not found');
+  expect(buildPatch).not.toHaveBeenCalled();
+  expect(h.runner.fire).not.toHaveBeenCalled();
+  expect(await h.storage.get(internal.id)).toEqual(internal);
+  const result = await h.scheduler.runNow(internal.id, { internalRoutine: true, deferToCaller: true });
+  expect(h.runner.fire).toHaveBeenCalledTimes(1);
+  await expect(h.scheduler.deleteRun(result.runId)).rejects.toThrow('not found');
+  expect(await h.storage.listRuns(internal.id)).toHaveLength(1);
+  await h.scheduler.pause(internal.id, { internalRoutine: true });
+  await h.scheduler.delete(internal.id, { internalRoutine: true });
+  expect(await h.storage.get(internal.id)).toBeNull();
+  await h.scheduler.runNow(publicSchedule.id);
+  expect(h.runner.fire).toHaveBeenCalledTimes(2);
+  await h.scheduler.stop();
 });

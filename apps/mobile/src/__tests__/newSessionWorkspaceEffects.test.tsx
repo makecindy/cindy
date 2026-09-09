@@ -30,6 +30,7 @@ const declarations = new Set([
   'appliedDefaultDeviceKeyRef', 'userTouchedDeviceRef', 'userTouchedWorkspaceRef',
   'patchDraft', 'selectWorkingDir', 'rememberWorkingDirForDevice', 'selectDialogueWorkspace',
   'selectRecentProject', 'openProjectBrowse',
+  'firstMessageRef', 'firstMessageSelectionRef', 'firstMessageSelection',
 ]);
 const effectMarkers = new Set([
   'drainStashedNewSessionDraft', 'readNewSessionPreferences',
@@ -64,6 +65,7 @@ for (const name of [...declarations, ...effectMarkers]) {
 
 interface WorkspaceState {
   draft: NewSessionDraft;
+  firstMessageSelection: { start: number; end: number };
   selectedDeviceId: string;
   newSessionPreferencesLoaded: boolean;
   selectDialogueWorkspace(): void;
@@ -91,7 +93,7 @@ const compiled = ts.transpileModule(`function usePageWorkspace(bindings) {
     setDraft((current) => current.workspaceKind === 'project' ? { ...current, workingDir: '' } : current);
   };
   return { draft, selectedDeviceId, newSessionPreferencesLoaded,
-    selectDialogueWorkspace, selectRecentProject, openProjectBrowse, switchDevice };
+    firstMessageSelection, selectDialogueWorkspace, selectRecentProject, openProjectBrowse, switchDevice };
 }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const usePageWorkspace = new Function(`${compiled}; return usePageWorkspace;`)() as
   (bindings: Record<string, unknown>) => WorkspaceState;
@@ -119,7 +121,8 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
     saveNewSessionPreferences: vi.fn(async () => {}),
     drainStashedNewSessionDraft: vi.fn(() => options.restoredKind ? {
       draft: { ...DEFAULT_NEW_SESSION_DRAFT, workspaceKind: options.restoredKind,
-        workingDir: options.restoredKind === 'project' ? '/restored/project' : '' },
+        workingDir: options.restoredKind === 'project' ? '/restored/project' : '',
+        firstMessage: 'restored draft' },
       attachments: [], deviceId: 'a', deviceName: 'A',
     } : null),
     loadBrowsePath: vi.fn(async () => {}), setDevicePickerOpen: vi.fn(),
@@ -182,6 +185,7 @@ describe('new session workspace page effects', () => {
     expect(page.current.draft).toMatchObject({ workspaceKind: kind,
       workingDir: kind === 'project' ? '/restored/project' : '' });
     expect(page.current.selectedDeviceId).toBe('a');
+    expect(page.current.firstMessageSelection).toEqual({ start: 'restored draft'.length, end: 'restored draft'.length });
     expect(page.bindings.pickInitialNewSessionWorkspace).not.toHaveBeenCalled();
   });
 

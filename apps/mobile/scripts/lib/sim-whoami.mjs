@@ -102,7 +102,7 @@ export function extractSimTakeoverArgs(args) {
 }
 
 /** Decide whether a listener has enough Cindy-specific identity for an explicit handoff. */
-export function classifySimMetroListener({ cwd, source, targetWorktree }) {
+export function classifySimMetroListener({ cwd, source, targetWorktree, platform = process.platform }) {
   if (!cwd) return { confirmed: false, worktree: null };
 
   const normalizedCwd = normalize(cwd).replaceAll('\\', '/').replace(/\/+$/, '');
@@ -113,10 +113,13 @@ export function classifySimMetroListener({ cwd, source, targetWorktree }) {
   }
 
   const worktree = normalizedCwd.slice(0, -suffix.length);
+  const isTarget = platform === 'win32'
+    ? worktree.toLowerCase() === normalizedTarget.toLowerCase()
+    : worktree === normalizedTarget;
   return {
     confirmed: true,
     worktree,
-    isTarget: worktree === normalizedTarget,
+    isTarget,
   };
 }
 
@@ -136,6 +139,10 @@ export function resolveSimMetroHandoff({
   envChanged = false,
   currentSource,
   runningSource,
+  currentRegion,
+  runningRegion,
+  currentEnvFingerprint,
+  runningEnvFingerprint,
   listener,
   listenerWorktreeExists = false,
 } = {}) {
@@ -155,18 +162,21 @@ export function resolveSimMetroHandoff({
 
   if (listener.isTarget) {
     if (runningSource === currentSource) {
-      if (envChanged && !takeover) {
+      const regionChanged = currentRegion !== undefined && runningRegion !== currentRegion;
+      const environmentChanged = currentEnvFingerprint !== undefined
+        && runningEnvFingerprint !== currentEnvFingerprint;
+      if ((envChanged || regionChanged || environmentChanged) && !takeover) {
         return {
           action: 'refuse',
-          code: 'target-env-stale',
+          code: regionChanged ? 'target-region-stale' : 'target-env-stale',
           lines: [
             `✗ 已补/改 apps/mobile/.env,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
             '  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。',
           ],
         };
       }
-      if (envChanged && takeover) {
-        return { action: 'restart', code: 'target-env', lines: [] };
+      if ((envChanged || regionChanged || environmentChanged) && takeover) {
+        return { action: 'restart', code: regionChanged ? 'target-region' : 'target-env', lines: [] };
       }
       return {
         action: 'reuse',

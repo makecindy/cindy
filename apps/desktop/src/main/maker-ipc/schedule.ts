@@ -398,6 +398,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
     return withScheduler(async ({ scheduler, storage }) => {
+      // Authorize before touching history; internal routine schedules are not public CRUD.
+      if (!await scheduler.get(scheduleId)) throw new Error(`Schedule not found: ${scheduleId}`);
       // 删 automation 前先把它名下所有未读历史标记为已读 —— 用户都决定删了,
       // 残留 unread badge 没意义。失败仅记日志,不阻断 delete 主流程。
       try {

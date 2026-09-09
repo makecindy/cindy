@@ -58,4 +58,39 @@ describe('sim-rebuild script invariants', () => {
     expect(source).toContain('`platform=iOS Simulator,id=${simulatorUdid}`');
     expect(source).toContain("'-destination', simulatorDestination");
   });
+
+  it('uses the Android debug client on Windows without invoking xcrun', () => {
+    expect(source).toContain("import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';");
+    expect(source).toContain("probeMetroOwnership");
+    expect(source).toContain('const ownership = probeMetroOwnership(8081);');
+    expect(source).toContain('if (!await portInUse(8081)) return true;');
+    expect(source).toContain('Metro on 8081 is occupied, but its listener PID could not be verified.');
+    expect(source).toContain('Metro on 8081 uses region');
+    expect(source).toContain('ownership.region');
+    expect(source).toContain("import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';");
+    expect(source).toContain('const androidTools = process.platform === \'win32\'');
+    expect(source).toContain('requireTools: !buildOnly');
+    expect(source).toContain('ANDROID_SDK_ROOT: sdkRoot, ANDROID_HOME: sdkRoot');
+    expect(source).toContain("if (process.platform === 'win32') {");
+    expect(source).toContain('await rebuildAndroidSimulator();');
+    expect(source).toContain("'--platform', 'android', '--no-install'");
+    expect(source).toContain("const gradle = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';");
+    expect(source).toContain("run('cmd.exe', ['/d', '/s', '/c', 'gradlew.bat assembleDebug']");
+    expect(source).not.toContain('process.env.ComSpec');
+    expect(source).toContain('resolvePnpmInvocation');
+    expect(source).toContain('function runPnpm(args, opts = {})');
+    expect(source).toContain("run(gradle, ['assembleDebug']");
+    expect(source).toContain("'install', '-r', apk");
+    expect(source).toContain("'shell', 'monkey', '-p', packageName, '1'");
+    expect(source).toContain('function ensureMetroOwnershipBeforeLaunch(packageName)');
+    const metroGate = source.indexOf('if (!await ensureMetroOwnershipBeforeLaunch(packageName)) return;');
+    const androidLaunch = source.indexOf("'shell', 'monkey', '-p', packageName, '1'");
+    expect(metroGate).toBeGreaterThanOrEqual(0);
+    expect(metroGate).toBeLessThan(androidLaunch);
+
+    const windowsBranch = source.indexOf("if (process.platform === 'win32') {");
+    const iosXcrunProbe = source.indexOf("capture('xcrun', ['simctl', 'list', 'devices', 'booted'])");
+    expect(windowsBranch).toBeGreaterThanOrEqual(0);
+    expect(iosXcrunProbe).toBeGreaterThan(windowsBranch);
+  });
 });

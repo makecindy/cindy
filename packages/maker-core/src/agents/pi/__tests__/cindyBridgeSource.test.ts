@@ -1266,9 +1266,22 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('await ctx.ui.input(');
     expect(source).toContain("const PERMISSION_USER_DENY = 'user-deny'");
     expect(source).toContain("const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny'");
-    expect(source).toContain('User denied this tool call via Cindy.');
-    expect(source).toContain('Cindy Auto-review denied this tool call.');
-    expect(source).toContain('Cindy could not approve this tool call.');
+    expect(source).toContain('User denied this tool call via Cindy');
+    expect(source).toContain('Cindy Auto-review denied this tool call');
+    expect(source).toContain('Cindy could not approve this tool call');
+  });
+
+  it('returns the bounded Auto reason to Pi while retaining legacy denial decoding', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const fragment = source.slice(source.indexOf('const PERMISSION_ALLOW'), source.indexOf('const READONLY_BUILTINS'));
+    const decode = runInNewContext(ts.transpile(fragment + '\npermissionDenialReason;', { target: ts.ScriptTarget.ES2022 })) as (value?: string) => string;
+    expect(decode('auto-review-deny:Only inspect; do not deploy.')).toBe('Cindy Auto-review denied this tool call: Only inspect; do not deploy.');
+    expect(decode('auto-review-deny')).toBe('Cindy Auto-review denied this tool call.');
+    expect(decode('user-deny')).toBe('User denied this tool call via Cindy.');
+    expect(decode('user-deny:Do not publish.')).toBe('User denied this tool call via Cindy: Do not publish.');
+    expect(decode('system-deny:session_closed')).toBe('Cindy could not approve this tool call: session_closed');
+    expect(decode(undefined)).toBe('Cindy could not approve this tool call.');
+    expect(decode('auto-review-deny:' + 'x'.repeat(500))).toBe('Cindy Auto-review denied this tool call: ' + 'x'.repeat(240));
   });
 
   it('normalizes bash timeout at the execute boundary without a host-side timer', () => {
@@ -2092,8 +2105,8 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   };
   runInNewContext(compiled, context);
   const calls: unknown[] = [];
-  const client = { request: async (method: string, params: unknown) => {
-    calls.push({ method, params });
+  const client = { request: async (method: string, params: unknown, signal?: AbortSignal) => {
+    calls.push({ method, params, signal });
     return { content: [{ type: 'text', text: 'ok' }] };
   } };
   const gateway = new context.Gateway();
@@ -2108,18 +2121,29 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'create_teammate']) {
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
-    const args = name === 'start_session_task' ? { instruction: 'Prepare a report' }
+    const args = name === 'routine_save' ? {
+      name: 'Rest', prompt: 'Remind me to rest', enabled: true,
+      triggers: [{ id: 'minute', kind: 'interval', intervalMs: 60000 }],
+    } : name === 'routine_list' || name === 'routine_sources' ? {}
+      : name.startsWith('routine_') ? { id: 'routine-1' }
+      : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'send_to_agent' ? { target_id: 'bot-b', message: 'Please review' }
       : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
       : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
       : { task_id: 'task-1' };
+    if (name === 'routine_save') {
+      expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
+      expect(tool.parameters.properties.botId).toBeUndefined();
+      expect(tool.parameters.properties.triggers.items.anyOf[0].properties.intervalMs.minimum).toBe(60000);
+    }
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
     expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.
-    await tool.execute('call-1', args);
-    expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } } });
+    const controller = new AbortController();
+    await tool.execute('call-1', args, controller.signal);
+    expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
 });

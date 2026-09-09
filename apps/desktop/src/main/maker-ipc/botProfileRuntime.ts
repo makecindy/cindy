@@ -804,6 +804,7 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
+    routinesEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
     botCreationEnabled: row.role === 'canonical' && helperAvailable,
     ownSkillsEnabled: ownSkillPluginRoot !== null,
     botModeEnabled: row.role === 'canonical',

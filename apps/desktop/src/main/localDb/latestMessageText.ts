@@ -121,12 +121,14 @@ interface RecentTitleDbRow {
   rowid: number;
 }
 
-function toTitleMessageCandidate(row: RecentTitleDbRow): TitleMessageCandidate | null {
+function toTitleMessageCandidate(
+  row: RecentTitleDbRow,
+  preferHookUserText: boolean,
+): TitleMessageCandidate | null {
   const role = row.role === 'user' ? 'user' : 'assistant';
-  const text = extractText(row.content, role);
-  if (!text) return null;
-
   const agentMeta = parseTitleAgentMeta(row.agentMeta);
+  const text = extractTitleMessageText(row.content, role, agentMeta, preferHookUserText);
+  if (!text) return null;
   return {
     role,
     text,
@@ -135,6 +137,31 @@ function toTitleMessageCandidate(row: RecentTitleDbRow): TitleMessageCandidate |
     toolUseId: row.toolUseId ?? null,
     agentMeta,
   };
+}
+
+/** Use the persisted user-authored body before the caller applies its title budget. */
+function extractTitleMessageText(
+  content: string,
+  role: 'user' | 'assistant',
+  agentMeta: Record<string, unknown> | null,
+  preferHookUserText: boolean,
+): string {
+  const source = agentMeta?.hookSource;
+  if (
+    preferHookUserText &&
+    role === 'user' &&
+    source &&
+    typeof source === 'object' &&
+    !Array.isArray(source)
+  ) {
+    const userText = (source as Record<string, unknown>).userText;
+    if (typeof userText === 'string' && userText.trim()) {
+      // Match hook dispatch's empty-body fallback and preserve the existing
+      // synthetic-input filtering for authored text.
+      return extractText(JSON.stringify({ text: userText.trim() }), role);
+    }
+  }
+  return extractText(content, role);
 }
 
 function parseTitleAgentMeta(raw: string | null): Record<string, unknown> | null {
@@ -212,6 +239,7 @@ async function recentMessagesWithClearedAt(
   clearedAt: number | null,
   snapshotUpperRowid: number | null,
   latestTurnIsInFlight: boolean,
+  preferHookUserText: boolean,
 ): Promise<RecentMessage[]> {
   if (limit <= 0 || snapshotUpperRowid == null) return [];
   const db = getDbClient().drizzle;
@@ -263,7 +291,7 @@ async function recentMessagesWithClearedAt(
     };
 
     const pageCandidates = rows
-      .map(toTitleMessageCandidate)
+      .map((row) => toTitleMessageCandidate(row, preferHookUserText))
       .filter((candidate): candidate is TitleMessageCandidate => candidate !== null);
     candidates.push(...pageCandidates);
     for (const candidate of pageCandidates) {
@@ -315,6 +343,7 @@ async function firstUserMessageWithClearedAt(
   sessionId: string,
   clearedAt: number | null,
   snapshotUpperRowid: number | null,
+  preferHookUserText: boolean,
 ): Promise<OpeningMessage> {
   if (snapshotUpperRowid == null) return { text: '', createdAt: null, rowid: null };
   const db = getDbClient().drizzle;
@@ -337,8 +366,9 @@ async function firstUserMessageWithClearedAt(
     .orderBy(asc(messages.createdAt), asc(messageRowid))
     .limit(OPENING_SCAN_LIMIT);
   for (const row of rows) {
-    if (!isVisibleTitleUser(parseTitleAgentMeta(row.agentMeta))) continue;
-    const text = extractText(row.content, 'user');
+    const agentMeta = parseTitleAgentMeta(row.agentMeta);
+    if (!isVisibleTitleUser(agentMeta)) continue;
+    const text = extractTitleMessageText(row.content, 'user', agentMeta, preferHookUserText);
     if (text) return { text, createdAt: row.createdAt ?? null, rowid: row.rowid };
   }
   return { text: '', createdAt: null, rowid: null };
@@ -352,6 +382,8 @@ export async function regenerateTitleMaterial(
   sessionId: string,
   recentLimit: number,
   latestTurnIsInFlight: boolean | (() => boolean) = false,
+  // Prompt prediction also consumes this material and needs injected context.
+  options: { preferHookUserText?: boolean } = {},
 ): Promise<RegenerateTitleMaterial> {
   const readLatestTurnIsInFlight = (): boolean =>
     typeof latestTurnIsInFlight === 'function'
@@ -367,13 +399,9 @@ export async function regenerateTitleMaterial(
     .where(eq(messages.sessionId, sessionId))
     .get();
   const inFlightAfterSnapshotSubmit = readLatestTurnIsInFlight();
-  const [clearedAt, snapshot] = await Promise.all([
-    sessionClearedAt(sessionId),
-    snapshotPromise,
-  ]);
+  const [clearedAt, snapshot] = await Promise.all([sessionClearedAt(sessionId), snapshotPromise]);
   const snapshotUpperRowid = snapshot?.rowid ?? null;
-  const snapshotLatestTurnIsInFlight =
-    inFlightBeforeSnapshot || inFlightAfterSnapshotSubmit;
+  const snapshotLatestTurnIsInFlight = inFlightBeforeSnapshot || inFlightAfterSnapshotSubmit;
   const [recent, opening] = await Promise.all([
     recentMessagesWithClearedAt(
       sessionId,
@@ -381,8 +409,14 @@ export async function regenerateTitleMaterial(
       clearedAt,
       snapshotUpperRowid,
       snapshotLatestTurnIsInFlight,
+      options.preferHookUserText === true,
     ),
-    firstUserMessageWithClearedAt(sessionId, clearedAt, snapshotUpperRowid),
+    firstUserMessageWithClearedAt(
+      sessionId,
+      clearedAt,
+      snapshotUpperRowid,
+      options.preferHookUserText === true,
+    ),
   ]);
   return { recent, opening };
 }
