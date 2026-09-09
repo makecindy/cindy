@@ -8524,7 +8524,16 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const isDurableMessagePush =
         push.channel === 'local-db:messages:created' ||
         (push.channel === 'maker:event' && inboundHasPersistId);
-      if (push.deviceId && inboundSid && isDurableMessagePush) {
+      const inboundEvent = (push.payload as { event?: unknown } | null)?.event as
+        | { type?: unknown; data?: { isFinal?: unknown; isFullText?: unknown } }
+        | null
+        | undefined;
+      const isOrdinaryStreamingTextDelta =
+        push.channel === 'maker:event' &&
+        inboundEvent?.type === 'text' &&
+        inboundEvent.data?.isFinal === false &&
+        inboundEvent.data?.isFullText !== true;
+      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta) {
         scheduleRemoteMessageRepair(inboundSid);
       }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
@@ -8547,7 +8556,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             resyncRequired?: unknown;
           } | null;
           if (typeof sync?.sessionId !== 'string' || sync.sessionId !== inboundSid) break;
-          if (sync.event && typeof sync.persistId === 'string') {
+          const hasSyncEvent = Boolean(sync.event && typeof sync.persistId === 'string');
+          if (hasSyncEvent) {
             handleMakerEventRaw(
               {
                 sessionId: sync.sessionId,
@@ -8560,7 +8570,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           if (sync.resyncRequired === true) {
             void reconcileRemoteMessages(sync.sessionId, {
               force: true,
-              repair: true,
+              // A full snapshot has already repaired the live bubble; keep it
+              // ahead of an older DB row. With only resyncRequired, the host
+              // has no snapshot left and the DB window is authoritative even
+              // while the controller still shows a stale streaming flag.
+              repair: hasSyncEvent,
             }).catch(() => undefined);
           }
           break;

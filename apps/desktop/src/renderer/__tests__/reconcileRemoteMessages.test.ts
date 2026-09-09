@@ -1577,6 +1577,89 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     ).toBe('current in-flight text');
   });
 
+  it('远程会话:resyncRequired 强制对账可替换 streaming 中已封存消息的旧正文', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: {
+          type: 'status', source: 'claude-code',
+          data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 },
+        },
+      },
+    });
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        persistId: 'streaming-assistant',
+        event: {
+          type: 'text', source: 'claude-code',
+          data: { text: 'stale streaming text', isFinal: false },
+        },
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'streaming-assistant', 'authoritative sealed text', '2026-06-15T00:00:02.000Z'),
+    ];
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:session-sync',
+      payload: { sessionId: s, resyncRequired: true },
+    });
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+
+    expect(makerChatStore.getSnapshot(s).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'client-seed', content: 'seed row', isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'client-streaming-assistant', content: 'authoritative sealed text', isStreaming: false,
+      }),
+    ]);
+  });
+
+  it('远程会话:普通 streaming text delta 不周期性触发历史修复', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = sid();
+      makerChatStore.initGlobalListeners();
+      await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+      invoke.mockClear();
+
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:event',
+        payload: {
+          sessionId: s,
+          persistId: 'streaming-assistant',
+          event: {
+            type: 'text', source: 'claude-code',
+            data: { text: 'delta', isFinal: false },
+          },
+        },
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect(invoke).not.toHaveBeenCalledWith(
+        DEVICE_ID,
+        'local-db:messages:list',
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('远程会话:权威重建没保留任何晚到的行时,孤岛标记清零', async () => {
     // review #676(codex P1):这种情况下新窗口**完全**由本次从最新连续翻回来的页组成,按构造
     // 没有孤岛。留着标记的代价不是"多做一次补齐":标记只由整窗重建清零,而窗口内的目标比重建
