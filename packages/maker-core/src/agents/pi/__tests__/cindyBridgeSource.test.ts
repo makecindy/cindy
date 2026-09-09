@@ -355,7 +355,56 @@ function loadQuestionTool(): { execute: (...args: any[]) => Promise<any> } {
   return tool;
 }
 
+function loadPackageTool(): { execute: (...args: any[]) => Promise<any> } {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const projectionStart = source.indexOf('const projectPiPackageCommandDiagnostic =');
+  const projectionEnd = source.indexOf('// Pi 的模型鉴权', projectionStart);
+  const start = source.indexOf('// Cindy owns a separate Pi extension store.');
+  const end = source.indexOf('// ── 原生会话树桥', start);
+  const compiled = ts.transpileModule(source.slice(projectionStart, projectionEnd) + source.slice(start, end), {
+    compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let tool: any;
+  runInNewContext(compiled, {
+    pi: { registerTool(value: any) { tool = value; } },
+    piPackageManagementToken: 'x'.repeat(64),
+    PI_PACKAGE_MANAGEMENT_TITLE: 'cindy:pi-package', MAX_PI_PACKAGE_SOURCE_LENGTH: 2048,
+  });
+  return tool;
+}
+
 describe('cindy-bridge extension source', () => {
+  it.each(['failed', 'timed-out', 'unknown', 'cancelled'] as const)(
+    'keeps %s diagnostics in the final Pi tool error and permits a later retry', async (outcome) => {
+      const tool = loadPackageTool();
+      const diagnostic = { phase: 'native-command', command: 'install', outcome, exitCode: null,
+        reason: 'unknown', recovery: 'inspect-state-before-retry', stderr: 'fake-private-stderr' };
+      let failed = true;
+      const ctx = { ui: { input: async () => JSON.stringify(failed
+        ? { ok: false, error: 'Safe failure',
+            ...(outcome === 'cancelled' ? { cancelled: true } : {
+              failureCode: 'native-command-failed', mayHaveChangedState: true, diagnostic,
+            }),
+            argv: '--token=fake-private-argv',
+          }
+        : { ok: true, result: { changed: true, nativeCommandSucceeded: true, projectionUnavailable: true } }) } };
+      const error = await tool.execute('pkg', { action: 'install', source: 'npm:sample' }, undefined, undefined, ctx)
+        .catch((failure: Error) => failure);
+      expect(error.message).toContain(outcome === 'cancelled' ? '"cancelled":true' : '"outcome":"' + outcome + '"');
+      expect(error.message).not.toContain('fake-private');
+      failed = false;
+      const result = await tool.execute('retry', { action: 'install', source: 'npm:sample' }, undefined, undefined, ctx);
+      expect(result.content[0].text).toContain('"nativeCommandSucceeded":true');
+      expect(result.details).toMatchObject({ changed: true, projectionUnavailable: true });
+    },
+  );
+
+  it('preserves legacy package failure messages when the host sends no diagnostic', async () => {
+    await expect(loadPackageTool().execute('pkg', { action: 'install', source: 'npm:sample' }, undefined, undefined, {
+      ui: { input: async () => JSON.stringify({ ok: false, error: 'Legacy failure' }) },
+    })).rejects.toThrow(/^Legacy failure$/);
+  });
+
   it('keeps the question tool pending until the UI returns a real answer', async () => {
     const tool = loadQuestionTool();
     let answer!: (value: string) => void;

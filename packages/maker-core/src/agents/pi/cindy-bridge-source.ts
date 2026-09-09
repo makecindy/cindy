@@ -31,6 +31,7 @@ import {
   SENSITIVE_CREDENTIAL_GLOB_PATTERNS,
   SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS,
 } from "../shared/sensitive-credential-paths.js";
+import { projectPiPackageCommandDiagnostic } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
@@ -97,6 +98,7 @@ const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
 const MAX_PI_PACKAGE_SOURCE_LENGTH = 2_048;
+const projectPiPackageCommandDiagnostic = ${projectPiPackageCommandDiagnostic.toString()};
 
 // Pi 的模型鉴权、localhost proxy 与 MCP bearer 需要留在父进程 env 供 runtime
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
@@ -3794,18 +3796,28 @@ export default async function cindyBridge(pi: any) {
         if (typeof response !== 'string' || response.length === 0) {
           throw new Error('Cindy could not complete the Pi extension operation.');
         }
-        let parsed: { ok?: unknown; error?: unknown; result?: unknown };
+        let parsed: { ok?: unknown; error?: unknown; result?: unknown; cancelled?: unknown;
+          failureCode?: unknown; mayHaveChangedState?: unknown; diagnostic?: unknown };
         try {
           parsed = JSON.parse(response);
         } catch {
           throw new Error('Cindy returned an invalid Pi extension operation result.');
         }
         if (parsed.ok !== true) {
-          throw new Error(
-            typeof parsed.error === 'string' && parsed.error.length > 0
-              ? parsed.error
-              : 'Cindy could not complete the Pi extension operation.',
-          );
+          const diagnostic = projectPiPackageCommandDiagnostic(parsed.diagnostic);
+          const details = {
+            ...(parsed.cancelled === true ? { cancelled: true } : {}),
+            ...(typeof parsed.failureCode === 'string' && [
+              'source-unavailable', 'package-not-found', 'version-not-found', 'state-unavailable', 'native-command-failed',
+            ].includes(parsed.failureCode) ? { failureCode: parsed.failureCode } : {}),
+            ...(typeof parsed.mayHaveChangedState === 'boolean' ? { mayHaveChangedState: parsed.mayHaveChangedState } : {}),
+            ...(diagnostic ? { diagnostic } : {}),
+          };
+          const message = typeof parsed.error === 'string' && parsed.error.length > 0
+            ? parsed.error : 'Cindy could not complete the Pi extension operation.';
+          // Pi turns thrown tool errors into model-visible text. Preserve the
+          // safe receipt there as well, rather than discarding it at this hop.
+          throw new Error(message + (Object.keys(details).length ? '\n' + JSON.stringify(details) : ''));
         }
         return {
           content: [{

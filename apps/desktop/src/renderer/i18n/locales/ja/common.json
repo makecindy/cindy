@@ -3143,6 +3143,7 @@
       "runtimeUnknown": "{{packageName}} には Pi {{range}} が必要ですが、現在の Cindy の Pi バージョンが要件を満たすか確認できませんでした。",
       "warning": {
         "no-resources": "この拡張機能には Pi リソースが見つかりません。",
+        "build-failed": "Pi の操作は完了しましたが、Cindy の補助ビルドは完了しませんでした。拡張機能のビルド依存関係を確認してください。",
         "inspection-failed": "Cindy はインストール済み内容を検査できませんでしたが、それを理由に無効化しません。Pi がネイティブに処理します。",
         "inspection-limit": "Cindy は詳細分析の上限で表示を停止しました。パッケージは Pi のネイティブローダーで引き続き利用できます。",
         "unsupported-filter": "Cindy はこの Pi リソースフィルターをまだ表示できません。パッケージとフィルターは Pi がネイティブに処理します。",

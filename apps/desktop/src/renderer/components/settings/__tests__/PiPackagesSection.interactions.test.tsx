@@ -291,6 +291,52 @@ describe('PiPackagesSection interaction state machine', () => {
     expect(toastMocks.success).not.toHaveBeenCalled();
   });
 
+  it('keeps cancellation out of failure toasts', async () => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => {
+      throw new Error('[MUTATION_CANCELLED] cancelled');
+    }) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    const remove = screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!;
+    fireEvent.click(remove);
+    await waitFor(() => expect(remove.hasAttribute('disabled')).toBe(false));
+    expect(toastMocks.error).not.toHaveBeenCalled();
+    expect(toastMocks.success).not.toHaveBeenCalled();
+  });
+
+  it('separates successful native mutation from a failed Cindy build', async () => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => ({
+      available: true, packages: [], changed: true, nativeCommandSucceeded: true,
+      diagnostics: [{ phase: 'cindy-analysis', outcome: 'failed', exitCode: 1,
+        reason: 'build-failed', recovery: 'check-build-dependencies' }],
+    })) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.settingsRemove'));
+    expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.warning.build-failed');
+    expect(toastMocks.error).not.toHaveBeenCalledWith('settings.piPackages.operationFailed');
+  });
+
+  it('reports confirmed native install success when Cindy cannot project its enabled state', async () => {
+    installElectronApi({
+      mutatePiPackage: vi.fn(async () => ({
+        available: false, packages: [], changed: true,
+        nativeCommandSucceeded: true, projectionUnavailable: true,
+      })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.change(screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder'), {
+      target: { value: 'npm:sample' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
+    await waitFor(() => expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.install'));
+    expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.failure.stateUnavailable');
+    expect(toastMocks.error).not.toHaveBeenCalledWith('settings.piPackages.operationFailed');
+    expect(toastMocks.success).not.toHaveBeenCalledWith('settings.piPackages.success.installEnabled');
+  });
+
   it('preserves the last complete roster when native success has no fresh projection', async () => {
     installElectronApi({
       mutatePiPackage: vi.fn(async () => ({

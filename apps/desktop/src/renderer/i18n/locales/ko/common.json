@@ -3143,6 +3143,7 @@
       "runtimeUnknown": "{{packageName}}에는 Pi {{range}}가 필요하지만 현재 Cindy의 Pi 버전이 요구 사항을 충족하는지 확인할 수 없습니다.",
       "warning": {
         "no-resources": "이 확장에서 Pi 리소스를 찾지 못했습니다.",
+        "build-failed": "Pi 작업은 완료되었지만 Cindy의 보조 빌드는 완료되지 않았습니다. 확장의 빌드 의존성을 확인하세요.",
         "inspection-failed": "Cindy가 설치된 내용을 검사하지 못했지만 이 때문에 비활성화하지 않습니다. Pi가 기본 방식으로 처리합니다.",
         "inspection-limit": "Cindy가 상세 분석 한도에서 추가 표시를 중단했습니다. 패키지는 Pi 기본 로더를 통해 계속 사용할 수 있습니다.",
         "unsupported-filter": "Cindy가 아직 이 Pi 리소스 필터를 표시할 수 없습니다. 패키지와 필터는 Pi가 기본 방식으로 처리합니다.",

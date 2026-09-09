@@ -64,6 +64,7 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
+  projectPiPackageCommandDiagnostic,
   PiNativeProviderProxyNotReadyError,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
@@ -704,6 +705,17 @@ function resolvePiExtensionUiStrings(deps: AgentDeps): PiExtensionUiStrings {
   return DEFAULT_PI_EXTENSION_UI_STRINGS;
 }
 
+/** Only the typed host failure crosses into tool results and deterministic receipts. */
+function piManagedPackageFailureDetails(error: unknown) {
+  if (error instanceof PiManagedPackageMutationCancelledError) return { cancelled: true };
+  if (!(error instanceof PiManagedPackageMutationFailedError)) return {};
+  return {
+    failureCode: error.failureCode,
+    mayHaveChangedState: error.mayHaveChangedState,
+    ...(error.diagnostic ? { diagnostic: error.diagnostic } : {}),
+  };
+}
+
 function piManagedPackageFailureMessage(
   strings: PiExtensionUiStrings,
   error: unknown,
@@ -828,9 +840,21 @@ function piManagedPackageResultSummary(
 ): Record<string, unknown> {
   if (!result || typeof result !== 'object') return {};
   const record = result as Record<string, unknown>;
+  const diagnostics = Array.isArray(record.diagnostics)
+    ? record.diagnostics.slice(0, 4).flatMap((value) => {
+        const diagnostic = projectPiPackageCommandDiagnostic(value);
+        return diagnostic ? [diagnostic] : [];
+      })
+    : [];
+  const projection = {
+    ...(record.nativeCommandSucceeded === true ? { nativeCommandSucceeded: true } : {}),
+    ...(diagnostics.length ? { diagnostics } : {}),
+    ...(record.projectionUnavailable === true ? { projectionUnavailable: true } : {}),
+    ...(record.runtimeConvergence === 'partial' ? { runtimeConvergence: 'partial' } : {}),
+  };
   const affected = record.affectedPackage;
   if (!affected || typeof affected !== 'object') {
-    return { changed: record.changed === true };
+    return { changed: record.changed === true, ...projection };
   }
   const pkg = affected as Record<string, unknown>;
   const shortString = (value: unknown, max = 512): string | undefined => (
@@ -891,6 +915,7 @@ function piManagedPackageResultSummary(
     : undefined;
   return {
     changed: record.changed === true,
+    ...projection,
     affectedPackage: {
       // Receipts are transcript/model context. Preserve a stable public source,
       // never URL credentials/query/fragment or a host-resolved absolute path.
@@ -913,6 +938,9 @@ function compactPiManagedPackageReceipt(receipt: Record<string, unknown>): Recor
     const error = typeof receipt.error === 'string' ? receipt.error : 'Pi extension operation failed.';
     return {
       ok: false,
+      ...(receipt.cancelled === true ? { cancelled: true } : {}),
+      ...(receipt.failureCode ? { failureCode: receipt.failureCode, mayHaveChangedState: receipt.mayHaveChangedState } : {}),
+      ...(receipt.diagnostic ? { diagnostic: receipt.diagnostic } : {}),
       error: error.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH),
       outputTruncated: error.length > MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH,
     };
@@ -925,6 +953,10 @@ function compactPiManagedPackageReceipt(receipt: Record<string, unknown>): Recor
     outputTruncated: true,
     result: {
       changed: result.changed === true,
+      ...(result.nativeCommandSucceeded === true ? { nativeCommandSucceeded: true } : {}),
+      ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
+      ...(result.projectionUnavailable === true ? { projectionUnavailable: true } : {}),
+      ...(result.runtimeConvergence === 'partial' ? { runtimeConvergence: 'partial' } : {}),
       ...(affected
         ? {
             affectedPackage: {
@@ -946,7 +978,14 @@ function compactPiManagedPackageReceipt(receipt: Record<string, unknown>): Recor
 
 type PiManagedPackageCommandOutcome =
   | { ok: true; result: unknown }
-  | { ok: false; error: string; cancelled?: boolean };
+  | {
+      ok: false;
+      error: string;
+      cancelled?: boolean;
+      failureCode?: PiManagedPackageMutationFailedError['failureCode'];
+      mayHaveChangedState?: boolean;
+      diagnostic?: PiManagedPackageMutationFailedError['diagnostic'];
+    };
 
 function piManagedPackageReceiptPayload(
   command: ParsedPiManagedPackageCommand,
@@ -957,6 +996,8 @@ function piManagedPackageReceiptPayload(
     : {
         ok: false,
         ...(outcome.cancelled ? { cancelled: true } : {}),
+        ...(outcome.failureCode ? { failureCode: outcome.failureCode, mayHaveChangedState: outcome.mayHaveChangedState } : {}),
+        ...(outcome.diagnostic ? { diagnostic: outcome.diagnostic } : {}),
         error: outcome.error.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH),
         outputTruncated: outcome.error.length > MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH,
       };
@@ -5026,15 +5067,16 @@ export class PiAgent extends BaseAgent {
             };
           } else {
             // The deterministic receipt is user/model-visible conversation data.
-            // Keep raw spawn/filesystem/inspection/CLI details in the Main log;
-            // only a stable localized failure value may cross into the receipt.
+            // Only host-selected diagnostic facts may cross into the receipt;
+            // unknown errors stay generic and are never logged verbatim.
             this.deps.logger.warn('exact Pi extension command failed', {
               action: command.action,
-              message: error instanceof Error ? error.message : String(error),
+              ...piManagedPackageFailureDetails(error),
             });
             outcome = {
               ok: false,
               error: piManagedPackageFailureMessage(uiStrings, error),
+              ...piManagedPackageFailureDetails(error),
             };
           }
         }
@@ -7285,20 +7327,23 @@ export class PiAgent extends BaseAgent {
               source,
             );
           } catch (error) {
-            // Extension UI responses are model-visible. Keep raw spawn,
-            // filesystem, inspection and Pi CLI details in the local log only.
-            this.deps.logger.warn('pi extension mutation failed', {
-              action,
-              sessionId: context.sessionId,
-              message: error instanceof Error ? error.message : String(error),
-            });
+            // Both tool responses and logs receive only host-selected facts;
+            // arbitrary process and filesystem text may contain credentials.
+            if (!(error instanceof PiManagedPackageMutationCancelledError)) {
+              this.deps.logger.warn('pi extension mutation failed', {
+                action,
+                sessionId: context.sessionId,
+                ...piManagedPackageFailureDetails(error),
+              });
+            }
             const uiStrings = resolvePiExtensionUiStrings(this.deps);
             proc.send({
               type: 'extension_ui_response',
               id,
               value: JSON.stringify({
                 ok: false,
-                error: piManagedPackageFailureMessage(uiStrings, error),
+                error: error instanceof PiManagedPackageMutationCancelledError ? uiStrings.cancel : piManagedPackageFailureMessage(uiStrings, error),
+                ...piManagedPackageFailureDetails(error),
               }),
             });
             if (error instanceof PiManagedPackageMutationFailedError

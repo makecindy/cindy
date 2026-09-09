@@ -201,10 +201,11 @@ export function PiPackagesSection() {
         }
         if (action === 'install' && result.affectedPackage?.enabled) setSource('');
       }
-      // Installation success means installed and enabled. Keep this Renderer
-      // assertion even though Main enforces the same invariant so an older or
-      // malformed receipt can never produce a false success toast.
-      if (action === 'install' && result.affectedPackage?.enabled !== true) {
+      // A confirmed native success survives a missing Cindy projection. Older
+      // receipts still need their enabled-package evidence; changed alone is
+      // not proof that installation succeeded.
+      if (action === 'install' && result.nativeCommandSucceeded !== true
+        && result.affectedPackage?.enabled !== true) {
         toast.error(t('settings.piPackages.operationFailed'));
         return false;
       }
@@ -225,10 +226,13 @@ export function PiPackagesSection() {
       }
       if (result.projectionUnavailable) {
         toast.error(t('settings.piPackages.failure.stateUnavailable'));
+      } else if (result.diagnostics?.some((diagnostic) => diagnostic.phase === 'cindy-analysis')) {
+        toast.error(t('settings.piPackages.warning.build-failed'));
       }
       return true;
     } catch (error) {
       const ipcError = extractIpcError(error);
+      if (ipcError?.code === 'MUTATION_CANCELLED') return false;
       toast.error(
         ipcError?.code === 'PI_PACKAGE_MUTATION_FAILED'
           ? ipcError.message

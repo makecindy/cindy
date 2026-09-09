@@ -1,6 +1,7 @@
+import { createPiPackageCommandError } from '../pi-package-diagnostic.js';
 import { readFileSync } from 'node:fs';
 
-import { PiManagedPackageMutationFailedError } from '@cindy/maker-core';
+import { PiManagedPackageMutationCancelledError, PiManagedPackageMutationFailedError } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loggerMocks = vi.hoisted(() => ({
@@ -194,6 +195,47 @@ describe('Pi managed package Main authorization', () => {
         mayHaveChangedState: false,
       },
     );
+  });
+
+  it('preserves cancellation without logging a native failure', async () => {
+    const { deps } = buildDeps();
+    const cancellation = new PiManagedPackageMutationCancelledError();
+    vi.mocked(deps.mutate).mockRejectedValueOnce(cancellation);
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install', source: 'npm:sample', authorization: 'confirmed-tool-call',
+    }, deps)).rejects.toBe(cancellation);
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['timed-out', 'unknown'] as const)('does not turn %s into a deterministic source failure', async (outcome) => {
+    const { deps } = buildDeps();
+    vi.mocked(deps.mutate).mockRejectedValueOnce(createPiPackageCommandError('npm ERR! E404 package not found', {
+      phase: 'native-command', outcome, exitCode: null,
+    }));
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install', source: 'npm:sample', authorization: 'confirmed-tool-call',
+    }, deps)).rejects.toMatchObject({
+      failureCode: 'native-command-failed', diagnostic: { outcome, nativeCode: 'E404', recovery: 'inspect-state-before-retry' },
+    });
+  });
+
+  it('carries safe process evidence without publishing arbitrary output or cause', async () => {
+    const { deps } = buildDeps();
+    const raw = 'npm ERR! E401 Authorization: Bearer deliberately-invalid-secret';
+    vi.mocked(deps.mutate).mockRejectedValueOnce(createPiPackageCommandError(raw, {
+      phase: 'native-command', outcome: 'failed', exitCode: 128,
+    }));
+    const failure = await mutateAuthorizedPiManagedPackage({
+      action: 'install', source: 'npm:sample', authorization: 'confirmed-tool-call',
+    }, deps).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ diagnostic: {
+      phase: 'native-command', outcome: 'failed', exitCode: 128,
+      reason: 'authentication', recovery: 'check-credentials',
+    } });
+    expect(failure).not.toHaveProperty('cause');
+    const published = JSON.stringify([failure, loggerMocks.warn.mock.calls]);
+    expect(published).not.toContain('deliberately-invalid-secret');
+    expect(published).not.toContain(raw);
   });
 
   it('rejects authorization values outside the host-owned union at runtime', async () => {

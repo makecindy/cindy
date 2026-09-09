@@ -3143,6 +3143,7 @@
       "runtimeUnknown": "{{packageName}} 要求 Pi {{range}}，但 Cindy 无法确定当前 Pi 版本是否满足。",
       "warning": {
         "no-resources": "这个扩展没有发现 Pi 资源。",
+        "build-failed": "Pi 已完成操作，但 Cindy 的辅助构建未完成。请检查扩展的构建依赖。",
         "inspection-failed": "Cindy 无法检查已安装内容，但不会因此停用；仍由 Pi 原生处理。",
         "inspection-limit": "Cindy 已达到详情分析上限并停止展示更多结果；包仍通过 Pi 原生加载。",
         "unsupported-filter": "Cindy 暂时无法展示这个 Pi 资源筛选配置；包和筛选仍由 Pi 原生处理。",

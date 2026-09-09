@@ -3144,6 +3144,7 @@
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
+        "build-failed": "Pi completed the operation, but Cindy could not finish the optional build. Check the extension’s build dependencies.",
         "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
         "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
         "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
