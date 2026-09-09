@@ -121,3 +121,9 @@ code/signal 断言后，在审查所指提交 d8bd012f1 上两种顺序均通过
 没有建立“父退出、后代继续持有管道”的前提。仅对测试后代设置 Windows detached，
 继续继承输出句柄；保留 PID 存活、明确失败、2 秒终态期限及 afterEach 清理断言。
 生产 Pi 的 spawn/进程树策略不变；Windows 修正效果以新提交的 CI 为准。
+
+Windows 后续运行 b1c442b4e 已通过后代存活等行为断言，但 afterEach 删除临时目录时
+遇到 EBUSY。清理现在区分“发出 kill”与“退出已确认”：等待该 fixture PID 的 ESRCH
+再删除目录，文件系统残留锁采用有界异步重试，避免阻塞事件循环；不吞掉清理失败。
+同轮 shard 1 的 Windows mutex 探测与飞书 Unicode 校验超时未改动相关源码，
+前一提交的同 shard 曾通过，尚无基线复现证据；由新 CI 复查，不认定已确定为偶发。
