@@ -30,6 +30,7 @@ import {
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  getSessionFsSnapshot: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
@@ -56,6 +57,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionFsSnapshot: mocks.getSessionFsSnapshot,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -182,6 +184,7 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
         if (idx >= 0) statusListeners.splice(idx, 1);
       };
     },
+    stablePermissionModeState: { mode: 'ask', generation: 0 },
     abort: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   } as unknown as Session;
@@ -273,7 +276,7 @@ interface QueueHarness {
   removeCalls: Array<{ sessionId: string; clientId: string }>;
   cancelAutoResumeCalls: Array<{ sessionId: string; runId: string }>;
   /** 模拟 drain 派发:触发最近一次入队项的 onAccepted。 */
-  accept(): Promise<void>;
+  accept(permissions?: { permissionMode?: string; planMode?: boolean }): Promise<void>;
   /** 模拟排队项被丢弃(用户删除 / abort 撤项)。 */
   discard(): void;
   /** 模拟普通自动续跑最终仍失败。 */
@@ -314,7 +317,7 @@ function createQueueHarness(opts: {
         if (opts.enqueueRetry) return { retry: true as const };
         if (opts.enqueueDuplicate) return { duplicate: true as const };
         enqueueCalls.push(req);
-        if (opts.acceptBeforeEnqueueResolves) await req.onAccepted();
+        if (opts.acceptBeforeEnqueueResolves) await req.onAccepted({ permissionMode: 'ask', planMode: false });
         return { clientId: `client-${enqueueCalls.length}` };
       }),
       removeQueuedPrompt: (sessionId, clientId) => {
@@ -335,8 +338,8 @@ function createQueueHarness(opts: {
         cancelAutoResumeCalls.push({ sessionId, runId });
       },
     },
-    async accept() {
-      await enqueueCalls.at(-1)?.onAccepted();
+    async accept(permissions = { permissionMode: 'ask', planMode: false }) {
+      await enqueueCalls.at(-1)?.onAccepted(permissions);
     },
     discard() {
       enqueueCalls.at(-1)?.onDiscarded?.();
@@ -431,15 +434,79 @@ beforeEach(() => {
     providerId: null,
   });
   mocks.getSessionProvider.mockReturnValue(null);
+  mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
 });
 
 describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
-  it('enqueues instead of sending directly; captures turn result after dispatch', async () => {
+  it.each(['permission', 'plan', 'switching', 'missing', 'replaced'])('defers queued routine acceptance after %s changes and runs with a fresh snapshot', async (change) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const f = createRunnerHarness(h.session, queue.deps);
+    const ctx = { ...createFireContext(), deferToCaller: true };
+    const fire = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const queuedPermissions = { permissionMode: change === 'permission' || change === 'replaced' ? 'bypassPermissions' : 'ask', planMode: false };
+    const currentPlan = change === 'plan';
+    mocks.getSessionFsSnapshot.mockResolvedValue(change === 'missing' ? null : { permissionMode: 'ask', planModeEnabled: currentPlan });
+    if (change === 'switching') Object.assign(h.session, { stablePermissionModeState: null });
+    let acceptedSession = h;
+    if (change === 'replaced') {
+      acceptedSession = createSessionHarness(async () => ({ accepted: true }));
+      f.replaceLiveSession(acceptedSession.session);
+    }
+    await queue.accept(queuedPermissions);
+    expect(await fire).toMatchObject({ deferred: true });
+    expect(acceptedSession.session.abort).toHaveBeenCalledOnce();
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(f.notifier.notify).not.toHaveBeenCalled();
+    expect(acceptedSession.listenerCount()).toBe(0);
+
+    Object.assign(acceptedSession.session, { stablePermissionModeState: { mode: 'ask', generation: 1 } });
+    mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: currentPlan });
+    const retry = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), { ...createFireContext(), deferToCaller: true });
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+    await queue.accept({ permissionMode: 'ask', planMode: currentPlan });
+    acceptedSession.emit({ type: 'done', data: {}, turnOrigin: SCHEDULER_TURN_ORIGIN } as AgentEvent);
+    expect(await retry).not.toMatchObject({ deferred: true });
+  });
+
+  it('defers a queued routine when its live session disappears before acceptance', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker, notifier } = createRunnerHarness(h.session, queue.deps);
+    const ctx = { ...createFireContext(), deferToCaller: true };
+    const fire = runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    vi.mocked(maker.getSession).mockReturnValue(undefined);
+    await expect(queue.accept()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+    expect(await fire).toMatchObject({ deferred: true });
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(h.listenerCount()).toBe(0);
+  });
+
+  it('cancels an edited routine revision at queued acceptance before marking the turn active', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const f = createRunnerHarness(h.session, queue.deps);
+    let valid = true;
+    const ctx = { ...createFireContext(), deferToCaller: true, canDispatch: () => valid };
+    const fire = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    valid = false;
+    await queue.accept();
+    expect(await fire).toMatchObject({ deferred: true });
+    expect(h.session.abort).toHaveBeenCalledOnce();
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(f.notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it.each(['user', 'bot'] as const)('%s enqueues without direct send and preserves routine plan mode', async (source) => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     const queue = createQueueHarness({ busy: true });
     const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
 
-    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    const firePromise = runner.fire(heartbeatSchedule({ source }), createFireContext());
 
     // 入队参数:发送正文带静默协议后缀,落库/展示用原始 prompt,origin=scheduler。
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
@@ -447,7 +514,10 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(req.sessionId).toBe(SESSION_ID);
     expect(req.text).toContain('PR #971 heartbeat prompt');
     expect(req.text).toContain('[Silent scheduled run]');
-    expect(req.persistedContent).toBe('PR #971 heartbeat prompt');
+    expect(req.inheritTargetPlanMode).toBe(source === 'bot' ? true : undefined);
+    expect(req.persistedContent).toContain('PR #971 heartbeat prompt');
+    if (source === 'user') expect(req.persistedContent).toBe('PR #971 heartbeat prompt');
+    else expect(req.persistedContent).not.toBe('PR #971 heartbeat prompt');
     expect(req.origin).toEqual({
       kind: 'scheduler',
       scheduleId: 'schedule-hb',
@@ -1245,6 +1315,20 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const result = await runner.fire(heartbeatSchedule(), createFireContext());
     expect(result).toMatchObject({ deferred: true });
     expect(queue.enqueueCalls.length).toBe(0);
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('manual busy dispatch defers only when the caller owns retries: %s', async (deferToCaller) => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, hasQueued: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+    const result = runner.fire(
+      heartbeatSchedule({ manual: true, source: 'bot' }),
+      { ...createFireContext(), deferToCaller },
+    );
+    if (deferToCaller) await expect(result).resolves.toMatchObject({ deferred: true });
+    else await expect(result).rejects.toThrow('HEARTBEAT_ALREADY_QUEUED');
+    expect(queue.enqueueCalls).toHaveLength(0);
     expect(harness.send).not.toHaveBeenCalled();
   });
 

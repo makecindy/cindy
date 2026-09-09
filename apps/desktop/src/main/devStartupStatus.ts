@@ -21,6 +21,7 @@ export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
  */
 export interface DesktopDevInstanceRecord {
   schemaVersion: 1;
+  worktreeLeaseProtocol?: 1;
   instanceId: string;
   pid: number;
   startedAtMs: number;
@@ -132,6 +133,7 @@ export async function beginDesktopDevInstance(
   const startedAtMs = options.startedAtMs ?? Date.now();
   const record: DesktopDevInstanceRecord = {
     schemaVersion: 1,
+    worktreeLeaseProtocol: 1,
     instanceId: options.instanceId ?? randomUUID(),
     pid,
     startedAtMs,

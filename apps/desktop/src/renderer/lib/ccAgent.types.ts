@@ -299,6 +299,8 @@ export interface Session {
    * 消费方按 null 兜底(不提示)。
    */
   activeTurnStartedAt?: number | null;
+  /** Host-confirmed pre-boot interruption generation; absent on older hosts. */
+  interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   /**
    * worktree-parallel-sessions: 本 session 绑定的 git worktree 绝对路径（null = 无 worktree）。

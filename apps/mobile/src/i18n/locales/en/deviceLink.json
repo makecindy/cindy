@@ -1,4 +1,8 @@
 {
+  "cachedHistory": {
+    "title": "Computer not connected",
+    "hint": "Saved content is available. Connect your computer to load more."
+  },
   "recovery": {
     "syncing": "Syncing…",
     "recovered": "Restored",

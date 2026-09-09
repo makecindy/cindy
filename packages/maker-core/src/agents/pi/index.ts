@@ -57,6 +57,8 @@ function validateSdkSessionId(value: string): string {
 
 import {
   AgentNotAuthenticatedError,
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
@@ -126,6 +128,7 @@ import {
   appendAutoReviewUserIntent,
   composeAutoReviewIntentWithClarification,
   isSystemPermissionDenialReason,
+  formatPermissionDenial,
   resolveAutoReviewDecision,
   toolAutoReviewAction,
   type AutoReviewDecision,
@@ -235,7 +238,7 @@ function isPiApprovalSurfaceAbsentReason(reason: unknown): boolean {
  * `deferWhenSurfaceLost` (durable Subagent approvals). Root-turn cards have no
  * durable mailbox to fall back to, so they map it to a system denial.
  */
-type PiPendingPromptSettle = (resolveAs: 'allow' | 'deny' | 'unanswered') => void;
+type PiPendingPromptSettle = (resolveAs: 'allow' | 'deny' | 'unanswered', reason?: string) => void;
 
 const PI_PROVIDER_ID = 'cindy';
 // 既非 Cindy 网关(cindy/xd)也非经 compat proxy 的订阅直连(openai/anthropic)的 providerId = 显式 BYOM
@@ -278,7 +281,15 @@ type PiPermissionResolution =
   | 'allow'
   | 'user-deny'
   | 'auto-review-deny'
+  | `auto-review-deny:${string}`
+  | `user-deny:${string}`
+  | `system-deny:${string}`
   | 'system-deny';
+
+/** The existing private input envelope can carry a reason without changing old confirm clients. */
+function piPermissionDenial(source: 'auto-review-deny' | 'user-deny' | 'system-deny', reason?: string): PiPermissionResolution {
+  return reason?.trim() ? `${source}:${reason.trim().slice(0, 240)}` : source;
+}
 
 /** Remote paths belong to the execution host, never the controller filesystem. */
 export function constrainPiDestructivePathResolution(
@@ -1185,6 +1196,7 @@ interface FailedPiStartupCleanup {
   proc: PiRpcProcess;
   promise: Promise<void> | null;
   cleanupLocal?: () => void;
+  confirmStopped: () => void;
 }
 
 /**
@@ -1407,6 +1419,7 @@ export class PiAgent extends BaseAgent {
     }
     if (this.failedStartupCleanups.get(sessionId) === entry) {
       this.failedStartupCleanups.delete(sessionId);
+      entry.confirmStopped();
       entry.cleanupLocal?.();
     }
   }
@@ -2649,7 +2662,15 @@ export class PiAgent extends BaseAgent {
       reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
-    const reviewReadGrants = reviewMode ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []) : [];
+    let reviewReadGrants: Awaited<ReturnType<typeof buildReviewReadGrants>> = [];
+    if (reviewMode) {
+      try {
+        reviewReadGrants = await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []);
+      } catch (error) {
+        // No Pi process exists until after the review grants are validated.
+        throw new AgentStartupStoppedError(error);
+      }
+    }
     const reviewReadPaths = reviewReadGrants.map((grant) => grant.realPath);
     // Keep ordinary permission files shape-compatible with older Cindy/Pi
     // sessions. The Review-only marker is capability-like: absence means the
@@ -3254,7 +3275,7 @@ export class PiAgent extends BaseAgent {
         // can re-offer it. The card is still dismissed so no stale UI remains.
         if (dismissOpts?.surfaceLost && entry.deferWhenSurfaceLost) {
           pendingPrompts.delete(requestId);
-          entry.settle('unanswered');
+          entry.settle('unanswered', reason);
           queue.push({
             type: 'interaction_dismissed',
             data: { requestId, reason, resolvedAs: 'deny', deferred: true },
@@ -3269,7 +3290,7 @@ export class PiAgent extends BaseAgent {
           autoReviewConfirmUndeliveredNotice.notify();
         }
         pendingPrompts.delete(requestId);
-        entry.settle(effectiveResolveAs);
+        entry.settle(effectiveResolveAs, reason);
         queue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason, resolvedAs: effectiveResolveAs },
@@ -3770,8 +3791,8 @@ export class PiAgent extends BaseAgent {
             ...(options.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // Durable child: losing the surface parks the question.
             deferWhenSurfaceLost: true,
-            settle: (resolveAs) => finalize(
-              resolveAs === 'allow' ? 'allow' : resolveAs === 'unanswered' ? null : 'system-deny',
+            settle: (resolveAs, reason) => finalize(
+              resolveAs === 'allow' ? 'allow' : resolveAs === 'unanswered' ? null : piPermissionDenial('system-deny', reason),
             ),
           });
           const permissionRequest = {
@@ -3819,9 +3840,7 @@ export class PiAgent extends BaseAgent {
             finalize(
               decision.behavior === 'allow'
                 ? 'allow'
-                : isSystemPermissionDenialReason(decision.reason)
-                  ? 'system-deny'
-                  : 'user-deny',
+                : piPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system-deny' : 'user-deny', decision.reason),
             );
           }).catch((error) => {
             this.deps.logger.warn('PI Subagent approval forwarding failed closed', {
@@ -3900,7 +3919,7 @@ export class PiAgent extends BaseAgent {
             return requestUserDecision({ forcePrompt: true });
           }
           if (decision.verdict === 'allow') return 'allow';
-          if (decision.verdict === 'block') return 'auto-review-deny';
+          if (decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
           if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return requestUserDecision({
             forcePrompt: true,
@@ -5156,14 +5175,20 @@ export class PiAgent extends BaseAgent {
       // quarantine；后续同 session startSession 会先重试 cleanup，绝不直接 spawn。
       // 远端失败时不清 runtime 文件；本地也只有确认进程结束后才清，避免存活
       // 进程丢 bridge/permission 状态。
-      let closeError: unknown = null;
+      let cleanupPending: AgentStartupCleanupPendingError | null = null;
       try {
         await proc.close();
       } catch (error) {
-        closeError = error;
+        let confirmStopped!: () => void;
+        const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
+        cleanupPending = new AgentStartupCleanupPendingError(
+          `pi startup failed and process cleanup remains unconfirmed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: err, whenStopped },
+        );
         this.failedStartupCleanups.set(startupCleanupKey, {
           proc,
           promise: null,
+          confirmStopped,
           ...(!remote
             ? { cleanupLocal: () => {
                 cleanupConfigHome();
@@ -5172,17 +5197,13 @@ export class PiAgent extends BaseAgent {
             : {}),
         });
       }
-      if (!remote && !closeError) {
+      if (!remote && !cleanupPending) {
         cleanupConfigHome();
         cleanupRuntimeFiles();
       }
-      if (closeError) {
-        throw new Error(
-          `pi startup failed and process cleanup remains unconfirmed: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
-          { cause: err },
-        );
-      }
-      throw err;
+      if (cleanupPending) throw cleanupPending;
+      // Only a successful close proves exit; do not infer it from the startup error.
+      throw new AgentStartupStoppedError(err);
     }
 
     const launchSubagentRunner = (request: PiSubagentRunnerLaunchRequest): Promise<void> =>
@@ -7077,12 +7098,15 @@ export class PiAgent extends BaseAgent {
     if (method === 'input' && event.title === PI_PACKAGE_MANAGEMENT_TITLE) {
       const context = getPermissionCtx();
       const mutate = this.deps.mutatePiManagedPackage;
+      let denialReason = formatPermissionDenial('system', 'Approval was cancelled or could not be completed.');
+      const deny = () => proc.send({ type: 'extension_ui_response', id,
+        value: JSON.stringify({ ok: false, error: denialReason }) });
       if (!context.allowPiPackageManagement || !mutate) {
         this.deps.logger.warn('pi managed package request rejected outside a local ordinary task', {
           sessionId: context.sessionId,
           remote: context.remote,
         });
-        proc.send({ type: 'extension_ui_response', id, cancelled: true });
+        deny();
         return;
       }
       void (async () => {
@@ -7106,12 +7130,16 @@ export class PiAgent extends BaseAgent {
           }
           if (context.isPermissionContextClosed()) return;
           let autoDecision: AutoReviewDecision | undefined;
+          let reviewCancelled = false;
           if (context.permissionMode === 'auto') {
             let unregister = () => {};
             const cancelled = new Promise<AutoReviewDecision>((resolve) => {
               unregister = context.registerPendingPrompt(`${id}:pi-extension-review`, {
                 forcePrompt: true,
-                settle: () => resolve({ verdict: 'block', reason: 'The pending operation was cancelled.' }),
+                settle: () => {
+                  reviewCancelled = true;
+                  resolve({ verdict: 'block', reason: 'The pending operation was cancelled.' });
+                },
               });
             });
             try {
@@ -7124,7 +7152,10 @@ export class PiAgent extends BaseAgent {
             }
           }
           if (autoDecision?.verdict === 'block' || context.isPermissionContextClosed()) {
-            proc.send({ type: 'extension_ui_response', id, cancelled: true });
+            denialReason = context.isPermissionContextClosed() || reviewCancelled
+              ? formatPermissionDenial('system', 'The pending operation was cancelled.')
+              : formatPermissionDenial('auto', autoDecision?.reason);
+            deny();
             return;
           }
           if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable();
@@ -7150,7 +7181,11 @@ export class PiAgent extends BaseAgent {
             unregister = context.registerPendingPrompt(`${id}:pi-extension-mutation`, {
               forcePrompt: true,
               unavailableHandoff: autoDecision?.unavailable,
-              settle: (resolveAs) => finish(resolveAs === 'allow'),
+              settle: (resolveAs, reason) => {
+                if (settled) return;
+                denialReason = formatPermissionDenial('system', reason ?? 'Approval was cancelled or could not be completed.');
+                finish(resolveAs === 'allow');
+              },
             });
             Promise.resolve()
               .then(() =>
@@ -7163,6 +7198,10 @@ export class PiAgent extends BaseAgent {
                     toolName: 'cindy_pi_extension', input: { action, source } }),
               )
               .then((decision) => {
+                if (settled) return;
+                if (decision.kind === 'permission' && decision.behavior === 'deny') {
+                  denialReason = formatPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason);
+                }
                 finish(decision.kind === 'permission' && decision.behavior === 'allow');
               })
               .catch((error) => {
@@ -7174,7 +7213,7 @@ export class PiAgent extends BaseAgent {
               });
           });
           if (!approved || context.isPermissionContextClosed()) {
-            proc.send({ type: 'extension_ui_response', id, cancelled: true });
+            deny();
             return;
           }
           let result: Record<string, unknown>;
@@ -7469,9 +7508,9 @@ export class PiAgent extends BaseAgent {
             forcePrompt: opts.forcePrompt,
             ...(opts.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
-            settle: (resolveAs) => finalize({
+            settle: (resolveAs, reason) => finalize({
               decided: true,
-              resolution: resolveAs === 'allow' ? 'allow' : 'system-deny',
+              resolution: resolveAs === 'allow' ? 'allow' : piPermissionDenial('system-deny', reason),
             }),
           });
           // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
@@ -7501,7 +7540,7 @@ export class PiAgent extends BaseAgent {
                 decisionKind: decision.kind,
               });
               if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
-              finalize({ decided: false, resolution: 'system-deny' });
+              finalize({ decided: false, resolution: piPermissionDenial('system-deny', 'Approval could not be delivered or completed.') });
               return;
             }
             if (
@@ -7515,9 +7554,7 @@ export class PiAgent extends BaseAgent {
               decided: true,
               resolution: decision.behavior === 'allow'
                 ? 'allow'
-                : isSystemPermissionDenialReason(decision.reason)
-                  ? 'system-deny'
-                  : 'user-deny',
+                : piPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system-deny' : 'user-deny', decision.reason),
             });
           }).catch((err) => {
             this.deps.logger.warn('pi permission resolver failed', {
@@ -7525,7 +7562,7 @@ export class PiAgent extends BaseAgent {
               message: err instanceof Error ? err.message : String(err),
             });
             if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
-            finalize({ decided: false, resolution: 'system-deny' });
+            finalize({ decided: false, resolution: piPermissionDenial('system-deny', 'Approval could not be delivered or completed.') });
           });
         });
       };
@@ -7566,7 +7603,7 @@ export class PiAgent extends BaseAgent {
         return opts?.forcePrompt === true
           || opts?.requireExplicitDecision === true
           || !isFullAccessNow()
-          ? 'system-deny'
+          ? outcome.resolution
           : 'allow';
       };
       void (async () => {
@@ -7698,7 +7735,7 @@ export class PiAgent extends BaseAgent {
             decision.verdict === 'allow'
               ? 'allow'
               : decision.verdict === 'block'
-                ? 'auto-review-deny'
+                ? piPermissionDenial('auto-review-deny', decision.reason)
                 : 'system-deny',
           );
         } catch (err) {

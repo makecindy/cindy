@@ -121,7 +121,7 @@ import { Session } from '../../../session.js';
 import * as piSubagentRuns from '../pi-subagent-runs.js';
 import type { PiSubagentRunStatus } from '../pi-subagent-runs.js';
 import { piProjectKey } from '../project-trust.js';
-import type { AgentDeps } from '../../base-agent.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, type AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { PiProjectTrustInputSnapshot } from '../../../types/pi-project-trust.js';
 
@@ -343,10 +343,24 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(knobs.closeCount).toBe(0); // 构造失败没有 proc 可关
   });
 
-  it('disposes ctx and closes the proc when a startup RPC rejects before handoff', async () => {
+  it('reports confirmed startup cleanup only after the proc closes, preserving the RPC error', async () => {
     knobs.getStateRejects = true;
+    let confirmStopped!: () => void;
+    knobs.closeGate = new Promise<void>((resolve) => { confirmStopped = resolve; });
     const agent = new PiAgent(buildDeps());
-    await expect(agent.startSession(opts())).rejects.toThrow(/get_state rejected/);
+    const rejected = vi.fn();
+    const startup = agent.startSession(opts()).catch((error: unknown) => {
+      rejected(error);
+      return error;
+    });
+    await vi.waitFor(() => expect(knobs.closeCount).toBe(1));
+    expect(rejected).not.toHaveBeenCalled();
+    confirmStopped();
+    const failure = await startup;
+    expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+    if (!(failure instanceof AgentStartupStoppedError)) throw new Error('missing exit evidence');
+    expect(failure.message).toBe('get_state rejected (mock)');
+    expect(failure.cause).toEqual(new Error('get_state rejected (mock)'));
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
@@ -357,16 +371,22 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.closeRejects = true;
     const agent = new PiAgent(buildDeps());
 
-    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    const failure = await agent.startSession(opts()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    if (!(failure instanceof AgentStartupCleanupPendingError)) throw new Error('missing cleanup evidence');
+    const stopped = vi.fn();
+    void failure.whenStopped.then(stopped);
     expect(knobs.spawnedEnvs).toHaveLength(1);
     // Same business id cannot spawn while the old proc still fails cleanup.
     await expect(agent.startSession(opts())).rejects.toThrow(/close unconfirmed/);
     expect(knobs.spawnedEnvs).toHaveLength(1);
+    expect(stopped).not.toHaveBeenCalled();
 
     knobs.closeRejects = false;
     knobs.getStateRejects = false;
     const handle = await agent.startSession(opts());
     expect(knobs.spawnedEnvs).toHaveLength(2);
+    expect(stopped).toHaveBeenCalledOnce();
     await handle.close();
   });
 
@@ -375,17 +395,23 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.closeRejects = true;
     const agent = new PiAgent(buildDeps());
 
-    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    const failure = await agent.startSession(opts()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    if (!(failure instanceof AgentStartupCleanupPendingError)) throw new Error('missing cleanup evidence');
+    const stopped = vi.fn();
+    void failure.whenStopped.then(stopped);
     await expect(agent.startSession({ ...opts(), sessionId: 's2' })).rejects.toThrow(
       /cleanup remains unconfirmed/,
     );
     expect(knobs.closeCount).toBe(2);
+    expect(stopped).not.toHaveBeenCalled();
 
     knobs.closeRejects = false;
     await agent.dispose();
     await agent.dispose();
 
     expect(knobs.closeCount).toBe(4);
+    expect(stopped).toHaveBeenCalledOnce();
   });
 
   it('reclaims a startup cleanup entry registered after dispose begins', async () => {
@@ -1604,7 +1630,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }, {}, 'input');
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
-    const review = vi.fn(async () => ({ verdict: 'block' as const }));
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'This task is read-only.' }));
     const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
       ...opts(),
       permissionMode: 'auto',
@@ -1616,7 +1642,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect.any(String),
       run.taskId,
       'approval',
-      expect.objectContaining({ value: 'auto-review-deny' }),
+      expect.objectContaining({ value: 'auto-review-deny:This task is read-only.' }),
     ));
     expect(review).toHaveBeenCalledOnce();
     expect(resolver).not.toHaveBeenCalled();

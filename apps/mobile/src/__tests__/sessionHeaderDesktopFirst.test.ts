@@ -26,7 +26,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;\n  if (syncing) return i18n.t('session.screen.syncing');");
     // 后台静默刷新:同步提示由 showSyncingIndicator gate —— 仅首次加载、还没有任何内容时显示,
     // 已有 messages(重开已看过的会话)时后台对账静默,不再弹"正在同步"。
-    expect(source).toContain('const showSyncingIndicator = loading && messages.length === 0;');
+    expect(source).toContain('const showSyncingIndicator = loading && !hasRenderedMessages;');
     expect(source).toContain("if (queuePaused) return i18n.t('session.screen.queuePausedNotice');\n  return null;");
     expect(source).toContain('attention ? (');
   });

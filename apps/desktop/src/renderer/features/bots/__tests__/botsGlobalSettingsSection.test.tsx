@@ -32,6 +32,8 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector" />,
 }));
+vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({}) }));
+vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({}) }));
 vi.mock('../BotModelChainEditor', () => ({
   BotModelChainEditor: ({ onChange, onRestoreDefault }: { onChange: (value: unknown[]) => void; onRestoreDefault?: () => void }) => (
     <>

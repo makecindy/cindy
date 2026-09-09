@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
 
-/** WorktreeContext 全量校验只用于启动/聚焦；回收事件按 sessionId 增量更新。 */
+/** WorktreeContext 只共享快照与 active 任务的探测结果；创建/回收按 sessionId 增量更新。 */
 
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { WorktreeProvider, useWorktrees } from '@/contexts/WorktreeContext';
+import {
+  WorktreeProvider,
+  useWorktrees,
+  useRefreshWorktreeForSession,
+  useReportWorktreeLiveness,
+  useWorktreeForSession,
+} from '@/contexts/WorktreeContext';
+import { useTaskInfoWorktree } from '@/features/cc-agent/sidebar/sessionWorktreeInfo';
 import { emitRefresh } from '@/lib/sessionsBus';
 
 vi.mock('@/lib/logger', () => ({
@@ -16,6 +23,7 @@ const mocks = {
   worktreeListAll: vi.fn(),
   worktreeGetForSession: vi.fn(),
   worktreeDetectCwd: vi.fn(),
+  findLinkedWorktree: vi.fn(),
   listeners: new Set<(payload: { sessionId: string }) => void>(),
   sessionCreatedListeners: new Set<
     (payload: { sessionId: string }, ownerStamp?: unknown) => void
@@ -42,10 +50,16 @@ function Probe() {
   );
 }
 
+function ActiveProbe() {
+  const info = useTaskInfoWorktree({ id: 'open', workingDir: '/repo' }, true, { observeTelemetry: true });
+  return <span data-testid="active">{info?.path ?? ''}</span>;
+}
+
 beforeEach(() => {
   mocks.worktreeListAll.mockReset();
   mocks.worktreeGetForSession.mockReset();
   mocks.worktreeDetectCwd.mockReset();
+  mocks.findLinkedWorktree.mockReset().mockResolvedValue(null);
   mocks.worktreeDetectCwd.mockResolvedValue({
     isInsideWorktree: true,
     isGitRepo: true,
@@ -59,6 +73,7 @@ beforeEach(() => {
       worktreeListAll: mocks.worktreeListAll,
       worktreeGetForSession: mocks.worktreeGetForSession,
       worktreeDetectCwd: mocks.worktreeDetectCwd,
+      gitContext: { findLinkedWorktree: mocks.findLinkedWorktree },
       onWorktreeChanged: (cb: (payload: { sessionId: string }) => void) => {
         mocks.listeners.add(cb);
         return () => mocks.listeners.delete(cb);
@@ -82,6 +97,134 @@ afterEach(() => {
 });
 
 describe('WorktreeContext recycle refresh', () => {
+  it('shares external deletion with sidebar badges, retains metadata for reopening and detects external restoration', async () => {
+    const meta = { sessionId: 'open', path: '/tmp/wt/open' };
+    mocks.worktreeListAll.mockResolvedValue([meta, { sessionId: 'idle', path: '/tmp/wt/idle' }]);
+    const content = (active: boolean) => <WorktreeProvider><Probe />{active && <ActiveProbe />}</WorktreeProvider>;
+    const view = render(content(true));
+    await act(async () => {});
+    expect(view.getByTestId('active').textContent).toBe(meta.path);
+
+    mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(view.getByTestId('active').textContent).toBe('');
+    expect(view.getByTestId('ids').textContent).toBe('idle:/tmp/wt/idle');
+
+    view.rerender(content(false));
+    mocks.worktreeDetectCwd.mockClear().mockResolvedValue({ isInsideWorktree: true });
+    view.rerender(content(true));
+    await act(async () => {});
+    expect(view.getByTestId('active').textContent).toBe(meta.path);
+    expect(view.getByTestId('ids').textContent).toContain('open:/tmp/wt/open');
+    expect(mocks.worktreeDetectCwd).toHaveBeenCalledExactlyOnceWith({ cwd: meta.path });
+    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+    expect(mocks.worktreeGetForSession).not.toHaveBeenCalled();
+  });
+
+  it('rechecks same-path restoration through refreshSession without requiring a changed push or focus', async () => {
+    const meta = { sessionId: 'open', path: '/tmp/wt/open' };
+    mocks.worktreeListAll.mockResolvedValue([meta]);
+    mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
+    let refresh!: (sessionId: string) => Promise<void>;
+    function Actions() {
+      refresh = useRefreshWorktreeForSession();
+      return <><Probe /><ActiveProbe /></>;
+    }
+    const view = render(<WorktreeProvider><Actions /></WorktreeProvider>);
+    await act(async () => {});
+    expect(view.getByTestId('active').textContent).toBe('');
+    expect(view.getByTestId('ids').textContent).toBe('');
+
+    mocks.worktreeGetForSession.mockResolvedValue({ ...meta });
+    mocks.worktreeDetectCwd.mockClear().mockResolvedValue({ isInsideWorktree: true });
+    await act(async () => { await refresh('open'); });
+    expect(view.getByTestId('active').textContent).toBe(meta.path);
+    expect(view.getByTestId('ids').textContent).toBe(`open:${meta.path}`);
+    expect(mocks.worktreeDetectCwd).toHaveBeenCalledExactlyOnceWith({ cwd: meta.path });
+    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+  });
+
+  it('does not hide a live worktree when its probe rejects', async () => {
+    mocks.worktreeListAll.mockResolvedValue([{ sessionId: 'open', path: '/tmp/wt/open' }]);
+    const view = render(<WorktreeProvider><Probe /><ActiveProbe /></WorktreeProvider>);
+    await act(async () => {});
+    mocks.worktreeDetectCwd.mockRejectedValue(new Error('probe timeout'));
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(view.getByTestId('active').textContent).toBe('/tmp/wt/open');
+    expect(view.getByTestId('ids').textContent).toBe('open:/tmp/wt/open');
+  });
+
+  it.each(['/tmp/wt/open', '/tmp/wt/restored'])(
+    'uses replacement metadata at %s while its probe is pending or fails, ignoring old results',
+    async (restoredPath) => {
+      const meta = { sessionId: 'open', path: '/tmp/wt/open' };
+      mocks.worktreeListAll.mockResolvedValue([meta]);
+      mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
+      let refresh!: (sessionId: string) => Promise<void>;
+      function Actions() {
+        refresh = useRefreshWorktreeForSession();
+        return <><Probe /><ActiveProbe /></>;
+      }
+      const view = render(<WorktreeProvider><Actions /></WorktreeProvider>);
+      await act(async () => {});
+      expect(view.getByTestId('active').textContent).toBe('');
+      expect(view.getByTestId('ids').textContent).toBe('');
+
+      let finishOld!: (value: { isInsideWorktree: boolean }) => void;
+      mocks.worktreeDetectCwd.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+
+      let rejectNew!: (reason: Error) => void;
+      mocks.worktreeGetForSession.mockResolvedValue({ ...meta, path: restoredPath });
+      mocks.worktreeDetectCwd.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectNew = reject; }));
+      await act(async () => { await refresh('open'); });
+      expect(view.getByTestId('ids').textContent).toBe(`open:${restoredPath}`);
+      expect(view.getByTestId('active').textContent).toBe(restoredPath);
+      expect(mocks.worktreeDetectCwd).toHaveBeenLastCalledWith({ cwd: restoredPath });
+
+      await act(async () => { finishOld({ isInsideWorktree: false }); });
+      expect(view.getByTestId('active').textContent).toBe(restoredPath);
+      expect(view.getByTestId('ids').textContent).toBe(`open:${restoredPath}`);
+      await act(async () => { rejectNew(new Error('[INTERNAL] Worktree directory probe failed')); });
+      expect(view.getByTestId('active').textContent).toBe(restoredPath);
+      expect(view.getByTestId('ids').textContent).toBe(`open:${restoredPath}`);
+
+      // A conclusive result for the new metadata must still update both views.
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      expect(view.getByTestId('active').textContent).toBe('');
+      expect(view.getByTestId('ids').textContent).toBe('');
+      expect(mocks.worktreeDetectCwd).toHaveBeenCalledTimes(4);
+      expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+      expect(mocks.worktreeGetForSession).toHaveBeenCalledExactlyOnceWith('open');
+    },
+  );
+
+  it('ignores liveness reports captured before same-path restoration or recycling', async () => {
+    const meta = { sessionId: 'open', path: '/tmp/wt/open' };
+    mocks.worktreeListAll.mockResolvedValue([meta]);
+    let report!: ReturnType<typeof useReportWorktreeLiveness>;
+    let original!: NonNullable<ReturnType<typeof useWorktreeForSession>>;
+    let refresh!: (sessionId: string) => Promise<void>;
+    function Actions() {
+      report = useReportWorktreeLiveness();
+      original = useWorktreeForSession('open') ?? original;
+      refresh = useRefreshWorktreeForSession();
+      return <Probe />;
+    }
+    const view = render(<WorktreeProvider><Actions /></WorktreeProvider>);
+    await act(async () => {});
+    const oldMeta = original;
+    mocks.worktreeGetForSession.mockResolvedValue({ ...meta });
+    await act(async () => { await refresh('open'); });
+    await act(async () => { report(oldMeta, false); });
+    expect(view.getByTestId('ids').textContent).toBe('open:/tmp/wt/open');
+    mocks.worktreeGetForSession.mockResolvedValue(null);
+    await act(async () => { await refresh('open'); });
+    await act(async () => { report(original, true); });
+    expect(view.getByTestId('ids').textContent).toBe('');
+    expect(mocks.worktreeDetectCwd).not.toHaveBeenCalled();
+  });
+
   it('removes only the reported session without reloading the full snapshot', async () => {
     mocks.worktreeListAll.mockResolvedValueOnce([
       { sessionId: 'archived-one', path: '/tmp/wt/archived-one' },
@@ -106,10 +249,9 @@ describe('WorktreeContext recycle refresh', () => {
     });
     expect(mocks.worktreeGetForSession).toHaveBeenCalledWith('archived-one');
     expect(mocks.worktreeListAll).toHaveBeenCalledTimes(1);
-    expect(mocks.worktreeDetectCwd).toHaveBeenCalledTimes(2);
   });
 
-  it('validates and updates only the reported worktree', async () => {
+  it('updates only the reported worktree', async () => {
     mocks.worktreeListAll.mockResolvedValueOnce([
       { sessionId: 'changed', path: '/tmp/wt/old' },
       { sessionId: 'other', path: '/tmp/wt/other' },
@@ -119,8 +261,6 @@ describe('WorktreeContext recycle refresh', () => {
         <Probe />
       </WorktreeProvider>,
     );
-    await waitFor(() => expect(mocks.worktreeDetectCwd).toHaveBeenCalledTimes(2));
-    mocks.worktreeDetectCwd.mockClear();
     mocks.worktreeGetForSession.mockResolvedValueOnce({
       sessionId: 'changed',
       path: '/tmp/wt/new',
@@ -132,8 +272,6 @@ describe('WorktreeContext recycle refresh', () => {
       expect(view.getByTestId('ids').textContent).toContain('changed:/tmp/wt/new');
     });
     expect(mocks.worktreeListAll).toHaveBeenCalledTimes(1);
-    expect(mocks.worktreeDetectCwd).toHaveBeenCalledOnce();
-    expect(mocks.worktreeDetectCwd).toHaveBeenCalledWith({ cwd: '/tmp/wt/new' });
   });
 
   it('keeps the newest response when the same session changes twice', async () => {
@@ -231,7 +369,6 @@ describe('WorktreeContext recycle refresh', () => {
     });
     expect(mocks.worktreeGetForSession).toHaveBeenCalledWith('background');
     expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
-    expect(mocks.worktreeDetectCwd).toHaveBeenCalledOnce();
   });
 
   it('does not run Git validation for a local background session without a worktree', async () => {
@@ -251,6 +388,29 @@ describe('WorktreeContext recycle refresh', () => {
     });
     expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
     expect(mocks.worktreeDetectCwd).not.toHaveBeenCalled();
+  });
+
+  it('refreshes explicit creation, recycling and restoration repeatedly without a full scan', async () => {
+    mocks.worktreeListAll.mockResolvedValue([]);
+    let refresh!: (sessionId: string) => Promise<void>;
+    function Actions() {
+      refresh = useRefreshWorktreeForSession();
+      return <Probe />;
+    }
+    const view = render(<WorktreeProvider><Actions /></WorktreeProvider>);
+    await act(async () => {});
+    for (let i = 0; i < 3; i++) {
+      mocks.worktreeGetForSession.mockResolvedValueOnce({
+        sessionId: 'restored', path: `/tmp/wt/restored-${i}`,
+      });
+      await act(async () => { await refresh('restored'); });
+      expect(view.getByTestId('ids').textContent).toBe(`restored:/tmp/wt/restored-${i}`);
+      mocks.worktreeGetForSession.mockResolvedValueOnce(null);
+      await act(async () => { emitWorktreeChanged('restored'); });
+      expect(view.getByTestId('ids').textContent).toBe('');
+    }
+    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+    expect(mocks.worktreeGetForSession).toHaveBeenCalledTimes(6);
   });
 
   it('ignores remote session creation pushes for the local worktree cache', async () => {
@@ -273,135 +433,42 @@ describe('WorktreeContext recycle refresh', () => {
     expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
   });
 
-  it('still performs a full validation when the window regains focus after the cooldown', async () => {
-    mocks.worktreeListAll.mockResolvedValue([]);
-    render(
-      <WorktreeProvider>
-        <Probe />
-      </WorktreeProvider>,
-    );
-    await waitFor(() => expect(mocks.worktreeListAll).toHaveBeenCalledOnce());
-
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 15_001);
-    act(() => window.dispatchEvent(new Event('focus')));
-
-    await waitFor(() => expect(mocks.worktreeListAll).toHaveBeenCalledTimes(2));
-  });
-
-  it('bounds probes and merges repeated focus while validation is in flight', async () => {
-    mocks.worktreeListAll.mockResolvedValue(
-      Array.from({ length: 6 }, (_, i) => ({
-        sessionId: String(i),
-        path: `/tmp/wt/${i}`,
-      })),
-    );
-    const releases: Array<() => void> = [];
-    let active = 0;
-    let peak = 0;
-    mocks.worktreeDetectCwd.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          peak = Math.max(peak, ++active);
-          releases.push(() => {
-            active--;
-            resolve({ isInsideWorktree: true });
-          });
-        }),
-    );
-    const view = render(
-      <WorktreeProvider>
-        <Probe />
-      </WorktreeProvider>,
-    );
-    await waitFor(() => expect(releases).toHaveLength(2));
-    act(() => {
-      for (let i = 0; i < 10; i++) window.dispatchEvent(new Event('focus'));
-    });
-    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
-    for (let i = 0; i < 3; i++) {
-      await act(async () => {
-        releases.splice(0).forEach((release) => release());
-      });
-    }
-    expect(peak).toBe(2);
-    expect(mocks.worktreeDetectCwd).toHaveBeenCalledTimes(6);
-    expect(view.getByTestId('ids').textContent).toContain('5:/tmp/wt/5');
-  });
-
-  it('keeps badges during cooldown, applies recycle immediately, and checks external removal on the trailing refresh', async () => {
-    mocks.worktreeListAll.mockResolvedValue([
-      { sessionId: 'archived', path: '/tmp/wt/archived' },
-      { sessionId: 'external', path: '/tmp/wt/external' },
-    ]);
-    const view = render(
-      <WorktreeProvider>
-        <Probe />
-      </WorktreeProvider>,
-    );
-    await waitFor(() => expect(view.getByTestId('ids').textContent).toContain('external'));
+  it('loads idle worktree metadata without Git probes or a periodic full scan', async () => {
     vi.useFakeTimers();
-    act(() => {
-      for (let i = 0; i < 10; i++) window.dispatchEvent(new Event('focus'));
+    mocks.worktreeListAll.mockResolvedValue(Array.from({ length: 69 }, (_, i) => ({
+      sessionId: `session-${i}`,
+      path: `/tmp/wt/${i}`,
+    })));
+    const view = render(<WorktreeProvider><Probe /></WorktreeProvider>);
+
+    await act(async () => {});
+    expect(view.getByTestId('ids').textContent).toContain('session-68:/tmp/wt/68');
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
     });
+
     expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
-    expect(view.getByTestId('ids').textContent).toContain('external');
-    mocks.worktreeGetForSession.mockResolvedValue(null);
-    await act(async () => emitWorktreeChanged('archived'));
-    expect(view.getByTestId('ids').textContent).toBe('external:/tmp/wt/external');
-    mocks.worktreeListAll.mockResolvedValue([{ sessionId: 'external', path: '/tmp/wt/external' }]);
-    mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
-    await act(async () => vi.advanceTimersByTimeAsync(15_000));
-    expect(mocks.worktreeListAll).toHaveBeenCalledTimes(2);
-    expect(view.getByTestId('ids').textContent).toBe('');
+    expect(mocks.worktreeDetectCwd).not.toHaveBeenCalled();
   });
 
-  it('rechecks an external removal when focus arrives during an older scan', async () => {
-    mocks.worktreeListAll.mockResolvedValue([{ sessionId: 'external', path: '/tmp/wt/external' }]);
-    let release!: (value: unknown) => void;
-    mocks.worktreeDetectCwd.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const view = render(
-      <WorktreeProvider>
-        <Probe />
-      </WorktreeProvider>,
-    );
-    await waitFor(() => expect(mocks.worktreeDetectCwd).toHaveBeenCalledOnce());
-    vi.useFakeTimers();
-    act(() => window.dispatchEvent(new Event('focus')));
-    // Even a scan longer than the cooldown must not swallow the focus hint.
-    await act(async () => vi.advanceTimersByTimeAsync(15_000));
-    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
-    await act(async () => release({ isInsideWorktree: true }));
-    expect(view.getByTestId('ids').textContent).toContain('external');
-    mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
-    await act(async () => vi.advanceTimersByTimeAsync(15_000));
-    expect(view.getByTestId('ids').textContent).toBe('');
-    expect(mocks.worktreeListAll).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not let an in-flight full snapshot resurrect a recycled entry', async () => {
-    mocks.worktreeListAll.mockResolvedValue([{ sessionId: 'gone', path: '/tmp/wt/gone' }]);
-    let release!: (value: unknown) => void;
-    mocks.worktreeDetectCwd.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const view = render(
-      <WorktreeProvider>
-        <Probe />
-      </WorktreeProvider>,
-    );
-    await waitFor(() => expect(mocks.worktreeDetectCwd).toHaveBeenCalledOnce());
-    mocks.worktreeGetForSession.mockResolvedValue(null);
-    await act(async () => emitWorktreeChanged('gone'));
-    await act(async () => release({ isInsideWorktree: true }));
-    expect(view.getByTestId('ids').textContent).toBe('');
+  it('keeps creation and recycling events newer than a pending metadata snapshot', async () => {
+    let finishList!: (value: Array<{ sessionId: string; path: string }>) => void;
+    mocks.worktreeListAll.mockImplementation(() => new Promise((resolve) => {
+      finishList = resolve;
+    }));
+    mocks.worktreeGetForSession.mockImplementation(async (sessionId: string) => (
+      sessionId === 'new' ? { sessionId, path: '/tmp/wt/new' } : null
+    ));
+    const view = render(<WorktreeProvider><Probe /></WorktreeProvider>);
+    await act(async () => {
+      emitSessionCreated('new');
+      emitWorktreeChanged('recycled');
+    });
+    await act(async () => {
+      finishList([{ sessionId: 'recycled', path: '/tmp/wt/recycled' }]);
+    });
+    expect(view.getByTestId('ids').textContent).toBe('new:/tmp/wt/new');
   });
 
   it('unsubscribes on unmount so a later push cannot refresh a dead tree', async () => {
@@ -441,25 +508,4 @@ describe('WorktreeContext recycle refresh', () => {
     });
   });
 
-  it('drops store entries whose directories are no longer linked worktrees', async () => {
-    mocks.worktreeListAll.mockResolvedValue([
-      { sessionId: 'gone', path: '/tmp/wt/gone' },
-      { sessionId: 'live', path: '/tmp/wt/live' },
-    ]);
-    mocks.worktreeDetectCwd.mockImplementation(async ({ cwd }: { cwd: string }) => ({
-      isInsideWorktree: cwd === '/tmp/wt/live',
-      isGitRepo: true,
-      gitInstalled: true,
-    }));
-
-    const view = render(
-      <WorktreeProvider>
-        <Probe />
-      </WorktreeProvider>,
-    );
-
-    await waitFor(() => {
-      expect(view.getByTestId('ids').textContent).toBe('live:/tmp/wt/live');
-    });
-  });
 });

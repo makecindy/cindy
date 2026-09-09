@@ -131,6 +131,7 @@ export interface MobileComposerInputRowProps {
   multilineShape?: boolean;
   onBlur?: TextInputProps['onBlur'];
   onChangeText: (value: string) => void;
+  onKeyPress?: TextInputProps['onKeyPress'];
   onSelectionChange?: TextInputProps['onSelectionChange'];
   onContentSizeChange?: TextInputProps['onContentSizeChange'];
   onFocus?: TextInputProps['onFocus'];
@@ -154,6 +155,7 @@ export interface MobileComposerInputRowProps {
   onPressIn?: TextInputProps['onPressIn'];
   placeholder: string;
   placeholderTextColor: string;
+  selection?: TextInputProps['selection'];
   /** 顶部居中的拖拽调高 grabber（ComposerResizeGrabber），absolute 定位不占布局空间。 */
   resizeHandle?: ReactNode;
   rowStyle?: StyleProp<ViewStyle>;
@@ -206,6 +208,7 @@ export function MobileComposerInputRow({
   multilineShape,
   onBlur,
   onChangeText,
+  onKeyPress,
   onSelectionChange,
   onContentSizeChange,
   onFocus,
@@ -215,6 +218,7 @@ export function MobileComposerInputRow({
   onPressIn,
   placeholder,
   placeholderTextColor,
+  selection,
   resizeHandle,
   rowStyle,
   scrollEnabled,
@@ -265,12 +269,14 @@ export function MobileComposerInputRow({
       onBlur={onBlur}
       onChangeText={onChangeText}
       onSelectionChange={onSelectionChange}
+      onKeyPress={onKeyPress}
       onContentSizeChange={onContentSizeChange}
       onFocus={onFocus}
       onPressIn={onPressIn}
       placeholder={placeholder}
       placeholderTextColor={placeholderTextColor}
       scrollEnabled={scrollEnabled}
+      selection={selection}
       selectionColor={selectionColor}
       style={[
         styles.input,

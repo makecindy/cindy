@@ -1,3 +1,7 @@
+import { startWorktreeRecycleMaintenance, stopWorktreeRecycleMaintenance, auditRegisteredWorktrees } from './worktree/recycleMaintenance';
+import { requestWorktreeRecycle } from './worktree/managedRecycle';
+import { recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
+import { tryGetDbClient } from './localDb/client/current';
 import {
   app,
   BrowserWindow,
@@ -18,6 +22,7 @@ import {
   type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
+import { getSessionThinkingSnapshots, getHistoryToolName } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import {
   rememberResolvedAppTheme,
@@ -127,6 +132,7 @@ app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
 async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
+  stopWorktreeRecycleMaintenance();
   // Do not terminate Main while one workspace patch command is settling.
   await waitForTurnChangeSetActions();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
@@ -462,6 +468,7 @@ import { sanitizeGhostNoticeText } from './cindy-brain/notifySlot.js';
 import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
+import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { WindowManualDragController } from './windowManualDrag';
@@ -475,6 +482,7 @@ import {
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  setHistoryToolNameReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
@@ -492,7 +500,6 @@ import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 import {
   registerWorktreeIpc,
   WorktreePool,
-  reconcileWorktreesForDeletedSessions,
   reconcilePendingSafeDirectoryCleanups,
 } from './worktree';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
@@ -959,10 +966,13 @@ import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 import {
   startScheduler,
   resetScheduler,
+  getSchedulerIfInitialized,
   getScheduleStorage,
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
 } from './scheduler-host/index.js';
+import { configureRoutineHost } from './routines/service.js';
+import { getBotRemoteResourceSource } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
   attachSchedulerEventListeners,
@@ -1010,6 +1020,9 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
     );
   }
 }
+
+// Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
+configureRoutineHost({ getBot: getBotRemoteResourceSource, getScheduler: getSchedulerIfInitialized, getScheduleStorage });
 
 /**
  * Phase 4: 不再用 `_schedulerStarted` flag —— `startScheduler()` 内部以 `_scheduler`
@@ -2447,6 +2460,10 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
 //   cindy-media:      媒体总仓字节仓取件窗口(内容寻址 blob;新写入媒体的
 //                     统一协议,历史 xdt-* 协议只读兼容)
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'cindy-desktop-capture',
+    privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
   imageSchemePrivilege,
   videoSchemePrivilege,
   localFileSchemePrivilege,
@@ -3382,7 +3399,9 @@ if (process.platform === 'darwin') {
 function applyMainWindowBackgroundThrottling(): void {
   const win = mainWindowRef;
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.setBackgroundThrottling(mainWindowBackgroundThrottlingAllowed);
+  win.webContents.setBackgroundThrottling(
+    mainWindowBackgroundThrottlingAllowed,
+  );
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {
@@ -5847,6 +5866,7 @@ const registerIpcHandlers = () => {
           .catch(() => {});
       });
       makerIpcsRegistered = true;
+      worktreeRuntimeCloseReady = true;
       // device-link 捕获自检放在这里(而非 bootstrap 线性段):maker:create-session / maker:send
       // 由上面的 registerMakerCoreIpc 注册,属 splash 后的延迟注册;若在线性段(initDeviceLinkService
       // 之后)就 assert,会误报这两个 sentinel「未捕获」。此刻所有 sentinel(含线性段已注册的
@@ -5858,16 +5878,7 @@ const registerIpcHandlers = () => {
       // 不阻塞启动 —— 老链路仍可用; 下次 splash retry 再尝试。
     }
 
-    // Phase 3 恢复上次退出时保留的 worktree pool（未被 session 引用的 clean ephemeral → 入池，dirty → 保留，stale → 清除）。
-    // 在 scheduler 之前恢复，确保首个 scheduler job 能命中池缓存。
-    await WorktreePool.recoverPool().catch((err) => {
-      console.error('[bootstrap-electron] recoverPool failed (non-fatal):', err);
-    });
-    // P0 重构对账:会话已删除(status='deleted' 或行已缺失)但 worktree 回收没跑完
-    // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
-    void reconcileWorktreesForDeletedSessions().catch((err) => {
-      console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
-    });
+    startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
     void reconcilePendingSafeDirectoryCleanups().catch((err) => {
       console.error('[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):', err);
@@ -8245,8 +8256,12 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  setHistoryToolNameReader(getHistoryToolName);
   registerLocalDbIpc({
+    isSessionTurnPendingCompletion,
+    readHistoryLiveMessages: getSessionThinkingSnapshots,
     resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
+    requestWorktreeRecycle,
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
     closeIdleSessionForMove: async (sessionId) => {
@@ -8400,6 +8415,7 @@ app.on('ready', async () => {
       // takeover. registerMakerIpc also invokes this once its services exist,
       // covering both possible splash/login orderings without duplicate runs.
       void restoreBotRuntimeForCurrentOwner();
+      startReadyWorktreeMaintenance();
       if (dbClientTakeover.mode === 'unchanged') {
         // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
         // onReady 完整启动，因此这里只保留 DB 连接交接，不重复执行账号级启动维护。
@@ -8840,6 +8856,7 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {
@@ -9545,4 +9562,22 @@ if (
   require.cache[__filename] == null
 ) {
   require.cache[__filename] = module;
+}
+
+let worktreeRuntimeCloseReady = false;
+let lastWorktreeMaintenanceDb: ReturnType<typeof tryGetDbClient> = null;
+
+/** Worktree maintenance needs both storage and runtime-close services. */
+function startReadyWorktreeMaintenance(): void {
+  startWorktreeRecycleMaintenance({
+    isReady: () => worktreeRuntimeCloseReady && getMakerIfReady() !== null && tryGetDbClient() !== null,
+    recycleCurrentSession: (sessionId, status) => recycleSessionWorktreeForStatusChange(sessionId, status),
+    onAttemptComplete: auditRegisteredWorktrees,
+  });
+  const db = tryGetDbClient();
+  if (worktreeRuntimeCloseReady && getMakerIfReady() && db && db !== lastWorktreeMaintenanceDb) {
+    lastWorktreeMaintenanceDb = db;
+    void auditRegisteredWorktrees().catch((error) => dbClientLog.warn('worktree audit postponed', error));
+    void WorktreePool.recoverPool().catch((error) => dbClientLog.warn('worktree pool recovery postponed', error));
+  }
 }

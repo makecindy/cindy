@@ -348,6 +348,58 @@ function requireReadyDb() {
   throw err;
 }
 
+function worktreeReferenceQuery(nextDb) {
+  const info = nextDb.prepare('PRAGMA table_info(sessions)').all();
+  const columns = new Set(info.map((column) => column.name));
+  const hasWorktree = columns.has('worktree_path');
+  const hasSource = columns.has('source');
+  const hasRemote = columns.has('remote_host_id');
+  if (!['id', 'status', 'working_dir'].every((name) => columns.has(name))
+    || (hasSource && !hasWorktree) || (hasRemote && !hasSource)) {
+    throw new Error('unsupported task reference schema');
+  }
+  const status = hasRemote ? 'status' : 'NULL';
+  return 'SELECT id, ' + status + ' AS status, ' + (hasSource ? 'source' : 'NULL') + ' AS source, '
+    + 'working_dir AS workingDir, ' + (hasWorktree ? 'worktree_path' : 'NULL') + ' AS worktreePath '
+    + 'FROM sessions' + (hasRemote ? ' WHERE remote_host_id IS NULL' : '');
+}
+
+function readLocalWorktreeReferences() {
+  const location = db.prepare('PRAGMA database_list').all();
+  const main = location.find((entry) => entry.name === 'main');
+  const databasePath = main && main.file;
+  if (!databasePath || !path.isAbsolute(databasePath)) throw new Error('task database path unavailable');
+  const currentPath = path.resolve(databasePath);
+  const root = path.dirname(currentPath);
+  const profiles = path.join(root, 'profiles');
+  if (fs.existsSync(profiles) && fs.readdirSync(profiles).length) {
+    throw new Error('profile database catalog requires a compatible reader');
+  }
+  const names = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
+  if (!names.includes(path.basename(currentPath))) throw new Error('unknown task database layout');
+  const rows = [];
+  for (const name of names) {
+    const file = path.join(root, name);
+    if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
+    const isCurrent = file === currentPath;
+    const nextDb = isCurrent ? db : new Database(file, {
+      readonly: true, fileMustExist: true,
+      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+    });
+    try {
+      const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
+      rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } finally {
+      if (!isCurrent) nextDb.close();
+    }
+  }
+  const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
+  if (after.length !== names.length || after.some((name) => !names.includes(name))) {
+    throw new Error('task database catalog changed during scan');
+  }
+  return rows;
+}
+
 const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1000, 5000, 30000, 5 * 60000, 30 * 60000];
@@ -2281,6 +2333,8 @@ function invalidArgs(message) {
 async function dispatch(op, args) {
   const readyDb = requireReadyDb();
   switch (op) {
+    case 'worktreeReferences':
+      return readLocalWorktreeReferences();
     case 'query': {
       const { sql, params } = args || {};
       return readyDb.prepare(sql).all(...normalizeParams(params));

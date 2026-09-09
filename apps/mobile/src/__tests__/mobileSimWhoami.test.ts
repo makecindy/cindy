@@ -78,6 +78,59 @@ describe('mobile:sim takeover and JSON arguments', () => {
       targetWorktree: '/repo/',
     })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
   });
+
+  it('compares Windows worktree paths case-insensitively', () => {
+    expect(classifySimMetroListener({
+      cwd: 'C:\\Repo\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'c:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/Repo', isTarget: true });
+    expect(classifySimMetroListener({
+      cwd: 'C:\\RepoOther\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'c:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/RepoOther', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: 'C:\\Repo\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'D:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/Repo', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: '/Repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo',
+      platform: 'linux',
+    })).toEqual({ confirmed: true, worktree: '/Repo', isTarget: false });
+  });
+
+  it('restarts a target Metro when its persisted region differs', () => {
+    expect(resolveSimMetroHandoff({
+      currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentRegion: 'global', runningRegion: 'cn',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-region-stale' });
+    expect(resolveSimMetroHandoff({
+      takeover: true, currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentRegion: 'global', runningRegion: 'cn',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-region' });
+  });
+
+  it('restarts a target Metro when its persisted environment fingerprint differs', () => {
+    expect(resolveSimMetroHandoff({
+      currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentEnvFingerprint: 'env-new', runningEnvFingerprint: 'env-old',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-env-stale' });
+    expect(resolveSimMetroHandoff({
+      takeover: true, currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentEnvFingerprint: 'env-new', runningEnvFingerprint: 'env-old',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-env' });
+  });
 });
 
 describe('mobile:sim Metro handoff', () => {

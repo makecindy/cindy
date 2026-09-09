@@ -1440,7 +1440,7 @@ describe('远程交互接线不变式', () => {
 
   it('F5: loadAroundMessage 经 aroundMessagesFor 路由(远程隧道,不查控制端空库)', () => {
     const src = read('lib/makerChatStore.ts');
-    expect(src).toContain('aroundMessagesFor(sessionId, messageId, opts)');
+    expect(src).toContain('aroundMessagesFor(sessionId, messageId, view?.getSnapshot().ready ? { radius: 0 } : opts)');
   });
 
   it('F7: dispatch handleSubscriptionFrame 拒绝 legacy "*"(只 link-open 可订全量)', () => {

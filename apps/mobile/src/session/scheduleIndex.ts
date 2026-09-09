@@ -235,7 +235,7 @@ export function getScheduleIndexInvalidationVersion(deviceId: string): number {
 }
 
 /** Test-only: clear cache and invalidation generations. */
-export function resetScheduleIndexThrottleForTesting(): void {
+export function clearSessionScheduleIndexCache(): void {
   scheduleIndexThrottleEntries.clear();
   scheduleIndexInvalidationVersions.clear();
 }
@@ -294,6 +294,9 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
   return a.scheduleId === b.scheduleId
     && a.scheduleName === b.scheduleName
     && a.unreadCount === b.unreadCount
+    && !!a.hasUnreadFailedRun === !!b.hasUnreadFailedRun
+    && a.latestFailedRun?.runId === b.latestFailedRun?.runId
+    && a.latestFailedRun?.firedAt === b.latestFailedRun?.firedAt
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt
     && a.scheduleStatus === b.scheduleStatus
@@ -305,4 +308,25 @@ function stringListsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   return a.every((item, index) => item === b[index]);
+}
+
+export const resetScheduleIndexThrottleForTesting = clearSessionScheduleIndexCache;
+
+/** Existing lightweight host query; never starts the schedule list + per-run scan. */
+export async function loadLightweightSessionScheduleIndex(deviceId: string, invoke: RemoteInvoke): Promise<Map<string, RemoteSessionScheduleInfo>> {
+  const raw = await invoke<{ runs?: unknown[] }>(deviceId, 'maker:schedule:list-sidebar-index-runs', []);
+  if (!raw || !Array.isArray(raw.runs)) throw new Error('Invalid schedule index');
+  const schedules = new Map<string, import('@/scheduler/types').RemoteSchedule>();
+  const runs = new Map<string, RemoteScheduleRun[]>();
+  for (const value of raw.runs) {
+    if (!value || typeof value !== 'object') throw new Error('Invalid schedule index row');
+    const row = value as Record<string, unknown>;
+    if (typeof row.scheduleId !== 'string' || typeof row.runId !== 'string' || typeof row.scheduleName !== 'string') throw new Error('Invalid schedule index row');
+    const schedule = normalizeScheduleList([{ id: row.scheduleId, name: row.scheduleName, status: row.scheduleStatus }])[0];
+    const run = normalizeScheduleRuns([{ ...row, id: row.runId }])[0];
+    if (!schedule || !run) throw new Error('Invalid schedule index row');
+    schedules.set(schedule.id, schedule);
+    runs.set(schedule.id, [...(runs.get(schedule.id) ?? []), run]);
+  }
+  return buildSessionScheduleIndex([...schedules.values()], runs);
 }

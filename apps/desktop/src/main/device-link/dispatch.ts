@@ -66,7 +66,11 @@ import {
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { app } from 'electron';
+import { remoteDesktop } from '../remote-desktop';
+import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
+import { isDeferredHistoryPush, deferredToolBoundary } from './historyViewPush';
+import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
@@ -108,6 +112,9 @@ const pushFailures = createPushFailureLog((summary) => log.warn('push delivery f
 function reportPushFailure(dst: string, channel: string, error: unknown): void {
   pushFailures.record(shortId(dst), channel, error instanceof DeviceLinkError ? error.code : 'UNKNOWN');
 }
+let readHistoryToolName = (_sessionId: string, _toolUseId: string): string => '';
+export function setHistoryToolNameReader(read: typeof readHistoryToolName): void { readHistoryToolName = read; }
+
 
 /**
  * 老版本 mobile 只认识 #527 之前已发布的 logo kind。新 mark 可由同版本客户端按
@@ -1550,6 +1557,7 @@ function scheduleSessionActivityRetry(dst: string, stage: SessionActivityStage):
 }
 
 function clearSessionActivityStage(dst: string): void {
+  clearHistoryNotices(dst);
   const stage = sessionActivityStages.get(dst);
   if (!stage) return;
   if (stage.retryTimer) clearTimeout(stage.retryTimer);
@@ -1558,6 +1566,7 @@ function clearSessionActivityStage(dst: string): void {
 
 function clearAllSessionActivityStages(): void {
   pushFailures.flush();
+  for (const dst of historyNoticeStages.keys()) clearHistoryNotices(dst);
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
   for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
 }
@@ -1581,6 +1590,26 @@ export function pushSessionActivityToController(
  * 按 topic 把一条本机广播转发给订阅了它的控制端。listener 注册后每条 tap 都过这里
  * (live 读 registry,topic 变化即时生效)。topic 算不出(无 session 标识)→ 丢弃。
  */
+const historyNoticeStages = new Map<string, Map<string, { ownerStamp?: PushOwnerStamp; timer: ReturnType<typeof setTimeout> }>>();
+function stageHistoryNotice(dst: string, sessionId: string, ownerStamp?: PushOwnerStamp): void {
+  const pending = historyNoticeStages.get(dst) ?? new Map();
+  if (pending.has(sessionId)) return;
+  if (pending.size >= 100) return;
+  const timer = setTimeout(() => {
+    pending.delete(sessionId);
+    if (pending.size === 0) historyNoticeStages.delete(dst);
+    if (subscriptions.getControllersForTopic(`session:${sessionId}`).includes(dst)) {
+      sendPushBestEffort(dst, 'maker:history-view-changed', { sessionId }, ownerStamp);
+    }
+  }, 500);
+  pending.set(sessionId, { timer, ownerStamp });
+  historyNoticeStages.set(dst, pending);
+}
+function clearHistoryNotices(dst: string): void {
+  for (const item of historyNoticeStages.get(dst)?.values() ?? []) clearTimeout(item.timer);
+  historyNoticeStages.delete(dst);
+}
+
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
@@ -1651,10 +1680,14 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     }
     return mobilePayload;
   };
+  const historySessionId = readPushSessionId(remotePayload);
+  const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
+    (id) => readHistoryToolName(historySessionId, id));
   const offlineTargets = subscriptions
     .getKnownControllersForTopic(topic)
     .filter((dst) => !liveTargets.includes(dst));
   for (const dst of offlineTargets) {
+    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId)) continue;
     if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel)) {
       offlinePushQueue.enqueue(dst, {
         channel,
@@ -1665,7 +1698,20 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     }
   }
   for (const dst of liveTargets) {
-    const targetPayload = payloadFor(dst);
+    let targetPayload = payloadFor(dst);
+    // A pending read also needs notices: its sampled rows can precede this push.
+    // Filtering still requires ready in projectsHistoryDetails, so raw survives.
+    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId, true)) {
+      const folded = subscriptions.projectsHistoryDetails(dst, historySessionId);
+      const event = (remotePayload as { event?: { type?: string; data?: { stage?: string } } })?.event;
+      // A folded duration ticks locally. Token deltas do not change its summary.
+      if (!folded || event?.type !== 'thinking' || event.data?.stage !== 'delta') stageHistoryNotice(dst, historySessionId, ownerStamp);
+      if (folded) {
+        const boundary = channel === MAKER_PUSH.EVENT ? deferredToolBoundary(remotePayload) : null;
+        if (boundary === null) continue;
+        targetPayload = boundary;
+      }
+    }
     const willBatch = batchEligibleSessionId !== null && batchTargets!.has(dst)
       && estimateMakerEventBytes(targetPayload) < MAKER_EVENT_BATCH_MAX_BYTES;
     // 跨 channel 保序(review 两轮):**不入批**的帧必须排在该会话已暂存的事件
@@ -1891,6 +1937,7 @@ export function dropAllControllers(
   client: DeviceLinkClient,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
+  remoteDesktop.stop();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -1949,6 +1996,7 @@ function deactivateControllerState(
   }
   let changed = false;
   changed = acceptedLinkControllers.delete(deviceId) || changed;
+  remoteDesktop.stop(deviceId);
   changed = controllerConnectionEpochByDevice.delete(deviceId) || changed;
   changed = controllerLinkGenerationByDevice.delete(deviceId) || changed;
   changed = reportedControllerNameByDevice.has(deviceId) || changed;
@@ -1989,6 +2037,7 @@ export function deactivateController(
 
 /** Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。 */
 export function deactivateAllControllers(reason: string): void {
+  remoteDesktop.stop();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -2027,6 +2076,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
+  remoteDesktop.stop(deviceId);
   const changed = deactivateControllerState(deviceId);
   topicSubscriptionControllers.delete(deviceId);
   offlinePushQueue.clear(deviceId);
@@ -2075,6 +2125,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
         return;
       }
       clearRemoteInvokeStateFor(src);
+      remoteDesktop.stop(src);
       offlinePushQueue.clear(src);
       const deactivated = deactivateControllerState(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
@@ -2208,6 +2259,7 @@ function handleLinkOpen(
     return;
   }
   markControllerLinkActive(client, src);
+  subscriptions.clearHistoryViews(src);
   acceptedLinkControllers.add(src);
   if (knownModernController) {
     subscriptions.updateControllerMetadata(src, name, capabilities);
@@ -2581,6 +2633,16 @@ function sanitizeMessageInvokeResult(
   result: InvokeResultPayload,
   channel: string | undefined,
 ): InvokeResultPayload {
+  if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')) {
+    const page = result.result as { items?: Array<{ type: string; messages?: unknown[] }>; messages?: unknown[] };
+    const sanitize = (message: unknown) => message && typeof message === 'object' && !Array.isArray(message)
+      ? stripRecoveryCheckpointFromMessage(message as Record<string, unknown>) : message;
+    return { ok: true, result: { ...page,
+      ...(page.messages ? { messages: page.messages.map(sanitize) } : {}),
+      ...(page.items ? { items: mapHistoryViewMessages(page.items as HistoryViewItem<HistoryMessageSource>[],
+        (rows) => rows.map(sanitize) as HistoryMessageSource[]) } : {}),
+    } };
+  }
   if (!channel || !REMOTE_MESSAGE_CHANNELS.has(channel)) return result;
   if (!result.ok || !Array.isArray(result.result)) return result;
   let changed = false;
@@ -2905,6 +2967,20 @@ function compactInvokeResultForDeviceLink(
   frame: { dst: string; requestId: string },
   args?: unknown[],
 ): InvokeResultPayload | null {
+  if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
+    && result.result && typeof result.result === 'object') {
+    const page = result.result as Record<string, unknown>;
+    const mapPage = (map: (row: unknown) => unknown): InvokeResultPayload => ({ ok: true, result: {
+      ...page,
+      ...(Array.isArray(page.messages) ? { messages: page.messages.map(map) } : {}),
+      ...(Array.isArray(page.items) ? { items: mapHistoryViewMessages(page.items as HistoryViewItem<HistoryMessageSource>[],
+        (rows) => rows.map(map) as HistoryMessageSource[]) } : {}),
+    } });
+    const compact = mapPage(compactRemoteMessageForDeviceLink);
+    if (fitsInvokeResultFrame(frame, compact)) return compact;
+    const placeholder = mapPage((row) => forceCompactRemoteMessageContent(compactRemoteMessageForDeviceLink(row)));
+    return fitsInvokeResultFrame(frame, placeholder) ? placeholder : null;
+  }
   if (!channel || !REMOTE_MESSAGE_CHANNELS.has(channel)) return null;
   if (!result.ok || !Array.isArray(result.result)) return null;
   const compactMessages = result.result.map(compactRemoteMessageForDeviceLink);
@@ -3285,6 +3361,11 @@ export async function runInvoke(
     };
   }
 
+  if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
+    try { return { ok: true, result: await remoteDesktop.request(src, payload.args?.[0]) }; }
+    catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
+  }
+
   // Review sessions may be mirrored to controllers for visibility, but their
   // only input is the host's direct reviewer.send() call. Reject before the
   // synthetic ipcMain event is dispatched, then let the handler repeat the
@@ -3424,6 +3505,8 @@ export async function runInvoke(
   try {
     const args = payload.args ?? [];
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
+    const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
+      && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
     if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
@@ -3435,6 +3518,7 @@ export async function runInvoke(
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
         // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
         controllerPlatform: getControllerPlatform(src),
+        historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () => dispatchLocalInvoke(

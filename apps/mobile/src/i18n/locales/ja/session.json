@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。",
+    "dismissTitle": "過去の失敗通知を閉じる"
+  },
   "common": {
     "cancel": "キャンセル",
     "delete": "削除",

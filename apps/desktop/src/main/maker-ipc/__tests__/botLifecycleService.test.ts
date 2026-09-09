@@ -120,14 +120,41 @@ describe('Bot lifecycle coordinator', () => {
     });
   });
 
-  function service() {
+  function service(hooks: Partial<import('../botLifecycleService.js').BotLifecycleServiceDeps> = {}) {
     return createBotLifecycleService({
       maker: { closeSession } as unknown as Maker,
       getDelegationService: () => ({ cancelDelegationsForBot } as never),
       deleteProfileAndDetachSessions,
       now: () => 10,
+      ...hooks,
     });
   }
+
+  it('awaits routine pause/resume and keeps permanent deletion retryable until cleanup succeeds', async () => {
+    const onPaused = vi.fn(async () => {
+      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('paused');
+    });
+    const onResumed = vi.fn(async () => {
+      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('active');
+    });
+    const onBeforeDelete = vi.fn<() => Promise<void>>(async () => {
+      expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeDefined();
+      throw new Error('routine cleanup failed');
+    });
+    const lifecycle = service({ onPaused, onResumed, onBeforeDelete });
+    await lifecycle.run({ botId: 'bot-1', action: 'pause' });
+    await lifecycle.run({ botId: 'bot-1', action: 'resume' });
+    expect(onPaused).toHaveBeenCalledOnce();
+    expect(onResumed).toHaveBeenCalledOnce();
+    const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
+    await expect(lifecycle.run(request)).rejects.toThrow('routine cleanup failed');
+    expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
+    expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
+    onBeforeDelete.mockResolvedValue(undefined);
+    await lifecycle.run(request);
+    expect(deleteProfileAndDetachSessions).toHaveBeenCalledOnce();
+    expect(onBeforeDelete.mock.invocationCallOrder.at(-1)).toBeLessThan(deleteProfileAndDetachSessions.mock.invocationCallOrder[0]);
+  });
 
   it('pauses the Bot and closes its linked sessions', async () => {
     const result = await service().run({ botId: 'bot-1', action: 'pause' });

@@ -68,7 +68,7 @@ const captureMutationOwnerMock = vi.fn(() => ({
   generation: 0,
 }));
 const acquireMutationLeaseMock = vi.fn(() => releaseMutationMock);
-const confirmRequestMock = vi.fn(async () => ({ confirmed: true, allowDirs: false }));
+const confirmRequestMock = vi.fn(async (): Promise<{ confirmed: boolean; allowDirs: boolean; reason?: string }> => ({ confirmed: true, allowDirs: false }));
 const classifyLocalAttachmentPathMock = vi.fn();
 const resolveGhostAttachmentUrlMock = vi.fn();
 type TestLedgerRef = {
@@ -1293,6 +1293,23 @@ describe('Cindy media 本机路径揭示', () => {
       }),
     );
     expect(result).toMatchObject({ ok: true, local_path: process.execPath });
+  });
+
+  it.each((['claude-code', 'codex', 'pi'] as const).flatMap((agentKind) =>
+    (['session_closed', 'session_aborted'] as const).map((reason) => ({ agentKind, reason })),
+  ))('$agentKind keeps $reason distinct from user denial on media and file handoffs', async ({ agentKind, reason }) => {
+    const url = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    confirmRequestMock.mockResolvedValue({ confirmed: false, allowDirs: false, reason });
+    const deps = makeDeps(agentKind, `cancel-${agentKind}-${reason}`);
+    const media = await deps.callMedia?.({ action: 'resolve_local_path', url });
+    expect(media).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED', message: expect.stringContaining(reason) });
+    expect(media).not.toHaveProperty('local_path');
+    const dir = path.join(outsideDir, `cancel-${agentKind}-${reason}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const handoff = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir });
+    expect(handoff).toMatchObject({ ok: false, message: expect.stringContaining(reason) });
+    expect(JSON.stringify([media, handoff])).toContain('并非用户手动拒绝');
   });
 
   it('用户拒绝或调用缺少会话语境时不把路径放进工具结果', async () => {

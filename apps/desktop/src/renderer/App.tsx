@@ -1,6 +1,7 @@
 import { RouterProvider } from 'react-router-dom';
 
 import { useEffect } from 'react';
+import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
@@ -368,6 +369,7 @@ export function App() {
                         )}
                         <EnvCheckGuard>
                           <MakerBootstrap />
+                          {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <RemoteDesktopHost />}
                           <ProjectAutomationNotifyBridge />
                           {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口

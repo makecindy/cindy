@@ -64,6 +64,7 @@ describe('history window backfill wiring', () => {
   });
 
   it('不变量 3：同步门槛按 session + 连接代，不用屏幕级 lastSyncedAt', () => {
+    expect(source).toContain('const SESSION_READ_ACK_DWELL_MS = 200;');
     expect(source).toContain('if (readAckSyncedKey !== `${sessionId}:${connectionEpoch}`) return;');
     expect(source).not.toContain('|| lastSyncedAt === null) return;');
   });
@@ -135,7 +136,7 @@ describe('live stream interruption wiring', () => {
     expect(sendSubscribe).toContain('await confirmTrackedSubscription({');
     // 反向竞态同样要守住：快速释放后又切回时，旧 unsubscribe 在真正发帧前必须
     // 剔除已经重新被 owner 持有的 topic，不能落在新 subscribe 后把实时流再关掉。
-    expect(source).toContain('(topic) => !registryRef.current.hasTopic(deviceId, topic)');
+    expect(source).toContain('(topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic)');
     expect(source).toMatch(
       /const toSend = shouldSendTopic \? topics\.filter\(shouldSendTopic\) : topics;[\s\S]*client\.invoke\(deviceId, \{\s*channel: DL_UNSUBSCRIBE_CHANNEL,\s*args: \[\{ topics: toSend \}\]/,
     );

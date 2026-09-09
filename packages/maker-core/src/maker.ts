@@ -38,6 +38,11 @@ import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilitie
 import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
 import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId, type SessionStartupPreferences } from './session.js';
+import {
+  AgentNotAuthenticatedError,
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
+} from './agents/base-agent.js';
 import type {
   AgentSessionHandle,
   AgentSessionTeardownOptions,
@@ -73,6 +78,8 @@ export interface SessionStartFailureContext {
   options: CreateSessionOptions;
   stage: 'prepare' | 'agent-start' | 'storage';
   error: unknown;
+  /** Startup entered the adapter without confirmed exit; host runtime guards must remain protective. */
+  runtimeMayBeAlive?: boolean;
 }
 
 export interface SessionLifecycleHooks {
@@ -90,8 +97,10 @@ export interface SessionLifecycleHooks {
    * hook 自身失败只记日志，绝不覆盖原始启动错误。
    */
   onStartFailed?: (context: SessionStartFailureContext) => void | Promise<void>;
-  /** session 关闭时 (Maker.closeSession 主动 / 内部异常 / handle 自然结束)。 */
-  onClose?: (sessionId: string) => void | Promise<void>;
+  /** Failed startup's handle was finally closed after deferred cleanup; no task ownership change. */
+  onStartCleanupSucceeded?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
+  /** session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。 */
+  onClose?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
   /**
    * Codex-only: resume 前读取该业务 session 对应 thread history 是否已可靠包含
    * 产品 prompt。读取失败由 Maker 视为 unknown,让 Codex fail toward restore。
@@ -424,6 +433,8 @@ export class Maker {
   private readonly invalidSdkSessionIds = new Map<string, Set<string>>();
   /** Explicit close cause keyed by the exact Session instance that will emit closed. */
   private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
+  /** Host cleanup hooks must settle before Maker.shutdown() releases its process barrier. */
+  private readonly pendingLifecycleCloses = new Set<Promise<void>>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
   public readonly makerMemory: MakerMemoryManager | undefined;
   /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
@@ -607,6 +618,7 @@ export class Maker {
     const notifyStartFailed = async (
       stage: SessionStartFailureContext['stage'],
       error: unknown,
+      runtimeMayBeAlive = false,
     ): Promise<void> => {
       if (!this.lifecycleHooks.onStartFailed) return;
       try {
@@ -615,6 +627,7 @@ export class Maker {
           options: startOpts,
           stage,
           error,
+          runtimeMayBeAlive,
         });
       } catch (hookError) {
         this.logger.warn('lifecycleHooks.onStartFailed threw; preserving original startup error', {
@@ -623,6 +636,17 @@ export class Maker {
           error: String(hookError),
         });
       }
+    };
+    const notifyStartCleanupSucceeded = (): void => {
+      const cleanup = Promise.resolve()
+        .then(() => this.lifecycleHooks.onStartCleanupSucceeded?.(id, startOpts))
+        .catch((error) => this.logger.warn('lifecycleHooks.onStartCleanupSucceeded threw', {
+          sessionId: id, error: String(error),
+        }));
+      this.pendingLifecycleCloses.add(cleanup);
+      void cleanup.then(() => {
+        this.pendingLifecycleCloses.delete(cleanup);
+      });
     };
     if (this.lifecycleHooks.prepareStartOptions) {
       try {
@@ -671,17 +695,19 @@ export class Maker {
     // business id 在 close/rebuild 后会复用；另铸一个只活在本次内存实例里的
     // 代号，让迟到的旧 MCP 请求不能借用新 Session 的权限状态。
     const sessionInstanceId = generateSessionId();
-    let codexThreadClaim =
-      opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)
-        ? this.claimCodexThread({
-            sessionId: id,
-            sessionInstanceId,
-            remoteHostId: startOpts.remoteHostId,
-            threadId: startOpts.resumeSessionId,
-          })
-        : null;
+    let codexThreadClaim: CodexThreadClaimLease | null = null;
     let handle: AgentSessionHandle;
+    let agentStartAttempted = false;
     try {
+      if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
+        codexThreadClaim = this.claimCodexThread({
+          sessionId: id,
+          sessionInstanceId,
+          remoteHostId: startOpts.remoteHostId,
+          threadId: startOpts.resumeSessionId,
+        });
+      }
+      agentStartAttempted = true;
       handle = await agent.startSession({
         ...startOpts,
         sessionId: id,
@@ -700,8 +726,26 @@ export class Maker {
       });
     } catch (error) {
       codexThreadClaim?.release();
-      await notifyStartFailed('agent-start', error);
-      throw error;
+      // A generic adapter error does not prove its process stopped. Preserve
+      // host guards; only pre-adapter failure or explicit exit evidence releases them.
+      const runtimeStopped = error instanceof AgentStartupStoppedError;
+      const authenticationFailed = error instanceof AgentNotAuthenticatedError;
+      const startupError = runtimeStopped ? error.cause : error;
+      await notifyStartFailed(
+        'agent-start',
+        startupError,
+        agentStartAttempted && !runtimeStopped && !authenticationFailed,
+      );
+      if (error instanceof AgentStartupCleanupPendingError) {
+        // The adapter still owns this unpublished process. Its eventual close
+        // must release only this startup's resources, even after a rebuild.
+        void error.whenStopped.then(notifyStartCleanupSucceeded).catch((cleanupError) => {
+          this.logger.warn('adapter startup cleanup remains unconfirmed', {
+            sessionId: id, error: String(cleanupError),
+          });
+        });
+      }
+      throw startupError;
     }
     if (opts.agentKind === 'codex' && isClaimableCodexThreadId(handle.id)) {
       try {
@@ -716,16 +760,21 @@ export class Maker {
           });
         }
       } catch (error) {
+        let cleanupFailed = false;
         try {
           await handle.close({ reason: 'navigation' });
         } catch (closeError) {
+          cleanupFailed = true;
+          this.failedHandleCleanups.set(id, {
+            handle, promise: null, onCleaned: notifyStartCleanupSucceeded,
+          });
           this.logger.warn('failed to close Codex handle after thread claim conflict', {
             sessionId: id,
             error: String(closeError),
           });
         }
         codexThreadClaim?.release();
-        await notifyStartFailed('agent-start', error);
+        await notifyStartFailed('agent-start', error, cleanupFailed);
         throw error;
       }
     }
@@ -742,19 +791,24 @@ export class Maker {
       localPiPackageGeneration !== null
       && localPiPackageGeneration !== this.localPiPackageRuntimeGeneration
     ) {
+      let cleanupFailed = false;
       try {
         await handle.close({ reason: 'navigation' });
       } catch (closeError) {
+        cleanupFailed = true;
         this.failedHandleCleanups.set(id, {
           handle,
           promise: null,
+          onCleaned: notifyStartCleanupSucceeded,
         });
         this.logger.warn('failed to close stale local Pi handle after package mutation', {
           sessionId: id,
           error: String(closeError),
         });
       }
-      throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+      const error = new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+      await notifyStartFailed('agent-start', error, cleanupFailed);
+      throw error;
     }
 
     // 落地元数据 —— storage 已有同 id 的 row 时跳过 insert, 走 update 把 sdkSessionId 写回
@@ -803,9 +857,10 @@ export class Maker {
         this.failedHandleCleanups.set(id, {
           handle,
           promise: null,
-          ...(codexThreadClaim
-            ? { onCleaned: () => codexThreadClaim?.release() }
-            : {}),
+          onCleaned: () => {
+            codexThreadClaim?.release();
+            notifyStartCleanupSucceeded();
+          },
         });
         this.logger.warn('failed to close agent handle after session storage failure', {
           sessionId: id,
@@ -815,7 +870,7 @@ export class Maker {
       if (!cleanupFailed && codexThreadClaim) {
         codexThreadClaim.release();
       }
-      await notifyStartFailed('storage', error);
+      await notifyStartFailed('storage', error, cleanupFailed);
       throw error;
     }
 
@@ -845,12 +900,15 @@ export class Maker {
           error: String(error),
         });
       }
+      let cleanupFailed = false;
       try {
         await handle.close({ reason: 'navigation' });
       } catch (closeError) {
+        cleanupFailed = true;
         this.failedHandleCleanups.set(id, {
           handle,
           promise: null,
+          onCleaned: notifyStartCleanupSucceeded,
         });
         this.logger.warn('failed to close stale local Pi handle after package mutation', {
           sessionId: id,
@@ -860,7 +918,9 @@ export class Maker {
       // This handle was never published. Ordinary onClose may release a task's
       // worktree and other durable ownership, so it belongs only to published
       // session closure—not startup rollback.
-      throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+      const error = new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+      await notifyStartFailed('storage', error, cleanupFailed);
+      throw error;
     };
     if (
       localPiPackageGeneration !== null
@@ -974,11 +1034,15 @@ export class Maker {
         // delete / emit 之后调 —— 钩子里的逻辑可能对外发 IPC 或读 maker state, 让 Maker
         // 自己的 invariant 先一致。
         if (this.lifecycleHooks.onClose) {
-          void Promise.resolve()
-            .then(() => this.lifecycleHooks.onClose!(meta.id))
+          const cleanup = Promise.resolve()
+            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts))
             .catch((err) => {
               this.logger.warn('lifecycleHooks.onClose threw', { sessionId: meta.id, error: String(err) });
             });
+          this.pendingLifecycleCloses.add(cleanup);
+          void cleanup.then(() => {
+            this.pendingLifecycleCloses.delete(cleanup);
+          });
         }
       }
     });
@@ -1230,6 +1294,13 @@ export class Maker {
       ...failedHandleCloses,
       ...lateSessionDetaches,
     ]);
+
+    // Session close notifications enqueue host-owned cleanup (for example
+    // runtime worktree lease release). Keep the quit barrier open until every
+    // hook that was queued by a detach has settled.
+    while (this.pendingLifecycleCloses.size > 0) {
+      await Promise.allSettled(Array.from(this.pendingLifecycleCloses));
+    }
 
     if (errors.length > 0) {
       // Maker 没注入 logger; host 端 stdout 能看到 (before-quit 阶段, 不阻塞流程)

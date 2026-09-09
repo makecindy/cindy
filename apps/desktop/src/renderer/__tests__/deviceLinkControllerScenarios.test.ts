@@ -37,6 +37,11 @@ vi.mock('@/lib/sessionService', () => ({
   touchUserSend: vi.fn(async () => ({})),
 }));
 vi.mock('@/lib/sessionsBus', () => ({ emitPatch: vi.fn() }));
+vi.mock('@/features/device-link/mirrorCacheClient', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/features/device-link/mirrorCacheClient')>(),
+  readCachedMessages: vi.fn(async () => []),
+  clearCachedMessages: vi.fn(),
+}));
 vi.mock('@/lib/userPromptStore', () => ({ getUserPrompt: () => '' }));
 vi.mock('@/lib/imageRef', () => ({
   parseUserContent: vi.fn((c: string) => ({ text: c, images: [], files: [] })),
@@ -48,8 +53,11 @@ vi.mock('@/lib/composerDraftStore', () => ({
   plainTextToTiptapDoc: (s: string) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }] }),
 }));
 
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, getRemoteHistoryView } from '@/lib/makerChatStore';
+import { projectHistoryView } from '@cindy/maker-shared/message-window';
+import { getLatestMessageTodoState } from '@cindy/maker-shared/message-render';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { readCachedMessages, clearCachedMessages } from '@/features/device-link/mirrorCacheClient';
 
 // ─── 忠实的被控端内存替身(单一真相源)───────────────────────────────────────────
 
@@ -77,6 +85,7 @@ function makeFakeHost(deviceId: string, deviceName: string) {
   const sessionsMeta = new Map<string, Record<string, unknown>>();
   const messages = new Map<string, Message[]>();
   let pushCb: ((p: RemotePush) => void) | null = null;
+  let historyViewEnabled = false;
 
   function meta(sid: string): Record<string, unknown> {
     return {
@@ -88,6 +97,22 @@ function makeFakeHost(deviceId: string, deviceName: string) {
 
   const invoke = vi.fn(async (_d: string, channel: string, args: unknown[]) => {
     switch (channel) {
+      case 'local-db:messages:view': {
+        if (!historyViewEnabled) return null;
+        const rows = messages.get(args[0] as string) ?? [];
+        const before = (args[1] as { before?: string })?.before;
+        const projected = projectHistoryView(before ? rows.slice(0, rows.findIndex((row) => row.id === before)) : rows, false);
+        const items = projected.slice(-20);
+        const first = items[0];
+        const hasMore = projected.length > items.length;
+        return { version: 1, items, hasMore,
+          nextCursor: hasMore ? (first.type === 'work' ? first.summary.firstMessageId : first.messages[0].id) : null };
+      }
+      case 'local-db:messages:work-details': {
+        const rows = messages.get(args[0] as string) ?? [];
+        const ref = args[1] as { firstMessageId: string; lastMessageId: string };
+        return { version: 1, messages: rows.slice(rows.findIndex((row) => row.id === ref.firstMessageId), rows.findIndex((row) => row.id === ref.lastMessageId) + 1), hasMore: false, nextCursor: null };
+      }
       case 'local-db:messages:list': {
         const sid = args[0] as string;
         const opts = (args[1] ?? {}) as { limit?: number };
@@ -115,6 +140,8 @@ function makeFakeHost(deviceId: string, deviceName: string) {
   return {
     deviceId,
     deviceName,
+    enableHistoryView: () => { historyViewEnabled = true; },
+    disableHistoryView: () => { historyViewEnabled = false; },
     invoke,
     /** 注册控制端 onRemotePush 回调(被控端经此向控制端转发广播)。 */
     registerPush(cb: (p: RemotePush) => void): () => void {
@@ -133,6 +160,10 @@ function makeFakeHost(deviceId: string, deviceName: string) {
       arr.push(msg);
       messages.set(sid, arr);
       if (!opts?.lossy) pushCb?.({ deviceId, channel: 'local-db:messages:created', payload: { sessionId: sid, message: msg } });
+    },
+    hostDelete(sid: string, clientIds: string[]): void {
+      messages.set(sid, (messages.get(sid) ?? []).filter((row) => !clientIds.includes(row.clientId)));
+      pushCb?.({ deviceId, channel: 'local-db:messages:deleted', payload: { sessionId: sid, clientIds } });
     },
     /** 被控端改某会话设置 → 广播 sessions:patched(控制端镜像收敛)。 */
     hostPatch(sid: string, patch: Record<string, unknown>): void {
@@ -203,6 +234,458 @@ afterEach(() => {
 });
 
 describe('device-link controller mirror — end-to-end scenarios', () => {
+  it.each(['migration', 'purge', 'failed-intent'])('orders old release before a replacement same-Host expansion (%s)', async (transition) => {
+    const s = sid();
+    const other = makeFakeHost('dev-B', 'Mac B');
+    host.enableHistoryView();
+    other.enableHistoryView();
+    const rows = [dbMessage(s, 'user', 'Work', '2026-06-15T00:00:00.000Z', 'user'),
+      dbMessage(s, 'work', 'Thinking', '2026-06-15T00:00:01.000Z', 'thinking'),
+      dbMessage(s, 'answer', 'Done', '2026-06-15T00:00:02.000Z')];
+    host.seedSession(s, {}, rows);
+    other.seedSession(s, {}, rows);
+    const original = host.invoke.getMockImplementation()!;
+    const applied: unknown[][] = [];
+    let finish = () => {};
+    let pause = true;
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (device === other.deviceId) return other.invoke(device, channel, args);
+      if (channel === 'local-db:messages:view-intent') {
+        if (pause && (args[1] as unknown[]).length) {
+          pause = false;
+          await new Promise<void>((resolve) => { finish = resolve; });
+          if (transition === 'failed-intent') throw new Error('late intent failure');
+        }
+        applied.push(args[1] as unknown[]);
+      }
+      return original(device, channel, args);
+    });
+    try {
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      makerChatStore.ensureInitialMessages(s);
+      await flush();
+      const oldView = getRemoteHistoryView(s)!;
+      oldView.setExpanded(oldView.getSnapshot().items.find((item) => item.type === 'work')!.key, true);
+      await flush();
+      if (transition === 'purge') {
+        makerChatStore.purgeSession(s);
+        makerChatStore.ensureInitialMessages(s);
+      } else {
+        remoteProjectsStore.setDeviceSessions(other.deviceId, 'Mac B', [{ id: s } as Session]);
+        await flush();
+        // B's page is independent of the unfinished A intent.
+        expect(getRemoteHistoryView(s)?.getSnapshot().ready).toBe(true);
+        remoteProjectsStore.removeDevice(other.deviceId);
+        remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      }
+      await flush();
+      const current = getRemoteHistoryView(s)!;
+      expect(remoteProjectsStore.getSessionDeviceId(s)).toBe(DEVICE_ID);
+      expect(current).not.toBe(oldView);
+      expect(current.getSnapshot().ready).toBe(true);
+      const work = current.getSnapshot().items.find((item) => item.type === 'work')!;
+      current.setExpanded(work.key, true);
+      await flush();
+      finish();
+      await flush();
+      await flush();
+      expect(applied.at(-1)).toEqual([work.type === 'work' ? work.summary : undefined]);
+      expect(getRemoteHistoryView(s)).toBe(current);
+    } finally {
+      finish();
+      makerChatStore.purgeSession(s);
+      await flush();
+    }
+  });
+
+  it.each(['initial', 'older', 'reconcile', 'details', 'intent', 'aba'])('retires every old-source history path before replacement (%s)', async (scenario) => {
+    const s = sid();
+    const other = makeFakeHost('dev-B', 'Mac B');
+    host.enableHistoryView();
+    other.enableHistoryView();
+    const oldRows = [
+      dbMessage(s, 'old-user', 'old user', '2026-06-15T00:00:00.000Z', 'user'),
+      dbMessage(s, 'old-work', 'old thinking', '2026-06-15T00:00:01.000Z', 'thinking'),
+      dbMessage(s, 'old-answer', 'old answer', '2026-06-15T00:00:02.000Z'),
+    ];
+    const newRows = [dbMessage(s, 'new-user', 'new source', '2026-06-15T00:01:00.000Z', 'user')];
+    host.seedSession(s, {}, oldRows);
+    other.seedSession(s, {}, newRows);
+    const original = host.invoke.getMockImplementation()!;
+    let pause = scenario === 'initial';
+    let finish: () => void = () => {};
+    const channelToPause = scenario === 'details' ? 'local-db:messages:work-details'
+      : scenario === 'intent' ? 'local-db:messages:view-intent' : 'local-db:messages:view';
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (device === other.deviceId) return other.invoke(device, channel, args);
+      // Capture the old response before migration, including an old-Host failure.
+      const value = await original(device, channel, args);
+      if (pause && channel === channelToPause && (scenario !== 'intent' || (args[1] as unknown[]).length)) {
+        pause = false;
+        await new Promise<void>((resolve) => { finish = resolve; });
+        if (scenario === 'older' || scenario === 'reconcile') throw new Error('[CHANNEL_NOT_ALLOWED] No handler');
+      }
+      return value;
+    });
+    try {
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      makerChatStore.ensureInitialMessages(s);
+      await flush();
+      const oldView = getRemoteHistoryView(s)!;
+      let pending: Promise<unknown> | undefined;
+      if (scenario !== 'initial') {
+        const work = oldView.getSnapshot().items.find((item) => item.type === 'work')!;
+        if (scenario === 'older') {
+          // Give the real pagination entry point an older cursor to request.
+          host.seedSession(s, {}, Array.from({ length: 25 }, (_, index) =>
+            dbMessage(s, `past-${index}`, `past ${index}`, new Date(Date.UTC(2026, 5, 14) + index * 1000).toISOString(), 'user')));
+          await oldView.refresh();
+          pause = true;
+          pending = makerChatStore.loadOlderMessages(s);
+        } else if (scenario === 'reconcile' || scenario === 'aba') {
+          pause = true;
+          pending = makerChatStore.reconcileRemoteMessages(s);
+        } else {
+          pause = true;
+          oldView.setExpanded(work.key, true);
+        }
+        await flush();
+      }
+      if (scenario === 'aba') {
+        remoteProjectsStore.removeDevice(DEVICE_ID);
+        expect(getRemoteHistoryView(s)).toBeUndefined();
+        expect(oldView.isActive()).toBe(false);
+        host.seedSession(s, {}, newRows);
+        remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      } else {
+        remoteProjectsStore.setDeviceSessions(other.deviceId, 'Mac B', [{ id: s } as Session]);
+      }
+      await flush();
+      const newView = getRemoteHistoryView(s)!;
+      expect(newView).toBeDefined();
+      expect(newView).not.toBe(oldView);
+      expect(oldView.isActive()).toBe(false);
+      expect(makerChatStore.getSnapshot(s).messages.map((row) => row.content)).toEqual(['new source']);
+      finish();
+      await pending;
+      await flush();
+      expect(getRemoteHistoryView(s)).toBe(newView);
+      expect(newView.getSnapshot().error).toBeNull();
+      expect(makerChatStore.getSnapshot(s).messages.map((row) => row.content)).toEqual(['new source']);
+      const reads = host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view').length;
+      // A retained old reference cannot issue more page/detail reads.
+      await oldView.refresh();
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(reads);
+      if (scenario === 'intent') {
+        const oldIntents = host.invoke.mock.calls.filter(([device, channel]) => device === DEVICE_ID && channel === 'local-db:messages:view-intent');
+        expect(oldIntents.at(-1)?.[2]).toEqual([s, []]);
+      }
+    } finally {
+      finish();
+      makerChatStore.purgeSession(s);
+      await flush();
+    }
+  });
+
+  it('keeps a same-source controller on ordinary mirror updates', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'one', 'same source', '2026-06-15T00:00:00.000Z')]);
+    try {
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      makerChatStore.ensureInitialMessages(s);
+      await flush();
+      const view = getRemoteHistoryView(s);
+      const reads = host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view').length;
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s, title: 'new title' } as Session]);
+      await flush();
+      expect(getRemoteHistoryView(s)).toBe(view);
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(reads);
+    } finally {
+      makerChatStore.purgeSession(s);
+      await flush();
+    }
+  });
+
+  it.each(['empty', 'rewound', 'failure', 'late-cache'])('hands off cold cache to authoritative history (%s)', async (scenario) => {
+    const s = sid();
+    const create = { ...dbMessage(s, 'create', '', '2026-06-15T00:00:00.000Z', 'tool_use'),
+      content: { toolName: 'TodoWrite', input: { todos: [{ content: 'Deleted plan', status: 'pending', activeForm: 'Working' }] } } } as unknown as Message;
+    const cached = [create, dbMessage(s, 'same', 'stale text', '2026-06-15T00:00:01.000Z', 'user')];
+    let finishCache: (rows: Message[]) => void = () => {};
+    vi.mocked(readCachedMessages).mockImplementationOnce(() => scenario === 'late-cache'
+      ? new Promise((resolve) => { finishCache = resolve; }) : Promise.resolve(cached));
+    host.enableHistoryView();
+    host.seedSession(s, {}, scenario === 'rewound'
+      ? [dbMessage(s, 'same', 'current text', '2026-06-15T00:00:01.000Z', 'user')] : []);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    const invoke = host.invoke.getMockImplementation()!;
+    let finishPage: () => void = () => {};
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel === 'local-db:messages:view') {
+        await new Promise<void>((resolve) => { finishPage = resolve; });
+        if (scenario === 'failure') throw new Error('timeout');
+      }
+      return invoke(device, channel, args);
+    });
+    try {
+      makerChatStore.ensureInitialMessages(s);
+      await flush();
+      if (scenario !== 'late-cache') {
+        expect(getLatestMessageTodoState(makerChatStore.getSnapshot(s).messages).hasPlanEvent).toBe(true);
+        expect(makerChatStore.getSnapshot(s).messages.every((row) => row.cacheHydrated)).toBe(true);
+      }
+      // A push arriving during the cache handoff is not part of the stale cache.
+      if (scenario === 'rewound') host.hostMessage(s, dbMessage(s, 'live', 'live output', '2026-06-15T00:00:02.000Z'));
+      finishPage();
+      await flush();
+      finishCache(cached);
+      await flush();
+      const state = makerChatStore.getSnapshot(s);
+      if (scenario === 'failure') {
+        expect(state.messages).toHaveLength(2);
+        expect(state.historyLoaded).toBe(false);
+        expect(clearCachedMessages).not.toHaveBeenCalled();
+      } else {
+        expect(state.historyLoaded).toBe(true);
+        expect(state.messages.some((row) => row.cacheHydrated)).toBe(false);
+        expect(getLatestMessageTodoState(state.messages).hasPlanEvent).toBe(false);
+        expect(clearCachedMessages).toHaveBeenCalledWith(DEVICE_ID, s);
+        if (scenario === 'rewound') {
+          expect(state.messages.map((row) => row.content)).toEqual(['current text', 'live output']);
+        } else expect(state.messages).toHaveLength(0);
+      }
+    } finally {
+      makerChatStore.purgeSession(s);
+    }
+  });
+
+  it.each(['demote', 'in-flight-demote', 'purge'])('releases unmounted prefetch without starting another read (%s)', async (mode) => {
+    vi.useFakeTimers();
+    const s = sid();
+    let finishPage: () => void = () => {};
+    try {
+      host.enableHistoryView();
+      host.seedSession(s, {}, [dbMessage(s, 'old', 'old text', '2026-06-15T00:00:00.000Z')]);
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      makerChatStore.ensureInitialMessages(s);
+      await vi.advanceTimersByTimeAsync(0);
+      const view = getRemoteHistoryView(s)!;
+      const invoke = host.invoke.getMockImplementation()!;
+      if (mode === 'in-flight-demote') {
+        host.invoke.mockImplementation(async (device, channel, args) => {
+          if (channel === 'local-db:messages:view') await new Promise<void>((resolve) => { finishPage = resolve; });
+          return invoke(device, channel, args);
+        });
+        void view.refresh();
+      }
+      const reads = host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view').length;
+      if (mode === 'purge') makerChatStore.purgeSession(s);
+      else await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(view.isActive()).toBe(false);
+      expect(getRemoteHistoryView(s)).toBeUndefined();
+      finishPage();
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(reads);
+      expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+      host.invoke.mockImplementation(invoke);
+      host.seedSession(s, {}, [dbMessage(s, 'new', 'new text', '2026-06-15T00:00:01.000Z')]);
+      // Re-prefetch must work even without a mounted view to reactivate it.
+      makerChatStore.ensureInitialMessages(s);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(makerChatStore.getSnapshot(s).messages.map((row) => row.content)).toEqual(['new text']);
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(reads + 1);
+    } finally {
+      finishPage();
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['mounted', 'prefetched', 'resumed', 'discovered', 'stalled'])('discovers plans through visible pages and stops without progress (%s)', async (entry) => {
+    vi.useFakeTimers();
+    const s = sid();
+    let leave: (() => void) | undefined;
+    const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+    try {
+      const row = (index: number, content: string, role: Message['role'] = 'assistant') =>
+        dbMessage(s, String(index), content, new Date(Date.UTC(2026, 5, 15) + index * 1000).toISOString(), role);
+      const create = { ...row(1, '', 'tool_use'), toolUseId: 'create',
+        content: { toolName: 'TaskCreate', input: { subject: 'Collect logs' }, toolUseId: 'create' } } as unknown as Message;
+      const result = { ...row(2, 'Task #abc created successfully: Collect logs', 'tool_result'), toolUseId: 'create' };
+      const update = { ...row(44, '', 'tool_use'), toolUseId: 'update',
+        ...(entry === 'discovered' ? { createdAt: row(23.5, '').createdAt } : {}),
+        content: { toolName: 'TaskUpdate', input: { taskId: 'abc', status: 'in_progress' }, toolUseId: 'update' } } as unknown as Message;
+      host.enableHistoryView();
+      host.seedSession(s, {}, [row(0, 'Investigate', 'user'), create, result, row(3, 'hidden', 'thinking'),
+        ...Array.from({ length: 40 }, (_, i) => row(i + 4, `# Result ${i}\nUseful output`)), update]
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      if (entry !== 'prefetched') leave = makerChatStore.enterView(s);
+      makerChatStore.ensureInitialMessages(s);
+      await settle();
+      const view = getRemoteHistoryView(s)!;
+      expect(view.getSnapshot().items).toHaveLength(20);
+      expect(getLatestMessageTodoState(makerChatStore.getSnapshot(s).messages, { taskHistoryMayBeIncomplete: true }).hasPlanEvent).toBe(entry !== 'discovered');
+      if (entry === 'stalled') {
+        const invoke = host.invoke.getMockImplementation()!;
+        host.invoke.mockImplementation((device, channel, args) => invoke(device, channel,
+          channel === 'local-db:messages:view' ? [args[0], {}] : args));
+      }
+      if (entry === 'resumed') { leave!(); leave = undefined; }
+      if (entry === 'prefetched' || entry === 'resumed') {
+        await vi.advanceTimersByTimeAsync(200);
+        expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(1);
+        leave = makerChatStore.enterView(s);
+        await settle();
+      }
+      await vi.advanceTimersByTimeAsync(200);
+      await settle();
+      const state = makerChatStore.getSnapshot(s);
+      const plan = getLatestMessageTodoState(state.messages, { taskHistoryMayBeIncomplete: state.hasMoreMessages });
+      if (entry === 'stalled') {
+        expect(plan.isResolved).toBe(false);
+        expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(2);
+        return;
+      }
+      expect(plan).toMatchObject({ hasPlanEvent: true, isResolved: true });
+      expect(JSON.stringify(plan.insertion)).toContain('Collect logs');
+      expect(view.getSnapshot().hasMore).toBe(false);
+      expect(view.getSnapshot().details.size).toBe(0);
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(entry === 'resumed' ? 4 : 3);
+      expect(host.invoke.mock.calls.some(([, channel]) => channel === 'local-db:messages:list' || channel === 'local-db:messages:work-details')).toBe(false);
+    } finally {
+      leave?.();
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])('bounds idle discovery without a plan, including a failed page (fails=%s)', async (fails) => {
+    vi.useFakeTimers();
+    const s = sid();
+    let leave: (() => void) | undefined;
+    try {
+      host.enableHistoryView();
+      host.seedSession(s, {}, Array.from({ length: 60 }, (_, i) => dbMessage(s, String(i), `# Result ${i}\nUseful output`, new Date(Date.UTC(2026, 5, 15) + i * 1000).toISOString())));
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      leave = makerChatStore.enterView(s);
+      makerChatStore.ensureInitialMessages(s);
+      await vi.advanceTimersByTimeAsync(0);
+      const invoke = host.invoke.getMockImplementation()!;
+      if (fails) host.invoke.mockImplementation(async (device, channel, args) => {
+        if (channel === 'local-db:messages:view' && (args[1] as { before?: string })?.before) throw new Error('timeout');
+        return invoke(device, channel, args);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(2);
+      const snapshot = getRemoteHistoryView(s)!.getSnapshot();
+      expect(snapshot.items).toHaveLength(fails ? 20 : 40);
+      expect(snapshot.hasMore).toBe(true);
+      expect(snapshot.error ? String(snapshot.error) : null).toBe(fails ? 'Error: timeout' : null);
+    } finally {
+      leave?.();
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['delete', 'clear'])('retires loaded older projection pages after a remote %s', async (operation) => {
+    const s = sid();
+    host.enableHistoryView();
+    const rows = Array.from({ length: 30 }, (_, index) => dbMessage(s, String(index), 'visible',
+      new Date(1_750_000_000_000 + index * 1000).toISOString(), 'user'));
+    host.seedSession(s, { clearedAt: null }, rows);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh(true);
+    expect(view.getSnapshot().items).toHaveLength(30);
+    host.hostPatch(s, { title: 'ordinary metadata' });
+    expect(view.getSnapshot().items).toHaveLength(30);
+    if (operation === 'delete') host.hostDelete(s, [rows[0].clientId]);
+    else {
+      host.seedSession(s, {}, []);
+      host.hostPatch(s, { clearedAt: '2026-09-08T10:00:00Z' });
+    }
+    expect(view.getSnapshot().items).toEqual([]);
+    expect(makerChatStore.getSnapshot(s).messages.some((row) => row.clientId === rows[0].clientId)).toBe(false);
+    await flush(); await flush();
+    expect(view.getSnapshot().ready).toBe(true);
+    expect(view.getSnapshot().items).toHaveLength(operation === 'delete' ? 20 : 0);
+    view.setActive(false);
+  });
+
+  it('returns to raw history when a previously capable Host is downgraded', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'old', 'old', '2026-06-15T00:00:00.000Z')]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+    const view = getRemoteHistoryView(s)!;
+    expect(view.getSnapshot().ready).toBe(true);
+    host.disableHistoryView();
+    host.hostMessage(s, dbMessage(s, 'new', 'new', '2026-06-15T00:00:01.000Z'), { lossy: true });
+    await makerChatStore.reconcileRemoteMessages(s, { force: true });
+    expect(view.getSnapshot().ready).toBe(false);
+    expect(getRemoteHistoryView(s)).toBeUndefined();
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(makerChatStore.getSnapshot(s).messages.map((row) => row.clientId)).toEqual(['client-old', 'client-new']);
+  });
+  it.each([false, true])('registers a fresh history page after ACK; reset during wait=%s', async (reset) => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:00.000Z')]);
+    const original = host.invoke.getMockImplementation()!;
+    let finish!: () => void;
+    let finishReset!: () => void;
+    let pageReads = 0;
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      const value = await original(device, channel, args);
+      if (channel === 'local-db:messages:view' && ++pageReads === 1) await new Promise<void>(done => { finish = done; });
+      else if (reset && channel === 'local-db:messages:view') await new Promise<void>(done => { finishReset = done; });
+      return value;
+    });
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    const view = getRemoteHistoryView(s)!;
+    expect(view.getSnapshot().ready).toBe(false);
+    const recovered = makerChatStore.reconcileRemoteMessages(s, { freshHistory: true });
+    if (reset) { view.reset(); await flush(); }
+    finish();
+    expect(await recovered).toBe(!reset);
+    expect(pageReads).toBe(2);
+    expect(view.getSnapshot().ready).toBe(!reset);
+    if (reset) { finishReset(); await flush(); }
+    view.setActive(false);
+  });
+  it('reads visible history first and fetches a collapsed work range only after expansion', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    const history = [dbMessage(s, 'u', 'question', '2026-06-15T00:00:00.000Z', 'user'),
+      { ...dbMessage(s, 'thought', '', '2026-06-15T00:00:01.000Z', 'thinking'), content: { kind: 'thinking', text: 'hidden body', durationMs: 500, isRedacted: false } },
+      dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:02.000Z')];
+    host.seedSession(s, {}, history);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(makerChatStore.getSnapshot(s).messages.map((row) => row.clientId)).toEqual(['client-u', 'client-answer']);
+    const view = getRemoteHistoryView(s)!;
+    const group = view.getSnapshot().items.find((item) => item.type === 'work')!;
+    expect(view.getSnapshot().details.size).toBe(0);
+    view.setExpanded(group.key, true);
+    await flush();
+    expect(view.getSnapshot().details.get(group.key)?.messages[0].content).toBe('hidden body');
+    expect(makerChatStore.getSnapshot(s).messages.some((row) => row.clientId === 'client-thought')).toBe(true);
+    view.setActive(false);
+  });
+
   it('完整镜像回路:开会话见历史 → live push 追加 → 丢帧 reconcile heal → 设置变更镜像', async () => {
     const s = sid();
     // 被控端已有 1 条历史 + 注册到远程项目(getSessionDeviceId 命中 → 传输层走隧道)。

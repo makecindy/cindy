@@ -62,6 +62,7 @@ const h = vi.hoisted(() => {
 const SETTINGS_PATH = path.join('/tmp/userdata', 'device-link-settings.json');
 
 const DEFAULT_SETTINGS = {
+  remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
@@ -128,6 +129,7 @@ describe('readDeviceLinkSettings', () => {
     const { readDeviceLinkSettings } = await load();
     expect(readDeviceLinkSettings()).toEqual({
       remoteControlEnabled: true,
+      remoteDesktopEnabled: false,
       keepAwake: false,
       revokedControllers: ['dev-1', 'dev-2'],
       disabledControlDeviceIds: [],

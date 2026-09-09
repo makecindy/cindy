@@ -10,10 +10,13 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { Maker, type CreateSessionOptions } from './maker.js';
+import { Maker, type CreateSessionOptions, type SessionStartFailureContext } from './maker.js';
 import { Session } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import {
+  AgentNotAuthenticatedError,
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type BaseAgent,
@@ -1388,6 +1391,256 @@ describe('Maker start-option lifecycle hooks', () => {
     expect(maker.listActiveSessions()).toEqual([]);
   });
 
+  it('binds a delayed close and a failed rebuild to their own startup options', async () => {
+    const closeEntered = createDeferred();
+    const allowClose = createDeferred();
+    const prepared: CreateSessionOptions[] = [];
+    const disposed: CreateSessionOptions[] = [];
+    const startSession = vi.fn(async () => createHandle({ id: 'thread-lifecycle' }));
+    const onStartFailed = vi.fn();
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: async (_id, options) => {
+          prepared.push(options);
+          if (prepared.length === 2) {
+            await Promise.resolve();
+            throw new Error('replacement preparation failed');
+          }
+        },
+        onStartFailed,
+        onClose: async (_id, options) => {
+          closeEntered.resolve();
+          await allowClose.promise;
+          disposed.push(options);
+        },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'same-task', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+    };
+    const first = await maker.createSession(options);
+    await first.close();
+    await closeEntered.promise;
+    await expect(maker.createSession(options)).rejects.toThrow('replacement preparation failed');
+    const replacement = await maker.createSession(options);
+    allowClose.resolve();
+    await vi.waitFor(() => expect(disposed).toHaveLength(1));
+    expect(new Set(prepared).size).toBe(3);
+    expect(prepared).not.toContain(options);
+    expect(disposed[0]).toBe(prepared[0]);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      options: prepared[1], stage: 'prepare', runtimeMayBeAlive: false,
+    }));
+    expect(maker.getSession('same-task')).toBe(replacement);
+    await replacement.close();
+    await vi.waitFor(() => expect(disposed).toHaveLength(2));
+    expect(disposed[1]).toBe(prepared[2]);
+  });
+
+  it.each([false, true])('reports whether a failed startup still has a live handle: %s', async (cleanupFails) => {
+    const handle = createHandle({ id: 'failed-storage' });
+    handle.close = vi.fn(async () => {
+      if (cleanupFails) throw new Error('termination unconfirmed');
+    });
+    const storage = createStorage();
+    storage.create = vi.fn().mockRejectedValue(new Error('storage unavailable'));
+    const onStartFailed = vi.fn();
+    const maker = new Maker({
+      agents: { codex: createAgent(async () => handle) },
+      storage, logger: createLogger(), lifecycleHooks: { onStartFailed },
+    });
+    await expect(maker.createSession({
+      id: 'storage-failure', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+    })).rejects.toThrow('storage unavailable');
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'storage', runtimeMayBeAlive: cleanupFails,
+    }));
+  });
+
+  it('runs startup cleanup when a prepared runtime cannot claim its thread', async () => {
+    const threadId = '11111111-1111-4111-8111-111111111111';
+    const startSession = vi.fn(async () => createHandle({ id: threadId }));
+    const onStartFailed = vi.fn();
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed },
+    });
+    const options: CreateSessionOptions = {
+      id: 'thread-owner', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+      resumeSessionId: threadId,
+    };
+    const owner = await maker.createSession(options);
+    await expect(maker.createSession({ ...options, id: 'thread-conflict' })).rejects.toThrow('already active');
+    expect(startSession).toHaveBeenCalledOnce();
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'thread-conflict', stage: 'agent-start', runtimeMayBeAlive: false,
+    }));
+    await owner.close();
+  });
+
+  it('releases deferred failed-start resources without touching the successful replacement', async () => {
+    const cleanupEntered = createDeferred();
+    const allowCleanup = createDeferred();
+    const leased = new Set<CreateSessionOptions>();
+    const prepared: CreateSessionOptions[] = [];
+    const failedHandle = createHandle({ id: 'failed-pi', agentKind: 'pi' });
+    failedHandle.close = vi.fn().mockRejectedValueOnce(new Error('still alive')).mockResolvedValue(undefined);
+    const storage = createStorage();
+    const create = storage.create.bind(storage);
+    storage.create = vi.fn().mockRejectedValueOnce(new Error('storage failed')).mockImplementation(create);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn()
+        .mockResolvedValueOnce(failedHandle)
+        .mockResolvedValueOnce(createHandle({ id: 'replacement-pi', agentKind: 'pi' })), 'pi') },
+      storage, logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: (_id, options) => { prepared.push(options); leased.add(options); },
+        onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+        onStartCleanupSucceeded: async (_id, options) => {
+          cleanupEntered.resolve();
+          await allowCleanup.promise;
+          leased.delete(options);
+        },
+        onClose: (_id, options) => { leased.delete(options); },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'same-failed-task', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    };
+    await expect(maker.createSession(options)).rejects.toThrow('storage failed');
+    expect(leased.size).toBe(1);
+    const replacement = await maker.createSession(options);
+    await cleanupEntered.promise;
+    expect(leased.size).toBe(2);
+    allowCleanup.resolve();
+    await vi.waitFor(() => expect(leased).toEqual(new Set([prepared[1]])));
+    expect(maker.getSession(options.id!)).toBe(replacement);
+    await replacement.close();
+    await vi.waitFor(() => expect(leased.size).toBe(0));
+  });
+
+  it('keeps an adapter-owned unpublished runtime protected until its own close completes', async () => {
+    const stopped = createDeferred();
+    const cleanupEntered = createDeferred();
+    const allowCleanup = createDeferred();
+    const pending = new AgentStartupCleanupPendingError('opaque adapter failure', {
+      cause: new Error('startup RPC failed'), whenStopped: stopped.promise,
+    });
+    const leased = new Set<CreateSessionOptions>();
+    const prepared: CreateSessionOptions[] = [];
+    const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
+      if (!runtimeMayBeAlive) leased.delete(options);
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn().mockRejectedValueOnce(pending)
+        .mockResolvedValueOnce(createHandle({ id: 'recovered-pi', agentKind: 'pi' })), 'pi') },
+      storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: (_id, options) => { prepared.push(options); leased.add(options); },
+        onStartFailed,
+        onStartCleanupSucceeded: async (_id, options) => {
+          cleanupEntered.resolve();
+          await allowCleanup.promise;
+          leased.delete(options);
+        },
+        onClose: (_id, options) => { leased.delete(options); },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'adapter-cleanup', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    };
+    await expect(maker.createSession(options)).rejects.toBe(pending);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'agent-start', runtimeMayBeAlive: true,
+    }));
+    expect(leased).toEqual(new Set([prepared[0]]));
+    stopped.resolve();
+    await cleanupEntered.promise;
+    const replacement = await maker.createSession(options);
+    expect(leased.size).toBe(2);
+    allowCleanup.resolve();
+    await vi.waitFor(() => expect(leased).toEqual(new Set([prepared[1]])));
+    await replacement.close();
+    await vi.waitFor(() => expect(leased.size).toBe(0));
+  });
+
+  it('does not release adapter startup resources when exit confirmation fails', async () => {
+    let rejectStopped!: (error: unknown) => void;
+    const whenStopped = new Promise<void>((_resolve, reject) => { rejectStopped = reject; });
+    const pending = new AgentStartupCleanupPendingError('adapter failed', {
+      cause: new Error('startup RPC failed'), whenStopped,
+    });
+    const logger = createLogger();
+    const onStartFailed = vi.fn();
+    const onStartCleanupSucceeded = vi.fn();
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn().mockRejectedValue(pending), 'pi') },
+      storage: createStorage(), logger,
+      lifecycleHooks: { onStartFailed, onStartCleanupSucceeded },
+    });
+    await expect(maker.createSession({
+      id: 'unconfirmed-exit', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    })).rejects.toBe(pending);
+    rejectStopped(new Error('exit could not be verified'));
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledWith(
+      'adapter startup cleanup remains unconfirmed', expect.objectContaining({ sessionId: 'unconfirmed-exit' }),
+    ));
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({ runtimeMayBeAlive: true }));
+    expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+  });
+
+  it.each([new TypeError('startup RPC failed'), 'non-Error startup failure'])(
+    'releases only the confirmed-stopped startup and preserves its original error: %s', async (startupError) => {
+      const otherStartup = {} as CreateSessionOptions;
+      const leased = new Set<CreateSessionOptions>([otherStartup]);
+      const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
+        if (!runtimeMayBeAlive) leased.delete(options);
+      });
+      const onStartCleanupSucceeded = vi.fn();
+      const maker = new Maker({
+        agents: { pi: createAgent(vi.fn().mockRejectedValue(new AgentStartupStoppedError(startupError)), 'pi') },
+        storage: createStorage(), logger: createLogger(),
+        lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed, onStartCleanupSucceeded,
+        },
+      });
+      await expect(maker.createSession({
+        id: 'confirmed-exit', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+      })).rejects.toBe(startupError);
+      expect(onStartFailed).toHaveBeenCalledOnce();
+      expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+        stage: 'agent-start', error: startupError, runtimeMayBeAlive: false,
+      }));
+      expect(leased).toEqual(new Set([otherStartup]));
+      expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    new Error('ordinary startup failure'),
+    Object.assign(new Error('ordinary startup failure'), { name: 'AgentStartupStoppedError' }),
+  ])('preserves runtime protection for an adapter failure without exit evidence: %s', async (error) => {
+    const onStartFailed = vi.fn();
+    const onStartCleanupSucceeded = vi.fn();
+    const startSession = vi.fn().mockRejectedValue(error);
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed, onStartCleanupSucceeded },
+    });
+    await expect(maker.createSession({
+      id: 'unknown-startup-exit', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4',
+    })).rejects.toThrow('ordinary startup failure');
+    expect(startSession).toHaveBeenCalledOnce();
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'unknown-startup-exit', stage: 'agent-start', runtimeMayBeAlive: true,
+    }));
+    expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+  });
+
   it('does not run the success hook when agent startup fails', async () => {
     const onStartSucceeded = vi.fn();
     const onStartFailed = vi.fn();
@@ -1408,6 +1661,29 @@ describe('Maker start-option lifecycle hooks', () => {
     expect(onStartFailed).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', stage: 'agent-start' }),
     );
+  });
+
+  it('releases the startup lease when authentication fails before spawning an agent', async () => {
+    const leased = new Set<CreateSessionOptions>();
+    const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
+      if (!runtimeMayBeAlive) leased.delete(options);
+    });
+    const authError = new AgentNotAuthenticatedError('claude-code', 'not authenticated');
+    const maker = new Maker({
+      agents: { 'claude-code': createAgent(vi.fn().mockRejectedValue(authError), 'claude-code') },
+      storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: (_id, options) => { leased.add(options); },
+        onStartFailed,
+      },
+    });
+    await expect(maker.createSession({
+      id: 'auth-failure', agentKind: 'claude-code', workingDir: '/repo', model: 'claude-model',
+    })).rejects.toBe(authError);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'agent-start', error: authError, runtimeMayBeAlive: false,
+    }));
+    expect(leased).toHaveLength(0);
   });
 
   it('preserves the original startup error when the failure hook also fails', async () => {
