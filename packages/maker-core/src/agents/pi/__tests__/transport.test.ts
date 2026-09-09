@@ -33,7 +33,9 @@ function makeChild(pid = 4321) {
   child.pid = pid;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: vi.fn() };
+  Object.assign(child.stdout, { destroy: vi.fn() });
+  Object.assign(child.stderr, { destroy: vi.fn() });
+  child.stdin = { write: vi.fn(), destroy: vi.fn() } as typeof child.stdin;
   child.kill = vi.fn();
   return child;
 }
@@ -200,6 +202,49 @@ describe('createPiStdioTransport', () => {
     // drain:历史行喂给第一个 handler
     expect(handler).toHaveBeenCalledWith('line1');
     expect(handler).toHaveBeenCalledWith('line2');
+  });
+
+  it('drains exit tail frames before notifying executor loss, even without pipe EOF', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, child } = makeTransport();
+      const observed: string[] = [];
+      transport.onLine(line => observed.push(line));
+      transport.onClose(info => observed.push(`exit:${info.code}`));
+      child.emit('exit', 23, null);
+      await expect(transport.writeLine('{}')).rejects.toThrow(/closed/);
+      child.stdout.emit('data', '{"type":"message_end"}\n{"type":"agent_settled"}\n');
+      expect(observed).toEqual(['{"type":"message_end"}', '{"type":"agent_settled"}']);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(observed.at(-1)).toBe('exit:23');
+      child.stdout.emit('data', '{"type":"late-descendant-output"}\n');
+      child.emit('close', 23, null);
+      expect(observed).toHaveLength(3);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('close racing executor exit reuses the same drain (close first: %s)', async (closeFirst) => {
+    vi.useFakeTimers();
+    try {
+      const { transport, child } = makeTransport();
+      const onClose = vi.fn();
+      transport.onClose(onClose);
+      let closing: Promise<void>;
+      if (closeFirst) {
+        closing = transport.close();
+        child.emit('exit', null, 'SIGTERM');
+      } else {
+        child.emit('exit', 23, null);
+        closing = transport.close();
+      }
+      await vi.advanceTimersByTimeAsync(250);
+      await closing;
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(child.kill.mock.calls).toEqual(closeFirst ? [['SIGTERM']] : []);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    } finally { vi.useRealTimers(); }
   });
 });
 
