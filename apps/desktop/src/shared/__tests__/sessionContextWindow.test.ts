@@ -47,6 +47,30 @@ describe('session context read projection', () => {
     expect(resolveVerifiedContextWindow(unverified, agent, 'local', model.id, 1_000_000)).toBeNull();
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('allows %s explicit budgets above the default up to the verified maximum', (agent) => {
+    const routes = { providers: [provider('xd', { ...model, contextWindow: 272_000, contextWindowMax: 1_000_000 })] };
+    for (const budget of [100_000, 800_000, 1_000_000]) {
+      expect(resolveVerifiedContextWindow(routes, agent, 'xd', model.id, budget)).toBe(budget);
+    }
+    expect(resolveVerifiedContextWindow(routes, agent, 'xd', model.id, 2_000_000)).toBe(1_000_000);
+    const raised = resolveVerifiedContextWindow(routes, agent, 'xd', model.id, 1_000_000)!;
+    expect(shouldRebuildForModelWindowSwitch({
+      contextTokens: 700_000, currentContextWindow: 800_000, targetContextWindow: raised,
+    })).toBe(false);
+    const reset = resolveVerifiedContextWindow(routes, agent, 'xd', model.id, null)!;
+    expect(reset).toBe(272_000);
+    expect(shouldRebuildForModelWindowSwitch({
+      contextTokens: 700_000, currentContextWindow: raised, targetContextWindow: reset,
+    })).toBe(true);
+    const unverified = { providers: [provider('xd', { ...model, contextWindowMax: 1_000_000, contextWindowVerified: false })] };
+    expect(resolveVerifiedContextWindow(unverified, agent, 'xd', model.id, 1_000_000)).toBeNull();
+  });
+
+  it.each([undefined, 0, -1, NaN, Infinity])('falls back to the verified window for invalid maximum %s', (contextWindowMax) => {
+    const routes = { providers: [provider('xd', { ...model, contextWindowMax })] };
+    expect(resolveVerifiedContextWindow(routes, 'codex', 'xd', model.id, 1_000_000)).toBe(272_000);
+  });
+
   it.each(['cc', 'claude-code'])(
     'corrects %s history without mutating its stored snapshot',
     (agentKind) => {

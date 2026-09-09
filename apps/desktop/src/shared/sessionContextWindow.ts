@@ -32,11 +32,14 @@ export function resolveVerifiedContextWindow(
   const only = candidates[0];
   if (only.contextWindowVerified !== true) return null;
   if (!Number.isFinite(only.contextWindow) || only.contextWindow <= 0) return null;
-  // A user budget may tighten history protection, but cannot establish or raise
-  // a verified route ceiling. Native startup/compaction still receives the raw budget.
-  return typeof workingBudget === 'number' && Number.isFinite(workingBudget) && workingBudget > 0
-    ? Math.min(workingBudget, only.contextWindow)
-    : only.contextWindow;
+  // The working default may be deliberately below the verified route maximum.
+  // An explicit budget can raise that default, but cannot raise physical capacity.
+  const maximum = typeof only.contextWindowMax === 'number' &&
+    Number.isFinite(only.contextWindowMax) && only.contextWindowMax > 0
+    ? only.contextWindowMax : only.contextWindow;
+  const budget = typeof workingBudget === 'number' && Number.isFinite(workingBudget) && workingBudget > 0
+    ? workingBudget : only.contextWindow;
+  return Math.min(budget, maximum);
 }
 
 /** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */

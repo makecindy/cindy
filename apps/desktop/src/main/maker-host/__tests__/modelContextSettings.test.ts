@@ -76,6 +76,17 @@ describe('implicit context settings use the startup source in history protection
     expect(state.limits.get(`${agent}:xd:shared-model`)).toBe(1_000_000);
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('%s implicit history uses the saved budget up to the route maximum', (agent) => {
+    const catalog = dualCatalog(agent);
+    const row = catalog.providers.find(provider => provider.id === 'xd')!.models[agent]![0]!;
+    row.contextWindow = 272_000;
+    row.contextWindowMax = 1_000_000;
+    state.limits.set(`${agent}:xd:shared-model`, 1_000_000);
+    expect(resolveConfiguredContextWindow(catalog, agent, null, 'shared-model')).toBe(1_000_000);
+    state.limits.delete(`${agent}:xd:shared-model`);
+    expect(resolveConfiguredContextWindow(catalog, agent, null, 'shared-model')).toBe(272_000);
+  });
+
   it('keeps unknown Claude sources unknown without borrowing another provider', () => {
     state.gateway = false;
     expect(resolveConfiguredContextWindow(dualCatalog('claude-code'), 'claude-code', null, 'shared-model')).toBeNull();
