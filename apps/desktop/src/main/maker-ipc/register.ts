@@ -786,7 +786,7 @@ import {
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
 import { readCompactionPct } from '../maker-host/compaction-settings-store.js';
-import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
+import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow, resolveModelContextProviderId } from '../maker-host/catalog-to-descriptors.js';
 import {
   isModelContextLimitCustomized,
   readModelContextLimit,
@@ -4563,8 +4563,9 @@ export function registerModelVisibilitySyncIpc(): void {
 /** User budgets must also govern existing-history protection, not only engine startup. */
 function resolveConfiguredContextWindow(...args: Parameters<typeof resolveVerifiedContextWindow>): number | null {
   const [catalog, agent, providerId, modelId] = args;
-  return resolveVerifiedContextWindow(catalog, agent, providerId, modelId,
-    providerId ? readModelContextLimit(agent, providerId, modelId) : null);
+  const source = resolveModelContextProviderId(catalog, agent, providerId, modelId);
+  return resolveVerifiedContextWindow(catalog, agent, source, modelId,
+    source ? readModelContextLimit(agent, source, modelId) : null);
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
@@ -4573,7 +4574,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const refreshContextSettings = (targets?: readonly { agent: AgentKind; providerId: string; modelId: string }[]) => {
     const owner = getActiveAppSession();
     const next = contextRefresh.then(() => refreshActiveModelContextSettings({
-      targets, inferProviderId: inferProviderIdForModel,
+      targets, inferProviderId: (model, agent) => resolveModelContextProviderId(getActiveCatalog(), agent, null, model),
       withSessionLock: withSendToSessionLock,
       hasPendingSelection: (sessionId) => {
         const pending = getPendingSessionRuntimeMutation(sessionId);

@@ -105,7 +105,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { inferProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { inferProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader, gatewayDefaultRouteDecision } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -140,6 +140,7 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelContextProviderId,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
 import {
@@ -1065,10 +1066,14 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
-      resolveModelContextLimit: (providerId, modelId) =>
-        providerId ? readModelContextLimit('claude-code', providerId, modelId)
-          ?? resolveModelDefaultContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId)
-          : null,
+      resolveModelContextLimit: (providerId, modelId) => {
+        const catalog = getDesktopSelectableCatalog();
+        const defaultSource = gatewayDefaultRouteDecision('claude-code', readClaudeApiKey()) ? 'xd'
+          : hasClaudeAiOAuth() ? 'anthropic' : null;
+        const source = resolveModelContextProviderId(catalog, 'claude-code', providerId, modelId, defaultSource);
+        return source ? readModelContextLimit('claude-code', source, modelId)
+          ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
+      },
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook

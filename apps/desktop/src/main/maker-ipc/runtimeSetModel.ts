@@ -427,11 +427,12 @@ export async function refreshActiveModelContextSettings(input: {
       const session = runtime.maker.getSession(active.id);
       if (!session) return;
       const source = getSessionProvider(active.id) ?? inferProviderId(session.model, session.agentKind);
-      if (targets && !targets.some((t) => t.agent === session.agentKind && t.providerId === source && t.modelId === session.model)) return;
+      if (targets && !targets.some((t) => t.agent === session.agentKind &&
+        (source === null || t.providerId === source) && t.modelId === session.model)) return;
       // The pending route is a later user choice; its rebuild reads current settings.
       const hasPending = () => input.hasPendingSelection(active.id) || !!runtime.getPendingCredentialSwitch?.(active.id);
       if (hasPending()) return;
-      if (!targets && !await session.requiresModelSwitchRebuild?.(session.model, { providerId: source })) return;
+      if ((!targets || source === null) && !await session.requiresModelSwitchRebuild?.(session.model, { providerId: source })) return;
       assertCurrent();
       if (hasPending() || runtime.maker.getSession(active.id) !== session) return;
       await applyRuntimeSetModelChange({ ...runtime, sessionId: active.id, model: session.model,

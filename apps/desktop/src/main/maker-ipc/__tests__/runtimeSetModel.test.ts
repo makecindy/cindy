@@ -1555,6 +1555,22 @@ describe('applyRuntimeSetModelChange', () => {
 });
 
 describe('context configuration refresh across live routes', () => {
+  it.each([false, true])('refreshes an ambiguous implicit source only when its actual runtime budget changed (%s)', async (changed) => {
+    const id = rememberSession('implicit-context-refresh');
+    const closeSession = vi.fn();
+    const session = { id, agentKind: 'claude-code' as const, model: 'shared', setModel: vi.fn(),
+      requiresModelSwitchRebuild: vi.fn(() => changed) };
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession } },
+      targets: [{ agent: 'claude-code', providerId: 'xd', modelId: 'shared' }],
+      inferProviderId: () => null, assertCurrent: () => {}, hasPendingSelection: () => false,
+      withSessionLock: withSendToSessionLock,
+    });
+    expect(session.requiresModelSwitchRebuild).toHaveBeenCalled();
+    expect(closeSession).toHaveBeenCalledTimes(changed ? 1 : 0);
+    expect(getSessionProvider(id)).toBeNull();
+  });
+
   it.each(['explicit', 'default'] as const)('preserves accepted runtime and harness selections during a %s refresh', async (kind) => {
     const switches = createPendingAgentSwitchRegistry();
     const ids = ['remote-pending-route', 'pending-harness'];
