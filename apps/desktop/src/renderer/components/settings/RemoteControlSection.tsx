@@ -24,6 +24,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { MyDevicesPanel } from './MyDevicesPanel';
+import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -244,7 +245,9 @@ export function RemoteControlSection() {
               dotColor={null}
               open={devicesOpen}
               onToggle={toggleDevices}
-              pinned={<MyDevicesPanel s={s} variant="self" />}
+              pinned={
+                <MyDevicesPanel s={s} variant="self" selfSettings={<RemoteDesktopSetting />} />
+              }
             >
               <MyDevicesPanel s={s} variant="others" />
             </CollapsibleSubSection>

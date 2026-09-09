@@ -1170,6 +1170,7 @@ describe('device-link revoke / restore handlers', () => {
 describe('device-link settings normalize', () => {
   it('非法输入回落默认值,布尔严格校验', () => {
     expect(settingsTesting.normalize(null)).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1177,6 +1178,7 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({})).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1184,6 +1186,7 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: 'true' })).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1191,6 +1194,7 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: true })).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: true,
       keepAwake: false,
       revokedControllers: [],
@@ -1205,6 +1209,7 @@ describe('device-link settings normalize', () => {
         disabledControlDeviceIds: [' dev-1 ', 'dev-1', '', 42, 'dev-2'],
       }),
     ).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1224,6 +1229,7 @@ describe('device-link settings normalize', () => {
         },
       }),
     ).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],

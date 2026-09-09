@@ -66,6 +66,8 @@ import {
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { app } from 'electron';
+import { remoteDesktop } from '../remote-desktop';
+import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
@@ -1891,6 +1893,7 @@ export function dropAllControllers(
   client: DeviceLinkClient,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
+  remoteDesktop.stop();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -1949,6 +1952,7 @@ function deactivateControllerState(
   }
   let changed = false;
   changed = acceptedLinkControllers.delete(deviceId) || changed;
+  remoteDesktop.stop(deviceId);
   changed = controllerConnectionEpochByDevice.delete(deviceId) || changed;
   changed = controllerLinkGenerationByDevice.delete(deviceId) || changed;
   changed = reportedControllerNameByDevice.has(deviceId) || changed;
@@ -1989,6 +1993,7 @@ export function deactivateController(
 
 /** Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。 */
 export function deactivateAllControllers(reason: string): void {
+  remoteDesktop.stop();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -2027,6 +2032,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
+  remoteDesktop.stop(deviceId);
   const changed = deactivateControllerState(deviceId);
   topicSubscriptionControllers.delete(deviceId);
   offlinePushQueue.clear(deviceId);
@@ -2075,6 +2081,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
         return;
       }
       clearRemoteInvokeStateFor(src);
+      remoteDesktop.stop(src);
       offlinePushQueue.clear(src);
       const deactivated = deactivateControllerState(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
@@ -3283,6 +3290,11 @@ export async function runInvoke(
       ok: false,
       error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed remotely` },
     };
+  }
+
+  if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
+    try { return { ok: true, result: await remoteDesktop.request(src, payload.args?.[0]) }; }
+    catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
   }
 
   // Review sessions may be mirrored to controllers for visibility, but their

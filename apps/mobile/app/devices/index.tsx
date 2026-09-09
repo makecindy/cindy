@@ -33,6 +33,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Menu,
+  Monitor,
   MessagesSquare,
   Lock,
   Pencil,
@@ -2414,6 +2415,14 @@ function HomeScreenContent() {
     }),
     [displayedProjectOrder, groupByProject, groupDialogue, sortBy, statusFilter, t],
   );
+  const openSelectedRemoteDesktop = useCallback(() => {
+    if (!selectedDeviceId) return;
+    const device = home.deviceFilters.find((item) => item.deviceId === selectedDeviceId);
+    guardedPush({
+      pathname: '/devices/desktop/[deviceId]',
+      params: { deviceId: selectedDeviceId, deviceName: device?.label ?? selectedDeviceLabel },
+    });
+  }, [guardedPush, home.deviceFilters, selectedDeviceId, selectedDeviceLabel]);
 
   const nativeHomeHeader = usesNativeStackHeader();
   const chromeHeight = nativeHomeHeader
@@ -2439,6 +2448,8 @@ function HomeScreenContent() {
           onOpenDeviceMenu={openDeviceMenu}
           onOpenDisplaySettings={openDisplaySettings}
           onOpenMenu={openChromeMenu}
+          onOpenRemoteDesktop={selectedDeviceId ? openSelectedRemoteDesktop : undefined}
+          remoteDesktopA11y={t('remoteDesktop.title')}
           onSelectScope={handleHomeScopeAction}
           scopeActions={homeScopePullDownActions}
           showRemoteGuide={showRemoteGuide}
@@ -2489,23 +2500,21 @@ function HomeScreenContent() {
         {showRemoteGuide ? (
           <View style={styles.headerIconButton} />
         ) : (
-          <NativePullDownMenu
-            actions={homeDisplayPullDownActions}
-            onAction={(id) => {
-              applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, {
-                groupByProject,
-                groupDialogue,
-              }));
-            }}
-          >
-            <HomeHeaderGlassButton
-              accessibilityLabel={t('devices.list.a11y.openDisplaySettings')}
-              onPress={nativeHomeMenus ? () => undefined : openDisplaySettings}
-              testID="home.displaySettingsButton"
+          <View style={styles.headerActions}>
+            {selectedDeviceId ? (
+              <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
+                <Monitor color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            ) : null}
+            <NativePullDownMenu
+              actions={homeDisplayPullDownActions}
+              onAction={(id) => applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, { groupByProject, groupDialogue }))}
             >
-              <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-            </HomeHeaderGlassButton>
-          </NativePullDownMenu>
+              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.openDisplaySettings')} onPress={nativeHomeMenus ? () => undefined : openDisplaySettings} testID="home.displaySettingsButton">
+                <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            </NativePullDownMenu>
+          </View>
         )}
         </View>
         )}
@@ -4381,6 +4390,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     width: 44,
+  },
+  headerActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
   },
   headerTitleWrap: {
     alignItems: 'center',

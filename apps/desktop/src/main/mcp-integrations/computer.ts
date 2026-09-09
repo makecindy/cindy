@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { withAgentDesktopInput } from '../remote-desktop/inputOwnership';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -3353,6 +3354,16 @@ export async function grantComputerDriverPermissions(
 }
 
 export async function callComputerDriverTool(
+  name: ComputerMcpToolName,
+  args: Record<string, unknown>,
+  context?: ComputerMcpCallContext,
+): Promise<unknown> {
+  return getComputerTool(name)?.readOnly === true
+    ? callComputerDriverToolImpl(name, args, context)
+    : withAgentDesktopInput(() => callComputerDriverToolImpl(name, args, context));
+}
+
+async function callComputerDriverToolImpl(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
