@@ -78,7 +78,7 @@ export function StorageManagementCard() {
         window.electronAPI.cindyMediaStorage.stats(),
         databaseApi?.measure?.() ?? databaseApi?.getStatus?.() ?? Promise.resolve({ databaseBytes: null }),
       ]);
-      const mediaSucceeded = mediaResult.status === 'fulfilled';
+      const mediaSucceeded = mediaResult.status === 'fulfilled' && mediaResult.value.success;
       const databaseSucceeded = databaseResult.status === 'fulfilled';
       setStats(mediaSucceeded ? mediaResult.value : null);
       setDatabaseBytes(databaseSucceeded ? databaseResult.value.databaseBytes : null);

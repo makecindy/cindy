@@ -179,6 +179,29 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
   });
 
+  it('shows unknown storage values when stats returns a business failure', async () => {
+    const api = storageApi();
+    vi.mocked(api.stats).mockResolvedValueOnce({
+      success: false,
+      blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
+      legacy: { bytes: 0, fileCount: 0 },
+      deadDirs: [],
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        cindyMediaStorage: api,
+        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+      },
+    });
+    render(<StorageManagementCard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('settings.about.storage.unknown')).toBeTruthy();
+      expect(screen.getByText('settings.about.storage.statsFailed')).toBeTruthy();
+    });
+  });
+
   it('restores the persisted threshold when saving a new threshold fails', async () => {
     const warningApi = databaseSizeWarningApi();
     vi.mocked(warningApi.setSettings).mockRejectedValueOnce(new Error('write failed'));
