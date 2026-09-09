@@ -8570,6 +8570,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           if (sync.resyncRequired === true) {
             void reconcileRemoteMessages(sync.sessionId, {
               force: !hasSyncEvent,
+              bypassHistoryView: !hasSyncEvent,
               // A full snapshot has already repaired the live bubble; keep it
               // ahead of an older DB row. With only resyncRequired, the host
               // has no snapshot left and the DB window is authoritative even
@@ -11693,11 +11694,20 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   freshHistory?: boolean;
+  bypassHistoryView?: boolean;
 }): Promise<boolean> {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
   const view = getRemoteHistoryView(sessionId);
-  if (view && (view.getSnapshot().ready || opts?.freshHistory)) return Promise.all([view.refresh(false, opts?.freshHistory), reconcilePendingInteractions(sessionId)]).then(() => {
+  if (view && opts?.bypassHistoryView) {
+    // Drop the capability-specific projection before falling back to the raw
+    // list path; otherwise its stale ready state can continue to own the UI.
+    releaseRemoteHistoryView(sessionId, view);
+  }
+  // Force recovery must bypass the HistoryView projection. Its add-only merge
+  // intentionally protects live rows, but a stall-confirmed not-running turn
+  // needs the authoritative DB row to replace a stale streaming shell.
+  if (view && !opts?.bypassHistoryView && (view.getSnapshot().ready || opts?.freshHistory)) return Promise.all([view.refresh(false, opts?.freshHistory), reconcilePendingInteractions(sessionId)]).then(() => {
     if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
     if (isHistoryViewUnavailable(view.getSnapshot().error)) {
       releaseRemoteHistoryView(sessionId, view);
