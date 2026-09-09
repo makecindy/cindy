@@ -8,11 +8,12 @@
  *
  *   - ok       : 占用 < 70% —— 直接切
  *   - warn     : 70% ≤ 占用 < 自动压缩阈值 —— 允许切, 轻提示
- *   - danger   : 自动压缩阈值 ≤ 占用 < 100% —— 允许切, 轻提示(切过去会立即触发自动压缩)
- *   - overflow : 占用 ≥ 100% —— 弹确认；确认后由 host 交接换窗，而不是用新模型压缩
+ *   - danger   : 自动压缩阈值 ≤ 占用 < 100% —— host 先交接换窗，再切目标模型
+ *   - overflow : 占用 ≥ 100% —— 确认后由 host 交接换窗，而不是用新模型压缩
  *
- * danger 档阈值取用户当前的 auto-compact 触发百分比(设置页 50-95%), 语义统一为
- * "切过去就会立刻顶到压缩线"; 读不到 / 非法时回退 90。此时同样走交接，不再先 compact。
+ * danger 档默认 90%；调用方仍可为其他恢复场景传 50-95 的显式阈值。模型切换事务固定传
+ * `MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT`，不读取各 harness 的日常 auto-compact 设置。
+ * 命中时走交接，不再先 compact。
  *
  * fail-open 原则: 目标窗口未知(目录查不到)或当前占用未知(=0, 新会话 / 状态未回流)
  * 时一律放行 —— 预检是护栏不是闸门, 缺数据时不能挡住用户操作。
@@ -27,7 +28,9 @@ export interface ModelSwitchContextAssessment {
 }
 
 const WARN_RATIO = 0.7;
-const DEFAULT_DANGER_PCT = 90;
+/** All harnesses use this target-window line for forced switch handoff/rebuild. */
+export const MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT = 90;
+const DEFAULT_DANGER_PCT = MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT;
 // 与 maker-core AutoCompactController / 设置页 Slider 的合法区间一致。
 const MIN_THRESHOLD_PCT = 50;
 const MAX_THRESHOLD_PCT = 95;
@@ -39,6 +42,17 @@ export interface AssessModelSwitchContextInput {
   targetContextWindow: number | undefined;
   /** 用户当前 auto-compact 触发百分比(50-95); 缺省 / 越界回退 90。 */
   autoCompactThresholdPct?: number;
+}
+
+/** Mixed-version device-link Pi guard; this only vetoes unsafe switches and never rebuilds remotely. */
+export function shouldBlockLegacyRemotePiModelWindowSwitch(input: {
+  hostGuardSupported: boolean;
+  contextTokens: number | null | undefined;
+  currentContextWindow: number | null | undefined;
+  targetContextWindow: number | null | undefined;
+}): boolean {
+  // 旧 Host 无法通过 Pi set_model + get_state 裁决最终 runtime 窗口；目录估值不能放行。
+  return !input.hostGuardSupported;
 }
 
 export function assessModelSwitchContext(

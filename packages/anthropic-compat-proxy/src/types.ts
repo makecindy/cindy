@@ -128,6 +128,21 @@ export interface RoutingDecision {
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。
    */
   localHandler?: LocalRequestHandler;
+  /**
+   * Request-local dispatch-generation check. The proxy evaluates it after routing/async transforms
+   * and again before a transparent retry. Returning false rejects locally, so a retry can never
+   * reuse an endpoint/header decision after its owner generation changes.
+   *
+   * The callback is deliberately argument-free: it must close over only the host-side generation
+   * state needed for validation and never receives request headers/body or an Error.
+   */
+  dispatchGenerationValid?: () => boolean;
+  /**
+   * Optional request-local forwarding observer created by a trusted routing decision.
+   * It receives no request context or payload; the forwarding layer only supplies fixed terminal
+   * classifications and an HTTP status after the real upstream request starts.
+   */
+  forwardLifecycle?: ForwardLifecycleObserver;
 }
 
 /**
@@ -140,6 +155,28 @@ export type RoutingTransform = (
   body: unknown,
   ctx: RequestTransformCtx,
 ) => RoutingDecision | null | Promise<RoutingDecision | null>;
+
+export type ForwardLifecycleFailure =
+  | 'client-aborted'
+  | 'request-error'
+  | 'request-timeout'
+  | 'response-error'
+  | 'response-aborted'
+  | 'response-closed'
+  | 'retry-rejected'
+  | 'retry-error';
+
+/**
+ * Request-local forwarding lifecycle observer.
+ *
+ * The proxy deliberately exposes only fixed terminal classifications and an HTTP status. Raw
+ * targets, headers, bodies, response bytes, and Error objects stay inside the forwarding layer.
+ */
+export interface ForwardLifecycleObserver {
+  onStart?(): void;
+  onComplete?(status: number): void;
+  onFailure?(failure: ForwardLifecycleFailure, status?: number): void;
+}
 
 export interface ResponseObserverCtx {
   readonly reqId: number;
@@ -201,6 +238,8 @@ export interface RecoveryRule {
   matches: (decodedErrorBodyText: string) => boolean;
   /** 改写请求 body;返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
   strip: (body: Buffer) => Buffer | null;
+  /** Classify a matched terminal rejection from the actual sent body, after safe retries. */
+  unrecoverableCode?: (body: Buffer) => string | null;
   /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
   onRetry?: (threadId: string, model: string) => void;
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
@@ -255,6 +294,17 @@ export interface ProxyOptions {
    * 传空数组 [] = 显式禁用所有 transform,纯透传。
    */
   transformRequest?: RequestTransform[];
+  /**
+   * Optional byte-preservation gate for non-chat endpoints sharing this proxy.
+   * Returning true skips every request-body transform for this request only.
+   */
+  bypassRequestTransforms?: (body: unknown, ctx: RequestTransformCtx) => boolean;
+  /**
+   * Opt selected opaque/non-JSON requests into routing without parsing their body.
+   * The routing transform receives `undefined`; the original bytes remain available
+   * to the forwarding path and can be preserved with `bypassRequestTransforms`.
+   */
+  routeOpaqueRequestBody?: (ctx: RequestTransformCtx) => boolean;
   /**
    * 可选: per-request 路由 override(按 body.model 等选上游 / 换鉴权 header)。
    * 不传 = 永远走 `upstream` + 透传 headers(字节级行为与不传时完全一致,向后兼容)。

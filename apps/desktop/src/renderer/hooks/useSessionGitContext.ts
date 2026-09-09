@@ -213,15 +213,15 @@ export function useSessionGitContext(session: Session): SessionGitContext {
   // 新会话查询失败 → 缓存无条目 → 返回空,与旧实现的"清空"语义一致。
   const { registerPrConsumer } = usePrActions();
   const sharedPrRefs = usePrRefsForSession(sessionId);
-  const { statuses: allStatuses } = usePrStatuses();
+  const { statuses: allStatuses } = usePrStatuses(sessionId);
   useEffect(() => {
     if (!isProjectSession) return undefined;
     return registerPrConsumer(sessionId, deviceLinkDeviceId ?? undefined);
   }, [isProjectSession, sessionId, deviceLinkDeviceId, registerPrConsumer]);
 
   const prRefs = isProjectSession ? sharedPrRefs : EMPTY.prRefs;
-  // statuses 是全局缓存(含其它会话的 PR);按本会话前 MAX_STATUS_QUERIES 条
-  // 引用过滤,保住旧契约「prStatuses 只含本会话条目」(消费方有 size 判断)。
+  // 状态已按会话隔离;再按本会话前 MAX_STATUS_QUERIES 条引用过滤,
+  // 保住旧契约「prStatuses 只含本会话条目」(消费方有 size 判断)。
   const prStatuses = useMemo(() => {
     const map = new Map<string, PrStatusResult>();
     for (const ref of prRefs.slice(0, MAX_STATUS_QUERIES)) {

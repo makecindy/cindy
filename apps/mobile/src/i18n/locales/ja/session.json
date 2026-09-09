@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。",
+    "dismissTitle": "過去の失敗通知を閉じる"
+  },
   "common": {
     "cancel": "キャンセル",
     "delete": "削除",
@@ -174,6 +178,7 @@
     "composerSessionNotSynced": "このセッションはまだ同期が完了していません。",
     "composerCreating": "セッションを作成中です。最初のメッセージ送信後に続けて送信できます。",
     "nextAgentSwitch": "次から {{agent}} · {{model}} に切り替え",
+    "nextModelSelection": "次のメッセージ · {{model}}",
     "createFailedTitle": "セッションの作成に失敗しました",
     "createFailedDefault": "セッションの作成に失敗しました。",
     "createFailedNotice": "セッションの作成に失敗しました：{{message}}",
@@ -250,7 +255,8 @@
   },
   "shareImage": {
     "title": "会話を共有",
-    "selectedCount": "{{count}} 件を選択中",
+    "subtitle_one": "{{count}} 件のメッセージを選択中",
+    "subtitle_other": "{{count}} 件のメッセージを選択中",
     "selectAll": "すべて選択",
     "clearAll": "選択を解除",
     "cancel": "共有をキャンセル",
@@ -267,6 +273,14 @@
     "composerPlaceholder": "今日は何をしましょうか〜",
     "voiceSelectDeviceFirst": "デバイスを選択してから音声入力を使用してください。",
     "creatingSession": "セッションを作成中",
+    "slowSend": {
+      "preparing": "送信を準備中…",
+      "uploading": "添付ファイルをアップロード中…",
+      "connecting": "コンピュータに接続中…",
+      "checkingModel": "モデル設定を確認中…",
+      "creating": "セッションを作成中…",
+      "sending": "メッセージを送信中…"
+    },
     "createAndSend": "セッションを作成して最初のメッセージを送信",
     "modelAccessibility": "モデル：{{model}}",
     "voiceInput": "音声入力",
@@ -322,6 +336,7 @@
     "worktreeBranchSaving": "選択したブランチを同期中…",
     "worktreeBranchSyncFailed": "保存済みのソースブランチを確認できません。ブランチを再選択してください",
     "worktreeSettingsSaving": "worktree 設定を同期中…",
+    "worktreeSettingsSyncFailed": "保存済みの worktree 設定を確認できません。スイッチを再度操作してください",
     "worktreeBranchesRetry": "ブランチを読み込めません。タップして再試行",
     "worktreeDetecting": "環境を検出中…",
     "worktreeRecovering": "接続を復旧中です。自動的に再試行しています…",
@@ -384,6 +399,37 @@
       "system": "システム"
     },
     "usageSection": "使用量",
+    "usage": {
+      "quota": "クォータ",
+      "week": "今週",
+      "hours": "{{count}} 時間",
+      "minutes": "{{count}} 分",
+      "remaining": "残り {{percent}}%",
+      "resets": "{{time}} にリセット",
+      "awaitingRefresh": "更新待ち",
+      "balance": "利用可能残高",
+      "cycle": "今サイクルの使用額",
+      "today": "今日の使用額",
+      "unavailable": "未取得",
+      "quotaUnavailable": "アカウントのクォータを取得できません",
+      "accountOnly": "ChatGPT アカウントのクォータ。このタスクがこのプランを使うかは未確認です",
+      "lastUpdated": "最終更新 {{time}}",
+      "taskUsage": "タスクの使用量",
+      "taskValue": "タスクの価値",
+      "taskCost": "タスクの費用",
+      "actualCost": "実際の費用",
+      "estimatedValue": "推定価値",
+      "totalTokens": "累計トークン",
+      "seeDetails": "内訳を見る",
+      "valueUnavailable": "一部のタスク価値を取得できません",
+      "valueExplanation": "価値は使用量と参考単価による推定であり、実際の請求額ではありません。",
+      "source": {
+        "chatgpt": "ChatGPT サブスクリプション",
+        "claude": "Claude サブスクリプション",
+        "xai": "SuperGrok サブスクリプション",
+        "gateway": "Cindy AI"
+      }
+    },
     "refreshContextUsage": "コンテキスト使用量を更新",
     "currentSessionSpend": "今回のセッション",
     "noSessionSpend": "セッションの使用量はまだありません",

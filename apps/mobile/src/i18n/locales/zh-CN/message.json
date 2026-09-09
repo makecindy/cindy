@@ -116,6 +116,10 @@
     "controlFork": "分叉任务",
     "markdownDocAriaLabel": "消息正文",
     "toolOutputTitle": "{{label}} 输出",
+    "toolInputTitle": "{{label}} 输入",
+    "viewToolInput": "查看完整输入",
+    "loadingToolInput": "正在读取完整输入",
+    "retryToolInput": "读取失败，重试",
     "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "空 Mermaid 图表。",
     "diffEditCount": "{{n}} 处编辑"
@@ -175,6 +179,19 @@
     "retry": "重试"
   },
   "systemCard": {
+    "contextRebuild": {
+      "labelOverflow": "已整理上下文并继续",
+      "labelTimeout": "上一轮没有响应，已整理后继续",
+      "labelStrip": "已去掉过大图片并继续",
+      "handoffTitle": "交接内容——整理后发送给后续对话的上下文摘要(不计入对话记录，仅在此展示)",
+      "handoffTitleEnglishSource": "交接内容——整理后发送给后续对话的上下文摘要，原文为英文(不计入对话记录，仅在此展示)"
+    },
+    "compact": {
+      "savedTokens": "节省 {{tokens}} tokens",
+      "manual": "手动压缩",
+      "auto": "自动压缩",
+      "aria": "对话已压缩"
+    },
     "goalComplete": "目标已达成 · {{turns}} 轮 · 耗时 {{duration}}",
     "goalResumed": "用量已恢复，继续目标",
     "goalCapacityRetry": "模型服务繁忙，正在重试目标",

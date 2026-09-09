@@ -20,6 +20,7 @@ import {
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
+  isAgentIslandPendingFocusAck,
   markAgentIslandSessionAttention,
   requestAgentIslandManualCollapse,
   requestAgentIslandManualExpand,
@@ -397,7 +398,10 @@ describe('Agent Island display state', () => {
       },
     }, start + 200);
     expect(state.sessions.get('s1')).toMatchObject({
-      assistantStreamRawText: '我会先',
+      assistantStream: {
+        mode: 'plain',
+        rawPreview: '我会先',
+      },
       reconnectStatus: '（1/5）正在重连…',
     });
     expect(buildAgentIslandDisplayState(state, start + 200).sessions[0]).toMatchObject({
@@ -446,7 +450,10 @@ describe('Agent Island display state', () => {
       running: true,
       phase: 'running',
       assistantStreamLineId: null,
-      assistantStreamRawText: '',
+      assistantStream: {
+        mode: 'pending',
+        rawPreview: '',
+      },
     });
     expect(session?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
       'user:run tests',
@@ -454,21 +461,29 @@ describe('Agent Island display state', () => {
     ]);
   });
 
-  it('keeps whitespace-only assistant deltas in the raw stream accumulator', () => {
+  it('keeps whitespace-only assistant deltas pending for the next visible delta', () => {
     const state = createAgentIslandState();
     const start = 1_000;
 
     applyAgentIslandUserPrompt(state, { sessionId: 's1', title: 'Task', agentKind: 'codex' }, 'run tests', start);
     applyAgentIslandEvent(state, { sessionId: 's1' }, textDeltaEvent('\n'), start + 100);
 
-    expect(state.sessions.get('s1')?.assistantStreamRawText).toBe('\n');
+    expect(state.sessions.get('s1')?.assistantStream).toMatchObject({
+      mode: 'pending',
+      rawChunks: ['\n'],
+      rawPreview: '',
+    });
     expect(state.sessions.get('s1')?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
       'user:run tests',
     ]);
 
     applyAgentIslandEvent(state, { sessionId: 's1' }, textDeltaEvent('我会继续处理'), start + 200);
 
-    expect(state.sessions.get('s1')?.assistantStreamRawText).toBe('\n我会继续处理');
+    expect(state.sessions.get('s1')?.assistantStream).toMatchObject({
+      mode: 'plain',
+      rawChunks: [],
+      rawPreview: '我会继续处理',
+    });
     expect(state.sessions.get('s1')?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
       'user:run tests',
       'assistant:我会继续处理',
@@ -1264,8 +1279,9 @@ describe('Agent Island display state', () => {
     expect(protectedDisplay.mode).toBe('expanded');
     expect(protectedDisplay.displaySurface).toBe('interactionCard');
 
-    expect(dismissAgentIslandActiveReveal(state, 2_200)).toBe(true);
-    const display = buildAgentIslandDisplayState(state, 2_250);
+    expect(dismissAgentIslandActiveReveal(state, 1_399)).toBe(false);
+    expect(dismissAgentIslandActiveReveal(state, 1_400)).toBe(true);
+    const display = buildAgentIslandDisplayState(state, 1_401);
 
     expect(display.mode).toBe('compact');
     expect(display.displayPolicy).toBe('blocking');
@@ -1617,6 +1633,100 @@ describe('Agent Island display state', () => {
     expect(getNextAgentIslandTimerAt(state, 1_900)).toBeNull();
   });
 
+  it.each([false, true])('collapses a completion immediately without extending the background-window ack grace (manual: %s)', (manual) => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_000);
+    if (manual) requestAgentIslandManualExpand(state);
+    expect(buildAgentIslandDisplayState(state, 1_100).mode).toBe('expanded');
+    requestAgentIslandSessionFocus(state, 'done', 1_200);
+    expect(buildAgentIslandDisplayState(state, 1_201).mode).toBe('compact');
+    expect(state.sessions.get('done')?.unread).toBe(true);
+    expect(isAgentIslandPendingFocusAck(state, 'done', 1_250)).toBe(true);
+
+    expect(buildAgentIslandDisplayState(state, 3_200).mode).toBe('compact');
+    expect(isAgentIslandPendingFocusAck(state, 'done', 3_200)).toBe(false);
+    setAgentIslandAppFocused(state, true, 3_250);
+    setAgentIslandVisibleSession(state, 'done', 3_300);
+    acknowledgeAgentIslandSessionRead(state, 'done', 3_300);
+    expect(buildAgentIslandDisplayState(state, 3_350).mode).toBe('compact');
+  });
+
+  it('keeps a clicked completion stack collapsed and unread when navigation never arrives', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'first' }, doneEvent(), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'second' }, doneEvent(), 1_050);
+    expect(buildAgentIslandDisplayState(state, 1_100).displaySurface).toBe('sessionList');
+    setAgentIslandPointerZones(state, { menuBar: false, panel: true }, 1_110);
+
+    requestAgentIslandSessionFocus(state, 'second', 1_120);
+    expect(buildAgentIslandDisplayState(state, 1_121).mode).toBe('compact');
+    // The pointer is still over the collapsed island; its next native report
+    // must not turn the click into another hover expansion.
+    setAgentIslandPointerZones(state, { menuBar: true, panel: false }, 1_130);
+    for (const now of [2_000, 10_000, 62_000]) {
+      const display = buildAgentIslandDisplayState(state, now);
+      expect(display.mode).toBe('compact');
+      expect(display.pillSnapshot.unreadCompletedCount).toBe(2);
+    }
+    expect(state.pendingFocusSessionId).toBeNull();
+  });
+
+  it.each(['manual', 'new-error'] as const)('does not close a newer %s surface on a late completion navigation', (surface) => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_000);
+    buildAgentIslandDisplayState(state, 1_100);
+    requestAgentIslandSessionFocus(state, 'done', 1_200);
+    expect(buildAgentIslandDisplayState(state, 1_201).mode).toBe('compact');
+
+    if (surface === 'manual') {
+      requestAgentIslandManualExpand(state);
+    } else {
+      applyAgentIslandEvent(state, { sessionId: 'done' }, statusEvent(true, 'Running'), 2_000);
+      applyAgentIslandEvent(state, { sessionId: 'done' }, terminalErrorEvent('new failure'), 2_100);
+    }
+    expect(buildAgentIslandDisplayState(state, 2_200).mode).toBe('expanded');
+    setAgentIslandVisibleSession(state, 'done', 3_200);
+    expect(buildAgentIslandDisplayState(state, 3_201).mode).toBe('expanded');
+    expect(state.pendingFocusSessionId).toBeNull();
+  });
+
+  it('keeps the newest click when an earlier navigation finishes late', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'a' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'b' }, statusEvent(true, 'Running'), 1_000);
+    requestAgentIslandManualExpand(state);
+    requestAgentIslandSessionFocus(state, 'a', 1_200);
+    requestAgentIslandSessionFocus(state, 'b', 1_300);
+    buildAgentIslandDisplayState(state, 3_200);
+
+    setAgentIslandVisibleSession(state, 'a', 3_250);
+    expect(buildAgentIslandDisplayState(state, 3_250).mode).toBe('expanded');
+    setAgentIslandVisibleSession(state, 'b', 3_300);
+    expect(buildAgentIslandDisplayState(state, 3_350).mode).toBe('compact');
+  });
+
+  it.each([false, true])('expires abandoned navigation before an ordinary visit (timer ran: %s)', (timerRan) => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'a' }, statusEvent(true, 'Running'), 1_000);
+    requestAgentIslandManualExpand(state);
+    buildAgentIslandDisplayState(state, 1_100);
+    requestAgentIslandSessionFocus(state, 'a', 1_200);
+    buildAgentIslandDisplayState(state, 3_200);
+
+    // The grace is over, but the slow-navigation target still has a finite
+    // cleanup deadline. It must expire even if a route ack beats that timer.
+    expect(isAgentIslandPendingFocusAck(state, 'a', 3_200)).toBe(false);
+    expect(getNextAgentIslandTimerAt(state, 3_200)).toBe(61_200);
+    if (timerRan) buildAgentIslandDisplayState(state, 61_200);
+    setAgentIslandAppFocused(state, true, 61_200);
+    setAgentIslandVisibleSession(state, 'a', 61_200);
+
+    expect(buildAgentIslandDisplayState(state, 61_200).mode).toBe('expanded');
+    expect(state.pendingFocusSessionId).toBeNull();
+    expect(state.pendingFocusUntil).toBeNull();
+    expect(getNextAgentIslandTimerAt(state, 61_200)).toBeNull();
+  });
+
   it('dismisses the first permission approval card after the clicked session becomes visible', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask', agentKind: 'codex' }, statusEvent(true, 'Running'), 1_000);
@@ -1879,8 +1989,9 @@ describe('Agent Island display state', () => {
     expect(protectedDisplay.mode).toBe('expanded');
     expect(protectedDisplay.displaySurface).toBe('completionCard');
 
-    expect(dismissAgentIslandActiveReveal(state, 3_200)).toBe(true);
-    const display = buildAgentIslandDisplayState(state, 3_250);
+    expect(dismissAgentIslandActiveReveal(state, 2_399)).toBe(false);
+    expect(dismissAgentIslandActiveReveal(state, 2_400)).toBe(true);
+    const display = buildAgentIslandDisplayState(state, 2_401);
 
     expect(display.mode).toBe('compact');
     expect(display.displayPolicy).toBe('transient');

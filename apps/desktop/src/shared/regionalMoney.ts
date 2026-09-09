@@ -36,7 +36,7 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
-  /** Gateway fast/priority tariff. Missing fields make that request unpriceable. */
+  /** Declared fast/priority tariff. Missing fields make that request unpriceable. */
   priority?: {
     inputPerMtok?: number;
     outputPerMtok?: number;

@@ -180,8 +180,7 @@ function pickEffort(
 export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowConfig {
   const { entry, engineOverride, memoryEffort, memoryFast, agentFastModeCapable } = args;
   const candidateEngines = entry.candidates.map(engineOfAgentKind);
-  const overrideUsable =
-    engineOverride !== undefined && candidateEngines.includes(engineOverride);
+  const overrideUsable = engineOverride !== undefined && candidateEngines.includes(engineOverride);
   const pinned =
     args.pinnedEngine !== undefined &&
     candidateEngines.includes(args.pinnedEngine) &&
@@ -260,9 +259,31 @@ export function resolveFavoriteRowConfig(args: {
 }
 
 /**
- * 收藏选中身份就是 uid(Chris 2026-08-20):面板只认「这条 uid 还在收藏列表里」,
- * 不拿正在跑的引擎/思维/加速去对副本 —— 对上才打勾会让下面同名模型行抢走焦点。
+ * uid 记录选择来源，完整配置决定它是否仍在使用。收藏在其它任务被编辑后，
+ * 旧任务保留自己的配置；不能用历史 uid 把不同的 Fast / 推理强度冒充为已应用。
+ * 这里只派生选中态，不回写任务、收藏或锚点存储。
  */
+export function favoriteMatchesSelection(args: {
+  entry: UnifiedModelEntry;
+  item: ModelFavoriteItem;
+  selected: { providerId: string | null; modelId: string };
+  agent: AgentKind | null | undefined;
+  effort: Effort | undefined;
+  fast: boolean;
+  agentFastModeCapable?: (agent: AgentKind) => boolean;
+}): boolean {
+  const { entry, item, selected, agent } = args;
+  if (
+    !agent ||
+    item.providerId !== selected.providerId ||
+    !entryMatchesModelId(entry, selected.modelId) ||
+    agentKindOfEngine(item.agent) !== agent ||
+    !entry.candidates.includes(agent)
+  )
+    return false;
+  const config = resolveFavoriteRowConfig(args);
+  return config.effort === (args.effort || null) && config.fast === args.fast;
+}
 
 /**
  * 该收藏是否**就是**该模型的推荐配置 —— 决定收藏行右侧要不要挂 `引擎 · 深度 [⚡]` 后缀
@@ -344,7 +365,7 @@ export interface UnifiedListRow {
 
 export interface UnifiedListSection {
   key: string;
-  kind: 'favorites' | 'group';
+  kind: 'favorites' | 'recommended' | 'group';
   /**
    * 分组小节的口径 —— **按供应商,不按模型家族**(Chris 2026-08-13 实测裁决:供应商决定
    * 价格,同名模型跨来源混排会让用户没法选)。每个供应商各自成组,标题用
@@ -462,6 +483,7 @@ export function buildUnifiedListSections(args: {
   entries: readonly UnifiedModelEntry[];
   favorites: readonly ModelFavoriteItem[];
   query: string;
+  matchesQuery?: (entry: UnifiedModelEntry, query: string) => boolean;
   rail: UnifiedRailFilter;
   /**
    * 该行(或该条收藏)**生效引擎**的解析器 —— 同引擎视图用它做**排序优先级**
@@ -471,9 +493,12 @@ export function buildUnifiedListSections(args: {
   effectiveEngineOf?: (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem) => UnifiedEngine;
   /** 供应商组间显示顺序(设置页拖动序);缺省 = 入参首见序。 */
   providerOrder?: readonly string[];
+  recommendation?: { agent: AgentKind; providerId: string | null; modelId: string };
 }): UnifiedListSection[] {
-  const { entries, favorites, rail, effectiveEngineOf } = args;
+  const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
+  const rail: UnifiedRailFilter = q ? { kind: 'all' } : args.rail;
+  const matches = args.matchesQuery ?? matchesQuery;
   const byKey = new Map<string, UnifiedModelEntry>();
   for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
 
@@ -507,7 +532,7 @@ export function buildUnifiedListSections(args: {
       const favoriteEngine = effectiveEngineOf ? effectiveEngineOf(entry, item) : item.agent;
       if (favoriteEngine !== engineOfAgentKind(rail.agent)) continue;
     }
-    if (!matchesQuery(entry, q)) continue;
+    if (!matches(entry, q)) continue;
     favRows.push({
       anchor: {
         kind: 'fav',
@@ -531,11 +556,29 @@ export function buildUnifiedListSections(args: {
   // 行在后。不把兼容行转换成当前引擎 —— 点下去仍按其落点走,落点在别处就走跨引擎确认。
   const visible = entries.filter(
     (entry) =>
-      matchesQuery(entry, q) &&
+      matches(entry, q) &&
       (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );
-  const clustered = clusterByProvider(visible, args.providerOrder);
+  const promoted = new Set<UnifiedModelEntry>();
+  if (rail.kind === 'all' && args.recommendation) {
+    const recommendation = args.recommendation;
+    const current = visible.find((entry) =>
+      entryMatchesModelId(entry, recommendation.modelId) &&
+      (recommendation.providerId === null || entry.providerId === recommendation.providerId));
+    const sameEngine = clusterByProvider(visible, args.providerOrder).flatMap((cluster) => cluster.items)
+      .filter((entry) => entry !== current && entry.availability !== 'requires_payment' &&
+        (effectiveEngineOf?.(entry) ?? resolveUnifiedRowConfig({ entry }).engine) === engineOfAgentKind(recommendation.agent));
+    const recommended = [...(current ? [current] : []), ...sameEngine];
+    if (recommended.length) {
+      sections.push({ key: 'recommended', kind: 'recommended', rows: recommended.map((entry) => ({
+        anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId }, entry,
+      })) });
+      recommended.forEach((entry) => promoted.add(entry));
+    }
+  }
+  // Cluster only the remaining models: emptied providers produce no header or spacing.
+  const clustered = clusterByProvider(visible.filter((entry) => !promoted.has(entry)), args.providerOrder);
   const arranged =
     rail.kind === 'engine'
       ? arrangeEngineRailClusters(clustered, rail.agent, effectiveEngineOf)
@@ -564,14 +607,8 @@ export interface SelectedRowAlignment {
 }
 
 /**
- * 打开面板 / 切视图时,把选中行滚到**可视区中部**(Chris 2026-08-19 实测反馈:
- * 「尽量保持在他上面的内容能展示,尽量在列表中部是当前选中的」)。
- *
- * 为什么不是「最小滚动进可视区」(改动前的做法):面板挂在 morph 弹层里,首开那一帧列表
- * 高度还是 pill 的裁切态 —— 极矮的可视区里做最小滚动,等价于把选中行顶到列表最上沿;等
- * morph 长开,那一行就死死钉在顶部,它上面的收藏第 1、2 条被顶出可视区。用户点了收藏第 3
- * 条再打开面板,看到的是「焦点永远在下面,收藏区不见了」。居中对齐天然给上方留出同等篇幅,
- * 生长过程中每次尺寸回调重算也始终指向同一个视觉位置。
+ * 打开面板 / 切视图时，把当前模型行中心定位到可视高度约 35% 处。
+ * 收藏可以滚出顶部；面板展开过程按实际高度重算，用户手动滚动后由调用方停止对齐。
  *
  * 纯函数:对齐是「ResizeObserver 里改 scrollTop」这类最容易写出振荡的地方,必须能脱离
  * 浏览器直接测。坐标一律用**滚动内容坐标系**(行的位置 = `rowRect.top - listRect.top + scrollTop`)。
@@ -587,8 +624,7 @@ export function computeSelectedRowScrollTop(args: {
   rowBottom: number;
 }): SelectedRowAlignment {
   const maxScrollTop = Math.max(0, args.scrollHeight - args.clientHeight);
-  const clamp = (value: number): number =>
-    Math.round(Math.min(Math.max(0, value), maxScrollTop));
+  const clamp = (value: number): number => Math.round(Math.min(Math.max(0, value), maxScrollTop));
   // 题头带盖住的那一条不算可视高度:按它算居中,行会偏上一半题头高。
   const visibleHeight = Math.max(0, args.clientHeight - args.headerInset);
   if (args.rowBottom - args.rowTop >= visibleHeight) {
@@ -596,7 +632,7 @@ export function computeSelectedRowScrollTop(args: {
   }
   const rowCenter = (args.rowTop + args.rowBottom) / 2;
   return {
-    scrollTop: clamp(rowCenter - args.headerInset - visibleHeight / 2),
+    scrollTop: clamp(rowCenter - args.headerInset - visibleHeight * 0.35),
     oversized: false,
   };
 }

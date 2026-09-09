@@ -1,3 +1,4 @@
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { createOrcaInterAgentDispatcher } from '../orcaInterAgentDispatcher.js';
@@ -22,6 +23,11 @@ import {
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
+import {
+  stampTrustedDesktopQueuedOrigin,
+  TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
+  TRUSTED_DESKTOP_QUEUE_ORIGIN,
+} from '../makerSendTransaction.js';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -45,6 +51,24 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     makeItem(clientId, text, {
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
     });
+
+  it('forwards main-stamped device-link provenance from enqueue to send', async () => {
+    const h = createHarness();
+    const sid = 'device-link-lead';
+    await h.coordinator.ensureQueueRestored(sid);
+
+    h.coordinator.enqueue(sid, makeItem('device-link-input', 'hello', {
+      fromDeviceLinkClient: true,
+    }));
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      sid,
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ fromDeviceLinkClient: true }),
+    );
+  });
 
   it('restores first, reserves at the head with a host stamp, deduplicates, and emits once', async () => {
     const h = createHarness();
@@ -695,6 +719,9 @@ function createHarness(opts?: {
   const resolveSessionReferences = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['resolveSessionReferences']>
   >(async () => []);
+  const refreshAgentReferencesBeforeDispatch = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['refreshAgentReferencesBeforeDispatch']>
+  >(async () => {});
   const emitProjection = vi.fn((projection: AgentInputProjection) => {
     projections.push(projection);
   });
@@ -788,6 +815,7 @@ function createHarness(opts?: {
     onResumableTurnErrorDiscarded,
     noteSessionClearBoundary,
     resolveSessionReferences,
+    refreshAgentReferencesBeforeDispatch,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
     screenUserMessage: (sessionId, agentFacingText, item) =>
       screenUserMessage
@@ -827,6 +855,7 @@ function createHarness(opts?: {
     onResumableTurnErrorDiscarded,
     noteSessionClearBoundary,
     resolveSessionReferences,
+    refreshAgentReferencesBeforeDispatch,
     emitProjection,
     projections,
     onUiRetry,
@@ -1242,6 +1271,24 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
+  });
+
+  it('attributes synchronous provider output to its active input and clears after completion', async () => {
+    const h = createHarness();
+    const sid = 'private-reply-attribution';
+    expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
+    h.sendToAgent.mockImplementationOnce(async () => {
+      expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+      h.setRunning(true);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('bot-dm:thread:delivery', 'private message'));
+    await flush();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
   });
 
   it('silently keeps a queue head when host dispatch returns SESSION_RUNNING', async () => {
@@ -2186,6 +2233,51 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(callbackDoneAtSendResolve).toBe(true);
+  });
+
+  it('refreshes transient Bot status when a queued message actually dispatches', async () => {
+    const h = createHarness();
+    const sid = 'refresh-bot-reference-at-dispatch';
+    const href = 'cindy://bot/bot-b';
+    const item = makeItem('q-refresh-bot', href, {
+      agentReferences: [{
+        kind: 'bot',
+        start: 0,
+        end: href.length,
+        href,
+        botId: 'bot-b',
+        name: 'Dash Bot',
+        hostSnapshot: {
+          availability: 'ready',
+          activity: 'idle',
+          activeDelegations: 0,
+        },
+      }],
+    });
+    h.refreshAgentReferencesBeforeDispatch.mockImplementationOnce(async (queued) => {
+      queued.agentReferences = queued.agentReferences?.map((reference) => reference.kind === 'bot'
+        ? {
+            ...reference,
+            hostSnapshot: {
+              availability: 'ready',
+              activity: 'working',
+              activeDelegations: 1,
+            },
+          }
+        : reference);
+    });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+
+    expect(h.refreshAgentReferencesBeforeDispatch).toHaveBeenCalledOnce();
+    const sentMessage = h.sendToAgent.mock.calls[0]?.[1];
+    expect(JSON.stringify(sentMessage)).toContain(
+      'availability=ready; activity=working; active_tracked_tasks=1',
+    );
+    expect(JSON.stringify(sentMessage)).not.toContain(
+      'availability=ready; activity=idle; active_tracked_tasks=0',
+    );
   });
 
   it('awaits the pre-dispatch hook after persistence and before vendor dispatch', async () => {
@@ -5926,12 +6018,27 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.steeringQueueClientIds).toEqual([]);
   });
 
+  it('clears an earlier deictic grant when a new attachment arrives through steer', async () => {
+    const h = createHarness();
+    h.coordinator.enqueue('resource-steer', makeItem('first', 'Send this.'));
+    await flush();
+    const item = stampTrustedDesktopQueuedOrigin(makeItem('image', 'Inspect the new image.', {
+      persistedContent: JSON.stringify({ text: 'Inspect the new image.', images: ['/new.png'] }),
+    }), true);
+    expect(item.origin).toBeUndefined(); // Device-link input does not gain Pi desktop privileges.
+    expect(item.autoReviewUserText).toBe('Inspect the new image.');
+    await h.coordinator.steer('resource-steer', item);
+    const opts = h.steerToAgent.mock.calls[0][2];
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBe('Inspect the new image.');
+    expect(appendAutoReviewUserIntent('Send this.', 'decorated', opts)).toBe('Inspect the new image.');
+  });
+
   it('screens same-turn steers through ghost hooks: rewrite injects and persists the rewritten text', async () => {
     const h = createHarness();
     h.setAgentKind('codex');
     const sid = 'steer-ghost-rewrite';
     const first = makeItem('q-1', 'first');
-    const second = makeItem('q-2', 'second');
+    const second = stampTrustedDesktopQueuedOrigin(makeItem('q-2', 'second'), false);
     h.setScreenUserMessage(async (_sid, agentFacingText) =>
       agentFacingText === 'second'
         ? { action: 'rewrite', ghostId: 'g-1', ghostName: 'guard', text: 'rewritten text' }
@@ -5950,7 +6057,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.steerToAgent).toHaveBeenCalledWith(
       sid,
       { type: 'user', content: 'rewritten text' },
-      expect.objectContaining({ messageUuid: expect.any(String) }),
+      expect.objectContaining({ messageUuid: expect.any(String), [AUTO_REVIEW_SOURCE_CONTENT]: 'second' }),
     );
     expect(h.onUserMessageRewritten).toHaveBeenCalledWith(
       sid,
@@ -5963,7 +6070,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       expect.objectContaining({
         clientId: second.clientId,
         content: 'rewritten text',
-        agentMeta: expect.objectContaining({ delivery: 'steer' }),
+        agentMeta: expect.objectContaining({ delivery: 'steer', autoReviewUserText: 'second' }),
       }),
       expect.objectContaining({ shouldBroadcast: expect.any(Function) }),
     );
@@ -8786,6 +8893,27 @@ describe('AgentInputCoordinator queue mutations', () => {
     });
   });
 
+  it('finalizes only a real pending text edit', async () => {
+    const h = createHarness();
+    const sid = 'edit-text-finalizer';
+    const item = makeItem('q-2', 'old text');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateText(sid, item.clientId, 'old text', undefined, undefined, false, finalize);
+    expect(finalize).not.toHaveBeenCalled();
+
+    h.coordinator.updateText(sid, item.clientId, 'pi install npm:context-mode', undefined, undefined, false, finalize);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0]).toMatchObject({
+      text: 'pi install npm:context-mode',
+      persistedContent: 'pi install npm:context-mode',
+    });
+  });
+
   it('does not re-parse remote edits that omit trusted session refs', async () => {
     const h = createHarness();
     const sid = 'edit-remote-without-snapshot';
@@ -8805,6 +8933,55 @@ describe('AgentInputCoordinator queue mutations', () => {
     const updated = latestProjection(h.projections).pendingQueue[0];
     expect(updated?.sessionRefs).toBeUndefined();
     expect(updated?.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
+  });
+
+  it('finalizes attachment-only edits so stale authorization cannot survive', async () => {
+    const h = createHarness();
+    const sid = 'edit-attachment-finalizer';
+    const item = makeItem('q-2', 'pi install npm:context-mode');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const next = makeItem(item.clientId, item.text, {
+      files: [{
+        id: 'file-new',
+        name: 'new.png',
+        path: '/tmp/new.png',
+        ext: '.png',
+        size: 10,
+        category: 'image',
+        mimeType: 'image/png',
+      }],
+    });
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateContentWithResult(sid, item.clientId, next, finalize);
+
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0].files).toEqual(next.files);
+  });
+
+  it('finalizes full-content edits after merging the replacement', async () => {
+    const h = createHarness();
+    const sid = 'edit-content-finalizer';
+    const item = makeItem('q-2', 'old text');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const next = makeItem(item.clientId, 'pi remove npm:context-mode');
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateContentWithResult(sid, item.clientId, next, finalize);
+
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: item.clientId,
+      text: 'pi remove npm:context-mode',
+      persistedContent: 'pi remove npm:context-mode',
+    }));
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.text)
+      .toBe('pi remove npm:context-mode');
   });
 
   it('replaces pending row content (text + files) in place while pinning identity fields', async () => {
@@ -8904,6 +9081,42 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it('restores the Main-owned authorization for an exact queued Desktop Pi command', async () => {
+    const writer = createHarness();
+    const sid = 'snapshot-desktop-pi-command';
+    const command = 'pi install npm:context-mode';
+    await writer.coordinator.ensureQueueRestored(sid);
+    writer.setRunning(true);
+    writer.coordinator.enqueue(
+      sid,
+      stampTrustedDesktopQueuedOrigin(makeItem('pi-command', command), false),
+    );
+    await flush();
+    const persisted = writer.persistQueueSnapshot.mock.calls.at(-1)?.[1][0]!;
+    const serialized = JSON.parse(JSON.stringify(persisted)) as AgentInputQueuedMessage;
+    expect((serialized as unknown as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT])
+      .toEqual(expect.objectContaining({ version: 1, clientId: 'pi-command', text: command }));
+    expect((serialized.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+      .toBeUndefined();
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [serialized]);
+
+    await h.coordinator.ensureQueueRestored(sid);
+    await flush();
+
+    expect((h.coordinator.getProjection(sid).pendingQueue[0] as unknown as Record<string, unknown>)
+      [TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT]).toBeUndefined();
+    const restored = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    expect((restored.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+      .toEqual(expect.objectContaining({ clientId: restored.clientId, text: command }));
+
+    h.coordinator.resume(sid);
+    await flush();
+    const dispatchPersist = h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage;
+    expect((dispatchPersist?.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+      .toEqual(expect.objectContaining({ clientId: restored.clientId, text: command }));
+  });
+
   it('persists the queue after restore and shrinks the snapshot once the head crosses the DB boundary', async () => {
     const h = createHarness();
     const sid = 'snapshot-persist';
@@ -9638,11 +9851,12 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
           text: '优化后的问题',
         }) as const,
     );
-    h.coordinator.enqueue('s1', makeItem('c1', '润色 原始问题'));
+    h.coordinator.enqueue('s1', stampTrustedDesktopQueuedOrigin(makeItem('c1', '润色 原始问题'), false));
     await flush();
     // 送 agent 的消息是改写版(buildMakerUserMessage 读 head.text)
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent.mock.calls[0][1]).toMatchObject({ content: '优化后的问题' });
+    expect(h.sendToAgent.mock.calls[0][3][AUTO_REVIEW_SOURCE_CONTENT]).toBe('润色 原始问题');
     // 落库内容也是改写版(persistUserMessage.content = head.persistedContent)
     expect(
       mocks.createMessage.mock.calls.some(

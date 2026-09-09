@@ -1,3 +1,4 @@
+import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 /**
  * pi agent 的 desktop host 装配 —— auth / runtimeConfig / 二进制解析 / 构造,
  * 集中在本模块,maker-host/index.ts 只做一次 buildPiAgent() 调用。
@@ -22,6 +23,9 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
+
+import { readModelContextLimit } from './model-context-limit-store.js';
+import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 
 import {
   PiAgent,
@@ -104,8 +108,11 @@ import {
   resolveBundledPiGatewayModelProfile,
 } from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
-import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
-import { resolveManagedPiPackageResources } from './pi-package-store.js';
+import { resolvePiRuntimeModelDescriptor, resolveModelDefaultContextWindow, resolveModelContextProviderId } from './catalog-to-descriptors.js';
+import {
+  resolveManagedPiNativePackagePaths,
+  resolveManagedPiPackageResources,
+} from './pi-package-store.js';
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 
 const log = createLogger('pi-host');
@@ -116,6 +123,22 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
 const PI_OPENAI_PROXY_KEY_ENV = 'CINDY_PI_OPENAI_PROXY_KEY';
+const PI_ANTHROPIC_PROXY_KEY_ENV = 'CINDY_PI_ANTHROPIC_PROXY_KEY';
+/**
+ * Claude 订阅占位 token。Pi 的 anthropic 适配器按 `apiKey.includes('sk-ant-oat')` 判定
+ * OAuth 形态,命中后才走原生订阅请求构造:Bearer 鉴权、`claude-code-20250219,oauth-2025-04-20`
+ * 加各 beta(fine-grained tool streaming / server-side fallback 等)、Claude Code 身份 system
+ * 段与 `claude-cli` UA。占位值本身不含授权能力;真 token 由 loopback proxy 在解析出
+ * anthropic provider 路由时覆盖 `authorization`,故该路由是占位值被换掉的唯一保证 ——
+ * 请求带 provider 头就必须钉在该路由上,不能落回默认上游(见
+ * anthropic-compat-proxy-host 的 piProviderId 钉住分支)。
+ * 用普通字串会让 Pi 按 x-api-key 形态发请求,proxy 再补 beta 头就会
+ * 与 body 里 Pi 已注入的 `fallbacks` 等字段脱节(400 `fallbacks: Extra inputs are not permitted`)。
+ *
+ * 取值即探针要求的最短形态(二进制里只有 `sk-ant-oat` 这一个字面量,版本段不参与判定),
+ * 与仓内既有 OAuth 形态夹具同值 —— 不额外造一个更长、更像真 token 的字串去撞密钥扫描。
+ */
+const PI_ANTHROPIC_PROXY_PLACEHOLDER_TOKEN = 'sk-ant-oat01';
 const PI_PROVIDER_HEADER = 'x-cindy-pi-provider-id';
 
 export interface PiBundledModelInfo {
@@ -500,6 +523,23 @@ function catalogCostForPiNative(cost: {
 }
 
 /**
+ * CatalogModel 只保存 Cindy 可选择的 effort 档位，Pi 原生目录还可能把档位映射到
+ * 另一条 wire 值（例如 minimal -> low）。叠加服务端能力时保留同源 bundled 映射；
+ * 服务端新增的档位没有原生映射才按同名值发送。
+ */
+function catalogThinkingLevelMap(
+  efforts: readonly string[],
+  bundled: PiNativeModelSpec['thinkingLevelMap'] | undefined,
+): NonNullable<PiNativeModelSpec['thinkingLevelMap']> {
+  return Object.fromEntries(
+    PI_REASONING_EFFORTS.map((effort) => [
+      effort,
+      efforts.includes(effort) ? (bundled?.[effort] ?? effort) : null,
+    ]),
+  );
+}
+
+/**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. Registry metadata is authoritative for OpenAI subscription
  * models; the version-matched PI binary remains authoritative for native API and
@@ -516,9 +556,13 @@ export function buildPiSubscriptionNativeProviders(
   const officialXaiById = new Map(
     (officialPiModels('xai') ?? []).map((model) => [model.id, model]),
   );
+  const officialOpenAiById = new Map(
+    (officialPiModels('openai-codex') ?? []).map((model) => [model.id, model]),
+  );
   const env: Record<string, string> = {
     [PI_OPENAI_PROXY_KEY_ENV]: piOpenaiProxyPlaceholderJwt(),
     [PI_XAI_PROXY_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY,
+    [PI_ANTHROPIC_PROXY_KEY_ENV]: PI_ANTHROPIC_PROXY_PLACEHOLDER_TOKEN,
   };
   const add = (
     sourceProviderId: 'anthropic' | 'openai' | 'xai',
@@ -581,6 +625,7 @@ export function buildPiSubscriptionNativeProviders(
       name,
       baseUrl,
       inheritModels: true,
+      ...(sourceProviderId === 'anthropic' ? { apiKeyEnvVar: PI_ANTHROPIC_PROXY_KEY_ENV } : {}),
       ...(sourceProviderId === 'openai' ? { apiKeyEnvVar: PI_OPENAI_PROXY_KEY_ENV } : {}),
       ...(sourceProviderId === 'xai' ? { apiKeyEnvVar: PI_XAI_PROXY_API_KEY_ENV } : {}),
       modelIdAliases,
@@ -605,6 +650,16 @@ export function buildPiSubscriptionNativeProviders(
         const listedIds =
           listedModelIdsByProvider?.get(piProviderId)
           ?? listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
+        const officialOpenAi = officialOpenAiById.get(wireId);
+        if (sourceProviderId === 'openai' && !bundledModel && !listedIds?.has(wireId)
+          && officialOpenAi?.api === 'openai-codex-responses') {
+          return {
+            ...structuredClone(officialOpenAi),
+            id: model.id,
+            wireId,
+            catalogAddition: true,
+          };
+        }
         const isKnownMissingXaiModel =
           wireId === 'grok-4.6' || model.id === 'grok-4.6' || model.id.endsWith('/grok-4.6');
         const isXaiCatalogAddition =
@@ -653,11 +708,9 @@ export function buildPiSubscriptionNativeProviders(
             maxTokens: model.maxOutput ?? bundledModel.maxTokens,
             reasoning: model.efforts.length > 0,
             input,
-            thinkingLevelMap: Object.fromEntries(
-              PI_REASONING_EFFORTS.map((effort) => [
-                effort,
-                model.efforts.includes(effort) ? effort : null,
-              ]),
+            thinkingLevelMap: catalogThinkingLevelMap(
+              model.efforts,
+              bundledModel.thinkingLevelMap,
             ),
             ...(cost ? { cost: { ...cost } } : {}),
             ...(bundledModel.headers ? { headers: { ...bundledModel.headers } } : {}),
@@ -704,9 +757,7 @@ export function buildPiSubscriptionNativeProviders(
                 ? { api: capabilityCorrection.api }
                 : {}),
           name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
-          contextWindow: isContextProfileAddition
-            ? model.contextWindow
-            : (preserved?.contextWindow ?? model.contextWindow),
+          contextWindow: model.contextWindow,
           ...(preserved?.maxTokens
             ? { maxTokens: preserved.maxTokens }
             : model.maxOutput
@@ -856,6 +907,7 @@ export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string): 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
   const ripgrepPath = getRipgrepBinaryPath();
   const config: AgentRuntimeConfig = {
+    behaviorFlags: (ctx) => ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv(),
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
     systemPrompt: composePiSystemPrompt(hostSystemPrompt, piSystemPrompt),
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
@@ -907,6 +959,9 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  /** Commit-edge fence; live caller retirement remains post-receipt below. */
+  onPiManagedPackageMutationCommitted?: () => Promise<void>;
+  onPiManagedPackageMutationSettled?: AgentDeps['onPiManagedPackageMutationSettled'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
@@ -918,6 +973,7 @@ export interface BuildPiAgentOpts {
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
   getRemotePiFileOps?: AgentDeps['getRemotePiFileOps'];
+  getRemoteAgentFileOps?: AgentDeps['getRemoteAgentFileOps'];
   /** 远端 pi 二进制解析(host probe;缺省 = 回落本地路径)。 */
   resolveRemotePiBinaryPath?: AgentDeps['resolveRemotePiBinaryPath'];
   /** 远端会话是否跳过 in-process MCP bridge(Phase 1 不桥 orca/memory/ghost)。 */
@@ -1226,19 +1282,32 @@ export function buildPiNativeProvidersFromConfigs(
     // strictly same-origin PI bundled knowledge, then an explicitly matched official
     // PI catalog. Missing protocol is not Chat: one unresolved model makes the whole
     // provider unusable so PI cannot silently send it to a guessed endpoint shape.
-    const bundledModels = rt.models.map((model) =>
-      !model.piApi && !runtimeApi
-        ? resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl)
-        : undefined,
-    );
+    const bundledModels = rt.models.map((model) => {
+      // 显式 runtime 协议决定端点形状，但不应阻止同源 Pi 目录补齐图片、输出上限等能力。
+      // 只有 per-model piApi 明确改写协议时才不借用；协议冲突也必须隔离。
+      if (model.piApi) return undefined;
+      const bundled = resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl);
+      if (!bundled || !runtimeApi || bundled.api === runtimeApi) return bundled;
+      return undefined;
+    });
     const official =
       rt.piCatalogProviderId &&
       officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
         ? officialPiModels(rt.piCatalogProviderId)
         : null;
     const officialById = new Map((official ?? []).map((model) => [model.id, model]));
+    // The pinned binary predates Astra. Exact public API endpoint/protocol matches
+    // may use our catalog addition even when the user entered the endpoint by hand.
+    // Never lend subscription capabilities to an API key or another endpoint.
+    const openaiAddition = !rt.piCatalogProviderId &&
+      runtimeApi === 'openai-responses' &&
+      officialPiRouteMatches('openai', rt.baseUrl, rt.wireProtocol)
+        ? officialPiModels('openai')?.find((model) => model.id === 'gpt-6-astra')
+        : undefined;
     const metadataModels = rt.models.map(
-      (model, index) => bundledModels[index] ?? officialById.get(model.id),
+      (model, index) => bundledModels[index] ?? officialById.get(model.id) ??
+        (model.id === openaiAddition?.id && !model.route &&
+          (!model.piApi || model.piApi === openaiAddition.api) ? openaiAddition : undefined),
     );
     const modelApis = rt.models.map(
       (model, index) =>
@@ -1300,18 +1369,18 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
+        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
+        // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
+        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
         const modelBaseUrl =
-          explicitRouteApi === modelApi
-            ? explicitRoute?.baseUrl
-            : bundledModel?.api === modelApi
-              ? bundledModel.baseUrl
-              : undefined;
+          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
         const spec = {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
           name: bundledModel?.name ?? m.name,
-          contextWindow: bundledModel?.contextWindow ?? m.contextWindow,
+          // 下发文件明确写出的上下文优先；本地 Pi 目录只补缺失值。
+          contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
           ...(bundledModel?.maxTokens ? { maxTokens: bundledModel.maxTokens } : {}),
           ...(bundledModel?.input
             ? { input: [...bundledModel.input] }
@@ -1338,7 +1407,17 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
           ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
-          ...(bundledModel?.compat ? { compat: structuredClone(bundledModel.compat) } : {}),
+          ...(bundledModel?.compat
+            ? { compat: structuredClone(bundledModel.compat) }
+            : !bundledModel && modelApi === 'openai-completions'
+              ? // 未知自定义 Chat Completions 端点保守回落(#3832):火山引擎等
+                // OpenAI 兼容网关只接受 system/assistant/user/tool,而 Pi 的
+                // detectCompat 对陌生端点默认 supportsDeveloperRole=true,会把
+                // system 指令按 role=developer 发出 → 整个模型不可用。system
+                // role 在所有 OpenAI 兼容端点均可用,故无同源 bundled 元数据时
+                // 默认收敛为 system;有 bundled 元数据的端点维持 Pi 原生判定。
+                { compat: { supportsDeveloperRole: false } }
+              : {}),
           ...(bundledModel?.samplingParams
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),
@@ -1746,6 +1825,13 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    getDisabledSkillPaths: readDisabledSkillPaths,
+    resolveModelContextLimit: (providerId, modelId) => {
+      const catalog = getActiveCatalog();
+      const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);
+      return source ? readModelContextLimit('pi', source, modelId)
+        ?? resolveModelDefaultContextWindow(catalog, 'pi', source, modelId) : null;
+    },
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     binaryPath,
@@ -1771,14 +1857,36 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
+    resolvePiGlobalContextHome: (remoteHostId) => {
+      if (remoteHostId) return '$HOME/.pi/agent';
+      const override = process.env.PI_CODING_AGENT_DIR;
+      return override
+        ? path.resolve(override.replace(/^~(?=$|[\\/])/, () => os.homedir()))
+        : path.join(os.homedir(), '.pi', 'agent');
+    },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
-    mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
+    resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
+    mutatePiManagedPackage: (request) => mutateAuthorizedPiManagedPackage(
+      request,
+      undefined,
+      opts.onPiManagedPackageMutationCommitted
+        ? { onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }
+        : undefined,
+    ),
+    onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),
       mutationFailed: t('settings.piPackages.operationFailed'),
+      mutationFailure: {
+        'source-unavailable': t('settings.piPackages.failure.sourceUnavailable'),
+        'package-not-found': t('settings.piPackages.failure.packageNotFound'),
+        'version-not-found': t('settings.piPackages.failure.versionNotFound'),
+        'state-unavailable': t('settings.piPackages.failure.stateUnavailable'),
+        'native-command-failed': t('settings.piPackages.failure.nativeCommandFailed'),
+      },
       mutationSuccess: {
-        install: t('settings.piPackages.success.install'),
+        install: t('settings.piPackages.success.installEnabled'),
         update: t('settings.piPackages.success.update'),
         remove: t('settings.piPackages.success.remove'),
       },
@@ -1868,6 +1976,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,
     getRemotePiTransport: opts.getRemotePiTransport,
     getRemotePiFileOps: opts.getRemotePiFileOps,
+    getRemoteAgentFileOps: opts.getRemoteAgentFileOps,
     resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,
     remotePiSkipMcpBridge: opts.remotePiSkipMcpBridge,
     getRemotePiAgentProxyEnv: opts.getRemotePiAgentProxyEnv,

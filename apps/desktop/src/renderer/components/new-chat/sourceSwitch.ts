@@ -170,6 +170,7 @@ export function resolveSourceSwitch(args: {
 export {
   resolveEffort,
   resolveRequestedEffort,
+  composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
 } from '@cindy/model-providers';

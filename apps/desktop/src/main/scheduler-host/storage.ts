@@ -143,8 +143,7 @@ function addCompatibleRegionalMoney(
   const actualValues = values.filter((value) => value.kind === 'actual-cost');
   const candidates = actualValues.length > 0 ? actualValues : values;
   const effective =
-    candidates.find((value) => value.currency === currency)?.currency ??
-    candidates[0].currency;
+    candidates.find((value) => value.currency === currency)?.currency ?? candidates[0].currency;
   const compatible = values.filter((value) => value.currency === effective);
   return compatible.length > 0 ? addRegionalMoney(compatible) : null;
 }
@@ -176,7 +175,7 @@ const unreadTerminalRunWhere = () =>
   sql`${scheduleRuns.readAt} IS NULL AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted', 'interrupted')`;
 
 function toScheduleSource(value: string | null): Schedule['source'] | undefined {
-  if (value === 'user' || value === 'project') return value;
+  if (value === 'user' || value === 'project' || value === 'bot') return value;
   return undefined;
 }
 
@@ -326,6 +325,11 @@ function legacyRunFromSession(
     // so old imported history does not create new attention dots.
     readAt: finishedAt,
   };
+}
+
+/** Public automation history must not expose or mutate the routine execution ledger. */
+function publicScheduleRunWhere() {
+  return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
@@ -566,15 +570,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           ...run,
           ...(persisted.totalTokens > 0 ? { totalTokens: persisted.totalTokens } : {}),
           costMoney:
-            addCompatibleRegionalMoney(
-              costValues,
-              run.costMoney?.currency,
-            ) ?? zeroUsageMoney(),
+            addCompatibleRegionalMoney(costValues, run.costMoney?.currency) ?? zeroUsageMoney(),
           estimatedValueMoney:
-            addCompatibleRegionalMoney(
-              estimatedValues,
-              run.estimatedValueMoney?.currency,
-            ) ?? zeroUsageMoney('value-estimate'),
+            addCompatibleRegionalMoney(estimatedValues, run.estimatedValueMoney?.currency) ??
+            zeroUsageMoney('value-estimate'),
           costAttribution: 'exact',
         };
       }
@@ -588,12 +587,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       return {
         ...run,
         ...(persisted.totalTokens > 0 ? { totalTokens: persisted.totalTokens } : {}),
-        costMoney:
-          addCompatibleRegionalMoney(persisted.costValues) ??
-          zeroUsageMoney(),
+        costMoney: addCompatibleRegionalMoney(persisted.costValues) ?? zeroUsageMoney(),
         estimatedValueMoney:
-          addCompatibleRegionalMoney(persisted.estimatedValues) ??
-          zeroUsageMoney('value-estimate'),
+          addCompatibleRegionalMoney(persisted.estimatedValues) ?? zeroUsageMoney('value-estimate'),
         costAttribution: 'exact',
       };
     });
@@ -603,8 +599,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * Sidebar 聚合索引用的轻量 run 列表：
    * - 每个 session 只返回最新的 run 映射，读取量不随同一任务的运行次数增长。
    * - 额外包含全部 running 与未读终态 run，供运行标记对账和未读计数。
+   * - 每个 session 保留最近一次失败/中断，即使已读也能查看历史失败提示。
    * - 未读旧 run 先返回以累计 session 红点，最新映射最后返回以裁决 Automation 归属。
    * - 非最新 running 不携带 sessionId，只参与运行标记对账。
+   * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
    */
   async listSidebarIndexRuns(): Promise<ScheduleSidebarIndexRun[]> {
     const db = this.getDb();
@@ -622,27 +620,48 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
     };
-    const [latestSessionRows, unreadRows, runningRows] = await Promise.all([
+    const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
         .select(projection)
         .from(scheduleSessionLatestRuns)
         .innerJoin(scheduleRuns, eq(scheduleSessionLatestRuns.runId, scheduleRuns.id))
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(isNotNull(scheduleRuns.sessionId)),
+        .where(and(isNotNull(scheduleRuns.sessionId), publicScheduleRunWhere())),
       db
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(unreadTerminalRunWhere()),
+        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere())),
       db
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(eq(scheduleRuns.status, 'running')),
+        .where(and(eq(scheduleRuns.status, 'running'), publicScheduleRunWhere())),
+      db
+        .select(projection)
+        .from(scheduleSessionLatestRuns)
+        .innerJoin(
+          scheduleRuns,
+          eq(
+            scheduleRuns.id,
+            sql`(
+            SELECT failed.id FROM schedule_runs AS failed
+            WHERE failed.session_id = ${scheduleSessionLatestRuns.sessionId}
+              AND failed.status IN ('failed', 'interrupted')
+            ORDER BY failed.fired_at DESC, failed.id DESC LIMIT 1
+          )`,
+          ),
+        )
+        .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+        .where(publicScheduleRunWhere()),
     ]);
     const latestRunIds = new Set(latestSessionRows.map((row) => row.runId));
+    const unreadRunIds = new Set(unreadRows.map((row) => row.runId));
     const rows = [
       ...unreadRows.filter((row) => !latestRunIds.has(row.runId)),
+      ...latestFailedRows.filter(
+        (row) => !latestRunIds.has(row.runId) && !unreadRunIds.has(row.runId),
+      ),
       ...runningRows
         .filter((row) => !latestRunIds.has(row.runId))
         .map((row) => ({ ...row, sessionId: null })),
@@ -713,7 +732,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       });
     }
 
-    return [...indexedRuns, ...legacyRuns];
+    return [...indexedRuns, ...legacyRuns].filter((run) => run.scheduleSource !== 'bot');
   }
 
   /**
@@ -933,10 +952,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         const estimatedValueMoney =
           run.costAttribution === 'direct'
             ? (run.estimatedValueMoney ?? null)
-            : remainingMoney(
-                run.estimatedValueMoney,
-                messageCost?.estimatedValueValues ?? [],
-              );
+            : remainingMoney(run.estimatedValueMoney, messageCost?.estimatedValueValues ?? []);
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
         appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
@@ -987,13 +1003,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
     return [...bySchedule.entries()].map(([scheduleId, summary]) => {
       const totalMoney =
-        addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency) ??
-        zeroUsageMoney();
+        addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency) ?? zeroUsageMoney();
       const totalEstimatedValueMoney =
-        addCompatibleRegionalMoney(
-          summary.estimatedValueValues,
-          summary.latestCurrency,
-        ) ?? zeroUsageMoney('value-estimate');
+        addCompatibleRegionalMoney(summary.estimatedValueValues, summary.latestCurrency) ??
+        zeroUsageMoney('value-estimate');
       return {
         scheduleId,
         totalMoney,
@@ -1008,13 +1021,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         sessionCount: summary.sessionIds.size,
         sessions: [...summary.sessionCosts.entries()].map(([sessionId, costs]) => {
           const money =
-            addCompatibleRegionalMoney(costs.costValues, costs.latestCurrency) ??
-            zeroUsageMoney();
+            addCompatibleRegionalMoney(costs.costValues, costs.latestCurrency) ?? zeroUsageMoney();
           const estimatedMoney =
-            addCompatibleRegionalMoney(
-              costs.estimatedValueValues,
-              costs.latestCurrency,
-            ) ?? zeroUsageMoney('value-estimate');
+            addCompatibleRegionalMoney(costs.estimatedValueValues, costs.latestCurrency) ??
+            zeroUsageMoney('value-estimate');
           return {
             sessionId,
             totalMoney: money,
@@ -1031,13 +1041,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     });
   }
 
-  async deleteRun(id: string): Promise<ScheduleRun | null> {
+  async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const db = this.getDb();
     // 先 select 一次拿到 scheduleId（callers 需要它来定位 'changed' 事件目标 schedule）；
     // 找不到直接返回 null，不抛错（与 update/updateRun 的契约对齐）。
-    const [row] = await db.select().from(scheduleRuns).where(eq(scheduleRuns.id, id)).limit(1);
+    const condition = and(
+      eq(scheduleRuns.id, id),
+      options?.excludeBotSchedules ? publicScheduleRunWhere() : undefined,
+    );
+    const [row] = await db.select().from(scheduleRuns).where(condition).limit(1);
     if (!row) return null;
-    await db.delete(scheduleRuns).where(eq(scheduleRuns.id, id));
+    await db.delete(scheduleRuns).where(condition);
     return scheduleRunToCamel(row);
   }
 
@@ -1181,7 +1195,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const [row] = await db
       .select({ n: sql<number>`count(*)` })
       .from(scheduleRuns)
-      .where(unreadTerminalRunWhere());
+      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()));
     return Number(row?.n ?? 0);
   }
 
@@ -1238,7 +1252,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const result = await db
       .update(scheduleRuns)
       .set({ readAt: Date.now() })
-      .where(unreadTerminalRunWhere())
+      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
     return typeof changes === 'number' ? changes : 0;
@@ -1250,12 +1264,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const result = await db
       .update(scheduleRuns)
       .set({ readAt: Date.now() })
-      .where(
-        and(
-          eq(scheduleRuns.scheduleId, scheduleId),
-          unreadTerminalRunWhere(),
-        ),
-      )
+      .where(and(eq(scheduleRuns.scheduleId, scheduleId), unreadTerminalRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
     return typeof changes === 'number' ? changes : 0;

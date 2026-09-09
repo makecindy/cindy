@@ -1,8 +1,10 @@
 import { IOSSimulatorInstanceError } from '@cindy/ios-simulator-runtime';
 import type { IOSSimulatorMcpAccessDecision } from '@cindy/mcps';
+import { clipboard, nativeImage } from 'electron';
 
 import type {
   IOSSimulatorNativeH264StreamProfileRequest,
+  IOSSimulatorPreferences,
   IOSSimulatorRendererToolName,
   IOSSimulatorSessionStatus,
   IOSSimulatorToolResponse,
@@ -11,6 +13,7 @@ import { IOS_SIMULATOR_RENDERER_TOOL_NAMES } from '../../shared/iosSimulatorIpc.
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   callIOSSimulatorHostTool,
+  captureIOSSimulatorScreenshotBytes,
   getIOSSimulatorLatestFrame,
   getIOSSimulatorSessionStatus,
   retryIOSSimulatorNativeRoute,
@@ -20,6 +23,10 @@ import {
   setIOSSimulatorViewerStreamProfile,
   updateIOSSimulatorViewerTouch,
 } from '../mcp-integrations/ios-simulator.js';
+import {
+  readIOSSimulatorPreferences,
+  writeIOSSimulatorAutoOpenEmbeddedPanel,
+} from '../mcp-integrations/ios-simulator-preferences.js';
 import {
   getIOSSimulatorRendererSessionAccess,
   getIOSSimulatorRendererViewerAccess,
@@ -41,6 +48,8 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 const log = createLogger('maker-ipc:ios-simulator');
 
 type IOSSimulatorIpcOperation =
+  | 'get-preferences'
+  | 'set-preferences'
   | 'request-access'
   | 'status'
   | 'call-tool'
@@ -49,10 +58,13 @@ type IOSSimulatorIpcOperation =
   | 'retry-native-route'
   | 'set-mutation-control'
   | 'latest-frame'
+  | 'copy-screenshot'
   | 'set-stream-profile'
   | 'live-touch';
 
 const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> = {
+  'get-preferences': 'iOS Simulator preferences are temporarily unavailable.',
+  'set-preferences': 'iOS Simulator preferences could not be updated.',
   'request-access': 'iOS Simulator access could not be requested.',
   status: 'iOS Simulator status is temporarily unavailable.',
   'call-tool': 'iOS Simulator operation failed.',
@@ -61,6 +73,7 @@ const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> 
   'retry-native-route': 'iOS Simulator Native acceleration could not be restored.',
   'set-mutation-control': 'iOS Simulator control state could not be updated.',
   'latest-frame': 'iOS Simulator frame is temporarily unavailable.',
+  'copy-screenshot': 'iOS Simulator screenshot could not be copied.',
   'set-stream-profile': 'iOS Simulator stream settings could not be updated.',
   'live-touch': 'iOS Simulator input could not be delivered.',
 };
@@ -71,6 +84,8 @@ export interface IOSSimulatorHandlerDeps {
   getSessionContext(sessionId: string): Promise<{ workingDir: string | null } | null>;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
+  getPreferences(): IOSSimulatorPreferences;
+  setAutoOpenEmbeddedPanel(enabled: boolean): Promise<IOSSimulatorPreferences>;
   getSessionAccess(
     target: IOSSimulatorRendererWebContents,
   ): IOSSimulatorRendererAccessSnapshot | null;
@@ -138,6 +153,11 @@ export interface IOSSimulatorHandlerDeps {
     route: { instanceId: string; generation: number; leaseId: string },
     viewerWebContentsId: number,
   ): Promise<IOSSimulatorToolResponse>;
+  captureScreenshotBytes(
+    sessionId: string,
+    route: { instanceId: string; generation: number; leaseId: string },
+  ): Promise<Buffer>;
+  writePngToClipboard(pngBytes: Buffer): void;
   updateViewerTouch(
     sessionId: string,
     route: { instanceId: string; generation: number; leaseId: string },
@@ -166,6 +186,8 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
   getSessionContext: async () => null,
   getOwnerScopeKey: activeOwnerScopeKey,
   isOwnerBoundaryPending: isAppSessionBoundaryPending,
+  getPreferences: readIOSSimulatorPreferences,
+  setAutoOpenEmbeddedPanel: writeIOSSimulatorAutoOpenEmbeddedPanel,
   getSessionAccess: getIOSSimulatorRendererSessionAccess,
   getViewerAccess: getIOSSimulatorRendererViewerAccess,
   hasViewerAccess: hasIOSSimulatorRendererViewerAccess,
@@ -181,6 +203,18 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
   retryNativeRoute: retryIOSSimulatorNativeRoute,
   setViewerStreamProfile: setIOSSimulatorViewerStreamProfile,
   getLatestFrame: getIOSSimulatorLatestFrame,
+  captureScreenshotBytes: captureIOSSimulatorScreenshotBytes,
+  writePngToClipboard: (pngBytes) => {
+    const image = nativeImage.createFromBuffer(pngBytes);
+    if (image.isEmpty()) {
+      throw new IOSSimulatorInstanceError(
+        'SCREENSHOT_CAPTURE_FAILED',
+        'The captured simulator screenshot is empty.',
+        true,
+      );
+    }
+    clipboard.writeImage(image);
+  },
   updateViewerTouch: updateIOSSimulatorViewerTouch,
   reportError: (operation, error) => {
     log.error(`iOS Simulator ${operation} IPC failed`, {
@@ -319,6 +353,31 @@ function readSenderWebContents(event: unknown): IOSSimulatorRendererWebContents 
   return sender as IOSSimulatorRendererWebContents;
 }
 
+async function callIOSSimulatorPreferences<T>(
+  deps: IOSSimulatorHandlerDeps,
+  operation: 'get-preferences' | 'set-preferences',
+  call: () => T | Promise<T>,
+): Promise<T> {
+  const ownerScopeKey = deps.getOwnerScopeKey();
+  const assertOwnerScopeCurrent = (): void => {
+    if (deps.isOwnerBoundaryPending() || deps.getOwnerScopeKey() !== ownerScopeKey) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'iOS Simulator preferences changed owner while handling the request. Retry the operation.',
+      );
+    }
+  };
+  assertOwnerScopeCurrent();
+  try {
+    const result = await call();
+    assertOwnerScopeCurrent();
+    return result;
+  } catch (error) {
+    assertOwnerScopeCurrent();
+    throwIOSSimulatorIpcError(deps, operation, error);
+  }
+}
+
 export function registerIOSSimulatorHandlers(
   registry: IpcHandlerRegistry,
   deps: Partial<IOSSimulatorHandlerDeps> = {},
@@ -410,6 +469,18 @@ export function registerIOSSimulatorHandlers(
       }
     });
   };
+  handle(MAKER_INVOKE.IOS_SIMULATOR_GET_PREFERENCES, () =>
+    callIOSSimulatorPreferences(resolved, 'get-preferences', () => resolved.getPreferences()),
+  );
+  handle(MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL, (_event, payload) => {
+    const record = readRecord(payload);
+    if (typeof record.enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enabled (boolean) required');
+    }
+    return callIOSSimulatorPreferences(resolved, 'set-preferences', () =>
+      resolved.setAutoOpenEmbeddedPanel(record.enabled as boolean),
+    );
+  });
   handle(MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, async (event, payload) => {
     const sessionId = readSessionId(payload);
     const sender = readSenderWebContents(event);
@@ -612,6 +683,21 @@ export function registerIOSSimulatorHandlers(
     return callIOSSimulatorHostForViewerSession(event, sessionId, 'latest-frame', () =>
       resolved.getLatestFrame(sessionId, route, viewerWebContentsId),
     );
+  });
+  handle(MAKER_INVOKE.IOS_SIMULATOR_COPY_SCREENSHOT, async (event, payload) => {
+    const record = readRecord(payload);
+    const sessionId = readSessionId(record);
+    assertSenderViewerSession(event, sessionId);
+    const route = readViewerRoute(record);
+    const pngBytes = await callIOSSimulatorHostForSession(event, sessionId, 'copy-screenshot', () =>
+      resolved.captureScreenshotBytes(sessionId, route),
+    );
+    try {
+      resolved.writePngToClipboard(pngBytes);
+    } catch (error) {
+      throwIOSSimulatorIpcError(resolved, 'copy-screenshot', error);
+    }
+    return { ok: true as const };
   });
   handle(MAKER_INVOKE.IOS_SIMULATOR_SET_STREAM_PROFILE, async (event, payload) => {
     const record = readRecord(payload);

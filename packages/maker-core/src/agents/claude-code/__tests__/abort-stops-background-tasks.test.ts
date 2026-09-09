@@ -219,6 +219,7 @@ async function startSessionWithStream(
     vendorOptions?: Record<string, unknown>;
     autoCompactThresholdPct?: number;
     capturePrompts?: boolean;
+    resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
   },
 ) {
   const configDir = await makeTempDir();
@@ -257,6 +258,7 @@ async function startSessionWithStream(
 
   const agent = new ClaudeCodeAgent({
     ...createDeps({
+      resolveModelContextLimit: opts?.resolveModelContextLimit,
       runtimeConfig: {
         ...(opts?.autoCompactThresholdPct === undefined
           ? {}
@@ -3195,4 +3197,18 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
       vi.useRealTimers();
     }
   });
+});
+
+
+it('applies an explicit model window to Claude runtime and compression accounting', async () => {
+  const { handle, fakeQueries } = await startSessionWithStream(undefined, {
+    resolveModelContextLimit: (_provider, model) => model === 'claude-opus-4-6' ? 600_000 : null,
+  });
+  expect(handle.getUsageSnapshot().contextWindow).toBe(600_000);
+  await handle.send({ type: 'user', content: 'hello' });
+  expect(fakeQueries).toHaveLength(1);
+  const query = sdkMock.query.mock.calls[0]![0] as { options: { env: Record<string, string> } };
+  expect(JSON.parse(query.options.env.XDT_MAKER_MODEL_CONTEXT_WINDOWS)).toMatchObject({ 'claude-opus-4-6[1m]': 600_000 });
+  expect(query.options.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('600000');
+  await handle.close();
 });

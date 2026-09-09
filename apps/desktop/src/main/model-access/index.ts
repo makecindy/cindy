@@ -181,6 +181,7 @@ function applyGatewayModels(
     authenticatedUserId?: string;
     authoritative?: boolean;
     preservePaymentRequiredRoutes?: boolean;
+    suppressEmbeddingFallback?: boolean;
   } = {},
 ): void {
   // 同一次 /models 响应建立 XD 模型与价格投影。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
@@ -221,6 +222,7 @@ function applyGatewayModels(
   setXdGatewayModels(models, {
     authoritative: options.authoritative ?? false,
     preservePaymentRequiredRoutes: options.preservePaymentRequiredRoutes,
+    suppressEmbeddingFallback: options.suppressEmbeddingFallback,
   });
 }
 
@@ -364,7 +366,7 @@ function getSync(): CredentialsSync {
             preservePaymentRequiredRoutes: shouldPreservePaymentRequiredRoutes(status),
           });
         } else if (['disabled', 'unsupported', 'idle'].includes(status.state)) {
-          applyGatewayModels([]);
+          applyGatewayModels([], { suppressEmbeddingFallback: true });
         }
       },
       log: {
@@ -472,7 +474,7 @@ export function initModelAccess(): void {
       authGeneration++;
       accountTier = null;
       // 旧身份模型清单不能跨账号/区域继续显示;新身份拉取成功后再注入。
-      applyGatewayModels([]);
+      applyGatewayModels([], { suppressEmbeddingFallback: true });
     }
     lastAuthUserId = isAuthenticated ? (userId ?? lastAuthUserId) : null;
     lastAuthRealm = isAuthenticated ? (realm ?? lastAuthRealm) : null;

@@ -84,8 +84,10 @@
 
 ## 2. 运行时沙箱与进程隔离
 
-- 每个运行中的插件使用独立 Electron 沙箱进程与专属 session partition。沙箱禁止直接访问
-  Node、宿主文件系统和网络。
+- 每个运行中的插件使用独立 Electron 沙箱进程与按 owner × plugin 隔离的内存 session
+  partition。同插件的 `settingsHtml`、panel 与逻辑页继续共享该 partition，保留 browser
+  storage 与 `BroadcastChannel` 契约；沙箱禁止直接访问 Node、宿主文件系统和通用网络，
+  唯一例外是第 4 节明确限定的 HTTPS 图片资源。
 - 插件只允许读取自身安装目录内、经安全相对路径校验的静态资源，不得越权读取其它目录。
 - 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 保持零特权桥。
 - 主机按 `webContents` 绑定反查真实 ghostId，**不信任 sender 自报身份**。
@@ -284,7 +286,9 @@
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
   `ghost_call` 的 `attachments`／`dir`／`save_dir` 在目标位于 workdir 外时，普通权限档
-  仍沿用现有确认与授权记忆策略；仅当 Host 能现读到**本地活跃会话**的运行时权限恰为
+  仍沿用现有确认与授权记忆策略；Auto 档把真实过户动作交给当前会话的 AI 审阅器，
+  allow 逐次放行、block 返回原因、ask 或服务故障才交用户确认。Full Access 旁路则仅当
+  Host 能现读到**本地活跃会话**的运行时权限恰为
   `bypassPermissions`（Full Access）时自动批准。该判定不得读取启动期 MCP context 快照，
   也不得回退可能滞后的 DB `permission_mode`。business `sessionId` 不足以证明仍是同一内存
   Session，必须同时匹配由 Maker 铸造、调用方不可覆盖的 instance identity；权限切换在途、
@@ -293,10 +297,11 @@
   identity 写入 Host 生成的 loopback URL；桥接层必须将 URL identity 与注册表中的当前实例
   严格比对，不匹配直接 401。兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
   但必须剥除 instance 能力，使 Full Access 自动交接继续 fail closed。
-  自动批准须在日志标明来源为 Full Access，不得伪装为用户点击，也不得写入人工目录授权
+  自动批准须区分 Full Access 与 AI 审阅来源，不得伪装为用户点击，也不得写入人工目录授权
   记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
   边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
-  授权。热切回其它档位后新请求必须恢复确认。此旁路**不适用于** workspace 创建、插件
+  授权。切回 Ask 后新请求恢复确认。Auto 的工作区草稿创建和媒体路径揭示也逐动作送审，
+  审阅期间任务实例、轮次或权限变化时旧 allow 失效。Full Access 旁路**不适用于** workspace 创建、插件
   Setup、OAuth、Secret／凭证或其它运行时确认边界，也不改变第 3.1 节的安装／更新策略。
   `dir`／`save_dir` 批准的是裁决时解析到的 canonical realpath 快照；出票必须使用该规范路径
   并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
@@ -316,6 +321,16 @@
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
+- 所有插件 HTML 页面（`settingsHtml`、panel、mainView 与逻辑页）都可以通过 `<img>` 或
+  CSS 图片直接加载任意 HTTPS 地址，这是唯一的页面网络直连例外。Host 统一生成包含
+  `img-src https:` 的 CSP，并由 owner × plugin session 请求闸把外部请求严格限定为
+  `protocol === "https:" && resourceType === "image"`。HTTP 图片、`fetch` / XHR、脚本、
+  样式表、字体、音视频、WebSocket 与其它协议一律不因此放行；同 ghost 的
+  `cindy-ghost://` 资源继续放行。该能力不新增 HTML sanitizer 或图片属性白名单；既有 CSP
+  继续阻止内联脚本和内联事件处理器，同包脚本行为不变。远程图片请求会向第三方暴露用户的
+  网络地址及完整 URL，作者不得把密钥、令牌或用户私密数据拼进图片 URL。session listener
+  按 owner × plugin 幂等注册；设置页与同插件其它页面继续共享 browser storage、IndexedDB
+  与 `BroadcastChannel`。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 - `iosSimulator` 能力只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
@@ -493,8 +508,9 @@ topic 路由；产品层多端语义见
 
 ## Review 清单
 
-1. 沙箱是否保持进程隔离、专属 partition、无 Node／宿主 FS／网络直连？身份是否由主机
-   反查而非信任 sender 自报？
+1. 沙箱是否保持进程隔离、专属 partition、无 Node／宿主 FS／通用网络直连？HTTPS 图片
+   例外是否仍严格限定为 `protocol === "https:" && resourceType === "image"`？身份是否由
+   主机反查而非信任 sender 自报？
 2. 是否先按执行者分清边界：当前 Agent 在途的通用操作是否严格绑定同插件、同会话、
    未交卷的 `callId` 并复用 Agent 授权；插件自主 Host 能力是否以 manifest 直接字段声明、
    在详情如实展示并由 Host 守门？是否误把安装弹窗或前端展示当成授权事实？

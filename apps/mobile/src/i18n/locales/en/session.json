@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "Some scheduled runs did not finish. Check the run history.",
+    "dismissTitle": "Dismiss past failure notice"
+  },
   "common": {
     "cancel": "Cancel",
     "delete": "Delete",
@@ -174,6 +178,7 @@
     "composerSessionNotSynced": "This session has not finished syncing yet.",
     "composerCreating": "Creating the session; you can keep sending after the first message goes out.",
     "nextAgentSwitch": "Next switches to {{agent}} · {{model}}",
+    "nextModelSelection": "Next · {{model}}",
     "createFailedTitle": "Session Creation Failed",
     "createFailedDefault": "Session creation failed.",
     "createFailedNotice": "Session creation failed: {{message}}",
@@ -249,8 +254,9 @@
     "forkCancel": "Cancel"
   },
   "shareImage": {
-    "title": "Share conversation",
-    "selectedCount": "{{count}} selected",
+    "title": "Share Conversation",
+    "subtitle_one": "{{count}} message selected",
+    "subtitle_other": "{{count}} messages selected",
     "selectAll": "Select All",
     "clearAll": "Deselect All",
     "cancel": "Cancel sharing",
@@ -267,6 +273,14 @@
     "composerPlaceholder": "What should we work on today?",
     "voiceSelectDeviceFirst": "Select a device before using voice input.",
     "creatingSession": "Creating session",
+    "slowSend": {
+      "preparing": "Preparing to send…",
+      "uploading": "Uploading attachments…",
+      "connecting": "Connecting to your computer…",
+      "checkingModel": "Checking model settings…",
+      "creating": "Creating session…",
+      "sending": "Sending your message…"
+    },
     "createAndSend": "Create session and send first message",
     "modelAccessibility": "Model: {{model}}",
     "voiceInput": "Voice input",
@@ -322,6 +336,7 @@
     "worktreeBranchSaving": "Syncing the selected branch…",
     "worktreeBranchSyncFailed": "Could not confirm the saved source branch — retry the branch selection",
     "worktreeSettingsSaving": "Syncing the worktree setting…",
+    "worktreeSettingsSyncFailed": "Could not confirm the saved worktree setting — retry the toggle",
     "worktreeBranchesRetry": "Could not load branches. Tap to retry",
     "worktreeDetecting": "Detecting environment…",
     "worktreeRecovering": "Reconnecting and retrying automatically…",
@@ -384,6 +399,37 @@
       "system": "System"
     },
     "usageSection": "Usage",
+    "usage": {
+      "quota": "Quota",
+      "week": "This week",
+      "hours": "{{count}} hours",
+      "minutes": "{{count}} minutes",
+      "remaining": "{{percent}}% remaining",
+      "resets": "Resets {{time}}",
+      "awaitingRefresh": "Awaiting refresh",
+      "balance": "Available balance",
+      "cycle": "Used this cycle",
+      "today": "Used today",
+      "unavailable": "Unavailable",
+      "quotaUnavailable": "Account quota unavailable",
+      "accountOnly": "ChatGPT account quota; this task's use of this plan is unconfirmed",
+      "lastUpdated": "Last updated {{time}}",
+      "taskUsage": "Task usage",
+      "taskValue": "Task value",
+      "taskCost": "Task cost",
+      "actualCost": "Actual cost",
+      "estimatedValue": "Estimated value",
+      "totalTokens": "Total tokens",
+      "seeDetails": "View breakdown",
+      "valueUnavailable": "Some task value is unavailable",
+      "valueExplanation": "Value is estimated from usage and reference prices. It is not an actual charge.",
+      "source": {
+        "chatgpt": "ChatGPT subscription",
+        "claude": "Claude subscription",
+        "xai": "SuperGrok subscription",
+        "gateway": "Cindy AI"
+      }
+    },
     "refreshContextUsage": "Refresh context usage",
     "currentSessionSpend": "This session",
     "noSessionSpend": "No session usage yet",

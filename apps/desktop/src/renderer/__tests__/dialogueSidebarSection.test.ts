@@ -82,8 +82,13 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
 
   it('offers the dialogue group as an opt-in toggle, not a fixed section', () => {
     expect(mainListModelSource).toContain('groupDialogue');
-    expect(projectsSectionSource).toContain('DialogueGroupNode');
-    expect(projectsSectionSource).toContain("t('ccAgent.sidebar.dialogues')");
+    /*
+      组件 2026-08-23 改名为 SessionGroupNode:对话组与**伙伴组**是同一种东西 ——
+      一个带标题的会话组,只差图标和标题,所以参数化而不是复制一份出来。
+      对话组仍是它的默认形态(不传 groupIcon / groupTitle 时逐字如旧)。
+    */
+    expect(projectsSectionSource).toContain('SessionGroupNode');
+    expect(projectsSectionSource).toContain("groupTitle ?? t('ccAgent.sidebar.dialogues')");
   });
 
   it('loads archived sessions on demand for the selected connected remote devices', () => {
@@ -110,9 +115,13 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     expect(sidebarSource).not.toContain('retryRemoteSessionBootstrap(device.deviceId)');
     expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.retryTasks'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoading'");
-    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoadFailed'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoading'");
-    expect(sidebarSource).toContain('retryDeviceLinkDeviceList');
+    // 设备目录失败不打断侧栏:断网或远端不可达时都继续显示本地与已缓存内容。
+    expect(sidebarSource).not.toContain('kind="devices"\n                  status="error"');
+    expect(sidebarSource).not.toContain('retryDeviceLinkDeviceList');
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.devicesLoadFailed'");
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.devicesPartiallyFailed'");
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.retryDevices'");
     // 即使有旧/空 shard，本轮 gave-up 也必须进 error，不能把缓存伪装成权威结果。
     expect(remoteProjectsHookSource).toContain("if (result === 'gave-up') {");
     expect(remoteProjectsHookSource).not.toContain(
@@ -126,6 +135,17 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     expect(sidebarSource).toContain('useRemoteArchivedFailedDeviceIds()');
     expect(sidebarSource).toContain('useRemoteArchivedLoadedDeviceIds()');
     expect(sidebarSource).toContain("if (filter.status === 'archived')");
+  });
+
+  it('keeps device directory loading as quiet text without a background panel', () => {
+    expect(sidebarSource).toContain(
+      "const quietDeviceLoading = kind === 'devices' && status === 'loading';",
+    );
+    expect(sidebarSource).toContain(
+      "'mx-3 flex flex-col items-center gap-3 px-4 py-8 text-center text-[var(--text-secondary)]'",
+    );
+    expect(sidebarSource).toContain('!quietDeviceLoading &&');
+    expect(sidebarSource).toContain('bg-[var(--surface-chip)] text-[var(--text-secondary)]');
   });
 
   it('keeps remote background loading from changing the sidebar layout', () => {
@@ -174,9 +194,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   // 不再按当前机器作用域猜(作用域可能是「所有」或另一台设备)。
   it('creates the dialogue on the device that owns the group when grouping by device', () => {
     // 设备段把自己的设备作为创建目标传下去:本机段 null,远程段 {deviceId, deviceName}。
-    expect(projectsSectionSource).toContain(
-      'const sectionDialogueTarget = section.deviceId',
-    );
+    expect(projectsSectionSource).toContain('const sectionDialogueTarget = section.deviceId');
     expect(projectsSectionSource).toContain(
       'renderNonProjectEntry(entry, key, sectionDialogueTarget)',
     );

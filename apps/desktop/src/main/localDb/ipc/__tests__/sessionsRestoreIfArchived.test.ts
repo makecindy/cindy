@@ -5,6 +5,8 @@
  * 一条条件 UPDATE 同时校验 archived 状态和项目身份，不能用 get + update 两步校验。
  */
 import Database from 'better-sqlite3';
+import os from 'node:os';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
@@ -19,6 +21,7 @@ const h = vi.hoisted(() => ({
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   tapWindowBroadcast: vi.fn(),
+  resourceLock: vi.fn(async (_resources: readonly string[], task: () => Promise<unknown>) => task()),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
@@ -52,6 +55,11 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
+vi.mock('../../../worktree/resourceLock', () => ({
+  physicalWorktreeKey: async (value: string) => value,
+  withWorktreeResourceLocks: h.resourceLock,
+}));
+vi.mock('../../../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: vi.fn() }));
 
 import { registerSessionIpc } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
@@ -103,6 +111,7 @@ function createDb(): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
@@ -160,6 +169,7 @@ function readStatus(): string {
 beforeEach(() => {
   vi.clearAllMocks();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
+  h.resourceLock.mockImplementation(async (_resources, task) => task());
   h.handlers.clear();
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
@@ -171,6 +181,61 @@ afterEach(() => {
 });
 
 describe('local-db:sessions:restore-if-archived', () => {
+  function managedIdentity(): ExpectedIdentity {
+    const root = path.join(os.tmpdir(), 'cindy-restore-lock-fixture', '.cindy-worktrees', 'work');
+    const workingDir = path.join(root, 'src');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run(workingDir, root, 'target');
+    return { ...ORIGINAL_IDENTITY, workingDir };
+  }
+
+  it('waits for a recycler holding the physical worktree lock before making the task active', async () => {
+    const identity = managedIdentity();
+    let acquired!: () => void;
+    const waiting = new Promise<void>((resolve) => { acquired = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    h.resourceLock.mockImplementationOnce(async (_resources, task) => {
+      acquired();
+      await gate;
+      return task();
+    });
+
+    const restoring = restore('target', identity);
+    await waiting;
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.resourceLock).toHaveBeenCalledWith(
+      expect.arrayContaining([path.dirname(identity.workingDir!)]), expect.any(Function),
+    );
+    release();
+    await expect(restoring).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('publishes active status before a later recycler can enter the resource lock', async () => {
+    const identity = managedIdentity();
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let tail = Promise.resolve<unknown>(undefined);
+    h.resourceLock.mockImplementation((_resources, task) => {
+      const next = tail.then(task);
+      tail = next;
+      return next;
+    });
+    // Hold the first lock holder long enough to enqueue both the restore and a later recycler.
+    const blocker = h.resourceLock([], async () => { entered(); await gate; });
+    await waiting;
+    const restoring = restore('target', identity);
+    await vi.waitFor(() => expect(h.resourceLock).toHaveBeenCalledTimes(2));
+    const canRecycle = h.resourceLock([], async () => readStatus() === 'archived');
+    release();
+    await blocker;
+    await expect(restoring).resolves.toMatchObject({ status: 'active' });
+    await expect(canRecycle).resolves.toBe(false);
+  });
+
   it('restores when archived status and the full project identity still match', async () => {
     const updated = (await restore()) as { id: string; status: string };
 
@@ -228,5 +293,13 @@ describe('local-db:sessions:restore-if-archived', () => {
 
   it('throws NOT_FOUND when the session no longer exists', async () => {
     await expect(restore('missing')).rejects.toThrow('[NOT_FOUND]');
+  });
+
+  it('does not restore Bot history through the ordinary task lifecycle', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET source = 'bot' WHERE id = 'target'").run();
+
+    await expect(restore()).rejects.toThrow(/Bot task lifecycle/);
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 });

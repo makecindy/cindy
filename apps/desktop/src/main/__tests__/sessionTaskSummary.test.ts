@@ -241,7 +241,7 @@ describe('sessionListPreviewPatch', () => {
 describe('turn-done list preview refresh', () => {
   it('回合结束后先刷新列表预览,再按需生成置顶摘要', () => {
     const registerSource = readFileSync(
-      resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
+      resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
       'utf8',
     );
     const summarySource = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');

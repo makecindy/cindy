@@ -106,6 +106,74 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
   `prepare(...).all()` 之类的同步查询。
 - 多步骤写操作需要原子性时使用已有命名事务／worker transaction，不在 Renderer 拼装
   数据库流程。
+- **新客户端写 `messages` 的连接必须先注册 `cjk_seg`。** SQLite 自定义函数是连接级的，
+  不进 schema。0100 起持久 `messages_fts` insert/update 触发器只写原文，并在
+  `cjk_seg` 已注册时跳过；新连接打开后由 `registerCjkSeg` 挂 TEMP 触发器按字写入。
+  旧客户端看不到 TEMP、也不会注册该函数，插入仍成功，只是新行不再按字切。生产
+  worker、migration runner、漂移修复都经由 `createBetterSqliteDatabase` /
+  `createWorkerDatabase` 注册。分词规格冻结在 `cjkSeg.ts`（只收
+  `\p{Script=Han}`）；改这个函数必须配新的重建 migration。
+
+## SQLite 语义避坑清单
+
+这些是真实踩过、且失败形态全部是「无报错静默出错」的 SQLite 语义。命中相关场景时
+先读本节；修复某条时必须在测试里锁定对应不变量（现有范例：
+`cjkTempTriggersSurvival.test.ts`）。
+
+### TEMP 对象 vs `PRAGMA temp_store`（#3841）
+
+**规则：连接上任何 TEMP 对象（TEMP TABLE / TEMP TRIGGER / TEMP VIEW / TEMP INDEX）
+的创建，必须排在该连接最后一次 `temp_store` 相关 pragma 执行之后。**
+
+SQLite 官方语义（[PRAGMA 文档](https://www.sqlite.org/pragma.html#pragma_temp_store)）：
+
+> "When the temp_store setting is changed, all existing temporary tables, indices,
+> triggers, and views are immediately deleted."
+
+即 **变更 `temp_store` 会立即、无报错地删除连接上全部现有 TEMP 对象**。这不是某个
+驱动的 bug，纯 Node、worker_threads、Electron、`:memory:` 与文件库行为一致。
+
+事故形态（#3841，v0.1.72）：`createWorkerDatabase` 先 `registerCjkSeg`（挂 TEMP 触发器）
+后 `applyPragmas`（含 `temp_store = MEMORY`），触发器被静默清空；持久触发器又因
+`cjk_seg` 函数守卫同时跳过 → 增量消息写入两条路都不进 FTS → 升级用户侧栏搜索按内容
+完全打不中新消息。全库 310 行漏索引，无任何 error 日志。
+
+**硬性约定**：
+
+1. 连接初始化顺序必须是「pragma → 注册 UDF → 挂 TEMP 对象」。worker 两条路径
+   （`worker/runtime.ts` 的 `createWorkerDatabase`、`client/WorkerThreadTransport.ts`
+   的 `createDatabase`）直接按此顺序执行。主进程 `openWithPragmas` 因工厂承担
+   native binding 解析与权限收紧，实际是「工厂（注册 UDF + 挂 TEMP）→ pragma →
+   `ensureCjkFtsTempTriggersInstalled` 重挂」；pragma 会清掉工厂刚挂的 TEMP 对象，
+   由收口函数重挂。新增路径优先按 worker 顺序写，不得在 TEMP 对象创建之后再
+   执行 `temp_store` pragma 而不收口。
+2. 新增连接级初始化代码时，禁止在 TEMP 对象创建之后再插入任何 `temp_store` pragma；
+   需要调整 temp 存储策略时，必须同步审计所有 TEMP 对象的创建时机。
+3. 挂载后必须经 `ensureCjkFtsTempTriggersInstalled` 收口：自检不在 → 重挂一次 →
+   仍不在则抛错拒绝启动。宁可 init 失败，不可静默漏索引。
+4. 复现极轻量：`:memory:` 单测里「`registerCjkSeg` → `temp_store` pragma → 断言
+   触发器消失」即可稳定复现（见 `cjkTempTriggersSurvival.test.ts`）。若某个疑似
+   SQLite 状态类 bug 在最小单测里复现不了，先怀疑自己的复现序列不对，再怀疑环境。
+
+### 持久 schema 不得引用连接级 UDF
+
+**规则：写入 `drizzle/` 的持久触发器/视图/生成列，函数引用只能是 SQLite 内建函数；
+自定义函数（UDF）只允许出现在连接级 TEMP 对象里。**
+
+UDF 是连接级的、不进 schema。持久触发器体内引用 UDF 时，任何未注册该 UDF 的连接
+（回退的旧客户端、维护脚本、只读分析工具）在 prepare 阶段就会报
+`no such function` —— 注意 **`WHEN` 守卫防不住这一条**：函数解析发生在语句编译期，
+`WHEN` 是运行期判断。`messages_fts` 的持久触发器因此只写原文并用 `pragma_function_list`
+守卫跳过，按字写入交给 TEMP 触发器；这个双层结构是被迫的，不要"简化"成持久触发器
+直调 UDF。
+
+### 通用教训
+
+- 「CREATE/写入了」≠「生效了」。凡是创建后依赖它工作的东西（触发器、函数、虚拟表
+  扩展），创建动作本身必须紧跟一条存在性/行为断言，断言失败 fail-loud。
+- 失败形态是「无报错 + 功能静默缺失」的 SQLite 交互，review 和测试都拦不住直觉盲区；
+  涉及 schema 联动的新设计，先在最小 `:memory:` 单测里验证「创建 → 生效 → 持久存在」
+  完整链条，再落实现。
 
 ## Review 清单
 
@@ -116,3 +184,6 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
 4. companion 是否为 CommonJS、确定性且具备必要的历史兼容守卫？
 5. 是否只在隔离数据库或 replay fixture 上运行了未合入 migration？
 6. `db:validate` 与 migration replay 是否都通过？未执行时是否明确说明原因？
+7. 是否新增或调整了连接初始化顺序（pragma / UDF 注册 / TEMP 对象）？若是，是否
+   经 `ensureCjkFtsTempTriggersInstalled` 收口？worker 路径是否保持「pragma →
+   UDF → TEMP」；主进程若必须「工厂 → pragma」，pragma 后是否立即重挂？

@@ -46,7 +46,9 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
+import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
+import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -83,6 +85,8 @@ export interface CodexRuntimeState {
   generationPendingToolIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
+  /** Model time sampled with the latest accepted output usage. */
+  generationOutputDurationMs: number;
   generationTurnId: string | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
@@ -128,6 +132,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
     generationDurationMs: 0,
+    generationOutputDurationMs: 0,
     generationTurnId: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
@@ -179,6 +184,7 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
+  rt.generationOutputDurationMs = 0;
   rt.generationTurnId = null;
   rt.generationTimingReliable = true;
 }
@@ -490,10 +496,13 @@ export interface ClassifiedCodexError {
 
 /**
  * ErrorNotification 与 turn/completed.turn.error 共用的结构化分类。
- * 只消费 Codex wire schema 的 codexErrorInfo；additionalDetails / stderr 不参与判定。
+ * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
+ * 唯一例外：远端 compact 密文 400 会把 `additionalDetails` 拼进 classify 文本，
+ * 因为用户形态经常是 message=`Error running remote compact task`、code 在 details 里。
  */
 export function classifyCodexError(error: {
   message?: string;
+  additionalDetails?: unknown;
   codexErrorInfo?: import('./app-server/protocol.js').CodexErrorInfo | null;
 } | null | undefined): ClassifiedCodexError {
   const rawMessage = error?.message ?? 'codex error';
@@ -509,9 +518,14 @@ export function classifyCodexError(error: {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const isCapacityError =
     parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
   const reason = isCapacityError
     ? UPSTREAM_OVERLOAD_REASON
-    : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+    : errorInfoTag === 'contextWindowExceeded' ||
+        isContextOverflowErrorMessage(message) ||
+        isRemoteCompactEncryptedContentError(compactClassifyText)
       ? CONTEXT_OVERFLOW_REASON
       : undefined;
   return {
@@ -1405,7 +1419,13 @@ function handleCommandExecution(
     type: 'tool_result_full',
     data: {
       toolUseId: item.id,
-      fullText: stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+      // #3793:bwrap 沙箱初始化失败(命令从未执行)时追加宿主归因标注,
+      // 模型不再盲目重试,用户在工具卡里能看到原因。健康与普通失败路径原样。
+      fullText: annotateSandboxInitFailure(
+        stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        isError,
+        item.command,
+      ),
       isError,
     },
     source: 'codex',

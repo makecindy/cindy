@@ -83,7 +83,7 @@ function makeFakeHost(deviceId: string) {
           requestId: args[0] as string,
           decision: args[1] as Record<string, unknown>,
         });
-        return null;
+        return { accepted: true };
       case 'maker:get-pending-interactions':
         return pending.get(args[0] as string) ?? [];
       case 'local-db:messages:list':
@@ -147,7 +147,7 @@ type FakeHost = ReturnType<typeof makeFakeHost>;
 /** window.electronAPI 桩:maker.* 本机响应通道用 vi.fn(校验「本机会话不经隧道」),deviceLink 接 FakeHost。 */
 function stubElectronApi(host: FakeHost) {
   const fanOut = () => () => () => {};
-  const localResolveInteraction = vi.fn(async () => {});
+  const localResolveInteraction = vi.fn(async () => ({ accepted: true }));
   const localSetPermissionMode = vi.fn(async () => {});
   const localSetFastMode = vi.fn(async () => {});
   const localGetPendingInteractions = vi.fn(
@@ -237,6 +237,39 @@ afterEach(() => {
 });
 
 describe('device-link 远程交互往返 — permission', () => {
+  it('远程确认失败只重查当前请求，不影响同一被控端的另一条确认', async () => {
+    const failedSession = sid();
+    const healthySession = sid();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: failedSession }, { id: healthySession }] as Session[]);
+    const request = { kind: 'permission', requestId: 'failed-receipt', toolName: 'Read', input: {} };
+    host.seedPending(failedSession, request);
+    host.hostInteraction(failedSession, request);
+    host.hostInteraction(healthySession, { ...request, requestId: 'healthy-receipt' });
+    host.invoke.mockRejectedValueOnce(new Error('receipt lost'));
+    makerChatStore.respondToPermission(failedSession, { behavior: 'allow' });
+    makerChatStore.respondToPermission(healthySession, { behavior: 'allow' });
+    await flush();
+    expect(makerChatStore.getSnapshot(failedSession).pendingPermission).toMatchObject({ submitting: false, submissionFailed: true });
+    expect(makerChatStore.getSnapshot(healthySession).pendingPermission).toBeNull();
+    expect(host.resolved.map((call) => call.requestId)).toEqual(['healthy-receipt']);
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [failedSession]);
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    expect(local.localGetPendingInteractions).not.toHaveBeenCalled();
+  });
+
+  it('切换数据归属后，旧的确认回包不得修改当前卡片', async () => {
+    const s = openRemoteSession();
+    let resolveReceipt!: (value: { accepted: boolean }) => void;
+    host.invoke.mockReturnValueOnce(new Promise((resolve) => { resolveReceipt = resolve; }));
+    host.hostInteraction(s, { kind: 'permission', requestId: 'old-owner', toolName: 'Read', input: {} });
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    const pending = makerChatStore.getSnapshot(s).pendingPermission;
+    setDataOwnerGeneration('new-owner', 1);
+    resolveReceipt({ accepted: true });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBe(pending);
+  });
+
   it('被控端 permission 请求 → 控制端置 pendingPermission → allow 经隧道回传', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {
@@ -960,8 +993,8 @@ describe('远程交互接线不变式', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('if (sourceRemoteDeviceId) {');
     expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, start + 2800);
-    const atomic = body.indexOf('? { effort: newEffort, fastMode: restoredFast }');
+    const body = src.slice(start, start + 4400);
+    const atomic = body.indexOf('effort: atomicEffort,', body.indexOf('useAtomicSelection'));
     const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
@@ -985,7 +1018,7 @@ describe('远程交互接线不变式', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const atomic = body.indexOf('? { effort: targetEffort, fastMode: restoredFast }');
+    const atomic = body.indexOf('effort: remoteAtomicEffort,', body.indexOf('useAtomicSelection'));
     const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
@@ -1078,7 +1111,9 @@ describe('远程交互接线不变式', () => {
     const providerBody = src.slice(providerStart, providerEnd);
     expect(modelBody).toContain('remoteDeviceId: sourceRemoteDeviceId');
     expect(modelBody).toContain('onEffortDidChange?.(newEffort, sessionId, sourceRemoteDeviceId)');
-    expect(modelBody).toContain('confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId)');
+    expect(modelBody).toMatch(
+      /confirmModelSwitchContextGuard\(\s*newModelId,\s*sourceRemoteDeviceId,\s*effectiveSourceId,/,
+    );
     expect(modelBody).toMatch(
       /persistFastModeChange\(restoredFast,\s*\{[\s\S]*?remoteDeviceId: sourceRemoteDeviceId/,
     );
@@ -1255,7 +1290,7 @@ describe('远程交互接线不变式', () => {
 
     const applyStart = src.indexOf('const applyModelAndEffort = async');
     expect(applyStart).toBeGreaterThan(-1);
-    const applyBody = src.slice(applyStart, applyStart + 3200);
+    const applyBody = src.slice(applyStart, applyStart + 5200);
     expect(applyBody).toContain('modelMemory?.setFast(');
     expect(applyBody).toMatch(
       /modelMemory\?\.setFast\(\s*currentModelAgentKind,\s*newProviderId,\s*modelId,\s*restoredFast,?\s*\)/,
@@ -1269,13 +1304,13 @@ describe('远程交互接线不变式', () => {
     const end = src.indexOf('const handleNavigateToProviders', start);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const runtimeGate = body.indexOf(
-      'const setModelResult = await window.electronAPI.maker.setModel(',
-    );
-    const atomicSelection = body.indexOf('{ effort: eff, fastMode: restoredFast }');
+    const runtimeGate = body.indexOf('await setModelWithFinalWindowConfirmation(');
+    const atomicSelection = body.indexOf('effort: atomicEffort,', runtimeGate);
+    const atomicFast = body.indexOf('fastMode: restoredFast,', atomicSelection);
     const applyUi = body.indexOf('applyProviderSelection();');
     expect(runtimeGate).toBeGreaterThan(-1);
     expect(atomicSelection).toBeGreaterThan(runtimeGate);
+    expect(atomicFast).toBeGreaterThan(atomicSelection);
     expect(applyUi).toBeGreaterThan(-1);
     expect(atomicSelection).toBeLessThan(applyUi);
     expect(body).not.toContain('await sessionService.update(sessionId, {');
@@ -1288,16 +1323,13 @@ describe('远程交互接线不变式', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const runtimeGate = body.indexOf(
-      'const setModelResult = await window.electronAPI.maker.setModel(',
-    );
-    const atomicSelection = body.indexOf(
-      '{ effort: newEffort, fastMode: restoredFast }',
-      runtimeGate,
-    );
+    const runtimeGate = body.indexOf('await setModelWithFinalWindowConfirmation(');
+    const atomicSelection = body.indexOf('effort: atomicEffort,', runtimeGate);
+    const atomicFast = body.indexOf('fastMode: atomicFast,', atomicSelection);
     const applyUi = body.indexOf('onModelDidChange?.(newModelId)');
     expect(runtimeGate).toBeGreaterThan(-1);
     expect(atomicSelection).toBeGreaterThan(runtimeGate);
+    expect(atomicFast).toBeGreaterThan(atomicSelection);
     expect(applyUi).toBeGreaterThan(-1);
     expect(atomicSelection).toBeLessThan(applyUi);
     expect(body).not.toContain('await sessionService.update(sessionId, {');
@@ -1397,16 +1429,18 @@ describe('远程交互接线不变式', () => {
     expect(body).not.toContain('persist:');
 
     const main = mainSrc('maker-ipc/register.ts');
-    const transactionStart = main.indexOf('const applyDirectoryGrants = (');
+    const transactionStart = main.indexOf('export function applyDirectoryGrants(');
     expect(transactionStart).toBeGreaterThan(-1);
-    const transaction = main.slice(transactionStart, transactionStart + 4_000);
+    const transactionEnd = main.indexOf('export async function applyLibraryReadonlyExtraDir(', transactionStart);
+    expect(transactionEnd).toBeGreaterThan(transactionStart);
+    const transaction = main.slice(transactionStart, transactionEnd);
     expect(transaction).toContain('withSendToSessionLock(sessionId');
     expect(transaction).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
   });
 
   it('F5: loadAroundMessage 经 aroundMessagesFor 路由(远程隧道,不查控制端空库)', () => {
     const src = read('lib/makerChatStore.ts');
-    expect(src).toContain('aroundMessagesFor(sessionId, messageId, opts)');
+    expect(src).toContain('aroundMessagesFor(sessionId, messageId, view?.getSnapshot().ready ? { radius: 0 } : opts)');
   });
 
   it('F7: dispatch handleSubscriptionFrame 拒绝 legacy "*"(只 link-open 可订全量)', () => {

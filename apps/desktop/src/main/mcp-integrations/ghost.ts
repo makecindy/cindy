@@ -1,3 +1,5 @@
+import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
+import { isBotAuthorizationSession } from '../maker-ipc/botAuthorizationHost.js';
 /**
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
@@ -32,7 +34,7 @@ import type {
   CindyGhostInfo,
   CindyGhostsMcpDeps,
 } from 'cindy-tools';
-import type { PermissionMode } from '@cindy/maker-core';
+import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import {
@@ -97,12 +99,14 @@ import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
+import type { MediaDownloadContext } from '../cindy-media/mediaDownload.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import { createForgeIconConverter } from './forgeIconConversion.js';
 import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
+import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -176,6 +180,7 @@ async function packForgeSource(
 export interface GhostGrantLiveSessionState {
   permissionMode: PermissionMode | null;
   remoteHostId: string | null;
+  reviewAction?: (action: ReviewableAction) => Promise<AutoReviewDecision>;
 }
 
 /**
@@ -188,6 +193,7 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
+  createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
   /**
@@ -223,7 +229,7 @@ export interface CindyGhostsHostDeps {
   onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 
-type GhostGrantApprovalSource = 'user' | 'full-access';
+type GhostGrantApprovalSource = 'user' | 'full-access' | 'auto-review';
 
 /** 确认卡内嵌图片预览的文件体积上限(只是预览阈值,不是过户限制——超阈值
  *  照样可过户,卡片上退化为文件名 + 路径 + 大小)。 */
@@ -395,6 +401,18 @@ async function requestGrantConfirm(params: {
         });
         return { ok: true, approvalSource: 'full-access' };
       }
+      if (live?.permissionMode === 'auto' && live.reviewAction) {
+        const decision = await live.reviewAction(toolAutoReviewAction('plugin_file_handoff', {
+          ghostId: params.ghostId,
+          lane: params.lane,
+          files: params.items.map(({ absPath, size, mimeType, isDirectory }) => ({ absPath, size, mimeType, isDirectory })),
+        }, live.remoteHostId ? 'These are files on the controller, NOT the remote task filesystem.' : undefined));
+        if (decision.verdict === 'allow') {
+          log.info('ghost grant: AI approved outside-workdir handoff', { ghostId: params.ghostId, lane: params.lane, grantSource: 'auto-review' });
+          return { ok: true, approvalSource: 'auto-review' };
+        }
+        if (decision.verdict === 'block') return { ok: false, message: decision.reason ?? 'Automatic review denied this file handoff.' };
+      }
     } catch (error) {
       // 自动扩权查询必须 fail closed:运行时状态读不到就继续走原确认路径,
       // 绝不回退可能滞后的 DB permission_mode。
@@ -434,16 +452,19 @@ async function requestGrantConfirm(params: {
     message:
       decision.reason === 'timeout'
         ? '过户确认超时:用户未在时限内响应,本次调用已取消;如仍需要,请提醒用户后重试'
-        : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
+        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+          ? `Cindy 已取消本次过户请求（${decision.reason}），并非用户手动拒绝。`
+          : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
   };
 }
 
 /**
- * 媒体仓路径揭示必须由 Host-owned 点击确认授权。用户是否在正文里“明确问过”
- * 只能指导 Agent 何时发起，不能作为安全边界；模型本身无法代替用户点按钮。
+ * 媒体仓路径揭示按当前 Auto 审阅或既有人工确认授权；审阅故障回退确认。
  */
 async function requestMediaPathRevealConfirm(params: {
   sessionId: string | null;
+  sessionInstanceId: string | null;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
   absPath: string;
   mimeType: string;
 }): Promise<{ ok: true } | { ok: false; errorCode: string; message: string }> {
@@ -453,6 +474,23 @@ async function requestMediaPathRevealConfirm(params: {
       errorCode: 'LOCAL_PATH_REVEAL_CONFIRM_UNAVAILABLE',
       message: '当前调用没有会话语境，无法让用户确认是否把本机路径返回给 Agent',
     };
+  }
+  if (params.sessionInstanceId && params.getLiveSessionGrantState) {
+    try {
+      const live = params.getLiveSessionGrantState(params.sessionId, params.sessionInstanceId);
+      if (live?.permissionMode === 'auto' && live.reviewAction) {
+        const decision = await live.reviewAction(toolAutoReviewAction('cindy_media.resolve_local_path', {
+          path: params.absPath, mimeType: params.mimeType,
+        }, 'Return the controller local path of this managed media to the agent.'));
+        if (decision.verdict === 'allow') return { ok: true };
+        if (decision.verdict === 'block') return {
+          ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED', message: decision.reason ?? 'Automatic review denied revealing this path.',
+        };
+      }
+    } catch {
+      // Same failure boundary as file handoffs: a live-state/reviewer exception
+      // must reach the existing confirmation path, never disclose the path.
+    }
   }
   const bridge = getGhostGrantConfirmBridge();
   if (!bridge) {
@@ -494,7 +532,9 @@ async function requestMediaPathRevealConfirm(params: {
     message:
       decision.reason === 'timeout'
         ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
-        : '用户未允许把本机路径返回给 Agent，不要重试',
+        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+          ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
+          : '用户未允许把本机路径返回给 Agent，不要重试',
   };
 }
 
@@ -1222,7 +1262,10 @@ export function collectCindyMediaUrls(
   }
 }
 
-function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
+function visibleChipGhosts(
+  workdir: string | null,
+  vendorOptions?: Readonly<Record<string, unknown>>,
+): InstalledGhost[] {
   return getGhostManager()
     .list()
     .filter(
@@ -1231,6 +1274,7 @@ function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.manifest.kind === 'chip' &&
         ghostHasTools(ghost) &&
+        isFrozenBuiltinPluginAllowed(vendorOptions, ghost.manifest.id) &&
         !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
     );
 }
@@ -1310,10 +1354,36 @@ export function getCindyGhostsMcpDeps(
 ): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
+  const isGhostAllowedByFrozenProfile = (ghostId: string): boolean =>
+    isFrozenBuiltinPluginAllowed(resolveSessionContext()?.vendorOptions, ghostId);
+  const frozenProfileDenied = () => ({
+    ok: false as const,
+    errorCode: 'GHOST_DISABLED_IN_WORKDIR' as const,
+    message: '当前伙伴配置未启用该插件；不要重试，改用已授权能力，或让用户更新伙伴配置后再试。',
+  });
   return {
+    connectAccount: async (target) => {
+      if (target.kind === 'plugin' && !isGhostAllowedByFrozenProfile(target.id))
+        return frozenProfileDenied();
+      const context = resolveSessionContext();
+      const sessionId = ghostSetupInteractionSessionId(context);
+      if (!sessionId) return { ok: false, errorCode: 'NO_SESSION_CONTEXT' };
+      const service = getBotAuthorizationService();
+      if (!service) return { ok: false, errorCode: 'HOST_NOT_READY' };
+      return service.request(sessionId, target);
+    },
     callMedia: async (request) => {
-      const result = await callCindyMedia(request);
-      const sessionId = resolveSessionContext()?.sessionId;
+      const sessionContext = resolveSessionContext();
+      const sessionId = sessionContext?.sessionId;
+      const downloadContext = (request.action === 'request' || request.action === 'poll') && sessionId && sessionContext?.sessionInstanceId
+        ? hostDeps.createMediaDownloadContext?.(sessionId, sessionContext.sessionInstanceId)
+        : undefined;
+      let result: Record<string, unknown>;
+      try {
+        result = await callCindyMedia(request, downloadContext);
+      } finally {
+        downloadContext?.dispose?.();
+      }
       if (request.action === 'resolve_local_path' && result.ok !== false) {
         const localPath = typeof result.local_path === 'string' ? result.local_path : '';
         const mimeType = typeof result.mime_type === 'string' ? result.mime_type : '';
@@ -1326,6 +1396,8 @@ export function getCindyGhostsMcpDeps(
         }
         const confirmed = await requestMediaPathRevealConfirm({
           sessionId: sessionId ?? null,
+          sessionInstanceId: resolveSessionContext()?.sessionInstanceId ?? null,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
           absPath: localPath,
           mimeType,
         });
@@ -1363,9 +1435,10 @@ export function getCindyGhostsMcpDeps(
     // 宁缺勿全,不注入工具描述;Codex 正常 startSession 的 developerInstructions
     // 会在拿到真实 workdir 后单独装配 system 段。
     getRosterItems() {
-      const workdir = resolveSessionContext()?.workingDir;
+      const context = resolveSessionContext();
+      const workdir = context?.workingDir;
       if (!workdir) return [];
-      return visibleChipGhosts(workdir)
+      return visibleChipGhosts(workdir, context?.vendorOptions)
         .map((g) => {
           const recall = ghostRecall(g);
           return {
@@ -1379,15 +1452,20 @@ export function getCindyGhostsMcpDeps(
     async listAwakeGhosts(): Promise<CindyGhostInfo[]> {
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
-      const workdir = resolveSessionContext()?.workingDir ?? null;
-      return visibleChipGhosts(workdir)
+      const context = resolveSessionContext();
+      const workdir = context?.workingDir ?? null;
+      return visibleChipGhosts(workdir, context?.vendorOptions)
         .map(toCindyGhostInfo);
     },
     async getAwakeGhost(ghostId) {
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir).find(
+      const visible = visibleChipGhosts(
+        workdir,
+        resolveSessionContext()?.vendorOptions,
+      ).find(
         (ghost) => ghost.manifest.id === ghostId,
       );
       if (visible) {
@@ -1400,6 +1478,9 @@ export function getCindyGhostsMcpDeps(
       };
     },
     async readGhostManual({ ghostId, path: manualPath }) {
+      if (!isGhostAllowedByFrozenProfile(ghostId)) {
+        return { ...frozenProfileDenied(), manual: [], content: '' };
+      }
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
       if (!visibility.ok) {
@@ -1437,6 +1518,7 @@ export function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -1476,6 +1558,13 @@ export function getCindyGhostsMcpDeps(
           errorCode: 'INTERNAL',
           message: '插件设置通道尚未就绪，本次调用未执行。',
         };
+      }
+      const authorizationSessionId = ghostSetupInteractionSessionId(sessionContext);
+      const authorizationService = getBotAuthorizationService();
+      if (authorizationService && authorizationSessionId && await isBotAuthorizationSession(authorizationSessionId)) {
+        const service = authorizationService;
+        const card = await service.request(authorizationSessionId, { kind: 'plugin', id: ghostId, ...(setupPlan && getGhostSetupAssessment(ghostId).reauthSuggest ? { reauthorize: true } : {}) }, setupPlan);
+        if (!card.ok) return card;
       }
       const setup = await setupCoordinator.ensureReady({
         sessionId: ghostSetupInteractionSessionId(sessionContext),
@@ -1686,6 +1775,7 @@ export function getCindyGhostsMcpDeps(
       // Pre-dispatch revalidation: attachment grants and dir tickets may have
       // taken time; confirm the target is still available before committing the
       // callId and dispatching to the sandbox.
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const preDispatchVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -1730,6 +1820,7 @@ export function getCindyGhostsMcpDeps(
         }
       }
       // Full revalidation after session-context await (DB query may take time)
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const postCtxVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -1776,6 +1867,7 @@ export function getCindyGhostsMcpDeps(
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
         sessionId: callSessionContext?.sessionId ?? null,
+        sessionInstanceId: callSessionContext?.sessionInstanceId,
         // 未声明 network 的 Agent 调用只能借本机 Agent 授权走 Desktop 出网；
         // SSH remote 会话保留 host id，由 networkSlot 明确拒绝本地出口。
         remoteHostId: callSessionContext?.remoteHostId ?? null,

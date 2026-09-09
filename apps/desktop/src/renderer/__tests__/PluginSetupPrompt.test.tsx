@@ -589,3 +589,27 @@ describe('PluginSetupPrompt', () => {
     });
   });
 });
+
+describe('teammate authorization card presentation', () => {
+  it('omits a missing brand icon and uses the service name directly', () => {
+    const { container } = render(<PluginSetupPrompt compact pending={pending} viewerState="expanded"
+      commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={() => {}} />);
+    expect(screen.getByText('Filo Google')).toBeTruthy();
+    expect(container.querySelector('img')).toBeNull();
+  });
+  it('keeps reopen distinct from a fresh authorization action', () => {
+    const command = vi.fn();
+    render(<PluginSetupPrompt compact pending={{ ...pending, reopenActionId: 'reopen-authorization', steps: pending.steps.map(step => ({ ...step, phase: 'waiting_external' })) }} viewerState="expanded"
+      commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={command} />);
+    fireEvent.click(screen.getByText(i18n.t('newChat.pluginSetup.reopen')));
+    expect(command).toHaveBeenCalledWith('setup-1', 'run_action', 'reopen-authorization');
+    fireEvent.click(screen.getByText(i18n.t('newChat.pluginSetup.retry')));
+    expect(command).toHaveBeenCalledWith('setup-1', 'run_action', 'oauth-connect:google-account');
+  });
+  it('collapses completed controls but retains the account identity', () => {
+    render(<PluginSetupPrompt compact pending={{ ...pending, terminal: true, steps: pending.steps.map(step => ({ ...step, phase: 'satisfied', action: undefined })) }} viewerState="expanded"
+      commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={() => {}} />);
+    expect(screen.getByText('Filo Google')).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+});

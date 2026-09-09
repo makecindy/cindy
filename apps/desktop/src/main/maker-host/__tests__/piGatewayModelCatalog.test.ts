@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Catalog } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
 import {
   resolveBundledPiGatewayModelProfile,
@@ -54,6 +54,7 @@ const currentGatewayModelsByApi = {
     'qwen/qwen3.8-max',
     'tencent/hy3',
     'z-ai/glm-5.3-flash',
+    'z-ai/glm-5.3-highspeed',
   ],
   'google-generative-ai': [
     'google/gemini-3.7-flash',
@@ -129,9 +130,7 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
         { id: 'openrouter', protocol: 'openai-chat', modelId: 'moonshot/kimi-k3' },
       ],
     });
-    expect(resolveCatalogPiGatewayModelApi(catalog, 'moonshot/kimi-k3')).toBe(
-      'anthropic-messages',
-    );
+    expect(resolveCatalogPiGatewayModelApi(catalog, 'moonshot/kimi-k3')).toBe('anthropic-messages');
   });
 
   it('does not borrow an exact namespaced id without a registry provider route', () => {
@@ -166,9 +165,7 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
     const catalog = serverCatalog({
       gatewayModelId: 'moonshot/kimi-k3',
       routes: [{ providerId: 'moonshot-kimi-global', modelId: 'kimi-k3' }],
-      presets: [
-        { id: 'moonshot-kimi-global', protocol: 'anthropic-messages', modelId: 'kimi-k3' },
-      ],
+      presets: [{ id: 'moonshot-kimi-global', protocol: 'anthropic-messages', modelId: 'kimi-k3' }],
     });
     catalog.modelRegistry!.models[0]!.status = 'retired';
     expect(resolveCatalogPiGatewayModelApi(catalog, 'moonshot/kimi-k3')).toBeNull();
@@ -185,6 +182,17 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
 });
 
 describe('Pi Gateway version-matched local supplement catalog', () => {
+  it.each(['google/gemini-3.8-flash', 'gemini-3.8-flash', 'google/gemini-99-pro-preview[1m]'])(
+    'keeps new XD Gemini route %s on Google without a per-model registration',
+    (id) =>
+      expect(resolveBundledPiGatewayModelProfile(id)).toEqual({ api: 'google-generative-ai' }),
+  );
+
+  it.each(['other/gemini-99-pro', 'google/not-gemini-99', 'google/gemini-99/other'])(
+    'does not extend the XD Google policy to unrelated identity %s',
+    (id) => expect(resolveBundledPiGatewayModelProfile(id)).toBeUndefined(),
+  );
+
   it('returns the exact Kimi native API and complete tool replay compatibility', () => {
     expect(resolveBundledPiGatewayModelProfile('moonshotai/kimi-k3')).toMatchObject({
       api: 'openai-completions',
@@ -202,6 +210,23 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
     });
   });
 
+  it('does not reuse serializer metadata after an authoritative API correction', () => {
+    const entry = BUNDLED_CATALOG.modelRegistry!.models.find((model) =>
+      model.routes.some(
+        (route) => route.providerId === 'xd' && route.modelId === 'moonshot/kimi-k3',
+      ),
+    )!;
+    const original = entry.nativeApi;
+    try {
+      entry.nativeApi = 'anthropic-messages';
+      expect(resolveBundledPiGatewayModelProfile('moonshot/kimi-k3')).toEqual({
+        api: 'anthropic-messages',
+      });
+    } finally {
+      entry.nativeApi = original;
+    }
+  });
+
   it.each([
     ['anthropic/claude-opus-5', 'anthropic-messages'],
     ['codex/gpt-5.5:auto', 'openai-responses'],
@@ -209,6 +234,7 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
     ['deepseek/deepseek-v4-pro', 'openai-completions'],
     ['qwen/qwen3.8-flash', 'openai-completions'],
     ['z-ai/glm-5.3-flash', 'openai-completions'],
+    ['z-ai/glm-5.3-highspeed', 'openai-completions'],
   ] as const)('resolves %s from the local Pi model table', (modelId, api) => {
     expect(resolveBundledPiGatewayModelProfile(modelId)).toMatchObject({ api });
   });
@@ -221,7 +247,7 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
         actualApi: resolveBundledPiGatewayModelProfile(modelId)?.api,
       })),
     );
-    expect(resolved).toHaveLength(46);
+    expect(resolved).toHaveLength(47);
     expect(resolved.filter((entry) => entry.actualApi !== entry.expectedApi)).toEqual([]);
   });
 
@@ -229,7 +255,11 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
     expect(resolveBundledPiGatewayModelProfile('z-ai/glm-5.2')).toMatchObject({
       api: 'openai-completions',
       compat: { thinkingFormat: 'zai', zaiToolStream: true },
-      thinkingLevelMap: { low: 'high', medium: 'high', high: 'high', max: 'max' },
+      thinkingLevelMap: { low: null, medium: null, high: 'high', max: 'max' },
+    });
+    expect(resolveBundledPiGatewayModelProfile('z-ai/glm-5.3-flash')).toMatchObject({
+      api: 'openai-completions',
+      thinkingLevelMap: { low: 'low', high: 'high', max: 'max', xhigh: null },
     });
     expect(resolveBundledPiGatewayModelProfile('z-ai/glm-5.1')).toEqual({
       api: 'openai-completions',

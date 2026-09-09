@@ -7,6 +7,8 @@ import {
 } from '@/session/mobileVoiceLanguage';
 import {
   DictationRefiner,
+  formatVoiceInputHistoryContext,
+  normalizeVoiceHistoryText,
   extractJsonStringFieldSnapshot,
   type DictationRefinementContext,
   type TextModelClient,
@@ -72,6 +74,26 @@ export interface MobileVoiceDraftInsertion {
   text: string;
 }
 
+export interface MobileVoiceSelection {
+  start: number;
+  end: number;
+}
+
+export function insertVoiceTranscriptDraftWithRange(
+  current: string,
+  transcript: string,
+  selection: MobileVoiceSelection,
+): { draft: string; insertion: MobileVoiceDraftInsertion | null } {
+  const text = transcript.trim();
+  if (!text) return { draft: current, insertion: null };
+  const start = Math.max(0, Math.min(current.length, selection.start));
+  const end = Math.max(start, Math.min(current.length, selection.end));
+  return {
+    draft: current.slice(0, start) + text + current.slice(end),
+    insertion: { start, end: start + text.length, text },
+  };
+}
+
 interface VoicePresignResult {
   putUrl: string;
   key: string;
@@ -87,9 +109,6 @@ interface CloudVoiceDeps {
   fetch?: typeof fetch;
 }
 
-const MOBILE_VOICE_INPUT_HISTORY_HEADER = '语音输入历史（旧到新，仅作术语、别名和用词风格参考）：';
-const MAX_MOBILE_VOICE_HISTORY_ENTRIES_FOR_REFINEMENT = 100;
-const MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS = 360;
 const MAX_REFINER_RESPONSE_CHARS = 64_000;
 const MAX_ERROR_DETAIL_CHARS = 1_000;
 
@@ -247,6 +266,7 @@ export function buildMobileVoiceRefinementContext(
     uiLanguage?: string;
     sourceLanguage?: string;
     refinementContext?: DictationRefinementContext;
+    /** Persisted per-host history, including the imported desktop snapshot. */
     localVoiceInputHistory?: readonly string[];
     /**
      * 从被控桌面拉来的词典快照。托管路径的 credential 本身不带词典
@@ -258,7 +278,7 @@ export function buildMobileVoiceRefinementContext(
 ): DictationRefinementContext {
   const settings = credential.settings;
   const dictionaryEntries = options.dictionaryEntries ?? settings?.dictionaryEntries ?? [];
-  const history = mergeMobileVoiceHistories(settings?.voiceInputHistory, options.localVoiceInputHistory);
+  const history = normalizeMobileVoiceHistoryNewestFirst(options.localVoiceInputHistory ?? settings?.voiceInputHistory ?? []);
   const uiLanguage = options.refinementContext?.uiLanguage?.trim()
     || options.uiLanguage?.trim()
     || currentMobileVoiceUiLanguage();
@@ -669,35 +689,15 @@ function formatMobileVoiceDictionary(
 }
 
 function formatMobileVoiceHistory(history: readonly string[]): string {
-  const entries = normalizeMobileVoiceHistoryNewestFirst(history).reverse();
-  if (entries.length === 0) return '';
-  return [
-    MOBILE_VOICE_INPUT_HISTORY_HEADER,
-    ...entries.map((entry) => `- ${entry}`),
-  ].join('\n');
-}
-
-function mergeMobileVoiceHistories(
-  syncedDesktopHistory: readonly string[] | undefined,
-  localMobileHistory: readonly string[] | undefined,
-): string[] {
-  return normalizeMobileVoiceHistoryNewestFirst([
-    ...(localMobileHistory ?? []),
-    ...(syncedDesktopHistory ?? []),
-  ]);
+  return formatVoiceInputHistoryContext(history.map((text) => ({ text })));
 }
 
 function normalizeMobileVoiceHistoryNewestFirst(history: readonly string[]): string[] {
   const entries: string[] = [];
   for (const item of history) {
-    const text = item
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS)
-      .trim();
+    const text = normalizeVoiceHistoryText(item);
     if (!text || entries.includes(text)) continue;
     entries.push(text);
-    if (entries.length >= MAX_MOBILE_VOICE_HISTORY_ENTRIES_FOR_REFINEMENT) break;
   }
   return entries;
 }

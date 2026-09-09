@@ -86,6 +86,8 @@ export class RemoteFileBrowserManager {
   private readonly log: Logger;
   /** in-flight 或已就绪的 client(promise 形态做并发去重)。 */
   private readonly clients = new Map<string, Promise<FileServiceClient>>();
+  /** Per-alias fence preventing stale endpoint builds from publishing. */
+  private readonly endpointGenerations = new Map<string, number>();
   /**
    * per-host 事件订阅者(搜索流 / P4 watch)。生命周期独立于 client——client
    * 断链重建后 buildClient 会重新挂一个转发器,订阅者无感。
@@ -99,6 +101,23 @@ export class RemoteFileBrowserManager {
     this.log = deps.logger ?? log;
   }
 
+  private currentEndpointGeneration(hostId: string): number {
+    return this.endpointGenerations.get(hostId) ?? 0;
+  }
+
+  private advanceEndpointGeneration(hostId: string): void {
+    this.endpointGenerations.set(hostId, this.currentEndpointGeneration(hostId) + 1);
+  }
+
+  private assertCurrentEndpointGeneration(hostId: string, generation: number): void {
+    if (this.currentEndpointGeneration(hostId) !== generation) {
+      throw new FileServiceRpcError(
+        'ENDPOINT_STALE',
+        `remote file-service endpoint changed while work was in flight: ${hostId}`,
+      );
+    }
+  }
+
   /**
    * 类型安全的远程调用入口。断链自动重建一次(仅幂等读方法);其余错误原样抛
    * FileServiceRpcError(caller 决定 throwIpcError 还是 {ok:false})。
@@ -108,10 +127,15 @@ export class RemoteFileBrowserManager {
     method: M,
     params: FsRpcMethods[M]['params'],
   ): Promise<FsRpcMethods[M]['result']> {
-    const client = await this.getClient(hostId);
+    const generation = this.currentEndpointGeneration(hostId);
+    const client = await this.getClient(hostId, generation);
+    this.assertCurrentEndpointGeneration(hostId, generation);
     try {
-      return await client.request(method, params);
+      const result = await client.request(method, params);
+      this.assertCurrentEndpointGeneration(hostId, generation);
+      return result;
     } catch (err) {
+      this.assertCurrentEndpointGeneration(hostId, generation);
       const code = (err as FileServiceRpcError)?.code;
       if (
         (code === 'CHANNEL_CLOSED' || code === 'CHANNEL_ERROR') &&
@@ -123,8 +147,10 @@ export class RemoteFileBrowserManager {
         // 伪失败;变更类断链一律把错误交回调用方由用户决定重试。
         this.log.warn('file-service channel lost, rebuilding', { hostId, method });
         this.clients.delete(hostId);
-        const rebuilt = await this.getClient(hostId);
-        return await rebuilt.request(method, params);
+        const rebuilt = await this.getClient(hostId, generation);
+        const result = await rebuilt.request(method, params);
+        this.assertCurrentEndpointGeneration(hostId, generation);
+        return result;
       }
       if (code === 'CHANNEL_CLOSED' || code === 'CHANNEL_ERROR') {
         // 变更类断链仍要重建 client,让下一次调用可用;本次错误如实上抛。
@@ -170,14 +196,14 @@ export class RemoteFileBrowserManager {
 
   /** 主动断开某 host 的 client(host 断开 / 应用退出清理)。幂等。 */
   async disposeHost(hostId: string): Promise<void> {
+    this.advanceEndpointGeneration(hostId);
     const pending = this.clients.get(hostId);
     if (!pending) return;
     this.clients.delete(hostId);
-    try {
-      (await pending).dispose();
-    } catch {
-      // 建链失败的 promise——无资源可清
-    }
+    // Do not await an in-flight build: it may be blocked on readiness. The
+    // generation fence makes it fail before publishing, then this continuation
+    // disposes any client it managed to construct.
+    void pending.then((client) => client.dispose()).catch(() => undefined);
   }
 
   async disposeAll(): Promise<void> {
@@ -185,17 +211,18 @@ export class RemoteFileBrowserManager {
     await Promise.allSettled(ids.map((id) => this.disposeHost(id)));
   }
 
-  private getClient(hostId: string): Promise<FileServiceClient> {
+  private getClient(hostId: string, generation: number): Promise<FileServiceClient> {
     const existing = this.clients.get(hostId);
     if (existing) {
       // 已有 in-flight 或活 client;死 client 在 await 后甄别并重建。
       return existing.then((c) => {
+        this.assertCurrentEndpointGeneration(hostId, generation);
         if (!c.isDead) return c;
         if (this.clients.get(hostId) === existing) this.clients.delete(hostId);
-        return this.getClient(hostId);
+        return this.getClient(hostId, generation);
       });
     }
-    const building = this.buildClient(hostId);
+    const building = this.buildClient(hostId, generation);
     this.clients.set(hostId, building);
     building.catch(() => {
       // 建链失败不留缓存,下次请求重走全链。
@@ -205,10 +232,12 @@ export class RemoteFileBrowserManager {
   }
 
   /** 完整就绪链:连接 → probe → 需要则装 → 启 daemon → handshake。 */
-  private async buildClient(hostId: string): Promise<FileServiceClient> {
+  private async buildClient(hostId: string, generation: number): Promise<FileServiceClient> {
     await this.deps.ensureHostReady(hostId);
+    this.assertCurrentEndpointGeneration(hostId, generation);
 
     let probe = await this.deps.probe(hostId);
+    this.assertCurrentEndpointGeneration(hostId, generation);
     // bundleVersion 也参与比较:schema 兼容的 daemon 行为修复(如新增错误码)
     // 只 bump bundle 版本,不比它就永远不会重推,修复会静默发不出去。
     const needsInstall =
@@ -233,20 +262,30 @@ export class RemoteFileBrowserManager {
         localBundle: FILE_SERVICE_BUNDLE_VERSION,
       });
       const r = await this.deps.install(hostId);
+      this.assertCurrentEndpointGeneration(hostId, generation);
       if (!r.ready) {
         throw new FileServiceRpcError('INSTALL_FAILED', r.error ?? 'file-service install failed');
       }
       probe = await this.deps.probe(hostId);
+      this.assertCurrentEndpointGeneration(hostId, generation);
     }
 
+    this.assertCurrentEndpointGeneration(hostId, generation);
     const host = this.deps.getHost(hostId);
     const rgArg = probe.rgPath ? ` --rg ${shq(probe.rgPath)}` : '';
     const stream = await host.execStream(
       `${shq(probe.nodeBinaryPath)} ${shq(probe.binaryPath)}${rgArg}`,
     );
+    try {
+      this.assertCurrentEndpointGeneration(hostId, generation);
+    } catch (err) {
+      try { stream.kill(); } catch { /* best effort */ }
+      throw err;
+    }
     const client = new FileServiceClient({ stream, logger: this.log });
     try {
       const info = await client.connect();
+      this.assertCurrentEndpointGeneration(hostId, generation);
       this.log.info('file-service connected', { hostId, ...info });
       // 事件转发:daemon event 帧 → 该 host 的所有订阅者。挂在 client 上,
       // client 死亡自动清;重建时这里重新挂,订阅者(hostListeners)无感。
@@ -274,7 +313,9 @@ export class RemoteFileBrowserManager {
       // (bundle 半新半旧的罕见态)——重推后由 caller 的下一次请求重走建链。
       if ((err as FileServiceRpcError)?.code === 'SCHEMA_MISMATCH') {
         this.log.warn('handshake schema mismatch, forcing reinstall', { hostId });
+        this.assertCurrentEndpointGeneration(hostId, generation);
         await this.deps.install(hostId);
+        this.assertCurrentEndpointGeneration(hostId, generation);
       }
       throw err;
     }

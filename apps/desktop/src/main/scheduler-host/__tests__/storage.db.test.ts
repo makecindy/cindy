@@ -256,14 +256,18 @@ const SCHEDULER_DDL = [
   `,
 ];
 
-function createStorageHarness() {
+function createStorageHarness(queries?: { query: string; params: unknown[] }[]) {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
   for (const statement of SCHEDULER_DDL) sqlite.exec(statement);
 
-  const db = drizzle(sqlite, { schema }) as SchedulerDrizzleDb;
+  const db = drizzle(sqlite, {
+    schema,
+    logger: queries ? { logQuery: (query, params) => queries.push({ query, params }) } : undefined,
+  }) as SchedulerDrizzleDb;
   return {
     close: () => sqlite.close(),
+    sqlite,
     db,
     storage: new DrizzleScheduleStorage(() => db),
   };
@@ -391,11 +395,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       const initial = new Map(
         (await harness.storage.listSidebarIndexRuns()).map((run) => [run.runId, run]),
       );
-      expect([...initial.keys()]).toEqual([
-        'run-old-unread',
-        'run-old-running',
-        'run-latest-read',
-      ]);
+      expect([...initial.keys()]).toEqual(['run-old-unread', 'run-old-running', 'run-latest-read']);
       expect(initial.get('run-latest-read')?.sessionId).toBe('sess-sidebar-index');
       expect(initial.get('run-old-unread')?.sessionId).toBe('sess-sidebar-index');
       expect(initial.get('run-old-running')?.sessionId).toBeUndefined();
@@ -419,6 +419,62 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(
         (await harness.storage.listSidebarIndexRuns()).every((run) => run.sessionId === undefined),
       ).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('retains only the latest read failure per session alongside unread runs and latest ownership', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-failure-history' });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('sess-failure-history', 'Failure history', 'desktop', 'dialogue', 1, 1)
+      `);
+      await harness.storage.insert(schedule);
+      await harness.storage.insert(baseSchedule({ id: 'sch-latest-owner' }));
+      for (const [id, status, firedAt, readAt] of [
+        ['old-unread', 'failed', 10, undefined],
+        ['old-read', 'failed', 20, 21],
+        ['latest-failure', 'interrupted', 30, undefined],
+        ['aborted', 'aborted', 40, 41],
+      ] as const) {
+        await harness.storage.insertRun({
+          id,
+          status,
+          firedAt,
+          readAt,
+          scheduleId: schedule.id,
+          sessionId: 'sess-failure-history',
+        });
+      }
+      await harness.storage.insertRun({
+        id: 'latest-success',
+        status: 'success',
+        firedAt: 50,
+        readAt: 51,
+        scheduleId: 'sch-latest-owner',
+        sessionId: 'sess-failure-history',
+      });
+      expect((await harness.storage.listSidebarIndexRuns()).map((run) => run.runId)).toEqual([
+        'old-unread',
+        'latest-failure',
+        'latest-success',
+      ]);
+
+      await harness.storage.updateRun('latest-failure', { readAt: 60 });
+      await harness.storage.updateRun('old-unread', { readAt: 60 });
+      const afterRead = await harness.storage.listSidebarIndexRuns();
+      expect(afterRead.map((run) => run.runId)).toEqual(['latest-failure', 'latest-success']);
+      expect(afterRead[0]).toMatchObject({
+        status: 'interrupted',
+        readAt: 60,
+        sessionId: 'sess-failure-history',
+      });
+      expect(afterRead[1]).toMatchObject({ scheduleId: 'sch-latest-owner' });
+      // 独立重查仍保留失败记录，已读并未删除历史。
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual(afterRead);
     } finally {
       harness.close();
     }
@@ -1167,7 +1223,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
   it('merges direct-only snapshot with a later message ledger update', async () => {
     const harness = createStorageHarness();
-    const schedule = baseSchedule({ id: 'sch-direct-only-snapshot', targetSessionId: 'sess-direct-only' });
+    const schedule = baseSchedule({
+      id: 'sch-direct-only-snapshot',
+      targetSessionId: 'sess-direct-only',
+    });
     const dbClient = { drizzle: harness.db } as unknown as DbClient;
     try {
       harness.db.run(sql`
@@ -1522,4 +1581,59 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       harness.close();
     }
   });
+});
+
+it('excludes internal routine rows in SQLite before materializing the public sidebar index', async () => {
+  const queries: { query: string; params: unknown[] }[] = [];
+  const harness = createStorageHarness(queries);
+  try {
+    for (const id of ['public', 'legacy', 'routine-owned']) {
+      await harness.storage.insert(baseSchedule({ id, source: id === 'routine-owned' ? 'bot' : 'user' }));
+      harness.db.run(sql`INSERT INTO sessions (id, title) VALUES (${id}, ${id})`);
+      await harness.storage.insertRun({ id: `${id}-failed`, scheduleId: id, sessionId: id, firedAt: 1, status: 'failed', readAt: 2 });
+      await harness.storage.insertRun({ id: `${id}-running`, scheduleId: id, sessionId: id, firedAt: 2, status: 'running' });
+      await harness.storage.insertRun({ id: `${id}-latest`, scheduleId: id, sessionId: id, firedAt: 3, status: 'success', readAt: 4 });
+    }
+    harness.db.run(sql`UPDATE schedules SET source = NULL WHERE id = 'legacy'`);
+    for (let i = 0; i < 128; i++) {
+      await harness.storage.insertRun({ id: `routine-unread-${i}`, scheduleId: 'routine-owned', sessionId: 'routine-owned', firedAt: i + 4, status: 'success' });
+    }
+    queries.length = 0;
+    const runs = await harness.storage.listSidebarIndexRuns();
+    expect(new Set(runs.map((run) => run.scheduleId))).toEqual(new Set(['public', 'legacy']));
+
+    // Execute the captured SQL directly: a final JS filter alone cannot pass this assertion.
+    const indexQueries = queries.filter(({ query }) =>
+      query.startsWith('select "schedule_runs"."id", "schedules"."id",'),
+    );
+    expect(indexQueries).toHaveLength(4);
+    for (const { query, params } of indexQueries) {
+      const rows = harness.sqlite.prepare(query).all(...params) as { source: string | null }[];
+      expect(rows.every((row) => row.source !== 'bot')).toBe(true);
+    }
+    expect(await harness.storage.listRuns('routine-owned', 131)).toHaveLength(131);
+  } finally {
+    harness.close();
+  }
+});
+
+it('excludes internal routine history from public indexes, unread counts and deletion', async () => {
+  const harness = createStorageHarness();
+  try {
+    await harness.storage.insert(baseSchedule({ id: 'public' }));
+    await harness.storage.insert(baseSchedule({ id: 'routine-owned', source: 'bot', manual: true }));
+    await harness.storage.insertRun({ id: 'public-run', scheduleId: 'public', firedAt: 1, finishedAt: 2, status: 'success' });
+    await harness.storage.insertRun({ id: 'routine-run', scheduleId: 'routine-owned', firedAt: 1, finishedAt: 2, status: 'success' });
+    expect((await harness.storage.listSidebarIndexRuns()).map((run) => run.runId)).toEqual(['public-run']);
+    expect(await harness.storage.getUnreadRunCount()).toBe(1);
+    await expect(harness.storage.deleteRun('routine-run', { excludeBotSchedules: true })).resolves.toBeNull();
+    expect(await harness.storage.listRuns('routine-owned')).toHaveLength(1);
+    await harness.storage.markAllUnreadRuns();
+    expect(await harness.storage.getUnreadRunCount()).toBe(0);
+    expect((await harness.storage.listRuns('routine-owned'))[0].readAt).toBeUndefined();
+    await expect(harness.storage.deleteRun('routine-run')).resolves.toMatchObject({ id: 'routine-run' });
+    await expect(harness.storage.deleteRun('public-run', { excludeBotSchedules: true })).resolves.toMatchObject({ id: 'public-run' });
+  } finally {
+    harness.close();
+  }
 });

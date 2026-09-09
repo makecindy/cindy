@@ -12,6 +12,33 @@
 
 type Effort = string;
 
+/** Model-level intent, independent of the consuming harness. Old catalogs sometimes put
+ * their defaults inside perAgent; promote their shared value or the lowest declared
+ * depth on conflict. This keeps legacy members usable without picking a harness or
+ * silently increasing effort. An explicit model-level null also wins.
+ */
+export function modelDefaultEffort(model: {
+  defaultEffort?: Effort | null;
+  perAgent?: Partial<Record<string, { defaultEffort?: Effort | null }>>;
+}): Effort | null | undefined {
+  if (model.defaultEffort !== undefined) return model.defaultEffort;
+  const legacy = [...new Set(Object.values(model.perAgent ?? {})
+    .flatMap((override) => override?.defaultEffort !== undefined ? [override.defaultEffort] : []))];
+  if (legacy.length <= 1) return legacy[0];
+  return lowestEffort(legacy.filter((effort): effort is string => effort !== null));
+}
+
+/** Default for a newly discovered model with no Cindy declaration. This is product
+ * policy, not a clamp for explicit user choices: prefer medium and never invent support.
+ */
+export function defaultEffortForCapabilities<T extends string>(efforts: readonly T[]): T | null {
+  for (const preferred of ['medium', 'high', 'low', 'xhigh', 'max', 'minimal', 'ultra']) {
+    const supported = efforts.find((effort) => effort === preferred);
+    if (supported !== undefined) return supported;
+  }
+  return efforts[0] ?? null;
+}
+
 /**
  * 解析「选中某模型后应落到哪一档 effort」—— 纯函数,集中 effort 优先级策略。
  *
@@ -75,6 +102,26 @@ export function resolveRequestedEffort(args: {
     return requested;
   }
   return resolveEffort({ efforts, ...rest });
+}
+
+/**
+ * 点选时交给 SET_MODEL 的原子快照。
+ *
+ * `resolveEffort` 在无档模型上会给 UI 占位 `'low'`。那一档不能写进运行时:
+ * 目录 `efforts` 为空的模型运行时语义是 `effort: null`,塞 low 会让胶囊显示
+ * thinking low/high,实际模型却没有思考档。Fast 同样:不支持就必须是 false,
+ * 不能把上一模型的插队状态带到新模型上。
+ */
+export function composeAtomicModelSelection(args: {
+  efforts: readonly Effort[];
+  effort: Effort;
+  fastSupported: boolean;
+  requestedFast: boolean;
+}): { effort: Effort | null; fastMode: boolean } {
+  return {
+    effort: args.efforts.length === 0 ? null : args.effort,
+    fastMode: args.fastSupported && args.requestedFast,
+  };
 }
 
 /**

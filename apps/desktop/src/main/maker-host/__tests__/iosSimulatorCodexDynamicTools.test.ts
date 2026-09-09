@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createIOSSimulatorCodexDynamicToolProvider } from '../ios-simulator-codex-dynamic-tools.js';
+import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
 
 const CONTEXT = {
   sessionId: 'session-a',
@@ -11,6 +12,31 @@ const CONTEXT = {
 };
 
 describe('iOS Simulator Codex dynamic tools', () => {
+  it('does not advertise or execute the eager gateway when the Bot snapshot disables it', async () => {
+    const callTool = vi.fn();
+    const provider = createIOSSimulatorCodexDynamicToolProvider({ deps: { callTool } });
+    const context = {
+      ...CONTEXT,
+      vendorOptions: { [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['ios-simulator'] },
+    };
+
+    expect(provider.listTools(context)).toEqual([]);
+    await expect(
+      provider.callTool(
+        {
+          threadId: 'thread-disabled',
+          turnId: 'turn-disabled',
+          callId: 'call-disabled',
+          namespace: null,
+          tool: 'cindy_ios_simulator__list_tools',
+          arguments: {},
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ success: false });
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
   it('keeps the lightweight gateway discoverable so it can explain installation', () => {
     const provider = createIOSSimulatorCodexDynamicToolProvider({
       deps: { callTool: vi.fn() },

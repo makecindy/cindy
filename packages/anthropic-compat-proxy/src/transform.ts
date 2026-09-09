@@ -17,6 +17,8 @@ import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
 import type { ThreadStripController } from './thread-strip-controller.js';
 import type { RecoveryRule, RequestTransform, RequestTransformCtx } from './types.js';
 
+export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+
 /**
  * 单个 model 的请求改写 handler。
  *
@@ -1523,6 +1525,19 @@ export function createEncryptedContentRecoveryRule(opts: {
     enabled: opts.enabled,
     matches: (text) => INVALID_ENCRYPTED_CONTENT_RE.test(text),
     strip: stripEncryptedContentFromBody,
+    unrecoverableCode: (body) => {
+      // Only compaction remains opaque. A standalone reasoning rejection must retain
+      // the ordinary retry/error behavior and must never request a context rebuild.
+      if (stripEncryptedContentFromBody(body)) return null;
+      try {
+        const input = JSON.parse(body.toString('utf8')).input;
+        return Array.isArray(input) && input.some((item) => item?.type === 'compaction' &&
+          typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0)
+          ? 'CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE' : null;
+      } catch {
+        return null;
+      }
+    },
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
   };

@@ -1,5 +1,7 @@
 import { AuthApiError } from '@cindy/auth-client';
 
+import { LOGIN_PREPARING_UNLOCK_TIMEOUT_MS } from '../shared/authIpc';
+
 /**
  * 冷启动 auth 流程的「限时等待」编排 —— 与 Electron / 网络层解耦的纯逻辑,
  * 供 authManager 的 `initialize()`(splash)与 `loadLoginProviders()`(登录准备态)
@@ -83,7 +85,7 @@ export async function awaitWithStartupTimeout<T>(
  * initialize 完成、GuestRoute 放行之后才出现的。这里复用同一把闸,时限更保守
  * (30s),超时后走既有 error 步(「暂时无法登录」+ 重试);不 abort 在途 getProviders。
  */
-export const LOGIN_PREPARING_GATE_TIMEOUT_MS = 30_000;
+export const LOGIN_PREPARING_GATE_TIMEOUT_MS = LOGIN_PREPARING_UNLOCK_TIMEOUT_MS;
 
 export interface PreparingGateLog {
   info: (...args: unknown[]) => void;

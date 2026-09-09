@@ -39,6 +39,38 @@ function createSessionSerializer() {
 }
 
 describe('remote directory grant atomic update', () => {
+  it('revokes stale runtime Library access even when the persisted grant is already empty', async () => {
+    const state = createState();
+    state.runtime.extraDirs = ['cindy-library:/old'];
+    expect((await state.update('extraDirs', [])).changed).toBe(false);
+    expect(state.setExtraDirs).toHaveBeenCalledWith([]);
+    expect(state.runtime.extraDirs).toEqual([]);
+    expect(state.persist).not.toHaveBeenCalled();
+  });
+
+  it.each(['extraDirs', 'writableDirs'] as const)('does not rebroadcast identical %s, but restores rebuilt runtime grants', async (axis) => {
+    const state = createState(['/reference'], ['/output']);
+    state.runtime[axis] = [];
+    const result = await state.update(axis, [...state.db[axis]]);
+    expect(result.changed).toBe(false);
+    expect(state.runtime).toEqual(state.db);
+    expect(state.persist).not.toHaveBeenCalled();
+  });
+
+  it('does not write thousands of empty directory updates', async () => {
+    const state = createState();
+    for (let i = 0; i < 2026; i++) await state.update('extraDirs', []);
+    expect(state.persist).not.toHaveBeenCalled();
+    expect(state.setExtraDirs).toHaveBeenCalledTimes(2026);
+  });
+
+  it('still persists a conflict-filtered revocation', async () => {
+    const state = createState(['/shared'], ['/shared']);
+    expect((await state.update('extraDirs', ['/shared'])).changed).toBe(true);
+    expect(state.db.extraDirs).toEqual([]);
+    expect(state.persist).toHaveBeenCalledOnce();
+  });
+
   it('accepts exact remote retention/revocation subsets and rejects additions', () => {
     expect(isPersistedDirectoryGrantSubset([], ['/shared', '/output'])).toBe(true);
     expect(isPersistedDirectoryGrantSubset(['/shared'], ['/shared', '/output'])).toBe(true);
@@ -120,5 +152,17 @@ describe('remote directory grant atomic update', () => {
         ]),
       });
     expect(state.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('runtime setExtraDirs 抛错则不持久化,避免假授权', async () => {
+    const state = createState(['/old-read']);
+    state.setExtraDirs.mockRejectedValueOnce(new Error('require app-server 0.144.6 or newer'));
+    await expect(state.update('extraDirs', ['/library-root'])).rejects.toThrow(
+      'require app-server 0.144.6 or newer',
+    );
+    expect(state.runtime.extraDirs).toEqual(['/old-read']);
+    expect(state.db.extraDirs).toEqual(['/old-read']);
+    expect(state.persist).not.toHaveBeenCalled();
+    expect(state.terminate).not.toHaveBeenCalled();
   });
 });

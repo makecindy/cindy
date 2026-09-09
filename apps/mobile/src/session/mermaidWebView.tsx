@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { buildMermaidWebViewHtml } from '@/session/mermaidWebViewHtml';
+import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius } from '@/theme/tokens';
 
@@ -35,7 +36,9 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   testID?: string;
   /** true 时页面允许双指缩放(详情查看用;内联预览保持锁定)。 */
   zoomable?: boolean;
+  active?: boolean;
 }>(function MermaidDiagramWebView({
+  active = true,
   bare = false,
   deferSource = false,
   fill = false,
@@ -50,6 +53,11 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   // 导出任务信箱(id → promise 两端):按 id 配对回包,超时/卸载显式 reject。
   const pendingExportsRef = useRef(new Map<string, PendingExport>());
   const exportSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    return registerMobileMessageWebView('mermaid');
+  }, [active]);
 
   useImperativeHandle(ref, () => ({
     exportPng() {
@@ -80,6 +88,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   }), []);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
+    if (!active) return;
     let message: unknown;
     try {
       message = JSON.parse(event.nativeEvent.data);
@@ -103,7 +112,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
     } else {
       pending.reject(new Error(typeof error === 'string' && error ? error : 'mermaid export failed'));
     }
-  }, []);
+  }, [active]);
 
   // 卸载时清空信箱:不兜底的话 exportPng promise 永不 settle。
   useEffect(() => () => {
@@ -112,13 +121,14 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
       pending.reject(new Error('mermaid webview unmounted'));
     }
     pendingExportsRef.current.clear();
-  }, []);
+  }, [active, source]);
 
   // 构建完整 HTML 非平凡字符串工作——memo 掉,只有源码或主题变化才重建,
   // 父级无关重渲染不重付。
   const html = useMemo(
-    () =>
-      buildMermaidWebViewHtml(source, {
+    () => {
+      if (!active) return '';
+      return buildMermaidWebViewHtml(source, {
         surfaceChip: colors.surfaceChip,
         textPrimary: colors.textPrimary,
         textSecondary: colors.textSecondary,
@@ -126,8 +136,9 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
         dark: mode === 'dark',
         deferSource,
         zoomable,
-      }),
-    [source, colors.surfaceChip, colors.textPrimary, colors.textSecondary, colors.textTertiary, mode, deferSource, zoomable],
+      });
+    },
+    [active, source, colors.surfaceChip, colors.textPrimary, colors.textSecondary, colors.textTertiary, mode, deferSource, zoomable],
   );
   return (
     // 尺寸必须钉在容器上(height 或 flex:1)、WebView 用 flex:1 填满:
@@ -142,7 +153,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
       ]}
       testID={testID}
     >
-      <WebView
+      {active ? <WebView
         automaticallyAdjustContentInsets={false}
         javaScriptEnabled
         nestedScrollEnabled
@@ -156,7 +167,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
           baseUrl: 'https://xdt-maker-mobile.local',
         }}
         style={styles.webView}
-      />
+      /> : null}
     </View>
   );
 });

@@ -315,7 +315,8 @@ describe('sidebar nested namespace contract', () => {
     ]));
     expect(iosSimulatorKeys).toEqual(expect.arrayContaining([
       'requestAccess', 'status', 'call', 'setAgentControl', 'setMutationControl',
-      'setViewerVisibility', 'retryNativeRoute', 'latestFrame', 'setStreamProfile', 'liveTouch',
+      'setViewerVisibility', 'retryNativeRoute', 'latestFrame', 'copyScreenshot',
+      'setStreamProfile', 'liveTouch',
       'onH264Frame', 'onRouteStatus', 'onFocusRequest',
     ]));
   });

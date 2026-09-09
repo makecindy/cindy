@@ -52,6 +52,7 @@ const h = vi.hoisted(() => {
 
   return {
     ipcHandle: vi.fn(),
+    assertTrustedAppRendererEvent: vi.fn(),
     logDebug: vi.fn(),
     logInfo: vi.fn(),
     queryResults,
@@ -89,6 +90,9 @@ vi.mock('../agent-island/service.js', () => ({
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 vi.mock('../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
+vi.mock('../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: h.assertTrustedAppRendererEvent,
+}));
 
 import { registerSessionIpc } from '../localDb/ipc/sessions.js';
 
@@ -170,6 +174,45 @@ function resolveReferencesHandler() {
 }
 
 describe('local-db:sessions:list includePinned', () => {
+  it('projects usage-history windows before stripping agent identity from the response', async () => {
+    const resolveContextWindow = vi.fn((row: { agentKind?: string | null }) =>
+      row.agentKind === 'codex' ? 272_000 : null,
+    );
+    registerSessionIpc(undefined, { resolveContextWindow });
+    const handler = h.ipcHandle.mock.calls.find(([name]) => name === 'local-db:sessions:list')![1];
+    h.queryResults.push([
+      sessionRow('codex', { agentKind: 'codex', contextWindow: 1_050_000, contextTokens: 140_500 }),
+      sessionRow('pi', { agentKind: 'pi', contextWindow: 872_000, contextTokens: 140_500 }),
+    ]);
+    const result = await handler({}, 20, 'all', { usageHistory: true });
+    expect(result[0]).toMatchObject({ contextWindow: 272_000, contextTokens: 140_500 });
+    expect(result[1]).toMatchObject({ contextWindow: 872_000, contextTokens: 140_500 });
+    expect(result[0]).not.toHaveProperty('agentKind');
+    expect(result[1]).not.toHaveProperty('agentKind');
+  });
+
+  it.each(['local-db:sessions:get', 'local-db:sessions:list'])(
+    '%s projects historical context using the stored route without writing it',
+    async (channel) => {
+      const resolveContextWindow = vi.fn(() => 272_000);
+      registerSessionIpc(undefined, { resolveContextWindow });
+      const handler = h.ipcHandle.mock.calls.find(([name]) => name === channel)![1];
+      const saved = listRow('old-astra', {
+        agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+        contextTokens: 140_500, contextWindow: 1_050_000,
+      });
+      h.queryResults.push([saved]);
+      const result = channel.endsWith(':get')
+        ? await handler({}, 'old-astra')
+        : (await handler({}, 20, 'active'))[0];
+      expect(result).toMatchObject({ contextTokens: 140_500, contextWindow: 272_000 });
+      expect(resolveContextWindow).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+      }));
+      expect(saved.session.contextWindow).toBe(1_050_000);
+    },
+  );
+
   it('returns recent active rows plus missing active pinned rows without duplicates', async () => {
     const handler = sessionsListHandler();
     h.queryResults.push(
@@ -193,6 +236,60 @@ describe('local-db:sessions:list includePinned', () => {
     expect(result.map((s) => s.id)).toEqual(['recent']);
     expect(h.listQuery).toHaveBeenCalledTimes(1);
     expect(h.queryResults).toHaveLength(1);
+  });
+
+  it('returns the full sessions set for the usage-history query without message projections', async () => {
+    const handler = sessionsListHandler();
+    h.queryResults.push([
+      sessionRow('recent', { totalTokenUsage: 20 }),
+      sessionRow('old', { totalTokenUsage: 200 }),
+    ]);
+
+    const result = await handler({}, 20, 'all', { usageHistory: true });
+
+    expect(result.map((s) => s.id)).toEqual(['recent', 'old']);
+    expect(result[0]).toEqual({
+      id: 'recent',
+      title: 'recent',
+      model: 'sonnet',
+      providerId: null,
+      totalTokenUsage: 20,
+      contextTokens: 0,
+      contextWindow: 0,
+      userSendAt: null,
+      updatedAt: new Date(1_700_000_000_000).toISOString(),
+    });
+    expect(result[0]).not.toHaveProperty('workingDir');
+    const selectCalls = h.fakeDb.select.mock.calls as unknown as Array<unknown[]>;
+    const projection = selectCalls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(Object.keys(projection ?? {})).toEqual([
+      'id',
+      'title',
+      'model',
+      'providerId',
+      'totalTokenUsage',
+      'contextTokens',
+      'contextWindow',
+      'agentKind',
+      'userSendAt',
+      'updatedAt',
+    ]);
+    expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
+    expect(h.listQuery).not.toHaveBeenCalled();
+    expect(h.queryResults).toHaveLength(0);
+    expect(h.assertTrustedAppRendererEvent).toHaveBeenCalledWith({});
+  });
+
+  it('rejects an untrusted renderer before running the unbounded usage-history query', async () => {
+    const handler = sessionsListHandler();
+    h.assertTrustedAppRendererEvent.mockImplementationOnce(() => {
+      throw new Error('[PERMISSION_DENIED]');
+    });
+
+    await expect(handler({}, 20, 'all', { usageHistory: true })).rejects.toThrow(
+      '[PERMISSION_DENIED]',
+    );
+    expect(h.fakeDb.select).not.toHaveBeenCalled();
   });
 
   it('also includes pinned rows for the all-status bucket used by mobile detail filters', async () => {

@@ -1,3 +1,4 @@
+import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 /**
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
  *
@@ -38,12 +39,19 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
+import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
+import {
+  filterEnabledGatewayMediaModels,
+  isMediaModelExecutable,
+} from '../model-access/mediaModels.js';
+import { hasCustomProviderCredential } from './provider-connection-state.js';
 import { getBaseUrl } from '../manifestService.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
   commitActiveCatalogSnapshot,
   getActiveCatalog,
+  getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
   setCustomProviderConfigs,
@@ -74,6 +82,7 @@ import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOlla
 import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
   setCustomProviderKeyReader,
+  setCustomProviderHeaderReader,
   setOAuthTokenReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
@@ -91,7 +100,11 @@ import {
   addProviderSecretsClearedListener,
 } from '../secrets/providerSecretStore.js';
 import { readClaudeApiKey, desktopCodexAuthAdapter } from './auth-adapters.js';
-import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import {
+  getProviderSecretStore,
+  readCustomProviderHeaders,
+  readCustomProviderKey,
+} from '../secrets/providerSecretStore.js';
 import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
@@ -429,6 +442,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 接通自定义供应商密钥读取器（idempotent）：provider-route 用 setter 注入避免触电，
   // 这里在路由发生前（splash 早于任何 turn）把真实 safeStorage 读取接进去。
   setCustomProviderKeyReader(readCustomProviderKey);
+  setCustomProviderHeaderReader(readCustomProviderHeaders);
   setProviderOAuthTokenReader((providerId, agent, options) => {
     if (providerId === 'xai') return readXaiProviderOAuthToken(options);
     // Codex and Pi processes do not carry Claude Code's native OAuth credential.
@@ -747,16 +761,24 @@ export async function refreshDiscoveredCodexModels(
  *
  * best-effort：localDb 未就绪 / 读失败时清空 custom（不抛），不影响内置供应商与路由默认行为。
  */
+// Same-owner refreshes can overlap (startup readiness, model discovery, and Settings CRUD). An
+// older DB read must never publish after a newer one or a persisted capability can disappear from
+// the in-memory routing catalog until the next full app restart.
+let customProviderCatalogRefreshGeneration = 0;
+
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldApply()) {
+    log.info('discarded stale custom provider catalog refresh');
+    return;
+  }
+  const generation = ++customProviderCatalogRefreshGeneration;
+  const isCurrent = (): boolean =>
+    generation === customProviderCatalogRefreshGeneration && shouldApply();
   try {
-    if (!shouldApply()) {
-      log.info('discarded stale custom provider catalog refresh');
-      return;
-    }
     const configs = await listCustomProvidersWithSecureHeaders();
-    if (!shouldApply()) {
+    if (!isCurrent()) {
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
@@ -771,7 +793,7 @@ export async function refreshCustomProvidersIntoCatalog(
         if (!previous || JSON.stringify(config.runtimes) === JSON.stringify(previous.runtimes)) {
           return [];
         }
-        if (!shouldApply()) return [];
+        if (!isCurrent()) return [];
         return [
           updateCustomProviderIfUnchanged(previous.id, previous, config).catch((err: unknown) => {
             log.warn('persist migrated custom provider failed', {
@@ -783,13 +805,13 @@ export async function refreshCustomProvidersIntoCatalog(
         ];
       }),
     );
-    if (!shouldApply()) {
+    if (!isCurrent()) {
       log.info('discarded stale custom provider catalog refresh after migration');
       return;
     }
     if (persisted.some((applied) => applied !== true)) {
       const fresh = await listCustomProvidersWithSecureHeaders();
-      if (!shouldApply()) {
+      if (!isCurrent()) {
         log.info('discarded stale custom provider catalog refresh after cas miss');
         return;
       }
@@ -800,7 +822,7 @@ export async function refreshCustomProvidersIntoCatalog(
     setCustomProviderConfigs(next);
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
-    if (!shouldApply()) {
+    if (!isCurrent()) {
       log.info('discarded stale custom provider catalog refresh failure', {
         err: String(err),
       });
@@ -928,7 +950,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(getActiveCatalog(), {
+  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
@@ -1004,6 +1026,28 @@ export function getDesktopProviderService(): ProviderService {
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
       providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
+    customApiKeyConnected: (provider) =>
+      hasCustomProviderCredential(provider, readCustomProviderKey),
+    getAvailableMediaModels: () => [
+      ...listReadyProviderMediaModels(),
+      ...(getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null
+        ? filterEnabledGatewayMediaModels(
+            getXdGatewayModels(),
+            undefined,
+            readModelDisableOverrides(),
+          )
+            .filter((model) =>
+              (['image.generate', 'image.edit', 'video.generate', 'video.image_to_video'] as const).some(
+                (capability) =>
+                  isMediaModelExecutable(
+                    model.id,
+                    capability,
+                  ),
+              ),
+            )
+            .map((model) => ({ providerId: 'xd', id: model.id }))
+        : []),
+    ],
     // 动态发现失败归因：目前只有 anthropic 的 live entitlement 证据依赖这条通道。
     // 即使 Registry presence 仍能展示目录，UI 也要说明当前账号验证失败，而不是一直
     // 说「正在发现」。

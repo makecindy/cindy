@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   recycleWorktreeForRemovedSession: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
   drizzle: {},
+  readBindings: vi.fn(),
+  requestRecycle: vi.fn(),
   userDataPath: '',
   agentIslandService: {
     handleSessionMetadataPatch: vi.fn(),
@@ -83,10 +85,12 @@ import {
   recycleSessionWorktreeForStatusChange,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionWorktreeRecycle,
   setSessionRuntimeCleanup,
   setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
+import { queueSessionWorktreeRecycle } from '../worktree/recycleQueue';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -100,8 +104,12 @@ beforeEach(() => {
   h.hasRegisteredWorktreeForSession.mockReturnValue(true);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
   h.isOwnerScopeCurrent.mockReturnValue(true);
+  h.readBindings.mockReset().mockResolvedValue([]);
+  h.requestRecycle.mockReset().mockResolvedValue(undefined);
+  Object.assign(h.drizzle, { select: () => ({ from: () => ({ where: () => ({ limit: h.readBindings }) }) }) });
   setSessionRemovalCancelOperations(h.cancelSessionOperations);
   setSessionRemovalCleanup(h.cleanupRemovedSession);
+  setSessionWorktreeRecycle(h.requestRecycle);
   setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionRouteLockImplementation(h.withSendToSessionLock);
 });
@@ -109,12 +117,82 @@ beforeEach(() => {
 afterEach(() => {
   setSessionRemovalCancelOperations(null);
   setSessionRemovalCleanup(null);
+  setSessionWorktreeRecycle(null);
   setSessionRuntimeCleanup(null);
   setSessionRouteLockImplementation(null);
   fs.rmSync(h.userDataPath, { recursive: true, force: true });
 });
 
 describe('setSessionsStatusInDb', () => {
+  it('returns batch status changes promptly and serializes their cleanup chains', async () => {
+    const ids = ['one', 'two', 'three'];
+    h.tx.mockResolvedValueOnce(ids.map((sessionId) => ({ sessionId, status: 'archived', workingDir: null })));
+    let finish!: () => void;
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    await setSessionsStatusInDb(ids, 'archived');
+    try {
+      await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
+      expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');
+      for (const sessionId of ids) expect(h.webContentsSend).toHaveBeenCalledWith(
+        'local-db:sessions:patched', { sessionId, patch: { status: 'archived' } },
+      );
+    } finally { finish?.(); }
+    await queueSessionWorktreeRecycle(async () => {});
+    expect(h.recycleWorktreeForRemovedSession.mock.calls.map(([id]) => id)).toEqual(ids);
+  });
+
+  it('rechecks a queued task restored to active while an earlier cleanup runs', async () => {
+    let finish!: () => void;
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const first = recycleSessionWorktreeForStatusChange('one', 'archived');
+    const second = recycleSessionWorktreeForStatusChange('two', 'archived');
+    try {
+      await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
+      h.isSessionStillRemovable.mockImplementation(async (id) => id !== 'two');
+    } finally { finish?.(); }
+    await Promise.all([first, second]);
+    expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');
+  });
+
+  it('retains the captured database while cleanup waits in the queue', async () => {
+    let finish!: () => void;
+    const savedDb = h.drizzle;
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const first = recycleSessionWorktreeForStatusChange('one', 'archived');
+    const second = recycleSessionWorktreeForStatusChange('two', 'archived');
+    try {
+      await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
+      h.drizzle = {};
+      finish(); await Promise.all([first, second]);
+      expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');
+    } finally { finish?.(); h.drizzle = savedDb; }
+  });
+
+  it('persists shared resource intent before the terminal transaction', async () => {
+    const worktree = path.join(h.userDataPath, 'repo', '.cindy-worktrees', 'one');
+    h.readBindings.mockResolvedValue([{ workingDir: path.join(worktree, 'src'), worktreePath: null, remoteHostId: null }]);
+    const order: string[] = [];
+    h.requestRecycle.mockImplementation(async (_id, resources) => {
+      expect(resources).toEqual([worktree]);
+      order.push('request');
+    });
+    h.tx.mockImplementationOnce(async () => { order.push('status'); return []; });
+    await setSessionsStatusInDb(['borrower'], 'archived');
+    expect(order).toEqual(['request', 'status']);
+  });
+
+  it('preserves task status when recovery intent cannot be persisted', async () => {
+    h.requestRecycle.mockRejectedValue(new Error('private internal path'));
+    await expect(setSessionsStatusInDb(['owner'], 'archived')).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.tx).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an unreadable reference query as an empty binding', async () => {
+    h.readBindings.mockRejectedValue(new Error('database unavailable'));
+    await expect(setSessionsStatusInDb(['owner'], 'archived')).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.tx).not.toHaveBeenCalled();
+  });
   it('runs one sessions.setStatus tx and broadcasts per session after commit', async () => {
     h.tx.mockResolvedValueOnce([
       {

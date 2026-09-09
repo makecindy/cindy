@@ -23,6 +23,20 @@ import { GhostInstallReceiptStore, hashApprovedSkillContent } from '../ghostInst
 import { forgeInstallOriginForMembership } from '../forgeOidcInstallConfirmBridge';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 
+const canLinkFile = (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-manager-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+})();
+
 /** 每个用例独立的临时仓库根 + 源文件目录(规则 23:测试路径一律 os.tmpdir)。 */
 let workDir: string;
 let rootDir: string;
@@ -322,6 +336,20 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
       approvedManifest: { id: 'hello', version: '1.0.0' },
       legacyMigrated: true,
     });
+  });
+
+  it.each([2, 3] as const)('keeps v%s legacy recommendation metadata approved across reload', async (schemaVersion) => {
+    const recommendations = { custom: 'unrelated metadata' };
+    const manifest = schemaVersion === 2
+      ? { ...goodManifest(), recommendations }
+      : { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'hello', name: 'Hello', version: '1.0.0', entry: 'main.js', recommendations };
+    await writeLegacyInstall('hello', manifest);
+    expect((await manager.migrateLegacyApprovalsOnce()).migrated).toEqual(['hello']);
+    expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    const approved = manager.approvedInstallEvidence('hello')?.approvedManifest;
+    if (schemaVersion === 2) expect(approved).not.toHaveProperty('recommendations');
+    else expect(approved).toHaveProperty('recommendations', recommendations);
+    expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
   });
 
   it('带 setup.kv 的旧安装无感迁移并保留标准化就绪声明', async () => {
@@ -857,7 +885,7 @@ describe('GhostManager · 迁移崩溃安全(in-progress 状态机)与隔离命�
     expect(await fs.promises.readFile(migrationLedgerPath(), 'utf8')).toBe('{ not valid json');
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     '台账是非普通文件(symlink)→ 门保守关死,不迁也不重写',
     async () => {
       await writeLegacyInstall('aaa', goodManifest('aaa'));

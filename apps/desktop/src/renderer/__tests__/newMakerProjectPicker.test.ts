@@ -1513,8 +1513,8 @@ describe('Shared create project picker', () => {
     );
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
-    expect(chatInputSource).toContain(
-      'hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}',
+    expect(chatInputSource).toMatch(
+      /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
     );
   });
 
@@ -1539,9 +1539,9 @@ describe('Shared create project picker', () => {
     expect(ccAgentSessionViewSource).toContain(
       'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
     );
-    expect(chatInputSource).toContain('&& writableGrantScope');
-    expect(chatInputSource).toContain('&& !remoteHostId');
-    expect(chatInputSource).toContain('&& deviceLinkDeviceId === null');
+    expect(chatInputSource).toMatch(/&&\s*writableGrantScope/);
+    expect(chatInputSource).toMatch(/&&\s*!remoteHostId/);
+    expect(chatInputSource).toMatch(/&&\s*deviceLinkDeviceId === null/);
     expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
     expect(chatInputSource).toContain('void onWritableDirRemove(path);');
     expect(chatInputSource).toContain('(writableDirs ?? []).filter((item) => item !== path)');

@@ -651,10 +651,19 @@ describe('timeout boundaries', () => {
     // (Windows CI) 上可能已消耗 >1ms, 不刷新会让刚创建的 session 被判过期
     // (idleTimeoutMs=1 的时序竞态, Windows shard 偶发 SIGTERM)。
     const entry = registry.get('just-made')!;
-    entry.lastActivityMono = process.hrtime.bigint();
-
-    // recycleIdle is fully synchronous for non-expired entries (loop/continue, no async)
-    (registry as any).recycleIdle();
+    const now = process.hrtime.bigint();
+    entry.lastActivityMono = now;
+    // Freeze the monotonic clock around the synchronous sweep. A 1ms threshold is
+    // intentionally below Windows filesystem/scheduler jitter, so measuring the
+    // real elapsed time here makes this boundary test flaky without testing a
+    // different runtime behavior.
+    const clock = vi.spyOn(process.hrtime, 'bigint').mockReturnValue(now);
+    try {
+      // recycleIdle is fully synchronous for non-expired entries (loop/continue, no async)
+      (registry as any).recycleIdle();
+    } finally {
+      clock.mockRestore();
+    }
 
     // Should NOT have been killed — activity is too recent
     expect(child.kill).not.toHaveBeenCalled();

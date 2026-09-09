@@ -7,7 +7,7 @@ Cindy desktop application — Linux x64/arm64 glibc
 This file separately discloses components not distributed under open-source licenses.
 
 ------------------------------------------------------------------------------
-Claude Code CLI@2.1.219
+Claude Code CLI@2.1.259
 Category: proprietary
 License: LicenseRef-Anthropic-Commercial-Terms
 Source: https://www.anthropic.com/legal/commercial-terms

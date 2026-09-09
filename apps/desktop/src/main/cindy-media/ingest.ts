@@ -13,7 +13,8 @@
  *   - 绝不反向(先记账后写盘会产生"有账无文件"的坏账,读路径直接 404,
  *     且回收器无从判断该行是垃圾还是丢文件)。
  *   - 去重命中(deduplicated=true)仍照常记账:recordBlob 幂等只刷 lastAccess,
- *     addRef 是新引用行——"同内容再次被引用"正是账本要记的事实。
+ *     addRef 是新引用行——"同内容再次被引用"正是账本要记的事实。writeBlob
+ *     只在最终实际内容 hash 正确时成功;错误去重不会进入账本。
  *
  * 所有函数接受可注入 db(规则 14),生产默认走 DbClient 的 drizzle 代理。
  */
@@ -38,8 +39,7 @@ export interface IngestRef {
   label?: string;
 }
 
-export interface IngestMediaParams {
-  buffer: Uint8Array;
+export type IngestMediaParams = blobStore.BlobSource & {
   /** 真实 mime(由主机侧判定,不信调用方之外的自报);白名单外直接拒。 */
   mimeType: string;
   /** 性质=可再生缓存(吃 cache 上限可清);附件/作品传 false(默认)。 */
@@ -94,10 +94,8 @@ export async function ingestMedia(
     throw new Error('cindy-media: guarded ingest requires a reference compensation scope');
   }
   params.assertStillValid?.();
-  const written = await blobStore.writeBlob({
-    buffer: params.buffer,
-    mimeType: params.mimeType,
-  });
+  // writeBlob 只在最终实际内容 hash 正确时返回;损坏/symlink/目录不会被当成去重。
+  const written = await blobStore.writeBlob(params);
   params.assertStillValid?.();
   await ledger.recordBlob(
     {

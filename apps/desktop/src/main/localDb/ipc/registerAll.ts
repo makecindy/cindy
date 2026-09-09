@@ -1,3 +1,5 @@
+import { registerRoutineRemoteResources } from '../../routines/remote.js';
+import { registerRoutinesIpc } from '../../routines/service.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -13,8 +15,10 @@ import { closeDb, ensureReady, getCurrentUserId } from '../index';
 import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
 import {
   registerSessionIpc,
+  type RegisterSessionIpcOpts,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionWorktreeRecycle,
 } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
@@ -28,6 +32,8 @@ import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search';
 import { registerRemoteHistoryIpc } from './history';
+import { recoverActiveBotTemplateSkills, registerBotIpc } from './bots';
+import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
@@ -71,6 +77,9 @@ function startMediaRefCompensationReconcile(
 }
 
 export interface RegisterLocalDbIpcOpts {
+  isSessionTurnPendingCompletion?: (sessionId: string) => boolean;
+  readHistoryLiveMessages?: (sessionId: string) => import('../../../renderer/lib/ccAgent.types').Message[];
+  resolveContextWindow?: RegisterSessionIpcOpts['resolveContextWindow'];
   /** Current stable app-session owner. False makes queued/in-flight work stale. */
   isOwnerCurrent?: (userId: string) => boolean;
   /** Dispose any secondary DB client committed by a stale onReady callback. */
@@ -81,6 +90,8 @@ export interface RegisterLocalDbIpcOpts {
   cancelSessionOperations?: (sessionId: string) => Promise<void>;
   /** Release Host-owned runtime and ownership after task removal is revalidated. */
   cleanupRemovedSession?: (sessionId: string) => Promise<void>;
+  /** Record worktree recycle intent before a terminal session status is persisted. */
+  requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
   /** Reconcile persisted Host-owned task runtimes once the owner DB is readable. */
@@ -109,6 +120,7 @@ export interface RegisterLocalDbIpcOpts {
 export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   setSessionRemovalCancelOperations(opts.cancelSessionOperations ?? null);
   setSessionRemovalCleanup(opts.cleanupRemovedSession ?? null);
+  setSessionWorktreeRecycle(opts.requestWorktreeRecycle ?? null);
   setSessionRouteLockImplementation(opts.withSessionLock ?? null);
   const runEnsureReady = createOwnerEnsureCoordinator({
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),
@@ -128,6 +140,10 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
         tryGetDbClient() === client &&
         getCurrentDbClientUserId() === userId &&
         (opts.isOwnerCurrent?.(userId) ?? true);
+      // 数据库与账号边界都已就绪后再补装旧版内置伙伴能力；不依赖用户先打开
+      // 伙伴页面。列表/get 仍保留幂等恢复，覆盖同进程账号切换后的读取路径。
+      await recoverActiveBotTemplateSkills();
+      if (!isReadyOwnerCurrent()) return;
       startMediaRefCompensationReconcile(userId, client, isReadyOwnerCurrent);
 
       const cancelSessionOperations = opts.cancelSessionOperations;
@@ -237,10 +253,15 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   });
 
   registerSessionIpc(getCurrentDbClientUserId, {
+    resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
   });
-  registerMessageIpc();
+  registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
+  registerBotIpc();
+  registerRoutinesIpc();
+  registerRoutineRemoteResources();
+  registerBotRemoteResourceProvider();
   registerSessionImportIpc();
   registerSessionShareIpc();
   registerOrcaWorkflowIpc();

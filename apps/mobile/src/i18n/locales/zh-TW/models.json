@@ -18,6 +18,9 @@
     "configureAccessibility": "配置 {{model}}",
     "budgetDisabledHint": "該模型需先在被控裝置配置 API key 才能使用",
     "priceLine": "輸入 {{input}} · 輸出 {{output}} / 百萬 token",
+    "priceTitle": "每百萬 token",
+    "priceAmounts": "輸入 {{input}} · 輸出 {{output}}",
+    "discountedVsStandard": "折扣中，較標準價省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
     "fastTag": "快速"
   },
@@ -35,6 +38,14 @@
       "max": "最高",
       "ultra": "極致"
     }
+  },
+  "contextWindowSwitch": {
+    "title": "此模型無法容納目前對話",
+    "remoteTitle": "目前遠端任務無法安全切換模型",
+    "description": "目前對話已使用 {{used}}，超過新模型可容納的 {{total}}（約 {{pct}}%）。若繼續切換，Cindy 會先產生簡短摘要再繼續；對話記錄仍會保留，但不會再逐字傳給新模型。",
+    "remoteDescription": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。",
+    "cancel": "保留目前模型",
+    "confirm": "切換並繼續"
   },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型",

@@ -30,6 +30,7 @@ export function createWechatTurnPermissionPolicy(
 ): TurnPermissionPolicy {
   return {
     origin: { kind: 'im', channel: 'wechat', taskId },
+    autoReviewContext: { requesterAuthority: 'unknown', source: 'direct' },
     confirmationSurface: 'channel',
     confirmationTimeoutMs: WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
     ...(options?.onInteractionStateChange

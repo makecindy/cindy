@@ -41,11 +41,7 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
   return {
     ...actual,
     loadCatalog: vi.fn(
-      (
-        source: Record<string, unknown>,
-        _io: unknown,
-        onResolved?: (result: unknown) => void,
-      ) =>
+      (source: Record<string, unknown>, _io: unknown, onResolved?: (result: unknown) => void) =>
         new Promise((resolve) => {
           h.loads.push({
             source,
@@ -138,11 +134,14 @@ vi.mock('../generic-oauth.js', () => ({
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
+  readCustomProviderHeaders: () => null,
   readCustomProviderKey: () => null,
   setProviderSecretsClearedListener: () => undefined,
   addProviderSecretsClearedListener: () => undefined,
 }));
 vi.mock('../provider-route.js', () => ({
+  getProviderRouteCredentialRevision: () => 0,
+  setCustomProviderHeaderReader: () => undefined,
   setCustomProviderKeyReader: () => undefined,
   setOAuthTokenReader: () => undefined,
   setProviderOAuthTokenReader: () => undefined,
@@ -184,6 +183,7 @@ import {
   buildUserProvider,
   type Catalog,
   type CustomProviderConfig,
+  XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import {
@@ -203,6 +203,12 @@ import {
   reloadActiveCatalogForEndpointChange,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
+import {
+  buildCodexCustomProviderArgs,
+  deriveCodexCustomProviderRoutes,
+  hasCodexAppliedCustomProviderCapability,
+  setCodexAppliedCustomProviderRoutes,
+} from '../codex-custom-provider-route.js';
 
 function catalogNamed(name: string, updatedAt?: string): Catalog {
   return {
@@ -257,9 +263,7 @@ describe('provider catalog realm reload', () => {
       }),
     ).resolves.toBe('replacement-token');
 
-    await expect(
-      __testing.readXaiProviderOAuthToken({ forceRefresh: true }),
-    ).resolves.toBeNull();
+    await expect(__testing.readXaiProviderOAuthToken({ forceRefresh: true })).resolves.toBeNull();
     expect(h.recoverGrokAuthAfterRejection).toHaveBeenCalledTimes(3);
   });
 
@@ -297,6 +301,80 @@ describe('provider catalog realm reload', () => {
     await refreshCustomProvidersIntoCatalog();
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
     h.customProviderRead.mockReset();
+  });
+
+  it('does not let an older OFF refresh overwrite a newer ON catalog and Host spawn snapshot', async () => {
+    const disabled: CustomProviderConfig = {
+      id: 'image-capability-race-provider',
+      name: 'Image capability race fixture',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-model', name: 'Chat model' }],
+        },
+      },
+    };
+    const enabled: CustomProviderConfig = {
+      ...disabled,
+      runtimes: {
+        codex: {
+          ...disabled.runtimes.codex!,
+          supportsImageGeneration: true,
+        },
+      },
+    };
+    let resolveOlderRefresh!: (configs: CustomProviderConfig[]) => void;
+    h.customProviderRead.mockReset();
+    h.customProviderRead
+      .mockReturnValueOnce(
+        new Promise<CustomProviderConfig[]>((resolve) => {
+          resolveOlderRefresh = resolve;
+        }),
+      )
+      .mockResolvedValueOnce([enabled]);
+
+    const olderRefresh = refreshCustomProvidersIntoCatalog();
+    await refreshCustomProvidersIntoCatalog();
+    resolveOlderRefresh([disabled]);
+    await olderRefresh;
+
+    const routes = deriveCodexCustomProviderRoutes(getActiveCatalog());
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.responseModels).toEqual(['chat-model']);
+    setCodexAppliedCustomProviderRoutes(routes);
+    expect(hasCodexAppliedCustomProviderCapability(disabled.id, 'imageGeneration')).toBe(true);
+    const spawn = buildCodexCustomProviderArgs('http://127.0.0.1:43210', 'env-key', routes);
+    expect(spawn.extraArgs.filter((arg) => arg.includes('.name='))).toHaveLength(1);
+    expect(spawn.extraArgs.join(' ')).toContain('x-openai-actor-authorization');
+
+    setCodexAppliedCustomProviderRoutes([]);
+    setCustomProviders([]);
+    h.customProviderRead.mockReset();
+  });
+
+  it('projects executable Imagine models onto the xAI API-key source', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: XAI_API_CUSTOM_PROVIDER_ID,
+        name: 'xAI API',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.x.ai/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'grok-4.6', name: 'Grok 4.6' }],
+          },
+        },
+      }),
+    ]);
+
+    const projected = getActiveCatalog().providers.find(
+      (provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID,
+    );
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
+    expect(projected?.imageModels).toEqual(bundledXai?.imageModels);
+
+    setCustomProviders([]);
   });
 
   it('does not publish a migrated snapshot after a failed CAS write', async () => {
@@ -360,7 +438,10 @@ describe('provider catalog realm reload', () => {
       (entry) => entry.id === 'openai/gpt-5.6-sol',
     );
     if (!currentEntry) throw new Error('expected gpt-5.6-sol Registry entry');
-    currentEntry.perAgent = { ...currentEntry.perAgent, codex: { efforts: ['high'] } };
+    current.modelRegistry!.models = [currentEntry];
+    current.modelRegistry!.baseModels!.find(
+      (model) => model.id === currentEntry.modelRef,
+    )!.defaults = { efforts: ['high'], defaultEffort: 'high' };
     setActiveCatalog(current);
 
     const config: CustomProviderConfig = {
@@ -376,13 +457,12 @@ describe('provider catalog realm reload', () => {
     setCustomProviderConfigs([config]);
 
     const next = structuredClone(catalogNamed('custom-after', '2026-08-12T11:00:00.000Z'));
-    const nextEntry = next.modelRegistry?.models.find(
-      (entry) => entry.id === 'openai/gpt-5.6-sol',
-    );
+    const nextEntry = next.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol');
     if (!nextEntry) throw new Error('expected gpt-5.6-sol Registry entry');
-    nextEntry.perAgent = {
-      ...nextEntry.perAgent,
-      codex: { efforts: ['high', 'max', 'ultra'], defaultEffort: 'ultra' },
+    next.modelRegistry!.models = [nextEntry];
+    next.modelRegistry!.baseModels!.find((model) => model.id === nextEntry.modelRef)!.defaults = {
+      efforts: ['high', 'max', 'ultra'],
+      defaultEffort: 'high',
     };
 
     const events: number[] = [];
@@ -397,7 +477,7 @@ describe('provider catalog realm reload', () => {
       expect(provider?.models.codex?.[0]).toMatchObject({
         id: 'gpt-5.6-sol',
         efforts: ['high', 'max', 'ultra'],
-        defaultEffort: 'ultra',
+        defaultEffort: 'high',
       });
       expect(events).toHaveLength(1);
     } finally {
@@ -412,9 +492,10 @@ describe('provider catalog realm reload', () => {
       (candidate) => candidate.id === 'openai/gpt-5.6-sol',
     );
     if (!entry) throw new Error('expected gpt-5.6-sol Registry entry');
-    entry.perAgent = {
-      ...entry.perAgent,
-      codex: { efforts: ['minimal', 'max'], defaultEffort: 'max' },
+    current.modelRegistry!.models = [entry];
+    current.modelRegistry!.baseModels!.find((model) => model.id === entry.modelRef)!.defaults = {
+      efforts: ['minimal', 'max'],
+      defaultEffort: 'minimal',
     };
     setActiveCatalog(current);
     const config: CustomProviderConfig = {
@@ -434,14 +515,14 @@ describe('provider catalog realm reload', () => {
     setActiveCatalog(withoutRegistry);
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
-    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'max' });
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'minimal' });
     expect(getActiveCatalog().modelRegistry).toBeUndefined();
 
     setActiveCatalog(current);
     commitModelPlaneFromCatalog(withoutRegistry);
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
-    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'max' });
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'minimal' });
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-12T12:00:00.000Z');
     setCustomProviders([]);
   });
@@ -651,9 +732,7 @@ describe('provider catalog realm reload', () => {
     const catalogWithXaiMedia = structuredClone(catalogNamed('catalog-with-xai-media'));
     const xai = catalogWithXaiMedia.providers.find((provider) => provider.id === 'xai');
     if (!xai) throw new Error('expected xAI provider');
-    xai.imageModels = [
-      { id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' },
-    ];
+    xai.imageModels = [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }];
     xai.imageDefaults = { standard: 'xai/grok-imagine-image' };
     xai.videoModels = [
       { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
@@ -665,7 +744,9 @@ describe('provider catalog realm reload', () => {
     const fallbackReload = reloadActiveCatalogForEndpointChange();
 
     // The endpoint-switch window uses bundled data, but it cannot advertise Global XD media.
-    const waitingXd = getDesktopSelectableCatalog().providers.find((provider) => provider.id === 'xd');
+    const waitingXd = getDesktopSelectableCatalog().providers.find(
+      (provider) => provider.id === 'xd',
+    );
     expect(waitingXd?.imageModels).toEqual([]);
     expect(waitingXd?.embeddingModels).toEqual([]);
     expect(waitingXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
@@ -679,9 +760,9 @@ describe('provider catalog realm reload', () => {
     expect(fallbackXd?.embeddingModels).toEqual([]);
     expect(fallbackXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
     expect(
-      fallbackCatalog.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(
-        (model) => model.id,
-      ),
+      fallbackCatalog.providers
+        .find((provider) => provider.id === 'xai')
+        ?.videoModels?.map((model) => model.id),
     ).toEqual(['xai/grok-imagine-video', 'xai/grok-imagine-video-1.5']);
     expect(deriveCindyMediaConfig(fallbackCatalog.providers, 'embed')).toEqual({
       models: [],
@@ -722,9 +803,9 @@ describe('provider catalog realm reload', () => {
       defaults: null,
     });
     expect(
-      currentCatalog.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(
-        (model) => model.id,
-      ),
+      currentCatalog.providers
+        .find((provider) => provider.id === 'xai')
+        ?.videoModels?.map((model) => model.id),
     ).toEqual(['xai/grok-imagine-video', 'xai/grok-imagine-video-1.5']);
 
     // Restore the baseline expected by the following realm-race tests.
@@ -738,20 +819,12 @@ describe('provider catalog realm reload', () => {
     const inheritedAll = structuredClone(catalogNamed('current-with-bundled-xd'));
     const inheritedXai = inheritedAll.providers.find((provider) => provider.id === 'xai');
     if (!inheritedXai) throw new Error('expected xAI provider');
-    inheritedXai.imageModels = [
-      { id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' },
-    ];
-    inheritedXai.videoModels = [
-      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
-    ];
+    inheritedXai.imageModels = [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }];
+    inheritedXai.videoModels = [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }];
 
     h.endpoint = 'https://model.cn-primary-missing-xd.example';
     const reload = reloadActiveCatalogForEndpointChange();
-    h.loads.at(-1)!.resolve(
-      inheritedAll,
-      'current',
-      ['image', 'video', 'embedding'],
-    );
+    h.loads.at(-1)!.resolve(inheritedAll, 'current', ['image', 'video', 'embedding']);
     await reload;
 
     const projectedAll = getDesktopSelectableCatalog();
@@ -803,8 +876,7 @@ describe('provider catalog realm reload', () => {
     await evidenceUpgrade;
 
     expect(
-      getDesktopSelectableCatalog()
-        .providers.find((provider) => provider.id === 'xd')
+      getDesktopSelectableCatalog().providers.find((provider) => provider.id === 'xd')
         ?.embeddingModels,
     ).toEqual(inheritedEmbeddingXd.embeddingModels);
 

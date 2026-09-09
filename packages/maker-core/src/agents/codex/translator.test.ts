@@ -808,6 +808,41 @@ describe('translateErrorNotification', () => {
     expect(events[0]!.data).not.toHaveProperty('reason');
   });
 
+  it('Codex 远端 compact 密文 400 走 context-overflow，交给 host 换窗而不是原样重试', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content", "message": "The encrypted content cind...9ln0 could not be verified." } }',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      reason: 'context-overflow',
+      isTerminal: true,
+    });
+  });
+
+  it('单独的 invalid_encrypted_content 不冒充超限换窗', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).not.toHaveProperty('reason');
+  });
+
   it('上下文超限终止错误带 context-overflow reason(#1429): 原样重试必败, renderer 靠它换恢复动作', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
@@ -843,6 +878,23 @@ describe('translateErrorNotification', () => {
       message: 'stream dropped',
       codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } },
     }).errorInfoTag).toBe('responseStreamDisconnected');
+    expect(
+      classifyCodexError({
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+      }).reason,
+    ).toBe('context-overflow');
+    expect(
+      classifyCodexError({
+        message: 'Error running remote compact task',
+        additionalDetails: 'code=invalid_encrypted_content',
+      }).reason,
+    ).toBe('context-overflow');
+    expect(
+      classifyCodexError({
+        message: 'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }).reason,
+    ).toBeUndefined();
   });
 
   it('Codex 结构化 contextWindowExceeded tag 不依赖错误文案措辞', async () => {
@@ -1535,6 +1587,67 @@ describe('translateItemNotification commandExecution output normalization', () =
       fullText: 'codegraph\nlink',
       isError: false,
     });
+  });
+
+  // #3793:bwrap 沙箱初始化失败(命令从未执行)的 failed exec 追加宿主归因标注;
+  // 普通失败不受影响。
+  it('annotates a failed exec whose output is pure bwrap init diagnostics', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-sandbox',
+          command: 'ls',
+          status: 'failed',
+          aggregatedOutput: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
+          exitCode: 1,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    const fullText = (full?.data as { fullText?: string }).fullText ?? '';
+    expect(fullText).toContain('Failed RTM_NEWADDR');
+    expect(fullText).toContain('[Cindy] The Codex command sandbox (bubblewrap) failed to initialize');
+    expect(full?.data).toMatchObject({ isError: true });
+  });
+
+  it('does not annotate an ordinary failed exec', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-fail',
+          command: 'tsc',
+          status: 'failed',
+          aggregatedOutput: 'error TS2322: type mismatch\n',
+          exitCode: 2,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect((full?.data as { fullText?: string }).fullText).toBe('error TS2322: type mismatch\n');
   });
 });
 

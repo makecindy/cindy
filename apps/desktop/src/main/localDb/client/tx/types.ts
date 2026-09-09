@@ -29,6 +29,23 @@ export type DbTxName =
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
+  | 'bots.createProfile'
+  | 'bots.updateProfile'
+  | 'bots.updateAttention'
+  | 'bots.reconcileCanonicalLink'
+  | 'bots.replaceCanonicalSession'
+  | 'bots.prepareRuntime'
+  | 'bots.finishRuntime'
+  | 'bots.finishDelegation'
+  | 'bots.reparentDelegations'
+  | 'bots.createDelegation'
+  | 'bots.reopenDelegation'
+  | 'bots.pauseLifecycle'
+  | 'bots.resumeLifecycle'
+  | 'bots.archiveLifecycle'
+  | 'bots.deleteProfile'
+  | 'bots.assertNoSharedHistory'
+  | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
   | 'wechatLeaseNextTask'
@@ -46,6 +63,7 @@ export type DbTxName =
   | 'wechatPromoteTaskAttachments'
   | 'wechatRefreshOutboxContexts'
   | 'wechatUnbindCleanup'
+  | 'skillUsage.applyMutation'
   | 'session.importShare';
 
 export interface CodexImportMessagesArgs {
@@ -145,6 +163,8 @@ export interface ForkSessionArgs {
     updatedAt: number;
   };
   uuidMap: Array<[string, string]> | Record<string, string>;
+  /** Rebind copied provider-native fork anchors to the child vendor session. */
+  nativeForkAnchorSessionMap?: Array<[string, string]> | Record<string, string>;
   /** Legacy Claude imports may have stored transcript parentage in parentUuid. */
   legacyTranscriptParentUuids?: string[];
   /** Imported Claude assistant rows may retain an external tool-use parent id. */
@@ -164,6 +184,15 @@ export interface ForkSessionArgs {
    * 长度必须等于 source message 数。
    */
   newMessageIds: Array<{ id: string; clientId: string }>;
+  /** Persist a native-history recovery handoff atomically with the child and copied history. */
+  recoveryMarker?: {
+    id: string;
+    clientId: string;
+    content: string;
+    createdAt: number;
+    /** Digest of the raw ordered prefix used to prepare content; checked inside the transaction. */
+    sourceMessagesDigest: string;
+  };
 }
 
 export interface EmbeddingMarkDoneArgs {
@@ -182,6 +211,8 @@ export interface EmbeddingRecordFailuresArgs {
   jobs: Array<{ rowid: number; attempts: number }>;
   errMsg: string;
   now: number;
+  /** #3416:确定性失败(INVALID_MODEL 等)整批直接进 'failed' 终态,不走退避。 */
+  terminal?: boolean;
 }
 
 export interface EmbeddingEnqueueArgs {
@@ -319,6 +350,14 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+  /** Same transaction as the durable handoff; source SDK ownership must still match. */
+  replacementRoute?: {
+    expectedSdkSessionId: string;
+    model: string;
+    providerId: string | null;
+    effort: string | null;
+    fastMode: boolean;
+  };
 }
 
 export interface MessageInsertArgs {
@@ -521,6 +560,216 @@ export interface ImDeleteBindingsArgs {
     userId: string;
     scopeKey: string;
   }>;
+}
+
+export interface BotsCreateProfileArgs {
+  id: string;
+  displayName: string;
+  description: string;
+  avatar: string;
+  avatarColor: string;
+  identitySource: string;
+  capabilitiesJson: string;
+  eventSubscription?: {
+    id: string;
+    name: string;
+    status: 'active' | 'paused';
+    ruleJson: string;
+  };
+  now: number;
+}
+
+export interface BotsUpdateProfileArgs {
+  id: string;
+  displayName?: string;
+  description?: string;
+  avatar?: string;
+  avatarColor?: string;
+  status?: string;
+  hiddenAt?: number | null;
+  pinnedAt?: number | null;
+  identitySource: string;
+  capabilitiesJson: string;
+  profileContentChanged: boolean;
+  expectedCurrentVersion: number;
+  /** Inserted and made authoritative in the same tx as the avatar address. */
+  botAvatarRef?: { id: string; hash: string; createdAt: number };
+  clearBotAvatarRefs?: boolean;
+  now: number;
+}
+
+export interface BotsUpdateAttentionArgs {
+  botId: string;
+  /** Null means a successful observation is clearing prior attention. */
+  reason: string | null;
+  observedAt: number;
+}
+
+export interface BotsReplaceCanonicalSessionArgs {
+  botId: string;
+  expectedCanonicalSessionId: string | null;
+  /** One-time compatibility evidence already validated by reconcileCanonicalLink. */
+  compatibilityMissingCanonicalSessionId?: string | null;
+  expectedProfileVersion: number;
+  session: {
+    id: string;
+    title: string;
+    workingDir: string | null;
+    workspaceKind: string;
+    model: string;
+    effort: string;
+    permissionMode: string;
+    agentKind: string;
+    remoteHostId: string | null;
+    providerId: string | null;
+    parentSessionId?: string | null;
+    extraDirs: string;
+    fastMode?: boolean;
+    source: string;
+    createdAt: number;
+    updatedAt: number;
+  };
+  now: number;
+}
+
+export interface BotsReconcileCanonicalLinkArgs {
+  botId: string;
+  now: number;
+}
+
+export interface BotsReconcileCanonicalLinkResult {
+  status: 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  canonicalSessionId: string | null;
+}
+
+export interface BotsReplaceCanonicalSessionResult {
+  created: boolean;
+  canonicalSessionId: string | null;
+  archivedCanonicalSessionId: string | null;
+}
+
+export interface BotsPrepareRuntimeArgs {
+  snapshot: {
+    id: string; botId: string; sessionId: string; profileVersion: number; agentKind: string;
+    workingDir: string; memoryScopeKey: string | null; configuredJson: string; resolvedJson: string;
+    preparedAt: number;
+  };
+  eventId: string;
+  eventPayloadJson: string;
+}
+
+export interface BotsFinishRuntimeArgs {
+  snapshotId: string;
+  botId: string;
+  sessionId: string;
+  status: 'applied' | 'degraded' | 'failed';
+  finishedAt: number;
+  failureJson: string | null;
+  eventId: string;
+  eventType: 'runtime-applied' | 'runtime-failed';
+  eventPayloadJson: string;
+}
+export interface BotsFinishDelegationArgs {
+  delegationId: string;
+  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+  resultSummary: string | null;
+  outputArtifactsJson: string;
+  lastError: string | null;
+  tokensUsed?: number;
+  completedAt: number;
+}
+
+export interface BotsFinishDelegationResult {
+  id: string;
+  parentSessionId: string | null;
+  childSessionId: string | null;
+  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+}
+
+export interface BotsReparentDelegationsArgs {
+  botId: string;
+  previousParentSessionId: string;
+  nextParentSessionId: string;
+  now: number;
+}
+
+export interface BotsReparentDelegationsResult {
+  delegationIds: string[];
+}
+
+export interface BotsCreateDelegationArgs {
+  maxActiveChildren: number;
+  delegation: {
+    id: string; requestingBotId: string; targetBotId: string | null; parentSessionId: string;
+    childSessionId: string; objective: string; contextRefsJson: string;
+    permissionSnapshotJson: string; lineageJson: string; targetProfileVersion: number | null;
+    depth: number; createdAt: number;
+  };
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotsReopenDelegationArgs {
+  maxActiveChildren: number;
+  delegationId: string;
+  requestingBotId: string;
+  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+  parentSessionId: string;
+  childSessionId: string;
+  objective: string;
+  permissionSnapshotJson: string;
+  targetBotId: string | null;
+  targetProfileVersion: number | null;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+  reopenedAt: number;
+}
+
+export interface BotsReopenDelegationResult {
+  reopened: boolean;
+  previousParentSessionId: string | null;
+}
+
+export interface BotsLifecycleTransitionArgs {
+  botId: string; canonicalSessionId: string | null; expectedProfileStatus: string;
+  at: number; eventId: string;
+}
+export interface BotsArchiveLifecycleArgs extends BotsLifecycleTransitionArgs {
+  expectedProfileStatus: string; worktreeDisposition: string;
+}
+export interface BotsDeleteProfileArgs {
+  botId: string;
+  sessionIds: string[];
+  keepTaskHistory: boolean;
+  at: number;
+}
+export interface ImRotateSessionArgs {
+  previousSessionId: string | null;
+  detachBinding: {
+    channel: string;
+    botContextId: string;
+    userId: string;
+    scopeKey: string;
+    targetSessionId: string;
+  } | null;
+  session: {
+    id: string;
+    title: string;
+    workingDir: string;
+    workspaceKind: 'project' | 'dialogue';
+    model: string;
+    effort: string;
+    permissionMode: string;
+    fastMode: boolean;
+    agentKind: string;
+    source: string;
+    providerId: string | null;
+    imBotContextId: string;
+    imUserId: string;
+  };
+  now: number;
+}
+
+export interface ImRotateSessionResult {
+  previousStatus: 'active' | 'archived' | 'deleted' | null;
 }
 
 export type WechatInboxStatus =
@@ -802,6 +1051,44 @@ export interface WechatUnbindCleanupResult {
   filePaths: string[];
 }
 
+export type SkillUsageApplyMutationArgs =
+  | {
+      kind: 'persist';
+      source: {
+        rawFilePath: string;
+        analyzerVersion: string;
+        agentKind: string;
+        sessionId: string;
+        sdkSessionId: string;
+        mtimeMs: number;
+        sizeBytes: number;
+        scannedAt: number;
+      };
+      exposures: Array<{
+        id: string;
+        rawFilePath: string;
+        rawLineNo: number;
+        sessionId: string;
+        sdkSessionId: string;
+        agentKind: string;
+        skillName: string;
+        skillPath: string | null;
+        skillDocumentHash: string | null;
+        exposureContentHash: string;
+        documentHashSource: string;
+        source: string;
+        toolUseId: string | null;
+        seenAt: number;
+        toolCallCount: number;
+        repeatedToolCallCount: number;
+        toolErrorCount: number;
+        commandCallCount: number;
+        commandFailureCount: number;
+      }>;
+    }
+  | { kind: 'deleteBefore'; analyzerVersion: string; recentSince: number }
+  | { kind: 'promote'; analyzerVersion: string };
+
 export type DbTxArgsByName = {
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
@@ -833,6 +1120,23 @@ export type DbTxArgsByName = {
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
+  'bots.createProfile': BotsCreateProfileArgs;
+  'bots.updateProfile': BotsUpdateProfileArgs;
+  'bots.updateAttention': BotsUpdateAttentionArgs;
+  'bots.reconcileCanonicalLink': BotsReconcileCanonicalLinkArgs;
+  'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
+  'bots.prepareRuntime': BotsPrepareRuntimeArgs;
+  'bots.finishRuntime': BotsFinishRuntimeArgs;
+  'bots.finishDelegation': BotsFinishDelegationArgs;
+  'bots.reparentDelegations': BotsReparentDelegationsArgs;
+  'bots.createDelegation': BotsCreateDelegationArgs;
+  'bots.reopenDelegation': BotsReopenDelegationArgs;
+  'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
+  'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
+  'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.deleteProfile': BotsDeleteProfileArgs;
+  'bots.assertNoSharedHistory': { botId: string };
+  'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
   wechatLeaseNextTask: WechatLeaseNextTaskArgs;
@@ -850,6 +1154,7 @@ export type DbTxArgsByName = {
   wechatPromoteTaskAttachments: WechatPromoteTaskAttachmentsArgs;
   wechatRefreshOutboxContexts: WechatRefreshOutboxContextsArgs;
   wechatUnbindCleanup: WechatUnbindCleanupArgs;
+  'skillUsage.applyMutation': SkillUsageApplyMutationArgs;
   'session.importShare': SessionImportShareArgs;
 };
 
@@ -884,6 +1189,23 @@ export type DbTxResultByName = {
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
+  'bots.createProfile': undefined;
+  'bots.updateProfile': { currentVersion: number };
+  'bots.updateAttention': { changed: boolean };
+  'bots.reconcileCanonicalLink': BotsReconcileCanonicalLinkResult;
+  'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
+  'bots.prepareRuntime': undefined;
+  'bots.finishRuntime': boolean;
+  'bots.finishDelegation': BotsFinishDelegationResult | null;
+  'bots.reparentDelegations': BotsReparentDelegationsResult;
+  'bots.createDelegation': undefined;
+  'bots.reopenDelegation': BotsReopenDelegationResult;
+  'bots.pauseLifecycle': undefined;
+  'bots.resumeLifecycle': undefined;
+  'bots.archiveLifecycle': { sessions: number };
+  'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
+  'bots.assertNoSharedHistory': undefined;
+  'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;
   wechatLeaseNextTask: WechatLeasedTask | null;
@@ -901,5 +1223,6 @@ export type DbTxResultByName = {
   wechatPromoteTaskAttachments: WechatPromoteTaskAttachmentsResult;
   wechatRefreshOutboxContexts: WechatRefreshOutboxContextsResult;
   wechatUnbindCleanup: WechatUnbindCleanupResult;
+  'skillUsage.applyMutation': undefined;
   'session.importShare': { messageCount: number };
 };

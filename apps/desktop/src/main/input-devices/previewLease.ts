@@ -3,13 +3,17 @@ export interface LayoutPreviewOwner {
   once(event: 'destroyed' | 'render-process-gone', listener: () => void): void;
 }
 
-export function createLayoutPreviewLease(setActive: (active: boolean) => void) {
+export function createLayoutPreviewLease(
+  setActive: (active: boolean) => void,
+  onOwnerGone?: () => void,
+) {
   let ownerId: number | null = null;
 
   const releaseIfOwner = (id: number): void => {
     if (ownerId !== id) return;
     ownerId = null;
     setActive(false);
+    onOwnerGone?.();
   };
 
   return {

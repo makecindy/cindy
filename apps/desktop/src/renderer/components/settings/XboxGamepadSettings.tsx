@@ -29,7 +29,10 @@ import {
   workLouderCodexCommandDescription,
   workLouderCodexCommandName,
 } from './workLouderCodexCommandCopy';
+import { GenericGamepadLayout } from './GenericGamepadLayout';
+import { JoyConGamepadLayout } from './JoyConGamepadLayout';
 import { PlayStationGamepadLayout } from './PlayStationGamepadLayout';
+import { SwitchProGamepadLayout } from './SwitchProGamepadLayout';
 import {
   XboxGamepadLayout,
   type XboxGamepadEditablePart,
@@ -40,6 +43,7 @@ import {
   cloneXboxGamepadLayout,
   createXboxGamepadDefaultLayout,
   createXboxGamepadDefaultSettings,
+  isNintendoJoyConDevice,
   XBOX_GAMEPAD_STICK_DIRECTIONS,
   type GamepadFamily,
   type XboxGamepadBinding,
@@ -206,13 +210,7 @@ function stickClickButton(stick: XboxGamepadStickId): XboxGamepadButtonId {
   return stick === 'left' ? 'ls' : 'rs';
 }
 
-export function XboxGamepadSettings({
-  family,
-  onBack,
-}: {
-  family: GamepadFamily;
-  onBack(): void;
-}) {
+export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily; onBack(): void }) {
   const { t } = useTranslation();
   const ns = gamepadCopyNs(family);
   const { state, loading, saving, error, setSettings, resetSettings, reload } = useXboxGamepad({
@@ -286,6 +284,18 @@ export function XboxGamepadSettings({
     };
   };
 
+  const layoutProps = {
+    layout: settings.layout,
+    disabled: !state || saving,
+    hintFor,
+    onEdit: setEditing,
+    preview,
+    labels: {
+      leftStick: t(familyControlKey(family, 'leftStick')),
+      rightStick: t(familyControlKey(family, 'rightStick')),
+    },
+  };
+
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="flex items-center justify-between gap-3">
@@ -357,30 +367,17 @@ export function XboxGamepadSettings({
         </div>
         <div className="flex justify-center">
           {family === 'playstation' ? (
-            <PlayStationGamepadLayout
-              layout={settings.layout}
-              disabled={!state || saving}
-              hintFor={hintFor}
-              onEdit={setEditing}
-              preview={preview}
-              labels={{
-                leftStick: t(familyControlKey(family, 'leftStick')),
-                rightStick: t(familyControlKey(family, 'rightStick')),
-              }}
-            />
+            <PlayStationGamepadLayout {...layoutProps} />
+          ) : family === 'nintendo' ? (
+            isNintendoJoyConDevice(state?.device) ? (
+              <JoyConGamepadLayout {...layoutProps} />
+            ) : (
+              <SwitchProGamepadLayout {...layoutProps} />
+            )
+          ) : family === 'generic' ? (
+            <GenericGamepadLayout {...layoutProps} />
           ) : (
-            <XboxGamepadLayout
-              layout={settings.layout}
-              disabled={!state || saving}
-              hintFor={hintFor}
-              onEdit={setEditing}
-              preview={preview}
-              variant={family === 'nintendo' ? 'nintendo' : 'xbox'}
-              labels={{
-                leftStick: t(familyControlKey(family, 'leftStick')),
-                rightStick: t(familyControlKey(family, 'rightStick')),
-              }}
-            />
+            <XboxGamepadLayout {...layoutProps} />
           )}
         </div>
       </SettingsCard>

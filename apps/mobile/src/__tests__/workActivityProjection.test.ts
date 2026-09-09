@@ -5,6 +5,8 @@ import { summarizeToolRowPresentation } from '@/session/messagePresentation';
 import {
   projectMobileWorkActivities,
   projectRecentMobileWorkActivities,
+  sameMobileWorkToolActivity,
+  type MobileProjectedToolActivity,
 } from '@/session/workActivityProjection';
 import type { RemoteMessage } from '@/session/types';
 
@@ -42,6 +44,41 @@ function activeWorkGroup(messages: RemoteMessage[]) {
 }
 
 describe('mobile work activity projection', () => {
+  it('keeps unchanged rows equivalent across large work-group projections and refreshes real changes', () => {
+    const commandActions = Array.from({ length: 200 }, (_, index) => ({
+      type: 'read', command: `cat src/file-${index}.ts`,
+      name: `file-${index}.ts`, path: `src/file-${index}.ts`,
+    }));
+    const group = activeWorkGroup([
+      message({ id: 'user', role: 'user', content: 'inspect' }),
+      toolUse('exec', 'exec', {
+        command: commandActions.map((action) => action.command).join(' && '),
+        commandActions, cwd: '/repo',
+      }, 2),
+    ]);
+    const tools = () => projectMobileWorkActivities(group.children, true).activities
+      .filter((activity): activity is MobileProjectedToolActivity => activity.kind === 'tool');
+    const before = tools();
+    const after = tools();
+    expect(before).toHaveLength(200);
+    expect(after.every((row, index) => row !== before[index])).toBe(true);
+    expect(after.every((row, index) => sameMobileWorkToolActivity(before[index], row))).toBe(true);
+
+    const row = before[0];
+    for (const changed of [
+      { ...row, key: 'another-key' },
+      { ...row, status: row.status === 'done' ? 'running' as const : 'done' as const },
+      { ...row, toolResult: 'new result' },
+      { ...row, message: { ...row.message, normalized: { ...row.message.normalized, secondaryBody: 'changed' } } },
+      { ...row, intentOverride: { ...row.intentOverride!, target: 'new target' } },
+      { ...row, intentOverride: { ...row.intentOverride!, path: '/new/path' } },
+      { ...row, intentOverride: { ...row.intentOverride!, action: 'search' as const } },
+      { ...row, intentOverride: undefined },
+    ]) {
+      expect(sameMobileWorkToolActivity(row, changed)).toBe(false);
+    }
+  });
+
   it('expands structured Codex commands and keeps only the latest five live actions', () => {
     const commandActions = Array.from({ length: 6 }, (_, index) => ({
       type: 'read',

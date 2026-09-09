@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
+import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import {
@@ -28,13 +29,13 @@ import {
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
 import type { AutomationScheduleSessionInfo } from '../lib/automationSidebarGrouping';
-import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '../../scheduler/lib/runUnread';
 import { loadScheduleSidebarIndexSnapshot } from '../../scheduler/lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../../scheduler/lib/scheduleRunReadSync';
+import { projectScheduleSidebarIndex } from '../../scheduler/lib/projectScheduleSidebarIndex';
 
 const log = createLogger('AutomationScheduleSessionIndex');
 
-/** 侧栏 hook 写入、会话视图只读。避免每个聊天窗再跑一遍全量 listSidebarIndexRuns。 */
+/** 窗口级 owner 写入，侧栏和任务视图只读；折叠侧栏不会中断索引。 */
 let publishedIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 const publishedIndexListeners = new Set<() => void>();
 
@@ -90,6 +91,7 @@ function applyOptimisticUnreads(next: Map<string, AutomationScheduleSessionInfo>
       existing.unreadRunIds.push(overlay.runId);
     }
     if (overlay.kind === 'failed' && !existing.unreadFailedRunIds.includes(overlay.runId)) {
+      existing.hasFailedRun = true;
       existing.unreadFailedRunIds.push(overlay.runId);
       existing.latestUnreadFailedRunId = overlay.runId;
     }
@@ -110,14 +112,27 @@ function subscribePublishedIndex(listener: () => void): () => void {
   };
 }
 
+export function usePublishedAutomationScheduleSessionIndex(): ReadonlyMap<
+  string,
+  AutomationScheduleSessionInfo
+> {
+  return useSyncExternalStore(
+    subscribePublishedIndex,
+    () => publishedIndex,
+    () => publishedIndex,
+  );
+}
+
 export function useAutomationScheduleSessionInfo(
   sessionId: string | undefined,
 ): AutomationScheduleSessionInfo | undefined {
-  return useSyncExternalStore(
+  const remoteInfo = useRemoteSessionScheduleInfo(sessionId ?? '');
+  const localInfo = useSyncExternalStore(
     subscribePublishedIndex,
     () => (sessionId ? publishedIndex.get(sessionId) : undefined),
     () => (sessionId ? publishedIndex.get(sessionId) : undefined),
   );
+  return remoteInfo ?? localInfo;
 }
 
 /**
@@ -192,43 +207,7 @@ export function useAutomationScheduleSessionIndex(
         }, RECONCILE_RECHECK_DELAY_MS);
       }
 
-      const next = new Map<string, AutomationScheduleSessionInfo>();
-      const latestFailedFiredAt = new Map<string, number>();
-      for (const run of runs) {
-        if (!run.sessionId) continue;
-        const existing = next.get(run.sessionId);
-        const unreadRunIds = existing?.unreadRunIds ? [...existing.unreadRunIds] : [];
-        const unreadFailedRunIds = existing?.unreadFailedRunIds
-          ? [...existing.unreadFailedRunIds]
-          : [];
-        // 只对未读 run 累加(与 isUnreadScheduleRun 对齐)。failed / interrupted
-        // 未读 run 拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
-        const isRunUnread = isUnreadScheduleRun(run);
-        if (isRunUnread) unreadRunIds.push(run.runId);
-        let latestUnreadFailedRunId = existing?.latestUnreadFailedRunId;
-        if (isUnreadFailedScheduleRun(run)) {
-          unreadFailedRunIds.push(run.runId);
-          const firedAt = run.firedAt ?? 0;
-          if (firedAt >= (latestFailedFiredAt.get(run.sessionId) ?? Number.NEGATIVE_INFINITY)) {
-            latestFailedFiredAt.set(run.sessionId, firedAt);
-            latestUnreadFailedRunId = run.runId;
-          }
-        }
-        next.set(run.sessionId, {
-          scheduleId: run.scheduleId,
-          scheduleName: run.scheduleName,
-          scheduleStatus: run.scheduleStatus,
-          scheduleSource: run.scheduleSource,
-          nextFireAt: run.nextFireAt,
-          workingDir: run.workingDir,
-          projectConfigId: run.projectConfigId,
-          unreadRunIds,
-          unreadFailedRunIds,
-          latestUnreadFailedRunId,
-          hasUnreadRun: unreadRunIds.length > 0,
-          hasUnreadFailedRun: unreadFailedRunIds.length > 0,
-        });
-      }
+      const next = projectScheduleSidebarIndex(runs);
       applyOptimisticUnreads(next);
       setIndex(next);
       publishIndex(next);

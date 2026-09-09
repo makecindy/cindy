@@ -5,6 +5,9 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { ServerApiError, serverApiFetch } from '../serverApiClient.js';
 import { getAppCapabilities, requireAppCapability } from '../appCapabilities.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('voice-input:cindy-voice-session');
 
 const VOICE_SESSION_REQUEST_TIMEOUT_MS = 10_000;
 const VOICE_REFINE_WARMUP_TIMEOUT_MS = 10_000;
@@ -38,6 +41,11 @@ export type CindyVoiceAsrSession = {
 /** Session-scoped bridge from Cindy identity to one-shot voice data-plane tickets. */
 export class CindyVoiceRunContext {
   private latestSessionId: string | null = null;
+  // A client-side ASR candidate can time out while its session allocation is
+  // still in flight. Do not let that late response overwrite the session used
+  // by a newer fallback candidate (which would attach refinement to the wrong
+  // upstream run).
+  private connectionGeneration = 0;
   /**
    * Set when session allocation had to drop the 'auto' refiner marker for a
    * voice-server that predates the delegated-refinement contract. Dictation
@@ -55,7 +63,10 @@ export class CindyVoiceRunContext {
     websocketUrl: string;
     authorizationToken: string;
   }> {
+    const requestGeneration = ++this.connectionGeneration;
+    const allocationStartedAt = performance.now();
     let session: CindyVoiceAsrSession;
+    let usedLegacyRefinerFallback = false;
     try {
       session = await createCindyVoiceSession({
         asrProvider,
@@ -80,9 +91,21 @@ export class CindyVoiceRunContext {
         refinerProvider: undefined,
         sourceLanguage: this.sourceLanguage,
       });
-      this.refinerUnavailableOnServer = true;
+      usedLegacyRefinerFallback = true;
     }
+    if (requestGeneration !== this.connectionGeneration) {
+      throw new Error('Cindy voice ASR session allocation was superseded by a newer provider attempt.');
+    }
+    if (usedLegacyRefinerFallback) this.refinerUnavailableOnServer = true;
     this.latestSessionId = session.sessionId;
+    // Session allocation is the HTTP half of managed ASR startup; the socket
+    // handshake that follows is timed separately by the provider. Splitting the
+    // two is what makes a slow start attributable.
+    log.debug('asr session allocated', {
+      asrProvider,
+      elapsedMs: Math.round(performance.now() - allocationStartedAt),
+      legacyRefinerFallback: usedLegacyRefinerFallback,
+    });
     return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
   }
 

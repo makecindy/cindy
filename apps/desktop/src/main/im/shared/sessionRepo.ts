@@ -2,16 +2,20 @@
  * main/im/shared/sessionRepo.ts
  * ---------------------------------------------------------------------------
  * IM 渠道的 sessions DB 层(渠道无关)。`sessions` 表与 desktop UI 会话共用
- * (见 localDb/schema.ts);按确定性 session id 查找/创建属于 (botContextId,
- * userId) 的会话行。渠道差异(id 格式 / source 列值 / 默认 title / workingDir
- * 策略 / 渠道专属列)收敛在 ImSessionNamespace, 由 adapter 注入。
+ * (见 localDb/schema.ts);按渠道路由查找/创建属于 (botContextId, userId) 的
+ * 会话行。大多数渠道沿用确定性 id；Telegram `/new` 会轮换成新的任务 id。
+ * 渠道差异(id 格式 / source 列值 / 默认 title / workingDir 策略 / 渠道专属列)
+ * 收敛在 ImSessionNamespace, 由 adapter 注入。
  *
  * Manual INSERT (不走 maker 的 DesktopSessionStorage.create) — 为了预填渠道
  * 专属列。Maker 的 `createSession({ id })` 经 storage.get() 看到行已存在,
  * 只附加 SDK handle。
  */
 
-import { eq, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+
+import { and, desc, eq, sql } from 'drizzle-orm';
+import type { IdentityKey } from '@cindy/im';
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
@@ -53,6 +57,8 @@ export interface ImSessionRow {
   permissionMode: PermissionMode;
   fastMode: boolean;
   sdkSessionId: string | null;
+  /** Non-empty means workingDir and Agent file paths live on an SSH host. */
+  remoteHostId?: string | null;
   /**
    * 该会话显式选定的供应商 id(路由用,null = 跟随默认路由)。/model 卡片选行时一并持久化,
    * IM turn 启动前 hydrate 进 session-provider-store,保证按选中供应商路由。
@@ -114,6 +120,17 @@ export interface ImSessionRepo {
     scopeKey?: string,
     prepared?: ImSessionRow,
   ): Promise<ImSessionRow>;
+  /**
+   * Create a distinct task from current channel defaults, then retire the
+   * previous channel-native task. Only namespaces with createTaskOnNew opt in.
+   */
+  createFreshSession?(
+    botContextId: string,
+    userId: string,
+    scopeKey?: string,
+    prepared?: ImSessionRow,
+    detachBinding?: { identity: IdentityKey; targetSessionId: string } | null,
+  ): Promise<{ current: ImSessionRow; previous: ImSessionRow | null }>;
   /**
    * 该渠道语境下 model 的默认 effort:
    *   1. config.effortOverrides[modelId] — IM 产品决策
@@ -197,6 +214,32 @@ export function createImSessionRepo(
     return workingDir === ns.ensureWorkingDir(botContextId) ? 'dialogue' : 'project';
   }
 
+  async function selectChannelRow(
+    botContextId: string,
+    userId: string,
+    scopeKey?: string,
+  ): Promise<typeof sessions.$inferSelect | null> {
+    const db = getDbClient().drizzle;
+    if (ns.createTaskOnNew) {
+      const rows = await db
+        .select()
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.source, ns.source),
+            eq(sessions.imBotContextId, botContextId),
+            eq(sessions.imUserId, userId),
+          ),
+        )
+        .orderBy(desc(sessions.createdAt), desc(sessions.id))
+        .limit(1);
+      if (rows[0]) return rows[0];
+    }
+    const legacyId = ns.sessionIdFor(botContextId, userId, scopeKey);
+    const rows = await db.select().from(sessions).where(eq(sessions.id, legacyId)).limit(1);
+    return rows[0] ?? null;
+  }
+
   return {
     sessionIdFor: (botContextId, userId, scopeKey) =>
       ns.sessionIdFor(botContextId, userId, scopeKey),
@@ -212,10 +255,7 @@ export function createImSessionRepo(
      * 会用同 id INSERT 撞 UNIQUE(sessions.id),IM 消息从此全部报错(#748)。
      */
     async peekSession(botContextId, userId, scopeKey) {
-      const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const db = getDbClient().drizzle;
-      const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
-      const row = rows[0];
+      const row = await selectChannelRow(botContextId, userId, scopeKey);
       if (!row) return null;
       return {
         id: row.id,
@@ -226,17 +266,17 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
       };
     },
 
     async findActiveSession(botContextId, userId, scopeKey) {
-      const id = ns.sessionIdFor(botContextId, userId, scopeKey);
+      const routeId = ns.sessionIdFor(botContextId, userId, scopeKey);
       const db = getDbClient().drizzle;
-      const result = await withSessionRouteLock(id, async () => {
-        const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
-        const row = rows[0];
+      const result = await withSessionRouteLock(routeId, async () => {
+        const row = await selectChannelRow(botContextId, userId, scopeKey);
         if (!row) return null;
         const workspaceKind = readWorkspaceKind(
           row.workingDir,
@@ -252,7 +292,7 @@ export function createImSessionRepo(
           if (row.status === 'deleted') {
             // Durable Subagent 墓碑与进行中的删除清理必须在翻回 active 之前撤掉，
             // 否则确定性 id 复活后每次 spawn 仍判父任务已删除。
-            await retireDeletedPiSubagentState(id);
+            await retireDeletedPiSubagentState(row.id);
           }
           const now = Date.now();
           await db
@@ -264,7 +304,7 @@ export function createImSessionRepo(
               // 渠道声明了归属分组时顺手校正老行, 但不碰用户 `/project` 切出去的行
               ...correctedWorkspaceKind(botContextId),
             })
-            .where(eq(sessions.id, id));
+            .where(eq(sessions.id, row.id));
           revivedFrom = row.status;
         } else if (workspaceKind !== null && workspaceKind !== row.workspaceKind) {
           // 存量脏行**就地回写**, 不等下一次归档。sidebar 的分组直接投影 DB 那一列
@@ -276,7 +316,7 @@ export function createImSessionRepo(
           await db
             .update(sessions)
             .set({ ...correctedWorkspaceKind(botContextId), updatedAt: Date.now() })
-            .where(eq(sessions.id, id));
+            .where(eq(sessions.id, row.id));
           workspaceKindCorrected = true;
         }
         return { row, workspaceKind, revivedFrom, workspaceKindCorrected };
@@ -304,6 +344,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
         // caller 拿到的和库里落定的才是同一个答案。
@@ -325,6 +366,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         workspaceKind: row.workspaceKind ?? null,
       };
@@ -373,7 +415,9 @@ export function createImSessionRepo(
           .values({
             id: row.id,
             title: ns.defaultTitle(userId),
-            ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
+            ...(row.workspaceKind ?? ns.workspaceKind
+              ? { workspaceKind: row.workspaceKind ?? ns.workspaceKind }
+              : {}),
             workingDir: row.workingDir,
             model: row.model,
             effort: row.effort,
@@ -424,6 +468,7 @@ export function createImSessionRepo(
             permissionMode: persistedRow.permissionMode,
             fastMode: persistedRow.fastMode,
             sdkSessionId: persistedRow.sdkSessionId,
+            remoteHostId: persistedRow.remoteHostId ?? null,
             providerId: persistedRow.providerId ?? null,
           }
         : row;
@@ -455,6 +500,84 @@ export function createImSessionRepo(
       }
       return result;
     },
+
+    async createFreshSession(botContextId, userId, scopeKey, prepared, detachBinding) {
+      if (!ns.createTaskOnNew) {
+        throw new Error(`${ns.source} does not create a new task for /new`);
+      }
+      const routeId = ns.sessionIdFor(botContextId, userId, scopeKey);
+      return withSessionRouteLock(routeId, async () => {
+        const previous = await this.peekSession(botContextId, userId, scopeKey);
+        const defaults = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
+        const fresh: ImSessionRow = {
+          ...defaults,
+          id: randomUUID(),
+          // `/project` is a lane preference. `/new` changes the task and its
+          // model route, but must not unexpectedly move the lane elsewhere.
+          workingDir: previous?.workingDir ?? defaults.workingDir,
+          workspaceKind: previous?.workspaceKind ?? defaults.workspaceKind,
+          sdkSessionId: null,
+        };
+        const rotate = async (): Promise<{
+          current: ImSessionRow;
+          previous: ImSessionRow | null;
+        }> => {
+          const client = getDbClient();
+          const now = Date.now();
+          const markers = ns.extraInsertColumns(botContextId, userId);
+          const imBotContextId = markers.imBotContextId;
+          const imUserId = markers.imUserId;
+          if (typeof imBotContextId !== 'string' || typeof imUserId !== 'string') {
+            throw new Error(`${ns.source} fresh-task routing markers are invalid`);
+          }
+          const result = await client.tx('im.rotateSession', {
+            previousSessionId: previous?.id ?? null,
+            detachBinding: detachBinding
+              ? {
+                  channel: detachBinding.identity.channel,
+                  botContextId: detachBinding.identity.botContextId,
+                  userId: detachBinding.identity.userId,
+                  scopeKey: detachBinding.identity.scopeKey ?? '',
+                  targetSessionId: detachBinding.targetSessionId,
+                }
+              : null,
+            session: {
+              id: fresh.id,
+              title: ns.defaultTitle(userId),
+              workingDir: fresh.workingDir,
+              workspaceKind: fresh.workspaceKind ?? ns.workspaceKind ?? 'project',
+              model: fresh.model,
+              effort: fresh.effort,
+              permissionMode: fresh.permissionMode,
+              fastMode: fresh.fastMode,
+              agentKind: toDbAgentKind(fresh.agentKind),
+              providerId: fresh.providerId,
+              source: ns.source,
+              imBotContextId,
+              imUserId,
+            },
+            now,
+          });
+          if (fresh.providerId) setSessionProvider(fresh.id, fresh.providerId);
+          log.info(
+            `created fresh ${ns.source} session id=${fresh.id} workingDir=${maskPath(fresh.workingDir)} ` +
+              `agent=${fresh.agentKind} model=${fresh.model} effort=${fresh.effort} ` +
+              `provider=${fresh.providerId ?? 'default'} permissionMode=${fresh.permissionMode}`,
+          );
+          broadcastSessionCreated(fresh.id);
+          if (previous && result.previousStatus !== 'deleted') {
+            broadcastSessionPatched(previous.id, { status: 'archived' });
+          }
+          return { current: fresh, previous };
+        };
+        // The deterministic lane lock serializes Telegram messages; the
+        // current UUID lock also serializes against Desktop archive/delete.
+        if (previous && previous.id !== routeId) {
+          return withSessionRouteLock(previous.id, rotate);
+        }
+        return rotate();
+      });
+    },
   };
 }
 
@@ -472,6 +595,7 @@ function rowFromDefaults(
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,
+    remoteHostId: null,
     providerId: defaults.providerId,
   };
 }
@@ -489,7 +613,8 @@ export async function touchUserSent(sessionId: string): Promise<void> {
 }
 
 /**
- * `/new` semantic: clear the conversation context but keep the session row.
+ * Legacy single-row channel `/new` semantic: clear the conversation context
+ * but keep the session row. Telegram uses createFreshSession instead.
  *
  * Implementation: null out `sdkSessionId` so the next `maker.createSession`
  * for this id starts a fresh SDK conversation thread (no resume). Caller is
@@ -511,7 +636,8 @@ export async function clearContext(sessionId: string): Promise<void> {
 }
 
 /**
- * `/new` 语义:保留同一个 IM 会话行,但按当前渠道的 IM 默认重新开始一条新对话。
+ * 存量单行渠道的 `/new` 语义:保留同一个 IM 会话行,但按当前渠道的 IM 默认
+ * 重新开始一条新对话。Telegram 走 createFreshSession, 不调用这里。
  *
  * 这会同时重置 agent/model/effort/provider/permission/fast 和 sdkSessionId。也就是说
  * 用户把飞书默认从 Claude Code 改成 Codex 后,在飞书里执行 `/new` 会按 Codex 开始，

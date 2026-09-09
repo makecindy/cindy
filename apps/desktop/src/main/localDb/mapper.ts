@@ -8,7 +8,11 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
+import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 
 import type {
   sessions,
@@ -20,6 +24,7 @@ import type {
 // 类型从 renderer 共享（仅 type-only import，运行时无 import 副作用）
 import type {
   Session,
+  UsageHistorySession,
   SessionStatus,
   Message,
   MessageRole,
@@ -42,6 +47,7 @@ import type {
   PreRunHookRunResult,
 } from '@cindy/maker-scheduler';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
+import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -54,6 +60,29 @@ import {
 
 type SessionRow = typeof sessions.$inferSelect;
 type SessionInsert = typeof sessions.$inferInsert;
+type SessionUsageRow = Pick<
+  SessionRow,
+  | 'id'
+  | 'title'
+  | 'model'
+  | 'providerId'
+  | 'totalTokenUsage'
+  | 'contextTokens'
+  | 'contextWindow'
+  | 'userSendAt'
+  | 'updatedAt'
+>;
+
+/**
+ * 运行时固定 effort 模型用 `null`；`sessions.effort` 是 NOT NULL 枚举。
+ * 空白 / null 表示不落库，UPDATE 保留该行已有的合法档位。
+ */
+export function persistableSessionEffort(effort: unknown): SessionInsert['effort'] | undefined {
+  if (typeof effort !== 'string') return undefined;
+  const trimmed = effort.trim();
+  return trimmed ? (trimmed as SessionInsert['effort']) : undefined;
+}
+
 type MessageRow = typeof messages.$inferSelect;
 type MessageInsert = typeof messages.$inferInsert;
 type ScheduleRow = typeof schedules.$inferSelect;
@@ -98,7 +127,7 @@ const PREVIEW_CONTENT_BOUND_CHARS = 4096;
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
  *  - user 消息：content 是 `{"text":"...","images":[],"files":[]}` → 取 .text
- *  - assistant 消息：content 是 JSON.stringify 后的 markdown 字符串 → 解析后原样用
+ *  - assistant 消息：content 是 JSON.stringify 后的 markdown 字符串 → 提取可读正文
  *  - 解析失败 / 空文本 → null（渲染端隐藏预览行）
  * 换行折叠成空格——卡片预览是流式 3 行 clamp，不保留消息内排版。
  */
@@ -113,7 +142,8 @@ export function finalizePlainPreview(
   // 实现细节。返回 null 与"无预览"同渲染语义。
   if (isSyntheticTriggerText(next)) return null;
   if (role === 'assistant') next = stripInternalWebCitations(next);
-  const collapsed = next.replace(/\s+/g, ' ').trim();
+  // Strip formatting before the display limit: URLs must not consume the preview budget.
+  const collapsed = markdownPreviewText(next);
   if (!collapsed) return null;
   return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
 }
@@ -176,8 +206,7 @@ export function boundSerializedMessageContent(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney =
-    row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -197,8 +226,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
   // 否则(CNY 无法表达进 USD 字段)保持冻结历史值。只消费 totalCostUsd 的读方
   // (device-link v1 / 手机端)在全量 reseed 后才不会丢本构建新增的 USD 花费。
   const legacyUsdProjection =
-    row.totalCostUsd +
-    (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
+    row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
@@ -249,6 +277,19 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
             ),
     summary: row.summary ?? null,
   };
+  // Only the owning host can distinguish a pre-boot interruption from a live
+  // turn. Keep the generation so existing ended/clear patches revoke it without
+  // another query; a normal read acknowledgement must not revoke this evidence.
+  const candidate = { ...base, interruptedTurnStartedAt: base.activeTurnStartedAt };
+  base.interruptedTurnStartedAt =
+    row.source != null &&
+    DESKTOP_VISIBLE_SESSION_SOURCES.includes(
+      row.source as (typeof DESKTOP_VISIBLE_SESSION_SOURCES)[number],
+    ) &&
+    (base.activeTurnStartedAt ?? Infinity) < getSessionInterruptionBootAt() &&
+    hasPendingSessionInterruption(candidate)
+      ? base.activeTurnStartedAt
+      : null;
   return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
 }
 
@@ -328,6 +369,7 @@ export function sessionCreateToRow(
          * create 由 renderer 透传用户在草稿里选定的来源,使新会话首个请求就走对供应商。
          */
         providerId?: string | null;
+        source?: 'bot';
       }
     | undefined,
   now: number,
@@ -367,6 +409,7 @@ export function sessionCreateToRow(
       typeof body?.providerId === 'string' && body.providerId.trim().length > 0
         ? body.providerId.trim()
         : null,
+    source: body?.source ?? 'desktop',
     createdAt: now,
     updatedAt: now,
   };
@@ -384,7 +427,7 @@ export function sessionPatchToRow(
     workingDir?: string;
     workspaceKind?: WorkspaceKind;
     model?: string;
-    effort?: string;
+    effort?: string | null;
     permissionMode?: string;
     providerId?: string | null;
     fastMode?: boolean;
@@ -409,7 +452,8 @@ export function sessionPatchToRow(
     out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   if (patch.model !== undefined) out.model = patch.model;
-  if (patch.effort !== undefined) out.effort = patch.effort as SessionInsert['effort'];
+  const persistableEffort = persistableSessionEffort(patch.effort);
+  if (persistableEffort !== undefined) out.effort = persistableEffort;
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];
   if (patch.providerId !== undefined) out.providerId = patch.providerId;
@@ -464,6 +508,26 @@ export function messageCreateToRow(
 function msToIso(ms: number | null | undefined): string | null {
   if (ms === null || ms === undefined) return null;
   return new Date(ms).toISOString();
+}
+
+/**
+ * 用量历史榜单的最小行映射。
+ *
+ * 与 sessionToCamel 分开，避免全量 usageHistory 查询把 workingDir、SDK
+ * 标识、远程主机等只属于会话管理的字段泄露到 Renderer。
+ */
+export function sessionUsageToCamel(row: SessionUsageRow): UsageHistorySession {
+  return {
+    id: row.id,
+    title: row.title,
+    model: row.model,
+    providerId: row.providerId,
+    totalTokenUsage: row.totalTokenUsage,
+    contextTokens: row.contextTokens,
+    contextWindow: row.contextWindow,
+    userSendAt: msToIso(row.userSendAt),
+    updatedAt: new Date(row.updatedAt).toISOString(),
+  };
 }
 
 function isoToMs(iso: string | null): number | null {
@@ -593,7 +657,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
-    source: row.source === 'project' ? 'project' : 'user',
+    source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
     kind: row.kind,
     cronExpr: row.cronExpr,
@@ -602,6 +666,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     manual: !!row.manual,
     intervalMs: row.intervalMs ?? undefined,
     agentKind: row.agentKind as SchedulerAgentKind,
+    modelAgentKind: row.modelAgentKind ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
     effort: row.effort ?? undefined,
@@ -653,6 +718,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     manual: s.manual,
     intervalMs: s.intervalMs ?? null,
     agentKind: s.agentKind,
+    modelAgentKind: s.modelAgentKind ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
@@ -707,6 +773,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   // intervalMs：undefined → null（清空，回退到 cron 槽位语义）；数字原样写
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
   if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
+  if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
@@ -774,8 +841,7 @@ export function projectAutomationConsentToRow(
 
 /** ScheduleRun 行 → 内存对象。 */
 export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
-  const legacyCost =
-    row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
+  const legacyCost = row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
   const currentCost =
     row.costCurrency && row.costAmount > 0
       ? normalizeRegionalMoney({
@@ -810,9 +876,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
       ? legacyEstimate.currency === currentEstimate.currency
         ? addRegionalMoney([legacyEstimate, currentEstimate])
         : currentEstimate
-      : (currentEstimate ??
-        legacyEstimate ??
-        zeroUsageMoney('value-estimate'));
+      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
   return {
     id: row.id,
     scheduleId: row.scheduleId,

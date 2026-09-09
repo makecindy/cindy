@@ -1,13 +1,36 @@
 import { describe, expect, it } from 'vitest';
+import { parseMessageToolUse } from '../messageNormalize.js';
 import {
+  createdPathsFromDescriptor,
   describeToolUse,
   humanizeToolToken,
   parseToolName,
+  sourcePathCandidatesFromDescriptor,
   piEditReplacements,
   truncateToolText,
 } from '../toolUseDescriptor';
 
 describe('parseToolName', () => {
+  it('describes persisted Pi MCP wrappers with the same descriptor as direct calls', () => {
+    const args = { query: 'card' };
+    expect(describeToolUse('cindy_mcp_call_tool', { server: 'custom', tool: 'search', args }))
+      .toEqual(describeToolUse('mcp:custom:search', args));
+  });
+  it.each(['start_team', 'part__tool'])('preserves Pi server boundaries for %s in raw and normalized messages', (tool) => {
+    const server = 'cindy_orca__evil';
+    const input = { value: 1 };
+    const gateway = { server, tool, args: input };
+    const normalized = parseMessageToolUse({ role: 'tool_use', toolUseId: 'pi-id', content: {
+      toolName: 'cindy_mcp_call_tool', input: gateway,
+    } });
+    expect(normalized.toolUseId).toBe('pi-id');
+    expect(parseToolName(normalized.toolName)).toEqual({ kind: 'mcp', server, tool });
+    const expected = describeToolUse(`mcp:${server}:${tool}`, input);
+    expect(describeToolUse('cindy_mcp_call_tool', gateway)).toEqual(expected);
+    expect(describeToolUse(normalized.toolName, normalized.input)).toEqual(expected);
+    expect(parseMessageToolUse({ role: 'tool_use', content: normalized })).toEqual(normalized);
+  });
+
   it('parses Claude Code mcp__server__tool names', () => {
     expect(parseToolName('mcp__feishu__read_by_url')).toEqual({
       kind: 'mcp',
@@ -497,5 +520,67 @@ describe('piEditReplacements', () => {
     // 顶层只给一半不成段(pi 自己也要求两侧都是字符串才归一化)。
     expect(piEditReplacements({ oldText: 'x' })).toEqual([]);
     expect(piEditReplacements({ newText: 'y' })).toEqual([]);
+  });
+});
+
+/**
+ * 这组断言的由来是一次真机事故:伙伴用 cindy_docs 做出了一份 8 页 PPT、文件确实
+ * 落盘了,但对话里只有模型自己写的一行路径 —— 没有卡,作品集里也没有。原因是
+ * 产物判定只认 Write / file_change,MCP 工具做出来的文件在结构上根本不算产物。
+ */
+describe('MCP 工具的产出文件(outPath 约定)', () => {
+  it('带 outPath 的 MCP 调用被算作新建了那个文件', () => {
+    const d = describeToolUse('mcp__cindy_docs__make_pptx', {
+      slides: [{ layout: 'cover', title: 'Q3' }],
+      outPath: 'documents/Q3.pptx',
+    });
+    expect(d.kind).toBe('mcp');
+    expect(createdPathsFromDescriptor(d)).toEqual(['documents/Q3.pptx']);
+  });
+
+  it('snake_case / camelCase 的写法都认(第三方插件不必跟我们同一套命名)', () => {
+    for (const key of ['out_path', 'outputPath', 'output_path']) {
+      const d = describeToolUse('mcp:someserver:export', { [key]: 'out/a.pdf' });
+      expect(createdPathsFromDescriptor(d)).toEqual(['out/a.pdf']);
+    }
+  });
+
+  it('没有 outPath 的 MCP 调用不产出任何路径(读类工具不该冒出卡)', () => {
+    const d = describeToolUse('mcp__cindy_docs__read_sheet', { path: 'data.xlsx' });
+    expect(createdPathsFromDescriptor(d)).toEqual([]);
+  });
+
+  it('Write 与 file_change 的既有判定不变', () => {
+    expect(
+      createdPathsFromDescriptor(describeToolUse('Write', { file_path: '/tmp/a.txt' })),
+    ).toEqual(['/tmp/a.txt']);
+    expect(createdPathsFromDescriptor(describeToolUse('Edit', { file_path: '/tmp/a.txt' }))).toEqual(
+      [],
+    );
+  });
+});
+
+describe('中间件不算成品(素材候选)', () => {
+  it('产出型调用引用的其它路径会被列为素材候选', () => {
+    const d = describeToolUse('mcp__cindy_docs__render_pdf', {
+      htmlPath: 'tmp/design.html',
+      outPath: 'documents/report.pdf',
+    });
+    expect(sourcePathCandidatesFromDescriptor(d)).toContain('tmp/design.html');
+    // 产物本身不会把自己列成素材。
+    expect(sourcePathCandidatesFromDescriptor(d)).not.toContain('documents/report.pdf');
+  });
+
+  it('内联正文不会被当成路径候选(html/markdown 动辄上千字)', () => {
+    const d = describeToolUse('mcp__cindy_docs__render_pdf', {
+      html: `<html>${'x'.repeat(2000)}</html>`,
+      outPath: 'documents/report.pdf',
+    });
+    expect(sourcePathCandidatesFromDescriptor(d)).toEqual([]);
+  });
+
+  it('不产出文件的调用没有素材候选(读类工具不该反杀任何东西)', () => {
+    const d = describeToolUse('mcp__cindy_docs__read_sheet', { path: 'data.xlsx' });
+    expect(sourcePathCandidatesFromDescriptor(d)).toEqual([]);
   });
 });

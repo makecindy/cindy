@@ -17,9 +17,7 @@ function model(
     efforts: effort ? [effort] : [],
     defaultEffort: effort,
     newSessionDefault,
-    ...(inputModalities
-      ? { modalities: { input: inputModalities, output: ['text'] } }
-      : {}),
+    ...(inputModalities ? { modalities: { input: inputModalities, output: ['text'] } } : {}),
   };
 }
 
@@ -60,6 +58,16 @@ function resolve(providers: ProviderView[], availableAgents = allAgents) {
 }
 
 describe('resolveNewMakerDefaultTuple', () => {
+  it.each([
+    { defaultEffort: undefined, efforts: ['low', 'medium', 'high'], expected: 'medium' },
+    { defaultEffort: 'max', efforts: ['low', 'medium', 'high'], expected: 'high' },
+    { defaultEffort: undefined, efforts: [], expected: null },
+  ])('keeps a usable model with incomplete or stale effort metadata: %j', ({ defaultEffort, efforts, expected }) => {
+    const candidate = { ...model('gpt-5.6-sol'), defaultEffort, efforts } as CatalogModel;
+    expect(resolve([provider({ id: 'openai', access: 'subscription', models: { codex: [candidate] } })]))
+      .toMatchObject({ model: 'gpt-5.6-sol', effort: expected });
+  });
+
   it('没有来源或清单仍在加载时不编造默认组合', () => {
     expect(resolve([])).toBeNull();
     expect(
@@ -86,7 +94,7 @@ describe('resolveNewMakerDefaultTuple', () => {
         vendor: 'codex',
         providerId: 'openai',
         model: 'chatgpt/gpt-5.6-sol',
-        effort: 'high',
+        effort: 'medium',
       },
     },
     {
@@ -132,7 +140,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     expect(resolve([source])).toEqual(expected);
   });
 
-  it('订阅优先于 Gateway，多订阅无时间信息时按 OpenAI 稳定优先', () => {
+  it('Gateway 优先于全部订阅，与来源清单顺序无关', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
@@ -150,13 +158,17 @@ describe('resolveNewMakerDefaultTuple', () => {
       access: 'subscription',
       models: { codex: [model('chatgpt/gpt-5.6-sol')] },
     });
-    expect(resolve([gateway, anthropic, openai])).toMatchObject({
-      vendor: 'codex',
-      providerId: 'openai',
-    });
+    for (const sources of [
+      [gateway, anthropic, openai],
+      [openai, anthropic, gateway],
+    ]) {
+      expect(resolve(sources)).toMatchObject({ vendor: 'pi', providerId: 'xd' });
+    }
+    // 无 Gateway 时保留订阅之间的稳定回退顺序。
+    expect(resolve([anthropic, openai])).toMatchObject({ providerId: 'openai' });
   });
 
-  it('本机 xAI 订阅优先于 Gateway，不会被 GLM 默认改写', () => {
+  it('本机 xAI 订阅也不压过 Gateway 推荐组合', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
@@ -171,9 +183,39 @@ describe('resolveNewMakerDefaultTuple', () => {
     });
     expect(resolve([gateway, xai])).toEqual({
       vendor: 'pi',
-      providerId: 'xai',
-      model: 'grok-4.6',
+      providerId: 'xd',
+      model: 'z-ai/glm-5.3-flash',
       effort: 'high',
+    });
+  });
+
+  it.each([
+    'disconnected',
+    'suspended',
+    'failed',
+    'hidden',
+    'unmarked',
+    'no-image',
+    'no-pi',
+  ] as const)('Gateway 不可用（%s）时回退订阅', (reason) => {
+    const gatewayModel = model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text', 'image']);
+    const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [gatewayModel] } });
+    const openai = provider({
+      id: 'openai',
+      access: 'subscription',
+      models: { codex: [model('gpt-5.6-sol')] },
+    });
+    if (reason === 'disconnected') gateway.connected = false;
+    if (reason === 'suspended') gateway.suspended = true;
+    if (reason === 'failed')
+      gateway.modelDiscoveryFailure = { kind: 'upstream', at: '2026-09-05T00:00:00Z' };
+    if (reason === 'hidden') gatewayModel.defaultEnabled = false;
+    if (reason === 'unmarked') gatewayModel.newSessionDefault = undefined;
+    if (reason === 'no-image') gatewayModel.modalities = { input: ['text'], output: ['text'] };
+    const agents = reason === 'no-pi' ? new Set(['cc', 'codex'] as const) : allAgents;
+    expect(resolve([gateway, openai], agents)).toMatchObject({
+      providerId: 'openai',
+      vendor: 'codex',
     });
   });
 
@@ -245,12 +287,12 @@ describe('resolveNewMakerDefaultTuple', () => {
     expect(resolve([gateway])).toBeNull();
   });
 
-  it('推荐模型不支持 high 时不静默降档为默认组合', () => {
+  it('新任务沿用模型声明的默认深度，不另写 high', () => {
     const openai = provider({
       id: 'openai',
       access: 'subscription',
       models: { codex: [model('chatgpt/gpt-5.6-sol', 'medium')] },
     });
-    expect(resolve([openai])).toBeNull();
+    expect(resolve([openai])).toMatchObject({ effort: 'medium' });
   });
 });

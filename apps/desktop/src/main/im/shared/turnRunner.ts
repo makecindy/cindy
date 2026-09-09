@@ -83,7 +83,11 @@ import type {
   TurnPermissionPolicy,
   UserMessage,
 } from '@cindy/maker-core';
-import type { IMAttachment, InteractiveCardSpec, StreamingTextHandle } from '@cindy/im';
+import type {
+  IMAttachment,
+  InteractiveCardSpec,
+  StreamingTextHandle,
+} from '@cindy/im';
 
 import { persistUserMessage } from '../messagePersistence';
 import { bindingStore } from '../binding';
@@ -106,7 +110,10 @@ import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleto
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
-import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
+import {
+  enqueueDurableWrite,
+  redactToolInputForUntrustedBoundary,
+} from '../../messagePersistBroadcaster';
 import {
   cancelPending,
   registerPending,
@@ -171,6 +178,13 @@ const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
 /** SESSION_RUNNING 竞态 / desktop turn 仍在跑时的兜底重试间隔。 */
 const DISPATCH_RETRY_MS = 500;
 
+function resolveTurnFileRoots(
+  workingDir: string,
+  remoteHostId: string | null | undefined,
+): string[] {
+  return remoteHostId ? [] : [workingDir];
+}
+
 interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
@@ -201,8 +215,8 @@ interface TurnState {
   presenter: TurnPresenter;
   /** Managed images discovered in tool output for durable text channels. */
   mediaAbsPaths: string[];
-  /** Current session root used to confine model-authored local file links. */
-  workingDir: string;
+  /** Empty for SSH sessions: remote paths must never be opened through local fs. */
+  allowedFileRoots: string[];
   done: boolean;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
@@ -649,6 +663,7 @@ export function createTurnRunner(
             permissionMode: row.permissionMode,
             fastMode: row.fastMode,
             sdkSessionId: row.sdkSessionId,
+            remoteHostId: row.remoteHostId ?? null,
             providerId: row.providerId ?? null,
           },
           attached: true,
@@ -716,6 +731,7 @@ export function createTurnRunner(
       target = created.target;
     }
     const row = target.row;
+    const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     if (!target.authChecked) {
       const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
       if (!auth.ok) {
@@ -788,7 +804,7 @@ export function createTurnRunner(
       streamingStartFailed: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
-      workingDir: row.workingDir,
+      allowedFileRoots,
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
@@ -809,7 +825,6 @@ export function createTurnRunner(
       terminalPromise,
       resolveTerminal,
     };
-
     let state: SessionState;
     try {
       state = await ensureSessionWired(target, userId);
@@ -958,9 +973,10 @@ export function createTurnRunner(
    * 退回队首, 等下一个 done/error 或 retry timer 再派发, 不报错。
    */
   /**
-   * 群护栏取缔(feishu): 渠道通过 turnPolicyOptionalForMode 声明「该权限档下
-   * 强确认策略可选」时, dispatch 前按会话当前权限档决定是否真正挂策略 —
-   * 返回 undefined = 不挂, maker 不再 fail-closed, 按用户显式选择直接执行。
+   * 群护栏取缔: 渠道通过 turnPolicyOptionalForMode 声明「该权限档下本轮
+   * 强确认策略可选」时, dispatch 前按会话当前权限档与具体 policy 决定是否
+   * 真正挂策略 —— 返回 undefined = 不挂, maker 不再 fail-closed, 按用户显式
+   * 选择直接执行。
    * 群上下文的防注入过滤与包裹独立于策略, 照常生效; 查档失败保持挂策略
    * (fail-closed 兜底)。其它渠道不实现该钩子, 行为不变。
    */
@@ -972,7 +988,10 @@ export function createTurnRunner(
     }
     try {
       const row = await repo.peekSessionById(item.rowId);
-      if (row && adapter.turnPolicyOptionalForMode(row.permissionMode)) {
+      if (
+        row &&
+        adapter.turnPolicyOptionalForMode(row.permissionMode, item.turnPermissionPolicy)
+      ) {
         log.info(
           `turn policy skipped by channel (mode=${row.permissionMode}) session=${item.rowId.slice(-8)}`,
         );
@@ -1060,7 +1079,7 @@ export function createTurnRunner(
           )
         : withHandoff;
 
-      // 群护栏取缔(飞书): 按会话当前权限档决定是否真正挂强确认策略, 见
+      // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见
       // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。
       const effectiveTurnPolicy = await resolveEffectiveTurnPolicy(item);
 
@@ -1354,6 +1373,7 @@ export function createTurnRunner(
         fastMode: row.fastMode,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
         providerId: row.providerId,
+        remoteHostId: row.remoteHostId ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
         vendorOptions: state.attached
           ? undefined
@@ -1494,6 +1514,22 @@ export function createTurnRunner(
     }
   }
 
+  async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
+    const handle = turn.streamingHandle;
+    if (!handle) return;
+    try {
+      await handle.finalize(finalView);
+    } catch (err) {
+      if (output.kind === 'chunked-text') {
+        turn.terminalKind = 'error';
+        turn.terminalErrorCode = 'terminal_output_commit_failed';
+      }
+      log.warn(
+        `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   async function handleSessionWiringBusy(userId: string, turn: TurnState): Promise<void> {
     log.info(`session wiring hit credential busy for userId=...${userId.slice(-8)}`);
     await completeTurnCallbackAfterAck(turn);
@@ -1554,6 +1590,7 @@ export function createTurnRunner(
       fastMode: row.fastMode,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
       providerId: row.providerId,
+      remoteHostId: row.remoteHostId ?? undefined,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: attached ? undefined : adapter.sessions.defaultTitle(userId),
@@ -2156,26 +2193,32 @@ export function createTurnRunner(
    * materializeTurnLocalImages 会按真实路径去重并清理正文引用，渠道最终只发一份。
    */
   function handleToolResultFullEvent(turn: TurnState, event: AgentEvent): void {
+    if (turn.allowedFileRoots.length === 0) return;
     const data = event.data as { fullText?: unknown } | null;
     if (!data || typeof data.fullText !== 'string') return;
     const urls = extractRenderableXdtImageUrls(data.fullText);
     if (urls.length === 0) return;
+    const extraAbsPaths: string[] = [];
+    for (const url of urls) {
+      try {
+        const { absPath } = url.startsWith('cindy-media://')
+          ? resolveCindyMediaUrl(url)
+          : resolveXdtImageUrl(url);
+        extraAbsPaths.push(absPath);
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
+      }
+    }
+    if (extraAbsPaths.length === 0) return;
     // streamingHandle 可能还没 spawn (e.g. 工具调用先于任何 text delta) — 触发
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
-    // O(1) 同步 push, 不阻塞事件循环。
+    // O(1) 同步 push, 不阻塞事件循环。终态群主流镜像读 turn.mediaAbsPaths,
+    // 所以 extra 图必须同步记到 turn 上, 不能只挂在句柄里。
     void ensureStreamingHandle(turn).then((handle) => {
       if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力 / 创建失败(null)
-      for (const url of urls) {
-        try {
-          const { absPath } = url.startsWith('cindy-media://')
-            ? resolveCindyMediaUrl(url)
-            : resolveXdtImageUrl(url);
-          handle.addExtraImageAbsPath(absPath);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
-        }
-      }
+      for (const absPath of extraAbsPaths) handle.addExtraImageAbsPath(absPath);
     });
   }
 
@@ -2564,8 +2607,11 @@ export function createTurnRunner(
         // 已由渠道设置显式放行, 实际只剩 acceptEdits)— 给用户能看懂的说法并
         // 指路 /permission + 私聊修复卡, 而不是裸抛策略错误码。
         const policyUnsupported = failure.reason.startsWith('TURN_PERMISSION_POLICY_UNSUPPORTED');
-        const rejectedMode = failure.reason.split(':')[2] ?? '';
-        const unsupportedCopy = adapter.ui.error?.permissionModeUnsupported;
+        const [, unsupportedKind = '', rejectedMode = ''] = failure.reason.split(':');
+        const unsupportedCopy =
+          unsupportedKind === 'agent'
+            ? adapter.ui.error?.agentUnsupported
+            : adapter.ui.error?.permissionModeUnsupported;
         const message =
           policyUnsupported && unsupportedCopy
             ? typeof unsupportedCopy === 'function'
@@ -2788,7 +2834,7 @@ export function createTurnRunner(
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
-            allowedFileRoots: [turn.workingDir],
+            allowedFileRoots: turn.allowedFileRoots,
             ...(turn.terminalErrorCode ? { errorCode: turn.terminalErrorCode } : {}),
           });
         }
@@ -2863,18 +2909,8 @@ export function createTurnRunner(
       }
     }
     if (turn.streamingHandle) {
-      try {
-        const finalView = composeStreamingView(turn) || '_(空回复)_';
-        await turn.streamingHandle.finalize(finalView);
-      } catch (err) {
-        if (output.kind === 'chunked-text') {
-          turn.terminalKind = 'error';
-          turn.terminalErrorCode = 'terminal_output_commit_failed';
-        }
-        log.warn(
-          `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+      const finalView = composeStreamingView(turn) || '_(空回复)_';
+      await finalizeTurnStream(turn, finalView);
     } else if (turn.presenter.wholeText().length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
       // turn ended. (Rare; normally agents emit at least one text block.)
@@ -2985,13 +3021,9 @@ export function createTurnRunner(
       }
     }
     if (turn?.streamingHandle) {
-      try {
-        const view = composeStreamingView(turn);
-        const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
-        await turn.streamingHandle.finalize(body);
-      } catch {
-        /* swallow */
-      }
+      const view = composeStreamingView(turn);
+      const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+      await finalizeTurnStream(turn, body);
     } else {
       try {
         if (output.kind === 'chunked-text') {
@@ -3026,7 +3058,13 @@ export function createTurnRunner(
   }
 
   async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (output.kind !== 'chunked-text' || !turn.presenter.wholeText().includes('![')) return;
+    if (
+      output.kind !== 'chunked-text' ||
+      turn.allowedFileRoots.length === 0 ||
+      !turn.presenter.wholeText().includes('![')
+    ) {
+      return;
+    }
     try {
       const materialized = await materializeLocalMarkdownImages({
         text: turn.presenter.wholeText(),
@@ -3075,7 +3113,23 @@ export function createTurnRunner(
     scopeKey?: string,
     confirmationTimeoutMs?: number,
   ) {
-    return async (req: InteractionRequest): Promise<InteractionDecision> => {
+    return async (rawReq: InteractionRequest): Promise<InteractionDecision> => {
+      // Redact BEFORE anything channel-facing sees the request. This listener
+      // replaces the Desktop handler, which does its own redaction, so without
+      // this the card builders (interactionCardModel copies `input` verbatim)
+      // would put a credential-bearing `proxyServer` into a Telegram/Feishu
+      // card. The browser tool rejects authenticated proxies later, but the
+      // card has already left the machine by then.
+      const req: InteractionRequest =
+        rawReq.kind === 'permission'
+          ? {
+              ...rawReq,
+              input: redactToolInputForUntrustedBoundary(
+                rawReq.toolName,
+                rawReq.input,
+              ) as Record<string, unknown>,
+            }
+          : rawReq;
       log.info(
         `interaction request kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
       );

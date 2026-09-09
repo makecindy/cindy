@@ -19,6 +19,8 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { Outlet } from 'react-router-dom';
+import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
+import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -69,7 +71,7 @@ export function useSkillhubStoreSync(): void {
     const itemKeys: Array<{ name: string; key: string }> = [];
     for (const s of skills) {
       if (s.kind !== 'skill') continue;
-      const sync = syncResults.get(s.name);
+      const sync = syncResults.get(skillhubCatalogKey(s.name, s.registryEntry?.catalogScope));
       if (!sync?.exists || !sync.isMine) continue;
       const serverAuthorId = sync.authorId ?? '';
       if (!serverAuthorId) continue; // server 没回 authorId 就别回填
@@ -133,14 +135,17 @@ export function useSkillhubStoreSync(): void {
 
   const skillhubProjects = useMemo<SkillhubProject[] | null>(() => {
     if (sessionsLoading) return null;
-    const { projects } = groupSessions(sessions);
-    return projects
-      .filter((p) => p.scope === 'local')
-      .map((p) => ({
-        projectRoot: p.workingDir,
-        hash: projectHash(p.workingDir),
-        displayName: p.displayName,
-      }));
+    const { projects } = groupSessions(sessions, { includePinnedInProjects: true, includeDraftsInProjects: true });
+    const catalogue = new Map<string, SkillhubProject>();
+    for (const project of projects.filter((p) => p.scope === 'local')) {
+      const roots = [project.workingDir, ...project.sessions.map((s) => normalizeWorkingDirForStorage(s.workingDir))];
+      for (const root of roots) {
+        if (!root || catalogue.has(root)) continue;
+        catalogue.set(root, { projectRoot: root, hash: projectHash(root),
+          displayName: root === project.workingDir ? project.displayName : `${project.displayName} · ${root.split('/').at(-1)}` });
+      }
+    }
+    return [...catalogue.values()];
   }, [sessions, sessionsLoading]);
 
   useEffect(() => {

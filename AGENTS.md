@@ -26,6 +26,9 @@
   `docs/dev-rules/repo-map.md`。
 - 首次安装、修复依赖或准备新 worktree 时，必须先读
   `docs/dev-rules/environment-setup.md`。
+- 新增模型、更新模型窗口／价格／推理档位／默认值，或排查模型信息显示错误前，必须先读
+  `docs/dev-rules/model-catalog-maintenance.md`：先确认实际下发目录与数据归属；Server
+  目录和客户端内置兜底需协调更新，不能只改本仓快照就认定线上已生效。
 - 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
 - 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
   特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。
@@ -48,6 +51,8 @@
   提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
+- 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
+  委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
 - 新增或修改 `/review`、Reviewer 任务、成果快照、Finding 协议、复核入口、结果呈现或
   复核生命周期前，必须先读 `docs/product-rules/review-product-direction.md`。
 - 新增或修改按区域（`cn` / `global`）分支的逻辑、构建身份与命名、端点选择、区域相关
@@ -57,6 +62,8 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
+- 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
+  `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
   或参与设计系统迁移 PR 前，必须先读治理合同
   `docs/design-rules/design-governance.md`：真相源边界、兼容红线、两级证据合同与
@@ -85,7 +92,12 @@
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
   `piEnvironment.ts`）、PI 会话权限／配置／system prompt／桥接，或 PI 相关的上线判断前，
-  必须先读 `docs/dev-rules/pi-harness.md`（含设计原则、维护不变量与上线清单）。
+  必须先读 `docs/dev-rules/pi-harness.md`（含设计原则、维护不变量与上线清单）。其中
+  **Pi 原生能力非退化是红线**：Pi 原生允许的安装、更新、扩展加载与 Agent 自助修复，Cindy
+  不得以静态分析、TUI／RPC 兼容提示、内容指纹、宿主审批或新增的“安全增强”为由拒绝、停用
+  或变成不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让
+  Cindy Pi 比同版本原生 Pi 更难用。完整裁决见 `docs/dev-rules/pi-harness.md`「Pi 上游 GUI
+  非退化红线」。
 - 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接，
   或身份卡、管子协议、打包与编写手册前，必须先读
   `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何

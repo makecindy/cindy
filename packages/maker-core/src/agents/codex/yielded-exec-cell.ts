@@ -14,8 +14,19 @@ export interface YieldedExecCell {
   command?: string;
 }
 
-/** Locked to the #3179 Codex rollout shape. Do not loosen without a new fixture. */
-export const YIELDED_EXEC_CELL_RE = /Script running with cell ID[ \t]+(\d+)/gi;
+/**
+ * Locked to the #3179 Codex rollout shape. Do not loosen without a new fixture.
+ *
+ * #3763 收紧:真实 yield 通知是执行器的**状态头**——marker 行从物理行首开始,
+ * 且紧跟 `Wall time` 帧(同一行以空白分隔,或下一物理行)。被引用/示例出现的
+ * 文案(grep 的 `路径:行号:` 前缀、源码里的缩进+引号、字面 `\n` 转义)都不满足
+ * 这两条,不再被当成真实 cell 铸造 continuation claim —— 此前误判会让已成功的
+ * 命令等待不存在的 cell,升级成 yield-continuation-lost-handle 终态失败。
+ * 残余盲区:纯文本恰好在列 0 完整复刻两行状态头 —— 与真实执行器输出无法区分,
+ * 接受(协议级 executionHandle 落地前的启发式边界)。
+ */
+export const YIELDED_EXEC_CELL_RE =
+  /(?:^|\r?\n)Script running with cell ID[ \t]+(\d+)(?:[ \t]+|\r?\n)Wall time[ \t]/gi;
 
 const MAX_SCAN_CHARS = 16_384;
 

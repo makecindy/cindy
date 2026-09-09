@@ -324,9 +324,11 @@ describe('feishu group lane adapter hooks', () => {
   });
 
   it('turnPolicyOptionalForMode: 仅完全访问档可选(护栏取缔), 其余档保持挂策略', () => {
-    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions')).toBe(true);
-    expect(adapter.turnPolicyOptionalForMode?.('auto')).toBe(false);
-    expect(adapter.turnPolicyOptionalForMode?.('acceptEdits')).toBe(false);
+    const policy = adapter.turnPermissionPolicyFor?.(groupEvent());
+    expect(policy).toBeDefined();
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', policy!)).toBe(true);
+    expect(adapter.turnPolicyOptionalForMode?.('auto', policy!)).toBe(false);
+    expect(adapter.turnPolicyOptionalForMode?.('acceptEdits', policy!)).toBe(false);
   });
 
   it('prepareAgentTurnText: 群 lane 拉历史拼上下文前缀(带时间标注), 剔除触发消息', async () => {

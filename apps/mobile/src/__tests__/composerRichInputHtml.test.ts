@@ -1,10 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
 
 describe('mobile composer rich input HTML', () => {
+  it('animates a native frame that fills the horizontal input row, preserving the WebView command ref', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'), 'utf8');
+    const frame = source.slice(source.indexOf('frame: {'), source.indexOf('webView: {'));
+    expect(frame).toContain('flex: 1');
+    expect(frame).toContain('minWidth: 0');
+    expect(source).toContain('<Animated.View style={[styles.frame, heightStyle');
+    expect(source).not.toContain('createAnimatedComponent(WebView)');
+    expect(source).toContain('containerStyle={styles.webView}');
+  });
+
   const html = buildComposerRichInputHtml({
     accessibilityLabel: '输入消息',
     document: { version: 1, nodes: [{ type: 'quote', quote: { text: '<quoted>' } }] },
@@ -23,6 +34,12 @@ describe('mobile composer rich input HTML', () => {
   });
 
   it('ships an offline contenteditable protocol with atom deletion and caret placement', () => {
+    // The editor scrollport follows UI-driven WebView resizing without waiting
+    // for a setConfig message, while scrollHeight still reports natural content.
+    expect(html).toContain('max-height: min(var(--max-height), 100vh)');
+    expect(html).toContain('overflow-y: auto');
+    expect(html).toContain('root.scrollHeight');
+    expect(html).not.toContain('height: 100vh;');
     expect(html).toContain('contentEditable');
     expect(html).toContain("event.key === 'Backspace'");
     expect(html).toContain('placeCaretAroundAtom(atom, event.clientX)');
@@ -30,6 +47,7 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('drag-start');
     expect(html).not.toContain('touchmove');
     expect(html).toContain("compositionstart");
+    expect(html).toContain("compositioncancel");
     expect(html).toContain("paste-images-start");
     expect(html).toContain('.slice(0, MAX_PASTED_IMAGE_COUNT)');
     expect(html).toContain('SUPPORTED_PASTED_IMAGE_MIME_TYPES.has(mimeType)');
@@ -41,6 +59,380 @@ describe('mobile composer rich input HTML', () => {
     expect(html).toContain('setConfig(value)');
     expect(html).toContain("style.setProperty('--chip', config.theme.chip)");
     expect(html).not.toContain('https://');
+  });
+
+  it('counts selection prefixes without cloning or reading atom payloads', () => {
+    const text = (nodeValue: string) => ({ nodeType: 3, nodeValue });
+    const element = (tagName: string, childNodes: unknown[], atom = false) => ({
+      nodeType: 1, tagName, childNodes, classList: { contains: (name: string) => atom && name === 'atom' },
+      get dataset() { throw new Error('selection must not read semantic payloads'); },
+    });
+    const suffix = text('\u200B🙂尾');
+    const root = element('DIV', [element('DIV', [text('前')]), element('SPAN', [], true), suffix]);
+    const source = html.slice(html.indexOf('const prefixAt ='), html.indexOf('const reportSelection ='));
+    const measure = (container: unknown, offset: number) => runInNewContext(
+      source + '; prefixAt(container, offset);',
+      { root, container, offset, CARET_ANCHOR: '\u200B', Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 } },
+    );
+    expect(measure(root, 1)).toEqual({ textLength: 2, atomCount: 0 });
+    expect(measure(suffix, 3)).toEqual({ textLength: 4, atomCount: 1 });
+    expect(source).not.toContain('cloneContents');
+    const message = { type: 'selection', documentId: 7, before: measure(root, 1), through: measure(suffix, 3) };
+    expect(JSON.stringify(message).length).toBeLessThan(160);
+    expect(parseComposerWebMessage(JSON.stringify(message))).toEqual(message);
+    expect(parseComposerWebMessage(JSON.stringify({ ...message, documentId: -1 }))).toBeNull();
+    expect(parseComposerWebMessage(JSON.stringify({ ...message, before: { textLength: -1, atomCount: 0 } }))).toBeNull();
+    const slashTail = text('b\u200B');
+    const slash = element('SPAN', [text('/a'), element('BR', []), slashTail]);
+    slash.classList.contains = (name) => name === 'slash';
+    root.childNodes = [slash, text('尾')];
+    expect(measure(slashTail, 0)).toEqual({ textLength: 2, atomCount: 0 });
+    expect(measure(root, 1)).toEqual({ textLength: 4, atomCount: 0 });
+  });
+
+  it('initializes on the Android WebView 85 API baseline', () => {
+    const legacyHtml = buildComposerRichInputHtml({
+      accessibilityLabel: '输入消息',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello' }] },
+      editable: true,
+      maxHeight: 264,
+      platform: 'android',
+      placeholder: '发送消息',
+      theme: {
+        background: '#eee',
+        border: '#aaa',
+        chip: '#ddd',
+        focus: '#555',
+        placeholder: '#777',
+        text: '#111',
+        textSecondary: '#333',
+      },
+    });
+    const script = legacyHtml.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+    expect(script).toBeTruthy();
+
+    const messages: unknown[] = [];
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    type StubNode = {
+      classList?: { contains(value: string): boolean };
+      className?: string;
+      contentEditable?: string;
+      dataset?: Record<string, string>;
+      readonly nextSibling: StubNode | null;
+      nodeType: number;
+      nodeValue?: string;
+      parentNode: StubParent | null;
+      remove(): void;
+      setAttribute?: () => void;
+      tabIndex?: number;
+      tagName?: string;
+      textContent?: string;
+    };
+    type StubParent = {
+      appendChild(node: StubNode | StubParent): StubNode | StubParent;
+      childNodes: StubNode[];
+      insertBefore(node: StubNode, reference: StubNode | null): StubNode;
+    };
+    type StubRange = {
+      collapse(): void;
+      deleteContents(): void;
+      insertNode(node: StubNode | StubParent): void;
+      selectNodeContents(): void;
+      setStart(node: StubNode, offset: number): void;
+      setStartAfter(node: StubNode): void;
+      startNode: StubNode | null;
+      startOffset: number;
+    };
+    const detach = (node: StubNode) => {
+      const parent = node.parentNode;
+      const index = parent?.childNodes.indexOf(node) ?? -1;
+      if (parent && index >= 0) parent.childNodes.splice(index, 1);
+      node.parentNode = null;
+    };
+    const insertBefore = (
+      parent: StubParent,
+      node: StubNode,
+      reference: StubNode | null,
+    ) => {
+      detach(node);
+      const index = reference ? parent.childNodes.indexOf(reference) : -1;
+      if (index >= 0) parent.childNodes.splice(index, 0, node);
+      else parent.childNodes.push(node);
+      node.parentNode = parent;
+      return node;
+    };
+    const createNode = (nodeType: number, nodeValue?: string): StubNode => {
+      const node: StubNode = {
+        get nextSibling() {
+          const parent = node.parentNode;
+          const index = parent?.childNodes.indexOf(node) ?? -1;
+          return parent && index >= 0 ? parent.childNodes[index + 1] || null : null;
+        },
+        nodeType,
+        nodeValue,
+        parentNode: null,
+        remove() {
+          detach(node);
+        },
+      };
+      return node;
+    };
+    const createFragment = (): StubParent => {
+      const fragment: StubParent = {
+        appendChild(node) {
+          if (!('nodeType' in node)) throw new Error('Nested fragments are not supported');
+          return insertBefore(fragment, node, null);
+        },
+        childNodes: [],
+        insertBefore(node, reference) {
+          return insertBefore(fragment, node, reference);
+        },
+      };
+      return fragment;
+    };
+    const children: StubNode[] = [];
+    const root = {
+      addEventListener(type: string, listener: (...args: unknown[]) => void) {
+        listeners.set(type, listener);
+      },
+      appendChild(node: StubNode | StubParent) {
+        if ('nodeType' in node) return insertBefore(root, node, null);
+        [...node.childNodes].forEach((child) => insertBefore(root, child, null));
+        return node;
+      },
+      childNodes: children,
+      contentEditable: 'false',
+      contains(node: unknown) {
+        return children.includes(node as StubNode);
+      },
+      dataset: {} as Record<string, string>,
+      get firstChild() {
+        return children[0] || null;
+      },
+      focus() {},
+      insertBefore(node: StubNode, reference: StubNode | null) {
+        return insertBefore(root, node, reference);
+      },
+      get lastChild() {
+        return children[children.length - 1] || null;
+      },
+      removeChild(node: StubNode) {
+        detach(node);
+        return node;
+      },
+      scrollHeight: 0,
+      setAttribute() {},
+      style: {
+        paddingBottom: '',
+        paddingTop: '',
+        setProperty() {},
+      },
+    };
+    const staleNode = createNode(1);
+    staleNode.parentNode = root;
+    children.push(staleNode);
+    let activeRange: StubRange | null = null;
+    const createRange = (): StubRange => ({
+      collapse() {},
+      deleteContents() {},
+      insertNode(node) {
+        const reference = this.startNode?.nextSibling || null;
+        if ('nodeType' in node) root.insertBefore(node, reference);
+        else [...node.childNodes].forEach((child) => root.insertBefore(child, reference));
+      },
+      selectNodeContents() {},
+      setStart(node, offset) {
+        this.startNode = node;
+        this.startOffset = offset;
+      },
+      setStartAfter(node) {
+        this.startNode = node;
+        this.startOffset = 1;
+      },
+      startNode: null,
+      startOffset: 0,
+    });
+    const selection = {
+      anchorNode: null as StubNode | null,
+      anchorOffset: 0,
+      addRange(range: StubRange) {
+        activeRange = range;
+        this.anchorNode = range.startNode;
+        this.anchorOffset = range.startOffset;
+      },
+      getRangeAt() {
+        if (!activeRange) throw new Error('No active range');
+        return activeRange;
+      },
+      get rangeCount() {
+        return activeRange ? 1 : 0;
+      },
+      removeAllRanges() {
+        activeRange = null;
+        this.anchorNode = null;
+        this.anchorOffset = 0;
+      },
+    };
+    const documentStub = {
+      addEventListener() {},
+      createComment(value: string) {
+        return createNode(8, value);
+      },
+      createDocumentFragment() {
+        return createFragment();
+      },
+      createElement(tagName: string) {
+        const element = createNode(1);
+        element.className = '';
+        element.classList = {
+          contains(value: string) {
+            return element.className?.split(/\s+/).includes(value) === true;
+          },
+        };
+        element.contentEditable = '';
+        element.dataset = {};
+        element.setAttribute = () => {};
+        element.tabIndex = 0;
+        element.tagName = tagName.toUpperCase();
+        element.textContent = '';
+        return element;
+      },
+      createRange,
+      createTextNode(value: string) {
+        return createNode(3, value);
+      },
+      documentElement: {
+        style: {
+          setProperty() {},
+        },
+      },
+      getElementById() {
+        return root;
+      },
+    };
+    const windowStub: {
+      ReactNativeWebView: { postMessage(payload: string): void };
+      cindyComposer?: {
+        applyDocument(value: unknown, focusAfter?: boolean, caret?: { nodeIndex: number; offset: number }): void;
+        commitPaste(requestId: string, nodes: unknown[]): void;
+        setConfig(value: { maxHeight: number }): void;
+      };
+      getSelection(): typeof selection;
+    } = {
+      ReactNativeWebView: {
+        postMessage(payload: string) {
+          messages.push(JSON.parse(payload));
+        },
+      },
+      getSelection() {
+        return selection;
+      },
+    };
+
+    let onResize = () => {};
+    runInNewContext(
+      `Array.prototype.flatMap = undefined;\n${script}`,
+      {
+        document: documentStub,
+        Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
+        ResizeObserver: class {
+          constructor(callback: () => void) { onResize = callback; }
+          observe() {}
+        },
+        window: windowStub,
+      },
+    );
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({ nodeType: 3, nodeValue: 'hello' });
+    expect(messages).toContainEqual({ type: 'ready' });
+    // A long draft's scrollport resizes on every drag frame; unchanged content
+    // measurements must not cross the WebView bridge again on those frames.
+    root.scrollHeight = 500;
+    const beforeResize = messages.length;
+    for (let frame = 0; frame < 100; frame += 1) onResize();
+    expect(messages.slice(beforeResize)).toEqual([{ type: 'height', height: 264 }]);
+    windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
+    expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
+    root.scrollHeight = 80;
+    const beforeContentShrink = messages.length;
+    onResize();
+    onResize();
+    expect(messages.slice(beforeContentShrink)).toEqual([{ type: 'height', height: 80 }]);
+    children[0].nodeValue = 'hello world';
+    listeners.get('input')?.();
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world' }] },
+    });
+
+    listeners.get('compositionstart')?.();
+    children[0].nodeValue = 'hello world composing';
+    listeners.get('input')?.();
+    expect(messages).not.toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world composing' }] },
+    });
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+    children[0].nodeValue = 'hello world after chip';
+    listeners.get('input')?.();
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: 'hello world after chip' }] },
+    });
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+
+    const pasteRange = createRange();
+    pasteRange.setStart(children[0], String(children[0].nodeValue).length);
+    selection.addRange(pasteRange);
+    listeners.get('paste')?.({
+      clipboardData: {
+        getData: () => ' pasted',
+        items: [],
+      },
+      preventDefault() {},
+    });
+    expect(messages).toContainEqual({
+      type: 'paste-text-request',
+      requestId: '1',
+      text: ' pasted',
+    });
+    windowStub.cindyComposer?.commitPaste('1', [
+      { type: 'text', text: ' pasted' },
+      { type: 'pasted-text', text: 'full pasted text', display: 'Pasted text' },
+    ]);
+    expect(children).toHaveLength(4);
+    expect(children[1]).toMatchObject({ nodeType: 3, nodeValue: ' pasted' });
+    expect(children[2]).toMatchObject({ className: 'atom', nodeType: 1 });
+    expect(children[3]).toMatchObject({ nodeType: 3, nodeValue: '\u200B' });
+    expect(selection.anchorNode).toBe(children[3]);
+    expect(selection.anchorOffset).toBe(1);
+    expect(messages).toContainEqual({
+      type: 'change',
+      document: {
+        version: 1,
+        nodes: [
+          { type: 'text', text: 'hello world pasted' },
+          { type: 'pasted-text', text: 'full pasted text', display: 'Pasted text' },
+        ],
+      },
+    });
+    expect(legacyHtml).not.toContain('replaceChildren');
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [
+        { type: 'pasted-text', text: 'long raw text', display: 'chip' },
+        { type: 'text', text: 'dictated suffix' },
+      ],
+    }, true, { nodeIndex: 1, offset: 8 });
+    expect(selection.anchorNode).toBe(children[2]);
+    expect(selection.anchorOffset).toBe(8);
+    expect(legacyHtml).not.toContain('.flatMap(');
   });
 
   it('uses the shared compact pill geometry for atoms and slash decorations', () => {
@@ -84,6 +476,8 @@ describe('mobile composer rich input HTML', () => {
     expect(html).toContain('setCaretAfter(inserted[inserted.length - 1], current)');
     expect(html).toContain('if (isCaretAnchor(container))');
     expect(html).toContain('removeAtom(atom)');
+    expect(html).toContain('composing = false;');
+    expect(html).toContain("root.addEventListener('compositioncancel'");
   });
 
   it('escapes bootstrap markup instead of injecting it into the page', () => {
@@ -107,7 +501,7 @@ describe('mobile composer rich input HTML', () => {
     expect(inputSource).toContain('applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;');
     expect(inputSource).toContain('applyDocumentAndSetSelectionToEnd: (value) => {');
     expect(inputSource).toContain('applyDocument(value, true);');
-    expect(inputSource).toContain('if (pending) applyDocument(pending.document, pending.focusAfter);');
+    expect(inputSource).toContain('if (pending) applyDocument(pending.document, pending.focusAfter, pending.caret);');
     expect(inputSource).toContain('pendingNodeInsertionsRef.current.push(node);');
     expect(inputSource).toContain('for (const node of pendingNodeInsertions)');
     expect(selectSource).toContain('queueEditingRef.current ? { persist: false } : undefined');
@@ -129,9 +523,10 @@ describe('mobile composer rich input HTML', () => {
       'utf8',
     ).replace(/\r\n/g, '\n');
     const overlayStart = screenSource.indexOf('const renderComposerInputOverlay = ');
+    expect(screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart)).toBeGreaterThan(overlayStart);
     const overlaySource = screenSource.slice(
       overlayStart,
-      screenSource.indexOf('const measureSendButtonTarget', overlayStart),
+      screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart),
     );
 
     expect(overlaySource).toContain('onPressIn={handleComposerInputPressIn}');

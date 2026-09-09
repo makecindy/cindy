@@ -96,6 +96,7 @@ function safeDecision(
 
 class SessionInteractionRouter {
   private desktopHandler: InteractionHandler | null = null;
+  private desktopCancel: ((requestId: string, decision: InteractionDecision) => void) | undefined;
   private lifecycleObserver: InteractionLifecycleObserver | null = null;
   private activeRoute: ActiveRoute | null = null;
   private readonly pending = new Map<string, PendingRequest>();
@@ -104,8 +105,9 @@ class SessionInteractionRouter {
     session.setInteractionListener((request) => this.dispatch(request));
   }
 
-  setDesktopHandler(handler: InteractionHandler): void {
+  setDesktopHandler(handler: InteractionHandler, cancel?: (requestId: string, decision: InteractionDecision) => void): void {
     this.desktopHandler = handler;
+    this.desktopCancel = cancel;
   }
 
   setLifecycleObserver(observer: InteractionLifecycleObserver | null): void {
@@ -160,7 +162,8 @@ class SessionInteractionRouter {
     };
   }
 
-  private async dispatch(request: InteractionRequest): Promise<InteractionDecision> {
+  async dispatch(request: InteractionRequest, signal?: AbortSignal): Promise<InteractionDecision> {
+    if (signal?.aborted) return safeDecision(request, 'session_aborted');
     if (this.pending.has(request.requestId)) {
       return safeDecision(request, 'duplicate_request_id');
     }
@@ -185,6 +188,16 @@ class SessionInteractionRouter {
       request,
       cancel,
     });
+    const abort = () => {
+      const decision = safeDecision(request, 'session_aborted');
+      if (active?.route.interactionSurface === 'channel-card' || active?.route.interactionSurface === 'headless') {
+        callSafely(() => active.onCancel?.(request.requestId, decision));
+      } else {
+        callSafely(() => this.desktopCancel?.(request.requestId, decision));
+      }
+      cancel(decision);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     this.notifyLifecycle('onStart', request, active?.route);
     this.notifyState(active?.route, 'waiting');
     const timeoutMs = active?.route.timeoutMs;
@@ -200,7 +213,9 @@ class SessionInteractionRouter {
         : null;
 
     try {
-      const decision = await Promise.race([handler(request), cancelled]);
+      const handled = handler(request);
+      if (signal?.aborted) abort();
+      const decision = await Promise.race([handled, cancelled]);
       this.notifyState(
         active?.route,
         !cancelledByRouter && this.activeRoute?.token === active?.token
@@ -212,6 +227,7 @@ class SessionInteractionRouter {
       this.notifyState(active?.route, 'cancelled');
       return safeDecision(request, 'interaction_handler_failed');
     } finally {
+      signal?.removeEventListener('abort', abort);
       if (timeout) clearTimeout(timeout);
       this.pending.delete(request.requestId);
       this.notifyLifecycle('onEnd', request, active?.route);
@@ -235,8 +251,18 @@ function routerFor(session: InteractionSession): SessionInteractionRouter {
 export function installDesktopInteractionHandler(
   session: InteractionSession,
   handler: InteractionHandler,
+  cancel?: (requestId: string, decision: InteractionDecision) => void,
 ): void {
-  routerFor(session).setDesktopHandler(handler);
+  routerFor(session).setDesktopHandler(handler, cancel);
+}
+
+/** Host permissions use the same UI, remote responses and route lease as Agent permissions. */
+export function requestHostInteraction(
+  session: InteractionSession,
+  request: InteractionRequest,
+  signal: AbortSignal,
+): Promise<InteractionDecision> {
+  return routerFor(session).dispatch(request, signal);
 }
 
 export function installInteractionLifecycleObserver(

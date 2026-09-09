@@ -6,7 +6,7 @@
  * (mobile i18n 化后由 models.json catalog 供文案,在使用点求值 i18n.t)。组件只做渲染,
  * 这里可 node 单测。
  */
-import { modelSupportsFastMode, type ProviderView } from '@cindy/model-providers/registry';
+import { getModel, modelSupportsFastMode, type ProviderView } from '@cindy/model-providers/registry';
 import type { SectionModel } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
 
@@ -64,34 +64,161 @@ export function providerDisplayTitle(p: Pick<ProviderView, 'id' | 'name'>): stri
   return PROVIDER_TITLE[p.id] ?? p.name;
 }
 
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function normalizedCostDiscount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
+    ? value
+    : undefined;
+}
+
+/** 对齐桌面 formatModelPriceAmount:小于 1 分保留最多 4 位,否则最多 2 位,不补零。 */
+function compactNumber(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+    useGrouping: false,
+  }).format(value);
+}
+
+function formatUsd(value: number): string {
+  return `$${compactNumber(value)}`;
+}
+
+function compactPercent(discount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 2,
+    useGrouping: false,
+  }).format(discount * 100);
+}
+
+// 各价格维度的缩放比例小于这个阈值时视为浮点噪声,按标准价展示。对齐桌面 modelPriceFormat。
+const MIN_EFFECTIVE_PRICE_GAP = 0.0005;
+
+function inferInputOutputDiscount(
+  standardInput: number,
+  standardOutput: number,
+  effectiveInput: number,
+  effectiveOutput: number,
+): number | undefined {
+  const gaps: number[] = [];
+  for (const [standard, effective] of [
+    [standardInput, effectiveInput],
+    [standardOutput, effectiveOutput],
+  ] as const) {
+    if (standard === 0) {
+      if (effective !== 0) return undefined;
+      continue;
+    }
+    const gap = 1 - effective / standard;
+    if (gap < MIN_EFFECTIVE_PRICE_GAP || gap > 1) return undefined;
+    gaps.push(gap);
+  }
+  if (gaps.length === 0) return undefined;
+  return gaps.every((gap) => Math.abs(gap - gaps[0]) < 1e-9) ? gaps[0] : undefined;
+}
+
 /** 单价行(对齐桌面 zh-CN priceTip:「输入 $3 · 输出 $15 / 百万 token」);无价返回 null。 */
 export function formatPriceLine(
   price: { inputUsdPerMtok: number; outputUsdPerMtok: number } | undefined,
 ): string | null {
   if (!price) return null;
-  const fmt = (v: number) => `$${Number(v.toFixed(2))}`;
   return i18n.t('models.picker.priceLine', {
-    input: fmt(price.inputUsdPerMtok),
-    output: fmt(price.outputUsdPerMtok),
+    input: formatUsd(price.inputUsdPerMtok),
+    output: formatUsd(price.outputUsdPerMtok),
   });
 }
 
+/** 模型选项页的价格块:折后价 + 可选折扣说明。无报价 → null。 */
+export interface PickerPricePresentation {
+  title: string;
+  amountsLine: string;
+  discountLabel: string | null;
+  discountPct?: number;
+}
+
 /**
- * 行展开区顶部的元信息行(对齐桌面 hover tooltip 的拼接口径:
- * 供应商完整名 · {contextWindow} 上下文 · 单价 · 快速)。全部缺失 → null(不渲染)。
+ * 模型选项页价格展示。报价表给标准价;目录 CatalogModel.cost 给折后价(桌面同口径)。
+ * 目录缺失时回退报价上的 costDiscount。比例不一致时不挂折扣,避免把混用价当成折后价。
+ * v1 通道只有 XD USD 扁平表:明确非 xd 的供应商行不读这张表(对齐桌面 provider-aware
+ * 查找);provider === null 是旧被控端扁平回退,仍可用。
+ */
+export function presentPickerPrice(args: {
+  pricing: MobileModelPricingMap | null;
+  provider: ProviderView | null;
+  modelId: string;
+  agentKind: AgentKind | null;
+}): PickerPricePresentation | null {
+  if (args.provider && args.provider.id !== 'xd') return null;
+  const quote = args.pricing?.[args.modelId];
+  if (
+    !quote ||
+    !isNonNegativeFinite(quote.inputUsdPerMtok) ||
+    !isNonNegativeFinite(quote.outputUsdPerMtok)
+  ) {
+    return null;
+  }
+
+  let currentInput = quote.inputUsdPerMtok;
+  let currentOutput = quote.outputUsdPerMtok;
+  let discount: number | undefined;
+
+  const catalogCost =
+    args.provider && args.agentKind
+      ? getModel(args.provider, args.modelId, args.agentKind)?.cost
+      : undefined;
+  const catalogInput = catalogCost?.input;
+  const catalogOutput = catalogCost?.output;
+
+  if (isNonNegativeFinite(catalogInput) && isNonNegativeFinite(catalogOutput)) {
+    discount = inferInputOutputDiscount(
+      quote.inputUsdPerMtok,
+      quote.outputUsdPerMtok,
+      catalogInput,
+      catalogOutput,
+    );
+    if (discount !== undefined) {
+      currentInput = catalogInput;
+      currentOutput = catalogOutput;
+    }
+  } else {
+    const fromQuote = normalizedCostDiscount(quote.costDiscount);
+    if (fromQuote !== undefined) {
+      discount = fromQuote;
+      currentInput = quote.inputUsdPerMtok * (1 - fromQuote);
+      currentOutput = quote.outputUsdPerMtok * (1 - fromQuote);
+    }
+  }
+
+  const discountLabel =
+    discount !== undefined
+      ? i18n.t('models.picker.discountedVsStandard', { percent: compactPercent(discount) })
+      : null;
+  return {
+    title: i18n.t('models.picker.priceTitle'),
+    amountsLine: i18n.t('models.picker.priceAmounts', {
+      input: formatUsd(currentInput),
+      output: formatUsd(currentOutput),
+    }),
+    discountLabel,
+    ...(discount !== undefined ? { discountPct: Math.round(discount * 100) } : {}),
+  };
+}
+
+/**
+ * 行展开区顶部的元信息行(供应商完整名 · {contextWindow} 上下文 · 快速)。
+ * 单价改由 presentPickerPrice 单独成块,对齐桌面 ModelConfigFlyout。全部缺失 → null。
  */
 export function buildRowMetaLine(args: {
   provider: Pick<ProviderView, 'id' | 'name'> | null;
   model: Pick<SectionModel, 'id' | 'contextWindow' | 'supportsFastMode'>;
-  pricing: MobileModelPricingMap | null;
 }): string | null {
   const parts: string[] = [];
   if (args.provider) parts.push(providerDisplayTitle(args.provider));
   if (args.model.contextWindow > 0) {
     parts.push(i18n.t('models.picker.contextSuffix', { size: formatContextWindow(args.model.contextWindow) }));
   }
-  const price = formatPriceLine(args.pricing?.[args.model.id]);
-  if (price) parts.push(price);
   if (args.model.supportsFastMode) parts.push(i18n.t('models.picker.fastTag'));
   return parts.length > 0 ? parts.join(' · ') : null;
 }
@@ -138,7 +265,7 @@ export function effortLabelFromRuntime(
 }
 
 /**
- * 一级列表使用稳定 effort id 生成英文短码，避免被控端下发的长文案或混合语言挤占模型名。
+ * 一级列表使用稳定 effort id 生成英文紧凑标签，避免被控端下发的长文案或混合语言挤占模型名。
  * 非英文界面继续使用完整本地化标签；完整英文名称仍由模型选项页展示。
  */
 export function compactEffortLabelFor(

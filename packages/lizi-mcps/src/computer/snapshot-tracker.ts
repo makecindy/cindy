@@ -38,6 +38,8 @@ interface SnapshotMeta {
   sessionKey: string;
   pid: number;
   windowId: number;
+  driverSnapshotId?: string;
+  elements?: Map<string, number>;
 }
 
 /** 保留的窗口数与历史快照数上限(FIFO 淘汰)。 */
@@ -84,10 +86,20 @@ export class WindowSnapshotTracker {
     return id;
   }
 
+  /** A failed observation invalidates earlier IDs and aliases without issuing a usable ID. */
+  invalidate(
+    sessionId: string | undefined,
+    pid: number,
+    windowId: number,
+  ): void {
+    this.latestByWindow.delete(this.windowKey(sessionId ?? '', pid, windowId));
+  }
+
   /** Register a host/driver snapshot id as an alias for the MCP-level guard id. */
   registerAlias(snapshotId: string, alias: string): void {
     const meta = this.metaById.get(snapshotId);
     if (alias.length === 0 || alias === snapshotId || !meta) return;
+    meta.driverSnapshotId = alias;
     const key = this.aliasKey(meta.sessionKey, alias);
     // Some drivers may expose a stable per-window id instead of a per-observation id.
     // Never overwrite an existing alias, otherwise an old element_index paired with
@@ -98,6 +110,54 @@ export class WindowSnapshotTracker {
       if (oldestAlias !== undefined) this.aliasToId.delete(oldestAlias);
     }
     this.aliasToId.set(key, snapshotId);
+  }
+
+  /** Resolve host ids to the driver's original id; never send a ws-* id to a driver. */
+  driverSnapshotId(sessionId: string | undefined, snapshotId: string): string | undefined {
+    const sessionKey = sessionId ?? '';
+    const id = this.aliasToId.get(this.aliasKey(sessionKey, snapshotId)) ?? snapshotId;
+    const meta = this.metaById.get(id);
+    return meta?.sessionKey === sessionKey ? meta.driverSnapshotId : undefined;
+  }
+
+  sameSnapshot(sessionId: string | undefined, left: string, right: string): boolean {
+    const key = sessionId ?? '';
+    const a = this.aliasToId.get(this.aliasKey(key, left)) ?? left;
+    const b = this.aliasToId.get(this.aliasKey(key, right)) ?? right;
+    return a === b && this.metaById.get(a)?.sessionKey === key;
+  }
+
+  windowId(sessionId: string | undefined, snapshotId: string): number | undefined {
+    const key = sessionId ?? '';
+    const id = this.aliasToId.get(this.aliasKey(key, snapshotId)) ?? snapshotId;
+    const meta = this.metaById.get(id);
+    return meta?.sessionKey === key ? meta.windowId : undefined;
+  }
+
+  recordElements(snapshotId: string, elements: unknown): void {
+    const meta = this.metaById.get(snapshotId);
+    if (!meta || !Array.isArray(elements)) return;
+    meta.elements = new Map();
+    for (const element of elements.slice(0, 2000)) {
+      if (typeof element?.element_token === 'string' && typeof element?.element_index === 'number') {
+        meta.elements.set(element.element_token, element.element_index);
+      }
+    }
+  }
+
+  elementReference(sessionId: string | undefined, token: string, observationId?: string) {
+    // A repeated token is ambiguous without an explicit observation. Never silently
+    // promote an old reference to the newest generation just because its text matches.
+    const canonicalId = observationId === undefined ? undefined
+      : this.aliasToId.get(this.aliasKey(sessionId ?? '', observationId)) ?? observationId;
+    for (const [snapshotId, meta] of this.metaById) {
+      if (canonicalId !== undefined && snapshotId !== canonicalId) continue;
+      const index = meta.elements?.get(token);
+      if (meta.sessionKey === (sessionId ?? '') && index !== undefined) {
+        return { snapshotId, index, windowId: meta.windowId };
+      }
+    }
+    return undefined;
   }
 
   /**

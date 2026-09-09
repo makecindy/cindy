@@ -2,6 +2,7 @@ import { createLogger } from '@/lib/logger';
 import {
   WebMicAudioEngine,
   currentPowerReleaseGeneration,
+  isMicrophonePermissionDeniedError,
   isPowerReleaseCancellation,
   isSelectedMicrophoneUnavailableError,
   powerReleaseCancellation,
@@ -31,6 +32,13 @@ export type VoiceInputCaptureSessionStartResult =
        * silently instead of surfacing `error`, which is an internal message.
        */
       cancelled?: boolean;
+      /**
+       * getUserMedia reported that microphone access is (no longer) allowed.
+       * The start guard may have trusted a positive permission cache, so this
+       * is the first place the revocation becomes visible; callers should show
+       * the permission recovery UI now instead of a generic capture error.
+       */
+      permissionDenied?: boolean;
     };
 
 type VoiceInputCaptureSessionOptions = {
@@ -150,6 +158,22 @@ export async function startVoiceInputCaptureSession(
       return {
         ok: false,
         cancelled: true,
+        error: options.formatStartError(error),
+      };
+    }
+    // The start guard trusts a positive permission cache so it does not open a
+    // throwaway microphone stream before every recording. If the real capture
+    // discovers that permission was revoked, invalidate that cache so the next
+    // start returns to the permission gate, and tell the caller so the current
+    // attempt surfaces the permission recovery UI rather than a raw error.
+    if (isMicrophonePermissionDeniedError(error)) {
+      log.warn(message(options.label, 'microphone permission denied during capture start'));
+      void window.electronAPI.voiceInput
+        .setRendererMicrophonePermissionVerified(false)
+        .catch(() => undefined);
+      return {
+        ok: false,
+        permissionDenied: true,
         error: options.formatStartError(error),
       };
     }

@@ -304,6 +304,9 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('settings.checkBundleUpdateButton');
     expect(source).not.toContain('testID="settings.bundleUpdate"');
     expect(source).toContain('runManualUpdateCheck({');
+    expect(source).toContain('...(IS_OTA_SELFHOST');
+    expect(source).toContain('withOtaClient: (operation) => runSelfHostedOtaRequest(');
+    expect(source).toContain(': { isConsented: hasPrivacyConsent })');
     expect(source).toContain('isTestFlightBuild: IS_TESTFLIGHT_BUILD');
     expect(source).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled');
     expect(source).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined');

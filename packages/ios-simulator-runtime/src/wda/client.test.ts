@@ -97,6 +97,7 @@ describe("WdaClient", () => {
     await client.tap("SESSION-1", { x: 10, y: 20 });
     await client.swipe("SESSION-1", { x: 1, y: 2 }, { x: 3, y: 4 }, 250);
     await client.typeText("SESSION-1", "Hi");
+    await client.home("SESSION-1");
     await client.lock("SESSION-1");
     await client.unlock("SESSION-1");
     await client.configureStream("SESSION-1", {
@@ -109,12 +110,15 @@ describe("WdaClient", () => {
       "http://127.0.0.1:8100/session/SESSION-1/actions",
       "http://127.0.0.1:8100/session/SESSION-1/actions",
       "http://127.0.0.1:8100/session/SESSION-1/wda/keys",
+      "http://127.0.0.1:8100/session/SESSION-1/wda/pressButton",
       "http://127.0.0.1:8100/session/SESSION-1/wda/lock",
       "http://127.0.0.1:8100/session/SESSION-1/wda/unlock",
       "http://127.0.0.1:8100/session/SESSION-1/appium/settings",
     ]);
     const typeBody = JSON.parse(String(fetch.mock.calls[2]?.[1]?.body));
     expect(typeBody).toEqual({ value: ["H", "i"] });
+    const homeBody = JSON.parse(String(fetch.mock.calls[3]?.[1]?.body));
+    expect(homeBody).toEqual({ name: "home" });
   });
 
   it("classifies an app-level rotation refusal without marking WDA unavailable", async () => {

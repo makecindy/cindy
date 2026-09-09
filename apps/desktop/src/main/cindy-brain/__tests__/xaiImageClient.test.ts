@@ -25,6 +25,33 @@ function channel(fetchImplementation: typeof fetch, overrides: Record<string, un
 }
 
 describe('xaiImageClient', () => {
+  it('uses the xAI API-key source for Imagine generation', async () => {
+    const doFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 }),
+    );
+    const hasApiKey = vi.fn(() => true);
+    const result = await channel(doFetch, {
+      hasApiKey,
+      getApiKey: () => 'xai-platform-key',
+      hasOAuthLogin: () => false,
+      getCredentialGeneration: () => 0,
+    }).generateImage({ model: 'xai/grok-imagine-image', prompt: '一只猫' });
+
+    expect(result.data[0]?.b64_json).toBe('aW1hZ2U=');
+    expect(hasApiKey).toHaveBeenCalled();
+    expect((doFetch.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBe(
+      'Bearer xai-platform-key',
+    );
+
+    const unavailable = channel(doFetch, {
+      hasApiKey: () => false,
+      hasOAuthLogin: () => false,
+      getCredentialGeneration: () => 0,
+    });
+    expect(unavailable.ready()).toBe(false);
+  });
+
   it('复用 SuperGrok OAuth 调 Imagine generation 并保留原生画幅', async () => {
     const doFetch = vi.fn<typeof fetch>(
       async () =>

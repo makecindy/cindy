@@ -190,7 +190,7 @@ export interface Schedule {
   jobType?: JobType;
   /** Release-compat tombstone：老 issue-triage 的 JSON 配置；新代码不读不写。 */
   jobConfig?: string;
-  source?: 'user' | 'project';
+  source?: 'user' | 'project' | 'bot';
   projectConfigId?: string;
   kind: ScheduleKind;
   cronExpr: string;
@@ -213,6 +213,8 @@ export interface Schedule {
    */
   intervalMs?: number;
   agentKind: AgentKind;
+  /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
+  modelAgentKind?: AgentKind;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -345,6 +347,8 @@ export interface CreateScheduleInput {
   /** Interval 语义间隔（毫秒）。详见 Schedule.intervalMs。 */
   intervalMs?: number;
   agentKind: AgentKind;
+  /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
+  modelAgentKind?: AgentKind;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源

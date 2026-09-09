@@ -116,6 +116,10 @@
     "controlFork": "Fork session",
     "markdownDocAriaLabel": "Message body",
     "toolOutputTitle": "{{label}} output",
+    "toolInputTitle": "{{label}} input",
+    "viewToolInput": "View full input",
+    "loadingToolInput": "Loading full input",
+    "retryToolInput": "Couldn't load input. Retry",
     "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "Empty Mermaid diagram.",
     "diffEditCount": "{{n}} edits"
@@ -175,6 +179,19 @@
     "retry": "Retry"
   },
   "systemCard": {
+    "contextRebuild": {
+      "labelOverflow": "Context reorganized, continuing",
+      "labelTimeout": "Last turn didn't respond; context reorganized to continue",
+      "labelStrip": "Oversized images removed, continuing",
+      "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
+      "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
+    },
+    "compact": {
+      "savedTokens": "saved {{tokens}} tokens",
+      "manual": "Manual compact",
+      "auto": "Auto compact",
+      "aria": "Chat compacted"
+    },
     "goalComplete": "Goal reached · {{turns}} turns · took {{duration}}",
     "goalResumed": "Usage restored, continuing the goal",
     "goalCapacityRetry": "Model service was busy — retrying the goal",

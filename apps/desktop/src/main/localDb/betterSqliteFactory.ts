@@ -5,6 +5,11 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import { createLogger, maskPath } from '../logger';
+import {
+  assertCjkSegRegistered,
+  ensureCjkFtsTempTriggersInstalled,
+  registerCjkSeg,
+} from './registerCjkSeg';
 
 const log = createLogger('localDb/betterSqliteFactory');
 
@@ -126,10 +131,26 @@ export function createBetterSqliteDatabase(
   // 对不存在的文件 ENOENT 静默跳过,故全新安装(文件尚未创建)时此次调用是 no-op。
   restrictDbFilePermissions(filename);
   const db = new Database(filename, finalOptions);
-  // 打开成功后再收紧一次:覆盖本次刚创建的新库,以及 WAL pragma 之前 / 之后 SQLite
-  // 创建的 -wal / -shm 伴随文件(继承主库 0600)。
-  restrictDbFilePermissions(filename);
-  return db;
+  try {
+    // 打开成功后再收紧一次:覆盖本次刚创建的新库,以及 WAL pragma 之前 / 之后 SQLite
+    // 创建的 -wal / -shm 伴随文件(继承主库 0600)。
+    restrictDbFilePermissions(filename);
+    registerCjkSeg(db);
+    assertCjkSegRegistered(db);
+    // 顺序硬约束（#3841）：调用方（openWithPragmas 等）若在本次调用之后再执行
+    // `temp_store` 相关 pragma，SQLite 会立即删除刚挂的 TEMP 触发器（文档化语义）。
+    // 约定：所有 pragma 必须先于本函数执行；这里按当前 pragma 状态收口验证一次，
+    // 不在就重挂，仍不在则拒绝——主进程连接也绝不带病持有空索引链。
+    ensureCjkFtsTempTriggersInstalled(db);
+    return db;
+  } catch (err) {
+    try {
+      db.close();
+    } catch {
+      // 初始化失败后关闭连接是 best-effort，原始错误更重要。
+    }
+    throw err;
+  }
 }
 
 /**

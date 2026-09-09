@@ -1,6 +1,8 @@
 import type { AgentIslandSessionActivity } from '../../shared/agentIsland.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
+  buildCreatorMicro2AgentKeymap,
   type WorkLouderCodexConnectionReason,
   type WorkLouderCodexDeviceState,
 } from '../../shared/workLouderCodex.js';
@@ -48,7 +50,7 @@ export interface WorkLouderCodexLightingFrame {
 }
 
 export type WorkLouderCodexHostRequest =
-  | { kind: 'init'; sdkEntry: string }
+  | { kind: 'init'; sdkEntry: string; keymapBackupDir?: string; creatorKeymap?: string[][] }
   | { kind: 'listen' }
   | { kind: 'apply'; frame: WorkLouderCodexLightingFrame }
   // Ask the host to verify the device is still there. The SDK has no
@@ -57,6 +59,7 @@ export type WorkLouderCodexHostRequest =
   // currently showing connection state.
   | { kind: 'probe' }
   | { kind: 'discover' }
+  | { kind: 'rebind-creator-keymap'; keymap: string[][] }
   | { kind: 'stop' };
 
 export type WorkLouderCodexHostMessage =
@@ -88,6 +91,80 @@ export interface WorkLouderCodexHidEvent {
 export interface WorkLouderCodexJoystickEvent {
   angle: number;
   distance: number;
+}
+
+/**
+ * Creator Micro 2's HID read loop goes idle between reports and the SDK logs
+ * `hid_read_timeout`. That is silence, not an unplugged cable. Codex treats the
+ * same timeout as "the cable came out".
+ *
+ * Both boards speak `v.oai.rgbcfg` / `v.oai.thstatus` / `v.oai.hid`. A lighting
+ * RPC timeout must not tear down HID — ChatGPT keeps the notify subscription.
+ */
+export function workLouderFirmwareIdlesHidRead(
+  deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
+): boolean {
+  return deviceType === 'creator-micro-2';
+}
+
+/**
+ * Another process is using the vendor HID, or our own handle was closed under
+ * an in-flight RPC. That is contention, not an unplugged cable — recycling the
+ * host here just storms `0xE00002E2` / `device has been closed`.
+ */
+export function isWorkLouderHidContention(detail: string): boolean {
+  return /0xE00002C1|0xE00002E2|device has been closed|\(iokit\/common\) not permitted/i.test(
+    detail,
+  );
+}
+
+/** Creator idle HID silence. Not an unplug, not a reason to probe liveness. */
+export function isWorkLouderIdleFirmwareError(
+  detail: string,
+  deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
+): boolean {
+  if (!workLouderFirmwareIdlesHidRead(deviceType)) return false;
+  return /hid_read_timeout|device disconnected|could not read/i.test(detail);
+}
+
+export function shouldRequestWorkLouderLivenessProbe(
+  detail: string,
+  deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
+): boolean {
+  if (isWorkLouderHidContention(detail)) return false;
+  if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
+  return true;
+}
+
+/**
+ * The native SDK often logs a dead USB/BT handle instead of throwing.
+ *
+ * Lighting control-plane noise (`Error calling RPC`, `Request timed out`,
+ * `No resolver found`, `RPC operation failed`) is not a dead cable. Treating
+ * those as transport death unsubscribes `v.oai.hid` and makes Creator Micro 2
+ * keys look dead while Codex still works.
+ *
+ * Creator's idle HID read also poisons the in-flight `device.status` RPC with
+ * `Device disconnected`. That is the same silence as `hid_read_timeout`, not an
+ * unplug. Codex still treats both the timeout and a disconnected handle as a
+ * dead cable.
+ *
+ * HID contention (`0xE00002E2`, `device has been closed`) is also not a dead
+ * cable — see `isWorkLouderHidContention`.
+ */
+
+export function isWorkLouderSdkTransportDeath(
+  detail: string,
+  deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
+): boolean {
+  if (isWorkLouderHidContention(detail)) return false;
+  if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
+  if (/hid_read_timeout/i.test(detail)) {
+    return Boolean(deviceType) && !workLouderFirmwareIdlesHidRead(deviceType);
+  }
+  return /cannot send, no device connected|device disconnected|hid_unavailable|0xE00002C5|error sending message|could not write|hid device disconnected/i.test(
+    detail,
+  );
 }
 
 const COLORS = {
@@ -124,8 +201,9 @@ const PHASE_PRIORITY: Readonly<Record<WorkLouderCodexSessionActivity['phase'], n
 export function createWorkLouderCodexLightingFrame(
   activity: readonly WorkLouderCodexSessionActivity[],
   slotSessionIds?: readonly string[],
+  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
-  const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds);
+  const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds, threadCount);
   const aggregate = slots.reduce<WorkLouderCodexSessionActivity['phase'] | null>((current, item) => {
     if (!item) return current;
     return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
@@ -136,10 +214,15 @@ export function createWorkLouderCodexLightingFrame(
   return {
     ambient: aggregate ? ambientForPhase(aggregate) : { ...OFF_SIDE },
     keys: aggregate ? keysForPhase(aggregate) : { ...OFF_SIDE },
-    threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) =>
-      threadForActivity(id, slots[id]),
-    ),
+    threads: Array.from({ length: threadCount }, (_, id) => threadForActivity(id, slots[id])),
   };
+}
+
+/** Extra Creator keys have no AG thread and would otherwise inherit this zone. */
+export function muteWorkLouderCodexKeyZone(
+  frame: WorkLouderCodexLightingFrame,
+): WorkLouderCodexLightingFrame {
+  return { ...frame, keys: { ...OFF_SIDE } };
 }
 
 /** The ordered task assignment shared by the six LEDs and their physical keys. */
@@ -200,43 +283,388 @@ function lightingActivityRank(item: WorkLouderCodexSessionActivity): number {
 export function projectWorkLouderCodexSlotActivity(
   activity: readonly WorkLouderCodexSessionActivity[],
   slotSessionIds?: readonly string[],
+  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
 ): Array<WorkLouderCodexSessionActivity | undefined> {
-  if (slotSessionIds === undefined) return selectWorkLouderCodexSlotActivity(activity);
+  if (slotSessionIds === undefined) {
+    return selectWorkLouderCodexSlotActivity(activity).slice(0, threadCount);
+  }
   const visibleBySessionId = new Map(
     activity.filter(isLightingVisibleActivity).map((item) => [item.sessionId, item] as const),
   );
-  return Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, slot) => {
+  return Array.from({ length: threadCount }, (_, slot) => {
     const sessionId = slotSessionIds[slot];
     return sessionId ? visibleBySessionId.get(sessionId) : undefined;
   });
 }
 
-/** Accept only press events for the six official Agent keys (AG00 through AG05). */
+/** Accept press events for Agent keys AG00 through AG12. */
 export function parseWorkLouderCodexAgentKeyPress(value: unknown): number | null {
   const event = parseWorkLouderCodexHidEvent(value);
   if (!event || event.act !== 1) return null;
-  const match = /^AG0([0-5])$/.exec(event.key);
+  const match = /^AG(0[0-9]|1[0-2])$/.exec(event.key);
   return match ? Number(match[1]) : null;
 }
 
 export function parseWorkLouderCodexHidEvent(value: unknown): WorkLouderCodexHidEvent | null {
   if (!value || typeof value !== 'object') return null;
-  const event = value as { key?: unknown; act?: unknown };
-  if (
-    typeof event.key !== 'string' ||
-    event.key.length > 32 ||
-    (event.act !== 0 && event.act !== 1 && event.act !== 2)
-  ) {
+  const event = value as { key?: unknown; k?: unknown; act?: unknown };
+  const key = typeof event.key === 'string' ? event.key : event.k;
+  if (typeof key !== 'string' || key.length === 0 || key.length > 32) {
     return null;
   }
   if (
-    !/^AG0[0-5]$/.test(event.key) &&
-    !/^ACT(?:0[6-9]|1[0-2])$/.test(event.key) &&
-    !/^ENC[A-Z0-9_]*$/.test(event.key)
+    !/^AG(0[0-9]|1[0-2])$/.test(key) &&
+    !/^ACT(?:0[6-9]|1[0-2])$/.test(key) &&
+    !/^ENC[A-Z0-9_]*$/.test(key)
   ) {
     return null;
   }
-  return { key: event.key, act: event.act };
+  const act = parseWorkLouderCodexHidAct(event.act);
+  return act === null ? null : { key, act };
+}
+
+/**
+ * Creator Micro 2 often emits HID / stick reports as a bare JSON object
+ * (`{k,act}` / `{a,d}`) instead of a JSON-RPC notify with `method: v.oai.hid`.
+ * The official SDK then logs "Received RPC call without id and method" and
+ * drops the report, so Cindy never sees the key. Rewrite those lines into the
+ * notify the SDK already knows how to dispatch.
+ */
+export function rewriteBareWorkLouderNotifyJson(data: string): string | null {
+  const jsonStart = data.indexOf('{');
+  if (jsonStart < 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.slice(jsonStart));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.id != null || record.i != null || record.method != null || record.m != null) {
+    return null;
+  }
+  const hidKey = record.k ?? record.key;
+  if (typeof hidKey === 'string' && hidKey.length > 0 && hidKey.length <= 32) {
+    return JSON.stringify({
+      method: 'v.oai.hid',
+      params: { k: hidKey, act: record.act, ag: record.ag ?? record.agent },
+    });
+  }
+  const angle = record.a ?? record.angle;
+  const distance = record.d ?? record.distance;
+  if (
+    typeof angle === 'number' &&
+    Number.isFinite(angle) &&
+    typeof distance === 'number' &&
+    Number.isFinite(distance)
+  ) {
+    return JSON.stringify({
+      method: 'v.oai.rad',
+      params: { a: angle, d: distance },
+    });
+  }
+  return null;
+}
+
+/** Explicit `{ ok: false }` envelopes are failed hardware round trips, not empty telemetry. */
+export function isFailedWorkLouderRpcEnvelope(result: unknown): boolean {
+  return Boolean(
+    result &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      (result as { ok?: unknown }).ok === false,
+  );
+}
+
+export function workLouderRpcFailureMessage(result: unknown): string {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return 'Work Louder RPC failed';
+  }
+  const error = (result as { error?: unknown }).error;
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return 'Work Louder RPC failed';
+}
+
+/** Liveness/bind reads must throw on a failed envelope. Telemetry may still unwrap to `{}`. */
+export function readWorkLouderDeviceStatusOrThrow(result: unknown): {
+  firmwareVersion?: string;
+  batteryPercentage?: number;
+  isCharging?: boolean;
+  layerIndex?: number;
+  profileIndex?: number;
+} {
+  if (isFailedWorkLouderRpcEnvelope(result)) {
+    throw new Error(workLouderRpcFailureMessage(result));
+  }
+  return unwrapWorkLouderDeviceStatus(result);
+}
+
+/** `getDeviceStatus` returns either a snapshot or the SDK `{ok, value}` envelope. */
+export function unwrapWorkLouderDeviceStatus(result: unknown): {
+  firmwareVersion?: string;
+  batteryPercentage?: number;
+  isCharging?: boolean;
+  layerIndex?: number;
+  profileIndex?: number;
+} {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return {};
+  const record = result as Record<string, unknown>;
+  if (record.ok === false) return {};
+  const source =
+    record.ok === true && record.value && typeof record.value === 'object' && !Array.isArray(record.value)
+      ? (record.value as Record<string, unknown>)
+      : record;
+  const firmwareVersion =
+    typeof source.firmwareVersion === 'string'
+      ? source.firmwareVersion
+      : typeof source.version === 'string'
+        ? source.version
+        : undefined;
+  const batteryPercentage =
+    typeof source.batteryPercentage === 'number'
+      ? source.batteryPercentage
+      : typeof source.battery === 'number'
+        ? source.battery
+        : undefined;
+  const isCharging =
+    typeof source.isCharging === 'boolean'
+      ? source.isCharging
+      : typeof source.is_charging === 'boolean'
+        ? source.is_charging
+        : undefined;
+  const layerIndex = readFiniteNumber(
+    source.layer_index ?? source.layerIndex ?? source.selectedLayerIndex,
+  );
+  const profileIndex = readFiniteNumber(
+    source.profile_index ?? source.profileIndex ?? source.selectedProfileIndex,
+  );
+  return {
+    ...(firmwareVersion !== undefined ? { firmwareVersion } : {}),
+    ...(batteryPercentage !== undefined ? { batteryPercentage } : {}),
+    ...(isCharging !== undefined ? { isCharging } : {}),
+    ...(layerIndex !== undefined ? { layerIndex } : {}),
+    ...(profileIndex !== undefined ? { profileIndex } : {}),
+  };
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Creator Micro 2 ships as an open macropad: factory layers emit boot-protocol
+ * keystrokes on the standard keyboard collection. Codex Micro ships with the
+ * same keys bound to `KV_OAI_*`, which stops typing and emits `v.oai.hid`
+ * instead. Cindy claims exclusivity the same way ChatGPT does — by writing
+ * those keycodes into the active keymap layer.
+ */
+export const WORKLOUDER_DEVICE_KEYMAP_FILE = 'keymap.json';
+export const WORKLOUDER_AGENT_KEY_MARKER = 'KV_OAI_AG00';
+export const CREATOR_MICRO_2_KEYMAP_RELOAD_MS = 2_500;
+/** Legacy owner-scoped fallback kept so an existing factory backup stays valid. */
+export const CREATOR_MICRO_2_KEYMAP_BACKUP_FILE = 'keymap-backup.json';
+
+export const CREATOR_MICRO_2_AGENT_KEYMAP: readonly (readonly string[])[] =
+  buildCreatorMicro2AgentKeymap();
+
+export const CREATOR_MICRO_2_AGENT_ENCODERS: readonly (readonly string[])[] = [
+  ['KV_OAI_ENC_CC', 'KV_OAI_ENC_CW', 'KV_OAI_ENC_CLK'],
+];
+
+export interface WorkLouderKeymapLayer {
+  id?: number;
+  name?: string;
+  layout?: {
+    encoders?: unknown;
+    buttons?: unknown;
+    keymap?: unknown;
+    joystick?: unknown;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface WorkLouderKeymapDocument {
+  profiles: Array<{ layers: WorkLouderKeymapLayer[]; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+function unwrapWorkLouderRpcValue(result: unknown): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const record = result as Record<string, unknown>;
+  if (record.ok === false) return null;
+  if (record.ok === true && 'value' in record) return record.value;
+  return result;
+}
+
+/** `fs.read` may return a string, `{data}`, a parsed object, or an SDK envelope. */
+export function unwrapWorkLouderKeymapText(result: unknown): string | null {
+  const payload = unwrapWorkLouderRpcValue(result);
+  if (typeof payload === 'string') {
+    return payload.trim().length > 0 ? payload : null;
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.data === 'string' && record.data.trim().length > 0) return record.data;
+  if (Array.isArray(record.profiles)) return JSON.stringify(payload);
+  return null;
+}
+
+export function parseWorkLouderKeymapDocument(text: string): WorkLouderKeymapDocument | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const profiles = (parsed as { profiles?: unknown }).profiles;
+  if (!Array.isArray(profiles) || profiles.length === 0) return null;
+  const layers = (profiles[0] as { layers?: unknown } | undefined)?.layers;
+  if (!Array.isArray(layers) || layers.length === 0) return null;
+  return parsed as WorkLouderKeymapDocument;
+}
+
+export function workLouderLayerHasAgentKeys(layer: WorkLouderKeymapLayer | undefined): boolean {
+  return Boolean(layer && JSON.stringify(layer).includes(WORKLOUDER_AGENT_KEY_MARKER));
+}
+
+/**
+ * Cindy occupies a board by replacing one active layer with a full `KV_OAI_*`
+ * grid. Snapshot/restore identity is that layer — a stale Cindy map on some
+ * other profile or layer must not skip capturing the layer about to be rewritten.
+ */
+export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefined): boolean {
+  const keymap = layer?.layout?.keymap;
+  if (!Array.isArray(keymap)) return false;
+  const codes = keymap.flat().filter((code): code is string => typeof code === 'string');
+  return (
+    codes.length >= 8 &&
+    codes.every((code) => code.startsWith('KV_OAI_')) &&
+    codes.some((code) => code.includes('AG00'))
+  );
+}
+
+export function isCindyExclusiveAgentKeymap(
+  text: string,
+  profileIndex = 0,
+  layerIndex = 0,
+): boolean {
+  const document = parseWorkLouderKeymapDocument(text);
+  if (!document) return false;
+  return isCindyExclusiveAgentLayer(document.profiles[profileIndex]?.layers?.[layerIndex]);
+}
+
+/**
+ * `device.status.layer_index` is 1-based (ChatGPT uses layer 1). Returns a
+ * 0-based index into `profiles[0].layers`, clamped to the keymap.
+ */
+export function resolveWorkLouderActiveLayerIndex(
+  layerIndex: number | undefined,
+  layerCount: number,
+): number {
+  if (layerCount <= 0) return 0;
+  const oneBased =
+    typeof layerIndex === 'number' && Number.isInteger(layerIndex) && layerIndex >= 1
+      ? layerIndex
+      : 1;
+  return Math.min(layerCount - 1, oneBased - 1);
+}
+
+/** Firmware profile index is 0-based in `device.status`. */
+export function resolveWorkLouderActiveProfileIndex(
+  profileIndex: number | undefined,
+  profileCount: number,
+): number {
+  if (profileCount <= 0) return 0;
+  const zeroBased =
+    typeof profileIndex === 'number' && Number.isInteger(profileIndex) && profileIndex >= 0
+      ? profileIndex
+      : 0;
+  return Math.min(profileCount - 1, zeroBased);
+}
+
+export function applyCreatorMicro2AgentLayer(
+  document: WorkLouderKeymapDocument,
+  layerIndex: number,
+  keymap: readonly (readonly string[])[] = CREATOR_MICRO_2_AGENT_KEYMAP,
+  profileIndex = 0,
+): { document: WorkLouderKeymapDocument; changed: boolean; alreadyBound: boolean } {
+  const layers = document.profiles[profileIndex]?.layers;
+  if (!layers || layerIndex < 0 || layerIndex >= layers.length) {
+    return { document, changed: false, alreadyBound: false };
+  }
+  const original = layers[layerIndex] ?? {};
+  const desiredKeymap = keymap.map((row) => [...row]);
+  const desiredEncoders = CREATOR_MICRO_2_AGENT_ENCODERS.map((row) => [...row]);
+  if (
+    JSON.stringify(original.layout?.keymap) === JSON.stringify(desiredKeymap) &&
+    JSON.stringify(original.layout?.encoders) === JSON.stringify(desiredEncoders)
+  ) {
+    return { document, changed: false, alreadyBound: true };
+  }
+  const nextLayer: WorkLouderKeymapLayer = {
+    ...original,
+    id: typeof original.id === 'number' ? original.id : layerIndex,
+    layout: {
+      ...(original.layout ?? {}),
+      encoders: desiredEncoders,
+      buttons: [],
+      keymap: desiredKeymap,
+      joystick: { type: 'VENDOR', sectors: [] },
+    },
+  };
+  const nextLayers = layers.slice();
+  nextLayers[layerIndex] = nextLayer;
+  const nextProfiles = document.profiles.slice();
+  nextProfiles[profileIndex] = { ...document.profiles[profileIndex], layers: nextLayers };
+  return {
+    document: { ...document, profiles: nextProfiles },
+    changed: true,
+    alreadyBound: false,
+  };
+}
+
+const CREATOR_KEYMAP_BACKUP_ID_MAX = 64;
+
+/**
+ * Stable-enough filename for one Creator Micro 2 factory keymap.
+ *
+ * The SDK HID object has no serial. Prefer HID `serialNumber` when the host
+ * still has it; otherwise fall back to a sanitized `portPath` / `devicePid`.
+ * Empty identity keeps the legacy `keymap-backup.json` so an existing owner
+ * backup is not abandoned.
+ */
+export function creatorMicro2KeymapBackupFileName(deviceId?: string | null): string {
+  const sanitized = sanitizeCreatorKeymapBackupId(deviceId);
+  return sanitized
+    ? `keymap-backup-${sanitized}.json`
+    : CREATOR_MICRO_2_KEYMAP_BACKUP_FILE;
+}
+
+/** Per-occupancy snapshot restored when Cindy releases the board. */
+export function creatorMicro2KeymapSessionFileName(deviceId?: string | null): string {
+  const sanitized = sanitizeCreatorKeymapBackupId(deviceId);
+  return sanitized ? `keymap-session-${sanitized}.json` : 'keymap-session.json';
+}
+
+function sanitizeCreatorKeymapBackupId(deviceId: string | null | undefined): string {
+  if (typeof deviceId !== 'string') return '';
+  const trimmed = deviceId.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return trimmed.slice(0, CREATOR_KEYMAP_BACKUP_ID_MAX);
+}
+
+/** Firmware may omit `act` (SDK marks it optional); treat that as a press. */
+function parseWorkLouderCodexHidAct(value: unknown): 0 | 1 | 2 | null {
+  if (value === undefined || value === null) return 1;
+  if (value === 0 || value === 1 || value === 2) return value;
+  if (value === '0' || value === '1' || value === '2') return Number(value) as 0 | 1 | 2;
+  return null;
 }
 
 export function parseWorkLouderCodexJoystickEvent(
@@ -283,11 +711,13 @@ export function applyWorkLouderCodexLightingBrightness(
   };
 }
 
-export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
+export function createWorkLouderCodexOffFrame(
+  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+): WorkLouderCodexLightingFrame {
   return {
     ambient: { ...OFF_SIDE },
     keys: { ...OFF_SIDE },
-    threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
+    threads: Array.from({ length: threadCount }, (_, id) => ({
       id,
       color: 0,
       brightness: 0,
@@ -305,11 +735,13 @@ export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
  * effects already proven on this hardware (running / waiting). Rainbow is
  * not: on an idle board it can look like the lights never came on.
  */
-export function createWorkLouderCodexWindowRevealFrame(): WorkLouderCodexLightingFrame {
+export function createWorkLouderCodexWindowRevealFrame(
+  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+): WorkLouderCodexLightingFrame {
   return {
     ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, COLORS.brand),
     keys: side(WorkLouderLightingEffect.Breath, 0.34, 0.55, COLORS.brand),
-    threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
+    threads: Array.from({ length: threadCount }, (_, id) => ({
       id,
       color: COLORS.brand,
       brightness: 0.72,
@@ -332,7 +764,7 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
       typeof slot === 'number' &&
       Number.isInteger(slot) &&
       slot >= 0 &&
-      slot < WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+      slot < WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT
     );
   }
   if (message.kind === 'hid')
@@ -366,7 +798,8 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
         reason === null ||
         reason === 'connection-timeout' ||
         reason === 'connection-failed' ||
-        reason === 'permission-required')
+        reason === 'permission-required' ||
+        reason === 'device-in-use')
     );
   }
   if (message.kind === 'log') {

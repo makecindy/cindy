@@ -2,7 +2,7 @@
 
 import { createElement, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AppShortcutOverrides } from '../../../../shared/appShortcuts';
 import type { LucideIcon } from 'lucide-react';
 
@@ -15,6 +15,15 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   getSessionDeviceId: () => undefined,
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 vi.mock('../plugins', () => ({}));
@@ -43,6 +52,7 @@ import {
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
 import { _resetStore, closeTab, getBucket, setActiveTab } from '../store';
+import { toast } from '@/lib/toast';
 import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
@@ -1304,5 +1314,120 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     });
     expect(getBucket('s2').tabs).toHaveLength(0);
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe('RightSidebarShell add-tab failure toast', () => {
+  const toastError = vi.mocked(toast.error);
+  let tabsIpc: RightSidebarTabsIpcStub;
+
+  beforeEach(() => {
+    toastError.mockClear();
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
+    _resetSidebarCommandsForTests();
+    rsbBrowserCommandListeners = [];
+    rsbBrowserPopupListeners = [];
+    rsbNativePopupEventListeners = [];
+    rsbNativePopupClaim.mockClear();
+    rsbNativePopupClose.mockClear();
+    eagerSpawnAndReport.mockClear();
+    eagerSpawnAndReport.mockImplementation(async () => undefined);
+    tabsIpc = makeRightSidebarTabsIpc();
+    installElectronApi(tabsIpc);
+  });
+
+  afterEach(() => {
+    _resetSidebarCommandsForTests();
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  function renderShellWithTerminalKind(): void {
+    registerTabKind({
+      kind: 'terminal',
+      menu: {
+        kind: 'terminal',
+        labelKey: 'rightSidebar.tabs.kinds.terminal',
+        icon: (() => null) as unknown as LucideIcon,
+        order: 1,
+        enabled: true,
+      },
+      TabPillTitle: () => createElement('span'),
+      TabBody: () => createElement('div'),
+      defaultState: () => null,
+    });
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+  }
+
+  it.each([
+    ['RIGHT_SIDEBAR_TOO_MANY_TABS', 'ipcError.RIGHT_SIDEBAR_TOO_MANY_TABS'],
+    ['RIGHT_SIDEBAR_STATE_TOO_LARGE', 'ipcError.RIGHT_SIDEBAR_STATE_TOO_LARGE'],
+    ['RIGHT_SIDEBAR_UNKNOWN_KIND', 'ipcError.RIGHT_SIDEBAR_UNKNOWN_KIND'],
+  ])('toasts the %s message when addTab fails', async (code, expectedKey) => {
+    tabsIpc.upsert.mockRejectedValueOnce(new Error(`[${code}] tab rejected`));
+    try {
+      renderShellWithTerminalKind();
+      await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+      const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+        x: 20,
+        y: 20,
+        top: 20,
+        right: 44,
+        bottom: 44,
+        left: 20,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.click(addButton);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith(expectedKey));
+    } finally {
+      unregisterTabKind('terminal');
+    }
+  });
+
+  it('falls back to the generic addFailed toast for uncoded errors', async () => {
+    tabsIpc.upsert.mockRejectedValueOnce(new Error('boom'));
+    try {
+      renderShellWithTerminalKind();
+      await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+      const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+        x: 20,
+        y: 20,
+        top: 20,
+        right: 44,
+        bottom: 44,
+        left: 20,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.click(addButton);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith('rightSidebar.tabs.addFailed'));
+    } finally {
+      unregisterTabKind('terminal');
+    }
   });
 });

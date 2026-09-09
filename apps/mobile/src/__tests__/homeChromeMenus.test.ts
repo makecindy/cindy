@@ -4,8 +4,8 @@ import {
   buildHomeDisplayPullDownActions,
   buildHomeScopeMenuItems,
   buildHomeScopePullDownActions,
-  homeDisplayMenuPatch,
   parseHomeScopePullDownAction,
+  homeDisplayMenuPatch,
 } from "@/session/homeChromeMenus";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
@@ -26,49 +26,47 @@ function filter(
 }
 
 describe("home chrome menus", () => {
-  it("nests open and rename under each native device scope item", () => {
+  it("keeps cached offline and unknown computers without granting revoked access", () => {
+    const filters = ["offline", "unknown", "access_revoked", "remote_disabled"].map((state) =>
+      filter({ id: state, label: state, deviceId: state, available: false, state, sessionCount: 2 }));
+    expect(buildHomeScopeMenuItems(filters, "All").map((item) => item.key)).toEqual(["offline", "unknown"]);
+    expect(buildHomeScopePullDownActions(filters, "All").map((item) => item.id)).toEqual(["offline", "unknown"]);
+  });
+  it("selects native device scopes directly without a management submenu", () => {
+    const actions = buildHomeScopePullDownActions([
+      filter({ id: "all", label: "全部任务" }),
+      filter({ id: "mac", label: "MacBook", deviceId: "d1", selected: true }),
+      filter({ id: "offline", label: "旧电脑", deviceId: "d2", available: false }),
+    ], "全部任务");
+
+    expect(actions).toEqual([
+      { id: "all", title: "全部任务", state: "off" },
+      { id: "mac", title: "MacBook", state: "on" },
+    ]);
+    expect(actions.every((item) => !item.subactions)).toBe(true);
+  });
+
+  it("places host-advertised collections beside All Sessions", () => {
     const actions = buildHomeScopePullDownActions(
       [
         filter({ id: "all", label: "全部任务", selected: true }),
-        filter({
-          id: "mac",
-          label: "MacBook",
-          deviceId: "d1",
-          selected: false,
-        }),
-        filter({
-          id: "offline",
-          label: "旧电脑",
-          deviceId: "d2",
-          available: false,
-        }),
+        filter({ id: "mac", label: "MacBook", deviceId: "d1" }),
       ],
-      "全部任务",
-      {
-        openLabel: "打开",
-        renameLabel: "重命名",
-        showTasksLabel: "查看任务",
-      },
+      "所有任务",
+      [{ id: "teammates", title: "所有伙伴" }],
     );
 
-    expect(actions.map((item) => item.id)).toEqual(["all", "scope.submenu:mac"]);
-    expect(actions[1]?.subactions?.map((item) => item.id)).toEqual([
+    expect(actions.map((item) => item.id)).toEqual([
+      "all",
+      "scope.collection:teammates",
       "mac",
-      "scope.open:d1",
-      "scope.rename:d1",
     ]);
-    expect(parseHomeScopePullDownAction("scope.open:d1")).toEqual({
-      kind: "open",
-      deviceId: "d1",
+    expect(parseHomeScopePullDownAction("scope.collection:teammates")).toEqual({
+      kind: "collection",
+      collectionId: "teammates",
     });
-    expect(parseHomeScopePullDownAction("scope.rename:d1")).toEqual({
-      kind: "rename",
-      deviceId: "d1",
-    });
-    expect(parseHomeScopePullDownAction("mac")).toEqual({
-      kind: "select",
-      filterId: "mac",
-    });
+    expect(actions[2]).toEqual({ id: "mac", title: "MacBook", state: "off" });
+    expect(parseHomeScopePullDownAction("mac")).toEqual({ kind: "select", filterId: "mac" });
   });
 
   it("lists all-conversations and available devices, marking the selected one", () => {

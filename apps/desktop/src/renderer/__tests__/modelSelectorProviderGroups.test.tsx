@@ -287,6 +287,8 @@ beforeEach(() => {
 function renderSelector(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
   return render(
     React.createElement(ModelSelector, {
+      // Compatibility renderer for capabilities-only remote hosts.
+      unifiedPanel: false,
       modelId: 'claude-opus-4-8',
       effort: 'high',
       onModelChange: vi.fn(),
@@ -373,6 +375,22 @@ async function waitForSearchInputFocus(): Promise<HTMLElement> {
 }
 
 describe('ModelSelector provider groups', () => {
+  it('offers source navigation with only a connected media provider and no chat candidates', async () => {
+    providersRef.providers = [{
+      id: 'gemini', name: 'Gemini', source: 'builtin', connected: true,
+      agents: [], models: {}, auth: { method: 'api-key' },
+    }];
+    const onNavigateToProviders = vi.fn();
+    renderSelector({
+      unifiedPanel: true, unifiedAgents: ['pi', 'codex'],
+      vendorKey: 'pi', modelId: '', currentProviderId: null,
+      onProviderChange: undefined, onUnifiedSelect: vi.fn(), onNavigateToProviders,
+    });
+    await openDropdown();
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.modelSelector.source.connect' }));
+    expect(onNavigateToProviders).toHaveBeenCalledOnce();
+  });
+
   it('仅在本机经典 Cindy AI 分组旁显示免费版标签', async () => {
     providersRef.providers = [
       ...(providersRef.DEFAULT_PROVIDERS as unknown[]),

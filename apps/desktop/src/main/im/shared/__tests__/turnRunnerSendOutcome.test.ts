@@ -377,6 +377,7 @@ function setupSession(sendImpl: Parameters<typeof createSessionHarness>[0]): Ses
 
 function setupAttachedSession(
   sendImpl: Parameters<typeof createSessionHarness>[0],
+  options: { remoteHostId?: string | null } = {},
 ): SessionHarness {
   const sessionId = 'desktop-attached-session';
   const h = createSessionHarness(sendImpl, sessionId);
@@ -391,6 +392,7 @@ function setupAttachedSession(
       permissionMode: 'bypassPermissions',
       fastMode: false,
       sdkSessionId: null,
+      remoteHostId: options.remoteHostId ?? null,
       providerId: null,
     },
   ]);
@@ -1159,6 +1161,75 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     },
   );
 
+  it.each([
+    {
+      capabilities: {} as Capabilities,
+      mode: 'ask' as const,
+      expected: 'AGENT_UNSUPPORTED_COPY',
+    },
+    {
+      capabilities: {
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      } as unknown as Capabilities,
+      mode: 'bypassPermissions' as const,
+      expected: 'MODE_UNSUPPORTED_COPY:bypassPermissions',
+    },
+  ])(
+    'maps policy rejection to the matching user guidance',
+    async ({ capabilities, mode, expected }) => {
+      const h = createSessionHarness(
+        async () => {
+          throw new TurnPermissionPolicyUnsupportedError('claude-code', mode);
+        },
+        'feishu-session',
+        { capabilities },
+      );
+      mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+      const localRunner = createTurnRunner(
+        {
+          ...fakeAdapter,
+          ui: {
+            ...fakeAdapter.ui,
+            error: {
+              ...fakeAdapter.ui.error,
+              agentUnsupported: 'AGENT_UNSUPPORTED_COPY',
+              permissionModeUnsupported: (permissionMode: string) =>
+                `MODE_UNSUPPORTED_COPY:${permissionMode}`,
+            },
+          },
+        },
+        fakeRepo,
+        fakeCards,
+      );
+
+      try {
+        await localRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: `msg-policy-copy-${mode}`,
+          text: 'policy failure',
+          attachments: [],
+          turnPermissionPolicy: {
+            origin: { kind: 'im', channel: 'wechat' },
+            confirmationSurface: 'channel',
+            forceConfirmToolCall: () => false,
+          },
+        });
+
+        expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+          'ou_user',
+          expected,
+          expect.anything(),
+        );
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    },
+  );
+
   it('skips the turn policy when the channel declares the session mode optional (Full access guardrail removal)', async () => {
     // feishu 渠道设置显式放行「完全访问」后: 该档位的群轮次不再挂强确认
     // 策略, maker 不 fail-closed, 按用户选择直接执行。
@@ -1195,6 +1266,59 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       );
       // 与策略配套的 turn lease 也不该挂。
       expect(h.session.acquireTurnLease).not.toHaveBeenCalled();
+    } finally {
+      localRunner.disposeAllSessions();
+    }
+  });
+
+  it('keeps a non-optional group policy in Full access so the turn fails closed', async () => {
+    mocks.peekSessionById.mockImplementationOnce(async () => ({
+      permissionMode: 'bypassPermissions',
+    } as unknown as ImSessionRow));
+    const h = createSessionHarness(
+      async () => {
+        throw new TurnPermissionPolicyUnsupportedError('pi', 'bypassPermissions');
+      },
+      'telegram-guest-full-access',
+      {
+        capabilities: {
+          turnPermissionPolicy: {
+            supported: { supported: true },
+            unsupportedPermissionModes: ['bypassPermissions'],
+          },
+        } as unknown as Capabilities,
+      },
+    );
+    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+    const turnPermissionPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram', taskId: 'msg-guest-policy' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
+    const optionalForMode = vi.fn(() => false);
+    const localAdapter = {
+      ...fakeAdapter,
+      turnPolicyOptionalForMode: optionalForMode,
+    } as unknown as ImChannelAdapter;
+    const localRunner = createTurnRunner(localAdapter, fakeRepo, fakeCards, {});
+
+    try {
+      const dispatch = await localRunner.dispatchAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/-100/77',
+        userMessageId: 'msg-guest-policy',
+        text: 'guest full access group turn',
+        attachments: [],
+        queueMode: 'external',
+        beforeProviderStart: vi.fn(async () => undefined),
+        turnPermissionPolicy,
+      });
+
+      expect(optionalForMode).toHaveBeenCalledWith('bypassPermissions', turnPermissionPolicy);
+      expect(dispatch).toEqual({
+        kind: 'rejected',
+        reason: 'TURN_PERMISSION_POLICY_UNSUPPORTED:mode:bypassPermissions',
+      });
     } finally {
       localRunner.disposeAllSessions();
     }
@@ -2628,6 +2752,32 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
       { threadTs: undefined },
     );
+  });
+
+  it('never treats SSH workdir or media paths as local files', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }), {
+      remoteHostId: 'ssh-host-1',
+    });
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({ xdt_image_url: 'xdt-image:///remote/project/tool.png' }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'remote final', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
+    const handle = await mocks.feishuIm.startStreamingText.mock.results[0].value;
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('remote final'));
   });
 
   it('does not report route resolution before auth passes on an existing route', async () => {

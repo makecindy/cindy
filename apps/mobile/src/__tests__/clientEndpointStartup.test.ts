@@ -35,6 +35,7 @@ const FULL_MANIFEST_OBJECT = {
   voiceApiBaseUrl: 'https://voice-next.example.com',
   githubApiBaseUrl: 'https://github-api-next.example.com',
   skillhubApiBaseUrl: 'https://skillhub-next.example.com',
+  cindySkillHubApiBaseUrl: 'https://cindy-skillhub-next.example.com',
   cdnBaseUrl: 'https://cdn-next.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update-next.example.com',
 };

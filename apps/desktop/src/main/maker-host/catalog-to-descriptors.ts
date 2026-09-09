@@ -1,3 +1,4 @@
+import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
 /**
  * catalog-to-descriptors —— 把 @cindy/model-providers 目录派生成 maker-core 的 per-agent
  * availableModels（ModelDescriptor[]）。
@@ -21,6 +22,7 @@
  */
 
 import {
+  PI_REASONING_EFFORTS,
   isAgentSelectableModel,
   isModelSelectableForNewRoute,
   type Catalog,
@@ -28,12 +30,7 @@ import {
   type AgentKind,
 } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
-import { resolveRetiredRegistryModelForPi } from './model-plane/modelPlanePolicy.js';
-import {
-  applyLocalOverridesToRetiredRootModel,
-  EMPTY_MODEL_CATALOG_OVERRIDES,
-  type ModelCatalogOverrides,
-} from './model-plane/localCatalogOverrides.js';
+import type { ModelCatalogOverrides } from './model-plane/localCatalogOverrides.js';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
 interface ModelCapabilitiesTarget {
@@ -53,19 +50,29 @@ interface SeenModelProjection {
   includesUserProvider: boolean;
 }
 
+function hasValidPiReasoningCapabilities(m: CatalogModel): boolean {
+  const efforts = m.reasoningEfforts;
+  return (
+    Array.isArray(efforts) &&
+    efforts.length > 0 &&
+    efforts.every((effort) => PI_REASONING_EFFORTS.includes(effort)) &&
+    typeof m.reasoningDefaultEffort === 'string' &&
+    efforts.includes(m.reasoningDefaultEffort)
+  );
+}
+
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
 function toDescriptor(
   m: CatalogModel,
   agent: AgentKind,
   options: DescriptorProjectionOptions = {},
 ): ModelDescriptor {
-  // Pi runtime 原生接受 minimal thinking level。目录里的同一模型常从 CC/Codex
-  // 投影而来而未声明该档；只要模型有 reasoning 档，就把 Pi 的最小档补在最前。
-  // BYOM 的 efforts 则是用户显式声明的协议能力，必须原样保留，不能对外宣称一个
-  // models.json 会禁用的档位。
+  // 缺少或格式错误的 Pi 能力字段继续走旧目录 minimal 兼容补档。合法独立 Pi 目录的
+  // reasoningEfforts 与 BYOM 声明都是协议能力，不能额外公布 models.json 禁用的档位。
   const efforts =
     agent === 'pi' &&
     options.preserveExplicitPiEfforts !== true &&
+    !hasValidPiReasoningCapabilities(m) &&
     m.efforts.length > 0 &&
     !m.efforts.includes('minimal')
       ? (['minimal', ...m.efforts] as const)
@@ -154,6 +161,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
       // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
       const userProvider = provider.source === 'user';
+      if (isLegacyGptContextProfile(provider, m.id)) continue;
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
       const descriptor = toDescriptor(m, agent, {
         preserveExplicitPiEfforts:
@@ -185,15 +193,15 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
 
 /**
  * 解析 Pi 当前持久化选择所需的运行时描述符,不参与公开模型清单或新路由准入。
- * 优先使用完整目录中的实际来源实体(允许 disabled/retired 供续跑);纯 Registry retired
- * 没有目录实体时,再按统一 model-plane policy 从其完整能力字段重建 Pi 投影。
+ * 只使用 Pi 自己目录中的实际来源实体(允许 disabled/retired 供续跑)。缺少 Pi 条目时
+ * 不从 Registry/Codex/Claude 重建，避免其它 harness 的成员关系污染 Pi。
  * `cindy` 是内置 gateway 的复合路由：按内置 provider 顺序解析，明确排除同 id user/BYOM。
  */
 export function resolvePiRuntimeModelDescriptor(
   catalog: Catalog,
   providerId: string | null | undefined,
   modelId: string,
-  options: { localOverrides?: ModelCatalogOverrides } = {},
+  _options: { localOverrides?: ModelCatalogOverrides } = {},
 ): ModelDescriptor | null {
   const providers =
     providerId === 'cindy'
@@ -213,18 +221,6 @@ export function resolvePiRuntimeModelDescriptor(
     }
   }
 
-  for (const provider of providers) {
-    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId, {
-      prepareRootModel: ({ providerId: matchedProviderId, rootAgent, model }) =>
-        applyLocalOverridesToRetiredRootModel(
-          matchedProviderId,
-          rootAgent,
-          model,
-          options.localOverrides ?? EMPTY_MODEL_CATALOG_OVERRIDES,
-        ),
-    });
-    if (retired) return toDescriptor(retired, 'pi');
-  }
   return null;
 }
 
@@ -251,24 +247,44 @@ export function resolvePiGatewayDescriptorProviderId(
  *
  * 返回 null 一律意味着「不收敛」，也就是改动前的行为（fail-safe）。
  */
-export function resolveVerifiedContextWindow(
+export { resolveVerifiedContextWindow } from '../../shared/sessionContextWindow';
+
+/** Resolve settings identity without borrowing a same-name model's provider. */
+export function resolveModelContextProviderId(
+  catalog: Pick<Catalog, 'providers'>, agent: AgentKind, providerId: string | null | undefined, modelId: string,
+  implicitDefaultProviderId?: string | null,
+): string | null {
+  if (agent === 'pi' && (providerId == null || providerId === 'cindy')) {
+    return resolvePiGatewayDescriptorProviderId(providerId);
+  }
+  if (providerId) return providerId;
+  const candidates = catalog.providers.filter((provider) => provider.routing[agent]?.disabled !== true &&
+    provider.models[agent]?.some((model) => model.id === modelId));
+  if (candidates.length === 1) return candidates[0]!.id;
+  return implicitDefaultProviderId && candidates.some((provider) => provider.id === implicitDefaultProviderId)
+    ? implicitDefaultProviderId : null;
+}
+
+/**
+ * The model editor's default window for this exact provider/harness route.
+ * Codex must apply this value even when no user override has been saved.
+ * The caller prepares an isolated native catalog and sets the CLI window and
+ * compaction budget; this value never replaces native runtime usage reports.
+ */
+export function resolveModelDefaultContextWindow(
   catalog: Catalog,
   agent: AgentKind,
   providerId: string | null | undefined,
   modelId: string,
 ): number | null {
-  const candidates: CatalogModel[] = [];
-  for (const provider of catalog.providers) {
-    if (provider.routing[agent]?.disabled === true) continue;
-    if (providerId && provider.id !== providerId) continue;
-    for (const m of provider.models[agent] ?? []) {
-      if (m.id === modelId) candidates.push(m);
-    }
-  }
-  if (candidates.length !== 1) return null;
-  const only = candidates[0];
-  if (only.contextWindowVerified !== true) return null;
-  return only.contextWindow > 0 ? only.contextWindow : null;
+  const source = providerId?.trim();
+  if (!source) return null;
+  const provider = catalog.providers.find((entry) => entry.id === source);
+  if (!provider) return null;
+  if (provider.routing[agent]?.disabled === true) return null;
+  const model = (provider.models[agent] ?? []).find((entry) => entry.id === modelId);
+  return model && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+    ? model.contextWindow : null;
 }
 
 /**

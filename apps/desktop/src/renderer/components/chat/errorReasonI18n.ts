@@ -14,16 +14,21 @@ import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError
  * active and historical views.
  */
 export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
+  user_model_access_denied: 'chat.errorBanner.modelAccessDenied',
   'empty-response': 'logic.errors.emptyResponse',
   'turn-failed': 'logic.errors.turnFailed',
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
   tool_use_loop_detected: 'logic.errors.toolUseLoopDetected',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',
+  'runtime-selection-cancelled': 'newChat.chatInput.switchFailed',
   'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
   'host-shell-command-blocked': 'logic.errors.hostShellCommandBlocked',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
   codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
   codex_history_oversized: 'logic.errors.codexHistoryOversized',
+  // Persisted error rows and the live reason both lack a reliable retirement
+  // cause, so use copy that does not claim a location or authentication cause.
+  'app-server-force-retired': 'chat.errorBanner.codexAppServerRetired',
   // 压缩风暴分两条:有切模型证据的才点名切模型。共用一条会让没切过模型(或已切回)
   // 的用户看到「请切回原模型」这种无从执行的指令 —— 这里的文案会覆盖 maker-core
   // 合成的 message,所以 reason 选错等于用户唯一看到的那句话就是错的。

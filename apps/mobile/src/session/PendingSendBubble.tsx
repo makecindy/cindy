@@ -10,11 +10,14 @@
  *  - ⚠ = 失败,可重试 / 删除。
  * 「排入队尾」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { Image } from 'expo-image';
+import { ActivityIndicator, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Text } from '@/components/AppText';
+import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { summarizeMessageBubblePresentation } from '@/session/messagePresentation';
+import { LONG_USER_MESSAGE_COLLAPSED_LINES, LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, mayExceedVisualLineThreshold, resolveUserMessageCollapse } from '@/session/userMessageCollapse';
+import { sentInlineTokensDisplayText } from '@/session/sentMessageAtoms';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   AlertCircle,
@@ -64,7 +67,7 @@ export interface PendingSendBubbleActions {
 }
 
 /**
- * 气泡内图片缩略条:乐观语义下图片从第一帧就以图的形态出现,不做「📎 附件行 → 正式消息
+ * 气泡上方图片附件条:乐观语义下图片从第一帧就以图的形态出现,不做「📎 附件行 → 正式消息
  * 图片」的形态跳变。uri 缺失时按 ossRef 查 sentAttachmentThumbStore(订阅版本号,
  * hydrate / 注册完成后自动补图);两者都拿不到时渲染 chip 底色占位格。
  */
@@ -79,15 +82,17 @@ export interface PendingSendBubbleActions {
 function useThumbCellUri(
   thumb: MobileOutboxThumb,
   resolveRemoteMedia?: ResolveRemoteMediaFn,
+  failedUris: readonly string[] = [],
 ): string | null {
   // 「这一格现在指的是哪张图」。排队消息被编辑、同一附件下标换成另一张图时,ThumbCell 的
   // key(clientId-file-index)不变、hook 实例被复用 —— 所有缓存都必须绑定这个身份,否则旧图
   // 会一直压住新图直到整行卸载,编辑后的气泡显示的是已被移除的附件(review P1)。
-  const identity = `${thumb.uri ?? ''}|${thumb.ossRef ?? ''}`;
-  const durableUri = thumb.ossRef ? getSentAttachmentThumbUri(thumb.ossRef) : null;
-  const localUri = durableUri ?? thumb.uri ?? null;
+  const identity = thumb.uri ?? thumb.ossRef ?? thumb.key;
+  const previewRef = thumb.previewRef ?? thumb.ossRef;
+  const durableUri = previewRef ? getSentAttachmentThumbUri(previewRef) : null;
+  const localUri = [durableUri, thumb.uri].find((uri) => uri && !failedUris.includes(uri)) ?? null;
   const [remoteState, setRemoteState] = useState<{ uri: string; identity: string } | null>(null);
-  const remoteUri = remoteState?.identity === identity ? remoteState.uri : null;
+  const remoteUri = remoteState?.identity === identity && !failedUris.includes(remoteState.uri) ? remoteState.uri : null;
   const remoteCandidate = localUri ? null : thumb.ossRef;
   useEffect(() => {
     if (!remoteCandidate || !resolveRemoteMedia || !isDesktopLocalMediaUrl(remoteCandidate)) {
@@ -116,40 +121,34 @@ function useThumbCellUri(
   // 等 store hydrate、远端取件更晚),换 uri 会让 Image 重新加载、中间露出底色(闪白)。
   // 锁同样绑身份:身份变了就解锁,重新按新图取。
   const shownRef = useRef<{ uri: string; identity: string } | null>(null);
-  const shown = shownRef.current?.identity === identity ? shownRef.current.uri : null;
+  const shown = shownRef.current?.identity === identity && !failedUris.includes(shownRef.current.uri) ? shownRef.current.uri : null;
   // 写 ref 放 layout effect(render 阶段不碰 ref:Concurrent 下被丢弃的 render 会污染它)。
   useLayoutEffect(() => {
-    if (candidate && shownRef.current?.identity !== identity) {
+    if (candidate && !shown) {
       shownRef.current = { uri: candidate, identity };
     }
-  }, [candidate, identity]);
+  }, [candidate, identity, shown]);
   return shown ?? candidate;
 }
 
 function ThumbCell({
   thumb,
   resolveRemoteMedia,
+  renderImage,
 }: {
+  renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   thumb: MobileOutboxThumb;
   resolveRemoteMedia?: ResolveRemoteMediaFn;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const uri = useThumbCellUri(thumb, resolveRemoteMedia);
+  const [failedUris, setFailedUris] = useState<readonly string[]>([]);
+  const uri = useThumbCellUri(thumb, resolveRemoteMedia, failedUris);
   return (
     <View style={styles.thumbCell}>
-      {uri ? (
-        <Image
-          // 缓存命中优先:同一张图在气泡与回流后的正式消息之间复用解码结果,交接时不重绘。
-          cachePolicy="memory-disk"
-          contentFit="cover"
-          // recyclingKey 绑到这一格:列表复用视图时不会短暂顶着上一条消息的图。
-          recyclingKey={thumb.key}
-          source={{ uri }}
-          style={styles.thumbCellImage}
-          transition={0}
-        />
-      ) : null}
+      {renderImage(uri, thumb.uri, () => {
+        if (uri) setFailedUris((failed) => failed.includes(uri) ? failed : [...failed, uri]);
+      })}
       {thumb.uploading ? (
         <View style={styles.thumbUploadingOverlay}>
           <ActivityIndicator color={colors.ctaText} size="small" />
@@ -162,7 +161,11 @@ function ThumbCell({
 function AttachmentThumbStrip({
   thumbs,
   resolveRemoteMedia,
+  renderImage,
+  gap,
 }: {
+  renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
+  gap: number;
   thumbs: readonly MobileOutboxThumb[];
   resolveRemoteMedia?: ResolveRemoteMediaFn;
 }) {
@@ -170,9 +173,9 @@ function AttachmentThumbStrip({
   useSentAttachmentThumbsVersion();
   if (thumbs.length === 0) return null;
   return (
-    <View style={styles.thumbStrip} testID="pendingSend.thumbStrip">
+    <View style={[styles.thumbStrip, { gap }]} testID="pendingSend.thumbStrip">
       {thumbs.map((thumb) => (
-        <ThumbCell key={thumb.key} resolveRemoteMedia={resolveRemoteMedia} thumb={thumb} />
+        <ThumbCell renderImage={renderImage} key={thumb.key} resolveRemoteMedia={resolveRemoteMedia} thumb={thumb} />
       ))}
     </View>
   );
@@ -182,7 +185,15 @@ export function PendingSendBubble({
   item,
   actions,
   resolveRemoteMedia,
+  renderImage,
+  renderText,
+  renderFile,
+  screenWidth,
 }: {
+  renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
+  renderText: (text: string, index: number) => ReactNode;
+  renderFile: (name: string, index: number) => ReactNode;
+  screenWidth?: number;
   item: MobilePendingSendItem;
   actions: PendingSendBubbleActions;
   /** 远端媒体取件(粘贴时已上传到媒体总仓的图靠它取缩略图)。 */
@@ -198,23 +209,39 @@ export function PendingSendBubble({
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
+  const layout = buildMessageContentLayout({ screenWidth });
   const rendersSentInlineBody = item.sentInlineTokens.some((token) => token.kind !== 'text');
+  const displayBody = rendersSentInlineBody ? sentInlineTokensDisplayText(item.sentInlineTokens) : item.text;
+  const density = summarizeMessageBubblePresentation({ kind: 'user', body: displayBody, attachmentCount: item.attachmentCount }).density;
+  const [measuredBody, setMeasuredBody] = useState<{ body: string; lines: number } | null>(null);
+  const [expandedBody, setExpandedBody] = useState<string | null>(null);
+  const measureBody = mayExceedVisualLineThreshold(displayBody);
+  const collapseResolved = measureBody && resolveUserMessageCollapse(
+    displayBody, measuredBody?.body === displayBody ? measuredBody.lines : null,
+    LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
+  );
+  const [collapseLatchBody, setCollapseLatchBody] = useState<string | null>(null);
+  const collapseLatched = collapseLatchBody === displayBody;
+  useEffect(() => {
+    if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);
+  }, [collapseResolved, collapseLatched, displayBody]);
+  const shouldCollapse = (measureBody && collapseLatched) || collapseResolved;
+  const expanded = expandedBody === displayBody;
+  const collapsedLines = shouldCollapse && !expanded ? LONG_USER_MESSAGE_COLLAPSED_LINES : undefined;
+  const hasBody = !!displayBody;
+  const hasAttachments = item.thumbs.length > 0 || !!item.fileNames?.length;
+  const [badgeAnchor, setBadgeAnchor] = useState<{ clientId: string; left: number } | null>(null);
+  const measureBadgeAnchor = (event: LayoutChangeEvent) => {
+    const left = Math.max(0, event.nativeEvent.layout.x - 28 - spacing.sm);
+    setBadgeAnchor((current) => current?.clientId === item.clientId && current.left === left
+      ? current : { clientId: item.clientId, left });
+  };
+  const badgePosition = badgeAnchor?.clientId === item.clientId
+    ? { left: badgeAnchor.left } : { right: 0 };
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
       <View style={styles.bubbleRow}>
-        <View style={styles.badge} testID={`pendingSend.badge.${item.phase}`}>
-          {failed ? (
-            <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : spinning ? (
-            <ActivityIndicator color={colors.textTertiary} size="small" />
-          ) : editing ? (
-            <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : (
-            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
-            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          )}
-        </View>
         <Pressable
           accessibilityHint={item.hint ?? undefined}
           accessibilityLabel={failed
@@ -227,33 +254,84 @@ export function PendingSendBubble({
           accessibilityRole="button"
           accessibilityState={{ expanded: selected, disabled: !interactive }}
           disabled={!interactive}
-          hitSlop={{ left: iconSize.xl + spacing.sm }}
+          hitSlop={spacing.sm}
           onPress={() => actions.onSelect(selected ? null : item.clientId)}
-          style={({ pressed }) => [
-            styles.bubble,
+          style={({ pressed }) => [styles.badge, badgePosition, pressed && styles.pressed]}
+          testID={`pendingSend.badge.${item.phase}`}
+        >
+          {failed ? (
+            <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : spinning ? (
+            <ActivityIndicator color={colors.textTertiary} size="small" />
+          ) : editing ? (
+            <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : (
+            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
+            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          )}
+        </Pressable>
+        <View
+          style={[
+            styles.content,
             item.phase === 'settling' && styles.bubbleSettling,
             selected && styles.bubbleSelected,
             editing && styles.bubbleEditing,
-            pressed && styles.pressed,
           ]}
           testID={`pendingSend.bubble.${item.clientId}`}
         >
-          {rendersSentInlineBody ? (
-            <SentInlineAtomBody
-              interactiveAtoms={false}
-              maxVisibleLines={selected ? undefined : 6}
-              numberOfLines={selected ? undefined : 6}
-              testID="pendingSend.sentInlineAtoms"
-              textStyle={styles.bubbleText}
-              tokens={item.sentInlineTokens}
-            />
-          ) : item.text ? (
-            <Text numberOfLines={selected ? undefined : 6} style={styles.bubbleText}>
-              {item.text}
-            </Text>
+          {hasAttachments ? (
+            <View key={`attachments:${item.clientId}`} onLayout={measureBadgeAnchor} style={[styles.attachmentStrip, { gap: layout.attachmentGap }]}>
+              <AttachmentThumbStrip
+                gap={layout.attachmentGap}
+                renderImage={renderImage}
+                resolveRemoteMedia={resolveRemoteMedia}
+                thumbs={item.thumbs}
+              />
+              {item.fileNames?.length ? (
+                <View style={[styles.thumbStrip, { gap: layout.attachmentGap, maxWidth: layout.fileChipMaxWidth }]}>
+                  {item.fileNames.map(renderFile)}
+                </View>
+              ) : null}
+            </View>
           ) : null}
-          <AttachmentThumbStrip resolveRemoteMedia={resolveRemoteMedia} thumbs={item.thumbs} />
-          {item.fileCount > 0 || uploadsPending ? (
+          {hasBody ? (
+            <View key={`body:${item.clientId}`} onLayout={hasAttachments ? undefined : measureBadgeAnchor} style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}>
+              {rendersSentInlineBody ? (
+                <SentInlineAtomBody
+                  interactiveAtoms={false}
+                  maxVisibleLines={collapsedLines}
+                  numberOfLines={collapsedLines}
+                  renderText={collapsedLines ? undefined : (text, index) => (
+                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index)}</View>
+                  )}
+                  testID="pendingSend.sentInlineAtoms"
+                  textStyle={styles.bubbleText}
+                  tokens={item.sentInlineTokens}
+                />
+              ) : item.text && !collapsedLines ? renderText(item.text, 0) : item.text ? (
+                <Text numberOfLines={collapsedLines} style={styles.bubbleText}>
+                  {item.text}
+                </Text>
+              ) : null}
+            {measureBody ? (
+              <View accessibilityElementsHidden accessible={false} importantForAccessibility="no-hide-descendants"
+                pointerEvents="none" style={styles.collapseMeasureWrap}>
+                <Text numberOfLines={LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD + 1}
+                  onTextLayout={(event) => setMeasuredBody({ body: displayBody, lines: event.nativeEvent.lines.length })}
+                  style={styles.bubbleText}>{displayBody}</Text>
+              </View>
+            ) : null}
+            {shouldCollapse ? (
+              <Text accessibilityRole="button" suppressHighlighting
+                accessibilityLabel={expanded ? t('message.renderer.collapseMessage') : t('message.renderer.expandMessage')}
+                onPress={(event) => { event.stopPropagation(); setExpandedBody(expanded ? null : displayBody); }}
+                style={styles.collapseToggleText}>
+                {expanded ? t('message.renderer.collapse') : t('message.renderer.expand')}
+              </Text>
+            ) : null}
+            </View>
+          ) : null}
+          {(item.fileCount > 0 && !item.fileNames?.length) || uploadsPending ? (
             <View style={styles.attachmentLine}>
               <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
               <Text style={styles.attachmentLineText}>
@@ -276,7 +354,7 @@ export function PendingSendBubble({
               {item.errorText}
             </Text>
           ) : null}
-        </Pressable>
+        </View>
       </View>
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
@@ -389,8 +467,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'flex-end',
     width: '100%',
   },
-  badge: { alignItems: 'center', flexDirection: 'row' },
+  badge: { alignItems: 'center', justifyContent: 'center', width: 28, minHeight: 44, position: 'absolute', top: 0, zIndex: 1 },
   // 与已发送用户气泡同款,但整体半透明:「这就是你的消息,只是还没生效」。
+  textChunk: { flexBasis: '100%', flexShrink: 1, maxWidth: '100%' },
+  content: { alignItems: 'flex-end', gap: 2, width: '100%', opacity: 0.62 },
+  bubbleCompact: { gap: 6, paddingVertical: spacing.sm },
+  bubbleRich: { gap: spacing.sm },
   bubble: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.borderStrong,
@@ -398,10 +480,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.xs,
     maxWidth: '86%',
-    opacity: 0.62,
+    minWidth: 0,
+    overflow: 'hidden',
     padding: spacing.md,
   },
-  bubbleSelected: { borderColor: colors.textSecondary, opacity: 1 },
+  collapseMeasureWrap: { left: spacing.md, right: spacing.md, top: 0, opacity: 0, position: 'absolute' },
+  collapseToggleText: { alignSelf: 'flex-start', color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingVertical: spacing.xs },
+  bubbleSelected: { opacity: 1 },
   bubbleEditing: { opacity: 0.38 },
   // 落定中:即将变实,透明度介于排队(0.62)与已发送(1)之间。
   bubbleSettling: { opacity: 0.85 },
@@ -412,17 +497,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   attachmentLine: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote },
-  thumbStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, justifyContent: 'flex-end' },
-  thumbCell: {
-    backgroundColor: colors.surfaceChip,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    height: 72,
-    overflow: 'hidden',
-    width: 72,
-  },
-  thumbCellImage: { height: '100%', width: '100%' },
+  attachmentStrip: { alignItems: 'flex-end', marginBottom: spacing.xs, maxWidth: '100%' },
+  thumbStrip: { alignItems: 'flex-end', maxWidth: '100%' },
+  thumbCell: { borderRadius: radius.container, overflow: 'hidden' },
   thumbUploadingOverlay: {
     alignItems: 'center',
     backgroundColor: colors.overlay,

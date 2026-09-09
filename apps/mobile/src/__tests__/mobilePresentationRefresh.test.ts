@@ -33,8 +33,8 @@ describe('mobile localized presentation refresh', () => {
 
   it('rebuilds localized session history and tail errors when the language changes', () => {
     const source = read('app/sessions/[sessionId].tsx');
-    const renderItems = source.slice(
-      source.indexOf('const renderItems = useMemo'),
+    const renderWindow = source.slice(
+      source.indexOf('const renderWindow = useMemo'),
       source.indexOf('// 只在本次 render 真正 commit 后更新 reconcile 基准'),
     );
     const tailBanner = source.slice(
@@ -42,7 +42,7 @@ describe('mobile localized presentation refresh', () => {
       source.indexOf('// 主按钮(重试 / 继续任务)'),
     );
 
-    expect(renderItems).toContain('i18nInstance.language');
+    expect(renderWindow).toContain('i18nInstance.language');
     expect(tailBanner).toContain('i18nInstance.language');
   });
 

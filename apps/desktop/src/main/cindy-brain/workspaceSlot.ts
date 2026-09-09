@@ -27,6 +27,7 @@
  */
 
 import path from 'node:path';
+import { toolAutoReviewAction, type AutoReviewDecision, type ReviewableAction } from '@cindy/maker-core';
 
 import {
   GHOST_WORKSPACE_MIN_INTERVAL_MS,
@@ -38,6 +39,7 @@ import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 /** 会话判重/创建/聚焦服务(maker-ipc 初始化完成后经 setter 注入)。 */
 export interface WorkspaceSessionService {
+  reviewPermissionAction?(sessionId: string, instanceId: string, action: ReviewableAction): Promise<AutoReviewDecision>;
   /**
    * 按目录判重:命中返回已有 active 会话 id(口径 = 侧边栏"同一工作区",
    * 归一化与 worktree 折叠在实现侧),查无返回 null。
@@ -48,7 +50,8 @@ export interface WorkspaceSessionService {
     dirAbs: string;
     title: string | null;
     ghostId: string;
-  }): Promise<string>;
+    shouldContinue?: () => boolean;
+  }): Promise<string | null>;
   /** focus:true 时跳转聚焦到该会话(deep-link navigate 通道;尽力而为)。 */
   focusSession(sessionId: string): void;
 }
@@ -61,7 +64,7 @@ export interface WorkspaceSlotDeps {
    */
   showDirectoryDialog(params: { ghostName: string; purpose: string | null }): Promise<string | null>;
   /** 在途 ghost_call 反查(cardService.inFlightCallInfoOf):查无/过期返回 null。 */
-  resolveCallContext(callId: string): { ghostId: string; sessionId: string | null } | null;
+  resolveCallContext(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string } | null;
   /** 会话目录快照(localDb);查无会话返回 null。 */
   getSessionDirInfo(
     sessionId: string,
@@ -154,6 +157,7 @@ export class GhostWorkspaceSlot {
 
     // ── 目录授权 ────────────────────────────────────────────────────────
     let dirAbs: string;
+    let callIsCurrent: (() => boolean) | undefined;
     if (request.mode === 'pick') {
       this.consentInFlight = true;
       let picked: string | null;
@@ -196,6 +200,11 @@ export class GhostWorkspaceSlot {
           '本次调用没有会话语境,无法向用户弹确认卡;请改用 mode:"pick" 让用户亲自选目录',
         );
       }
+      callIsCurrent = () => {
+        const current = this.deps.resolveCallContext(request.callId as string);
+        return current?.ghostId === ctx.ghostId && current?.sessionId === ctx.sessionId
+          && current?.sessionInstanceId === ctx.sessionInstanceId;
+      };
       const stat = await this.deps.statDir(request.dir);
       if (stat === 'not-found') return fail('DIR_NOT_FOUND', '目录不存在(只支持本机已存在的目录)');
       if (stat === 'not-directory') return fail('NOT_DIRECTORY', '该路径不是目录');
@@ -209,8 +218,7 @@ export class GhostWorkspaceSlot {
           '无法确认发起会话的本机工作区语境(远程 SSH 会话或会话信息不可用),workspace v1 不支持;请改用 mode:"pick" 让用户亲自选本机目录',
         );
       }
-      // 两档钳制:目录在发起会话的 workdir 内 → 自动放行;workdir 外一律
-      // 确认卡,证明不了"在内"就弹卡。
+      // Outside directories enter Auto review or the existing Ask confirmation.
       const insideWorkdir =
         dirInfo.workingDir !== null && this.deps.isInsideWorkdir(request.dir, dirInfo.workingDir);
       if (!insideWorkdir) {
@@ -222,11 +230,18 @@ export class GhostWorkspaceSlot {
         this.consentInFlight = true;
         let confirmed: { ok: true } | { ok: false; message: string };
         try {
-          confirmed = await this.deps.confirmDir({
-            ghostId,
-            sessionId: ctx.sessionId,
-            dirAbs: request.dir,
-          });
+          const review = ctx.sessionInstanceId && service.reviewPermissionAction
+            ? await service.reviewPermissionAction(ctx.sessionId, ctx.sessionInstanceId,
+                toolAutoReviewAction('plugin_workspace', { ghostId, dir: request.dir, title, focus: request.focus },
+                  'Ensure a local draft task exists in this directory. This does not start an agent.'))
+            : undefined;
+          confirmed = review?.verdict === 'allow' ? { ok: true }
+            : review?.verdict === 'block' ? { ok: false, message: review.reason ?? 'Automatic review denied this workspace request.' }
+            : await this.deps.confirmDir({
+                ghostId,
+                sessionId: ctx.sessionId,
+                dirAbs: request.dir,
+              });
         } catch (error) {
           // 桥未就绪/renderer 通道异常等 reject 折叠成结构化 INTERNAL,
           // 不把裸异常漏给沙箱(与 pick 对话框同纪律)。
@@ -249,13 +264,18 @@ export class GhostWorkspaceSlot {
     const name = path.basename(dirAbs) || dirAbs;
     const ensure = async (): Promise<GhostPipeWorkspaceResult> => {
       try {
+        if (callIsCurrent && !callIsCurrent()) return fail('CANCELLED', 'The originating tool call has ended.');
         const existing = await service.findActiveSessionByWorkdir(dirAbs);
+        if (callIsCurrent && !callIsCurrent()) return fail('CANCELLED', 'The originating tool call has ended.');
         if (existing) {
           if (request.focus === true) service.focusSession(existing);
           this.deps.log?.info('ghost workspace ensured (reused)', { ghostId, sessionId: existing });
           return { ok: true, sessionId: existing, created: false, name };
         }
-        const sessionId = await service.createDraftSession({ dirAbs, title, ghostId });
+        const sessionId = await service.createDraftSession({ dirAbs, title, ghostId,
+          ...(callIsCurrent ? { shouldContinue: callIsCurrent } : {}),
+        });
+        if (!sessionId || (callIsCurrent && !callIsCurrent())) return fail('CANCELLED', 'The originating tool call has ended.');
         if (request.focus === true) service.focusSession(sessionId);
         this.deps.log?.info('ghost workspace ensured (created)', { ghostId, sessionId });
         return { ok: true, sessionId, created: true, name };

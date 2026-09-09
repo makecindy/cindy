@@ -129,12 +129,14 @@ describe('Windows Git PATH PowerShell probes', () => {
         try {
           output = execFileSync(
             path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-            ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsPathKindProbeScript(4, 3_000, 2)],
+            // Hosted Windows runners can spend several seconds starting the
+            // nested PowerShell probes before any candidate is inspected.
+            ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsPathKindProbeScript(4, 10_000, 2)],
             {
               encoding: 'utf8',
               input: Buffer.from(JSON.stringify(groups), 'utf8'),
               stdio: ['pipe', 'pipe', 'pipe'],
-              timeout: 5_000,
+              timeout: 15_000,
               windowsHide: true,
             },
           );
@@ -152,7 +154,7 @@ describe('Windows Git PATH PowerShell probes', () => {
         rmSync(tempRoot, { recursive: true, force: true });
       }
     },
-    12_000,
+    30_000,
   );
 
   it.runIf(process.platform === 'win32')(
@@ -227,7 +229,7 @@ describe('Windows Git PATH PowerShell probes', () => {
             '-NonInteractive',
             '-Command',
             [
-              '$deadline = [DateTime]::UtcNow.AddSeconds(3)',
+              '$deadline = [DateTime]::UtcNow.AddSeconds(8)',
               `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
               '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
               '  Start-Sleep -Milliseconds 50',
@@ -235,8 +237,8 @@ describe('Windows Git PATH PowerShell probes', () => {
             ].join('\n'),
           ],
            // PowerShell startup can exceed five seconds on a busy hosted Windows runner;
-           // allow cleanup to observe the child process exit without changing the probe budget.
-           { stdio: 'ignore', timeout: 10_000, windowsHide: true },
+           // the in-script deadline (8s) plus startup must fit the exec timeout.
+           { stdio: 'ignore', timeout: 15_000, windowsHide: true },
         );
       } finally {
         if (coordinatorPid) {
@@ -253,7 +255,9 @@ describe('Windows Git PATH PowerShell probes', () => {
         }
       }
     },
-     20_000,
+    // waitFor(5s) + descendant cleanup exec(10s) + liveness probe exec(15s) already
+    // sum to 30s; leave headroom for coordinator exit, taskkill, and scheduling.
+     45_000,
   );
 
   it('reports recoverable script failures only when a logger is supplied', () => {

@@ -115,9 +115,23 @@ describe('regenerateTitleMaterial pagination', () => {
         id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
       ) VALUES (?, ?, 's1', ?, ?, NULL, ?, ?, NULL)
     `);
-    insert.run('m1', 'c1', 'user', JSON.stringify({ text: '继续' }), JSON.stringify({ autoResume: true }), 1);
+    insert.run(
+      'm1',
+      'c1',
+      'user',
+      JSON.stringify({ text: '继续' }),
+      JSON.stringify({ autoResume: true }),
+      1,
+    );
     insert.run('m2', 'c2', 'user', JSON.stringify({ text: '真实需求：修复标题' }), null, 2);
-    insert.run('m3', 'c3', 'assistant', JSON.stringify('已完成修复'), JSON.stringify({ turnCompleted: true }), 3);
+    insert.run(
+      'm3',
+      'c3',
+      'assistant',
+      JSON.stringify('已完成修复'),
+      JSON.stringify({ turnCompleted: true }),
+      3,
+    );
 
     const material = await regenerateTitleMaterial('s1', 8);
 
@@ -137,14 +151,28 @@ describe('regenerateTitleMaterial pagination', () => {
       ) VALUES (?, ?, 's1', ?, ?, NULL, ?, ?, NULL)
     `);
     insert.run('m1', 'c1', 'user', JSON.stringify({ text: '原始需求' }), null, 1);
-    insert.run('m2', 'c2', 'assistant', JSON.stringify('历史答复'), JSON.stringify({ turnCompleted: true }), 2);
+    insert.run(
+      'm2',
+      'c2',
+      'assistant',
+      JSON.stringify('历史答复'),
+      JSON.stringify({ turnCompleted: true }),
+      2,
+    );
 
     let stateReads = 0;
     const material = await regenerateTitleMaterial('s1', 8, () => {
       stateReads += 1;
       if (stateReads === 1) {
         insert.run('m3', 'c3', 'user', JSON.stringify({ text: '新一轮需求' }), null, 3);
-        insert.run('m4', 'c4', 'assistant', JSON.stringify('施工播报'), JSON.stringify({ uuid: 'progress' }), 4);
+        insert.run(
+          'm4',
+          'c4',
+          'assistant',
+          JSON.stringify('施工播报'),
+          JSON.stringify({ uuid: 'progress' }),
+          4,
+        );
       }
       return true;
     });
@@ -156,5 +184,75 @@ describe('regenerateTitleMaterial pagination', () => {
       '新一轮需求',
     ]);
     expect(material.recent.some((message) => message.text === '施工播报')).toBe(false);
+  });
+});
+
+describe('regenerateTitleMaterial hook user text', () => {
+  it.each([false, true])(
+    'uses the authored body for opening and recent messages (JSON content: %s)',
+    async (jsonContent) => {
+      const { sqlite } = createHarness();
+      sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+      const insert = sqlite.prepare(`
+      INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES (?, ?, 's1', ?, ?, ?, ?)
+    `);
+      const background = `<group_chat_context>${'旧群聊背景'.repeat(100)}</group_chat_context>`;
+      const opening = '修复手机滚动卡顿';
+      const latest = '总结本周手机流畅性修改，包括草稿';
+      for (const [index, body] of [opening, latest].entries()) {
+        const text = background + body;
+        insert.run(
+          `u${index}`,
+          `cu${index}`,
+          'user',
+          jsonContent ? JSON.stringify({ text }) : text,
+          JSON.stringify({ hookSource: { im: 'telegram', userText: body } }),
+          index * 2 + 1,
+        );
+        insert.run(
+          `a${index}`,
+          `ca${index}`,
+          'assistant',
+          JSON.stringify('已整理修改'),
+          JSON.stringify({ turnCompleted: true, hookSource: { userText: '不应替换助手回复' } }),
+          index * 2 + 2,
+        );
+      }
+      const material = await regenerateTitleMaterial('s1', 2, false, { preferHookUserText: true });
+      const predictionMaterial = await regenerateTitleMaterial('s1', 2);
+      expect(predictionMaterial.opening.text).toBe(background + opening);
+      expect(predictionMaterial.recent.map((m) => m.text)).toEqual([
+        background + latest,
+        '已整理修改',
+      ]);
+      expect(material.opening.text).toBe(opening);
+      expect(material.recent.map((m) => m.text)).toEqual([latest, '已整理修改']);
+      expect(material.recent[0].text.slice(0, 300)).toBe(latest);
+    },
+  );
+
+  it.each([
+    null,
+    '{broken',
+    '[]',
+    JSON.stringify({ hookSource: null }),
+    JSON.stringify({ hookSource: [] }),
+    JSON.stringify({ hookSource: { im: 'telegram' } }),
+    JSON.stringify({ hookSource: { userText: 42 } }),
+    JSON.stringify({ hookSource: { userText: '' } }),
+    JSON.stringify({ hookSource: { userText: '   ' } }),
+  ])('preserves legacy and ordinary content for metadata %s', async (meta) => {
+    const { sqlite } = createHarness();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES ('u1', 'cu1', 's1', 'user', ?, ?, 1)`,
+      )
+      .run(JSON.stringify({ text: '原始用户正文' }), meta);
+    const material = await regenerateTitleMaterial('s1', 8, false, { preferHookUserText: true });
+    expect(material.opening.text).toBe('原始用户正文');
+    expect(material.recent.map((m) => m.text)).toEqual(['原始用户正文']);
   });
 });

@@ -116,6 +116,10 @@
     "controlFork": "セッションを分岐",
     "markdownDocAriaLabel": "メッセージ本文",
     "toolOutputTitle": "{{label}} の出力",
+    "toolInputTitle": "{{label}} の入力",
+    "viewToolInput": "完全な入力を表示",
+    "loadingToolInput": "完全な入力を読み込み中",
+    "retryToolInput": "入力を読み込めませんでした。再試行",
     "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "空の Mermaid 図。",
     "diffEditCount": "{{n}} 件の編集"
@@ -175,6 +179,19 @@
     "retry": "再試行"
   },
   "systemCard": {
+    "contextRebuild": {
+      "labelOverflow": "コンテキストを整理して続行しました",
+      "labelTimeout": "直前の応答がなかったため、整理して続行しました",
+      "labelStrip": "大きな画像を除いて続行しました",
+      "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
+      "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
+    },
+    "compact": {
+      "savedTokens": "{{tokens}} トークンを節約",
+      "manual": "手動圧縮",
+      "auto": "自動圧縮",
+      "aria": "会話を圧縮しました"
+    },
     "goalComplete": "目標を達成 · {{turns}} 回 · 所要 {{duration}}",
     "goalResumed": "使用量が回復、目標を継続",
     "goalCapacityRetry": "モデルサービスが混雑していました。目標を再試行します",

@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
+import { defaultEffortForCapabilities } from '@cindy/model-providers';
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -81,7 +82,7 @@ function isProviderModel(value: unknown): boolean {
     value.contextWindow > 0 &&
     Array.isArray(efforts) &&
     efforts.every((effort) => typeof effort === 'string') &&
-    (defaultEffort === null ||
+    (defaultEffort === undefined || defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
     isOptionalBoolean(value.disabled) &&
     isOptionalBoolean(value.supportsFastMode) &&
@@ -104,7 +105,11 @@ function sanitizeProviderModels(
   const sanitized: Record<string, unknown[]> = {};
   for (const [agent, entries] of Object.entries(models)) {
     if (!Array.isArray(entries)) return null;
-    sanitized[agent] = entries.filter(isProviderModel);
+    sanitized[agent] = entries.filter(isProviderModel).map((entry: Record<string, unknown>) =>
+      entry.defaultEffort === undefined
+        ? { ...entry, defaultEffort: defaultEffortForCapabilities(entry.efforts as string[]) }
+        : entry,
+    );
   }
   return sanitized;
 }

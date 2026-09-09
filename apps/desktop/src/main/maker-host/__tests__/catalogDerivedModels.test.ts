@@ -22,6 +22,8 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
+  resolveModelDefaultContextWindow,
+  resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
@@ -103,6 +105,58 @@ function injectedCatalog(): Catalog {
 }
 
 describe('deriveAvailableModels — dynamic-first catalog contract', () => {
+  it('keeps explicit GPT-6 Pi effort capabilities in the picker and runtime descriptor', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [
+      model('chatgpt/gpt-6-astra', {
+        contextWindow: 272_000,
+        maxOutput: 128_000,
+        efforts: [...efforts],
+        defaultEffort: 'medium',
+        reasoning: true,
+        reasoningEfforts: [...efforts],
+        reasoningDefaultEffort: 'medium',
+        supportsImageInput: true,
+      }),
+    ];
+    const expected = {
+      contextWindow: 272_000,
+      maxOutputTokens: 128_000,
+      efforts: [...efforts],
+      defaultEffort: 'medium',
+      supportsImageInput: true,
+    };
+    expect(deriveAvailableModels(catalog, 'pi').find((entry) => entry.id === 'chatgpt/gpt-6-astra'))
+      .toMatchObject(expected);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-6-astra'))
+      .toMatchObject(expected);
+  });
+
+  it.each([
+    ['missing fields', {}],
+    ['null efforts', { reasoningEfforts: null, reasoningDefaultEffort: 'medium' }],
+    ['string efforts', { reasoningEfforts: 'medium', reasoningDefaultEffort: 'medium' }],
+    ['empty efforts', { reasoningEfforts: [], reasoningDefaultEffort: 'medium' }],
+    ['invalid effort', { reasoningEfforts: ['medium', 'ultra'], reasoningDefaultEffort: 'medium' }],
+    ['non-string effort', { reasoningEfforts: ['medium', null], reasoningDefaultEffort: 'medium' }],
+    ['missing default', { reasoningEfforts: ['medium'] }],
+    ['null default', { reasoningEfforts: ['medium'], reasoningDefaultEffort: null }],
+    ['default outside efforts', { reasoningEfforts: ['low'], reasoningDefaultEffort: 'medium' }],
+  ])('keeps legacy Pi minimal compatibility for %s in both descriptors', (_label, fields) => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    // Remote JSON can violate the static CatalogModel type at runtime.
+    const entry = {
+      ...model('legacy-reasoner', { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }),
+      ...fields,
+    } as unknown as CatalogModel;
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [entry];
+    const expected = { efforts: ['minimal', 'low', 'medium', 'high'], defaultEffort: 'medium' };
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === entry.id))
+      .toMatchObject(expected);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', entry.id)).toMatchObject(expected);
+  });
+
   it('publishes Pi effort controls only when the official catalog has an explicit thinking map', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
     expect(pi.find((m) => m.id === 'grok-4.3')?.efforts).toEqual([
@@ -483,7 +537,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(provider!.models['claude-code']!.some((entry) => entry.id === retired.id)).toBe(true);
   });
 
-  it('纯 Registry retired 不进入公开清单,但可按统一投影重建 Pi 续跑描述符', () => {
+  it('纯 Registry retired 不会被重建成 Pi 续跑描述符', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -524,18 +578,11 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       'openai',
       'chatgpt/gpt-retired',
       { localOverrides },
-    )).toMatchObject({
-      id: 'chatgpt/gpt-retired',
-      displayName: 'GPT Retired',
-      contextWindow: 444_000,
-      maxOutputTokens: 96_000,
-      efforts: ['minimal', 'medium', 'high'],
-      defaultEffort: 'high',
-    });
+    )).toBeNull();
     expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
   });
 
-  it('retired Pi fallback 按 addition 后 patch 的最终层顺序重建 root', () => {
+  it('本地 Codex addition/patch 也不能重建 retired Pi fallback', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -575,15 +622,10 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       'openai',
       'chatgpt/gpt-local-revival',
       { localOverrides },
-    )).toMatchObject({
-      displayName: 'Local addition',
-      contextWindow: 600_000,
-      efforts: ['minimal', 'medium', 'high'],
-      defaultEffort: 'high',
-    });
+    )).toBeNull();
   });
 
-  it('retired OpenAI context profile 按 alias id 与 entry baseline 重建 Pi 私有描述符', () => {
+  it('retired OpenAI context profile 不会跨 harness 重建 Pi 私有描述符', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -613,14 +655,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
 
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-5.6-sol[1m]'),
-    ).toMatchObject({
-      id: 'chatgpt/gpt-5.6-sol[1m]',
-      displayName: 'GPT-5.6-Sol (1M · Higher usage)',
-      contextWindow: 1_000_000,
-      maxOutputTokens: 128_000,
-      efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
-      defaultEffort: 'medium',
-    });
+    ).toBeNull();
   });
 
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
@@ -732,5 +767,90 @@ describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () =
       p.routing.codex = { ...(p.routing.codex ?? {}), disabled: true } as typeof p.routing.codex;
     }
     expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'xd/only')).toBeNull();
+  });
+});
+
+describe('resolveModelDefaultContextWindow — settings defaults configure the same native route', () => {
+  function catalogWithCustom(solContextWindow?: number): Catalog {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'mygpt',
+        name: 'My GPT',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.invalid/v1',
+            models: [
+              {
+                id: 'gpt-5.6-sol',
+                name: 'gpt-5.6-sol',
+                ...(solContextWindow !== undefined ? { contextWindow: solContextWindow } : {}),
+              },
+              { id: 'gpt-5.4-mini', name: 'gpt-5.4-mini' },
+            ],
+          },
+        },
+      }),
+    );
+    return catalog;
+  }
+
+  it('用户显式填写的窗口返回该值', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+    ).toBe(1_050_000);
+  });
+
+  it('applies the displayed default for custom models without a saved override', () => {
+    const catalog = catalogWithCustom();
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(200_000);
+  });
+
+  it('applies Gateway and subscription defaults independently for the same model id', () => {
+    const catalog = catalogWithCustom(500_000);
+    for (const [id, window] of [['xd', 1_050_000], ['openai', 272_000]] as const) {
+      const provider = catalog.providers.find(p => p.id === id)!;
+      const model = catalog.providers.find(p => p.id === 'mygpt')!.models.codex![0]!;
+      provider.models.codex = [{ ...model, contextWindow: window }];
+      expect(resolveModelDefaultContextWindow(catalog, 'codex', id, model.id)).toBe(window);
+    }
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(500_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'missing')).toBeNull();
+    catalog.providers.find(p => p.id === 'xd')!.routing.codex!.disabled = true;
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('没有 providerId 不注入', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
+    ).toBeNull();
+  });
+});
+
+
+describe('context settings for provider-less routes', () => {
+  it('keeps Pi default gateway budgets isolated from same-name subscription models', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    for (const provider of catalog.providers) {
+      for (const agent of ['claude-code', 'pi'] as const) {
+        provider.models[agent] = ['xd', 'anthropic'].includes(provider.id)
+          ? [model('shared-model', { contextWindow: provider.id === 'xd' ? 100_000 : 200_000 })] : [];
+      }
+    }
+    for (const id of [null, undefined, 'cindy']) {
+      const source = resolveModelContextProviderId(catalog, 'pi', id, 'shared-model');
+      expect(source).toBe('xd');
+      expect(resolveModelDefaultContextWindow(catalog, 'pi', source, 'shared-model')).toBe(100_000);
+    }
+    expect(resolveModelContextProviderId(catalog, 'pi', 'anthropic', 'shared-model')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBeNull();
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'xd')).toBe('xd');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'anthropic')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'anthropic', 'shared-model', 'xd')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'xd', 'shared-model')).toBe('xd');
+    catalog.providers.find((provider) => provider.id === 'anthropic')!.models['claude-code'] = [];
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBe('xd');
   });
 });

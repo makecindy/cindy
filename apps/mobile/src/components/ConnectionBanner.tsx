@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from './ConnectionNoticeOverlay';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { LoaderCircle } from 'lucide-react-native';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { Text } from '@/components/AppText';
 import type { DeviceLinkConnectionIssue, DeviceLinkStatus } from '@cindy/device-link';
 import {
@@ -17,40 +19,22 @@ import {
   resolveConnectionBannerVisibility,
   resolveEffectiveConnectionError,
 } from '@/components/connectionBannerVisibility';
-import { fontWeight, useThemedStyles, type ThemeColors } from '@/theme';
-import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
-/** 普通断线(无分类 issue)转为可见提示前的静默窗口:健康重连通常 <1s 完成,不闪 banner。 */
-const OFFLINE_BANNER_DELAY_MS = 1_200;
-
-/**
- * 条件挂载 ConnectionBanner 的统一可见性判定:
- * - 请求级 error / 可分类连接问题(鉴权失效、被顶号等)→ 立即显示;
- * - 当前关联设备熔断 open(电脑端未响应,relay 可能仍 online)→ 立即显示;
- * - 普通弱网断线(status 非 online 且无分类 issue)→ 持续超过静默窗口才显示,
- *   既让用户看得到「正在重连」(否则消息流静默停更没有任何信号),又不因
- *   一次快速重连闪一下布局(规则 7:杜绝跳变)。
- * 判定核在 resolveConnectionBannerVisibility(纯函数,单测覆盖)。
- */
+/** Eligibility only. ConnectionBanner owns the shared one-second display delay,
+ * including screens that mount the component unconditionally. */
 export function useShowConnectionBanner(
   status: DeviceLinkStatus,
   error: string | null,
   issue: DeviceLinkConnectionIssue | null,
   deviceUnresponsive = false,
+  recovery?: 'syncing' | 'recovered',
 ): boolean {
-  const offline = status !== 'online';
-  const [offlineLongEnough, setOfflineLongEnough] = useState(false);
-  useEffect(() => {
-    if (!offline) {
-      setOfflineLongEnough(false);
-      return;
-    }
-    const timer = setTimeout(() => setOfflineLongEnough(true), OFFLINE_BANNER_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [offline]);
-  return resolveConnectionBannerVisibility({
+  const offline = status !== 'online' || recovery === 'syncing';
+  return recovery === 'recovered' || resolveConnectionBannerVisibility({
     offline,
-    offlineLongEnough,
+    offlineLongEnough: true,
     // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
     // 否则恢复后 banner 会带着"自动重试中"文案常驻到用户手动同步。
     hasError: Boolean(resolveEffectiveConnectionError(error, deviceUnresponsive)),
@@ -66,10 +50,13 @@ export function ConnectionBanner({
   density = 'default',
   deviceUnresponsive = false,
   error,
+  requestErrorAutoRecovering,
   issue = null,
   lastSyncedAt,
   onSync,
   variant = 'bar',
+  recovery,
+  cachedOnly = false,
 }: {
   status: DeviceLinkStatus;
   loading: boolean;
@@ -77,52 +64,66 @@ export function ConnectionBanner({
   /** 当前关联设备熔断 open(电脑端未响应);relay 可能仍 online,单独入参 */
   deviceUnresponsive?: boolean;
   error: string | null;
+  /** Request owners with local retry (e.g. history pagination) can opt out of connection recovery. */
+  requestErrorAutoRecovering?: boolean;
   /** 连接层失败原因(useDeviceLink().connectionIssue);比请求级 error 更根因,优先展示 */
   issue?: DeviceLinkConnectionIssue | null;
   lastSyncedAt: number | null;
   onSync(): void;
   variant?: 'bar' | 'inline';
+  recovery?: 'syncing' | 'recovered';
+  cachedOnly?: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
+  const active = useShowConnectionBanner(status, error, issue, deviceUnresponsive, recovery === 'recovered' ? undefined : recovery);
+  const visible = useDelayedConnectionNotice(cachedOnly || active, recovery === 'recovered');
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;
   // 熔断 open 优先于请求级 error:open 期间的请求失败绝大多数就是熔断快速失败本身,
   // 状态级提示(未响应 + 自动重试中)比单次请求的错误原文更能解释现状。
-  const showUnresponsive = !activeIssue && deviceUnresponsive;
+  const showUnresponsive = !cachedOnly && !activeIssue && deviceUnresponsive;
   // 熔断已关后残留的 DEVICE_UNRESPONSIVE 错误是陈旧快照,按 null 处理(与
   // useShowConnectionBanner 同一判定,否则会出现可见但无内容的空壳 banner)。
   const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
-  const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
-  const showSyncAction = resolveConnectionBannerSyncActionVisibility({
+  const friendlyError = cachedOnly || activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
+  const autoRecoveringRequest = requestErrorAutoRecovering ?? isAutoRecoveringRemoteError(effectiveError);
+  const showRecoveryProgress = !cachedOnly && (!activeIssue || activeIssue.kind === 'unstable' || activeIssue.kind === 'replaced')
+    && (status === 'connecting' || deviceUnresponsive || recovery === 'syncing'
+      || (friendlyError !== null && autoRecoveringRequest));
+  const showSyncAction = !cachedOnly && resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeIssue !== null,
     deviceUnresponsive: showUnresponsive,
     hasRequestError: friendlyError !== null,
-    requestErrorAutoRecovering: isAutoRecoveringRemoteError(effectiveError),
+    requestErrorAutoRecovering: autoRecoveringRequest,
   });
-  const tone = activeIssue
+  const tone = cachedOnly ? 'off' : activeIssue
     ? 'off'
     : showUnresponsive
       ? 'busy'
-      : friendlyError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+      : friendlyError ? 'muted' : recovery === 'syncing' ? 'busy' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const compact = density === 'compact';
-  const title = activeIssue
+  const title = cachedOnly && !activeIssue ? t('deviceLink.cachedHistory.title') : activeIssue
     ? activeIssue.kind === 'unstable'
       ? t('deviceLink.unstableTitle')
       : connectionIssueTitle(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveTitle')
-      : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
-  const copy = activeIssue
+      : friendlyError ? t('deviceLink.syncFailed') : status === 'online' && recovery
+        ? t(`deviceLink.recovery.${recovery}`) : relayStatusLabel(status);
+  const copy = cachedOnly && !activeIssue ? t('deviceLink.cachedHistory.hint') : activeIssue
     ? activeIssue.kind === 'unstable'
       ? t('deviceLink.unstableHint')
       : connectionIssueHint(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveHint')
-      : friendlyError ?? relayStatusHint(status, lastSyncedAt);
+      : friendlyError ?? (status === 'online' && recovery === 'syncing'
+        ? t('deviceLink.recovery.syncingHint') : relayStatusHint(status, lastSyncedAt));
+  if (!visible) return null;
   return (
+    <ConnectionNoticeOverlay>
     <View
       style={[
         styles.root,
@@ -132,7 +133,7 @@ export function ConnectionBanner({
       ]}
       testID="connection.banner"
     >
-      <StatusDot tone={tone} pulsing={!activeIssue && (status === 'connecting' || showUnresponsive)} />
+      <StatusDot tone={tone} pulsing={!cachedOnly && !activeIssue && (status === 'connecting' || showUnresponsive || recovery === 'syncing')} />
       <View style={[styles.textBlock, compact && styles.textBlockCompact]}>
         <Text
           ellipsizeMode="tail"
@@ -160,9 +161,33 @@ export function ConnectionBanner({
           onPress={onSync}
           testID="connection.syncButton"
         />
+      ) : showRecoveryProgress ? (
+        <ConnectionRecoveryProgress />
       ) : null}
     </View>
+    </ConnectionNoticeOverlay>
   );
+}
+
+/** Shared by the Home connection row and detail banners; never a press target. */
+export function ConnectionRecoveryProgress() {
+  const { colors } = useTheme();
+  const reduceMotion = useReduceMotionEnabled();
+  return <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+    {reduceMotion === false ? (
+    <ActivityIndicator
+      color={colors.textSecondary}
+      size="small"
+      testID="connection.recoveryProgress"
+    />
+  ) : (
+    <LoaderCircle
+      color={colors.textSecondary}
+      size={iconSize.action}
+      testID="connection.recoveryProgressStatic"
+    />
+    )}
+  </View>;
 }
 
 function ConnectionSyncButton({
@@ -196,6 +221,10 @@ function ConnectionSyncButton({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   root: {
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.container,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -214,8 +243,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.sm,
     minHeight: 42,
     paddingHorizontal: spacing.md,
   },

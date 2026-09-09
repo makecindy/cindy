@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import ts from 'typescript';
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
 // 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
@@ -164,6 +165,42 @@ describe('runQuitDisposers', () => {
     await runQuitDisposers(1000);
 
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
+  });
+
+  it.each([false, true])('keeps real bootstrap Codex and DB dependencies until Maker settles or times out (timeout=%s)', async (timesOut) => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    // 读取真实注册顺序和 phase，避免测试中的手写编排与 bootstrap 漂移。
+    const source = ts.createSourceFile('bootstrap-electron.ts', readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+    const names = new Set(['shutdown-maker', 'lsp-pool', 'pi-subagent-final-sweep', 'codex-env', 'codex-proxy', 'remote-ssh-pool', 'db-client', 'local-db-close']);
+    const registrations: Array<{ name: string; phase: 'sync' | 'async' | 'post-async' }> = [];
+    for (const node of source.statements) {
+      if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) continue;
+      const call = node.expression;
+      if (!ts.isIdentifier(call.expression) || call.expression.text !== 'onQuit') continue;
+      const [name, , phase] = call.arguments;
+      if (!name || !phase || !ts.isStringLiteral(name) || !ts.isStringLiteral(phase) || !names.has(name.text)) continue;
+      if (phase.text !== 'sync' && phase.text !== 'async' && phase.text !== 'post-async') throw new Error('invalid quit phase');
+      registrations.push({ name: name.text, phase: phase.text });
+    }
+    expect(registrations).toHaveLength(names.size);
+    const events: string[] = [];
+    let finish!: () => void;
+    const maker = new Promise<void>((resolve) => { finish = resolve; });
+    for (const { name, phase } of registrations) {
+      onQuit(name, name === 'shutdown-maker' ? async () => { await maker; events.push(name); } : () => { events.push(name); }, phase);
+    }
+    const quit = runQuitDisposers(100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(events).toEqual(['lsp-pool']);
+    if (timesOut) await vi.advanceTimersByTimeAsync(100);
+    else finish();
+    await quit;
+    expect(events).toEqual([
+      'lsp-pool', ...(timesOut ? [] : ['shutdown-maker']), 'pi-subagent-final-sweep',
+      'codex-env', 'codex-proxy', 'remote-ssh-pool', 'db-client', 'local-db-close',
+    ]);
+    finish();
   });
 
   it('sync disposer that throws does not block subsequent disposers', async () => {

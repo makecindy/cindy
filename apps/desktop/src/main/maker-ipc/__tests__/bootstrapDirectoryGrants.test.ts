@@ -43,6 +43,49 @@ function createOpts(
 }
 
 describe('prepareDirectoryGrantsForBootstrap', () => {
+  it.each(['readonly', 'writable'])('does not grant writes when %s canonicalization times out during fallback', async (failed) => {
+    const { workspace, specs, output } = makeGrantTree();
+    const opts = createOpts(workspace, [specs], [output]);
+    const persistExistingSession = vi.fn(async () => {});
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      preservePersistedGrants: true,
+      readPersistedWritableDirs: async () => [output],
+      realpathDirectory: async (dir) => {
+        if (dir === (failed === 'readonly' ? specs : output)) {
+          throw Object.assign(new Error('timeout'), { code: 'WORKDIR_PROBE_TIMEOUT' });
+        }
+        return dir;
+      },
+      persistExistingSession,
+    });
+    expect(opts).toMatchObject({ extraDirs: [specs], writableDirs: [] });
+    expect(persistExistingSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps saved grants through fallback bootstrap while filtering unavailable runtime roots', async () => {
+    const { workspace, specs, output, root } = makeGrantTree();
+    const stored = { extraDirs: [specs], writableDirs: [output] };
+    const persistExistingSession = vi.fn(async () => {});
+    const statDirectory = vi.fn(async () => {
+      throw Object.assign(new Error('share unavailable'), { code: 'WORKDIR_PROBE_TIMEOUT' });
+    });
+    const temporary = createOpts(workspace, stored.extraDirs, [root]);
+    await prepareDirectoryGrantsForBootstrap(temporary, {
+      preservePersistedGrants: true, statDirectory,
+      readPersistedWritableDirs: async () => stored.writableDirs,
+      persistExistingSession,
+    });
+    expect(temporary).toMatchObject({ extraDirs: [], writableDirs: [] });
+    expect(statDirectory.mock.calls.flat()).not.toContain(root);
+    expect(persistExistingSession).not.toHaveBeenCalled();
+    const reconnected = createOpts(workspace, stored.extraDirs, [root]);
+    await prepareDirectoryGrantsForBootstrap(reconnected, {
+      readPersistedWritableDirs: async () => stored.writableDirs, persistExistingSession,
+    });
+    expect(reconnected).toMatchObject(stored);
+    expect(persistExistingSession).not.toHaveBeenCalled();
+  });
+
   it('persists the complete applied subset when lazy bootstrap removes a nested writable grant', async () => {
     const { workspace, shared, specs, output } = makeGrantTree();
     const opts = createOpts(workspace, [specs], [shared, output]);
@@ -64,7 +107,7 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
   it('drops caller-supplied writable roots when no persisted session grant exists', async () => {
     const { root, workspace, shared, specs, output } = makeGrantTree();
     const sharedAlias = path.join(root, 'shared-alias');
-    symlinkSync(shared, sharedAlias, 'dir');
+    symlinkSync(shared, sharedAlias, process.platform === 'win32' ? 'junction' : 'dir');
     const opts = createOpts(workspace, [specs], [sharedAlias, output]);
     const persistExistingSession = vi.fn(async () => {
       // Direct maker:create-session has no SQLite row until maker-core creates it.

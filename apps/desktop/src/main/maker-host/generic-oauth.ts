@@ -1,3 +1,4 @@
+import { pickModelMetadata, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * generic-oauth —— 目录 `auth.oauth` 描述符驱动的通用 OAuth Runner。
  *
@@ -509,10 +510,7 @@ export interface GenericOAuthLoginOptions {
 }
 
 // 同一时刻每个 provider 只允许一个登录流。
-const activeLogins = new Map<
-  string,
-  { abort: AbortController; close: () => void }
->();
+const activeLogins = new Map<string, { abort: AbortController; close: () => void }>();
 
 /** 取消某供应商进行中的登录。 */
 export function cancelGenericOAuthLogin(providerId: string): void {
@@ -574,9 +572,9 @@ async function runDeviceCodeGrant(
     typeof authorization?.device_code === 'string' ? authorization.device_code : '';
   const userCode = typeof authorization?.user_code === 'string' ? authorization.user_code : '';
   const verificationUrl =
-    safeVerificationUrl(authorization?.verification_uri_complete)
-    ?? safeVerificationUrl(authorization?.verification_uri)
-    ?? safeVerificationUrl(authorization?.verification_url);
+    safeVerificationUrl(authorization?.verification_uri_complete) ??
+    safeVerificationUrl(authorization?.verification_uri) ??
+    safeVerificationUrl(authorization?.verification_url);
   const expiresInSeconds = positiveNumber(authorization?.expires_in);
   if (!deviceCode || !userCode || !verificationUrl || !expiresInSeconds) {
     throw new Error('invalid_device_authorization_response');
@@ -623,9 +621,9 @@ async function runDeviceCodeGrant(
     });
     const payload = await readJsonObject(response);
     if (
-      response.ok
-      && typeof payload?.access_token === 'string'
-      && payload.access_token.length > 0
+      response.ok &&
+      typeof payload?.access_token === 'string' &&
+      payload.access_token.length > 0
     ) {
       return payload as unknown as TokenResponse;
     }
@@ -639,9 +637,7 @@ async function runDeviceCodeGrant(
     if (error === 'access_denied') throw new Error('device_access_denied');
     if (error === 'expired_token') throw new Error('device_code_expired');
     throw new Error(
-      error
-        ? `device_token_error_${error}`
-        : `device_token_exchange_failed_${response.status}`,
+      error ? `device_token_error_${error}` : `device_token_exchange_failed_${response.status}`,
     );
   }
   throw new Error('device_code_expired');
@@ -658,8 +654,7 @@ export async function runGenericOAuthLogin(
 ): Promise<GenericOAuthLoginResult> {
   cancelGenericOAuthLogin(provider.id);
 
-  const listener =
-    oauth.flow === 'device-code' ? null : new CallbackListener(provider.name);
+  const listener = oauth.flow === 'device-code' ? null : new CallbackListener(provider.name);
   const abort = new AbortController();
   activeLogins.set(provider.id, {
     abort,
@@ -803,7 +798,7 @@ export async function discoverGenericOAuthModels(
   oauth: OAuthProviderDescriptor,
   discoveryUrl?: string,
   agent?: AgentKind,
-): Promise<{ id: string; name: string; contextWindow?: number }[] | null> {
+): Promise<DiscoveredModel[] | null> {
   const url = discoveryUrl ?? oauth.modelsDiscoveryUrl;
   if (!url) return null;
   const token = readCachedGenericOAuthAccessToken(providerId, oauth);
@@ -839,9 +834,7 @@ export async function discoverGenericOAuthModels(
  * 回落保守默认(#386)。
  * 纯函数——OAuth 自动发现（本模块）与 API key 表单「获取模型列表」（provider-model-fetch）共用。
  */
-export function parseModelsListResponse(
-  json: unknown,
-): { id: string; name: string; contextWindow?: number }[] | null {
+export function parseModelsListResponse(json: unknown): DiscoveredModel[] | null {
   const list = (() => {
     if (!json || typeof json !== 'object') return null;
     const o = json as { data?: unknown; models?: unknown };
@@ -850,7 +843,7 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
-  const out: { id: string; name: string; contextWindow?: number }[] = [];
+  const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
     const id =
@@ -890,11 +883,41 @@ export function parseModelsListResponse(
           // 异常值(如 context_length: 1e20)——这类值会通过取整后为正的校验,但落盘后
           // Main 的正数校验反而会因为超界而拒绝整份供应商配置,内置 OAuth 发现分支则会
           // 把这个失真值当真实窗口注入目录(review P2)。
-          (v) => typeof v === 'number' && Number.isFinite(v) && Math.floor(v) > 0 && Number.isSafeInteger(Math.floor(v)),
+          (v) =>
+            typeof v === 'number' &&
+            Number.isFinite(v) &&
+            Math.floor(v) > 0 &&
+            Number.isSafeInteger(Math.floor(v)),
         )
       : undefined;
+    const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+    const architecture = record.architecture as { input_modalities?: unknown } | undefined;
+    const reasoning = record.reasoning as
+      { supportedEfforts?: unknown; defaultEffort?: unknown } | undefined;
+    const rawDefault =
+      reasoning?.defaultEffort !== undefined ? reasoning.defaultEffort : record.default_effort;
+    const discoveredMetadata = pickModelMetadata({
+      ...([rec?.display_name, rec?.name].some(
+        (value) => typeof value === 'string' && value.trim().length > 0,
+      )
+        ? { name }
+        : {}),
+      description: record.description,
+      group: record.group,
+      contextWindow: typeof rawWindow === 'number' ? Math.floor(rawWindow) : undefined,
+      maxOutputTokens: record.max_output_tokens ?? record.maxOutputTokens,
+      efforts: reasoning?.supportedEfforts ?? record.supported_efforts,
+      defaultEffort: rawDefault === 'none' ? null : rawDefault,
+      supportsFastMode: record.supports_fast_mode ?? record.supportsServiceTier,
+      supportsImageInput:
+        record.supports_image_input ??
+        (Array.isArray(architecture?.input_modalities)
+          ? architecture.input_modalities.includes('image')
+          : undefined),
+    });
     out.push({
       id,
+      discoveredMetadata,
       name,
       ...(typeof rawWindow === 'number' ? { contextWindow: Math.floor(rawWindow) } : {}),
     });

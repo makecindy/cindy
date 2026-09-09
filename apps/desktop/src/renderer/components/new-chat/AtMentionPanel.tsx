@@ -26,6 +26,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Bot,
   Check,
   ClipboardList,
   File as FileIcon,
@@ -51,7 +52,7 @@ import {
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
-import { extraDirBasename } from './extraDirsActions';
+import { extraDirBasename, extraDirDisplayLabel, isLibraryExtraDirSlot } from './extraDirsActions';
 
 const TOOLTIP_FALLBACK_H = 120;
 const VIEWPORT_PAD = 8;
@@ -345,6 +346,8 @@ export function AtMentionPanel({
       meta = item.description || t('newChat.atMention.desktopWindow');
     } else if (item.type === 'session') {
       meta = t('newChat.atMention.task');
+    } else if (item.type === 'bot') {
+      meta = t('newChat.atMention.bot');
     } else if (item.type === 'plugin-command') {
       // Plugin rows follow the compact icon + name presentation used by the
       // installed-plugin menu; the command remains an internal selection key.
@@ -372,6 +375,8 @@ export function AtMentionPanel({
             ? Monitor
             : item.type === 'session'
               ? History
+              : item.type === 'bot'
+                ? Bot
               : item.type === 'plugin-command' || item.type === 'plugin-resource'
                 ? Plug
               : FileIcon;
@@ -556,26 +561,32 @@ export function AtMentionPanel({
                               size={16}
                               className="shrink-0 text-[var(--cmd-palette-item-icon)] opacity-60"
                             />
-                            <Tip text={p} mono side="top">
+                            <Tip
+                              text={isLibraryExtraDirSlot(p) ? extraDirDisplayLabel(p) : p}
+                              mono={!isLibraryExtraDirSlot(p)}
+                              side="top"
+                            >
                               <span className="min-w-0 flex-1 truncate text-left text-14 text-[var(--cmd-palette-item-text)]">
-                                {extraDirBasename(p)}
+                                {extraDirDisplayLabel(p)}
                               </span>
                             </Tip>
-                            <button
-                              type="button"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => referenceDirs.onRemove(p)}
-                              className={cn(
-                                'rounded-full p-1 opacity-0 transition-opacity',
-                                'hover:bg-[var(--cmd-palette-item-hover)]',
-                                'group-hover:opacity-70 hover:!opacity-100',
-                                'focus-visible:opacity-100 focus-visible:outline-none',
-                                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                              )}
-                              aria-label={t('extraDirs.remove', { name: extraDirBasename(p) })}
-                            >
-                              <X size={12} className="text-[var(--cmd-palette-item-text)]" />
-                            </button>
+                            {isLibraryExtraDirSlot(p) ? null : (
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => referenceDirs.onRemove(p)}
+                                className={cn(
+                                  'rounded-full p-1 opacity-0 transition-opacity',
+                                  'hover:bg-[var(--cmd-palette-item-hover)]',
+                                  'group-hover:opacity-70 hover:!opacity-100',
+                                  'focus-visible:opacity-100 focus-visible:outline-none',
+                                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                                )}
+                                aria-label={t('extraDirs.remove', { name: extraDirBasename(p) })}
+                              >
+                                <X size={12} className="text-[var(--cmd-palette-item-text)]" />
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>

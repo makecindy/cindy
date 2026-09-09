@@ -5,18 +5,27 @@ import {
   WORKLOUDER_CODEX_ANALOG_DIRECTIONS,
   WORKLOUDER_CODEX_COMMAND_SLOTS,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
+  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   isWorkLouderCodexAgentSource,
+  isWorkLouderCreatorProgrammableKey,
   normalizeWorkLouderCodexAgentSource,
+  normalizeWorkLouderCreatorTaskKeys,
+  normalizeWorkLouderMerges,
+  workLouderLayoutMerges,
+  workLouderMicrophoneKeysSeparate,
   isWorkLouderCodexAutoDim,
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
   isWorkLouderCodexKeycapId,
+  canonicalizeWorkLouderCodexKeycapId,
+  isWorkLouderModel,
+  type WorkLouderAccessoriesState,
   type WorkLouderCodexAction,
   type WorkLouderCodexLayout,
   type WorkLouderCodexSettings,
   type WorkLouderCodexSettingsPatch,
   type WorkLouderCodexPublishedTask,
-  type WorkLouderCodexState,
+  type WorkLouderModel,
 } from '../../shared/workLouderCodex.js';
 import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from './taskSlots.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -33,14 +42,14 @@ const SETTING_KEYS = [
 
 export interface WorkLouderCodexSettingsIpcDeps {
   assertTrustedSender(event: unknown): void;
-  getState(): WorkLouderCodexState;
-  writeSettings(patch: WorkLouderCodexSettingsPatch): WorkLouderCodexSettings;
-  resetSettings(): WorkLouderCodexSettings;
-  applySettings(settings: WorkLouderCodexSettings): void;
+  getState(): WorkLouderAccessoriesState;
+  writeSettings(model: WorkLouderModel, patch: WorkLouderCodexSettingsPatch): WorkLouderCodexSettings;
+  resetSettings(model: WorkLouderModel): WorkLouderCodexSettings;
+  applySettings(model: WorkLouderModel, settings: WorkLouderCodexSettings): void;
   openInputMonitoringSettings(): Promise<void>;
   probeDevice(): void;
   publishTasks(tasks: readonly WorkLouderCodexPublishedTask[]): void;
-  setLayoutPreviewActive(active: boolean, event: unknown): void;
+  setLayoutPreviewActive(active: boolean, model: WorkLouderModel | null, event: unknown): void;
 }
 
 function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
@@ -119,14 +128,23 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
       // by an older build round-trips instead of being rejected outright.
       'voiceButtonMode',
       'separateMicrophoneKeys',
+      'merges',
+      'taskKeys',
     ],
     'layout field',
   );
   if (record.version !== 1) throwIpcError('INVALID_PARAMS', 'layout version must be 1');
   const slotsRecord = requireRecord(record.slots, 'layout slots must be an object');
-  rejectUnknownKeys(slotsRecord, WORKLOUDER_CODEX_COMMAND_SLOTS, 'layout slot');
+  rejectUnknownKeys(
+    slotsRecord,
+    [...WORKLOUDER_CODEX_COMMAND_SLOTS, ...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS],
+    'layout slot',
+  );
+  const extraCreatorSlots = WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.filter(
+    (slot) => slot.startsWith('AG') && slotsRecord[slot] !== undefined,
+  );
   const slots = Object.fromEntries(
-    WORKLOUDER_CODEX_COMMAND_SLOTS.map((slot) => {
+    [...WORKLOUDER_CODEX_COMMAND_SLOTS, ...extraCreatorSlots].map((slot) => {
       const assignment = requireRecord(slotsRecord[slot], `${slot} assignment is required`);
       rejectUnknownKeys(assignment, ['keycapId', 'action'], `${slot} assignment field`);
       if (!isWorkLouderCodexKeycapId(assignment.keycapId)) {
@@ -134,7 +152,10 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
       }
       return [
         slot,
-        { keycapId: assignment.keycapId, action: parseAction(assignment.action ?? null, true) },
+        {
+          keycapId: canonicalizeWorkLouderCodexKeycapId(assignment.keycapId),
+          action: parseAction(assignment.action ?? null, true),
+        },
       ];
     }),
   ) as WorkLouderCodexLayout['slots'];
@@ -160,16 +181,39 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
   if (!isWorkLouderCodexEncoderMode(record.encoderMode)) {
     throwIpcError('INVALID_PARAMS', 'encoderMode is invalid');
   }
-  if (typeof record.separateMicrophoneKeys !== 'boolean') {
+  if (
+    record.merges === undefined &&
+    typeof record.separateMicrophoneKeys !== 'boolean'
+  ) {
     throwIpcError('INVALID_PARAMS', 'separateMicrophoneKeys must be a boolean');
   }
+  if (record.merges !== undefined && !Array.isArray(record.merges)) {
+    throwIpcError('INVALID_PARAMS', 'merges must be an array');
+  }
+  if (
+    record.separateMicrophoneKeys !== undefined &&
+    typeof record.separateMicrophoneKeys !== 'boolean'
+  ) {
+    throwIpcError('INVALID_PARAMS', 'separateMicrophoneKeys must be a boolean');
+  }
+  const merges = workLouderLayoutMerges({
+    merges: record.merges !== undefined ? normalizeWorkLouderMerges(record.merges) : undefined,
+    separateMicrophoneKeys:
+      typeof record.separateMicrophoneKeys === 'boolean'
+        ? record.separateMicrophoneKeys
+        : true,
+  });
   return {
     version: 1,
     slots,
     analogStick,
     encoder,
     encoderMode: record.encoderMode,
-    separateMicrophoneKeys: record.separateMicrophoneKeys,
+    separateMicrophoneKeys: workLouderMicrophoneKeysSeparate(merges),
+    merges,
+    ...(record.taskKeys !== undefined
+      ? { taskKeys: normalizeWorkLouderCreatorTaskKeys(record.taskKeys) }
+      : {}),
   };
 }
 
@@ -178,6 +222,10 @@ function parseAction(value: unknown, nullable: false): WorkLouderCodexAction;
 function parseAction(value: unknown, nullable: boolean): WorkLouderCodexAction | null {
   if (value === null && nullable) return null;
   const record = requireRecord(value, 'device action must be an object');
+  if (record.type === 'voice') {
+    rejectUnknownKeys(record, ['type'], 'voice action field');
+    return { type: 'voice' };
+  }
   if (record.type === 'command') {
     rejectUnknownKeys(record, ['type', 'commandId'], 'command action field');
     if (!isWorkLouderCodexCommandId(record.commandId)) {
@@ -225,35 +273,42 @@ function parseAction(value: unknown, nullable: boolean): WorkLouderCodexAction |
   throwIpcError('INVALID_PARAMS', 'device action type is invalid');
 }
 
+function parseModel(value: unknown): WorkLouderModel {
+  if (!isWorkLouderModel(value)) throwIpcError('INVALID_PARAMS', 'Work Louder model is invalid');
+  return value;
+}
+
 export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIpcDeps) {
   return {
-    get(event: unknown): WorkLouderCodexState {
+    get(event: unknown): WorkLouderAccessoriesState {
       deps.assertTrustedSender(event);
       return deps.getState();
     },
 
-    set(event: unknown, value: unknown): WorkLouderCodexState {
+    set(event: unknown, model: unknown, value: unknown): WorkLouderAccessoriesState {
       deps.assertTrustedSender(event);
+      const resolved = parseModel(model);
       const patch = parseSettingsPatch(value);
       let settings: WorkLouderCodexSettings;
       try {
-        settings = deps.writeSettings(patch);
+        settings = deps.writeSettings(resolved, patch);
       } catch {
         throwIpcError('INTERNAL', 'Work Louder Codex settings write failed');
       }
-      deps.applySettings(settings);
+      deps.applySettings(resolved, settings);
       return deps.getState();
     },
 
-    reset(event: unknown): WorkLouderCodexState {
+    reset(event: unknown, model: unknown): WorkLouderAccessoriesState {
       deps.assertTrustedSender(event);
+      const resolved = parseModel(model);
       let settings: WorkLouderCodexSettings;
       try {
-        settings = deps.resetSettings();
+        settings = deps.resetSettings(resolved);
       } catch {
         throwIpcError('INTERNAL', 'Work Louder Codex settings reset failed');
       }
-      deps.applySettings(settings);
+      deps.applySettings(resolved, settings);
       return deps.getState();
     },
 
@@ -267,7 +322,7 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
      * results. Fire-and-forget at the host layer, so the caller polls this to
      * notice an unplug rather than waiting for a push that never comes.
      */
-    probe(event: unknown): WorkLouderCodexState {
+    probe(event: unknown): WorkLouderAccessoriesState {
       deps.assertTrustedSender(event);
       deps.probeDevice();
       return deps.getState();
@@ -332,10 +387,22 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
 
     setLayoutPreviewActive(event: unknown, value: unknown): void {
       deps.assertTrustedSender(event);
-      if (typeof value !== 'boolean') {
+      if (typeof value === 'boolean') {
+        deps.setLayoutPreviewActive(value, value ? 'codex-micro' : null, event);
+        return;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throwIpcError('INVALID_PARAMS', 'layout preview flag must be a boolean or object');
+      }
+      const record = value as { active?: unknown; model?: unknown };
+      if (typeof record.active !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'layout preview flag must be a boolean');
       }
-      deps.setLayoutPreviewActive(value, event);
+      deps.setLayoutPreviewActive(
+        record.active,
+        record.active ? parseModel(record.model) : null,
+        event,
+      );
     },
   };
 }

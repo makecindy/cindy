@@ -70,6 +70,8 @@ export interface PiPackageRuntimeRequirement {
 
 export interface PiPackageView {
   source: string;
+  /** Main-owned opaque target when the displayed source is deliberately redacted. */
+  mutationTarget?: string;
   name: string;
   version?: string;
   enabled: boolean;
@@ -86,8 +88,7 @@ export interface PiPackageView {
     | 'inspection-failed'
     | 'inspection-limit'
     | 'unsupported-filter'
-    | 'unsafe-source'
-    | 'lifecycle-scripts-disabled';
+    | 'unsafe-source';
 }
 
 export interface PiPackageListResult {
@@ -128,22 +129,24 @@ export function isRelativeLocalPiPackageSource(value: string): boolean {
 export interface PiPackageMutationRequest {
   action: PiPackageMutationAction;
   source: string;
+  /** Main-owned opaque identity for a deliberately redacted persisted source. */
+  mutationTarget?: string;
   enabled?: boolean;
 }
 
 export interface PiPackageMutationResult extends PiPackageListResult {
   changed: boolean;
   affectedPackage?: PiPackageView;
+  /** The mutation succeeded, but packages is not an authoritative full roster. */
+  projectionUnavailable?: true;
+  /** The package change committed, but at least one local Pi runtime may remain alive. */
+  runtimeConvergence?: 'partial';
 }
 
 export function hasPiPackageCompatibilityWarning(pkg: PiPackageView): boolean {
   return pkg.warning !== undefined
     || pkg.resources.some((resource) => resource.compatibility !== 'supported')
     || pkg.runtimeRequirements?.some((requirement) => requirement.compatible !== true) === true;
-}
-
-export function shouldShowPiPackagePostMutationNotice(pkg: PiPackageView): boolean {
-  return pkg.requiresExtensionApproval === true || hasPiPackageCompatibilityWarning(pkg);
 }
 
 export interface PiPackageSlashCommand {

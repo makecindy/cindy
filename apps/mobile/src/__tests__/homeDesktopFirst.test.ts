@@ -3,10 +3,117 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
+import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
+import { describeRemoteError } from '@/device-link/remoteStatus';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
+
+describe('mobile Home connection feedback', () => {
+  it('does not offer manual sync for the device-prefixed unresponsive error shown on Home', () => {
+    expect(resolveConnectionBannerSyncActionVisibility({
+      online: true,
+      hasActiveIssue: false,
+      deviceUnresponsive: true,
+      hasRequestError: true,
+      requestErrorAutoRecovering: false,
+    })).toBe(false);
+  });
+
+  it('wires Home itself to the shared recovery indicator instead of an unconditional retry button', () => {
+    const source = readSource('app/devices/index.tsx');
+    expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
+    expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
+    expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
+    expect(source).toContain('const showConnectionRow = homeRecoveringDeviceIds.size > 0 ||');
+    expect(source).toContain("homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')");
+    expect(source).toContain("recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'");
+    const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
+    expect(hydrate.indexOf("updateDeviceConnectionState(device.deviceId, 'syncing')")).toBeLessThan(hydrate.indexOf('const promise = hydrateDeviceSessionsOnce('));
+    expect(source).toContain('useDelayedConnectionNotice(showConnectionRow)');
+    const row = source.slice(source.indexOf('{showConnectionNotice ? ('), source.indexOf('<SectionList'));
+    expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
+    const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
+    expect(progress).toContain('<ConnectionRecoveryProgress');
+    expect(progress).not.toContain('onPress');
+    expect(progress).not.toContain('<Pressable');
+  });
+});
+
+describe('Home recovery completion', () => {
+  const stale = { deviceId: 'a', deviceName: 'MacBook', error: '[DEVICE_UNRESPONSIVE] circuit open' };
+  const recovering = new Set(['a']);
+  const recovered = new Set<string>();
+  it('tracks ordinary failures through same-device and other-device circuit transitions', () => {
+    const failure = { deviceId: 'a', deviceName: 'Same name', error: '[IPC_ERROR] failed' };
+    const other = { deviceId: 'b', deviceName: 'Same name', error: '[REQUEST_TIMEOUT] failed' };
+    for (const [ids, failures, expectedRecovery, expectedError] of [
+      [[], [failure], false, 'Same name: [IPC_ERROR] failed'],
+      [['a'], [failure], true, 'Same name: [IPC_ERROR] failed'],
+      [['a'], [failure, other], false, 'Same name: [REQUEST_TIMEOUT] failed'],
+      [['a', 'b'], [failure, other], true, 'Same name: [IPC_ERROR] failed；Same name: [REQUEST_TIMEOUT] failed'],
+      [['b'], [failure, other], false, 'Same name: [IPC_ERROR] failed'],
+      [[], [failure], false, 'Same name: [IPC_ERROR] failed'],
+    ] as const) {
+      const feedback = resolveHomeConnectionFeedback([...failures], new Set(ids));
+      expect(feedback).toEqual({ error: expectedError, deviceRecovery: expectedRecovery });
+      expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+        deviceUnresponsive: feedback.deviceRecovery, hasRequestError: feedback.error !== null,
+        requestErrorAutoRecovering: false,
+      })).toBe(!expectedRecovery);
+    }
+  });
+  it('expires a recovered device marker while another device is still probing', () => {
+    expect(resolveHomeConnectionFeedback(stale, new Set(['b']))).toEqual({ error: null, deviceRecovery: true });
+  });
+  it('keeps page-level errors independent of a device circuit', () => {
+    expect(resolveHomeConnectionFeedback('[NETWORK_UNAVAILABLE] failed', recovering))
+      .toEqual({ error: '[NETWORK_UNAVAILABLE] failed', deviceRecovery: false });
+  });
+  it.each([
+    [true, true, true],
+    [false, true, true],
+    [true, false, false],
+    [false, false, false],
+  ])('keeps mixed-device recovery independent (circuit=%s, manual=%s)', (circuit, manual, canSync) => {
+    const ordinary = { deviceId: 'b', deviceName: 'Other', error: '[REQUEST_TIMEOUT] failed' };
+    const feedback = resolveHomeConnectionFeedback(manual ? [stale, ordinary] : stale, circuit ? recovering : recovered);
+    expect(feedback.error).toBe(manual ? 'Other: [REQUEST_TIMEOUT] failed' : circuit ? 'MacBook: [DEVICE_UNRESPONSIVE] circuit open' : null);
+    expect(feedback.deviceRecovery).toBe(circuit && !manual);
+    expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+      deviceUnresponsive: feedback.deviceRecovery, hasRequestError: feedback.error !== null,
+      requestErrorAutoRecovering: false,
+    })).toBe(canSync);
+  });
+  it('shows background recovery even without a stored request error', () => {
+    expect(resolveHomeConnectionFeedback(null, recovering)).toEqual({ error: null, deviceRecovery: true });
+  });
+  it('clears the stale circuit error once probing succeeds', () => {
+    expect(resolveHomeConnectionFeedback(stale, recovering).error).toBe('MacBook: [DEVICE_UNRESPONSIVE] circuit open');
+    expect(resolveHomeConnectionFeedback(stale, recovered).error).toBeNull();
+  });
+  it('preserves a different device failure in the joined error', () => {
+    expect(resolveHomeConnectionFeedback([stale, { deviceId: 'b', deviceName: 'Other', error: 'denied' }], recovered).error).toBe('Other: denied');
+  });
+  it.each(['REQUEST_TIMEOUT', 'NETWORK_UNAVAILABLE'])('keeps manual retry after %s exhausts bounded retries', (code) => {
+    const error = resolveHomeConnectionFeedback(`[${code}] failed`, recovered).error;
+    expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+      deviceUnresponsive: false, hasRequestError: error !== null, requestErrorAutoRecovering: false,
+    })).toBe(true);
+  });
+  it.each(['DEVICE_UNRESPONSIVE', '[DEVICE_UNRESPONSIVE]', 'Mac: [DEVICE_UNRESPONSIVE]；Other'])('never classifies the device name %s as an error code', (deviceName) => {
+    const ordinary = { deviceId: 'b', deviceName, error: '[REQUEST_TIMEOUT] failed' };
+    for (const ids of [recovered, recovering]) {
+      const feedback = resolveHomeConnectionFeedback([stale, ordinary], ids, describeRemoteError);
+      expect(feedback.error).toBe(`${deviceName}: ${describeRemoteError(ordinary.error)}`);
+      expect(feedback.deviceRecovery).toBe(false);
+    }
+  });
+  it('classifies all failures before limiting display to two entries', () => {
+    expect(resolveHomeConnectionFeedback([stale, stale, { deviceId: 'c', deviceName: 'Third', error: 'denied' }], recovering).error).toBe('Third: denied');
+  });
+});
 
 describe('mobile Home startup reads', () => {
   it('returns the local value when the read settles in time', async () => {
@@ -282,10 +389,13 @@ describe('mobile home desktop-first surface', () => {
     expect(vendorIconSource).not.toContain('transform="translate(');
     expect(vendorIconSource).toContain('Easing.inOut(Easing.ease)');
     // 行运行态经订阅获取(memo 化后命令式读取会 stale,2026-07-18 重渲染风暴修复)
-    expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(item.session.id);');
-    // 保鲜契约:ProjectRow 与 AutomationGroupChildren 内的命令式运行态读取必须各挂一份
-    // storeVersion 订阅(裸语句形态);行内相对时间靠分钟心跳订阅保鲜。丢任何一处都是 stale-UI。
-    expect((homeSource.match(/^  useRemoteSessionStoreVersion\(\);$/gm) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(latestItem.session.id);');
+    // 保鲜契约:项目/自动化折叠只订阅低频首页状态；消息预览下沉到 session 行。
+    // 普通流式 token 不得再通过全局 storeVersion 唤醒整棵首页列表。
+    expect(homeSource).not.toContain('useRemoteSessionStoreVersion();');
+    expect((homeSource.match(/useRemoteHomeStatusVersion\(\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(homeSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
+    expect(homeSource).toContain('useRemoteMessageVersion(normalizedSearchQuery.length > 0)');
     expect(homeSource).toContain('useMinuteNow();');
     expect(homeSource).toContain('<RadioTower');
     expect(homeSource).toContain('<UsersRound');
@@ -312,15 +422,16 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('saveDeviceIdentityCache(result.cache)');
     expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke)');
     expect(source).toContain('replaceSessionScheduleIndexEntries(');
-    expect(source).toContain("invoke<unknown[]>(device.deviceId, 'maker:list-active', [])");
+    expect(source).toContain("invoke<unknown[]>(device.deviceId, 'maker:list-active', [");
+    expect(source).toContain("{ summary: true }");
     expect(source).toContain('if (isOptionalActiveSessionSnapshotError(err)) return null;');
     expect(source).toContain('function isOptionalActiveSessionSnapshotError(error: unknown): boolean');
     expect(source).toContain('if (isAccessRevokedError(error) || isDeviceOfflineError(error)) return false;');
     expect(source).toContain("if (text.includes('REMOTE_DISABLED')) return false;");
     expect(source).toContain('return true;');
-    expect(source).toMatch(/const \[\s*list,\s*activeSessions,\s*activeSessionSnapshotEpoch,/);
+    expect(source).toContain('await runIndependentSnapshotReads([');
     expect(source).toContain('remoteSessionStore.captureActiveSessionSnapshotEpoch()');
-    expect(source).toMatch(/return \[\s*list,\s*activeSessions,\s*activeSessionSnapshotEpoch,/);
+    expect(source).toContain('return [active, epoch] as const;');
     expect(source).toContain('activeSessionSnapshotEpoch,');
     expect(source).toContain('remoteScheduleEventStore.subscribe(() => {');
     expect(source).toContain('const snapshot = remoteScheduleEventStore.getSnapshot(deviceId)');
@@ -335,7 +446,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('|| item.liveActivity?.attention === true;');
     // 提醒点已从行首 icon 角标移到行右侧状态槽(替代时间位),五档判定与桌面
     // sidebarRightStatus 对齐:error 红 > awaiting TapTap 蓝 > running spinner > 完成绿 > 时间。
-    expect(source).toContain('resolveMobileSessionRightStatus({');
+    expect(source).toContain('resolveMobileSessionRowStatus(item, sessionIsRunning, groupExpanded)');
     expect(source).toContain('styles.sessionRightDot');
     expect(source).toContain('<SessionRightSpinner');
     expect(source).not.toContain('sessionAttentionDot');
@@ -350,30 +461,28 @@ describe('mobile home desktop-first surface', () => {
     const localSmokeSource = readSource('scripts/local-device-link-smoke.mjs');
     const deviceDetailFlow = readSource('e2e/maestro/session_list_controls.yaml');
 
-    expect(source).toContain('item.deviceId !== null && item.available');
+    expect(source).toContain('item.deviceId !== null && canBrowseMobileHomeDevice(item)');
     expect(source).toContain('`home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}`');
     expect(source).toContain('function sanitizeDeviceChipTestId');
     expect(source).toContain("return value.replace(/[^A-Za-z0-9_-]/g, '_');");
     expect(source).not.toContain("const testID = item.deviceId ? 'home.deviceChip' : 'home.deviceChip.all';");
     expect(localSmokeSource).toContain('process.env.XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID = mockHostDeviceChipId;');
     expect(maestroSource).toContain('XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID=${hostDeviceChipId}');
-    expect(deviceDetailFlow).toContain('id: "${XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID}"');
+    expect(deviceDetailFlow).toContain('id: "deviceManagement.open.${XDT_MOBILE_E2E_HOST_DEVICE_ID}"');
   });
 
-  it('lets mobile rename account devices through the authoritative device-link API', () => {
-    const source = readSource('app/devices/index.tsx');
+  it('keeps device management in the drawer and scope selection direct', () => {
+    const home = readSource('app/devices/index.tsx');
+    const drawer = readSource('src/session/HomeChromeDrawer.tsx');
+    const management = readSource('app/devices/manage.tsx');
 
-    expect(source).toContain('const [renameTarget, setRenameTarget]');
-    expect(source).toContain('function RenameDeviceModal');
-    expect(source).toContain('onRenameDevice={openRenameDevice}');
-    expect(source).toContain('testID={testID ? `${testID}.rename` : undefined}');
-    expect(source).toContain('testID="home.renameDevice.input"');
-    expect(source).toContain("testID: 'home.renameDevice.save'");
-    expect(source).toContain('`/api/device-link/devices/${encodeURIComponent(target.deviceId)}`');
-    expect(source).toContain("method: 'PATCH'");
-    expect(source).toContain('body: { name }');
-    expect(source).toContain('remoteSessionStore.renameDevice(target.deviceId, nextName)');
-    expect(source).not.toContain('clearManualName');
+    expect(drawer).toContain('testID="home.chromeDrawer.devices"');
+    expect(home).toContain("guardedPush('/devices/manage')");
+    expect(home).not.toContain('onRenameDevice=');
+    expect(home).not.toContain('onOpenDevice=');
+    expect(management).toContain('key={accountGeneration}');
+    expect(management).toContain("pathname: '/devices/manage/[deviceId]'");
+    expect(management).toContain('onRename={manager.openRename}');
   });
 
   it('scopes multi-device connection feedback to the affected device chip', () => {
@@ -388,8 +497,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
     expect(source).toContain(
-      "const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+      "const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
     );
+    expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
@@ -432,7 +542,8 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
     expect(sessionRowSource).toContain('ellipsizeMode="tail"');
     expect(sessionRowSource).toContain('numberOfLines={1}');
-    expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(item, { running })');
+    expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
+    expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
     expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
@@ -496,7 +607,8 @@ describe('mobile home desktop-first surface', () => {
     // 只影响首次触发顺序(缓存先画、fresh 后覆盖),不会挡掉任何一次重连刷新。
     expect(source).not.toContain('homeSessionHydratedRef');
     expect(source).toContain('!homeViewPreferencesHydrated');
-    expect(source).toContain('}, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);');
+    expect(source).toContain('const startSilentHomeSync = useCallback(() => {');
+    expect(source).toContain('}, [connectionEpoch, startSilentHomeSync]);');
     expect(source).toContain('resolveHomeDeviceSyncIds(');
     expect(source).toContain('reconcileHomeDeviceSyncScope(syncDeviceIds);');
     expect(source).toContain('runHomeDeviceSyncBatch(syncRows');
@@ -534,12 +646,31 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain('refreshControl={<RefreshControl refreshing={loading}');
   });
 
+  it('starts the silent list sync on Home focus and Android foreground activation', () => {
+    const source = readSource('app/devices/index.tsx');
+    const silentSync = source.slice(
+      source.indexOf('const startSilentHomeSync = useCallback'),
+      source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'),
+    );
+
+    expect(silentSync).toContain('!deviceIdentityCacheReady');
+    expect(silentSync).toContain('!homeListCacheHydrated');
+    expect(silentSync).toContain('!homeViewPreferencesHydrated');
+    expect(silentSync).toContain('void loadHome({ visible: false });');
+    expect(silentSync).toContain('useFocusEffect(');
+    expect(silentSync).toContain('startSilentHomeSync();');
+    expect(silentSync).toContain("AppState.addEventListener('change'");
+    expect(silentSync).toContain("if (nextState === 'active') startSilentHomeSync();");
+    expect(silentSync).toContain('}, [connectionEpoch, startSilentHomeSync]);');
+  });
+
   it('binds every Home device projection and async continuation to the active account generation', () => {
     const source = readSource('app/devices/index.tsx');
 
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
-    expect(source).toContain('const { accountGeneration, apiFetch, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('const { accountGeneration, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('return readDeviceList();');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');
     expect(source).toContain('syncInFlightRef.current = null;');

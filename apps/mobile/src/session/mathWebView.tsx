@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { buildMathWebViewHtml } from '@/session/mathWebViewHtml';
+import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius } from '@/theme/tokens';
 
@@ -39,31 +40,57 @@ function rememberMeasuredHeight(source: string, height: number): void {
  * (稳定性约束见上方常量注释,改动前先理解闪动循环的成因)。
  */
 export function MathFormulaWebView({
+  active = true,
   source,
   testID,
 }: {
+  active?: boolean;
   source: string;
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const renderIdentityRef = useRef({ active, source });
+  const renderGenerationRef = useRef(0);
+  if (
+    renderIdentityRef.current.active !== active
+    || renderIdentityRef.current.source !== source
+  ) {
+    renderIdentityRef.current = { active, source };
+    renderGenerationRef.current += 1;
+  }
+  const renderGeneration = renderGenerationRef.current;
   const [height, setHeight] = useState(
     () => measuredHeightCache.get(source) ?? MATH_WEBVIEW_DEFAULT_HEIGHT,
   );
   const heightRef = useRef(height);
+  const katexHeightAppliedRef = useRef(false);
+  useEffect(() => {
+    const cachedHeight = measuredHeightCache.get(source);
+    const nextHeight = cachedHeight ?? MATH_WEBVIEW_DEFAULT_HEIGHT;
+    katexHeightAppliedRef.current = cachedHeight !== undefined;
+    heightRef.current = nextHeight;
+    setHeight((current) => current === nextHeight ? current : nextHeight);
+  }, [source]);
+  useEffect(() => {
+    if (!active) return undefined;
+    return registerMobileMessageWebView('math');
+  }, [active]);
   const html = useMemo(
     () =>
-      buildMathWebViewHtml(source, {
-        background: colors.surface,
-        textPrimary: colors.textPrimary,
-        textSecondary: colors.textSecondary,
-      }),
-    [colors.surface, colors.textPrimary, colors.textSecondary, source],
+      active
+        ? buildMathWebViewHtml(source, {
+            background: colors.surface,
+            textPrimary: colors.textPrimary,
+            textSecondary: colors.textSecondary,
+          })
+        : '',
+    [active, colors.surface, colors.textPrimary, colors.textSecondary, source],
   );
   // 本次挂载是否已应用过 KaTeX 最终态高度:应用过之后,迟到的过渡态上报
   // (乱序消息)不允许再把高度拉回去。
-  const katexHeightAppliedRef = useRef(false);
   const onMessage = useCallback((event: WebViewMessageEvent) => {
+    if (!active || renderGenerationRef.current !== renderGeneration) return;
     // 消息门:只认页面脚本上报的 math-height 形态,其它一律忽略
     // (WebView 消息通道是不可信输入,不做任何超出高度设置的行为)。
     try {
@@ -97,10 +124,10 @@ export function MathFormulaWebView({
     } catch {
       // 非 JSON 消息不属于本组件协议,忽略。
     }
-  }, [source]);
+  }, [active, renderGeneration, source]);
   return (
-    <View style={styles.container} testID={testID}>
-      <WebView
+    <View style={[styles.container, { height }]} testID={testID}>
+      {active ? <WebView
         automaticallyAdjustContentInsets={false}
         javaScriptEnabled
         nestedScrollEnabled
@@ -115,7 +142,7 @@ export function MathFormulaWebView({
         // backgroundColor transparent → RNW 关掉 WKWebView 的 opaque,首帧
         // 提交前透出容器的 surface 底色,消掉默认白底闪一下的空白帧(规则 7)。
         style={[styles.webView, { height }]}
-      />
+      /> : null}
     </View>
   );
 }

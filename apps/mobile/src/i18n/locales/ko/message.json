@@ -116,6 +116,10 @@
     "controlFork": "세션 분기",
     "markdownDocAriaLabel": "메시지 본문",
     "toolOutputTitle": "{{label}} 출력",
+    "toolInputTitle": "{{label}} 입력",
+    "viewToolInput": "전체 입력 보기",
+    "loadingToolInput": "전체 입력 불러오는 중",
+    "retryToolInput": "입력을 불러오지 못했습니다. 다시 시도",
     "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
     "diffEditCount": "{{n}}개 편집"
@@ -175,6 +179,19 @@
     "retry": "재시도"
   },
   "systemCard": {
+    "contextRebuild": {
+      "labelOverflow": "컨텍스트를 정리하고 계속합니다",
+      "labelTimeout": "직전 응답이 없어 정리한 뒤 계속합니다",
+      "labelStrip": "큰 이미지를 빼고 계속합니다",
+      "handoffTitle": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
+      "handoffTitleEnglishSource": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
+    },
+    "compact": {
+      "savedTokens": "{{tokens}} 토큰 절약",
+      "manual": "수동 압축",
+      "auto": "자동 압축",
+      "aria": "대화가 압축되었습니다"
+    },
     "goalComplete": "목표 달성 · {{turns}}회 · 소요 {{duration}}",
     "goalResumed": "사용량이 회복되어 목표를 계속합니다",
     "goalCapacityRetry": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",

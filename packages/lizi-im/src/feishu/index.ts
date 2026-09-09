@@ -363,6 +363,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     await wsClient.stop({
       offlineTimeoutMs: wsClient.QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS,
       reason: 'transport-dispose',
+      discardPendingTopicLeases: true,
     });
   }
 
@@ -431,7 +432,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     );
   }
 
-  startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
+  startStreamingText(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
     return streamingText.start(userId, initial);
   }
 

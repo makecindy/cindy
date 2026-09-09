@@ -854,7 +854,7 @@ export type ProviderBindStatePayload = ProviderBindStatusPayload;
 // ── 阶段 6(v2): 实时问答 ────────────────────────────────────────────────────
 
 /** 可查询的清单种类。 */
-export const QUERY_KINDS = ['workspaces', 'models', 'sessions'] as const;
+export const QUERY_KINDS = ['workspaces', 'models', 'sessions', 'session-new'] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
@@ -864,6 +864,14 @@ export type QueryKind = (typeof QUERY_KINDS)[number];
 export interface QueryRequestPayload {
   queryId: string;
   kind: QueryKind;
+  /** kind=session-new: create and bind a blank task immediately for `/new`. */
+  sessionNew?: {
+    previousExternalKey: string;
+    externalKey: string;
+    workspace: string;
+    options?: TaskDispatchOptions;
+    source?: TaskSource;
+  };
 }
 
 /**
@@ -926,6 +934,8 @@ export interface QueryResponsePayload {
   agents?: QueryAgentModels[];
   /** kind=sessions 且 ok 时必填: at most 20 privacy-minimised entries. */
   sessions?: QuerySessionEntry[];
+  /** kind=session-new 且 ok 时必填。 */
+  sessionId?: string;
 }
 
 // ── 阶段 7(v2): 任务取消 ────────────────────────────────────────────────────
@@ -1268,6 +1278,9 @@ export const HOOK_FEATURE_PROVIDER_BEHAVIOR = 'provider-behavior-v1';
 
 /** Both peers must advertise this before query.kind=sessions is used. */
 export const HOOK_FEATURE_SESSION_PICKER = 'session-picker-v1';
+
+/** Both peers support immediate blank-task creation for provider `/new`. */
+export const HOOK_FEATURE_SESSION_NEW = 'session-new-v1';
 
 /** Server capability announcing that its provider registry enables Telegram. */
 export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';

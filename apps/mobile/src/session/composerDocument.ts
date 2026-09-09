@@ -28,6 +28,21 @@ export const MOBILE_LONG_PASTE_LINE_THRESHOLD = 24;
 export const MOBILE_LONG_PASTE_CHAR_THRESHOLD = 4_000;
 export const MOBILE_LONG_PASTE_MAX_CHARS = 2_000_000;
 
+export interface ComposerSelection {
+  start: number;
+  end: number;
+  /** Counts of atoms before each endpoint distinguish zero-width quote boundaries. */
+  atomRange?: { start: number; end: number };
+}
+
+export interface ComposerVoiceDraftUpdate {
+  draft: string;
+  initialDocument: ComposerDocument;
+  initialSelection: ComposerSelection;
+  insertionEnd?: number;
+  replacement?: { start: number; end: number; text: string };
+}
+
 export interface ComposerTextNode {
   type: 'text';
   text: string;
@@ -182,6 +197,35 @@ export function composerDocumentsEqual(
   });
 }
 
+/** Locate a projected caret in the flat semantic nodes rendered by the editor. */
+export function composerCaretPosition(document: ComposerDocument, offset: number): { nodeIndex: number; offset: number } {
+  let remaining = Math.max(0, offset);
+  for (let nodeIndex = 0; nodeIndex < document.nodes.length; nodeIndex += 1) {
+    const node = document.nodes[nodeIndex];
+    const length = composerNodeProjectedText(node).length;
+    if (remaining < length || (node.type === 'text' && remaining === length)) {
+      return { nodeIndex, offset: remaining };
+    }
+    remaining -= length;
+  }
+  return { nodeIndex: document.nodes.length, offset: 0 };
+}
+
+/** Compact DOM prefixes count text and atoms separately, without copying atom payloads. */
+export function composerSelectionOffset(
+  document: ComposerDocument,
+  prefix: { textLength: number; atomCount: number },
+): number | null {
+  let atomCount = 0;
+  let textLength = 0;
+  let offset = prefix.textLength;
+  for (const node of document.nodes) {
+    if (node.type === 'text') textLength += node.text.length;
+    else if (atomCount++ < prefix.atomCount) offset += composerNodeProjectedText(node).length;
+  }
+  return prefix.atomCount <= atomCount && prefix.textLength <= textLength ? offset : null;
+}
+
 /** Visible editable projection. Quote atoms intentionally contribute no text. */
 export function composerDocumentProjectedText(document: ComposerDocument): string {
   return document.nodes.map((node) => {
@@ -239,6 +283,20 @@ export function composerDocumentQuotes(document: ComposerDocument): ChatQuote[] 
   return document.nodes.flatMap((node) => (node.type === 'quote' ? [node.quote] : []));
 }
 
+/** The captured structural selection is valid only until the document changes. */
+export function reconcileComposerVoiceDraft(document: ComposerDocument, update: ComposerVoiceDraftUpdate): ComposerDocument {
+  const { draft, initialDocument, initialSelection, insertionEnd } = update;
+  if (update.replacement) {
+    const { start, end, text } = update.replacement;
+    return replaceComposerTextRange(document, start, end, [{ type: 'text', text }]);
+  }
+  if (document === initialDocument && insertionEnd !== undefined) {
+    return replaceComposerTextRange(document, initialSelection.start, initialSelection.end,
+      [{ type: 'text', text: draft.slice(initialSelection.start, insertionEnd) }], initialSelection.atomRange);
+  }
+  return reconcileComposerProjectedText(document, draft);
+}
+
 export function appendComposerNode(
   document: ComposerDocument,
   node: ComposerNode,
@@ -267,18 +325,26 @@ export function replaceComposerTextRange(
   from: number,
   to: number,
   replacement: readonly ComposerNode[],
+  atomRange?: { start: number; end: number },
 ): ComposerDocument {
   const start = Math.max(0, Math.min(from, to));
   const end = Math.max(start, Math.max(from, to));
   const before: ComposerNode[] = [];
   const after: ComposerNode[] = [];
   let offset = 0;
+  let atomIndex = 0;
 
   for (const node of document.nodes) {
     const text = composerNodeProjectedText(node);
     const nodeStart = offset;
     const nodeEnd = nodeStart + text.length;
     offset = nodeEnd;
+    const currentAtom = node.type === 'text' ? atomIndex : atomIndex++;
+    if (node.type === 'quote' && atomRange) {
+      if (currentAtom < atomRange.start) before.push(node);
+      else if (currentAtom >= atomRange.end) after.push(node);
+      continue;
+    }
 
     if (nodeEnd <= start) {
       before.push(node);
@@ -300,7 +366,7 @@ export function replaceComposerTextRange(
     }
   }
 
-  if (start >= offset) before.push(...document.nodes.slice(before.length));
+  if (!atomRange && start >= offset) before.push(...document.nodes.slice(before.length));
   return normalizeComposerDocument({ version: 1, nodes: [...before, ...replacement, ...after] });
 }
 

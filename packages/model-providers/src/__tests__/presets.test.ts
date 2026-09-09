@@ -261,6 +261,52 @@ describe('sanitizePresets', () => {
     }
   });
 
+  it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
+    'strips credential-bearing modelsUrl without dropping the preset: %s',
+    (userinfo) => {
+      const preset = {
+        ...VALID_PRESET,
+        runtimes: {
+          codex: {
+            baseUrl: 'https://x.example/v1',
+            models: [{ id: 'm', name: 'M' }],
+            modelsUrl: `https://${userinfo}x.example/v1/models`,
+          },
+        },
+      };
+      const out = sanitizePresets([preset]);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.runtimes.codex).toEqual({
+        baseUrl: 'https://x.example/v1',
+        models: [{ id: 'm', name: 'M' }],
+      });
+    },
+  );
+
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('removes only discovery sources with credentials in $field: $userinfo', ({ field, userinfo }) => {
+    const source = {
+      baseUrl: 'https://x.example/v1',
+      modelsUrl: 'https://x.example/v1/models',
+      wireProtocol: 'openai-responses',
+    };
+    const out = sanitizePresets([{
+      ...VALID_PRESET,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://x.example/v1',
+          models: [{ id: 'm', name: 'M' }],
+          modelDiscovery: [source, { ...source, [field]: `https://${userinfo}x.example/v1/models` }],
+        },
+      },
+    }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.runtimes.codex?.modelDiscovery).toEqual([source]);
+  });
+
   it('modelDiscovery 只保留同源且协议合法的附加目录', () => {
     const source = {
       baseUrl: 'https://x.example/api/v1',
@@ -370,6 +416,60 @@ describe('sanitizePresets', () => {
         },
       },
     }])).toEqual([]);
+  });
+
+  it('图片生成能力只接受显式布尔值', () => {
+    const imagegen = {
+      id: 'imagegen',
+      name: 'Imagegen',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'image-chat', name: 'Image Chat' }],
+        },
+      },
+    };
+    expect(sanitizePresets([imagegen])).toEqual([imagegen]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              supportsImageGeneration: 'yes',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              wireProtocol: 'openai-chat',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            pi: {
+              ...imagegen.runtimes.codex,
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it('requestPath 合法时保留；跨主机、fragment 与 CRLF 形态剥字段但保留预设', () => {
@@ -1070,6 +1170,25 @@ describe('官方渠道预设契约', () => {
         name: 'GLM-5.2 (1M)',
         contextWindow: 1_000_000,
       });
+    },
+  );
+
+  it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
+    '%s 的 Claude Code 提供 GLM-5.3 1M 独立入口,与 Pi 列表的 glm-5.3 窗口一致 (#3883)',
+    (id) => {
+      const claudeModels = preset(id)?.runtimes['claude-code']?.models ?? [];
+      expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toEqual({
+        id: 'glm-5.3[1m]',
+        name: 'GLM-5.3 (1M)',
+        contextWindow: 1_000_000,
+      });
+      // 窗口来源:同一端点族的 Pi 列表已声明 glm-5.3 为 1M,Claude Code 的 [1m] 形态不得比它小。
+      expect(
+        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.contextWindow,
+      ).toBe(1_000_000);
+      // 只补独立 1M 条目:既有裸条目保持原样(留空仍按 200K 保守默认),不静默抬窗。
+      expect(claudeModels.find((model) => model.id === 'glm-5.2')).toEqual({ id: 'glm-5.2', name: 'GLM-5.2' });
+      expect(claudeModels.find((model) => model.id === 'glm-5.3')).toBeUndefined();
     },
   );
 

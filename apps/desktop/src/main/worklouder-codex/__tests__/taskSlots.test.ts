@@ -6,18 +6,11 @@ import {
 } from '../taskSlots.js';
 
 describe('selectWorkLouderCodexRecentTaskSlots', () => {
-  it('keeps pure recency order and caps the projection at six tasks', () => {
-    expect(
-      selectWorkLouderCodexRecentTaskSlots([
-        { id: 'recent-1' },
-        { id: 'recent-2' },
-        { id: 'recent-3' },
-        { id: 'recent-4' },
-        { id: 'recent-5' },
-        { id: 'recent-6' },
-        { id: 'older-pinned-task' },
-      ]),
-    ).toEqual(['recent-1', 'recent-2', 'recent-3', 'recent-4', 'recent-5', 'recent-6']);
+  it('keeps pure recency order and caps the projection at the board size', () => {
+    const rows = Array.from({ length: 15 }, (_, index) => ({ id: `recent-${index}` }));
+    expect(selectWorkLouderCodexRecentTaskSlots(rows)).toEqual(
+      rows.slice(0, 13).map((row) => row.id),
+    );
   });
 });
 
@@ -34,8 +27,8 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
     expect(catalog.options).toHaveLength(2);
   });
 
-  it('caps the keys at six while keeping the full option list', () => {
-    const rows = Array.from({ length: 9 }, (_, index) => ({
+  it('caps the keys at the board size while keeping the full option list', () => {
+    const rows = Array.from({ length: 16 }, (_, index) => ({
       id: `task-${index}`,
       title: `Task ${index}`,
       pinnedAt: null,
@@ -44,8 +37,9 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
 
     const catalog = buildWorkLouderCodexTaskCatalog(rows);
 
-    expect(catalog.sidebar).toHaveLength(6);
-    expect(catalog.options).toHaveLength(9);
+    expect(catalog.sidebar).toHaveLength(13);
+    expect(catalog.lastSent).toHaveLength(13);
+    expect(catalog.options).toHaveLength(16);
   });
 
   it('orders last-sent tasks by the last user message, not sidebar order', () => {

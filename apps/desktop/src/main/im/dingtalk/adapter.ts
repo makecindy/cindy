@@ -76,7 +76,7 @@ export function buildDingTalkAdapter(
     // 因而可以显式选择 bypassPermissions（完全访问）；群聊携带成员可控上下文，
     // 无论谁 @ bot 都附加强确认策略，危险操作仍须主人在群里确认。
     turnPermissionPolicyFor: (event) =>
-      event.speaker ? createDingTalkTurnPermissionPolicy(event.messageId) : undefined,
+      event.speaker ? createDingTalkTurnPermissionPolicy(event.messageId, event.speaker.isOwner) : undefined,
     prepareAgentTurnText: async (event) => {
       if (!event.speaker) return null;
       const speaker = sanitizeSpeaker(event.speaker.name);

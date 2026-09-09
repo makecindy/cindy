@@ -1,4 +1,31 @@
 {
+  "management": {
+    "title": "Device Management",
+    "openDevice": "View details for {{name}}",
+    "details": "Device details",
+    "retry": "Retry",
+    "unknown": "Not available",
+    "notFound": "This device is no longer in your account.",
+    "deleteDevice": "Delete device",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteMessage": "Remove this device from your device list. This does not delete files on the computer.",
+    "deleteFailed": "Could not delete the device.",
+    "deleteOnline": "This device is online. Take it offline before deleting it.",
+    "currentlyOnline": "Currently online",
+    "nameTooLong": "Device names must be {{limit}} characters or fewer.",
+    "fields": {
+      "name": "Name",
+      "status": "Status",
+      "platform": "Platform",
+      "model": "Model",
+      "systemVersion": "System version",
+      "appVersion": "Cindy version",
+      "cpu": "Processor",
+      "memory": "Memory",
+      "lastSeen": "Last online",
+      "deviceId": "Device ID"
+    }
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",
@@ -6,6 +33,20 @@
     "delete": "Delete",
     "deleting": "Deleting",
     "create": "New"
+  },
+  "resources": {
+    "hostOffline": "Offline",
+    "titleFallback": "Resources",
+    "loading": "Loading…",
+    "emptyTitle": "Nothing here yet",
+    "emptyCopy": "This computer has not provided any items here yet.",
+    "loadFailed": "Couldn’t load these items",
+    "noHosts": "No compatible computer is available.",
+    "noConversation": "This item does not currently have a session to open.",
+    "openFailed": "Couldn’t open the session",
+    "resolving": "Opening the latest session…",
+    "retry": "Try again",
+    "hostCount": "{{count}} computers"
   },
   "presentation": {
     "deviceList": {
@@ -664,6 +705,27 @@
         "hoursAgo": "{{count}} hr ago",
         "daysAgo": "{{count}} days ago"
       }
+    }
+  },
+  "companions": {
+    "messageSent": "Message sent",
+    "privateChat": "Private chat with {{name}}",
+    "backgroundTask": "Background task",
+    "openTask": "Open task",
+    "stopTask": "Stop task",
+    "actionFailed": "Unable to load or complete this action",
+    "messages": "Messages",
+    "readOnly": "Read only",
+    "unread": "New reply",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "waiting": "Waiting for reply",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "timed-out": "Timed out",
+      "unknown": "Status unavailable"
     }
   }
 }

@@ -1,3 +1,4 @@
+import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -25,6 +26,12 @@ import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListVi
 import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
+import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
+import { BotsHomeView } from '@/features/bots/BotsHomeView';
+import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
+import { BotRosterView } from '@/features/bots/BotRosterView';
+import { BotSessionView } from '@/features/bots/BotSessionView';
+import { BotDirectMessageView } from '@/features/bots/BotDirectMessageView';
 import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatureLayout';
 
 /**
@@ -38,6 +45,7 @@ import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatu
  *         └── MainLayout            → 主功能区
  *              ├── /                → Navigate to /cc-agent
  *              ├── /cc-agent/...    → CCAgentFeatureLayout
+ *              ├── /bots/...        → BotsFeatureLayout
  *              └── /settings        → SettingsView
  *
  * LocalDbGate 下沉在路由层：AuthProvider 在 RouterProvider 之外无法 useNavigate。
@@ -114,6 +122,23 @@ export const router = createHashRouter([
                     ],
                   },
                   {
+                    path: 'bots',
+                    element: <BotsFeatureLayout />,
+                    children: [
+                      { index: true, element: <BotsHomeView /> },
+                      // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
+                      // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
+                      // 被当成一个叫 "roster" 的伙伴。
+                      { path: 'roster', element: <BotRosterView /> },
+                      { path: 'remote/:deviceId/:botId', element: <RemoteBotSessionView /> },
+                      // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
+                      { path: ':botId/direct/:threadId', element: <BotDirectMessageView /> },
+                      { path: ':botId', element: <BotsHomeView /> },
+                      { path: ':botId/session/:sessionId', element: <BotSessionView /> },
+                      { path: ':botId/history/:sessionId', element: <BotHistorySessionView /> },
+                    ],
+                  },
+                  {
                     // Issue Tracker — 已迁移至 GitHub，此处仅保留引导页
                     path: 'issues',
                     element: <IssueTrackerFeatureLayout />,
@@ -131,6 +156,7 @@ export const router = createHashRouter([
                             index: true,
                             element: <SkillhubHomeView />,
                           },
+                          { path: 'by-path', element: <SkillhubDetailView /> },
                           { path: ':kind/global/:name', element: <SkillhubDetailView /> },
                           {
                             path: ':kind/project/:projectHash/:name',

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -20,6 +20,7 @@ export function AddAccountLoginPage() {
   const initializedRef = useRef(false);
   const flowFinishedRef = useRef(false);
   const closeStartedRef = useRef(false);
+  const [flowInitialized, setFlowInitialized] = useState(false);
   const returnTo = (location.state as AddAccountLocationState | null)?.returnTo ?? '/cc-agent';
 
   useEffect(() => {
@@ -34,19 +35,21 @@ export function AddAccountLoginPage() {
   }, [reportLocalDbGate]);
 
   useEffect(() => {
-    if (loginState || initializedRef.current) return;
+    if (initializedRef.current) return;
     initializedRef.current = true;
-    void beginAddAccount().catch(() => {
-      toast.error(t('sidebar.accountSwitcher.startFailed'));
-      navigate(returnTo, { replace: true });
-    });
-  }, [beginAddAccount, loginState, navigate, returnTo, t]);
+    void beginAddAccount()
+      .then(() => setFlowInitialized(true))
+      .catch(() => {
+        toast.error(t('sidebar.accountSwitcher.startFailed'));
+        navigate(returnTo, { replace: true });
+      });
+  }, [beginAddAccount, navigate, returnTo, t]);
 
   useEffect(() => {
-    if (loginState?.step !== 'completed') return;
+    if (!flowInitialized || loginState?.step !== 'completed') return;
     flowFinishedRef.current = true;
     navigate(returnTo, { replace: true });
-  }, [loginState?.step, navigate, returnTo]);
+  }, [flowInitialized, loginState?.step, navigate, returnTo]);
 
   useEffect(
     () => () => {

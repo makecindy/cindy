@@ -33,7 +33,8 @@ import {
   claimPatchableOpener,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
-import { getLog } from './moduleScope.js';
+import { resolveFeishuMediaUrl } from './mediaCache.js';
+import { getHost, getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
@@ -79,6 +80,25 @@ function fitCardToLimit(
     }
   }
   return fitted;
+}
+
+async function uploadExtraImageKeys(absPaths: readonly string[]): Promise<string[]> {
+  const results = await Promise.all(
+    absPaths.map(async (absPath) => {
+      try {
+        return await uploadImage(absPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        getLog().warn(`[feishu/streamingText] uploadImage extra ${absPath} failed: ${msg}`);
+        return null;
+      }
+    }),
+  );
+  const keys: string[] = [];
+  for (const key of results) {
+    if (key) keys.push(key);
+  }
+  return keys;
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -220,8 +240,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           // uploadImage takes an absPath, so we resolve here.
           // cindy-media(媒体总仓新地址)优先走 host 注入的解析回调;老
           // xdt-image 仍走 feishu 专属目录解析。
-          const { resolveFeishuMediaUrl } = await import('./mediaCache.js');
-          const { getHost } = await import('./moduleScope.js');
           let absPath: string;
           try {
             const hostResolved = getHost().media?.resolveMediaUrl(url) ?? null;
@@ -236,8 +254,14 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
             return null;
           }
           bodyImageAbsPaths.add(absPath);
-          const key = await uploadImage(absPath);
-          return key ? ([url, key] as const) : null;
+          try {
+            const key = await uploadImage(absPath);
+            return key ? ([url, key] as const) : null;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`[feishu/streamingText] uploadImage ${absPath} failed: ${msg}`);
+            return null;
+          }
         }),
       );
       for (const r of results) {
@@ -249,29 +273,13 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //     同一条 uploadImage 通道, 但 path 由 host 主进程已经解好直接传 absPath,
     //     这里不再过 resolveFeishuMediaUrl (@cindy/im 包对其它 host namespace 不感知)。
     //     正文里已内联的同图(按 absPath)跳过,防"正文一张 + 尾部一张"双份。
-    const extraImageKeys: string[] = [];
     const extrasToUpload = this.extraImageAbsPaths.filter((p) => !bodyImageAbsPaths.has(p));
     if (extrasToUpload.length > 0) {
       log.debug(
         `[feishu/streamingText] uploading ${extrasToUpload.length} extra image(s) from tool_result`,
       );
-      const results = await Promise.all(
-        extrasToUpload.map(async (absPath) => {
-          try {
-            return await uploadImage(absPath);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(
-              `[feishu/streamingText] uploadImage extra ${absPath} failed: ${msg}`,
-            );
-            return null;
-          }
-        }),
-      );
-      for (const k of results) {
-        if (k) extraImageKeys.push(k);
-      }
     }
+    const extraImageKeys = await uploadExtraImageKeys(extrasToUpload);
 
     // 2. Send xdt-file links as separate file messages.
     const fileLinks = collectXdtFileLinks(text);
@@ -301,9 +309,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //    c) empty text + only files → "🎉 N 个文件已送达" placeholder
     //    d) totally empty → fallback "(空回复)"
     const hasAnyImage = imageUrls.length > 0 || extraImageKeys.length > 0;
+    const fileOnly = cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0;
     try {
       let card: unknown;
-      if (cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0) {
+      if (fileOnly) {
         card = buildMarkdownCardV2(transportMessages.streaming.fileSentDone(fileLinks.length));
       } else if (hasAnyImage) {
         // 文本空但有图(画完图没说话) — 不要在图上面塞 "(空回复)" 占位, 让图自己说话。
@@ -348,7 +357,9 @@ export async function start(
   // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
   // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
   const claimed = claimPatchableOpener(openId);
-  if (claimed) return new FeishuStreamingTextHandle(claimed, openId, initial);
+  if (claimed) {
+    return new FeishuStreamingTextHandle(claimed, openId, initial);
+  }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
   return new FeishuStreamingTextHandle(messageId, openId, initial);
 }

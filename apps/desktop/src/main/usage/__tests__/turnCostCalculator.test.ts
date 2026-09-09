@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { subscriptionDirectPriceQuote } from '../../../shared/modelPriceQuote';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import { __resetActiveLedgerCurrencyForTesting, setActiveLedgerCurrency } from '../ledgerCurrency';
@@ -43,6 +45,36 @@ const SUBSCRIPTION: TurnPricingContext = {
   billingRoute: 'subscription',
   region: 'global',
 };
+
+describe('Astra subscription reference estimates', () => {
+  const astra = subscriptionDirectPriceQuote(
+    'chatgpt/gpt-6-astra', BUNDLED_CATALOG.modelRegistry, 'codex', '2026-09-04',
+  );
+  const tokens = { inputTokens: 50_000, outputTokens: 100, cacheReadTokens: 200_000, cacheCreateTokens: 22_000 };
+
+  it('uses the declared Fast tariff for native priority segments, including cache writes', () => {
+    expect(astra?.source).toBe('subscription-reference');
+    expect(computeGatewayTurnCost(tokens, astra)).toBeCloseTo(0.98);
+    expect(computeGatewayTurnCost(tokens, astra, 'priority')).toBeCloseTo(1.96);
+    expect(computeGatewayTurnCost(tokens, astra, 'fast')).toBeCloseTo(1.96);
+    expect(computeGatewaySegmentedTurnCost([
+      { ...tokens, priceVariant: 'standard' },
+      { ...tokens, priceVariant: 'priority' },
+    ], astra)).toBeCloseTo(2.94);
+  });
+
+  it('keeps the subscription reference window bound for both tariffs', () => {
+    const expanded = { ...tokens, inputTokens: tokens.inputTokens + 1 };
+    expect(computeGatewayTurnCost(expanded, astra)).toBeNull();
+    expect(computeGatewayTurnCost(expanded, astra, 'priority')).toBeNull();
+  });
+
+  it('does not borrow standard cache-write prices for an incomplete reference Fast tariff', () => {
+    expect(astra?.priority).toBeDefined();
+    const incomplete = { ...astra!, priority: { ...astra!.priority, cacheCreatePerMtok: undefined, inputTokenPriceBands: undefined } };
+    expect(computeGatewayTurnCost(tokens, incomplete, 'priority')).toBeNull();
+  });
+});
 
 function quote(
   modelId: string,

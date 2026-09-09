@@ -1,4 +1,27 @@
 {
+  "localLogs": {
+    "upload": "上传日志",
+    "uploadHint": "仅发送筛选后的运行记录及应用、系统版本。详细 Debug 日志请使用导出。",
+    "uploadResult": {
+      "unavailable": "当前版本未配置日志上传。",
+      "consentRequired": "上传日志前需同意隐私政策。",
+      "empty": "暂无近期日志，请先开启记录并复现问题。",
+      "failed": "上传失败，日志仍保留在手机上。"
+    },
+    "title": "Debug 日志",
+    "record": "记录 Debug 日志",
+    "hint": "记录手机上的连接、恢复、滚动、键盘与性能细节。默认关闭，最多保留 7 天、8 MB，不会自动上传。",
+    "export": "导出 Debug 日志",
+    "clear": "清空日志",
+    "busy": "处理中…",
+    "failed": "无法保存或分享日志，请重试。",
+    "clearHint": "删除已保存的诊断日志？",
+    "cancel": "取消",
+    "exportHint": "分享详细本地日志供排障使用；不包含对话正文或凭证。",
+    "options": "日志选项",
+    "uploadCopied": "上传成功，编号 {{code}} 已复制。",
+    "uploadSucceeded": "上传成功，编号 {{code}}。"
+  },
   "title": "设置",
   "language": {
     "title": "语言",
@@ -58,9 +81,6 @@
     "deviceName": "设备名称",
     "deviceNameDetail": "电脑端授权列表会显示这个名称。",
     "platform": "平台",
-    "remoteControl": "被控权限",
-    "remoteControlValue": "电脑端管理",
-    "remoteControlDetail": "手机只作为控制端。允许被控、撤销和恢复权限仍在电脑端设置里完成。",
     "editAccessibility": "修改{{label}}"
   },
   "relay": {

@@ -775,6 +775,21 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
     );
   });
 
+  it('model-window-switch 说明主动换小窗,不谎报已经溢出', () => {
+    const text = buildHandoffText([msg('user', '继续改'), msg('assistant', '好')], {
+      fromLabel: 'Pi',
+      toLabel: 'Pi',
+      sessionId: 'sess-smaller-window',
+      reason: 'model-window-switch',
+    });
+    expect(text).toContain('switching to a model with a smaller context window');
+    expect(text).not.toContain("exceeded the model's context window");
+    expect(text).toContain('[Session context rebuild · internal context]');
+    expect(text.trimEnd().endsWith("== End of rebuild note; the user's new message follows ==")).toBe(
+      true,
+    );
+  });
+
   it('单轮 100 条 tool_use 折叠中部,且硬上限/检索段/结束标记全部存活', () => {
     const messages: HandoffSourceMessage[] = [msg('user', '执行大量工具')];
     for (let i = 0; i < 100; i++) {

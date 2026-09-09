@@ -1,4 +1,27 @@
 {
+  "localLogs": {
+    "upload": "로그 업로드",
+    "uploadHint": "선별된 실행 기록과 앱 및 OS 버전만 전송합니다. 상세 로그는 내보내기를 사용하세요.",
+    "uploadResult": {
+      "unavailable": "이 빌드에는 로그 업로드가 설정되지 않았습니다.",
+      "consentRequired": "로그를 업로드하기 전에 개인정보 처리방침에 동의해 주세요.",
+      "empty": "최근 로그가 없습니다. 기록을 켜고 문제를 재현해 주세요.",
+      "failed": "업로드하지 못했습니다. 로그는 휴대폰에 보관되어 있습니다."
+    },
+    "title": "디버그 로그",
+    "record": "디버그 로그 기록",
+    "hint": "휴대폰 연결, 복구, 스크롤, 키보드 및 성능 세부 정보를 기록합니다. 기본 꺼짐이며 최대 7일, 8 MB를 보관합니다. 자동 업로드하지 않습니다.",
+    "export": "디버그 로그 내보내기",
+    "clear": "로그 지우기",
+    "busy": "처리 중…",
+    "failed": "로그를 저장하거나 공유할 수 없습니다. 다시 시도해 주세요.",
+    "clearHint": "저장된 진단 로그를 삭제할까요?",
+    "cancel": "취소",
+    "exportHint": "문제 해결을 위해 상세 로컬 로그를 공유합니다. 대화 내용이나 인증 정보는 포함하지 않습니다.",
+    "options": "로그 옵션",
+    "uploadCopied": "업로드했습니다. 번호 {{code}}를 복사했습니다.",
+    "uploadSucceeded": "업로드했습니다. 번호 {{code}}."
+  },
   "title": "설정",
   "language": {
     "title": "언어",
@@ -58,9 +81,6 @@
     "deviceName": "기기 이름",
     "deviceNameDetail": "컴퓨터의 승인 목록에 이 이름이 표시됩니다.",
     "platform": "플랫폼",
-    "remoteControl": "원격 제어 권한",
-    "remoteControlValue": "데스크톱에서 관리",
-    "remoteControlDetail": "이 휴대폰은 제어하는 쪽으로만 동작합니다. 피제어 허용·철회·복원은 데스크톱 설정에서 진행합니다.",
     "editAccessibility": "{{label}} 수정"
   },
   "relay": {

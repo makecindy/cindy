@@ -285,7 +285,7 @@ export function useMobileLocalAttachments(
         discardMobileUploadedAttachment(attachment, {
           getToken: () => optionsRef.current.getAccessToken(),
         });
-        if (candidate.cleanupLocalUris) await candidate.cleanupLocalUris(localUris);
+        if (candidate.cleanupLocalUris) void candidate.cleanupLocalUris(localUris).catch(() => undefined);
         return;
       }
       // 发送后气泡的本地缩略图兜底:消息里持久化的是 cindy-oss-attach:// 中转引用,
@@ -313,7 +313,8 @@ export function useMobileLocalAttachments(
         // 只有持久缩略图已经接管 composer / sent-message 预览后才删源文件；
         // 注册失败时保留到页面卸载，不能让已上传附件立刻变成坏图。
         if (deliveredCandidate.uri !== candidate.uri) {
-          await candidate.cleanupLocalUris(localUris);
+          // 附件已交给 composer/outbox，清理失败不能再把成功翻成上传失败。
+          void candidate.cleanupLocalUris(localUris).catch(() => undefined);
         }
       }
     },

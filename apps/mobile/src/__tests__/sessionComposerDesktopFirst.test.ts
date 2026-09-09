@@ -7,6 +7,48 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile session composer desktop-first surface', () => {
+  it('keeps draft subscriptions and the recording timer outside the task render boundary', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const paletteStart = source.indexOf('function SessionComposerPalette(');
+    const inputStart = source.indexOf('function SessionComposerInput(');
+    const inputEnd = source.indexOf('function SessionSearchSheet(', inputStart);
+    expect(paletteStart).toBeGreaterThan(source.indexOf('export default function SessionScreen()'));
+    const task = source.slice(source.indexOf('export default function SessionScreen()'), paletteStart);
+    const input = source.slice(inputStart, inputEnd);
+    expect(task).not.toContain('useSyncExternalStore(source.subscribe');
+    expect(task).not.toContain('composerDraftSource.subscribe');
+    expect(task).not.toContain('useMobileVoiceRecordingTimer(');
+    expect(task).toContain('<SessionComposerInput');
+    expect(task).toContain('<SessionComposerPalette');
+    expect(task).toContain('source={composerDraftSource}');
+    expect(input).toContain('useSyncExternalStore(source.subscribe, source.getSnapshot)');
+    expect(input).toContain('useMobileVoiceRecordingTimer(');
+    expect(task).toContain('const commandsAtSend = slashCommandsRef.current;');
+    expect(task).toContain('remoteCommands: commandsAtSend,');
+    // Dispatch and the keyed palette must receive a fresh ref synchronously;
+    // passive unmount cleanup leaves a window for the old command list to leak.
+    expect(task).toContain('const slashCommandsRef = useMemo<RefObject<MobileSlashCommand[]>>(\n'
+      + '    () => ({ current: [] }),\n'
+      + '    [activeComposerDraftScopeKey],\n'
+      + '  );');
+    expect(task).toContain('<SessionComposerPalette\n'
+      + '            key={activeComposerDraftScopeKey}\n'
+      + '            source={composerDraftSource}\n'
+      + '            commandsRef={slashCommandsRef}');
+  });
+
+  it('keeps local send and queue activity out of message grouping', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    expect(source).toContain('const isMessageListStreaming = remoteSessionRunning || currentTurnStreaming;');
+    expect(source).toContain('isSessionStreaming: isMessageListStreaming,');
+    expect(source).toContain('() => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming');
+    const renderStart = source.indexOf('const renderWindow = useMemo(');
+    const renderEnd = source.indexOf('// Reconciliation must only use committed rows.', renderStart);
+    const renderSource = source.slice(renderStart, renderEnd);
+    expect(renderSource).not.toContain(', isSessionStreaming,');
+    expect(renderSource).toContain(', isMessageListStreaming,');
+  });
+
   it('fences every active-session snapshot request against newer retry progress', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
@@ -14,8 +56,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain(
       'const activityEpochAtFetchStart = remoteSessionStore.captureActiveSessionSnapshotEpoch();',
     );
-    expect((source.match(/fetchActiveSessionSnapshot\(\),/g) ?? []).length).toBe(2);
-    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(2);
+    // First open and reopen share one progressive, independently retried reader.
+    expect(source).toContain('commitRead(fetchActiveSessionSnapshot,');
+    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(1);
     expect((source.match(/maker\.listActiveSessions\(\)/g) ?? []).length).toBe(1);
   });
 
@@ -39,10 +82,10 @@ describe('mobile session composer desktop-first surface', () => {
     const trailingActionsEnd = source.indexOf('const resumeQueue = () => {', trailingActionsStart);
     const trailingActionsSource = source.slice(trailingActionsStart, trailingActionsEnd);
     const voiceButtonStart = source.indexOf('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    const voiceButtonEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceButtonStart);
+    const voiceButtonEnd = source.indexOf('const renderComposerAttachmentButton = () => (', voiceButtonStart);
     const voiceButtonSource = source.slice(voiceButtonStart, voiceButtonEnd);
-    const floatingVoiceIndex = composerInputSource.indexOf('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    const sendIndex = composerInputSource.indexOf('trailing={composerCardActive ? null : renderComposerTrailingActions()}');
+    const floatingVoiceIndex = composerInputSource.indexOf('floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}');
+    const sendIndex = composerInputSource.indexOf('trailing={composerCardActive ? null : controls.trailing}');
     const composerSurfaceStart = source.indexOf('composerSurface: {');
     // composerOverlayPanel 已随「模型下拉改 ModelPickerSheet 浮窗」删除,锚到下一个样式键。
     const composerSurfaceEnd = source.indexOf('composerSurfaceCompact:', composerSurfaceStart);
@@ -94,11 +137,8 @@ describe('mobile session composer desktop-first surface', () => {
     const voiceDraftOverlayContentEnd = source.indexOf('voiceDraftMeasuredBlock:', voiceDraftOverlayContentStart);
     const voiceDraftOverlayContentStyle = source.slice(voiceDraftOverlayContentStart, voiceDraftOverlayContentEnd);
     const voiceDraftMeasuredBlockStart = source.indexOf('voiceDraftMeasuredBlock: {');
-    const voiceDraftMeasuredBlockEnd = source.indexOf('voiceDraftCaretOverlay:', voiceDraftMeasuredBlockStart);
+    const voiceDraftMeasuredBlockEnd = source.indexOf('voiceDraftText:', voiceDraftMeasuredBlockStart);
     const voiceDraftMeasuredBlockStyle = source.slice(voiceDraftMeasuredBlockStart, voiceDraftMeasuredBlockEnd);
-    const voiceDraftCaretOverlayStart = source.indexOf('voiceDraftCaretOverlay: {');
-    const voiceDraftCaretOverlayEnd = source.indexOf('voiceDraftText:', voiceDraftCaretOverlayStart);
-    const voiceDraftCaretOverlayStyle = source.slice(voiceDraftCaretOverlayStart, voiceDraftCaretOverlayEnd);
     const voiceDraftTextStyleStart = source.indexOf('voiceDraftText: {');
     const voiceDraftTextStyleEnd = source.indexOf('voiceDraftListeningPrompt:', voiceDraftTextStyleStart);
     const voiceDraftTextStyle = source.slice(voiceDraftTextStyleStart, voiceDraftTextStyleEnd);
@@ -112,8 +152,13 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('<Scan color={colors.textPrimary}');
     expect(source).toContain('<Folder color={colors.textPrimary}');
     expect(composerInputSource).toContain('cardActive={composerCardActive}');
-    expect(composerInputSource).toContain('leading={renderComposerCompactLeading()}');
+    expect(composerInputSource).toContain('leading={controls.leading}');
     expect(source).toContain('const renderComposerCompactLeading = () => (');
+    expect(source).toContain('leading: renderComposerCompactLeading()');
+    expect(source).toContain('toolbar: renderComposerToolbar()');
+    expect(source).toContain('trailing: renderComposerTrailingActions()');
+    expect(source).toContain('gesture={composerResize.gesture}');
+    expect(source).toContain('<GestureDetector gesture={composerResize.scrollGesture}>');
     expect(source).not.toContain('styles.composerCompactAttachmentSlot');
     expect(source).toContain('styles.composerCompactAttachmentHit');
     expect(source).not.toContain('styles.composerCompactAttachmentHitArea');
@@ -125,11 +170,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(source).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(source).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
-    expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
+    expect(composerInputSource).toContain('toolbar={controls.toolbar}');
     expect(source).toContain('const renderComposerToolbar = () => (');
     expect(attachmentButtonSource).toContain('<Plus');
     expect(source).toContain('<Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />');
-    expect(composerInputSource).toContain('trailing={composerCardActive ? null : renderComposerTrailingActions()}');
+    expect(composerInputSource).toContain('trailing={composerCardActive ? null : controls.trailing}');
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
@@ -151,9 +196,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.modelSheet"');
     expect(source).not.toContain('composerOverlayPanel');
     expect(source).toContain('onPress={toggleComposerModelPicker}');
-    // 选行 fast 写穿只按值变化,不做 fastEditable 门控:切到不支持 fast 的模型时必须把
-    // 服务端残留的 fastMode=true 清零(review P1 回归锚)。
-    expect(source).toContain('if (next.fastMode !== modelSheetSelection.fastMode)');
+    // 新 host 把 fast 纳入原子 selection；旧 host 的兼容写穿仍只按值变化，不做
+    // fastEditable 门控，切到不支持 fast 的模型时必须把服务端残留的 true 清零。
+    expect(source).toContain('fastMode: next.fastMode');
+    expect(source).toContain('if (!atomicSelection && next.fastMode !== modelSheetSelection.fastMode)');
     expect(source).not.toContain('fastEditable && next.fastMode');
     // + 号打开可拖动 Context 面板(附件 / 计划模式 / 目标模式收在面板内)。
     expect(source).toContain('testID="session.contextSheet"');
@@ -291,7 +337,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const COMPOSER_STATUS_ROW_RESERVED_HEIGHT = 28;');
     expect(source).toContain('const COMPOSER_STACK_GAP_HEIGHT = 4;');
     expect(source).toContain('const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;');
-    expect(source).toContain('const COMPOSER_VOICE_CARET_GAP = 2;');
+    expect(voiceMicCaretStyle).toContain('marginLeft: 2');
     expect(source).not.toContain('const COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(source).not.toContain('const COMPOSER_VOICE_OVERLAY_HORIZONTAL_PADDING');
     expect(source).toContain('const composerInputIsMultiline = composerResize.dragging');
@@ -303,11 +349,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerResize = useComposerResize({');
     expect(source).toContain('const composerInputVisibleHeight = composerResize.visibleContentHeight;');
     expect(source).toContain('const composerInputScrollEnabled = composerResize.scrollEnabled;');
-    expect(source).toContain('const composerShellHasScrollableContent = attachments.length > 0');
-    expect(source).toContain('const composerScrollEnabled = nativeShellLayout.composerScrollEnabled');
-    // 外壳滚动必须仅在真有可滚内容时启用,且 grabber touch-down 通过
-    // setNativeProps 同步关闸(绝不能 setState——重页面 re-render 会阻塞
-    // JS 线程,拖拽 move 事件被合并延后,位移在 grant 重置前全部丢失)。
+    expect(source).toContain('const composerShellHasScrollableContent = attachmentCount > 0');
+    expect(source).toContain('const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled');
+    // Scroll ownership is native in installed apps; retain Expo Go's JS fallback.
     expect(source).toContain('&& composerShellHasScrollableContent;');
     expect(source).not.toContain('&& (!composerInputScrollEnabled || composerShellHasScrollableContent);');
     expect(source).toContain('const handleGrabberTouchActiveChange = useCallback((active: boolean) => {');
@@ -323,7 +367,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(source.match(/scrollEnabled={composerInputScrollEnabled}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(composerInputSource).toContain('maxHeight={composerResize.inputMaxHeight}');
-    expect(composerInputSource).toContain('inputFrameHeight={composerResize.frameHeight}');
+    expect(composerInputSource).toContain('inputFrameAnimatedStyle={composerResize.frameStyle}');
     expect(composerInputSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
     expect(sharedSource).toContain('{ maxHeight },');
     expect(source).not.toContain('{ height: composerInputVisibleHeight');
@@ -347,13 +391,14 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('modelSummary: [modelLabel, effortLabel].filter(Boolean).join');
     expect(source).toContain('const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };');
     expect(source.match(/hitSlop={COMPOSER_CONTROL_HIT_SLOP}/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-    expect(source).toContain('const composerHasText = draft.trim().length > 0;');
     expect(source).toContain('const composerQuoteCount = composerDocumentQuotes(composerDocument).length;');
-    expect(source).toContain('const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;');
+    expect(source).toContain('attachmentCount: attachmentCount + pendingUploadCount,');
+    expect(source).toContain('quoteCount: composerQuoteCount,');
+    expect(source).toContain('draftText: draft,');
     expect(source).toContain('const composerShowSendButton = composerLayout.send.visible || voiceStartPending;');
     expect(source).not.toContain('composerLayout.send.visible && (!voiceIsListening || composerHasPayload)');
     expect(source).toContain('const latestDocument = latestDraft.trim()');
-    expect(source).toContain('reconcileComposerProjectedText(documentBeforeStop, latestDraft)');
+    expect(source).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
     expect(source).toContain('if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0))');
     expect(source).toContain('const currentTurnStreaming = useMemo(');
     expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
@@ -393,7 +438,7 @@ describe('mobile session composer desktop-first surface', () => {
     // 会在点语音的同时弹出软键盘。听写文字由覆盖层渲染,caret 只在用户点输入框
     // (停止听写并有意打字)时由 WebKit 按触点放置。
     expect(source).not.toContain('setSelectionToEnd');
-    expect(source).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
+    expect(source).toContain('voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });');
     expect(source).toContain('caretHidden={voiceIsListening}');
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
@@ -414,7 +459,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(voiceDraftMeasuredBlockStyle).not.toContain('paddingRight: COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(voiceDraftMeasuredBlockStyle).toContain("position: 'relative'");
     expect(voiceDraftMeasuredBlockStyle).not.toContain("width: '100%'");
-    expect(voiceDraftCaretOverlayStyle).toContain("position: 'absolute'");
+    expect(source).not.toContain('voiceDraftCaretOverlay:');
     expect(voiceDraftTextStyle).not.toContain("alignSelf: 'flex-start'");
     expect(voiceDraftTextStyle).toContain('color: colors.textPrimary');
     expect(voiceDraftTextStyle).not.toContain("color: 'transparent'");
@@ -427,18 +472,17 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('paddingRight: COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(voiceMicCaretStyle).toContain('height: MOBILE_COMPOSER_INPUT_LINE_HEIGHT');
     expect(voiceMicCaretStyle).toContain("justifyContent: 'center'");
-    expect(source.match(/voiceDraftScrollRef\.current\?\.scrollToEnd\(\{ animated: false \}\);/g)?.length ?? 0)
+    expect(source.match(/voiceDraftScrollRef\.current\?\.scrollTo\(\{ y: voiceDraftCaretFrame.top, animated: false \}\);/g)?.length ?? 0)
       .toBeGreaterThanOrEqual(3);
     expect(source).toContain('const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });');
     expect(source).not.toContain('const [composerTextInputFrameWidth, setComposerTextInputFrameWidth] = useState(0);');
     expect(source).not.toContain('const [voiceDraftContentHeight, setVoiceDraftContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);');
     expect(source).not.toContain('const handleComposerTextInputFrameLayout = useCallback((event: LayoutChangeEvent) => {');
     expect(source).not.toContain('onLayout={handleComposerTextInputFrameLayout}');
-    expect(source).toContain('const handleVoiceDraftTextLayout = useCallback((event: TextLayoutEvent) => {');
-    expect(source).toContain('const lastLine = lines[lines.length - 1];');
-    expect(source).toContain('lastLine.x + lastLine.width + COMPOSER_VOICE_CARET_GAP');
+    expect(source).toContain('const handleVoiceDraftTextLayout = useCallback(() => {');
+    expect(source).toContain('caret.measureLayout(block, (x, y) => {');
     expect(source).not.toContain('voiceDraftBlockWidth - COMPOSER_VOICE_CARET_WIDTH - COMPOSER_VOICE_CARET_EDGE_INSET');
-    expect(source).toContain('lastLine.y + ((lastLine.height - COMPOSER_INPUT_LINE_HEIGHT) / 2)');
+    expect(source).toContain('top: Math.max(0, Math.round(y))');
     expect(source).not.toContain('setVoiceDraftContentHeight((currentHeight) => (');
     expect(source).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;');
     expect(source).toContain('styles.voiceDraftListeningPrompt');
@@ -459,10 +503,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('textBreakStrategy="simple"');
     expect(source).not.toContain('android_hyphenationFrequency="none"');
     expect(source).toContain('onTextLayout={handleVoiceDraftTextLayout}');
-    expect(voiceDraftTextSource).toContain('{draft}');
-    expect(source).toContain('styles.voiceDraftCaretOverlay');
-    expect(source).toContain('left: voiceDraftCaretFrame.left');
-    expect(source).toContain('top: voiceDraftCaretFrame.top');
+    expect(voiceDraftTextSource).toContain('{draft.slice(0, voiceDraftInsertionEnd)}');
+    expect(voiceDraftTextSource).toContain('viewRef={voiceDraftCaretRef}');
+    expect(voiceDraftTextSource).toContain('{draft.slice(voiceDraftInsertionEnd)}');
     expect(source).not.toContain('voiceMicCaretInline');
     expect(source).not.toContain('<VoiceMicWaveCaret color={colors.statusReady} inline />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
@@ -481,7 +524,7 @@ describe('mobile session composer desktop-first surface', () => {
       finishVoiceSource.indexOf('const latestDraft = await controller.stop();'),
     );
     expect(finishVoiceSource).toContain('voiceStopInFlightRef.current = false;');
-    expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
+    expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}');
     expect(composerInputSource).not.toContain('floatingVoiceButtonStyle=');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
@@ -588,7 +631,8 @@ describe('mobile session composer desktop-first surface', () => {
     // falls back to building the managed credential itself otherwise. 手机语音
     // 只保留 Cindy 官方托管路径:BYOK/穿透已删除。
     expect(source).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(source).toContain('takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),');
+    expect(source).toContain('const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null);');
+    expect(source).toContain('prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory))');
     expect(source).not.toContain('MobileVoiceServiceMode');
     expect(source).not.toContain('LiteLlm');
     expect(source).toContain('?? createMobileCindyVoiceCredential(deviceId);');
@@ -601,7 +645,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(source).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(source).toContain('voiceContext.warmRefiner(input),');
-    expect(source).toContain('getMobileVoiceInputHistoryForHost(deviceId),');
+    expect(source).toContain('getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory)');
     // Device link is opened non-blocking (not awaited): dictation goes through the
     // cloud ASR proxy and does not need the link, so it must not gate mic start.
     expect(source).toContain('void openLink(deviceId).catch(() => undefined);');
@@ -689,7 +733,13 @@ describe('mobile session composer desktop-first surface', () => {
       + "      startupSeq = voiceStartupSeqRef.current + 1;",
     );
     expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;');
-    expect(voiceSource).toContain('onDraftChanged: setComposerDraft');
+    expect(voiceSource).toContain('if (selection) input?.rememberSelection(text, selection);');
+    expect(voiceSource).toContain('writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });');
+    expect(source).toContain('draft.slice(0, voiceDraftInsertionEnd)');
+    expect(source).toContain('draft.slice(voiceDraftInsertionEnd)');
+    expect(source).toContain('caret.measureLayout(block, (x, y) => {');
+    expect(source).toContain('viewRef={voiceDraftCaretRef}');
+    expect(source).toContain('useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) =>');
     expect(voiceSource).toContain('isMobileRealtimeAudioAvailable()');
     expect(voiceSource.indexOf('isMobileRealtimeAudioAvailable()')).toBeLessThan(
       voiceSource.indexOf('resolveMobileVoiceRecordingPermission({'),

@@ -40,10 +40,26 @@ export function registerScheduleUpdateTool(
       recurring: z.boolean().optional(),
       agentKind: z.enum(AGENT_KIND).optional(),
       kind: z.literal('cron').optional(),
-      model: z.string().optional(),
-      providerId: z.string().optional(),
-      effort: z.enum(EFFORT).optional(),
-      workingDir: z.string().optional(),
+      model: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('传 null = 清空,回到所选 agentKind 的默认模型路由;省略 = 不修改。换 agentKind 时上一引擎的 model 会被引擎自动丢弃,无需手动清。'),
+      providerId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('传 null = 清空(同 model 一起回到默认路由);省略 = 不修改。'),
+      effort: z
+        .enum(EFFORT)
+        .nullable()
+        .optional()
+        .describe('传 null = 清空(按模型默认档);省略 = 不修改。'),
+      workingDir: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('传 null = 清空(回到绑定会话 / 对话工作区语义);省略 = 不修改。'),
       useWorktree: z.boolean().optional(),
       targetSessionId: z
         .string()
@@ -111,6 +127,21 @@ export function registerScheduleUpdateTool(
           // 这是 JSON 边界唯一的清空表达。
           input = { ...input, intervalMs: undefined };
         }
+        // 同上:model / providerId / effort / workingDir 的 null 也翻成带 key 的
+        // undefined(storage 按 hasOwnProperty 判定 → 清列 NULL)。此前 schema 只收
+        // string,agent 想把任务从一个引擎的模型路由上摘下来(如伙伴接管期用 Codex
+        // 模型跑过、再改回 Claude Code)只能报 INVALID_ARGS,陈旧路由永远清不掉。
+        for (const key of ['model', 'providerId', 'effort', 'workingDir'] as const) {
+          if ((patch as Record<string, unknown>)[key] === null) {
+            input = { ...input, [key]: undefined };
+          }
+        }
+        const clearsWorkingDir = (patch as { workingDir?: string | null }).workingDir === null;
+        if (clearsWorkingDir) {
+          // 清目录 = 回到对话工作区语义(与 create 缺省目录时的推断、引擎「给了真实
+          // 目录翻成 project」对称),否则 workspaceKind 仍是 project 却无目录。
+          input = { ...input, workspaceKind: 'dialogue' };
+        }
         // 无条件校验本次 patch 显式带的 cronExpr / timezone(函数对缺省字段是
         // no-op)。不能只在 patch 带 intervalMs 数值时校验:任务已有 intervalMs、
         // patch 只改 cronExpr 时,真 partial 语义保留原 interval,引擎按
@@ -129,6 +160,17 @@ export function registerScheduleUpdateTool(
           input = { ...input, targetSessionId: sessionId };
         }
         return scheduler.updateFromCurrent(id, async (existing) => {
+          // worktree 模式以 workingDir 为基仓(workdir-resolver 会拒绝无目录的 worktree
+          // 任务,每次 fire 都失败)。清目录时若任务仍开着 useWorktree 且本次没关,
+          // 明确拒绝而不是写出一条跑不动的任务(codex review)。
+          const nextUseWorktree = Object.prototype.hasOwnProperty.call(input, 'useWorktree')
+            ? input.useWorktree
+            : existing.useWorktree;
+          if (clearsWorkingDir && nextUseWorktree) {
+            throw new Error(
+              'invalid request: workingDir 传 null 清空时任务仍开启 useWorktree(worktree 需要 workingDir 作为基仓);请同时传 useWorktree:false,或改传新的 workingDir',
+            );
+          }
           // preRunHook.timeoutMs 的真 partial 表达:只改 command 时沿用任务现有超时
           // (此前整对象替换会把省略的 timeoutMs 静默清成"不限时");传 null 才显式清除。
           // null 在进入引擎前剥掉 —— 引擎/storage 只认 number | undefined。

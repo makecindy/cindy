@@ -7,6 +7,7 @@ import {
   type ConversationShareWebViewColors,
 } from '@/session/conversationShareWebViewHtml';
 import { i18n } from '@/i18n';
+import { buildConversationShareSvgLayout } from '@/session/conversationShareSvgLayout';
 
 const colors: ConversationShareWebViewColors = {
   background: '#ffffff',
@@ -50,6 +51,64 @@ function buildRichConversationHtml(): string {
 }
 
 describe('buildConversationShareHtml 富内容导出', () => {
+  it('继续脱敏跨行内格式和段落拆开的凭证', () => {
+    const html = buildConversationShareHtml({
+      allShareableIds: ['secret'], colors, contentWidth: 390,
+      selectedMessages: [{ clientId: 'secret', kind: 'assistant', body: 'password: `private-code-secret`\n\nAuthorization: Basic **private-strong-secret**\n\npassword:\n\nprivate-paragraph-secret' }],
+    });
+    expect(html).not.toContain('private-');
+    expect(html).toContain('[REDACTED]');
+  });
+
+  it.each(['token', 'access_token', 'api_key'])(
+    '带 %s 的已准备图片使用 SVG 备用成图，保留图片和脱敏文字',
+    (parameter) => {
+      const url = `https://example.com/pic.png?${parameter}=private-image-secret`;
+      const uri = 'data:image/png;base64,aGVsbG8=';
+      const picture = `![picture](${url})`;
+      const options = {
+        allShareableIds: ['plain', 'parts'], colors, contentWidth: 390,
+        selectedMessages: [
+          { clientId: 'plain', kind: 'assistant' as const, body: picture, images: new Map([[url, { uri, width: 40, height: 20 }]]) },
+          {
+            clientId: 'parts', kind: 'user' as const, body: '',
+            bodyParts: [{ kind: 'text' as const, text: `| image |\n| --- |\n| ${picture} |` }],
+            secondaryBody: `${picture}\n\npassword=private-text-secret\n\n[link](https://example.com/?token=private-link-secret)\n\n\`\`\`text\npassword=private-code-secret\n\`\`\``,
+            images: new Map([[url, { uri, width: 40, height: 20 }]]),
+          },
+        ],
+      };
+      expect(() => buildConversationShareHtml(options)).toThrow('conversation-share-image-requires-svg');
+      const svg = buildConversationShareSvgLayout({ ...options, width: 390, messages: options.selectedMessages });
+      expect(svg.images).toHaveLength(3);
+      expect(svg.images.every((image) => image.uri === uri)).toBe(true);
+      expect(JSON.stringify(svg)).not.toContain('private-');
+      expect(JSON.stringify(svg)).not.toContain(url);
+      expect(JSON.stringify(svg)).toContain('[REDACTED]');
+    },
+  );
+
+  it.each(['body', 'bodyParts', 'secondaryBody'] as const)(
+    '%s 中图片语法受到脱敏影响时由 SVG 保留图片或替代文字',
+    (field) => {
+      const url = 'https://example.com/p.png';
+      const body = `password: private![preview](${url})`;
+      for (const prepared of [false, true]) {
+        const message = {
+          clientId: 'm', kind: 'assistant' as const, body: '',
+          ...(field === 'bodyParts' ? { bodyParts: [{ kind: 'text' as const, text: body }] } : { [field]: body }),
+          images: new Map(prepared ? [[url, { uri: 'data:image/png;base64,aGVsbG8=', width: 40, height: 20 }]] : []),
+        };
+        const options = { allShareableIds: ['m'], colors, contentWidth: 390, selectedMessages: [message] };
+        expect(() => buildConversationShareHtml(options)).toThrow('conversation-share-image-requires-svg');
+        const svg = buildConversationShareSvgLayout({ ...options, width: 390, messages: [message] });
+        expect(svg.images).toHaveLength(prepared ? 1 : 0);
+        expect(JSON.stringify(svg)).not.toContain('private');
+        expect(JSON.stringify(svg)).not.toContain(url);
+      }
+    },
+  );
+
   it('只按选中内容嵌入对应的富内容运行时', () => {
     const plainHtml = buildConversationShareHtml({
       allShareableIds: ['plain'],
@@ -146,10 +205,11 @@ describe('buildConversationShareHtml 富内容导出', () => {
       }],
     });
 
-    expect(html).toContain(`alt="${i18n.t('message.renderer.imageFallbackTitle')}"`);
+    expect(html).toContain(`<span class="xdt-image-chip">${i18n.t('message.renderer.imageFallbackTitle')}</span>`);
+    expect(html).not.toContain('https://example.com/image.png');
   });
 
-  it('完整回退原生增强，并安全保留已分享 PNG', () => {
+  it('限制原生与降级 renderer 的完整源尺寸，并安全保留已分享 PNG', () => {
     const nativeSource = readFileSync(
       resolve(
         process.cwd(),
@@ -164,9 +224,20 @@ describe('buildConversationShareHtml 富内容导出', () => {
     const sessionSource = readFileSync(
       resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(nativeSource).toContain('conversationShareMaxSourcePixels');
+    expect(nativeSource).toContain('UIWindow(windowScene: windowScene)');
+    expect(nativeSource).toContain('hostingWindow.rootViewController = viewController');
+    expect(nativeSource).toContain('hostingWindow?.isHidden = true');
+    expect(nativeSource).toContain('no active window scene');
+    expect(nativeSource).toContain('UIWindow.Level.normal.rawValue + 1');
+    expect(nativeSource).toContain('hostingWindow.alpha = 0.01');
+    expect(nativeSource).toContain('waitForWebContentPaint(webView)');
+    expect(nativeSource).toContain('requestAnimationFrame(resolve)');
+    expect(nativeSource).toContain('merged.hasVisibleVariation');
+    expect(nativeSource).toContain('Conversation share PNG is blank.');
+    expect(nativeSource).toContain('format.scale = 1');
     expect(nativeSource).toContain(
       'captureWidth * captureHeight <= conversationShareMaxSourcePixels',
     );
@@ -179,12 +250,29 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(webViewSource).toContain(
       'files.slice(SHARE_PNG_RETAIN_COUNT, SHARE_PNG_RETAIN_COUNT + SHARE_PNG_CLEANUP_BATCH)',
     );
+    expect(sessionSource).toContain('deleteConversationSharePngTemp');
     expect(sessionSource).toContain('cleanupConversationSharePngTemps');
     expect(sessionSource).toContain('cache 目录交给下一次有界清理');
     expect(sessionSource).toContain('if (!shareCompleted && localUri)');
     expect(sessionSource).toContain('<ConversationShareSvg');
-    expect(sessionSource).not.toContain('nativeConversationShareAvailable');
-    expect(sessionSource).not.toContain('renderConversationShareHtmlToPng({');
+    expect(sessionSource).toContain(
+      "nativeConversationShareAvailable = Platform.OS === 'ios'",
+    );
+    expect(sessionSource).toContain(
+      'if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;',
+    );
+    expect(sessionSource).toContain(
+      'const messages = await shareImages.prepare();',
+    );
+    expect(sessionSource).toContain(
+      'nativeConversationShareAvailable\n      && shareCharacterSrc',
+    );
+    expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
+    expect(sessionSource).toContain('nativeShareAssetsReady');
+    expect(sessionSource).toContain('native webview export succeeded');
+    expect(sessionSource).toContain('falling back to svg');
+    expect(sessionSource).not.toContain('OTA webview export failed; falling back to svg');
+    expect(sessionSource).toContain('return svg.exportPng();');
     const shareAsyncIndex = sessionSource.indexOf(
       "await sharing.shareAsync(localUri, { mimeType: 'image/png' });",
     );
@@ -217,9 +305,9 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(svgSource).toContain('const SHARE_LOGO_HEIGHT = 18;');
     expect(svgSource).toContain('const SHARE_LOCKUP_GAP = 6;');
     expect(svgSource).toContain('rx={6}');
-    expect(svgSource).toContain('footerAssetGate.waitUntilReady()');
-    expect(svgSource).toContain('footerAssetGate.markReady("character")');
-    expect(svgSource).toContain('footerAssetGate.markReady("logo")');
+    expect(svgSource).toContain('assetGate.waitUntilSettled()');
+    expect(svgSource).toContain('assetGate.markReady("character")');
+    expect(svgSource).toContain('assetGate.markReady("logo")');
     expect(html).toContain('width: 22px;');
     expect(html).toContain('height: 18px;');
     expect(html).toContain('gap: 6px;');
@@ -353,7 +441,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(html).toContain('/review');
     expect(html).not.toContain('share-inline-chip-icon" aria-hidden="true">/</span>');
     expect(html).toContain('preview.png');
-    expect(html).not.toContain('share-attachment-image');
+    expect(html).not.toContain('<img class="share-attachment-image"');
     expect(html).toContain('remote.png');
     expect(html).toContain('notes.md');
     expect(html).not.toContain('visible fallback');

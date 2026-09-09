@@ -120,17 +120,13 @@ describe('WorkLouderCodexKeyboardLayout', () => {
       />,
     );
 
-    // Encoder top-left, stick top-right. Naming alone never caught these being
-    // swapped, so assert the order they appear in the first row.
-    const firstRow = container.querySelector('[data-testid] > div');
-    const labels = Array.from(firstRow?.children ?? []).map((child) =>
-      child.matches('[aria-label]')
-        ? child.getAttribute('aria-label')
-        : child.querySelector('[aria-label]')?.getAttribute('aria-label'),
-    );
-    expect(labels).toHaveLength(4);
-    expect(labels[0]).toMatch(/旋钮/);
-    expect(labels[3]).toMatch(/摇杆/);
+    const board = container.querySelector('[data-testid="worklouder-codex-keyboard-layout"]');
+    const encoder = board?.querySelector('[aria-label*="旋钮"]')?.parentElement;
+    const analog = board?.querySelector('[aria-label*="摇杆"]')?.parentElement;
+    expect(encoder?.getAttribute('style')).toMatch(/grid-column:\s*1/);
+    expect(analog?.getAttribute('style')).toMatch(/grid-column:\s*4/);
+    expect(encoder?.getAttribute('style')).toMatch(/grid-row:\s*1/);
+    expect(analog?.getAttribute('style')).toMatch(/grid-row:\s*1/);
   });
 
   it('prints no lettering on the keys — the real keycaps carry artwork only', () => {
@@ -151,6 +147,8 @@ describe('WorkLouderCodexKeyboardLayout', () => {
   it('splits the microphone into two single-width keys when the layout asks', () => {
     const settings = createWorkLouderCodexDefaultSettings();
     settings.layout.separateMicrophoneKeys = true;
+    settings.layout.merges = [];
+    settings.layout.slots.ACT10 = { keycapId: 'MIC', action: null };
 
     render(
       <WorkLouderCodexKeyboardLayout
@@ -161,9 +159,8 @@ describe('WorkLouderCodexKeyboardLayout', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /^MIC1/ })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^MIC$/ }).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /^EMPT1/ })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^MIC$/ })).toBeNull();
   });
 
   it('opens the editor for whichever part was clicked', () => {
@@ -193,6 +190,99 @@ describe('WorkLouderCodexKeyboardLayout', () => {
   });
 });
 
+describe('WorkLouderCodexKeyboardLayout — Creator Micro 2', () => {
+  it('binds push-to-talk to a blank cap on ACT10 and keeps the bottom row split', () => {
+    const { layout } = createWorkLouderCodexDefaultSettings('creator-micro-2');
+
+    expect(layout.separateMicrophoneKeys).toBe(true);
+    expect(layout.slots.ACT10).toEqual({ keycapId: 'EMPT1', action: { type: 'voice' } });
+    expect(layout.slots.ACT11).toEqual({ keycapId: 'EMPT2', action: null });
+    expect(layout.slots.ACT12.action).toEqual({
+      type: 'command',
+      commandId: 'composer.submit',
+    });
+  });
+
+  it('draws its own board: three 1U bottom keys, the same status lights, no microphone cap', () => {
+    const settings = createWorkLouderCodexDefaultSettings('creator-micro-2');
+    render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots()}
+        model="creator-micro-2"
+        labels={LABELS}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    // Thirteen blank keys: six agent keys plus seven command keys, all drawn
+    // as single-width caps. Creator ships no 2U MIC cap and no CODEX cap.
+    expect(screen.getAllByRole('button', { name: /^AG0/ })).toHaveLength(6);
+    expect(screen.queryByRole('button', { name: /^MIC/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^CODEX/ })).toBeNull();
+
+    // The bottom-left cluster is the same three status lights as Codex;
+    // the three bottom keys are separate 1U keys.
+    expect(screen.queryByTestId('worklouder-creator-touch-cluster')).toBeNull();
+    expect(screen.getByRole('img', { name: '状态指示灯' })).toBeTruthy();
+    const empt1 = screen.getAllByRole('button', { name: /^EMPT1/ });
+    expect(empt1).toHaveLength(2); // ACT06 and ACT10 share the blank cap style.
+  });
+
+  it('draws a promoted Codex command key as a task slot', () => {
+    const settings = createWorkLouderCodexDefaultSettings();
+    settings.layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'ACT06'];
+    render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots(['最近任务'])}
+        labels={LABELS}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /^ACT06/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^FAST/ })).toBeNull();
+  });
+
+  it('draws a promoted command key as a task slot and a demoted agent key as a blank cap', () => {
+    const settings = createWorkLouderCodexDefaultSettings('creator-micro-2');
+    settings.layout.taskKeys = ['ACT06', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05'];
+    render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots(['最近任务'])}
+        model="creator-micro-2"
+        labels={LABELS}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /^ACT06/ })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^EMPT1/ }).length).toBeGreaterThan(0);
+  });
+
+  it('opens the bottom-row key editors, distinguishing ACT10 from ACT06', () => {
+    const onEditKeycap = vi.fn();
+    const settings = createWorkLouderCodexDefaultSettings('creator-micro-2');
+    render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots()}
+        model="creator-micro-2"
+        labels={LABELS}
+        onEditKeycap={onEditKeycap}
+      />,
+    );
+
+    const empt1 = screen.getAllByRole('button', { name: /^EMPT1/ });
+    fireEvent.click(empt1[0]);
+    expect(onEditKeycap).toHaveBeenLastCalledWith('ACT06');
+    fireEvent.click(empt1[1]);
+    expect(onEditKeycap).toHaveBeenLastCalledWith('ACT10');
+  });
+});
+
 describe('WorkLouderCodexKeycapPicker', () => {
   const copy = {
     title: '编辑键帽',
@@ -201,6 +291,7 @@ describe('WorkLouderCodexKeycapPicker', () => {
     close: '关闭',
     cancel: '取消',
     save: '保存',
+    blank: '空白',
   };
 
   it('filters keycaps and keeps save/cancel explicit', () => {
@@ -274,6 +365,72 @@ describe('WorkLouderCodexKeycapPicker', () => {
     );
 
     expect(screen.getByText('已分配动作')).toBeTruthy();
+  });
+
+  it('renders the role header above the keycap search', () => {
+    render(
+      <WorkLouderCodexKeycapPicker
+        open
+        slot="ACT06"
+        selectedKeycapId="FAST"
+        query=""
+        onQueryChange={vi.fn()}
+        onOpenChange={vi.fn()}
+        onSelect={vi.fn()}
+        header={<span>按键用途</span>}
+        copy={copy}
+      />,
+    );
+
+    const header = screen.getByText('按键用途');
+    const search = screen.getByPlaceholderText('搜索键帽');
+    expect(header.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('hides keycap artwork the board cannot physically wear', () => {
+    render(
+      <WorkLouderCodexKeycapPicker
+        open
+        slot="ACT10"
+        selectedKeycapId="EMPT1"
+        query=""
+        onQueryChange={vi.fn()}
+        onOpenChange={vi.fn()}
+        onSelect={vi.fn()}
+        excludeKeycaps={['MIC', 'MIC1']}
+        copy={copy}
+      />,
+    );
+
+    // Creator ships blank caps only — no microphone artwork in any width.
+    expect(screen.queryByRole('button', { name: 'MIC' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'MIC1' })).toBeNull();
+    expect(screen.getByRole('button', { name: '空白' })).toBeTruthy();
+  });
+
+  it('puts the single blank 1U cap first instead of the numbered catalogue SKUs', () => {
+    render(
+      <WorkLouderCodexKeycapPicker
+        open
+        slot="ACT06"
+        selectedKeycapId="EMPT2"
+        query=""
+        onQueryChange={vi.fn()}
+        onOpenChange={vi.fn()}
+        onSelect={vi.fn()}
+        copy={copy}
+      />,
+    );
+
+    const tiles = screen
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') !== null);
+    expect(tiles[0]?.getAttribute('aria-label')).toBe('空白');
+    expect(tiles[0]?.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'EMPT1' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'EMPT2' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'EMPT3' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'EMPT4' })).toBeNull();
   });
 });
 

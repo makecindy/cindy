@@ -189,6 +189,11 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 - 正式包不得新增远程脚本或 `'unsafe-inline'`。现有 `'unsafe-eval'` 仅为 vendored drawio
   的已知例外；新增用途必须先做安全评估，不能顺手扩大 `script-src`、`connect-src` 或
   `frame-src`。
+- 所有插件 HTML 页面统一允许 HTTPS 图片：Host 生成的 CSP 只给 `img-src` 增加 `https:`，
+  owner × plugin session 的请求闸只额外放行
+  `protocol === "https:" && resourceType === "image"`。HTTP 图片、XHR／fetch、脚本、
+  样式表、字体、媒体、WebSocket 与其它协议保持拒绝，同 ghost 的 `cindy-ghost://` 资源照常
+  放行。不得把这项图片能力扩成通用网络口子；listener 继续按 partition 幂等注册。
 - 新的本地资源通道优先使用范围受控的自定义协议，不新增 `file://` 读取路径。主 Renderer
   仍使用 `file://` 是存量架构，迁移需要单独设计和验证，不能在普通功能 PR 中顺带改动。
 - 打包必须保留现有 Fuses：关闭 RunAsNode、Node options 和 CLI inspect，开启 cookie 加密、

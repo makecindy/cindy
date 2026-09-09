@@ -11,10 +11,13 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { TextInput } from '@/components/AppText';
+import Reanimated, { type useAnimatedStyle } from 'react-native-reanimated';
+import { GestureDetector } from '@/platform/gestureHandler';
+import type { PanGesture } from 'react-native-gesture-handler';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
@@ -109,6 +112,7 @@ export interface MobileComposerInputRowProps {
    * null / undefined 走内容自动增长（现状行为）。
    */
   inputFrameHeight?: number | Animated.Value | null;
+  inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle>;
   /**
    * 输入区（inputFrame）的最小高度。给语音听写用：听写期间「点输入区停止听写」的命中层
    * 盖在 inputFrame 上，而单行听写时 inputFrame 只有 28pt，不满足触控目标 44pt；
@@ -127,6 +131,8 @@ export interface MobileComposerInputRowProps {
   multilineShape?: boolean;
   onBlur?: TextInputProps['onBlur'];
   onChangeText: (value: string) => void;
+  onKeyPress?: TextInputProps['onKeyPress'];
+  onSelectionChange?: TextInputProps['onSelectionChange'];
   onContentSizeChange?: TextInputProps['onContentSizeChange'];
   onFocus?: TextInputProps['onFocus'];
   /**
@@ -149,6 +155,7 @@ export interface MobileComposerInputRowProps {
   onPressIn?: TextInputProps['onPressIn'];
   placeholder: string;
   placeholderTextColor: string;
+  selection?: TextInputProps['selection'];
   /** 顶部居中的拖拽调高 grabber（ComposerResizeGrabber），absolute 定位不占布局空间。 */
   resizeHandle?: ReactNode;
   rowStyle?: StyleProp<ViewStyle>;
@@ -188,6 +195,7 @@ export function MobileComposerInputRow({
   floatingVoiceButton,
   floatingVoiceButtonStyle,
   inputFrameHeight,
+  inputFrameAnimatedStyle,
   inputFrameMinHeight,
   inputElement,
   inputOverlay,
@@ -200,6 +208,8 @@ export function MobileComposerInputRow({
   multilineShape,
   onBlur,
   onChangeText,
+  onKeyPress,
+  onSelectionChange,
   onContentSizeChange,
   onFocus,
   onPasteImages,
@@ -208,6 +218,7 @@ export function MobileComposerInputRow({
   onPressIn,
   placeholder,
   placeholderTextColor,
+  selection,
   resizeHandle,
   rowStyle,
   scrollEnabled,
@@ -257,12 +268,15 @@ export function MobileComposerInputRow({
       multiline={multiline}
       onBlur={onBlur}
       onChangeText={onChangeText}
+      onSelectionChange={onSelectionChange}
+      onKeyPress={onKeyPress}
       onContentSizeChange={onContentSizeChange}
       onFocus={onFocus}
       onPressIn={onPressIn}
       placeholder={placeholder}
       placeholderTextColor={placeholderTextColor}
       scrollEnabled={scrollEnabled}
+      selection={selection}
       selectionColor={selectionColor}
       style={[
         styles.input,
@@ -297,13 +311,14 @@ export function MobileComposerInputRow({
         ]}
       >
         {cardLayout ? null : leading}
-        <Animated.View
+        <Reanimated.View
           style={[
             styles.inputFrame,
             // 收起单行与 34pt + 并排：输入盒在行内居中。
             geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
+            inputFrameAnimatedStyle,
           ]}
         >
           {inputElement ?? (onPasteImages && !isExpoGo ? (
@@ -312,7 +327,7 @@ export function MobileComposerInputRow({
             </TextInputWrapper>
           ) : textInputElement)}
           {inputOverlay}
-        </Animated.View>
+        </Reanimated.View>
         {cardLayout ? null : trailing}
       </View>
       {cardLayout && toolbar != null ? (
@@ -384,6 +399,7 @@ export interface ComposerResizeGrabberProps {
    * ScrollView 滚动，防止原生滚动抢走拖拽手势）。
    */
   panHandlers: GestureResponderHandlers & Pick<ViewProps, 'onTouchStart' | 'onTouchEnd' | 'onTouchCancel'>;
+  gesture: PanGesture;
   /** 不可见时淡出且不响应触摸，布局位置保持不变（避免出现/消失跳变）。 */
   visible: boolean;
   testID?: string;
@@ -396,7 +412,7 @@ export interface ComposerResizeGrabberProps {
  * 不会引起输入行高度跳变。触摸命中区是顶部居中的一段窄条，比可见的横条大得多，
  * 行两端保持穿透，不与左右按钮抢触摸。
  */
-export function ComposerResizeGrabber({ onAdjust, panHandlers, visible, testID }: ComposerResizeGrabberProps) {
+export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible, testID }: ComposerResizeGrabberProps) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
@@ -417,7 +433,9 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, visible, testID }
       pointerEvents={visible ? 'box-none' : 'none'}
       style={[styles.resizeGrabberTouch, { opacity }]}
     >
+      <GestureDetector gesture={gesture}>
       <View
+        collapsable={false}
         accessibilityActions={[
           { label: t('composer.input.resize.increaseHeight'), name: 'increment' },
           { label: t('composer.input.resize.decreaseHeight'), name: 'decrement' },
@@ -434,11 +452,12 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, visible, testID }
       >
         <View style={styles.resizeGrabberBar} />
       </View>
+      </GestureDetector>
     </Animated.View>
   );
 }
 
-export function VoiceMicWaveCaret({ color, testID }: { color: string; testID?: string }) {
+export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<View> }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const bar1 = useRef(new Animated.Value(0)).current;
   const bar2 = useRef(new Animated.Value(0)).current;
@@ -486,6 +505,8 @@ export function VoiceMicWaveCaret({ color, testID }: { color: string; testID?: s
     <View
       pointerEvents="none"
       style={styles.voiceMicCaret}
+      ref={viewRef}
+      collapsable={false}
       testID={testID}
     >
       <Mic color={color} size={iconSize.lg} strokeWidth={iconStroke.regular} />

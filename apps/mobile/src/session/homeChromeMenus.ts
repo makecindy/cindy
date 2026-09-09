@@ -7,7 +7,7 @@ import type {
   HomeStatusFilter,
 } from "@/session/homeListPriority";
 import type { HomeProjectOrder } from "@/session/homeProjectOrder";
-import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
+import { canBrowseMobileHomeDevice, type MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
 export type { HomeListSortBy, HomeProjectOrder, HomeStatusFilter };
 
@@ -32,7 +32,7 @@ export function buildHomeScopeMenuItems(
 ): ChromeActionMenuItem[] {
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   const deviceFilters = filters.filter(
-    (item) => item.deviceId !== null && item.available,
+    (item) => item.deviceId !== null && canBrowseMobileHomeDevice(item),
   );
   const items: ChromeActionMenuItem[] = [];
   if (allFilter) {
@@ -192,23 +192,13 @@ function inlineGroup(
   };
 }
 
-export const HOME_SCOPE_OPEN_PREFIX = "scope.open:";
-export const HOME_SCOPE_RENAME_PREFIX = "scope.rename:";
+export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
 
 export function parseHomeScopePullDownAction(
   id: string,
-):
-  | { kind: "select"; filterId: string }
-  | { kind: "open"; deviceId: string }
-  | { kind: "rename"; deviceId: string } {
-  if (id.startsWith(HOME_SCOPE_OPEN_PREFIX)) {
-    return { kind: "open", deviceId: id.slice(HOME_SCOPE_OPEN_PREFIX.length) };
-  }
-  if (id.startsWith(HOME_SCOPE_RENAME_PREFIX)) {
-    return {
-      kind: "rename",
-      deviceId: id.slice(HOME_SCOPE_RENAME_PREFIX.length),
-    };
+): { kind: "select"; filterId: string } | { kind: "collection"; collectionId: string } {
+  if (id.startsWith(HOME_SCOPE_COLLECTION_PREFIX)) {
+    return { kind: "collection", collectionId: id.slice(HOME_SCOPE_COLLECTION_PREFIX.length) };
   }
   return { kind: "select", filterId: id };
 }
@@ -216,15 +206,11 @@ export function parseHomeScopePullDownAction(
 export function buildHomeScopePullDownActions(
   filters: readonly MobileHomeDeviceFilterItem[],
   allConversationsLabel: string,
-  deviceActions: {
-    openLabel: string;
-    renameLabel: string;
-    showTasksLabel: string;
-  },
+  collections: readonly { id: string; title: string }[] = [],
 ): NativePullDownAction[] {
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   const deviceFilters = filters.filter(
-    (item) => item.deviceId !== null && item.available,
+    (item) => item.deviceId !== null && canBrowseMobileHomeDevice(item),
   );
   const items: NativePullDownAction[] = [];
   if (allFilter) {
@@ -232,24 +218,15 @@ export function buildHomeScopePullDownActions(
       checkable(allFilter.id, allConversationsLabel, allFilter.selected),
     );
   }
+  for (const collection of collections) {
+    items.push({
+      id: `${HOME_SCOPE_COLLECTION_PREFIX}${collection.id}`,
+      title: collection.title,
+    });
+  }
   for (const item of deviceFilters) {
     if (!item.deviceId) continue;
-    items.push({
-      id: `scope.submenu:${item.id}`,
-      state: item.selected ? "on" : "off",
-      subactions: [
-        checkable(item.id, deviceActions.showTasksLabel, item.selected),
-        {
-          id: `${HOME_SCOPE_OPEN_PREFIX}${item.deviceId}`,
-          title: deviceActions.openLabel,
-        },
-        {
-          id: `${HOME_SCOPE_RENAME_PREFIX}${item.deviceId}`,
-          title: deviceActions.renameLabel,
-        },
-      ],
-      title: item.label,
-    });
+    items.push(checkable(item.id, item.label, item.selected));
   }
   return items;
 }

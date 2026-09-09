@@ -1,4 +1,27 @@
 {
+  "localLogs": {
+    "upload": "Upload logs",
+    "uploadHint": "Send only filtered run records and app/system versions. Export for detailed debug logs.",
+    "uploadResult": {
+      "unavailable": "Log upload is unavailable in this build.",
+      "consentRequired": "Accept the Privacy Policy before uploading logs.",
+      "empty": "No recent logs. Enable recording and reproduce the problem first.",
+      "failed": "Upload failed. Logs are still saved on this phone."
+    },
+    "title": "Debug logs",
+    "record": "Record debug logs",
+    "hint": "Record phone connection, recovery, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
+    "export": "Export debug logs",
+    "clear": "Clear logs",
+    "busy": "Working…",
+    "failed": "Unable to save or share logs. Please try again.",
+    "clearHint": "Delete the saved diagnostic logs?",
+    "cancel": "Cancel",
+    "exportHint": "Share detailed local logs for troubleshooting. No conversation content or credentials.",
+    "options": "Log options",
+    "uploadCopied": "Uploaded. Code {{code}} copied.",
+    "uploadSucceeded": "Uploaded. Code {{code}}."
+  },
   "title": "Settings",
   "language": {
     "title": "Language",
@@ -58,9 +81,6 @@
     "deviceName": "Device Name",
     "deviceNameDetail": "This name appears in the authorization list on your computer.",
     "platform": "Platform",
-    "remoteControl": "Remote Control",
-    "remoteControlValue": "Managed on desktop",
-    "remoteControlDetail": "This phone acts only as a controller. Granting, revoking, and restoring control permissions is done in desktop settings.",
     "editAccessibility": "Edit {{label}}"
   },
   "relay": {

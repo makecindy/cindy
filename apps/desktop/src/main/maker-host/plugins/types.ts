@@ -67,6 +67,24 @@ export const ESSENTIAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'lsp',
 ]);
 
+/** Minimal built-ins every Bot needs; ordinary Cindy Sessions keep all essentials. */
+export const BOT_BASELINE_PLUGIN_IDS: ReadonlySet<string> = new Set([
+  'memory',
+  'xdt_helper',
+]);
+
+export function resolveBotAllowedBuiltinPluginIds(
+  catalog: readonly { id: string; available?: boolean }[],
+  configured: readonly string[],
+): string[] {
+  const explicit = new Set(configured);
+  return [...new Set(catalog
+    .filter((item) =>
+      item.available !== false
+      && (BOT_BASELINE_PLUGIN_IDS.has(item.id) || explicit.has(item.id)))
+    .map((item) => item.id))];
+}
+
 /** Plugin ids that have a dedicated Settings home and should NOT appear in the
  *  generic「内置工具」list — but remain user-toggleable (unlike essential ids).
  *  `browser` and `computer` live under Settings →「电脑使用 / Computer Use」,

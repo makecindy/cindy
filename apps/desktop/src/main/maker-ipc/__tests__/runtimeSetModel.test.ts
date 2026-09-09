@@ -1,4 +1,8 @@
+import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { acceptSessionRuntimeMutation, getPendingSessionRuntimeMutation, clearSessionRuntimeControlState } from '../sessionRuntimeControl.js';
+import { createPendingAgentSwitchRegistry } from '../sessionAgentSwitchHandler.js';
+import { withSendToSessionLock } from '../sendToSessionLock.js';
 
 import {
   clearSessionProvider,
@@ -6,7 +10,13 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
 import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../maker-host/codex-custom-provider-route.js';
+import {
   applyRuntimeSetModelChange,
+  refreshActiveModelContextSettings,
+  closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
   type RuntimeSetModelMaker,
 } from '../runtimeSetModel.js';
@@ -32,6 +42,7 @@ const touchedSessions = new Set<string>();
 
 afterEach(() => {
   sessionProviderWriteObserver.current = null;
+  setCodexAppliedCustomProviderRoutes([]);
   for (const sessionId of touchedSessions) {
     clearSessionProvider(sessionId);
   }
@@ -42,6 +53,37 @@ function rememberSession(sessionId: string): string {
   touchedSessions.add(sessionId);
   return sessionId;
 }
+
+const imageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
+  {
+    providerId: 'provider-a',
+    routeId: 'a'.repeat(20),
+    modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model', 'a-alt-model'],
+    routing: {
+      upstream: 'https://a.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+  {
+    providerId: 'provider-b',
+    routeId: 'b'.repeat(20),
+    modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+    capabilities: { imageGeneration: true },
+    responseModels: ['shared-model'],
+    routing: {
+      upstream: 'https://b.invalid/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'none',
+    },
+    responseRoutingByModel: {},
+    credentialRevision: 1,
+  },
+];
 
 describe('isRemoteModelSwitchRouteChangeError', () => {
   it('recognizes both IPC codes and remote daemon message markers', () => {
@@ -59,7 +101,212 @@ describe('isRemoteModelSwitchRouteChangeError', () => {
   });
 });
 
+describe('closeRejectedRuntimeAndRestoreControlStores', () => {
+  it('restores the old control route and rejects when runtime close leaves the handle alive', async () => {
+    const closeError = new Error('close transport rejected');
+    const retainedRuntimeError = new Error('rejected runtime is still live');
+    const closeRuntime = vi.fn(async () => {
+      throw closeError;
+    });
+    const controlStores = {
+      providerId: 'target-provider',
+      effort: 'max',
+      fastMode: true,
+    };
+    const persistedRoute = {
+      model: 'old-model',
+      providerId: 'old-provider',
+      effort: 'low',
+      fastMode: false,
+    } as const;
+    const restoreControlStores = vi.fn(() => {
+      controlStores.providerId = persistedRoute.providerId;
+      controlStores.effort = persistedRoute.effort;
+      controlStores.fastMode = persistedRoute.fastMode;
+    });
+    const reportCloseError = vi.fn();
+    const assertRuntimeClosed = vi.fn(() => {
+      expect(controlStores).toEqual({
+        providerId: persistedRoute.providerId,
+        effort: persistedRoute.effort,
+        fastMode: persistedRoute.fastMode,
+      });
+      throw retainedRuntimeError;
+    });
+
+    await expect(
+      closeRejectedRuntimeAndRestoreControlStores({
+        closeRuntime,
+        restoreControlStores,
+        reportCloseError,
+        assertRuntimeClosed,
+      }),
+    ).rejects.toBe(retainedRuntimeError);
+
+    expect(closeRuntime).toHaveBeenCalledOnce();
+    expect(reportCloseError).toHaveBeenCalledWith(closeError);
+    expect(restoreControlStores).toHaveBeenCalledOnce();
+    expect(assertRuntimeClosed).toHaveBeenCalledOnce();
+    expect(controlStores).toEqual({
+      providerId: persistedRoute.providerId,
+      effort: persistedRoute.effort,
+      fastMode: persistedRoute.fastMode,
+    });
+    expect(persistedRoute.model).toBe('old-model');
+  });
+});
+
 describe('applyRuntimeSetModelChange', () => {
+  async function applyImageGenerationRouteChange(input: {
+    testId: string;
+    currentThreadModelProviderId: string;
+    currentProviderId: string;
+    currentModel: string;
+    nextProviderId: string;
+    nextModel: string;
+    requiresModelSwitchRebuild?: (
+      model: string,
+      opts?: { providerId?: string | null },
+    ) => boolean | Promise<boolean>;
+  }) {
+    setCodexAppliedCustomProviderRoutes(imageGenerationRoutes);
+    const sessionId = rememberSession(input.testId);
+    setSessionProvider(sessionId, input.currentProviderId);
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: input.currentThreadModelProviderId,
+        model: input.currentModel,
+        setModel,
+        ...(input.requiresModelSwitchRebuild
+          ? { requiresModelSwitchRebuild: input.requiresModelSwitchRebuild }
+          : {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: input.nextModel,
+      providerId: input.nextProviderId,
+    });
+    return { result, sessionId, setModel, closeSession };
+  }
+
+  it('keeps one dynamic identity across eligible Responses models of the same Provider', async () => {
+    const routeA = imageGenerationRoutes[0]!;
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-same-provider',
+      currentThreadModelProviderId: routeA.modelProviderId,
+      currentProviderId: routeA.providerId,
+      currentModel: 'shared-model',
+      nextProviderId: routeA.providerId,
+      nextModel: 'a-alt-model',
+    });
+
+    expect(result.closeSession).not.toHaveBeenCalled();
+    expect(result.setModel).toHaveBeenCalledWith('a-alt-model', { providerId: 'provider-a' });
+  });
+
+  it('prioritizes a dynamic Provider identity rebuild over context-host preflight', async () => {
+    const [routeA, routeB] = imageGenerationRoutes;
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-cross-before-context-host',
+      currentThreadModelProviderId: routeA!.modelProviderId,
+      currentProviderId: routeA!.providerId,
+      currentModel: 'shared-model',
+      nextProviderId: routeB!.providerId,
+      nextModel: 'shared-model',
+      requiresModelSwitchRebuild,
+    });
+
+    expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.setModel).not.toHaveBeenCalled();
+  });
+
+  it('still rebuilds a context Host inside one dynamic Provider identity', async () => {
+    const routeA = imageGenerationRoutes[0]!;
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-same-provider-context-host',
+      currentThreadModelProviderId: routeA.modelProviderId,
+      currentProviderId: routeA.providerId,
+      currentModel: 'shared-model',
+      nextProviderId: routeA.providerId,
+      nextModel: 'a-alt-model',
+      requiresModelSwitchRebuild,
+    });
+
+    expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('a-alt-model', {
+      providerId: routeA.providerId,
+    });
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.setModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'dynamic to non-Responses',
+      currentIdentity: imageGenerationRoutes[0]!.modelProviderId,
+      currentProvider: 'provider-a',
+      targetProvider: 'provider-a',
+      targetModel: 'chat-model',
+    },
+    {
+      name: 'ordinary to dynamic',
+      currentIdentity: 'cindy_gateway',
+      currentProvider: 'ordinary-provider',
+      targetProvider: 'provider-a',
+      targetModel: 'shared-model',
+    },
+    {
+      name: 'dynamic Provider A to Provider B with the same model id',
+      currentIdentity: imageGenerationRoutes[0]!.modelProviderId,
+      currentProvider: 'provider-a',
+      targetProvider: 'provider-b',
+      targetModel: 'shared-model',
+    },
+  ])('closes the live thread when crossing $name', async (testCase) => {
+    const result = await applyImageGenerationRouteChange({
+      testId: `imagegen-cross-${testCase.name}`,
+      currentThreadModelProviderId: testCase.currentIdentity,
+      currentProviderId: testCase.currentProvider,
+      currentModel: 'shared-model',
+      nextProviderId: testCase.targetProvider,
+      nextModel: testCase.targetModel,
+    });
+
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(result.sessionId)).toBe(testCase.targetProvider);
+  });
+
+  it('does not rebuild an unrelated ordinary Codex route', async () => {
+    const result = await applyImageGenerationRouteChange({
+      testId: 'imagegen-ordinary-control',
+      currentThreadModelProviderId: 'cindy_gateway',
+      currentProviderId: 'ordinary-provider',
+      currentModel: 'ordinary-model',
+      nextProviderId: 'ordinary-provider',
+      nextModel: 'ordinary-model-next',
+    });
+
+    expect(result.closeSession).not.toHaveBeenCalled();
+    expect(result.setModel).toHaveBeenCalledWith('ordinary-model-next', {
+      providerId: 'ordinary-provider',
+    });
+  });
+
   it('rolls back provider route when live setModel rejects', async () => {
     const sessionId = rememberSession('runtime-set-model-rollback');
     setSessionProvider(sessionId, 'xd');
@@ -167,6 +414,52 @@ describe('applyRuntimeSetModelChange', () => {
       effort: 'high',
     });
   });
+
+  it('hot-applies a same-provider Claude model change while the turn is running',
+    async () => {
+      // 闸门 fail-open 之后走这条:Opus → Fable / Cindy 同凭证热切,不关会话、不丢 effort。
+      const sessionId = rememberSession('runtime-set-model-claude-hot-in-turn');
+      setSessionProvider(sessionId, 'cindy');
+      const setModel = vi.fn(async () => {});
+      const closeSession = vi.fn(async () => {});
+      const registerPendingCredentialSwitch = vi.fn();
+      const maker: RuntimeSetModelMaker = {
+        getSession: () => ({
+          agentKind: 'claude-code',
+          remoteHostId: null,
+          model: 'claude-opus-5',
+          setModel,
+        }),
+        listActiveSessions: () => [
+          {
+            id: sessionId,
+            agentKind: 'claude-code',
+            remoteHostId: null,
+            isTurnRunning: () => true,
+          },
+        ],
+        closeSession,
+      };
+
+      const result = await applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'claude-fable-5',
+        providerId: 'cindy',
+        effort: 'high',
+        registerPendingCredentialSwitch,
+      });
+
+      expect(result).toEqual({ status: 'applied' });
+      expect(setModel).toHaveBeenCalledWith('claude-fable-5', {
+        providerId: 'cindy',
+        effort: 'high',
+      });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+      expect(getSessionProvider(sessionId)).toBe('cindy');
+    },
+  );
 
   it('normalizes a whitespace provider before route and busy-session decisions', async () => {
     const sessionId = rememberSession('runtime-set-model-normalize-provider');
@@ -891,6 +1184,179 @@ describe('applyRuntimeSetModelChange', () => {
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
   });
 
+  it('lets the Pi guard reject an incompatible runtime replacement before route side effects', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-replacement-guard');
+    setSessionProvider(sessionId, 'openai');
+    const closeSession = vi.fn(async () => {});
+    const clearPendingCredentialSwitch = vi.fn();
+    const wakeSessionInputQueue = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'chatgpt/gpt-5.5',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      assertSessionCloseSupported: () => { throw new Error('replacement unsupported'); },
+      clearPendingCredentialSwitch,
+      wakeSessionInputQueue,
+    })).rejects.toThrow('replacement unsupported');
+
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(clearPendingCredentialSwitch).not.toHaveBeenCalled();
+    expect(wakeSessionInputQueue).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+
+  it.each([
+    { fromProvider: 'xai', fromModel: 'grok-4.6', toProvider: 'openai', toModel: 'gpt-5.6-sol' },
+    { fromProvider: 'openai', fromModel: 'gpt-5.6-sol', toProvider: 'xai', toModel: 'grok-4.6' },
+    { fromProvider: 'xai', fromModel: 'grok-4.6', toProvider: 'xd', toModel: 'gpt-5.6-sol' },
+    { fromProvider: 'xd', fromModel: 'gpt-5.6-sol', toProvider: 'xai', toModel: 'grok-4.6' },
+  ] as const)(
+    'closes idle Pi before $fromProvider → $toProvider so the next send lazy-creates',
+    async ({ fromProvider, fromModel, toProvider, toModel }) => {
+      const sessionId = rememberSession(`runtime-set-model-pi-${fromProvider}-to-${toProvider}`);
+      setSessionProvider(sessionId, fromProvider);
+      const setModel = vi.fn(async () => {});
+      const closeSession = vi.fn(async () => {
+        expect(getSessionProvider(sessionId)).toBe(fromProvider);
+      });
+      const maker: RuntimeSetModelMaker = {
+        getSession: () => ({
+          agentKind: 'pi',
+          remoteHostId: null,
+          model: fromModel,
+          setModel,
+        }),
+        listActiveSessions: () => [
+          { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+        ],
+        closeSession,
+      };
+
+      await expect(applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: toModel,
+        providerId: toProvider,
+        clearPendingCredentialSwitch: vi.fn(),
+        wakeSessionInputQueue: vi.fn(),
+      })).resolves.toEqual({ status: 'applied' });
+
+      expect(closeSession).toHaveBeenCalledWith(sessionId);
+      expect(setModel).not.toHaveBeenCalled();
+      expect(getSessionProvider(sessionId)).toBe(toProvider);
+    },
+  );
+
+  it('hot-switches idle Pi inside the same proxy identity without closing', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-same-xai');
+    setSessionProvider(sessionId, 'xai');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'grok-4.5',
+      providerId: 'xai',
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(setModel).toHaveBeenCalledWith('grok-4.5', { providerId: 'xai' });
+    expect(getSessionProvider(sessionId)).toBe('xai');
+  });
+
+  it('defers a busy Pi proxy-identity switch until the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-busy-xai-to-openai');
+    setSessionProvider(sessionId, 'xai');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xai');
+  });
+
+  it.each((['claude-code', 'codex', 'pi'] as const).flatMap(agentKind => [null, 'ssh-host'].map(remoteHostId => ({ agentKind, remoteHostId }))))('reloads $agentKind context on $remoteHostId after the turn without cleanup', async ({ agentKind, remoteHostId }) => {
+    const sessionId = rememberSession(`context-reload-${agentKind}`);
+    setSessionProvider(sessionId, 'xd');
+    let busy = true;
+    const cleanup = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {
+      await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, cleanup);
+    });
+    const setModel = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind, remoteHostId, model: 'same-model', setModel }),
+      listActiveSessions: () => [{ id: sessionId, agentKind, remoteHostId, isTurnRunning: () => busy }],
+      closeSession,
+    };
+    const input = { maker, sessionId, model: 'same-model', providerId: 'xd',
+      forceSessionRebuild: true, registerPendingCredentialSwitch };
+    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'deferred' });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { model: 'same-model', providerId: 'xd', forceSessionRebuild: true });
+    busy = false;
+    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied' });
+    expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(cleanup).not.toHaveBeenCalled();
+    await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, cleanup);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {
     const sessionId = rememberSession('runtime-set-model-orca-worker-rebuild');
     setSessionProvider(sessionId, 'xd');
@@ -922,6 +1388,115 @@ describe('applyRuntimeSetModelChange', () => {
     expect(setModel).not.toHaveBeenCalled();
   });
 
+  it('rebuilds an idle Codex Session when its handle reports a context-host boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-context-host-rebuild');
+    setSessionProvider(sessionId, 'mygpt');
+    const setModel = vi.fn(async () => {});
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+        requiresModelSwitchRebuild,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      clearPendingCredentialSwitch: vi.fn(),
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
+      providerId: 'mygpt',
+    });
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes a provider thread relink over context-host rebuild preflight', async () => {
+    const sessionId = rememberSession('runtime-set-model-relink-before-context-host');
+    setSessionProvider(sessionId, 'mygpt');
+    const order: string[] = [];
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const setModel = vi.fn(async () => {});
+    const relinkCodexThread = vi.fn(async () => {
+      order.push('relink');
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.6-sol',
+        setModel,
+        requiresModelSwitchRebuild,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession: vi.fn(async () => {
+        order.push('close');
+      }),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      requiresCodexThreadRelink: true,
+      relinkCodexThread,
+    })).resolves.toEqual({ status: 'applied', persistedRoute: true });
+
+    expect(order).toEqual(['close', 'relink']);
+    expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('defers a busy Codex context-host rebuild to the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-context-host-defer');
+    setSessionProvider(sessionId, 'mygpt');
+    const registerPendingCredentialSwitch = vi.fn();
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+        requiresModelSwitchRebuild: async () => true,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      forceSessionRebuild: true,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+    });
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
   it('defers a busy Orca Worker rebuild to the turn boundary', async () => {
     const sessionId = rememberSession('runtime-set-model-orca-worker-defer');
     setSessionProvider(sessionId, 'xd');
@@ -950,6 +1525,7 @@ describe('applyRuntimeSetModelChange', () => {
     })).resolves.toEqual({ status: 'deferred' });
 
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      forceSessionRebuild: true,
       model: 'gpt-5.4',
       providerId: 'xd',
     });
@@ -982,5 +1558,136 @@ describe('applyRuntimeSetModelChange', () => {
       }),
     ).rejects.toThrow(/busy/);
     expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+});
+
+describe('context configuration refresh across live routes', () => {
+  it.each([false, true])('refreshes an ambiguous implicit source only when its actual runtime budget changed (%s)', async (changed) => {
+    const id = rememberSession('implicit-context-refresh');
+    const closeSession = vi.fn();
+    const session = { id, agentKind: 'claude-code' as const, model: 'shared', setModel: vi.fn(),
+      requiresModelSwitchRebuild: vi.fn(() => changed) };
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession } },
+      targets: [{ agent: 'claude-code', providerId: 'xd', modelId: 'shared' }],
+      inferProviderId: () => null, assertCurrent: () => {}, hasPendingSelection: () => false,
+      withSessionLock: withSendToSessionLock,
+    });
+    expect(session.requiresModelSwitchRebuild).toHaveBeenCalled();
+    expect(closeSession).toHaveBeenCalledTimes(changed ? 1 : 0);
+    expect(getSessionProvider(id)).toBeNull();
+  });
+
+  it.each(['explicit', 'default'] as const)('preserves accepted runtime and harness selections during a %s refresh', async (kind) => {
+    const switches = createPendingAgentSwitchRegistry();
+    const ids = ['remote-pending-route', 'pending-harness'];
+    const sessions = ids.map((id) => ({ id: rememberSession(id), agentKind: 'codex' as const,
+      model: 'old-model', setModel: vi.fn(), isTurnRunning: () => true,
+      requiresModelSwitchRebuild: vi.fn(() => true) }));
+    const next = { agentKind: 'codex' as const, model: 'next-model', providerId: 'next-provider', effort: null, fastMode: false };
+    acceptSessionRuntimeMutation({ sessionId: ids[0]!, source: 'agent', deferred: true, profile: next });
+    switches.set(ids[1]!, { targetAgentKind: 'pi', model: 'pi-model', providerId: 'pi-provider' });
+    const registerPendingCredentialSwitch = vi.fn();
+    const closeSession = vi.fn();
+    try {
+      await refreshActiveModelContextSettings({
+        runtime: { maker: { getSession: (id) => sessions.find((s) => s.id === id), listActiveSessions: () => sessions, closeSession },
+          isSessionInTurn: () => true, registerPendingCredentialSwitch },
+        ...(kind === 'explicit' ? { targets: [{ agent: 'codex' as const, providerId: 'old-provider', modelId: 'old-model' }] } : {}),
+        inferProviderId: () => 'old-provider', assertCurrent: () => {}, withSessionLock: withSendToSessionLock,
+        hasPendingSelection: (id) => !!getPendingSessionRuntimeMutation(id) || !!switches.get(id),
+      });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+      expect(getPendingSessionRuntimeMutation(ids[0]!)?.profile).toEqual(next);
+      expect(switches.get(ids[1]!)?.model).toBe('pi-model');
+    } finally { clearSessionRuntimeControlState(ids[0]!); }
+  });
+
+  it('rechecks accepted selections after asynchronous context preflight', async () => {
+    const id = rememberSession('context-preflight-selection');
+    let pending = false;
+    const closeSession = vi.fn();
+    const registerPendingCredentialSwitch = vi.fn();
+    const session = { id, agentKind: 'pi' as const, model: 'old', setModel: vi.fn(),
+      requiresModelSwitchRebuild: async () => { pending = true; return true; } };
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession }, registerPendingCredentialSwitch },
+      inferProviderId: () => 'xd', assertCurrent: () => {}, hasPendingSelection: () => pending,
+      withSessionLock: withSendToSessionLock,
+    });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+  });
+
+  it.each(['explicit', 'default'] as const)('refreshes all three engines for a %s edit while preserving other routes and pending choices', async (kind) => {
+    const ids = ['claude-code', 'codex', 'pi', 'other-route', 'pending'] as const;
+    const sessions = ids.map((id) => {
+      rememberSession(id);
+      setSessionProvider(id, id === 'other-route' ? 'other' : 'xd');
+      return { id, agentKind: id === 'other-route' || id === 'pending' ? 'pi' as const : id,
+        model: 'shared-model', setModel: vi.fn(async () => {}),
+        requiresModelSwitchRebuild: vi.fn(() => id !== 'other-route'), isTurnRunning: () => false };
+    });
+    const closeSession = vi.fn(async (_sessionId: string) => {});
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: (id) => sessions.find((s) => s.id === id), listActiveSessions: () => sessions, closeSession },
+        getPendingCredentialSwitch: (id) => id === 'pending' ? { model: 'next-model', providerId: 'xd' } : undefined },
+      ...(kind === 'explicit' ? { targets: sessions.slice(0, 3).map((s) => ({ agent: s.agentKind, providerId: 'xd', modelId: s.model })) } : {}),
+      hasPendingSelection: () => false, withSessionLock: async (_id, run) => run(),
+      inferProviderId: () => null, assertCurrent: () => {},
+    });
+    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['claude-code', 'codex', 'pi']);
+    expect(sessions[4]!.requiresModelSwitchRebuild).not.toHaveBeenCalled();
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('retains a failed %s catalog reload and continues later tasks', async (agentKind) => {
+    const sessions = ['failed', 'later'].map(suffix => ({
+      id: rememberSession(`catalog-${agentKind}-${suffix}`), agentKind, remoteHostId: 'ssh-host',
+      model: 'model', setModel: vi.fn(), requiresModelSwitchRebuild: () => true,
+    }));
+    const registerPendingCredentialSwitch = vi.fn();
+    const closeSession = vi.fn(async () => {}).mockRejectedValueOnce(new Error('temporary transport failure'));
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { listActiveSessions: () => sessions, getSession: id => sessions.find(s => s.id === id), closeSession },
+        registerPendingCredentialSwitch },
+      hasPendingSelection: () => false, withSessionLock: withSendToSessionLock,
+      inferProviderId: () => 'xd', assertCurrent: () => {},
+    });
+    expect(closeSession.mock.calls).toEqual([[sessions[0]!.id], [sessions[1]!.id]]);
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledExactlyOnceWith(sessions[0]!.id, {
+      model: 'model', providerId: null, forceSessionRebuild: true,
+    });
+  });
+
+  it.each(['selection', 'account'] as const)('preserves a newer %s change while a catalog close fails', async (change) => {
+    const id = rememberSession(`catalog-close-${change}`);
+    let changed = false;
+    const session = { id, agentKind: 'pi' as const, remoteHostId: 'ssh-host', model: 'model',
+      setModel: vi.fn(), requiresModelSwitchRebuild: () => true };
+    const registerPendingCredentialSwitch = vi.fn();
+    const run = refreshActiveModelContextSettings({
+      runtime: { maker: { listActiveSessions: () => [session], getSession: () => session,
+        closeSession: async () => { changed = true; throw new Error('close failed'); } }, registerPendingCredentialSwitch },
+      hasPendingSelection: () => changed && change === 'selection', withSessionLock: withSendToSessionLock,
+      inferProviderId: () => 'xd', assertCurrent: () => { if (changed && change === 'account') throw new Error('owner changed'); },
+    });
+    if (change === 'account') await expect(run).rejects.toThrow('owner changed');
+    else await expect(run).resolves.toBeUndefined();
+    expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+  });
+
+  it('stops a default refresh if the account changes during native preflight', async () => {
+    const sessionId = rememberSession('owner-context-refresh');
+    let current = true;
+    const closeSession = vi.fn(async (_sessionId: string) => {});
+    const session = { id: sessionId, agentKind: 'claude-code' as const, model: 'model', setModel: vi.fn(async () => {}),
+      requiresModelSwitchRebuild: async () => { current = false; return true; } };
+    await expect(refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession } },
+      hasPendingSelection: () => false, withSessionLock: async (_id, run) => run(),
+      inferProviderId: () => 'xd', assertCurrent: () => { if (!current) throw new Error('owner changed'); },
+    })).rejects.toThrow('owner changed');
+    expect(closeSession).not.toHaveBeenCalled();
   });
 });

@@ -7,7 +7,60 @@
 
 import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft } from 'lucide-react';
 
-import type { GitContextDirSource, PrStatusKind } from '@/lib/gitContext.types';
+import type { GitContextDirSource, PrStatusKind, PrStatusResult } from '@/lib/gitContext.types';
+
+/**
+ * 本机 gh 不可用时徽标承担的引导动作。tooltip 是非交互浮层放不了按钮,
+ * 所以动作落在 chip 点击上:点击把对应提示词填进当前任务输入框(只填不发),
+ * **不再**打开 PR——gh 问题解决之前一个 chip 只有一个动作。
+ *   install = gh 未安装 → 让 Agent 安装并登录
+ *   login   = gh 未登录 → 让 Agent 登录
+ * 其它失败(no-token / not-found / fetch-failed)用户做不了什么,返回 null,
+ * 点击仍是打开 PR。
+ */
+export type PrGuidanceAction = 'install' | 'login';
+
+export type PrGuidanceSessionOpts = {
+  /** Codex SSH:Agent 跑在远端机器。 */
+  remoteHostId?: string | null;
+  /** device-link:本 session 归属被控设备。与 remoteHostId 互不相干,必须同时钳。 */
+  deviceLinkDeviceId?: string | null;
+  /** review 等只读任务:ChatInput 永久 disabled,插入会被静默丢掉。 */
+  readOnly?: boolean;
+};
+
+/**
+ * 点击会独占 chip(不再打开 PR),所以只有动作能兑现才引导:
+ *   1. 当前任务的 Agent 就在本机(非 SSH / 非 device-link)
+ *   2. 输入框能收下提示词(非 review 只读)
+ * 任一不成立 → 不引导,点击仍打开 PR。
+ */
+export function prGuidanceFor(
+  status: PrStatusResult | undefined,
+  opts?: PrGuidanceSessionOpts,
+): PrGuidanceAction | null {
+  if (opts?.remoteHostId || opts?.deviceLinkDeviceId || opts?.readOnly) return null;
+  if (!status || status.ok) return null;
+  if (status.reason === 'gh-missing') return 'install';
+  if (status.reason === 'gh-not-logged-in') return 'login';
+  return null;
+}
+
+/** 失败态 tooltip 的原因文案 key(ccAgent.gitContext.pr.*)。加载中(undefined)不给。 */
+export function prFailureCopyKey(status: PrStatusResult | undefined): string | null {
+  if (!status || status.ok) return null;
+  switch (status.reason) {
+    case 'gh-missing':
+      return 'ccAgent.gitContext.pr.ghMissing';
+    case 'gh-not-logged-in':
+      return 'ccAgent.gitContext.pr.ghNotLoggedIn';
+    case 'not-found':
+      return 'ccAgent.gitContext.pr.notFound';
+    case 'no-token':
+    case 'fetch-failed':
+      return 'ccAgent.gitContext.pr.statusUnknown';
+  }
+}
 
 /**
  * 决定分支 chip 显示哪条分支。优先级:

@@ -81,13 +81,14 @@ async function fulfillDownloadWithTarGz(opts: DownloadOpts) {
   };
 }
 
-function makeProvisioner(overrides?: { optionalAsset?: boolean }) {
+function makeProvisioner(overrides?: { optionalAsset?: boolean; binaryName?: string }) {
+  const { binaryName = BIN_NAME, ...configOverrides } = overrides ?? {};
   return createBinaryProvisioner({
     vendorKey: 'pi',
     manifestField: 'pi',
     installSubdir: `dir-dist-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    artifact: { kind: 'tar-gz-dir', binaryName: BIN_NAME },
-    ...overrides,
+    artifact: { kind: 'tar-gz-dir', binaryName },
+    ...configOverrides,
   });
 }
 
@@ -133,6 +134,33 @@ describe('createBinaryProvisioner tar-gz-dir', () => {
     expect(fs.existsSync(path.join(versionDir, `${BIN_NAME}.dist.tar.gz`))).toBe(false);
     if (process.platform !== 'win32') {
       expect(fs.statSync(result.binaryPath).mode & 0o111).not.toBe(0);
+    }
+  });
+
+  it('supports a nested package entrypoint such as bin/codex', async () => {
+    const binaryName = path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-package-src-'));
+    const sourceBinary = path.join(sourceRoot, binaryName);
+    fs.mkdirSync(path.dirname(sourceBinary), { recursive: true });
+    fs.writeFileSync(sourceBinary, '#!/bin/sh\necho codex\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(sourceRoot, 'codex-package.json'), '{}');
+    mocks.archiveState.srcDir = sourceRoot;
+    mocks.download.mockImplementation(fulfillDownloadWithTarGz);
+
+    let installRoot: string | undefined;
+    try {
+      const result = await makeProvisioner({ binaryName }).prepare();
+
+      expect(result.ready).toBe(true);
+      const versionDir = path.dirname(path.dirname(result.binaryPath));
+      installRoot = path.dirname(versionDir);
+      expect(result.binaryPath).toBe(path.join(versionDir, binaryName));
+      expect(fs.existsSync(path.join(versionDir, 'codex-package.json'))).toBe(true);
+      expect(fs.existsSync(path.join(versionDir, '.verified'))).toBe(true);
+      expect(fs.existsSync(path.join(versionDir, `${binaryName}.dist.tar.gz`))).toBe(false);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      if (installRoot) fs.rmSync(installRoot, { recursive: true, force: true });
     }
   });
 

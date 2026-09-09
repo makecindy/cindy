@@ -130,7 +130,7 @@ export function markRemoteTopicsSubscribed(
   topics: readonly Topic[],
 ): void {
   if (!deviceId || topics.length === 0) return;
-  const current = acked.get(deviceId) ?? new Set<Topic>();
+  const current = new Set(acked.get(deviceId));
   for (const topic of topics) current.add(topic);
   acked.set(deviceId, current);
 }
@@ -151,10 +151,11 @@ export function markRemoteTopicsUnsubscribed(
   deviceId: string,
   topics: readonly Topic[],
 ): void {
-  const current = acked.get(deviceId);
-  if (!current) return;
+  if (!acked.has(deviceId)) return;
+  const current = new Set(acked.get(deviceId));
   for (const topic of topics) current.delete(topic);
   if (current.size === 0) acked.delete(deviceId);
+  else acked.set(deviceId, current);
 }
 
 /**

@@ -7,6 +7,7 @@ export type {
   ClaudeSubagentModelAccessStatus,
 } from './claude-code/subagent-model-access.js';
 export { CodexAgent } from './codex/index.js';
+export { isCodexHistoryRecoveryRequired } from './codex/history-recovery.js';
 export {
   CODEX_HISTORY_OVERSIZED_REASON,
   CODEX_LIVE_TAIL_OVERSIZED_BYTES,
@@ -72,6 +73,7 @@ export {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from './shared/context-overflow-error.js';
+export { isRemoteCompactEncryptedContentError } from './shared/remote-compact-encrypted-error.js';
 export { isDeterministicHostCompactFailure } from './shared/auto-compact-controller.js';
 // ErrorBanner 用人话替换 LiteLLM / Responses 空壳流中断,不驱动自动续跑。
 export {
@@ -92,6 +94,8 @@ export {
   AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS,
   autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  extractAutoReviewUserIntent,
+  appendAutoReviewUserIntent,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
@@ -104,6 +108,7 @@ export {
   type AutoReviewRequest,
   type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
+export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export type { ReviewableAction } from './shared/auto-review.js';
 export {
   ORCA_NESTED_REPORT_DENIAL_REASON,

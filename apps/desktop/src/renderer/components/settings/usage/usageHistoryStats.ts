@@ -10,10 +10,7 @@
  *   - `models[]` / `modelDaily` 是 30 天 → 按模型、按 agent、每日柱图
  */
 
-import type {
-  UsageHistoryModel,
-  UsageHistoryPayload,
-} from '@/hooks/useUsageHistory';
+import type { UsageHistoryModel, UsageHistoryPayload } from '@/hooks/useUsageHistory';
 
 export type UsageAgentKind = UsageHistoryModel['agentKind'];
 
@@ -21,6 +18,8 @@ export interface UsageDay {
   day: string;
   tokens: number;
 }
+
+export type UsageHistoryRange = 'all' | '30d' | '7d' | 'today' | `day:${string}`;
 
 export interface ModelTokenRow {
   key: string;
@@ -76,6 +75,123 @@ function shiftDayKey(dayKey: string, deltaDays: number): string {
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
   return `${date.getFullYear()}-${mm}-${dd}`;
+}
+
+export function usageRangeDay(range: UsageHistoryRange, todayKey?: string): string | null {
+  if (range === 'today') return todayKey ?? null;
+  return range.startsWith('day:') ? range.slice(4) : null;
+}
+
+/** Exact-day ranges cannot provide a distinct "today" comparison column. */
+export function isUsageHistorySingleDay(range: UsageHistoryRange): boolean {
+  return range === 'today' || usageRangeDay(range) !== null;
+}
+
+export function isUsageDayInRange(
+  day: string,
+  todayKey: string,
+  range: UsageHistoryRange,
+): boolean {
+  const selectedDay = usageRangeDay(range);
+  if (selectedDay) return day === selectedDay;
+  if (range === 'all') return true;
+  if (range === 'today') return day === todayKey;
+  const days = range === '7d' ? 7 : 30;
+  return day >= shiftDayKey(todayKey, -(days - 1)) && day <= todayKey;
+}
+
+/**
+ * Derive the table/statistics payload for a selected range. Charts intentionally
+ * receive their own fixed-window slices so changing this range never changes
+ * the heatmap or daily-token chart.
+ */
+export function filterUsageHistoryPayload(
+  payload: UsageHistoryPayload | null,
+  range: UsageHistoryRange,
+): UsageHistoryPayload | null {
+  if (!payload) return null;
+
+  const selectedDay = usageRangeDay(range, payload.todayKey);
+  const rangeTodayKey = selectedDay ?? payload.todayKey;
+  const modelByKey = new Map<string, UsageHistoryModel>();
+  for (const row of payload.modelDaily) {
+    if (!isUsageDayInRange(row.day, payload.todayKey, range) || row.tokens <= 0) continue;
+    const key = `${row.agentKind}\u0000${row.model}`;
+    const existing = modelByKey.get(key);
+    const componentTotal =
+      (row.inputTokens ?? 0) +
+      (row.outputTokens ?? 0) +
+      (row.cacheReadTokens ?? 0) +
+      (row.cacheCreateTokens ?? 0);
+    // Old renderer snapshots only carried `tokens`; preserve their totals until
+    // the next main-process refresh supplies the component fields.
+    const inputTokens = row.inputTokens ?? (componentTotal === 0 ? row.tokens : 0);
+    const outputTokens = row.outputTokens ?? 0;
+    const cacheReadTokens = row.cacheReadTokens ?? 0;
+    const cacheCreateTokens = row.cacheCreateTokens ?? 0;
+    if (existing) {
+      existing.inputTokens += inputTokens;
+      existing.outputTokens += outputTokens;
+      existing.cacheReadTokens += cacheReadTokens;
+      existing.cacheCreateTokens += cacheCreateTokens;
+      continue;
+    }
+    modelByKey.set(key, {
+      agentKind: row.agentKind,
+      model: row.model,
+      money: row.money,
+      estimatedMoney:
+        row.subscriptionEstimateMoney.amount > 0 ? row.subscriptionEstimateMoney : null,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreateTokens,
+    });
+  }
+
+  const modelDaily = payload.modelDaily.filter((row) =>
+    isUsageDayInRange(row.day, payload.todayKey, range),
+  );
+  const days = payload.days.filter((row) => isUsageDayInRange(row.day, payload.todayKey, range));
+  const models = [...modelByKey.values()];
+  const lastRangeTokens = models.reduce((sum, model) => sum + modelTokenTotal(model), 0);
+  const todayTokens = modelDaily
+    .filter((row) => row.day === rangeTodayKey)
+    .reduce((sum, row) => sum + row.tokens, 0);
+
+  return {
+    ...payload,
+    todayKey: rangeTodayKey,
+    days,
+    modelDaily,
+    models,
+    totals: {
+      ...payload.totals,
+      todayTokens,
+      last30DaysTokens: lastRangeTokens,
+    },
+    streak: computeTokenStreak(
+      days
+        .map((row) => ({ day: row.day, tokens: row.tokens ?? 0 }))
+        .filter((row) => row.tokens > 0),
+      rangeTodayKey,
+    ),
+  };
+}
+
+export function chartUsageHistoryPayload(
+  payload: UsageHistoryPayload | null,
+): UsageHistoryPayload | null {
+  if (!payload) return null;
+  const charts = filterUsageHistoryPayload(payload, '30d');
+  return {
+    ...(charts ?? payload),
+    // The heatmap decides its own visible window from the measured card width.
+    // Keep the full `days` history here so a wide settings card can expose more
+    // than the old fixed 20-week slice; the daily bar chart still uses modelDaily
+    // from the fixed 30-day chart payload above.
+    days: payload.days,
+  };
 }
 
 /** payload.days → 只保留 token 维度 (热力图与 streak 的共同输入)。 */

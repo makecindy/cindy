@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ModelRegistry } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type ModelRegistry } from '@cindy/model-providers';
 
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
 import {
@@ -115,6 +115,24 @@ describe('gatewayPricingCatalog', () => {
 });
 
 describe('registryPricingCatalog', () => {
+  it.each(['fast', 'priority'] as const)('projects declared %s prices without inventing unavailable tariffs', (variant) => {
+    const entry = structuredClone(BUNDLED_CATALOG.modelRegistry!.models.find((model) => model.id === 'openai/gpt-6-astra')!);
+    const prices = entry.routes[0]!.referencePrices!;
+    prices.find((price) => price.variant === 'fast')!.variant = variant;
+    const registry: ModelRegistry = { schemaVersion: 1, updatedAt: '2026-09-04T00:00:00Z', models: [entry] };
+    const getQuote = (at = '2026-09-04') => providerReferencePriceQuote('openai', 'gpt-6-astra', registry, { at });
+    expect(getQuote()).toMatchObject({ inputPerMtok: 10, priority: { inputPerMtok: 20, cacheCreatePerMtok: 25 } });
+
+    const fast = prices.find((price) => price.variant === variant)!;
+    fast.effectiveFrom = '2026-09-05';
+    expect(getQuote()?.priority).toBeUndefined();
+    expect(getQuote('2026-09-05')?.priority).toBeDefined();
+    fast.currency = 'CNY';
+    expect(getQuote('2026-09-05')?.priority).toBeUndefined();
+    entry.routes[0]!.referencePrices = prices.filter((price) => price.variant === 'standard');
+    expect(getQuote()?.priority).toBeUndefined();
+  });
+
   it('preserves the bounds of a single reference-price interval', () => {
     const registry: ModelRegistry = {
       schemaVersion: 1,

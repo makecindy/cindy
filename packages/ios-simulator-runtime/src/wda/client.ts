@@ -528,10 +528,10 @@ export class WdaClient implements IOSSimulatorAutomationDriver {
     );
   }
 
-  async home(signal?: AbortSignal): Promise<void> {
+  async home(sessionId: string, signal?: AbortSignal): Promise<void> {
     await this.#request(
-      "/wda/homescreen",
-      { method: "POST", body: "{}" },
+      `/session/${requireSessionId(sessionId)}/wda/pressButton`,
+      { method: "POST", body: JSON.stringify({ name: "home" }) },
       signal,
     );
   }

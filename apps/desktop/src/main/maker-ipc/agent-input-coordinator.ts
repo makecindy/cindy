@@ -1,3 +1,4 @@
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -28,10 +29,16 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
+import { readAutoReviewUserText } from './autoReviewUserIntent.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
+import {
+  restoreTrustedDesktopQueuedOrigin,
+  revokeTrustedDesktopQueuedOrigin,
+  TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
+} from './makerSendTransaction.js';
 import type {
   DesktopSessionDispatchFailure,
   HostSendFailureCode,
@@ -181,6 +188,8 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
@@ -201,6 +210,8 @@ export interface AgentInputSendOpts {
    * 最终 wire 消息。**由 main 构造,不是 wire 输入。**
    */
   fromMobileClient?: boolean;
+  /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
+  fromDeviceLinkClient?: boolean;
   /** Main-owned clear token captured when this input became active. */
   expectedClearBoundaryMs?: number | null;
   /** Main-owned input generation captured before async preparation. */
@@ -388,6 +399,14 @@ export interface AgentInputCoordinatorDeps {
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
   ) => Promise<AgentInputSessionReferenceContext[]>;
+  /**
+   * Refresh ephemeral structured-reference state at the actual dispatch
+   * boundary. Queue snapshots may wait behind another turn and must not carry
+   * a stale Bot working/idle observation into the model input.
+   */
+  refreshAgentReferencesBeforeDispatch?: (
+    item: AgentInputQueuedMessage,
+  ) => Promise<void>;
   emitProjection: (projection: AgentInputProjection) => void;
   /**
    * 意识拦截钩(订阅槽①,will-user-message):派发与落库**之前**问一遍已装
@@ -543,6 +562,8 @@ export interface AgentInputCoordinatorDeps {
 }
 
 interface ActiveTurn {
+  /** Retained after steering receipt cleanup until this turn ends. */
+  latestSteeringClientId?: string;
   item: AgentInputQueuedMessage | null;
   delivery: AgentInputDelivery;
   messageUuid: string;
@@ -1033,6 +1054,17 @@ export class AgentInputCoordinator {
     return texts;
   }
 
+  /** O(1), main-owned input attribution before synchronous provider events settle the turn. */
+  getActiveInputClientId(sessionId: string, vendorGeneration?: number): string | null {
+    const state = this.states.get(sessionId);
+    const active = state?.activeTurn;
+    if (!active) return null;
+    if (vendorGeneration !== undefined && active.vendorTurnGeneration !== null
+      && vendorGeneration !== active.vendorTurnGeneration) return null;
+    // A human steering a private reply takes ownership of the resulting output.
+    return active.latestSteeringClientId ?? active.item?.clientId ?? null;
+  }
+
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
   }
@@ -1172,9 +1204,9 @@ export class AgentInputCoordinator {
     }
     let items: AgentInputQueuedMessage[];
     try {
-      items = (await this.deps.loadQueueSnapshot!(sessionId)).map(
-        normalizeRestoredSyntheticTrigger,
-      );
+      items = (await this.deps.loadQueueSnapshot!(sessionId))
+        .map(normalizeRestoredSyntheticTrigger)
+        .map(restoreTrustedDesktopQueuedOrigin);
     } catch (err) {
       log.warn('load queue snapshot failed; will retry on next entry', {
         sessionId,
@@ -1998,6 +2030,7 @@ export class AgentInputCoordinator {
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
+    if (state.activeTurn) state.activeTurn.latestSteeringClientId = item.clientId;
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
@@ -2111,6 +2144,9 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+        [AUTO_REVIEW_SOURCE_CONTENT]: item.autoReviewUserText ?? '',
+        ...(readAutoReviewUserText(item.persistedContent) === null
+          ? { [AUTO_REVIEW_USER_INTENT]: item.autoReviewUserText ?? '' } : {}),
         messageUuid,
         userName: item.userName,
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
@@ -2914,6 +2950,7 @@ export class AgentInputCoordinator {
     sessionRefs?: AgentInputQueuedMessage['sessionRefs'],
     trustedSessionReferenceContexts?: AgentInputSessionReferenceContext[],
     requireTrustedSnapshot = false,
+    finalizeUpdatedMessage?: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage,
   ): AgentInputProjection {
     const trimmed = newText.trim();
     if (!trimmed) return this.getProjection(sessionId);
@@ -2936,7 +2973,9 @@ export class AgentInputCoordinator {
         delete updated.sessionReferencesRequireTrustedSnapshot;
         delete updated.trustedSessionReferenceContexts;
       }
-      return updated;
+      return finalizeUpdatedMessage && newText !== entry.text
+        ? finalizeUpdatedMessage(updated)
+        : updated;
     });
     this.emit(sessionId);
     return this.getProjection(sessionId);
@@ -2967,6 +3006,7 @@ export class AgentInputCoordinator {
     sessionId: string,
     clientId: string,
     next: AgentInputQueuedMessage,
+    finalizeUpdatedMessage?: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage,
   ): { projection: AgentInputProjection; updated: boolean } {
     if (!next.text.trim() && !(next.files && next.files.length > 0)) {
       return { projection: this.getProjection(sessionId), updated: false };
@@ -2977,8 +3017,18 @@ export class AgentInputCoordinator {
     }
     const index = state.pendingQueue.findIndex((entry) => entry.clientId === clientId);
     if (index < 0) return { projection: this.getProjection(sessionId), updated: false };
+    const current = state.pendingQueue[index];
+    const updated = updateQueuedMessageContent(current, next);
+    const authorizationContentChanged = updated.text !== current.text
+      || updated.persistedContent !== current.persistedContent
+      || updated.files !== current.files
+      || updated.mentions !== current.mentions
+      || updated.sessionRefs !== current.sessionRefs
+      || updated.agentReferences !== current.agentReferences;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = updateQueuedMessageContent(state.pendingQueue[index], next);
+    nextQueue[index] = finalizeUpdatedMessage && authorizationContentChanged
+      ? finalizeUpdatedMessage(updated)
+      : updated;
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return { projection: this.getProjection(sessionId), updated: true };
@@ -3740,8 +3790,11 @@ export class AgentInputCoordinator {
   private toProjectedItem(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
     const projected = { ...item };
     delete projected.hostAcceptedAtMs;
+    delete projected.autoReviewUserText;
+    delete projected.fromDeviceLinkClient;
     delete projected.trustedSessionReferenceContexts;
     delete projected.sessionReferencesRequireTrustedSnapshot;
+    delete (projected as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
     // Recovery hints are main-owned evidence for the next vendor turn, not
     // renderer/device-link payload. Keep the projection minimal and avoid
     // echoing transcript-derived summaries to remote controllers.
@@ -4267,6 +4320,7 @@ export class AgentInputCoordinator {
             delete head.sessionReferencesRequireTrustedSnapshot;
           }
           delete head.agentReferences;
+          revokeTrustedDesktopQueuedOrigin(head);
           this.deps.onUserMessageRewritten?.(sessionId, head, {
             ghostId: verdict.ghostId,
             ghostName: verdict.ghostName,
@@ -4274,6 +4328,10 @@ export class AgentInputCoordinator {
             originalText,
           });
         }
+      }
+      if (this.deps.refreshAgentReferencesBeforeDispatch) {
+        await this.deps.refreshAgentReferencesBeforeDispatch(head);
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
       }
       const sdkSessionId = await this.deps.getSdkSessionId(sessionId).catch(() => undefined);
       if (!this.isActiveTurnCurrent(sessionId, active)) return;
@@ -4290,6 +4348,7 @@ export class AgentInputCoordinator {
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
+        [AUTO_REVIEW_SOURCE_CONTENT]: head.autoReviewUserText ?? '',
         messageUuid: active.messageUuid,
         userName: head.userName,
         throwOnStartFailure: true,
@@ -4304,6 +4363,7 @@ export class AgentInputCoordinator {
         ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
+        ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         persistUserMessage: {
           clientId: head.clientId,
           content: head.persistedContent,
@@ -5793,6 +5853,7 @@ export class AgentInputCoordinator {
           content: item.persistedContent,
           agentMeta: {
             uuid: active.messageUuid,
+            ...(item.autoReviewUserText !== undefined ? { autoReviewUserText: item.autoReviewUserText } : {}),
             sdkSessionId,
             delivery: active.delivery,
             ...(transcriptParentUuid ? { transcriptParentUuid } : {}),

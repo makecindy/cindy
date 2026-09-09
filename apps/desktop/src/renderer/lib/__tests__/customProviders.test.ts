@@ -278,15 +278,17 @@ describe('PI custom-provider protocol overrides', () => {
   ] as const)(
     'drops a stale Messages route when switching the model override to %s',
     (piApi, expected) => {
-      const models: ProviderRuntimeModelConfig[] = [{
-        id: 'routed-model',
-        name: 'Routed model',
-        piApi: 'anthropic-messages',
-        route: {
-          baseUrl: 'https://provider.example/anthropic',
-          wireProtocol: 'anthropic-messages',
+      const models: ProviderRuntimeModelConfig[] = [
+        {
+          id: 'routed-model',
+          name: 'Routed model',
+          piApi: 'anthropic-messages',
+          route: {
+            baseUrl: 'https://provider.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+          },
         },
-      }];
+      ];
 
       expect(setCustomProviderModelPiApi(models, 0, piApi)[0]).toEqual({
         id: 'routed-model',
@@ -348,7 +350,9 @@ describe('Pi custom-provider reasoning controls', () => {
         reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
       },
     ]);
-    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(models);
+    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(
+      models.map((model) => ({ ...model, reasoning: false })),
+    );
   });
 
   it('keeps canonical order and refuses to remove the final supported effort', () => {
@@ -645,6 +649,43 @@ describe('providerViewToCustomProviderConfig', () => {
     ]);
   });
 
+  it('round-trips Codex image generation independently from image input', () => {
+    const provider = {
+      id: 'image-provider',
+      name: 'Image Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://image.example/v1',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+        },
+      },
+      models: {
+        codex: [
+          {
+            id: 'image-model',
+            name: 'Image Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+            supportsImageInput: false,
+          },
+        ],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.codex).toMatchObject({
+      supportsImageGeneration: true,
+      models: [{ id: 'image-model', name: 'Image Model' }],
+    });
+  });
+
   it('round-trips Pi reasoning efforts from a provider view', () => {
     const provider = {
       id: 'local-reasoning',
@@ -732,8 +773,8 @@ describe('appendDiscoveredCustomProviderModels', () => {
     );
     expect(result).toEqual({
       models: [
-        { id: 'kept', name: 'Kept' },
-        { id: 'new', name: 'New', defaultEnabled: false },
+        { id: 'kept', name: 'Kept', nameExplicit: true, discoveredMetadata: { name: 'New name' } },
+        { id: 'new', name: 'New', defaultEnabled: false, discoveredMetadata: { name: 'New' } },
       ],
       addedIds: ['new'],
     });
@@ -749,10 +790,15 @@ describe('appendDiscoveredCustomProviderModels', () => {
       ],
     );
     expect(result.models).toEqual([
-      { id: 'big', name: 'Big', contextWindow: 1_000_000, defaultEnabled: false },
-      { id: 'plain', name: 'Plain', defaultEnabled: false },
+      {
+        id: 'big',
+        name: 'Big',
+        discoveredMetadata: { name: 'Big', contextWindow: 1_000_000 },
+        defaultEnabled: false,
+      },
+      { id: 'plain', name: 'Plain', discoveredMetadata: { name: 'Plain' }, defaultEnabled: false },
       // 非法值不落盘,回落保守默认
-      { id: 'bogus', name: 'Bogus', defaultEnabled: false },
+      { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' }, defaultEnabled: false },
     ]);
   });
 });
@@ -814,6 +860,34 @@ describe('custom provider credential lifecycle', () => {
     await createCustomProvider(config, keys);
 
     expect(create).toHaveBeenCalledWith(config, keys);
+  });
+
+  it('forwards the explicit manual create restart policy through the same mutation', async () => {
+    const create = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { createCustomProvider: create },
+      },
+    });
+    const config = {
+      id: 'new-image-provider',
+      name: 'New image provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          supportsImageGeneration: true,
+          models: [{ id: 'model', name: 'Model' }],
+        },
+      },
+    };
+    const options = {
+      source: 'manual-settings' as const,
+      codexImageGenerationRestartPolicy: 'interrupt' as const,
+    };
+
+    await createCustomProvider(config, {}, options);
+
+    expect(create).toHaveBeenCalledWith(config, {}, options);
   });
 
   it('surfaces an atomic main-process create failure', async () => {

@@ -16,6 +16,8 @@ import {
   DEFAULT_LIBRARY_LIMITS,
   type LibraryVaultDeps,
   type LibraryLimits,
+  type LibraryFileIdentity,
+  type LibraryReadHandle,
 } from '../libraryVault.js';
 
 const sha256Of = (s: string): string => createHash('sha256').update(s).digest('hex');
@@ -50,14 +52,48 @@ describe('LibraryVault', () => {
   let diskFree: number | null = 1024 ** 4; // 1 TiB:默认宽裕
   let limitsOverride: Partial<LibraryLimits> = {};
 
-  const makeVault = (): LibraryVault => {
+  const makeVault = (over: Partial<LibraryVaultDeps> = {}): LibraryVault => {
     const deps: LibraryVaultDeps = {
       rootDir: () => libraryRoot,
       ghostId: 'test-ghost',
       getDiskFreeBytes: async () => diskFree,
       locationKind: 'default',
+      limits: limitsOverride,
+      ...over,
     };
     return new LibraryVault(deps);
+  };
+
+  const identityStub = (
+    size: number,
+    isFile = true,
+    ino = 1,
+    dev = 1,
+  ): LibraryFileIdentity => ({
+    size: BigInt(size),
+    isFile: () => isFile,
+    ino: BigInt(ino),
+    dev: BigInt(dev),
+  });
+
+  const fakeReadHandle = (opts: {
+    statSize: number;
+    isFile?: boolean;
+    data?: Buffer;
+    ino?: number;
+    dev?: number;
+    readSpy?: () => void;
+  }): LibraryReadHandle => {
+    const data = opts.data ?? Buffer.alloc(opts.statSize);
+    return {
+      stat: async () => identityStub(opts.statSize, opts.isFile ?? true, opts.ino ?? 1, opts.dev ?? 1),
+      read: async (buffer, offset, length, position) => {
+        opts.readSpy?.();
+        const bytesRead = data.copy(buffer, offset, position, position + length);
+        return { bytesRead };
+      },
+      close: async () => undefined,
+    };
   };
 
   beforeEach(async () => {
@@ -65,7 +101,6 @@ describe('LibraryVault', () => {
     libraryRoot = path.join(tmpRoot, 'libraries', 'test-ghost');
     diskFree = 1024 ** 4;
     limitsOverride = {};
-    void limitsOverride; // 后续用例需要时经 makeVault 参数化;当前统一默认限额
   });
 
   afterEach(async () => {
@@ -446,6 +481,100 @@ describe('LibraryVault', () => {
       expect(r.ok).toBe(false);
       const d = await vault.delete({ path: 'escape-door/anything' });
       expect(d.ok).toBe(false);
+    });
+  });
+
+  describe('read 路径 O_NOFOLLOW + identity 复核', () => {
+    it('常规 blob 可读(真实 fs,正本 assets/<2>/<hash>/blob.ext)', async () => {
+      const vault = makeVault();
+      await vault.open();
+      const rel = 'assets/ab/abc123def456abc123def456abc123de/blob.png';
+      const body = 'pixel-bytes';
+      const w = await vault.write({ path: rel, content: body });
+      expect(w.ok).toBe(true);
+      const r = await vault.read({ path: rel });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.content).toBe(body);
+        expect(r.sha256).toBe(sha256Of(body));
+        expect(r.bytes).toBe(Buffer.byteLength(body));
+      }
+    });
+
+    it('打开后目标 identity 变化 → INTERNAL 且不得返回字节', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'assets/ab/deadbeefdeadbeefdeadbeefdeadbeef/blob.bin', content: 'secret' });
+      let readCalled = false;
+      const vaultSwap = makeVault({
+        lstatForRead: async () => identityStub(6, true, 1, 1),
+        openForRead: async () =>
+          fakeReadHandle({
+            statSize: 6,
+            data: Buffer.from('secret'),
+            ino: 999,
+            readSpy: () => {
+              readCalled = true;
+            },
+          }),
+      });
+      await vaultSwap.open();
+      const r = await vaultSwap.read({ path: 'assets/ab/deadbeefdeadbeefdeadbeefdeadbeef/blob.bin' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('INTERNAL');
+      expect(r).not.toHaveProperty('content');
+      expect(readCalled).toBe(false);
+    });
+
+    it('ino=0 身份不可用 → fail-closed INTERNAL,不得返回字节', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'assets/cd/cafecafecafecafecafecafecafecafe/blob.bin', content: 'leak' });
+      let readCalled = false;
+      const vaultZero = makeVault({
+        lstatForRead: async () => identityStub(4, true, 0, 1),
+        openForRead: async () =>
+          fakeReadHandle({
+            statSize: 4,
+            data: Buffer.from('leak'),
+            ino: 0,
+            readSpy: () => {
+              readCalled = true;
+            },
+          }),
+      });
+      await vaultZero.open();
+      const r = await vaultZero.read({ path: 'assets/cd/cafecafecafecafecafecafecafecafe/blob.bin' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('INTERNAL');
+      expect(r).not.toHaveProperty('content');
+      expect(readCalled).toBe(false);
+    });
+
+    it('openForRead 收到 O_RDONLY|O_NOFOLLOW;失败不得回落无复核 read', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'assets/ef/efefefefefefefefefefefefefefefef/blob.bin', content: 'payload' });
+      const seenFlags: number[] = [];
+      const vaultFlags = makeVault({
+        lstatForRead: async () => identityStub(7, true, 1, 1),
+        openForRead: async (_abs, flags) => {
+          seenFlags.push(flags);
+          const err = new Error('ELOOP') as NodeJS.ErrnoException;
+          err.code = 'ELOOP';
+          throw err;
+        },
+      });
+      await vaultFlags.open();
+      const r = await vaultFlags.read({ path: 'assets/ef/efefefefefefefefefefefefefefefef/blob.bin' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('INTERNAL');
+      expect(r).not.toHaveProperty('content');
+      expect(seenFlags).toHaveLength(1);
+      expect(seenFlags[0] & fs.constants.O_RDONLY).toBe(fs.constants.O_RDONLY);
+      if (typeof fs.constants.O_NOFOLLOW === 'number') {
+        expect(seenFlags[0] & fs.constants.O_NOFOLLOW).toBe(fs.constants.O_NOFOLLOW);
+      }
     });
   });
 });

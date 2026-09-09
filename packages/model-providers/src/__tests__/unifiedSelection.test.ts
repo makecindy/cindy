@@ -515,7 +515,7 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
-  it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
+  it('xai 双 root 推荐 claude-code', () => {
     expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
     expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
   });
@@ -602,6 +602,9 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
       wireModelId: 'claude-opus-5',
+      protocolMode: 'matching',
+      nativeApi: 'anthropic-messages',
+      outboundApi: 'anthropic-messages',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',

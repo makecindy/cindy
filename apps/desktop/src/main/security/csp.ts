@@ -64,6 +64,8 @@ const CUSTOM_MEDIA_SCHEMES = [
 
 /** Inputs that shape the emitted policy. All origins are already normalized. */
 export interface CspContext {
+  /** Isolated capture document: no arbitrary network, subframes or application UI. */
+  desktopCapture?: boolean;
   /** True when the renderer is served by the Vite dev server (needs eval + ws). */
   isDev: boolean;
   /** Vite dev-server origin (dev only); added to connect-src. `null` in prod. */
@@ -94,6 +96,9 @@ export function parseOrigin(url: string | null | undefined): string | null {
  */
 export function buildContentSecurityPolicy(ctx: CspContext): string {
   const { isDev, devServerOrigin } = ctx;
+  if (ctx.desktopCapture) {
+    return "default-src 'none'; script-src 'self'; connect-src 'none'; img-src blob: data:; media-src blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  }
 
   // script-src is the crown jewel. The XSS→preload escalation path is an
   // attacker getting THEIR script to run — via an injected inline <script>
@@ -195,7 +200,9 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
   if (cspInstalledSessions.has(session)) {
     // Re-installing would silently replace our own listener — and hint that
     // some caller may be racing onHeadersReceived. Skip + warn instead.
-    cspLog.warn('installContentSecurityPolicy called twice on the same session — ignoring the second call');
+    cspLog.warn(
+      'installContentSecurityPolicy called twice on the same session — ignoring the second call',
+    );
     return;
   }
   cspInstalledSessions.add(session);
@@ -216,6 +223,7 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
     // Exact-origin match (not startsWith) so e.g. http://localhost:51730
     // cannot piggyback on a http://localhost:5173 dev origin.
     const isAppDocument =
+      (ctx.desktopCapture === true && url === 'cindy-desktop-capture://capture/index.html') ||
       url.startsWith('file://') ||
       (ctx.devServerOrigin !== null && parseOrigin(url) === ctx.devServerOrigin);
     if (!isAppDocument) {
@@ -229,10 +237,7 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
     // intersect two policies and silently over-tighten.
     for (const key of Object.keys(responseHeaders)) {
       const lower = key.toLowerCase();
-      if (
-        lower === 'content-security-policy' ||
-        lower === 'content-security-policy-report-only'
-      ) {
+      if (lower === 'content-security-policy' || lower === 'content-security-policy-report-only') {
         delete responseHeaders[key];
       }
     }

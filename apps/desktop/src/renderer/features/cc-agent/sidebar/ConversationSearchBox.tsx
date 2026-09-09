@@ -46,6 +46,7 @@ import {
   type MachineSelection,
 } from '@/features/device-link/selectedMachineStore';
 import { formatSidebarTime } from '../lib/formatSidebarTime';
+import { parseSnippetMarkup } from './snippetMarkup';
 import {
   getSearchSortBy,
   setSearchSortBy,
@@ -61,6 +62,7 @@ import type {
 } from '../../../../shared/conversationSearch';
 import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
+import { keywordRanges } from './keywordRanges';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { conversationSearchResultKey } from '@/lib/conversationSearchFanout';
@@ -1318,36 +1320,23 @@ function searchSourceLabel(
 }
 
 function renderSnippet(snippet: string | null | undefined, query: string): React.ReactNode | null {
-  const text = snippet?.trim();
-  if (!text) return null;
-  const parts = text.split(/(<\/?mark>)/g);
-  const out: React.ReactNode[] = [];
-  let marked = false;
-  parts.forEach((part, index) => {
-    if (!part) return;
-    if (part === '<mark>') {
-      marked = true;
-      return;
-    }
-    if (part === '</mark>') {
-      marked = false;
-      return;
-    }
-    if (marked) {
-      out.push(
-        <mark key={`${index}-${part}`} className={SEARCH_MARK_CLASS}>
-          {part}
-        </mark>,
-      );
-    } else {
-      out.push(
-        <Fragment key={`${index}-${part}`}>
-          {renderKeywordHighlights(part, query)}
-        </Fragment>,
+  // 侧栏 snippet 是原文切片，不是 buildSnippetFromContent 哨兵协议。不要传 protocol:true。
+  const parts = parseSnippetMarkup(snippet);
+  if (!parts) return null;
+  return parts.map((part, index) => {
+    if (part.marked) {
+      return (
+        <mark key={`${index}-${part.text}`} className={SEARCH_MARK_CLASS}>
+          {part.text}
+        </mark>
       );
     }
+    return (
+      <Fragment key={`${index}-${part.text}`}>
+        {renderKeywordHighlights(part.text, query)}
+      </Fragment>
+    );
   });
-  return out.length > 0 ? out : null;
 }
 
 function renderKeywordHighlights(text: string, query: string): React.ReactNode {
@@ -1367,33 +1356,6 @@ function renderKeywordHighlights(text: string, query: string): React.ReactNode {
   });
   if (cursor < text.length) out.push(text.slice(cursor));
   return out;
-}
-
-function keywordRanges(text: string, query: string): Array<{ start: number; end: number }> {
-  const tokens = [...new Set(query.match(/[\p{L}\p{N}]+/gu) ?? [])]
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0)
-    .sort((a, b) => b.length - a.length);
-  if (tokens.length === 0) return [];
-
-  const lowerText = text.toLocaleLowerCase();
-  const ranges: Array<{ start: number; end: number }> = [];
-  for (const token of tokens) {
-    const lowerToken = token.toLocaleLowerCase();
-    let index = lowerText.indexOf(lowerToken);
-    while (index >= 0) {
-      const next = { start: index, end: index + token.length };
-      if (!ranges.some((range) => rangesOverlap(range, next))) {
-        ranges.push(next);
-      }
-      index = lowerText.indexOf(lowerToken, index + lowerToken.length);
-    }
-  }
-  return ranges.sort((a, b) => a.start - b.start);
-}
-
-function rangesOverlap(a: { start: number; end: number }, b: { start: number; end: number }): boolean {
-  return a.start < b.end && b.start < a.end;
 }
 
 const SEARCH_MARK_CLASS =

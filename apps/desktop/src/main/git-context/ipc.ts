@@ -14,8 +14,8 @@
  *   git-context:pr-refs-changed { sessionId }
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
- * 本来就靠 gh,凭证天然就有;未登录时降级 no-token,UI 提示让 agent 跑一次
- * gh auth login 即可。不做 app 级 PAT 绑定(设计收敛,见 PR #94 讨论)。
+ * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
+ * 徽标点击引导 agent 安装或登录。不做 app 级 PAT 绑定(设计收敛,见 PR #94 讨论)。
  */
 
 import { BrowserWindow, ipcMain } from 'electron';
@@ -88,8 +88,8 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
 /** gh CLI 登录态来源(进程内共享单例,内置 5min 正 / 30s 负缓存)。 */
 const ghCliTokenSource = getSharedGhCliTokenSource();
 
-async function readGithubToken(): Promise<string | null> {
-  return ghCliTokenSource.readToken();
+async function readGithubToken() {
+  return ghCliTokenSource.readTokenDetailed();
 }
 
 /** GraphQL 查未解决 review thread 数(REST 不暴露 isResolved)。上限 100。 */
@@ -323,7 +323,7 @@ export function registerGitContextIpc(): void {
         return [];
       }
     }
-    return prStatusService!.getStatuses(parsed);
+    return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
   });
 }
 

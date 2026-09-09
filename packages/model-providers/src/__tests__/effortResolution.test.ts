@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveEffort,
   resolveRequestedEffort,
+  composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,
@@ -164,6 +165,83 @@ describe('resolveRequestedEffort —— 面板/收藏显式档 vs 本端再查�
       }),
     ).toBe('low');
   });
+});
+
+describe('composeAtomicModelSelection —— 点选快照不能把 UI 占位写进运行时', () => {
+  it.each([
+    {
+      name: '有档 + 支持 Fast:原样带上 high 和 Fast',
+      args: {
+        efforts: ['low', 'medium', 'high'] as const,
+        effort: 'high',
+        fastSupported: true,
+        requestedFast: true,
+      },
+      want: { effort: 'high', fastMode: true },
+    },
+    {
+      name: '有档但不支持 Fast:Fast 必须关,不能带着上一个模型的插队状态',
+      args: {
+        efforts: ['low', 'medium', 'high'] as const,
+        effort: 'high',
+        fastSupported: false,
+        requestedFast: true,
+      },
+      want: { effort: 'high', fastMode: false },
+    },
+    {
+      name: '无档本地/BYOM:effort 写 null 而不是 UI 占位 low',
+      args: {
+        efforts: [] as const,
+        effort: 'low',
+        fastSupported: false,
+        requestedFast: false,
+      },
+      want: { effort: null, fastMode: false },
+    },
+    {
+      name: '无档但 resolveEffort 给了 high 占位:仍然 null,避免胶囊显示 thinking high',
+      args: {
+        efforts: [] as const,
+        effort: 'high',
+        fastSupported: false,
+        requestedFast: true,
+      },
+      want: { effort: null, fastMode: false },
+    },
+    {
+      name: '收藏 Fast 关:显式 false 压过记忆里的开',
+      args: {
+        efforts: ['high'] as const,
+        effort: 'high',
+        fastSupported: true,
+        requestedFast: false,
+      },
+      want: { effort: 'high', fastMode: false },
+    },
+  ])('$name', ({ args, want }) => {
+    expect(composeAtomicModelSelection(args)).toEqual(want);
+  });
+
+  it('目录暂缺时 resolveRequestedEffort 保住 high；传空 efforts 进原子快照则按无档写 null',
+    () => {
+      const requested = resolveRequestedEffort({
+        requested: 'high',
+        efforts: [],
+        defaultEffort: null,
+        activeEffort: 'low',
+      });
+      expect(requested).toBe('high');
+      expect(
+        composeAtomicModelSelection({
+          efforts: [],
+          effort: requested,
+          fastSupported: false,
+          requestedFast: false,
+        }),
+      ).toEqual({ effort: null, fastMode: false });
+    },
+  );
 });
 
 describe('resolveIntentReselectEffort —— 意图期改选不把空串回落成旧 high', () => {

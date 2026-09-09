@@ -1,3 +1,4 @@
+import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
  *
@@ -17,10 +18,7 @@ import {
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
-import {
-  classifyProviderError,
-  type ProviderErrorCode,
-} from '../../shared/providerErrors.js';
+import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import { deriveModelsDiscoveryUrl, parseModelsListResponse } from './generic-oauth.js';
 import { outboundFetch } from './outbound-fetch.js';
 
@@ -28,6 +26,7 @@ import { outboundFetch } from './outbound-fetch.js';
 const FETCH_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
+const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
 
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
@@ -55,7 +54,7 @@ export interface ProviderModelsFetchSpec {
 export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
-  models?: { id: string; name: string; contextWindow?: number }[];
+  models?: DiscoveredModel[];
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -64,13 +63,17 @@ export interface ProviderModelsFetchResult {
   detail?: string;
 }
 
-/** 两个 URL 是否同源（scheme + host + 端口）。任一解析失败视为不同源（fail-closed）。 */
-function sameOrigin(a: string, b: string): boolean {
+/** origin 不含 userinfo；先独立验证地址，错误中不带原始 URL 或解析器异常。 */
+function parseModelsFetchUrl(value: string): URL {
   try {
-    return new URL(a).origin === new URL(b).origin;
+    const url = new URL(value);
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password) {
+      return url;
+    }
   } catch {
-    return false;
+    // URL 解析器的异常可能包含凭据，只返回固定的校验说明。
   }
+  throw new Error(INVALID_DISCOVERY_URL);
 }
 
 function withoutCredentialHeaders(
@@ -93,15 +96,21 @@ function normalizedHeaders(headers: Record<string, string> | undefined): Record<
 }
 
 /** 构造列模型请求（纯函数，单测直断言）。鉴权头组合与 buildProbeRequest 同口径。 */
-export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: string; init: RequestInit } {
+export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
+  url: string;
+  init: RequestInit;
+} {
+  const baseUrl = parseModelsFetchUrl(spec.baseUrl);
+  const explicit = spec.modelsUrl?.trim();
+  const modelsUrl = explicit ? parseModelsFetchUrl(explicit) : null;
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
     : normalizedHeaders(spec.headers);
   const anthropicMessages =
-    spec.wireProtocol === 'anthropic-messages'
-    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+    spec.wireProtocol === 'anthropic-messages' ||
+    (spec.wireProtocol === undefined && spec.agent === 'claude-code');
   if (anthropicMessages) {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
@@ -116,9 +125,11 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
   }
   // modelsUrl 是用户不可见的隐藏字段（预设/配置快照）。只有与 baseUrl 同源才采用——
   // 防止用户改了 baseUrl 后，key 仍被发往快照里的旧主机 / 被降级成明文（现有预设全部同源）。
-  const explicit = spec.modelsUrl?.trim();
   return {
-    url: explicit && sameOrigin(explicit, spec.baseUrl) ? explicit : deriveModelsDiscoveryUrl(spec.baseUrl),
+    url:
+      explicit && modelsUrl?.origin === baseUrl.origin
+        ? explicit
+        : deriveModelsDiscoveryUrl(spec.baseUrl),
     init: { method: 'GET', headers },
   };
 }
@@ -140,11 +151,9 @@ export async function fetchProviderModels(
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
   if (
-    spec.authMethod === 'none'
-    && (
-      !isLoopbackProviderUrl(spec.baseUrl)
-      || (!!spec.modelsUrl?.trim() && !isLoopbackProviderUrl(spec.modelsUrl.trim()))
-    )
+    spec.authMethod === 'none' &&
+    (!isLoopbackProviderUrl(spec.baseUrl) ||
+      (!!spec.modelsUrl?.trim() && !isLoopbackProviderUrl(spec.modelsUrl.trim())))
   ) {
     return {
       ok: false,
@@ -152,7 +161,13 @@ export async function fetchProviderModels(
       detail: 'no-auth provider model discovery requires loopback URLs',
     };
   }
-  const { url, init } = buildModelsFetchRequest(spec);
+  let request: ReturnType<typeof buildModelsFetchRequest>;
+  try {
+    request = buildModelsFetchRequest(spec);
+  } catch {
+    return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
+  }
+  const { url, init } = request;
   let res: Response;
   try {
     res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -174,12 +189,22 @@ export async function fetchProviderModels(
   try {
     json = await res.json();
   } catch {
-    return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'models response is not JSON' };
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      status: res.status,
+      detail: 'models response is not JSON',
+    };
   }
   const models = parseModelsListResponse(json);
   if (!models || models.length === 0) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
-    return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'no models found in response' };
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      status: res.status,
+      detail: 'no models found in response',
+    };
   }
   return { ok: true, models };
 }

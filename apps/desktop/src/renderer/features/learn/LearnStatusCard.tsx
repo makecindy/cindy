@@ -151,7 +151,7 @@ export function LearnStatusCard({ data, contextSessionId }: LearnStatusCardProps
         {run.status === 'awaiting-review' && !isOriginCard
           ? t('learn.card.continueHint')
           : run.sourceKind === 'hub' && run.hubSlug
-            ? `hub:${run.hubSlug}`
+            ? `hub:${run.hubCatalogScope ? `${run.hubCatalogScope}:` : ''}${run.hubSlug}`
             : run.sourceKind === 'session'
               ? t('learn.card.fromConversation')
               : run.input}

@@ -18,6 +18,7 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -31,6 +32,11 @@ vi.mock('../maker-host/index.js', () => ({
   getMaker: () => ({
     forkSdkSession: forkSdkSessionMock,
   }),
+}));
+
+const inferProviderIdForModelMock = vi.fn();
+vi.mock('../maker-host/provider-route.js', () => ({
+  inferProviderIdForModel: inferProviderIdForModelMock,
 }));
 
 // fake drizzle: select 链返回 thenable。写入侧 MR2.2 后走 DbClient.tx。
@@ -102,6 +108,8 @@ beforeEach(async () => {
   commitContextRebuildMock.mockClear();
   createMessageMock.mockClear();
   forkSdkSessionMock.mockReset();
+  inferProviderIdForModelMock.mockReset();
+  inferProviderIdForModelMock.mockReturnValue(null);
   // 默认空 uuidMap 让 agentMeta 字段被去掉 (无映射)。具体测试按需 override。
   forkSdkSessionMock.mockResolvedValue({
     newSdkSessionId: 'sdk-new-session-uuid',
@@ -332,6 +340,7 @@ describe('forkSessionAtMessage', () => {
       providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
+      forkAtTimestampMs: 2500,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。
@@ -353,6 +362,216 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newMessageIds).toHaveLength(2);
 
     expect(result.parentSessionId).toBe('src-session');
+  });
+
+  it('codex path: uses the latest native turn anchor across mixed old and new history', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    const legacyUser = makeMessageRow({
+      id: 'legacy-user',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 1000,
+    });
+    const legacyAssistant = makeMessageRow({
+      id: 'legacy-assistant',
+      role: 'assistant',
+      agentKind: 'codex',
+      agentMeta: JSON.stringify({ turnCompleted: true }),
+      createdAt: 1500,
+    });
+    const priorUser = makeMessageRow({
+      id: 'user-1',
+      role: 'user',
+      content: '"hi"',
+      agentKind: 'codex',
+      createdAt: 2000,
+    });
+    const priorAssistant = makeMessageRow({
+      id: 'asst-1',
+      role: 'assistant',
+      content: '"hi back"',
+      agentKind: 'codex',
+      agentMeta: JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'codex-thread-source',
+          kind: 'turn',
+          id: 'turn-at-boundary',
+        },
+      }),
+      createdAt: 2500,
+    });
+
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        sdkSessionId: 'codex-thread-source',
+      }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([legacyUser, legacyAssistant, priorUser, priorAssistant]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        sdkSessionId: 'codex-thread-child',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryMock.mockResolvedValue([
+      { role: 'user', content: '"later"' },
+      { role: 'user', content: '"target"' },
+    ]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'codex-thread-child',
+      uuidMap: new Map<string, string>(),
+      usedNativeForkAnchor: true,
+    });
+
+    await forkSessionAtMessage('src-session', 'target-user');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
+      sourceSdkSessionId: 'codex-thread-source',
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      upToMessageId: undefined,
+      lastTurnId: 'turn-at-boundary',
+      tailTurnsToDrop: 2,
+      title: '[Fork] Project A',
+      workingDir: '/work',
+      remoteHostId: null,
+    });
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
+      nativeForkAnchorSessionMap: Array<[string, string]>;
+    };
+    expect(txArgs.nativeForkAnchorSessionMap).toEqual([
+      ['codex-thread-source', 'codex-thread-child'],
+    ]);
+  });
+
+  it('codex path: supplies event time for native lookup when the latest copied turn has no anchor', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    const priorUser = makeMessageRow({ id: 'user-1', role: 'user', createdAt: 2000 });
+    const olderAnchoredAssistant = makeMessageRow({
+      id: 'asst-old-anchor',
+      role: 'assistant',
+      agentKind: 'codex',
+      agentMeta: JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'legacy-codex-thread',
+          kind: 'turn',
+          id: 'older-turn',
+        },
+      }),
+      createdAt: 2250,
+    });
+    const priorAssistant = makeMessageRow({
+      id: 'asst-1',
+      role: 'assistant',
+      agentKind: 'codex',
+      agentMeta: JSON.stringify({ turnCompleted: true }),
+      createdAt: 2500,
+    });
+
+    selectQueue.push([
+      makeSourceRow({ agentKind: 'codex', sdkSessionId: 'legacy-codex-thread' }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([priorUser, olderAnchoredAssistant, priorAssistant,
+      // Error rows have a synthetic display timestamp, not native event time.
+      makeMessageRow({ id: 'failed-error', role: 'error', createdAt: 2600 }),
+    ]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        sdkSessionId: 'legacy-codex-child',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryMock.mockResolvedValue([{ role: 'user', content: '"target"' }]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'legacy-codex-child',
+      uuidMap: new Map<string, string>(),
+    });
+
+    await forkSessionAtMessage('src-session', 'target-user');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex',
+      expect.not.objectContaining({ lastTurnId: expect.anything() }),
+    );
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex', expect.objectContaining({ forkAtTimestampMs: 2500 }),
+    );
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
+      nativeForkAnchorSessionMap?: Array<[string, string]>;
+    };
+    expect(txArgs.nativeForkAnchorSessionMap).toBeUndefined();
+  });
+
+  it('codex path: does not reuse an older anchor after a tool-only turn', async () => {
+    const priorUser = makeMessageRow({
+      id: 'anchored-user',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 1750,
+    });
+    const priorAssistant = makeMessageRow({
+      id: 'anchored-assistant',
+      role: 'assistant',
+      agentKind: 'codex',
+      agentMeta: JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'codex-thread-source',
+          kind: 'turn',
+          id: 'older-turn',
+        },
+      }),
+      createdAt: 2000,
+    });
+    const toolOnlyUser = makeMessageRow({
+      id: 'tool-only-user',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 2500,
+    });
+    const toolResult = makeMessageRow({
+      id: 'tool-result',
+      role: 'tool_result',
+      agentKind: 'codex',
+      createdAt: 2750,
+    });
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+
+    selectQueue.push([
+      makeSourceRow({ agentKind: 'codex', sdkSessionId: 'codex-thread-source' }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([priorUser, priorAssistant, toolOnlyUser, toolResult]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        sdkSessionId: 'codex-thread-child',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryMock.mockResolvedValue([{ role: 'user', content: '"target"' }]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'codex-thread-child',
+      uuidMap: new Map<string, string>(),
+    });
+
+    await forkSessionAtMessage('src-session', 'target-user');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex',
+      expect.not.objectContaining({ lastTurnId: expect.anything() }),
+    );
   });
 
   it('pi path: creates a new SDK session but leaves business-session activation to first-send lazy-create', async () => {
@@ -439,6 +658,67 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
+  it.each(['user', 'assistant', 'first-user', 'recovered'] as const)(
+    'codex history recovery forks only the selected prefix atomically: %s', async (kind) => {
+      const futureTime = Date.now() + 60_000;
+      const source = makeSourceRow({ agentKind: 'codex', model: 'gpt-5.5', sdkSessionId: 'damaged-thread', clearedAt: 500 });
+      const target = makeMessageRow({ clientId: 'target', role: kind === 'assistant' || kind === 'recovered' ? 'assistant' : 'user', createdAt: futureTime, rowid: 20, content: '"target content"' });
+      const prior = makeMessageRow({ clientId: 'source-user', role: 'user', createdAt: futureTime - 1, content: '"keep prefix"' });
+      const rows = kind === 'first-user' ? [] : target.role === 'assistant' ? [prior, target] : [prior];
+      selectQueue.push([source], [target]);
+      if (target.role === 'assistant') selectQueue.push([makeMessageRow({ role: 'user', createdAt: futureTime, rowid: 30, content: '"future content"' })]);
+      selectQueue.push(rows, [makeSourceRow({ agentKind: 'codex', sdkSessionId: null })]);
+      if (kind === 'recovered') {
+        queryOneMock.mockResolvedValueOnce({ id: 'recovery', created_at: futureTime + 1, rowid: 40,
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: true, sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd', handoff: 'old handoff with future content' }) });
+      } else {
+        forkSdkSessionMock.mockRejectedValueOnce(new Error('failed to prepare paginated fork: thread-store internal error: thread history projection for damaged-thread expected ordinal 259, got 258'));
+      }
+
+      const result = await forkSessionAtMessage('src-session', 'target');
+      expect(txCalls).toHaveLength(1);
+      const args = txCalls[0]!.args as {
+        sourceClearedAt: number; targetCreatedAt: number; targetRowid: number;
+        newSession: Record<string, unknown>; nativeForkAnchorSessionMap?: unknown;
+        newMessageIds: Array<{ clientId: string }>; recoveryMarker: { createdAt: number; content: string; sourceMessagesDigest: string };
+      };
+      expect(args.sourceClearedAt).toBe(500);
+      expect(args.targetCreatedAt).toBe(futureTime);
+      expect(args.targetRowid).toBe(target.role === 'assistant' ? 30 : 20);
+      expect(args.newSession).toMatchObject({ sdkSessionId: null, contextTokens: 0, contextWindow: 0,
+        totalTokenUsage: 0, totalCostUsd: 0, parentSessionId: 'src-session', forkedAtMessageId: 'target' });
+      expect(args.nativeForkAnchorSessionMap).toBeUndefined();
+      expect(args.recoveryMarker.sourceMessagesDigest).toBe(computeForkSourceMessagesDigest(rows.map((row) => ({
+        client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
+        agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
+      }))));
+      const marker = JSON.parse(args.recoveryMarker.content);
+      expect(marker).toMatchObject({ reason: 'native-session-recovery', consumed: false,
+        sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd',
+        sourceUserClientId: args.newMessageIds[0]?.clientId ?? null });
+      expect(args.recoveryMarker.createdAt).toBeGreaterThanOrEqual(rows.at(-1)?.createdAt ?? 0);
+      expect(marker.handoff).not.toContain('future content');
+      if (rows.length) expect(marker.handoff).toContain('keep prefix');
+      if (target.role === 'user') expect(marker.handoff).not.toContain('target content');
+      else expect(marker.handoff).toContain('target content');
+      expect(result._count?.messages).toBe(rows.length + 1);
+      expect(commitContextRebuildMock).not.toHaveBeenCalled();
+      expect(createMessageMock).not.toHaveBeenCalled();
+      if (kind === 'recovered') expect(forkSdkSessionMock).not.toHaveBeenCalled();
+      expect(source.sdkSessionId).toBe('damaged-thread');
+    },
+  );
+
+  it.each(['401 Unauthorized', 'thread/fork timed out after 30000ms', 'cancelled', 'ENOSPC: no space left on device'])(
+    'does not recover unrelated fork errors: %s', async (message) => {
+      selectQueue.push([makeSourceRow({ agentKind: 'codex' })], [makeMessageRow({ clientId: 'target' })],
+        [makeMessageRow({ role: 'assistant', content: '"history"' })]);
+      forkSdkSessionMock.mockRejectedValueOnce(new Error(message));
+      await expect(forkSessionAtMessage('src-session', 'target')).rejects.toMatchObject({ code: 'CODEX_FORK_STATE_UNAVAILABLE' });
+      expect(txCalls).toHaveLength(0);
+    },
+  );
+
   it('codex path: projects a blocked resume preparation without exposing diagnostics', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     selectQueue.push([
@@ -460,7 +740,7 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
-  it('strip encrypted fork: codex-only path forks with strip flag and copies all messages', async () => {
+  it.each([false, true])('strip encrypted fork copies history and recovers indexed history atomically: %s', async (recover) => {
     const source = makeSourceRow({
       agentKind: 'codex',
       model: 'gpt-5.5',
@@ -476,13 +756,14 @@ describe('forkSessionAtMessage', () => {
       makeSourceRow({
         agentKind: 'codex',
         title: '[Fork·已剥离] Project A',
-        sdkSessionId: 'codex-thread-new',
+        sdkSessionId: recover ? null : 'codex-thread-new',
         parentSessionId: 'src-session',
         forkedAtMessageId: null,
       }),
     ]);
 
-    forkSdkSessionMock.mockResolvedValue({
+    if (recover) forkSdkSessionMock.mockRejectedValue(Object.assign(new Error('indexed history'), { code: 'CODEX_HISTORY_RECOVERY_REQUIRED' }));
+    else forkSdkSessionMock.mockResolvedValue({
       newSdkSessionId: 'codex-thread-new',
       uuidMap: new Map<string, string>(),
     });
@@ -504,6 +785,7 @@ describe('forkSessionAtMessage', () => {
     const txCall = txCalls.find((c) => c.name === 'fork.session');
     expect(txCall).toBeDefined();
     const txArgs = txCall!.args as {
+      recoveryMarker?: { content: string; sourceMessagesDigest: string };
       targetCreatedAt: number;
       newSession: Record<string, unknown>;
       newMessageIds: Array<{ id: string; clientId: string }>;
@@ -515,6 +797,17 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.forkedAtMessageId).toBeNull();
     expect(txArgs.newSession.providerId).toBe('xd');
     expect(txArgs.newMessageIds).toHaveLength(2);
+    expect(txArgs.newSession.sdkSessionId).toBe(recover ? null : 'codex-thread-new');
+    if (recover) {
+      expect(txArgs.recoveryMarker!.sourceMessagesDigest).toBe(computeForkSourceMessagesDigest([first, second].map((row) => ({
+        client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
+        agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
+      }))));
+      expect(JSON.parse(txArgs.recoveryMarker!.content)).toMatchObject({
+        reason: 'native-session-recovery', consumed: false, sourceSdkSessionId: 'codex-thread-source',
+        handoff: expect.stringContaining('[User]\nhello'),
+      });
+    } else expect(txArgs.recoveryMarker).toBeUndefined();
     expect(result.parentSessionId).toBe('src-session');
   });
 
@@ -966,6 +1259,205 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.providerId).toBeNull();
   });
 
+  it.each([false, true])('restores the provider snapshot from a new historical switch boundary (recovery=%s)', async (recovery) => {
+    const target = makeMessageRow({
+      id: 'historical-codex-assistant',
+      clientId: 'historical-codex-assistant-client',
+      role: 'assistant',
+      agentKind: 'codex',
+      createdAt: 2500,
+      rowid: 20,
+    });
+    const priorUser = makeMessageRow({
+      id: 'historical-codex-user',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 2000,
+      rowid: 10,
+    });
+    selectQueue.push([
+      makeSourceRow({ agentKind: 'pi', model: 'pi-model', sdkSessionId: 'current-pi-session' }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([]);
+    selectQueue.push([priorUser, target]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        model: 'google/gemini-3.7-flash',
+        providerId: 'xd',
+        sdkSessionId: 'forked-codex-session',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryOneMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          fromAgentKind: 'codex',
+          toAgentKind: 'pi',
+          fromModel: 'google/gemini-3.7-flash',
+          fromProviderId: 'xd',
+          fromSdkSessionId: 'parked-codex-session',
+        }),
+        created_at: 2800,
+        rowid: 30,
+      });
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'forked-codex-session',
+      uuidMap: new Map<string, string>(),
+    });
+    if (recovery) forkSdkSessionMock.mockRejectedValueOnce(new Error('thread history projection for parked-codex-session expected ordinal 259, got 258'));
+
+    await forkSessionAtMessage('src-session', 'historical-codex-assistant-client');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({
+        sourceSdkSessionId: 'parked-codex-session',
+        model: 'google/gemini-3.7-flash',
+        providerId: 'xd',
+      }),
+    );
+    expect(inferProviderIdForModelMock).not.toHaveBeenCalled();
+    if (recovery) {
+      const args = txCalls[0]!.args as { recoveryMarker: { content: string }; newSession: Record<string, unknown> };
+      expect(JSON.parse(args.recoveryMarker.content)).toMatchObject({
+        sourceAgentKind: 'codex', sourceModel: 'google/gemini-3.7-flash', sourceProviderId: 'xd', sourceSdkSessionId: 'parked-codex-session',
+      });
+      expect(args.newSession).toMatchObject({ agentKind: 'codex', model: 'google/gemini-3.7-flash', providerId: 'xd', sdkSessionId: null });
+    }
+  });
+
+  it('restores provider from the nearest new entry boundary when the exit boundary is old', async () => {
+    const target = makeMessageRow({
+      id: 'mixed-codex-assistant',
+      clientId: 'mixed-codex-assistant-client',
+      role: 'assistant',
+      agentKind: 'codex',
+      createdAt: 2500,
+      rowid: 20,
+    });
+    const priorUser = makeMessageRow({
+      id: 'mixed-codex-user',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 2400,
+      rowid: 15,
+    });
+    selectQueue.push([
+      makeSourceRow({ agentKind: 'pi', model: 'pi-model', sdkSessionId: 'current-pi-session' }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([]);
+    selectQueue.push([priorUser, target]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        model: 'google/gemini-3.7-flash',
+        providerId: 'xd',
+        sdkSessionId: 'forked-codex-session',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryOneMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          fromAgentKind: 'codex',
+          toAgentKind: 'pi',
+          fromModel: 'google/gemini-3.7-flash',
+          fromSdkSessionId: 'parked-codex-session',
+        }),
+        created_at: 2800,
+        rowid: 30,
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          fromAgentKind: 'cc',
+          toAgentKind: 'codex',
+          fromModel: 'claude-sonnet-4-6',
+          toModel: 'google/gemini-3.7-flash',
+          toProviderId: 'xd',
+          fromSdkSessionId: 'parked-claude-session',
+        }),
+      });
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'forked-codex-session',
+      uuidMap: new Map<string, string>(),
+    });
+
+    await forkSessionAtMessage('src-session', 'mixed-codex-assistant-client');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ providerId: 'xd' }),
+    );
+    expect(inferProviderIdForModelMock).not.toHaveBeenCalled();
+  });
+
+  it('infers a unique Codex provider for fully legacy switch boundaries', async () => {
+    const target = makeMessageRow({
+      id: 'legacy-codex-assistant',
+      clientId: 'legacy-codex-assistant-client',
+      role: 'assistant',
+      agentKind: 'codex',
+      createdAt: 2500,
+      rowid: 20,
+    });
+    const priorUser = makeMessageRow({
+      id: 'legacy-codex-user',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 2000,
+      rowid: 10,
+    });
+    selectQueue.push([
+      makeSourceRow({ agentKind: 'pi', model: 'pi-model', sdkSessionId: 'current-pi-session' }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([]);
+    selectQueue.push([priorUser, target]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        model: 'google/gemini-3.7-flash',
+        providerId: 'xd',
+        sdkSessionId: 'forked-codex-session',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryOneMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          fromAgentKind: 'codex',
+          toAgentKind: 'pi',
+          fromModel: 'google/gemini-3.7-flash',
+          fromSdkSessionId: 'parked-codex-session',
+        }),
+        created_at: 2800,
+        rowid: 30,
+      })
+      .mockResolvedValueOnce(null);
+    inferProviderIdForModelMock.mockReturnValue('xd');
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'forked-codex-session',
+      uuidMap: new Map<string, string>(),
+    });
+
+    await forkSessionAtMessage('src-session', 'legacy-codex-assistant-client');
+
+    expect(inferProviderIdForModelMock).toHaveBeenCalledWith(
+      'google/gemini-3.7-flash',
+      'codex',
+    );
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ providerId: 'xd' }),
+    );
+  });
+
   it('re-arms the copied handoff when forking from the first user after an engine switch', async () => {
     const boundary = makeMessageRow({
       id: 'switch-boundary',
@@ -1014,12 +1506,105 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.agentKind).toBe('cc');
   });
 
+  it('does not reuse an older Codex turn anchor for the first user after an engine switch', async () => {
+    const oldCodexAssistant = makeMessageRow({
+      id: 'old-codex-assistant',
+      clientId: 'old-codex-assistant-client',
+      role: 'assistant',
+      agentKind: 'codex',
+      agentMeta: JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'parked-codex-thread',
+          kind: 'turn',
+          id: 'old-codex-turn',
+        },
+      }),
+      createdAt: 2000,
+      rowid: 10,
+    });
+    const boundary = makeMessageRow({
+      id: 'switch-to-codex',
+      clientId: 'switch-to-codex-client',
+      role: 'agent_switch',
+      content: JSON.stringify({
+        fromAgentKind: 'cc',
+        toAgentKind: 'codex',
+        fromModel: 'claude-sonnet-4-6',
+        fromSdkSessionId: 'parked-claude-session',
+        handoff: 'full handoff',
+        consumed: true,
+      }),
+      createdAt: 2500,
+      rowid: 20,
+    });
+    const target = makeMessageRow({
+      id: 'first-codex-user',
+      clientId: 'first-codex-user-client',
+      role: 'user',
+      agentKind: 'codex',
+      createdAt: 3000,
+      rowid: 30,
+    });
+
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        sdkSessionId: 'fresh-codex-thread',
+      }),
+    ]);
+    selectQueue.push([target]);
+    selectQueue.push([oldCodexAssistant, boundary]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        sdkSessionId: 'forked-codex-thread',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    queryMock.mockResolvedValue([]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'forked-codex-thread',
+      uuidMap: new Map<string, string>(),
+    });
+
+    await forkSessionAtMessage('src-session', 'first-codex-user-client');
+
+    expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
+      sourceSdkSessionId: 'fresh-codex-thread',
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+      title: '[Fork] Project A',
+      workingDir: '/work',
+      remoteHostId: null,
+    });
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
+      resetHandoffBoundaryClientId: string | null;
+      nativeForkAnchorSessionMap?: Array<[string, string]>;
+    };
+    expect(txArgs.resetHandoffBoundaryClientId).toBe('switch-to-codex-client');
+    expect(txArgs.nativeForkAnchorSessionMap).toBeUndefined();
+  });
+
   it('counts rollback turns only from the parked Codex thread across later resumes', async () => {
     const target = makeMessageRow({
       id: 'historical-codex-assistant',
       clientId: 'historical-codex-assistant-cid',
       role: 'assistant',
       agentKind: 'codex',
+      agentMeta: JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: {
+          agentKind: 'codex',
+          sdkSessionId: 'parked-codex-thread',
+          kind: 'turn',
+          id: 'historical-codex-turn',
+        },
+      }),
       createdAt: 2500,
       rowid: 20,
     });
@@ -1086,6 +1671,7 @@ describe('forkSessionAtMessage', () => {
     forkSdkSessionMock.mockResolvedValue({
       newSdkSessionId: 'forked-codex-thread',
       uuidMap: new Map<string, string>(),
+      usedNativeForkAnchor: true,
     });
 
     await forkSessionAtMessage('src-session', 'historical-codex-assistant-cid');
@@ -1095,17 +1681,23 @@ describe('forkSessionAtMessage', () => {
       model: 'gpt-5.4',
       providerId: null,
       upToMessageId: undefined,
+      lastTurnId: 'historical-codex-turn',
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。
       remoteHostId: null,
     });
+    expect(inferProviderIdForModelMock).toHaveBeenCalledWith('gpt-5.4', 'codex');
     const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
       newSession: Record<string, unknown>;
+      nativeForkAnchorSessionMap: Array<[string, string]>;
     };
     expect(txArgs.newSession.agentKind).toBe('codex');
     expect(txArgs.newSession.model).toBe('gpt-5.4');
+    expect(txArgs.nativeForkAnchorSessionMap).toEqual([
+      ['parked-codex-thread', 'forked-codex-thread'],
+    ]);
   });
 
   // ── assistant 目标（fork-from-reply）────────────────────────────────────
@@ -1467,6 +2059,7 @@ describe('forkSessionAtMessage', () => {
       providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 1,
+      forkAtTimestampMs: 2500,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。

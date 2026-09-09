@@ -452,9 +452,11 @@ export type SandboxPolicy =
 
 export interface ThreadForkParams {
   threadId: string;
+  /** Fork the source thread at this provider-native turn boundary. */
+  lastTurnId?: string;
   /** 可选: 从特定 rollout path fork (绝大多数场景用 threadId)。 */
   path?: string;
-  /** Codex 自家前端 fork 精确节点时会开启, 保留完整历史供后续 rollback。 */
+  /** Legacy fork + rollback path only; lastTurnId precision path omits it. */
   persistExtendedHistory?: boolean;
   model?: string;
   cwd?: string;
@@ -488,6 +490,20 @@ export interface ThreadRollbackParams {
   threadId: string;
   /** 从 thread 尾部回滚多少个完整 turn。 */
   numTurns: number;
+}
+
+/** Codex 0.153.4: bounded turn metadata, including failed/interrupted turns. */
+export interface ThreadTurnsListParams {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+  sortDirection: 'desc';
+  itemsView: 'notLoaded';
+}
+
+export interface ThreadTurnsListResponse {
+  data: Array<{ id: string; status: string; startedAt?: number | null }>;
+  nextCursor: string | null;
 }
 
 export interface ThreadRollbackResponse {
@@ -906,6 +922,8 @@ export interface TokenUsageBreakdown {
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;
+  /** Present in Codex 0.153.0; older app-server versions omit this subset. */
+  cacheWriteInputTokens?: number;
   outputTokens: number;
   reasoningOutputTokens: number;
 }
@@ -1208,6 +1226,7 @@ export const Method = {
   ThreadResume: 'thread/resume',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',

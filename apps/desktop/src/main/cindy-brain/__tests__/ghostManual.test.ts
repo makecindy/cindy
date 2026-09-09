@@ -8,6 +8,20 @@ import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
 import { readInstalledGhostManual } from '../ghostManual';
 
 let workDir: string;
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+const canLinkFile = (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-manual-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 beforeEach(async () => {
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-ghost-manual-test-'));
@@ -175,12 +189,15 @@ describe('readInstalledGhostManual', () => {
   });
 
   it('声明目录的中间层符号链接不能逃出插件安装根', async () => {
-    if (process.platform === 'win32') return;
     const outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-manual-outside-'));
     try {
       await fs.promises.mkdir(path.join(workDir, 'docs'), { recursive: true });
       await fs.promises.writeFile(path.join(outsideDir, 'MANUAL.md'), '# 根外私密正文');
-      await fs.promises.symlink(outsideDir, path.join(workDir, 'docs/physical-dir'));
+      await fs.promises.symlink(
+        outsideDir,
+        path.join(workDir, 'docs/physical-dir'),
+        directoryLinkType,
+      );
       const result = await readInstalledGhostManual(ghost(), 'logical-name');
       expect(result).toMatchObject({
         ok: false,
@@ -196,7 +213,6 @@ describe('readInstalledGhostManual', () => {
   });
 
   it('item.dir 任一中间组件是根内或根外 symlink 都不可用，普通中间目录可读', async () => {
-    if (process.platform === 'win32') return;
     await write('docs/plain/unit/MANUAL.md', '# 普通中间目录');
     expect(await readInstalledGhostManual(ghost('docs/plain/unit'), 'logical-name')).toMatchObject({
       ok: true,
@@ -215,7 +231,7 @@ describe('readInstalledGhostManual', () => {
       ] as const) {
         const linkPath = path.join(workDir, 'docs/link');
         await fs.promises.rm(linkPath, { force: true });
-        await fs.promises.symlink(target, linkPath);
+        await fs.promises.symlink(target, linkPath, directoryLinkType);
         const result = await readInstalledGhostManual(ghost('docs/link/unit'), 'logical-name');
         expect(result).toMatchObject({
           ok: false,
@@ -252,7 +268,7 @@ describe('readInstalledGhostManual', () => {
     await write('docs/physical-dir/MANUAL.md', Buffer.from([0xff, 0xfe, 0xfd]));
     await assertUnavailable();
 
-    if (process.platform !== 'win32') {
+    if (canLinkFile) {
       const target = path.join(workDir, 'outside.md');
       await fs.promises.writeFile(target, '# outside');
       await fs.promises.rm(path.join(workDir, 'docs/physical-dir/MANUAL.md'));
@@ -262,7 +278,6 @@ describe('readInstalledGhostManual', () => {
   });
 
   it('单元内的中间目录符号链接无论指向根内还是根外都不可读取', async () => {
-    if (process.platform === 'win32') return;
     await write('docs/physical-dir/MANUAL.md', '# 入口');
     await write('docs/physical-dir/real-inside/private.md', '# 根内私密正文');
     const outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-manual-child-'));
@@ -272,7 +287,11 @@ describe('readInstalledGhostManual', () => {
         ['inside-link', path.join(workDir, 'docs/physical-dir/real-inside'), '根内私密正文'],
         ['outside-link', outsideDir, '根外私密正文'],
       ] as const) {
-        await fs.promises.symlink(target, path.join(workDir, `docs/physical-dir/${linkName}`));
+        await fs.promises.symlink(
+          target,
+          path.join(workDir, `docs/physical-dir/${linkName}`),
+          directoryLinkType,
+        );
         const result = await readInstalledGhostManual(
           ghost(),
           `logical-name/${linkName}/private.md`,

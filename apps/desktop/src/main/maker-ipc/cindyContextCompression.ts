@@ -13,8 +13,8 @@
  * 交接正文本来就不带 tool_result。纯文本把字节顶破时 token 一定早已破。
  * 混合型大尾巴（可剥图不足一半）有意不救，等证据再动比例阈值，不加新档。
  *
- * 切模型预检的数学仍在 assessModelSwitchContext。确认切小窗后，动作端
- * 应以 tokens='violated' 调用本决定走 rebuild，不再走独立 handoff（本版尚未并入）。
+ * 切模型预检的数学仍在 assessModelSwitchContext。确认切小窗后，main 的统一
+ * set-model 事务在目标压力线先走 context_rebuild，再落目标 route；不另造 handoff。
  */
 
 export type CompressionBudgetState = 'ok' | 'violated' | 'unknown';

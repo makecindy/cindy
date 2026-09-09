@@ -1,11 +1,32 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { betaChannelState, navigate } = vi.hoisted(() => ({
+const {
+  authState,
+  betaChannelState,
+  confirm,
+  runningSnapshot,
+  listAccounts,
+  navigate,
+  syncAccounts,
+  switchAccount,
+} = vi.hoisted(() => ({
+  authState: {
+    user: { name: 'Cindy user', avatar: null } as { name: string; avatar: string | null } | null,
+    mode: 'cloud' as 'cloud' | 'local',
+    dataOwnerId: 'owner-a' as string | null,
+    isCanary: false,
+  },
   betaChannelState: { enableBeta: false, isCustomized: false, loading: false },
+  confirm: vi.fn(),
+  runningSnapshot: new Map<string, { isRunning: boolean }>(),
+  listAccounts: vi.fn(),
   navigate: vi.fn(),
+  syncAccounts: vi.fn(),
+  switchAccount: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -15,16 +36,25 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  useLocation: () => ({ pathname: '/' }),
+  useLocation: () => ({ pathname: '/', search: '' }),
   useNavigate: () => navigate,
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
-    user: { name: 'Cindy user', avatar: null },
-    mode: 'cloud',
-    isCanary: false,
+    ...authState,
+    listAccounts,
+    syncAccounts,
+    switchAccount,
   }),
+}));
+
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useOptionalConfirmDialog: () => ({ confirm }),
+}));
+
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: { getRunningSnapshot: () => runningSnapshot },
 }));
 
 vi.mock('@/hooks/useUpdateStatus', () => ({
@@ -71,7 +101,63 @@ vi.mock('@/components/sidebar/MobileDownloadDialog', () => ({
 import { UserInfoSection } from '@/components/sidebar/UserInfoSection';
 
 beforeEach(() => {
+  confirm.mockReset().mockResolvedValue(true);
+  runningSnapshot.clear();
   navigate.mockClear();
+  authState.user = { name: 'Cindy user', avatar: null };
+  authState.mode = 'cloud';
+  authState.dataOwnerId = 'owner-a';
+  listAccounts.mockReset().mockResolvedValue({
+    mutationAllowed: true,
+    accounts: [
+      {
+        accountKey: 'current',
+        displayName: 'Cindy user',
+        email: 'current@example.com',
+        avatarUrl: null,
+        kind: 'personal',
+        orgName: null,
+        orgLogoUrl: null,
+        isCurrent: true,
+      },
+      {
+        accountKey: 'other',
+        displayName: 'Other user',
+        email: 'other@example.com',
+        avatarUrl: null,
+        kind: 'personal',
+        orgName: null,
+        orgLogoUrl: null,
+        isCurrent: false,
+      },
+    ],
+  });
+  syncAccounts.mockReset().mockResolvedValue({
+    mutationAllowed: true,
+    accounts: [
+      {
+        accountKey: 'current',
+        displayName: 'Cindy user',
+        email: 'current@example.com',
+        avatarUrl: null,
+        kind: 'personal',
+        orgName: null,
+        orgLogoUrl: null,
+        isCurrent: true,
+      },
+      {
+        accountKey: 'other',
+        displayName: 'Other user',
+        email: 'other@example.com',
+        avatarUrl: null,
+        kind: 'personal',
+        orgName: null,
+        orgLogoUrl: null,
+        isCurrent: false,
+      },
+    ],
+  });
+  switchAccount.mockReset().mockResolvedValue(undefined);
   betaChannelState.enableBeta = false;
   betaChannelState.loading = false;
   Object.defineProperty(window, 'electronAPI', {
@@ -126,5 +212,178 @@ describe('UserInfoSection mobile download entry', () => {
     fireEvent.click(screen.getByRole('button', { name: 'open linked devices' }));
 
     expect(navigate).toHaveBeenCalledWith('/settings?tab=remote-control&section=devices');
+  });
+
+  it('shows all saved accounts only in the multi-account menu and switches directly', async () => {
+    render(<UserInfoSection isCollapsed={false} />);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(await screen.findByRole('menuitem', { name: /Other user/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /Cindy user/ }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+
+    await userEvent.click(screen.getByRole('menuitem', { name: /Other user/ }));
+    await waitFor(() => expect(switchAccount).toHaveBeenCalledWith('other'));
+  });
+
+  it.each([false, true])(
+    'does not switch on a release over an asynchronously loaded account (collapsed=%s)',
+    async (isCollapsed) => {
+      render(<UserInfoSection isCollapsed={isCollapsed} />);
+
+      // The opening press starts on the trigger. Account rows arrive before
+      // release; Radix must not turn that release into an account selection.
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      const account = await screen.findByRole('menuitem', { name: /Other user/ });
+      await act(async () => {
+        fireEvent.pointerUp(account, { button: 0 });
+        // Flush the asynchronous running-task check used by switchSavedAccount.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(switchAccount).not.toHaveBeenCalled();
+      expect(screen.getByRole('menu')).toBeTruthy();
+    },
+  );
+
+  it.each(['Enter', ' '])('still switches with keyboard selection (%s)', async (key) => {
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      key: 'Enter',
+    });
+    const account = await screen.findByRole('menuitem', { name: /Other user/ });
+    act(() => account.focus());
+    fireEvent.keyDown(account, { key });
+    await waitFor(() => expect(switchAccount).toHaveBeenCalledWith('other'));
+  });
+
+  it.each([false, true])('keeps running-task confirmation (confirmed=%s)', async (confirmed) => {
+    runningSnapshot.set('running-session', { isRunning: true });
+    confirm.mockResolvedValue(confirmed);
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Other user/ }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    if (confirmed) {
+      await waitFor(() => expect(switchAccount).toHaveBeenCalledWith('other'));
+    } else {
+      expect(switchAccount).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([false, true])(
+    'does not switch during repeated open/dismiss (collapsed=%s)',
+    async (isCollapsed) => {
+      render(<UserInfoSection isCollapsed={isCollapsed} />);
+      const trigger = screen.getByRole('button', { name: 'sidebar.user.moreLabel' });
+      for (const closeWith of ['trigger', 'outside', 'escape', 'trigger', 'outside']) {
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+        await screen.findByRole('menuitem', { name: /Other user/ });
+        if (closeWith === 'escape') {
+          fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+        } else {
+          fireEvent.pointerDown(closeWith === 'trigger' ? trigger : document.body, {
+            button: 0,
+            ctrlKey: false,
+            pointerType: 'mouse',
+          });
+        }
+        await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+      }
+      expect(switchAccount).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it('drops the previous account menu snapshot as soon as the owner changes', async () => {
+    const view = render(<UserInfoSection isCollapsed={false} />);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole('menuitem', { name: /Other user/ })).toBeTruthy();
+
+    authState.dataOwnerId = 'owner-b';
+    view.rerender(<UserInfoSection isCollapsed={false} />);
+
+    expect(screen.queryByRole('menuitem', { name: /Other user/ })).toBeNull();
+  });
+
+  it('does not show an account section when only one account is saved', async () => {
+    listAccounts.mockResolvedValueOnce({
+      mutationAllowed: true,
+      accounts: [
+        {
+          accountKey: 'current',
+          displayName: 'Cindy user',
+          email: 'current@example.com',
+          avatarUrl: null,
+          kind: 'personal',
+          orgName: null,
+          orgLogoUrl: null,
+          isCurrent: true,
+        },
+      ],
+    });
+    syncAccounts.mockResolvedValueOnce({
+      mutationAllowed: true,
+      accounts: [
+        {
+          accountKey: 'current',
+          displayName: 'Cindy user',
+          email: 'current@example.com',
+          avatarUrl: null,
+          kind: 'personal',
+          orgName: null,
+          orgLogoUrl: null,
+          isCurrent: true,
+        },
+      ],
+    });
+
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    await waitFor(() => expect(syncAccounts).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('menuitem', { name: /Cindy user/ })).toBeNull();
+  });
+
+  it('keeps the sign-in entry before Settings when the user is not signed in', async () => {
+    authState.user = null;
+    authState.mode = 'local';
+
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    const signIn = await screen.findByRole('menuitem', {
+      name: 'login.signIn',
+    });
+    const settings = screen.getByRole('menuitem', { name: 'sidebar.user.menuSettings' });
+    expect(signIn.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(listAccounts).not.toHaveBeenCalled();
+
+    fireEvent.click(signIn);
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith('/add-account', { state: { returnTo: '/' } }),
+    );
   });
 });

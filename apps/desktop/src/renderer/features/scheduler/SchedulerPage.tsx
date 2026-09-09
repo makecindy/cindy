@@ -29,6 +29,7 @@ import { Plus, Timer } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { scheduleToUserCreateInput } from './lib/scheduleFormLogic';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
@@ -68,30 +69,6 @@ import {
   readPluginScheduleCreateIntent,
 } from './lib/pluginScheduleCreateIntent';
 
-function scheduleToUserCreateInput(
-  schedule: Schedule,
-  overrides: Partial<CreateScheduleInput> = {},
-): CreateScheduleInput {
-  return {
-    name: schedule.name,
-    prompt: schedule.prompt,
-    kind: schedule.kind,
-    cronExpr: schedule.cronExpr,
-    timezone: schedule.timezone,
-    recurring: schedule.recurring,
-    manual: schedule.manual,
-    intervalMs: schedule.intervalMs,
-    agentKind: schedule.agentKind,
-    model: schedule.model,
-    effort: schedule.effort,
-    workspaceKind: schedule.workspaceKind,
-    workingDir: schedule.workingDir,
-    useWorktree: schedule.useWorktree,
-    persistentSession: schedule.persistentSession,
-    notify: schedule.notify,
-    ...overrides,
-  };
-}
 
 /**
  * 排序：active 与 expired 同 rank（一次性已跑完的任务不再单独沉底，
@@ -578,6 +555,9 @@ export function SchedulerPage() {
 
   const handleDelete = useCallback(
     (s: Schedule) => {
+      // Bot automation has a dedicated lifecycle/API. Keep this defensive
+      // guard even though the generic list filters bot-owned schedules.
+      if (s.source === 'bot') return;
       requestDeleteSchedule({
         id: s.id,
         name: s.name,

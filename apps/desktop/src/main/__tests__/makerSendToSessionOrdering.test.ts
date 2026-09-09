@@ -45,6 +45,13 @@ const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'rendere
 const useOrcaWorkerSelectionSource = readFileSync(useOrcaWorkerSelectionSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('sendToSession ordering', () => {
+  it('routes even idle private Bot deliveries through the durable input coordinator', () => {
+    const block = extractSendToSessionSource();
+    const routing = block.indexOf("explicitClientId?.startsWith('bot-dm:') || inputCoordinator.shouldQueueNewTurn(targetSessionId)");
+    expect(routing).toBeGreaterThan(0);
+    expect(block.indexOf('await enqueueSendToSessionMessage({', routing)).toBeLessThan(block.indexOf('let live = maker.getSession(targetSessionId)'));
+  });
+
   it('uses the full queue inspection count for workspace worker summaries', () => {
     const diagnosticsBlock = extractBetween(
       source,
@@ -127,7 +134,7 @@ describe('sendToSession ordering', () => {
     );
 
     expect(policyGuardBlock).toContain(
-      "const liveWorkspaceKind = (lead as { workspaceKind?: unknown } | undefined)?.workspaceKind;",
+      'const liveWorkspaceKind = (lead as { workspaceKind?: unknown } | undefined)?.workspaceKind;',
     );
     expect(policyGuardBlock).toContain(
       "typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;",
@@ -331,7 +338,7 @@ describe('sendToSession ordering', () => {
     const resumedBranch = extractBetween(
       block,
       'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
-      'const tracked = run.finally(() => {',
+      'return trackSendToSessionLockRun(',
     );
 
     expect(source).toContain('assertDesktopSendDispatched');
@@ -358,6 +365,28 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
     expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
+  });
+
+  it('routes a retained Pi error handle through bounded close retry before sending', () => {
+    const block = extractSendToSessionSource();
+    const loadLive = block.indexOf('let live = maker.getSession(targetSessionId);');
+    const retainedErrorGuard = block.indexOf(
+      "if (live?.agentKind === 'pi' && live.getStatus() === 'error') {",
+    );
+    const liveDispatch = block.indexOf('if (live) {', retainedErrorGuard);
+    const lazyResume = block.indexOf(
+      'const { session } = await bootstrapSession(createOpts);',
+      liveDispatch,
+    );
+
+    expect(loadLive).toBeGreaterThan(-1);
+    expect(retainedErrorGuard).toBeGreaterThan(loadLive);
+    expect(liveDispatch).toBeGreaterThan(retainedErrorGuard);
+    expect(lazyResume).toBeGreaterThan(liveDispatch);
+    expect(block.slice(retainedErrorGuard, liveDispatch)).toContain('live = undefined;');
+    expect(source).toContain(
+      'whose Maker.createSession call performs the existing bounded close retry',
+    );
   });
 
   it('awaits Git baseline capture after send_to_session user row persistence and before dispatch', () => {
@@ -411,7 +440,9 @@ describe('sendToSession ordering', () => {
       'await gitSnapshotCoordinator.onTurnStart(session.id);',
     );
     expect(countOccurrences(block, 'sendUserMessageWithAwaitedGitBaseline(')).toBe(3);
-    expect(block).not.toContain('const sendResult = await session.send({ type: \'user\', content: message }, {');
+    expect(block).not.toContain(
+      "const sendResult = await session.send({ type: 'user', content: message }, {",
+    );
     expect(block).not.toContain('const sendResult = await live.send(');
   });
 
@@ -523,6 +554,8 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
     expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
     expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
+    expect(setModelBlock).toContain('return Object.assign(response, {');
+    expect(setModelBlock).not.toContain('return {\n          ...response,');
     expectOrder(
       setModelBlock,
       'applyRuntimeSetModelChange({',
@@ -560,7 +593,7 @@ describe('sendToSession ordering', () => {
       'restoreControlStores();',
       'throw persistenceError;',
     );
-    expect(preloadSource).toContain('selection?: { effort: string; fastMode: boolean },');
+    expect(preloadSource).toContain('selection?: { effort: string | null; fastMode: boolean },');
     expectOrder(
       preloadSource,
       'expectedAgentSwitchRevision,',
@@ -630,7 +663,9 @@ describe('sendToSession ordering', () => {
     expect(promptPreviewBlock).toContain('try {');
     expect(promptPreviewBlock).toContain('getAgentIslandService()');
     expect(promptPreviewBlock).toContain('service.handleUserPrompt');
-    expect(promptPreviewBlock).toContain('log.warn(\'Agent Island prompt preview update failed after user message persistence\'');
+    expect(promptPreviewBlock).toContain(
+      "log.warn('Agent Island prompt preview update failed after user message persistence'",
+    );
     expect(promptPreviewBlock).toContain('clientId: options.clientId');
     expect(promptPreviewBlock).toContain('error: error instanceof Error ? error.message : String(error)');
   });
@@ -662,7 +697,7 @@ describe('sendToSession ordering', () => {
     const resumedBranch = extractBetween(
       block,
       'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
-      'const tracked = run.finally(() => {',
+      'return trackSendToSessionLockRun(',
     );
 
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
@@ -697,10 +732,16 @@ describe('sendToSession ordering', () => {
       'idleWorker: async ({ callerLeadSessionId, workerId, expectedStatus }) => {',
     );
 
-    expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain(
+      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));',
+    );
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
-    expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
+    expectOrder(
+      resumeBranch,
+      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));',
+      'const opts = buildCreateOptsWithStderr({',
+    );
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
     expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
@@ -751,45 +792,12 @@ describe('sendToSession ordering', () => {
     expect(terminalBlock).toContain('await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({');
     expect(terminalBlock).toContain('sessionId: session.id,');
     expect(terminalBlock).toContain("status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',");
-    expect(terminalBlock).toContain('finalText,');
+    expect(terminalBlock).toContain('finalText: workerTerminalFinalText,');
     expect(terminalBlock).not.toContain('getWorkerLink');
     expect(terminalBlock).not.toContain('listWorkersByLead');
     expect(terminalBlock).not.toContain('dispatchInterAgentMessage');
   });
-
-  it('serializes worker terminal handling behind in-flight turn-start status updates', () => {
-    const wireSessionSource = extractWireSessionSource();
-    const terminalBlock = extractWorkerTerminalHandlerSource();
-    const captureIndex = wireSessionSource.indexOf(
-      'orcaTeamServiceForEvents?.captureWorkerTerminalTurn(session.id)',
-    );
-    const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
-    const drainIndex = wireSessionSource.indexOf(
-      'agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);',
-    );
-    const waitIndex = wireSessionSource.indexOf(
-      'await workerTurnStartSequencer.waitForStart(session.id);',
-    );
-    const terminalIndex = wireSessionSource.indexOf(
-      'await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({',
-    );
-
-    expect(source).toContain(
-      'const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);',
-    );
-    expect(source).toContain('workerTurnStartSequencer.start(session.id, async () => {');
-    expect(source).toContain(
-      'await orcaTeamServiceForEvents?.handleWorkerTurnStarted(session.id);',
-    );
-    expect(terminalBlock).toContain('await workerTurnStartSequencer.waitForStart(session.id);');
-    expect(terminalBlock).toContain('capture: workerTerminalCapture,');
-    expect(captureIndex).toBeGreaterThanOrEqual(0);
-    expect(broadcastIndex).toBeGreaterThanOrEqual(0);
-    expect(drainIndex).toBeGreaterThan(broadcastIndex);
-    expect(drainIndex).toBeGreaterThan(captureIndex);
-    expect(waitIndex).toBeGreaterThan(broadcastIndex);
-    expect(terminalIndex).toBeGreaterThan(waitIndex);
-  });
+  // serializes worker terminal handling behind in-flight turn-start status updates: covered by the executable sessionEventPipeline tests.
 
   it('keeps terminal skip and manual interrupt behavior inside OrcaTeamService', () => {
     const serviceTerminalBlock = extractOrcaTeamServiceHandleWorkerTerminalTurnSource();
@@ -1044,7 +1052,7 @@ describe('sendToSession ordering', () => {
 
 function extractSendToSessionSource(): string {
   const block = source.match(
-    /async function sendToSessionInternal\([\s\S]*?const tracked = run\.finally\(\(\) => \{/,
+    /async function sendToSessionInternal\([\s\S]*?return trackSendToSessionLockRun\(/,
   )?.[0];
   expect(block).toBeTruthy();
   if (!block) throw new Error('sendToSessionInternal source block not found');
@@ -1097,20 +1105,10 @@ function extractDispatchOrEnqueueOrcaInterAgentMessageSource(): string {
 }
 
 function extractWorkerTerminalHandlerSource(): string {
-  const block = source.match(
-    /Worker turn 结束后[\s\S]*?await orcaTeamServiceForEvents\?\.handleWorkerTerminalTurn\(\{[\s\S]*?\n {10}\}\);/,
-  )?.[0];
-  expect(block).toBeTruthy();
-  if (!block) throw new Error('worker terminal handler source block not found');
-  return block;
-}
-
-function extractWireSessionSource(): string {
-  return extractBetween(
-    source,
-    'export function wireSessionToIpc',
-    'ipcMain.handle(MAKER_INVOKE.LIST_AVAILABLE_AGENTS',
-  );
+  return readFileSync(
+    resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
+    'utf8',
+  ).replaceAll('deps.', '');
 }
 
 function extractBetween(

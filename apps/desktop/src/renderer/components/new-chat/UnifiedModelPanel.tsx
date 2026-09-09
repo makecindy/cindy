@@ -1,3 +1,4 @@
+import { matchesModelName } from '@/lib/modelDisplayNames';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -14,7 +15,6 @@ import { cn } from '@/lib/utils';
 import { modelPriceDiscountLabelValues, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
-import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 
@@ -25,13 +25,13 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
 import type { ModelMemoryAccessors } from './ModelSelector';
-import { ProviderRailMark, UnifiedFlyoutHost } from './UnifiedFlyoutHost';
+import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import {
-  agentKindOfEngine,
   anchorKey,
+  favoriteMatchesSelection,
   engineOfAgentKind,
   entryMatchesModelId,
   wireModelIdOf,
@@ -53,43 +53,13 @@ import {
 const FAVORITE_FEEDBACK_MS = 700;
 /**
  * 「全部」视图的固定 rail —— 模块级常量保证引用稳定,不打穿 sections 的 useMemo。
- * 两个消费方:badge 样式的固定视图、定宽 sizer 的全量量宽(同一个值,不重复声明)。
+ * 定宽 sizer 与全量视图共用。
  */
 const RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
-/**
- * 鼠标离开行到收起浮层之间的 grace period。
- *
- * 80ms 是行内 Radix 子面板的老值(那里行与面板几乎贴着);统一浮层是 portal + fixed,
- * 鼠标要横穿一段缝隙才够得到它,80ms 会在半路把浮层收掉(2026-08-13 实测)。缝隙本身
- * 已经并进浮层包装的 padding(见 UnifiedFlyoutHost),这里再给足时间兜住抬手 / 手抖。
- */
-const FLYOUT_CLOSE_GRACE_MS = 240;
-/** 鼠标是朝浮层那一侧离开行的 —— 明显的「我要去浮层」意图,给更长的窗口。 */
-const FLYOUT_CLOSE_GRACE_TOWARD_MS = 600;
-/** 定宽 sizer 的行不接任何交互(见 widthSizerSections)—— 模块级常量避免每帧新建闭包。 */
+/** 定宽 sizer 的行不接交互。 */
 const noop = (): void => {};
+const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
 
-/**
- * badge 样式滚动题头的**一套位形**(下面三处必须同源派生,拆开写过就漂过:横幅本身的
- * 高度 / 渐变、updateStickyLabel 的接管与顶出阈值、ensureSelectedVisible 的上界)。
- *
- * 这组数字与真组头的 `pt-1 / pb-3 / leading-none` + 列表 `p-2` 是同一套位形:
- * 列表上衬 8 + 组头上衬 4 + 文字行内居中 ≈ 文字距列表顶 13px,题头卡接管的那一瞬要与
- * 真组头逐像素重合。
- *   - SOLID:横幅的**不透明实底**高度。文字上下各留约 13px 净空;实底只到文字下缘就
- *     渐隐,下一行的字会贴着题头文字冒出来(Chris 2026-08-16 实测「贴底」)。
- *     它也是自动对齐时必须让开的遮挡带 —— 实底之下的内容看不见,把选中行滚到 listTop
- *     等于把它藏在题头后面。
- *   - TOTAL:实底 + 12px 渐隐尾的整条横幅高度。
- *   - SWITCH_AT:组头盒顶到达这里(此时文字恰好落在钉住位)即被题头卡接管锁死。
- *     顶出阈值 = SWITCH_AT + SOLID:下一组组头贴上实底下缘后 1:1 把在位题头顶出,
- *     推满 SOLID 时正好轮到它自己锁进钉住位,全程无跳变、无空窗。
- */
-const BADGE_HEADER_SOLID_PX = 38;
-const BADGE_HEADER_TOTAL_PX = 50;
-const BADGE_HEADER_SWITCH_AT_PX = 8;
-
-/** 选中一行时回传的生效配置(见 `UnifiedModelPanelProps.onSelect`)。 */
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
   engine: UnifiedEngine;
@@ -157,28 +127,32 @@ export interface UnifiedModelPanelProps {
   onPaymentRequired?: () => void;
   /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
   configurationEnabled?: boolean;
+  isRouteDisabled?: (providerId: string, modelId: string, agent: AgentKind) => boolean;
+  /**
+   * official = 模型优先的受限入口。忽略全局引擎偏好、模型记忆和收藏配置，
+   * 始终使用目录为该模型给出的官方推荐引擎与默认配置。
+   */
+  selectionPolicy?: 'personalized' | 'official';
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
-   *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图列
-   *     引擎匹配的收藏 + 所有候选含当前引擎的模型(默认/选过的在前,仅兼容的在后);
-   *   - 该视图里的模型行**显示和点选都钉在当前轨引擎**上(π 轨里点就是 Pi);
-   *     排序仍按「默认/选过的在前」,不把主场改写成当前引擎。
-   *   - 显式切到「全部 / 供应商」视图时,列表顶部出现一行克制的有损警示;
+   *   - 默认展示全部，已有任务把当前模型和同引擎模型提升到「推荐」;
+   *   - 在「全部 / 供应商」视图时，列表顶部显示有损切换警示;
    *   - 「全部」里选中一行若生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
    *     performAgentSwitch 那条既有事务链路),而不是普通的 onSelect。
    *
    * `onCrossEngineSelect` 与 `currentAgent` 刻意做成**同一个对象里的必填字段**:会话内
-   * 一定存在跨引擎行(浮层引擎胶囊随时能把一行切到别的引擎),没有处理器就等于放一个
+   * 「全部 / 供应商」和浮层引擎胶囊都能把一行切到别的引擎,没有处理器就等于放一个
    * 点了什么都不会发生的行 —— 类型层面堵住这种假按钮。
    */
   sessionEngineFilter?: {
     currentAgent: AgentKind;
     /**
-     * 任务**正在跑**的引擎(不跟随切换意图)。跨引擎确认与切换路由拿它和行上的生效引擎比:
-     * 意图期 currentAgent 会翻到目标,用 currentAgent 判断会把「点 Pi 收藏」当成同引擎、
-     * 跳过确认框(Chris 2026-08-20)。缺省 = 回落 currentAgent(草稿 / 无 runtime 的入口)。
+     * 任务**正在跑**的引擎(不跟随切换意图)。跨引擎确认与切换路由拿它和行上的生效引擎比。
+     * 缺省 = 回落 currentAgent(草稿 / 无 runtime 的入口)。
      */
     runtimeAgent?: AgentKind;
+    /** 已登记、下一条消息才落地的切换目标。缺省 = 没有挂着的意图。 */
+    pendingTarget?: AgentKind;
     /**
      * 返回 `false` = 调用方**没有**执行这次切换(典型:跨引擎确认弹窗被取消)。
      * 面板本身不消费返回值,但包在外面的 ModelSelector 靠它决定「收起面板」还是
@@ -207,7 +181,11 @@ export interface UnifiedModelPanelProps {
    * 可选「跟随会话」行(opt-in,仅 scheduler 的 heartbeat 绑定会话任务)。
    * 语义与既有面板同名 prop 逐字一致:选中 = 模型留空、跟随绑定会话。
    */
-  followSession?: { active: boolean; label: string; onFollow: () => void };
+  followSession?: {
+    active: boolean;
+    label: string;
+    onFollow: () => void | boolean | Promise<void | boolean>;
+  };
   /**
    * 行选中。第 4 个参数是该行**已经合成好的生效配置**(引擎 ⊕ 深度 ⊕ Fast ⊕ 收藏锚点)——
    * 调用方拿到它才能把「模型 + 引擎」当成一件事写下去(M5:草稿的 vendor 就按 `engine` 派生)。
@@ -221,7 +199,9 @@ export interface UnifiedModelPanelProps {
     modelId: string,
     effort: Effort | '',
     config: UnifiedSelectedRow,
-  ) => void;
+  ) => void | boolean | Promise<void | boolean>;
+  /** 在没有独立模型记忆的入口应用配置，保持面板打开。 */
+  onConfigure?: UnifiedModelPanelProps['onSelect'];
   /**
    * live 选中行改深度 —— 走会话实时状态,不预写记忆(与既有语义一致)。
    * 返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 视为落了)。
@@ -241,7 +221,7 @@ export interface UnifiedModelPanelProps {
     modelId: string,
     effort: Effort | '',
     config: UnifiedSelectedRow,
-  ) => void;
+  ) => void | boolean | Promise<void | boolean>;
   /**
    * live 选中行改 Fast —— 必须等调用方持久化成功,不预写记忆(device-link 写穿失败会污染
    * 被控端草稿)。返回值语义同 `onEffortChangeLive`。
@@ -266,7 +246,7 @@ export interface UnifiedModelPanelProps {
  *   - 行 = **(来源, 模型)**,横跨它能用的所有引擎;引擎由推荐映射自动配好,并在每行右侧
  *     以「引擎图标 + 推理强度 + ⚡」三元组**常驻显示** —— 引擎可见性靠一致的结构位,
  *     不靠出错才提示。
- *   - 高级调整(引擎 / 深度 / Fast / 收藏)全部收进 hover 浮层,主列表不因 hover 重排。
+ *   - 高级调整(引擎 / 深度 / Fast / 收藏)收进点击打开的浮层。
  *
  * 数据源:M1 的 `unifiedModelEntries`(纯逻辑,已按生效来源解析候选与能力)+ 调用方注入的
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
@@ -298,9 +278,12 @@ export function UnifiedModelPanel({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   configurationEnabled = true,
+  selectionPolicy = 'personalized',
+  isRouteDisabled,
   sessionEngineFilter,
   followSession,
   onSelect,
+  onConfigure,
   onSelectedFavoriteAnchorClear,
   onEffortChangeLive,
   onFastModeChangeLive,
@@ -309,33 +292,29 @@ export function UnifiedModelPanel({
   panelWidthFluid = false,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
-  const favorites = useModelFavorites();
+  const storedFavorites = useModelFavorites();
+  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : storedFavorites;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。
   const enginePrefsVersion = useModelEnginePrefsVersion();
   const memoryVersion = useProviderModelMemoryVersion();
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
-  // 列表样式试用开关(本机偏好):badge = v7 引擎徽标行;classic = 现行样式。
-  const pickerLayout = useModelPickerLayout();
-  // 会话内默认停在「同引擎」视图(规格 §1.6:切引擎有损,默认给无损那一面)。
-  const [rail, setRail] = useState<UnifiedRailFilter>(() =>
-    sessionAgent ? { kind: 'engine', agent: sessionAgent } : { kind: 'all' },
-  );
-  // 会话引擎在外部变化(切换完成 / 换会话)时,把默认视图跟过去 —— 停在旧引擎的
-  // 「同引擎」视图上会把新引擎的模型全挡掉(与既有 browseVendor 重置同一动机)。
+
+  // 默认展示全部模型，避免当前引擎没有可用模型时把其它可选模型挡住。
+  const [rail, setRail] = useState<UnifiedRailFilter>({ kind: 'all' });
+  // 外部切换引擎后回到默认视图，避免继续按旧引擎过滤。
   const lastSessionAgentRef = useRef(sessionAgent);
   useEffect(() => {
     if (lastSessionAgentRef.current === sessionAgent) return;
     lastSessionAgentRef.current = sessionAgent;
-    setRail(sessionAgent ? { kind: 'engine', agent: sessionAgent } : { kind: 'all' });
+    setRail({ kind: 'all' });
   }, [sessionAgent]);
   const [flyAnchor, setFlyAnchor] = useState<UnifiedAnchor | null>(null);
   const [flyAnchorEl, setFlyAnchorEl] = useState<HTMLElement | null>(null);
   const [justFavorited, setJustFavorited] = useState<string | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const favoriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不该收起浮层。
   const suppressScrollDismissRef = useRef(false);
@@ -398,8 +377,8 @@ export function UnifiedModelPanel({
   );
 
   const railItems = useMemo(
-    () => buildUnifiedRail(entries, sessionAgent, providerOrder),
-    [entries, sessionAgent, providerOrder],
+    () => buildUnifiedRail(entries, undefined, providerOrder),
+    [entries, providerOrder],
   );
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
@@ -407,10 +386,7 @@ export function UnifiedModelPanel({
     if (railItems.some((item) => railItemKey(item) === railItemKey(rail))) return;
     setRail({ kind: 'all' });
   }, [rail, railItems]);
-  // badge 样式:左侧快捷跳转栏整条拿掉(Chris 2026-08-16),视图恒为「全部」——
-  // 引擎与渠道已在行内(徽标 + 渠道签),渠道归属再由分栏题头上的供应商图标承担,
-  // 快捷跳转的职责就地消化;行内星标仍可收藏。classic 样式的 rail 行为保持不变。
-  const effectiveRail = pickerLayout === 'badge' ? RAIL_ALL : rail;
+  const effectiveRail = query.trim() ? RAIL_ALL : rail;
 
   // ── 行配置合成 ────────────────────────────────────────────────────────────
   // 「正在用的引擎」的口径 = 上面推 keepModel 时用的那一个(liveEngineAgent),不另起一份。
@@ -427,20 +403,38 @@ export function UnifiedModelPanel({
     [liveEngineAgent, selected.modelId, selected.providerId],
   );
 
-  // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
-  // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
-  // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
-  //
-  // 收藏是独立选中项(Chris 2026-08-20):只认 uid 还在不在,不拿正在跑的引擎/思维/加速
-  // 去对副本。对上才打勾,等于让下面同名模型行把焦点抢走 —— 点了 Pi 收藏、任务还停在
-  // Claude 时必现。
-  const activeFavoriteUid = useMemo(
-    () =>
-      selectedFavoriteUid && favorites.some((item) => item.uid === selectedFavoriteUid)
-        ? selectedFavoriteUid
-        : null,
-    [favorites, selectedFavoriteUid],
-  );
+  // 收藏编辑与任务配置分开持久化；选中标记必须核对完整组合，不能只认历史 uid。
+  // selected / liveEngineAgent / effort / fast 必须描述同一份实际配置。
+  const activeFavoriteUid = useMemo(() => {
+    const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
+    if (!item) return null;
+    const entry = entries.find(
+      (candidate) =>
+        candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
+    );
+    return entry &&
+      favoriteMatchesSelection({
+        entry,
+        item,
+        selected,
+        agent: liveEngineAgent,
+        effort: selectedEffort,
+        fast: fastMode,
+        agentFastModeCapable,
+      })
+      ? item.uid
+      : null;
+  }, [
+    entries,
+    favorites,
+    selectedFavoriteUid,
+    selected.providerId,
+    selected.modelId,
+    liveEngineAgent,
+    selectedEffort,
+    fastMode,
+    agentFastModeCapable,
+  ]);
 
   // ★ 引擎那一半(engineOverride / pinnedEngine / forceEngine 的合成与 isSelectedModelRow
   // 判据)在下方 effectiveEngineOf 里有一份**同构副本**(供 sections 过滤,避免把深度 / Fast
@@ -462,37 +456,36 @@ export function UnifiedModelPanel({
       void memoryVersion;
       // 当前草稿 / 会话**实际在用**的模型行:引擎显示强制与事实一致(正在跑什么就画
       // 什么),不受推荐 / override / pinned 摆布 —— 2026-08-14 实测抓到草稿在 pi 上跑
-      // DeepSeek,行上却按推荐回落显示「Claude」。收藏被选中时不强制(live 的是那条收藏)。
+      // DeepSeek,行上却按推荐回落显示「Claude」。收藏配置被采用时，模型本体同样显示实际配置。
       const isSelectedModelRow =
-        !activeFavoriteUid &&
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
+      const personalized = selectionPolicy === 'personalized';
       const base = resolveUnifiedRowConfig({
         entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(personalized
+          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
-        memoryEffort: (agent) =>
-          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
-        memoryFast: (agent) =>
-          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        ...(personalized
+          ? {
+              memoryEffort: (agent: AgentKind) =>
+                modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+              memoryFast: (agent: AgentKind) =>
+                modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+            }
+          : {}),
         agentFastModeCapable,
         // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上。
-        // 同引擎轨再加一道:没写过引擎 override 的**未选中**行钉在轨上显示/点选。
+        // 同引擎轨再加一道:未选中行显示/点选都钉在轨上 —— leftover override 不能把
+        // π 轨里的 Claude 默认模型改道跨引擎(浮层在该轨也不提供 Harness 切换)。
         // 选中行必须先钉 live 引擎(草稿/另一会话留下的全局 override 不能改写正在跑的那一行)。
-        // 未选中行的浮层显式换引擎:override 赢,否则胶囊弹回、点行仍走轨引擎。
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(() => {
           if (isSelectedModelRow && liveEngineAgent) {
             return { forceEngine: engineOfAgentKind(liveEngineAgent) };
           }
-          const override = getModelEngineOverride(entry.providerId, entry.modelId);
-          const overrideUsable =
-            override !== undefined && entry.candidates.includes(agentKindOfEngine(override));
-          if (
-            railForConfig.kind === 'engine' &&
-            entry.candidates.includes(railForConfig.agent) &&
-            !overrideUsable
-          ) {
+          if (railForConfig.kind === 'engine' && entry.candidates.includes(railForConfig.agent)) {
             return { forceEngine: engineOfAgentKind(railForConfig.agent) };
           }
           return {};
@@ -532,6 +525,7 @@ export function UnifiedModelPanel({
       selected.modelId,
       selected.providerId,
       selectedEffort,
+      selectionPolicy,
       sessionAgent,
     ],
   );
@@ -561,12 +555,13 @@ export function UnifiedModelPanel({
       }
       void enginePrefsVersion;
       const isSelectedModelRow =
-        !activeFavoriteUid &&
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
       return resolveUnifiedRowConfig({
         entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(selectionPolicy === 'personalized'
+          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
           ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
@@ -579,6 +574,7 @@ export function UnifiedModelPanel({
       liveEngineAgent,
       selected.modelId,
       selected.providerId,
+      selectionPolicy,
       sessionAgent,
     ],
   );
@@ -589,16 +585,20 @@ export function UnifiedModelPanel({
         entries,
         favorites,
         query,
+        matchesQuery: (entry, q) => matchesModelName({
+          id: entry.modelId, displayName: entry.displayName, description: entry.description,
+        }, q, t),
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
+        ...(scope === 'session' && liveEngineAgent
+          ? { recommendation: { agent: liveEngineAgent, ...selected } }
+          : {}),
       }),
-    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder],
+    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
   );
 
-  // 列表变化时把选中行对齐到**可视区中部**(Chris 2026-08-19 实测反馈,详见
-  // computeSelectedRowScrollTop 的头注:此前是「最小滚动进可视区」,首开那一帧列表极矮,
-  // 等价于把选中行顶到最上沿,收藏 1、2 条被顶出去)。
+  // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
   // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
   // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
   // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
@@ -623,17 +623,13 @@ export function UnifiedModelPanel({
     }
     const listRect = el.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
-    // badge 样式的滚动题头是**不透明实底**覆盖层,恒盖住列表视口顶部 SOLID 那一带
-    // (见 BADGE_HEADER_* 头注)。不把它从可视高度里扣掉的话,居中算出来的位置会整体
-    // 偏上半条题头,选中行有一截压在题头背后。
-    const headerInset = pickerLayout === 'badge' ? BADGE_HEADER_SOLID_PX : 0;
     // 「行是所在组第一行时把组标题一起露出来」的老逻辑已随居中一并去掉:居中天然在行上方
     // 留出半屏内容,组标题不会再被裁在视口外,多一条特例只会让收敛条件更难对。
     const alignment = computeSelectedRowScrollTop({
       scrollTop: el.scrollTop,
       clientHeight: el.clientHeight,
       scrollHeight: el.scrollHeight,
-      headerInset,
+      headerInset: 0,
       rowTop: rowRect.top - listRect.top + el.scrollTop,
       rowBottom: rowRect.bottom - listRect.top + el.scrollTop,
     });
@@ -670,7 +666,7 @@ export function UnifiedModelPanel({
       return;
     }
     // morph 生长期间尺寸还会变,保持在途,交给下一次尺寸回调复核。
-  }, [pickerLayout]);
+  }, []);
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -719,77 +715,26 @@ export function UnifiedModelPanel({
     setFlyAnchor(null);
     setFlyAnchorEl(null);
   }, []);
-  const cancelClose = useCallback(() => {
-    if (closeTimerRef.current === null) return;
-    clearTimeout(closeTimerRef.current);
-    closeTimerRef.current = null;
-  }, []);
-  const scheduleClose = useCallback(
-    (delay: number = FLYOUT_CLOSE_GRACE_MS) => {
-      cancelClose();
-      closeTimerRef.current = setTimeout(() => {
-        closeTimerRef.current = null;
-        closeFlyout();
-      }, delay);
-    },
-    [cancelClose, closeFlyout],
-  );
-
-  /**
-   * 行的 pointerleave:判一下**往哪边走**。朝浮层那一侧离开 = 用户正在去浮层的路上,
-   * 给长窗口;朝反方向 / 上下离开 = 正常扫列表,走短窗口。
-   * 只用「离开点落在行的哪半边」这一个信号 —— 不做安全三角形那套几何,够用且不会误伤。
-   */
-  const scheduleCloseFromRow = useCallback(
-    (event: { clientX: number; currentTarget: HTMLElement }) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      const flyoutRect = flyoutRef.current?.getBoundingClientRect();
-      const towardFlyout = flyoutRect
-        ? flyoutRect.left < rect.left
-          ? event.clientX <= rect.left + 2
-          : event.clientX >= rect.right - 2
-        : false;
-      scheduleClose(towardFlyout ? FLYOUT_CLOSE_GRACE_TOWARD_MS : FLYOUT_CLOSE_GRACE_MS);
-    },
-    [scheduleClose],
-  );
-
   useEffect(
     () => () => {
-      if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
       if (favoriteTimerRef.current !== null) clearTimeout(favoriteTimerRef.current);
     },
     [],
   );
-
-  // 滚动即收起:浮层锚定行会跟着滚动漂移(桌面菜单惯例,与旧版行配置浮层同解)。
-  // 浮层自身的滚动除外。
-  useEffect(() => {
-    if (!flyAnchor) return;
-    const onAnyScroll = (event: Event) => {
-      if (flyoutRef.current?.contains(event.target as Node)) return;
-      cancelClose();
-      closeFlyout();
-    };
-    document.addEventListener('scroll', onAnyScroll, true);
-    return () => document.removeEventListener('scroll', onAnyScroll, true);
-  }, [cancelClose, closeFlyout, flyAnchor]);
 
   // 切换事务 in-flight 时面板会 interactionDisabled 置灰,但浮层不能收 —— 收了就是
   // 「改思维闪关菜单」(Chris 2026-08-20):改档走 performAgentSwitch → disabled → 浮层没了。
 
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
-      if (anchor.kind === 'fav') return activeFavoriteUid === anchor.uid;
-      // 收藏锚点被选中时,模型行不同时打勾(锚点语义:选中的是那一条收藏)。
-      if (activeFavoriteUid) return false;
+      if (anchor.kind === 'fav') return false;
       // 会话 / 草稿存的是 wire id;按「行 id 或任一引擎 wire id 命中」解析(合并行契约)。
       return (
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === anchor.providerId)
       );
     },
-    [activeFavoriteUid, selected.modelId, selected.providerId],
+    [selected.modelId, selected.providerId],
   );
 
   /** ☆ 点亮 0.7s 后恢复(规格 §1.5:源头行不持有收藏态,只给一次动作反馈)。 */
@@ -813,6 +758,8 @@ export function UnifiedModelPanel({
     addFavorite,
     removeFavorite,
     selectRow,
+    pending: actionPending,
+    runExternal,
   } = useUnifiedRowActions({
     interactionDisabled,
     isLiveRow,
@@ -824,6 +771,7 @@ export function UnifiedModelPanel({
     onEffortChangeLive,
     onFastModeChangeLive,
     onSelect,
+    onConfigure,
     onSelectedFavoriteAnchorClear,
     sessionEngineFilter,
     sessionAgent,
@@ -853,7 +801,9 @@ export function UnifiedModelPanel({
     resolveDefaultRowConfig: (entry) =>
       resolveUnifiedRowConfig({
         entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(selectionPolicy === 'personalized'
+          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
       }),
@@ -880,20 +830,14 @@ export function UnifiedModelPanel({
     if (flyAnchor && !flyTarget) closeFlyout();
   }, [closeFlyout, flyAnchor, flyTarget]);
 
-  const revealFlyout = (anchor: UnifiedAnchor, element: HTMLElement) => {
+  const revealFlyout = (anchor: UnifiedAnchor, element: HTMLElement, toggle = false) => {
     if (!configurationEnabled || interactionDisabled) return;
-    cancelClose();
-    setFlyAnchorEl((current) => (current === element ? current : element));
-    setFlyAnchor((current) => (sameAnchor(current, anchor) ? current : anchor));
-  };
-
-  /** 焦点离开行:落进浮层就按住不收(← 键刚把焦点送进去的那一下),否则照常收。 */
-  const handleRowBlurAway = (related: EventTarget | null) => {
-    if (related && flyoutRef.current?.contains(related as Node)) {
-      cancelClose();
+    if (toggle && sameAnchor(flyAnchor, anchor)) {
+      closeFlyout();
       return;
     }
-    scheduleClose();
+    setFlyAnchorEl((current) => (current === element ? current : element));
+    setFlyAnchor((current) => (sameAnchor(current, anchor) ? current : anchor));
   };
 
   /** ← 键:开浮层并把焦点送进去(浮层挂载 + 定位要一帧,故在 rAF 后再找可聚焦项)。 */
@@ -915,6 +859,8 @@ export function UnifiedModelPanel({
   const sectionLabel = (section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
+      : section.kind === 'recommended'
+        ? t('newChat.modelSelector.unified.recommended')
       : section.group
         ? providerLabel(section.group.providerId)
         : '';
@@ -923,7 +869,7 @@ export function UnifiedModelPanel({
   const hasRows = rows.length > 0;
 
   /**
-   * 行内价格 / 订阅签的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
+   * 行内价格的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
    * 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
    * 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
    *
@@ -934,45 +880,37 @@ export function UnifiedModelPanel({
     (
       entry: UnifiedModelEntry,
       config: UnifiedRowConfig,
-    ): {
-      priceDisplay: NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']> | null;
-      subscriptionRow: boolean;
-    } => {
+    ): NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']> | null => {
       const price = priceOf(entry.providerId, config.wireModelId ?? entry.modelId, config.agent);
-      // 订阅接入且拿不到按量报价的行:画「订阅」小签,不画 $ 档串(那类模型走套餐额度,
-      // 画钱会被读成按量计费)。判定用 provider.access.kind + 报价来源
-      // (subscription-reference = 只是价值估算,不是账单价)。
+      // 接入方式由来源区域说明,行内不重复标注。订阅价值估算不作为按量报价展示。
       const rowProvider = providers.find((item) => item.id === entry.providerId);
       const subscriptionRow =
         rowProvider?.access?.kind === 'subscription' &&
         (price === null ||
           price.kind !== 'priced' ||
           price.current.source === 'subscription-reference');
-      if (subscriptionRow) return { priceDisplay: null, subscriptionRow: true };
-      if (price?.kind === 'free') return { priceDisplay: { kind: 'free' }, subscriptionRow: false };
-      if (price?.kind !== 'priced') return { priceDisplay: null, subscriptionRow: false };
+      if (subscriptionRow) return null;
+      if (price?.kind === 'free') return { kind: 'free' };
+      if (price?.kind !== 'priced') return null;
       // 符号个数按**标准价**判(original;折扣不改变模型的价格档),点亮几格按折扣比例
       // 取整;颜色只由点亮格数决定(见 UnifiedModelRow priceDisplay 头注)。
       const basis = price.original ?? price.current;
       const discountPct = price.discount !== undefined ? Math.round(price.discount * 100) : 0;
       return {
-        subscriptionRow: false,
-        priceDisplay: {
-          kind: 'tier',
-          tier: priceTierOf(basis.outputPerMtok, basis.currency),
-          // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
-          symbol: basis.currency === 'CNY' ? '¥' : '$',
-          ...(discountPct > 0 && discountPct < 100
-            ? {
-                discountPct,
-                paidPct: 100 - discountPct,
-                title: t(
-                  'newChat.modelSelector.pricing.discount',
-                  modelPriceDiscountLabelValues(price.discount ?? 0),
-                ),
-              }
-            : {}),
-        },
+        kind: 'tier',
+        tier: priceTierOf(basis.outputPerMtok, basis.currency),
+        // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
+        symbol: basis.currency === 'CNY' ? '¥' : '$',
+        ...(discountPct > 0 && discountPct < 100
+          ? {
+              discountPct,
+              paidPct: 100 - discountPct,
+              title: t(
+                'newChat.modelSelector.pricing.discount',
+                modelPriceDiscountLabelValues(price.discount ?? 0),
+              ),
+            }
+          : {}),
       };
     },
     [priceOf, providers, t],
@@ -990,14 +928,10 @@ export function UnifiedModelPanel({
    * 定宽,切 rail 只换可见内容、不再改宽度。取舍写明:代价是一次打开多渲染一份静态行
    * (无交互、无 hover、不进 listbox),换来宽度稳定。
    *
-   * 只在**有 rail 的形态**(非 badge)下挂:badge 拿掉了 rail、视图恒为「全部」,压根切不出
-   * 第二种宽度;`fluidWidth` 的 field 形态宽度绑 trigger,量了也没人听;当前已经是全量视图
-   * 时更不必量自己一遍。
+   * field 形态宽度绑 trigger；当前已是全量视图时无需重复量宽。
    */
   const widthSizerActive =
-    pickerLayout !== 'badge' &&
-    !panelWidthFluid &&
-    (effectiveRail.kind !== 'all' || query.trim() !== '');
+    !panelWidthFluid && (effectiveRail.kind !== 'all' || query.trim() !== '');
   const widthSizerSections = useMemo(
     () =>
       widthSizerActive
@@ -1013,101 +947,18 @@ export function UnifiedModelPanel({
     [widthSizerActive, entries, favorites, effectiveEngineOf, providerOrder],
   );
 
-  // badge 样式:滚动中的「继承目录题头」—— 覆盖层常驻列表视口顶部,显示当前滚过的
-  // 组名。不用 sticky:它钉在滚动容器 padding 之下,上沿必漏一条行;覆盖层整条不透明
-  // 横幅盖住顶部(含 padding 带),机制上无从透底。
-  const [stickyLabel, setStickyLabel] = useState<{
-    label: string;
-    providerId: string | null;
-    /** 被下一组组头顶出时的位移(≤0,px)—— 1:1 跟随滚动,见 updateStickyLabel。 */
-    offset: number;
-  } | null>(null);
-  const updateStickyLabel = useCallback(() => {
-    const list = listRef.current;
-    if (!list) return;
-    // 真 sticky 力学(Chris 2026-08-16:「没在它出现就锁死…落下来把第一个模型挡住」
-    // ——离散阈值切换会让组头先跟滚一段再跳回钉住位,必须做成连续运动):
-    //   - 组头盒顶到达 SWITCH_AT 即被题头卡接管锁死,一到位就锁,不多跟一像素;
-    //   - 下一组组头盒顶贴上题头实底下缘(PUSH_AT)后,把在位题头 1:1 顶出(offset 随
-    //     滚动连续变化),推满实底高度时正好轮到它自己锁进钉住位 —— 全程无跳变、无空窗。
-    // 两个阈值都从 BADGE_HEADER_* 派生(见其头注:横幅高度 / 渐变 / 自动对齐上界同源)。
-    const SWITCH_AT = BADGE_HEADER_SWITCH_AT_PX;
-    const PUSH_AT = SWITCH_AT + BADGE_HEADER_SOLID_PX;
-    const listTop = list.getBoundingClientRect().top;
-    let current: { label: string; providerId: string | null; offset: number } | null = null;
-    let nextTop: number | null = null;
-    for (const el of list.querySelectorAll<HTMLElement>('[data-group-label]')) {
-      const top = el.getBoundingClientRect().top - listTop;
-      if (top < SWITCH_AT) {
-        current = {
-          label: el.dataset.groupLabel ?? '',
-          providerId: el.dataset.groupProvider ?? null,
-          offset: 0,
-        };
-      } else {
-        nextTop = top;
-        break;
-      }
-    }
-    if (current && nextTop !== null) {
-      current.offset = Math.min(0, Math.round(nextTop) - PUSH_AT);
-    }
-    // 滚动每帧都会进来,内容没变就复用旧引用,不触发重渲染。
-    setStickyLabel((prev) =>
-      prev?.label === current?.label &&
-      prev?.providerId === current?.providerId &&
-      prev?.offset === current?.offset
-        ? prev
-        : current,
-    );
-  }, []);
-  useEffect(() => {
-    if (pickerLayout !== 'badge') {
-      setStickyLabel(null);
-      return;
-    }
-    updateStickyLabel();
-  }, [pickerLayout, sections, updateStickyLabel]);
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      {/* badge 样式不设左侧快捷跳转栏(Chris 2026-08-16):渠道归属由行内渠道签 +
-          分栏题头的供应商图标承担,列表恒为「全部」视图。 */}
-      {pickerLayout !== 'badge' && (
-        <UnifiedModelRail
-          items={railItems}
-          active={rail}
-          onSelect={setRail}
-          providers={providers}
-          providerLabel={providerLabel}
-          interactionDisabled={interactionDisabled}
-        />
-      )}
+      <UnifiedModelRail
+        items={railItems}
+        active={effectiveRail}
+        onSelect={setRail}
+        providers={providers}
+        providerLabel={providerLabel}
+        interactionDisabled={interactionDisabled || actionPending}
+      />
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {pickerLayout === 'badge' && stickyLabel && (
-          <div
-            aria-hidden
-            // 复刻真组头的静止位形,接管瞬间与列表顶部的真组头逐像素重合;收尾照设计稿
-            // .sec:实底渐隐到透明,不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
-            // 高度与渐变止点全部由 BADGE_HEADER_* 派生(见其头注),不在这里另写字面量。
-            className="pointer-events-none absolute inset-x-0 top-0 z-[6] px-[18px] pt-3 text-11 leading-none text-[var(--text-tertiary)]"
-            style={{
-              height: BADGE_HEADER_TOTAL_PX,
-              background: `linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) ${BADGE_HEADER_SOLID_PX}px, transparent)`,
-              // 顶出位移由滚动位置直接驱动(1:1),不加 transition —— 与滚动逐帧同步,
-              // 补间动画反而会让它滞后于手指。
-              transform: `translateY(${stickyLabel.offset}px)`,
-            }}
-          >
-            <div className="flex items-center gap-1.5">
-              {stickyLabel.providerId && (
-                <ProviderRailMark providerId={stickyLabel.providerId} providers={providers} />
-              )}
-              <span className="truncate">{stickyLabel.label}</span>
-            </div>
-          </div>
-        )}
         <div
           ref={listRef}
           role="listbox"
@@ -1127,25 +978,23 @@ export function UnifiedModelPanel({
           // 二者相加才既不过高、也不会在窄窗口里滚不到底。
           style={{ maxHeight: `${listMaxHeight ?? 428}px` }}
           onScroll={() => {
-            // 滚动不派发 pointerleave,浮层会跟着滚出视口的锚点行漂到菜单外 → 一滚就收起。
-            // 程序化的选中行对齐不算用户意图,由 suppressScrollDismissRef 放行一次。
+            // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
+            // 程序化对齐不取消在途的选中行定位。
             if (suppressScrollDismissRef.current) {
               suppressScrollDismissRef.current = false;
               return;
             }
             // 用户亲手滚动 → 放弃在途的「保证选中行可见」,不跟用户抢滚动条。
             needsEnsureVisibleRef.current = false;
-            if (flyAnchor) closeFlyout();
           }}
-          onScrollCapture={pickerLayout === 'badge' ? updateStickyLabel : undefined}
         >
           {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
           {followSession && (
             <>
               <button
                 type="button"
-                disabled={interactionDisabled}
-                onClick={() => followSession.onFollow()}
+                disabled={interactionDisabled || actionPending}
+                onClick={() => void runExternal(followSession.onFollow)}
                 role="option"
                 aria-selected={followSession.active}
                 data-follow-session-row
@@ -1166,11 +1015,8 @@ export function UnifiedModelPanel({
               <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
             </>
           )}
-          {/* 跨引擎视图的有损警示(规格 §1.6)—— 一行、可截断、不抢占列表高度。
-            只在会话内**离开**同引擎视图时出现:同引擎轨的优先行是无损的,兼容行点下去
-            走确认事务,轨顶不常驻警示(避免每次打开喊狼)。badge 样式没有同引擎视图
-            (恒为「全部」),常驻警示同样是喊狼 —— 有损由选中时的确认事务把关。 */}
-          {pickerLayout !== 'badge' && sessionEngineFilter && effectiveRail.kind !== 'engine' && (
+          {/* 离开同引擎视图后提示切换风险；真正切换仍经过确认事务。 */}
+          {sessionEngineFilter && effectiveRail.kind !== 'engine' && (
             <div
               role="note"
               data-cross-engine-warning
@@ -1200,19 +1046,7 @@ export function UnifiedModelPanel({
             </div>
           ) : (
             sections.map((section) => (
-              <div
-                key={section.key}
-                role="group"
-                aria-label={sectionLabel(section)}
-                // badge 样式:组间距放在 section 容器上(组头自身上下衬对称),标签文字
-                // 到上一组尾行与到本组首行的距离一致(Chris 2026-08-16:「上下高度对齐」)。
-                className={cn(pickerLayout === 'badge' && 'mt-2 first:mt-0')}
-              >
-                {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。
-                  badge 样式的"滚动中组名常驻"不用 sticky(sticky 钉在滚动容器
-                  padding 之下,上沿会漏出一条行 —— Chris 2026-08-16 实测),改由
-                  列表视口顶部的覆盖层题头承载(见 stickyLabel),这里保持普通元素。
-                  badge 样式的组头带供应商图标(快捷跳转栏拿掉后渠道归属落在这里)。 */}
+              <div key={section.key} role="group" aria-label={sectionLabel(section)}>
                 <div
                   data-group-label={sectionLabel(section)}
                   {...(section.group?.type === 'provider'
@@ -1220,20 +1054,15 @@ export function UnifiedModelPanel({
                     : {})}
                   className={cn(
                     'flex items-center gap-1.5 px-2.5 text-11 text-[var(--text-tertiary)]',
-                    // badge:上 4 下 12(配合列表 8px 上衬,顶部文字上下净空各约 13px,
-                    // 与滚动题头卡同一套位形);classic 保持既有 8/4 节奏。
-                    pickerLayout === 'badge' ? 'pb-3 pt-1 leading-none' : 'pb-1 pt-2',
+                    'pb-1 pt-2',
                   )}
                 >
-                  {pickerLayout === 'badge' && section.group?.type === 'provider' && (
-                    <ProviderRailMark providerId={section.group.providerId} providers={providers} />
-                  )}
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
                   const config = configOf(row.entry, row.favorite);
                   const key = anchorKey(row.anchor);
-                  const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
+                  const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
                     <UnifiedModelRow
                       key={key}
@@ -1245,49 +1074,33 @@ export function UnifiedModelPanel({
                       isFavoriteRow={!!row.favorite}
                       justFavorited={justFavorited === key}
                       {...(priceDisplay ? { priceDisplay } : {})}
-                      {...(subscriptionRow
-                        ? { subscriptionLabel: t('settings.providers.models.subscription') }
-                        : {})}
-                      interactionDisabled={interactionDisabled}
+
+                      configurationEnabled={configurationEnabled}
+                      interactionDisabled={
+                        interactionDisabled ||
+                        actionPending ||
+                        !!isRouteDisabled?.(
+                          row.entry.providerId,
+                          config.wireModelId ?? row.entry.modelId,
+                          config.agent,
+                        )
+                      }
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
                       {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
                       {...(onPaymentRequired ? { onPaymentRequired } : {})}
                       effortLabelOf={effortLabelOf}
                       providers={providers}
-                      layout={pickerLayout}
-                      // badge 样式:右缘来源字签(providerLabel 既有结果);行首徽标点按
-                      // 在候选引擎间快切 —— 与浮层引擎胶囊走**同一条 applyEngine 链路**
-                      // (选中行的草稿回写 / 会话跨引擎确认语义因此完全一致)。收藏行不给
-                      // 快切(☆ 是配置副本,徽标只作标识,改引擎去浮层改那条收藏)。
-                      {...(pickerLayout === 'badge'
-                        ? {
-                            channelLabel: providerLabel(row.entry.providerId),
-                            ...(configurationEnabled &&
-                            !row.favorite &&
-                            row.entry.candidates.length > 1
-                              ? {
-                                  onEngineCycle: () => {
-                                    const engines = row.entry.candidates.map(engineOfAgentKind);
-                                    const next =
-                                      engines[
-                                        (engines.indexOf(config.engine) + 1) % engines.length
-                                      ];
-                                    if (next) applyEngine(row.anchor, row.entry, config, next);
-                                  },
-                                }
-                              : {}),
-                          }
-                        : {})}
                       onReveal={revealFlyout}
                       onRevealForKeyboard={revealFlyoutForKeyboard}
-                      onLeave={scheduleCloseFromRow}
-                      onBlurAway={handleRowBlurAway}
                       onSelect={() => selectRow(row.anchor, config, row.favorite)}
-                      onStar={() =>
-                        row.favorite
-                          ? removeFavorite(row.anchor, row.entry)
-                          : addFavorite(row.anchor, config)
+                      onStar={
+                        selectionPolicy === 'personalized'
+                          ? () =>
+                              row.favorite
+                                ? removeFavorite(row.anchor, row.entry)
+                                : addFavorite(row.anchor, config)
+                          : undefined
                       }
                     />
                   );
@@ -1319,7 +1132,7 @@ export function UnifiedModelPanel({
                 </div>
                 {section.rows.map((row) => {
                   const config = configOf(row.entry, row.favorite, RAIL_ALL);
-                  const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
+                  const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
                     <UnifiedModelRow
                       key={anchorKey(row.anchor)}
@@ -1331,20 +1144,16 @@ export function UnifiedModelPanel({
                       isFavoriteRow={!!row.favorite}
                       justFavorited={false}
                       {...(priceDisplay ? { priceDisplay } : {})}
-                      {...(subscriptionRow
-                        ? { subscriptionLabel: t('settings.providers.models.subscription') }
-                        : {})}
+
+                      configurationEnabled={configurationEnabled}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
                       {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
                       effortLabelOf={effortLabelOf}
                       providers={providers}
-                      layout={pickerLayout}
                       onReveal={noop}
                       onRevealForKeyboard={noop}
-                      onLeave={noop}
-                      onBlurAway={noop}
                       onSelect={noop}
                       onStar={noop}
                     />
@@ -1365,8 +1174,6 @@ export function UnifiedModelPanel({
           // 否则它停在旧坐标上脱锚。sections 的引用只在真正重建列表时才变。
           repositionKey={sections}
           {...(overlayClassName !== undefined ? { className: overlayClassName } : {})}
-          onPointerEnter={cancelClose}
-          onPointerLeave={() => scheduleClose()}
           onDismiss={closeFlyout}
         >
           {(() => {
@@ -1390,10 +1197,20 @@ export function UnifiedModelPanel({
                 )}
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
-                disabled={interactionDisabled}
-                onEngineChange={(engine) =>
-                  applyEngine(target.anchor, target.entry, config, engine)
+                disabled={
+                  interactionDisabled ||
+                  actionPending ||
+                  !!isRouteDisabled?.(
+                    target.entry.providerId,
+                    config.wireModelId ?? target.entry.modelId,
+                    config.agent,
+                  )
                 }
+                engineLocked={effectiveRail.kind === 'engine'}
+                onEngineChange={(engine) => {
+                  if (effectiveRail.kind === 'engine') return;
+                  applyEngine(target.anchor, target.entry, config, engine);
+                }}
                 onEffortChange={(effort) =>
                   applyEffort(target.anchor, target.entry, config, effort)
                 }

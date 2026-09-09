@@ -50,6 +50,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
@@ -646,6 +647,52 @@ export function createMakerHookSessionRunner(deps: {
           : {}),
         resumeSessionId,
       };
+      if (req.createOnly) {
+        if (!req.isNew) return fail('create-only requires a new task');
+        try {
+          // `/new` only needs a durable, sidebar-visible task boundary. Do not
+          // start an Agent process here: that turns a local metadata mutation
+          // into a slow websocket RPC and can leave server/client state split
+          // if the response times out. The first real message cold-opens this
+          // same row through the ordinary reuse path.
+          await desktopSessionStorage.create({
+            id: req.sessionId,
+            agentKind: effectiveAgentKind,
+            workDir: workingDir,
+            title: req.title ?? 'New task',
+            model: effectiveModel,
+            ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
+            ...(effort !== undefined ? { effort } : {}),
+            permissionMode,
+          });
+          if (providerId) {
+            setSessionProvider(req.sessionId, providerId);
+            await setSessionProviderIdInDb(req.sessionId, providerId);
+          }
+          if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+            await setSessionSourceInDb(req.sessionId, req.source.im);
+          }
+          await touchUserSendInDb(req.sessionId).catch((err) => {
+            log.warn(
+              `hook create-only touchUserSend failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+          const wtMeta = worktreeStore.get(req.sessionId);
+          if (wtMeta) await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          broadcastSessionCreated(req.sessionId);
+          return {
+            status: 'ok',
+            finalText: '',
+            errorMessage: '',
+            durationMs: Date.now() - startedAt,
+          };
+        } catch (err) {
+          if (worktreeStore.get(req.sessionId)) {
+            void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
+          }
+          return fail(err instanceof Error ? err.message : String(err));
+        }
+      }
       try {
         await prepareUnhealthySessionForSend(req.sessionId);
         session = await maker.createSession(createOpts);

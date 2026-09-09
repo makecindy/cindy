@@ -128,7 +128,7 @@ export interface ResponsesRequest {
   include?: string[];
   prompt_cache_key?: string;
   max_output_tokens?: number;
-  reasoning?: { effort?: 'low' | 'medium' | 'high' | 'xhigh'; summary?: 'auto' | 'concise' | 'detailed' | 'none' };
+  reasoning?: { effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'; summary?: 'auto' | 'concise' | 'detailed' | 'none' };
   /** Fast 模式:codex 后端的 'priority' tier(models_cache service_tiers 声明,UI 名 "Fast")。 */
   service_tier?: string;
 }
@@ -198,6 +198,8 @@ export interface BridgeProviderConfig {
    * 对 reasoningEffort 报 400)bridge 将**完全不发** reasoning 字段。省略 = 全部支持。
    */
   supportsReasoning?: (model: string) => boolean;
+  /** Final per-model route capabilities. Omitted providers retain the legacy xhigh ceiling. */
+  supportedReasoningEfforts?: (model: string) => readonly string[] | undefined;
   /**
    * 该(去前缀后的)model 是否启用 strict function-tool 约束解码。这是生产唯一控制面
    * (不走环境变量)。开启后 translate 层仍**逐工具**做 strict 子集兼容检查

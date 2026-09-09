@@ -64,6 +64,7 @@ describe('history window backfill wiring', () => {
   });
 
   it('不变量 3：同步门槛按 session + 连接代，不用屏幕级 lastSyncedAt', () => {
+    expect(source).toContain('const SESSION_READ_ACK_DWELL_MS = 200;');
     expect(source).toContain('if (readAckSyncedKey !== `${sessionId}:${connectionEpoch}`) return;');
     expect(source).not.toContain('|| lastSyncedAt === null) return;');
   });
@@ -77,7 +78,7 @@ describe('history window backfill wiring', () => {
     // 换会话时整体重置,否则上个会话的已考察集合会压住新会话的补齐。
     expect(source).toContain('existingState?.sid === sessionId');
     expect(source).toContain('state.sid !== sessionIdAtStart || state.epoch !== epochAtStart');
-    expect(source).toContain('findHistoryWindowGap(messages, consideredKeys)');
+    expect(source).toContain('findHistoryWindowGap(latestMessagesRef.current, consideredKeys)');
     expect(source).toContain('...gapState.contiguous,');
     expect(source).toContain('...gapState.backfilled,');
     expect(source).toContain('...gapState.failed,');
@@ -125,15 +126,17 @@ describe('live stream interruption wiring', () => {
     );
     // 传的是 markHeldRemoteTopicsSubscribed 的返回值(仍被持有的那些),不是原始 toSend ——
     // 中途被释放的 topic 不算订阅生效。
-    expect(sendSubscribe).toMatch(/noteSessionLiveStreamsAcked\(\s*markHeldRemoteTopicsSubscribed\(/);
+    expect(sendSubscribe).toMatch(/const held = markHeldRemoteTopicsSubscribed\(remoteSubscribedTopicsRef\.current, registryRef\.current, deviceId, toSend\);\s*noteSessionLiveStreamsAcked\(held\);/);
+    expect(sendSubscribe).toContain("if (held.length > 0) record?.('subscription', 'applied', held.length)");
     // scope 在 ensureOnline 等待期间变化时，已释放 topic 不能迟到发到主机；仍被其它 owner
     // 持有的 topic 必须重新评估，不能和已释放 topic 一起饿死。
     expect(sendSubscribe).toContain('.filter((topic) => registryRef.current.hasTopic(deviceId, topic))');
     expect(sendSubscribe).toContain('toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic))');
-    expect(sendSubscribe).toContain('if (!sent) {');
+    // The production loop is behavior-tested in subscriptionAcknowledgements.test.ts.
+    expect(sendSubscribe).toContain('await confirmTrackedSubscription({');
     // 反向竞态同样要守住：快速释放后又切回时，旧 unsubscribe 在真正发帧前必须
     // 剔除已经重新被 owner 持有的 topic，不能落在新 subscribe 后把实时流再关掉。
-    expect(source).toContain('(topic) => !registryRef.current.hasTopic(deviceId, topic)');
+    expect(source).toContain('(topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic)');
     expect(source).toMatch(
       /const toSend = shouldSendTopic \? topics\.filter\(shouldSendTopic\) : topics;[\s\S]*client\.invoke\(deviceId, \{\s*channel: DL_UNSUBSCRIBE_CHANNEL,\s*args: \[\{ topics: toSend \}\]/,
     );

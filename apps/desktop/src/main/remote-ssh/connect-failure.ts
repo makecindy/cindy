@@ -8,11 +8,15 @@ import {
   KEY_FILE_NOT_FOUND_CODE,
   KEY_FILE_UNREADABLE_CODE,
   PINNED_AGENT_FAILED_CODE,
+  SSH_AGENT_UNAVAILABLE_CODE,
+  SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
 } from '@cindy/maker-remote-ssh';
 
 export type ConnectFailureClass =
   | 'SSH_AUTH_FAILED'
   | 'SSH_KEY_FILE_NOT_FOUND'
+  | 'SSH_AGENT_UNAVAILABLE'
+  | 'SSH_CONFIG_AUTH_UNSUPPORTED'
   | 'SSH_CONNECT_FAILED';
 
 /**
@@ -36,6 +40,12 @@ export function classifyConnectFailure(err: unknown): { code: ConnectFailureClas
   // 失败)统一归 SSH_KEY_FILE_NOT_FOUND(非重试、引导修本地配置)——
   // 不得落进 SSH_AUTH_FAILED(远端认证语义)或 SSH_CONNECT_FAILED(可重试语义)。
   const code = (err as { code?: unknown } | null)?.code;
+  if (code === SSH_CONFIG_AUTH_UNSUPPORTED_CODE) {
+    return { code: 'SSH_CONFIG_AUTH_UNSUPPORTED', msg };
+  }
+  if (code === SSH_AGENT_UNAVAILABLE_CODE) {
+    return { code: 'SSH_AGENT_UNAVAILABLE', msg };
+  }
   if (
     code === KEY_FILE_NOT_FOUND_CODE
     || code === KEY_FILE_UNREADABLE_CODE

@@ -9,15 +9,11 @@ import type {
   PiPackageRuntimeRequirement,
   PiPackageView,
 } from '@/../shared/piPackages';
-import {
-  isRelativeLocalPiPackageSource,
-  shouldShowPiPackagePostMutationNotice,
-} from '@/../shared/piPackages';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { isRelativeLocalPiPackageSource } from '@/../shared/piPackages';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { SettingsTextInput } from './SettingsTextInput';
 
@@ -46,7 +42,11 @@ type PiPackagesLoadState = 'loading' | 'ready' | 'error';
 
 interface PiPackageBusyOperation {
   action: PiPackageMutationAction;
-  source: string;
+  packageId: string;
+}
+
+function packageRowId(pkg: PiPackageView): string {
+  return pkg.mutationTarget ?? pkg.source;
 }
 
 function resourceLabel(
@@ -136,7 +136,6 @@ export function PiPackagesSection() {
   const [packages, setPackages] = useState<PiPackageView[]>([]);
   const [available, setAvailable] = useState(true);
   const [loadState, setLoadState] = useState<PiPackagesLoadState>('loading');
-  const [compatibilityNotice, setCompatibilityNotice] = useState<PiPackageView | null>(null);
   const [busy, setBusy] = useState<PiPackageBusyOperation | null>(null);
   const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
   const mountedRef = useRef(false);
@@ -158,7 +157,7 @@ export function PiPackagesSection() {
       setLoadState('ready');
     } catch {
       if (!mountedRef.current || generation !== loadGenerationRef.current) return;
-      if (!hasLoadedRef.current) setLoadState('error');
+      setLoadState('error');
       toast.error(tRef.current('settings.piPackages.operationFailed'));
     }
   }, []);
@@ -179,11 +178,11 @@ export function PiPackagesSection() {
   const runMutation = async (
     action: PiPackageMutationAction,
     packageSource: string,
-    options?: { enabled?: boolean },
+    options?: { enabled?: boolean; mutationTarget?: string },
   ): Promise<boolean> => {
     if (mutationInFlightRef.current) return false;
     mutationInFlightRef.current = true;
-    setBusy({ action, source: packageSource });
+    setBusy({ action, packageId: options?.mutationTarget ?? packageSource });
     try {
       const result = await window.electronAPI.maker.mutatePiPackage({
         action,
@@ -195,29 +194,46 @@ export function PiPackagesSection() {
         // authoritative mutation receipt when it eventually resolves.
         loadGenerationRef.current += 1;
         hasLoadedRef.current = true;
-        setLoadState('ready');
-        setAvailable(result.available);
-        setPackages(result.packages);
-        if (action === 'install') setSource('');
-        if (
-          (action === 'install' || action === 'update') &&
-          result.affectedPackage &&
-          shouldShowPiPackagePostMutationNotice(result.affectedPackage)
-        ) {
-          setCompatibilityNotice(result.affectedPackage);
+        setLoadState(result.projectionUnavailable ? 'error' : 'ready');
+        if (!result.projectionUnavailable) {
+          setAvailable(result.available);
+          setPackages(result.packages);
         }
+        if (action === 'install' && result.affectedPackage?.enabled) setSource('');
+      }
+      // Installation success means installed and enabled. Keep this Renderer
+      // assertion even though Main enforces the same invariant so an older or
+      // malformed receipt can never produce a false success toast.
+      if (action === 'install' && result.affectedPackage?.enabled !== true) {
+        toast.error(t('settings.piPackages.operationFailed'));
+        return false;
       }
       // Toasts are app-level feedback: even if the user leaves this panel while
       // the host mutation is running, they still need the final outcome.
       const successKey =
         action === 'install' && result.affectedPackage?.enabled
           ? 'settings.piPackages.success.installEnabled'
-          : `settings.piPackages.success.${action}`;
-      toast.success(t(successKey));
+          : action === 'remove'
+            ? 'settings.piPackages.success.settingsRemove'
+            : action === 'set-enabled' && options?.enabled === false
+              ? 'settings.piPackages.success.settingsDisable'
+              : `settings.piPackages.success.${action}`;
+      if (result.runtimeConvergence === 'partial') {
+        toast.error(t('settings.piPackages.failure.runtimeConvergencePartial'));
+      } else {
+        toast.success(t(successKey));
+      }
+      if (result.projectionUnavailable) {
+        toast.error(t('settings.piPackages.failure.stateUnavailable'));
+      }
       return true;
     } catch (error) {
-      if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') return false;
-      toast.error(t('settings.piPackages.operationFailed'));
+      const ipcError = extractIpcError(error);
+      toast.error(
+        ipcError?.code === 'PI_PACKAGE_MUTATION_FAILED'
+          ? ipcError.message
+          : t('settings.piPackages.operationFailed'),
+      );
       return false;
     } finally {
       mutationInFlightRef.current = false;
@@ -238,17 +254,6 @@ export function PiPackagesSection() {
       return next;
     });
   };
-  const closeCompatibilityNoticeUnlessMutating = (open: boolean) => {
-    if (!open && !mutationInFlightRef.current) setCompatibilityNotice(null);
-  };
-  const disableCompatibilityNoticePackage = async () => {
-    const notice = compatibilityNotice;
-    if (!notice?.enabled) return;
-    if (await runMutation('set-enabled', notice.source, { enabled: false })) {
-      if (mountedRef.current) setCompatibilityNotice(null);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
@@ -284,7 +289,7 @@ export function PiPackagesSection() {
             />
             <button
               type="button"
-              disabled={loadState !== 'ready' || !available || !installSource || Boolean(busy)}
+              disabled={loadState === 'loading' || !available || !installSource || Boolean(busy)}
               onClick={() => {
                 if (isRelativeLocalPiPackageSource(installSource)) {
                   toast.error(t('settings.piPackages.relativePathUnsupported'));
@@ -355,20 +360,24 @@ export function PiPackagesSection() {
 
         <div className={packages.length > 0 ? CARD_CLASS : undefined}>
           {packages.map((pkg) => {
-            const packageBusy = busy?.source === pkg.source;
+            const mutationTargetOption = pkg.mutationTarget
+              ? { mutationTarget: pkg.mutationTarget }
+              : {};
+            const rowId = packageRowId(pkg);
+            const packageBusy = busy?.packageId === rowId;
             const packageManageable = pkg.manageable !== false;
             const packageCanToggle = packageManageable && pkg.canToggle !== false;
-            const expanded = expandedSources.has(pkg.source);
+            const expanded = expandedSources.has(rowId);
             const noticeCount = packageCompatibilityNoticeCount(pkg);
             return (
               <div
-                key={pkg.source}
+                key={rowId}
                 className="border-b border-[var(--settings-theme-card-border)] last:border-b-0"
               >
                 <div className="flex min-h-11 items-center gap-1.5 px-3 py-1">
                   <button
                     type="button"
-                    onClick={() => toggleDetails(pkg.source)}
+                    onClick={() => toggleDetails(rowId)}
                     aria-expanded={expanded}
                     className="flex min-w-0 flex-1 items-baseline gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
                   >
@@ -420,14 +429,17 @@ export function PiPackagesSection() {
                     checked={pkg.enabled}
                     disabled={Boolean(busy) || !packageCanToggle}
                     onCheckedChange={(enabled) => {
-                      void runMutation('set-enabled', pkg.source, { enabled });
+                      void runMutation('set-enabled', pkg.source, {
+                        ...mutationTargetOption,
+                        enabled,
+                      });
                     }}
                     aria-label={t('settings.piPackages.toggleAria', { name: pkg.name })}
                   />
                   <button
                     type="button"
                     disabled={Boolean(busy) || !packageManageable}
-                    onClick={() => void runMutation('update', pkg.source)}
+                    onClick={() => void runMutation('update', pkg.source, mutationTargetOption)}
                     aria-label={t('settings.piPackages.updateAria', { name: pkg.name })}
                     aria-busy={packageBusy && busy?.action === 'update'}
                     className={ICON_ACTION_CLASS}
@@ -437,7 +449,7 @@ export function PiPackagesSection() {
                   <button
                     type="button"
                     disabled={Boolean(busy) || !packageManageable}
-                    onClick={() => void runMutation('remove', pkg.source)}
+                    onClick={() => void runMutation('remove', pkg.source, mutationTargetOption)}
                     aria-label={t('settings.piPackages.removeAria', { name: pkg.name })}
                     aria-busy={packageBusy && busy?.action === 'remove'}
                     className={ICON_ACTION_CLASS}
@@ -446,7 +458,7 @@ export function PiPackagesSection() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => toggleDetails(pkg.source)}
+                    onClick={() => toggleDetails(rowId)}
                     aria-expanded={expanded}
                     aria-label={
                       expanded
@@ -488,71 +500,6 @@ export function PiPackagesSection() {
           })}
         </div>
       </section>
-
-      <ConfirmDialog
-        open={compatibilityNotice !== null}
-        onOpenChange={closeCompatibilityNoticeUnlessMutating}
-        title={t('settings.piPackages.compatibilityNoticeTitle')}
-        description={t('settings.piPackages.compatibilityNoticeDescription', {
-          name: compatibilityNotice?.name ?? '',
-        })}
-        content={
-          compatibilityNotice ? (
-            <div className="flex flex-col gap-2">
-              {compatibilityNotice.warning && (
-                <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5 text-12 text-[var(--confirm-desc)]">
-                  {t(`settings.piPackages.warning.${compatibilityNotice.warning}`)}
-                </div>
-              )}
-              {compatibilityNotice.requiresExtensionApproval && (
-                <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-                  <p className="text-12 font-medium text-[var(--confirm-title)]">
-                    {t('settings.piPackages.extensionApprovalTitle')}
-                  </p>
-                  <p className="mt-1 text-11 leading-[1.45] text-[var(--confirm-desc)]">
-                    {t('settings.piPackages.extensionApprovalDescription')}
-                  </p>
-                </div>
-              )}
-              {compatibilityNotice.runtimeRequirements?.map((requirement) => (
-                <RuntimeRequirementDetails
-                  key={`${requirement.packageName}:${requirement.range}`}
-                  requirement={requirement}
-                />
-              ))}
-              {compatibilityNotice.resources
-                .filter((resource) => resource.compatibility !== 'supported')
-                .map((resource, index) => (
-                  <ResourceCompatibilityDetails
-                    key={`${resource.kind}:${resource.name}:${index}`}
-                    resource={resource}
-                  />
-                ))}
-              <p className="mt-1 text-11 leading-[1.45] text-[var(--confirm-desc)]">
-                {t('settings.piPackages.parserDisclaimer')}
-              </p>
-            </div>
-          ) : undefined
-        }
-        maxWidth={520}
-        describeContent
-        confirmText={
-          compatibilityNotice?.enabled
-            ? t('settings.piPackages.keepEnabled')
-            : t('settings.piPackages.done')
-        }
-        cancelText={t('settings.piPackages.keepDisabled')}
-        showCancel={false}
-        tertiaryText={
-          !compatibilityNotice?.requiresExtensionApproval && compatibilityNotice?.enabled
-            ? t('settings.piPackages.disableAfterInstall')
-            : undefined
-        }
-        loading={busy?.action === 'set-enabled'}
-        onConfirm={() => setCompatibilityNotice(null)}
-        onCancel={() => setCompatibilityNotice(null)}
-        onTertiary={() => void disableCompatibilityNoticePackage()}
-      />
     </div>
   );
 }

@@ -36,7 +36,6 @@ import {
   Folder,
   Loader2,
   Plug,
-  RefreshCw,
   SquarePen,
   Timer,
   Trash2,
@@ -108,6 +107,10 @@ import {
 import { playSessionEventSound } from '@/lib/notificationSound';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import {
+  botOwnedSessionNotificationTitle,
+  sendSessionEventNotification,
+} from '@/lib/sessionEventNotification';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   clearSessionAttentionMany,
@@ -130,7 +133,7 @@ import { useProjectAliases } from './hooks/useProjectAliases';
 import { useCollapsedProjects } from './hooks/useCollapsedProjects';
 import { useOrcaLeadWorkerMap } from './hooks/useOrcaLeadWorkerMap';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
-import { useAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
@@ -188,7 +191,7 @@ import {
   type AutomationScheduleSessionInfo,
   type AutomationSessionGroup,
 } from './lib/automationSidebarGrouping';
-import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { getSessionDeviceId, remoteProjectsStore, useRemoteScheduleIndex } from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
   useRemoteSessionActivity,
@@ -272,7 +275,6 @@ import {
   useSwitcherDevices,
 } from '@/features/device-link/useMachineSwitcher';
 import {
-  retryDeviceLinkDeviceList,
   useDeviceLinkDeviceListSettled,
   useDeviceLinkDeviceListRequestState,
 } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -320,23 +322,22 @@ function RemoteSidebarLoadNotice({
   status,
   deviceLabel,
   partial,
-  onRetry,
 }: {
   kind: 'tasks' | 'devices';
   status: 'loading' | 'error';
   deviceLabel?: string;
   partial: boolean;
-  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const isError = status === 'error';
   // tasks 的读取失败有完整自动恢复链路(10s 起对账退避重试 + 熔断探测恢复后自动重新
   // bootstrap),失败态只是「自动重试进行中」的状态说明,不是要求用户行动的告警——
   // 用中性样式 + role=status,且**不提供手动按钮**(2026-08 弱网实测反馈:重连必须
-  // 全自动,红色 alert + 按钮读起来像必须人工干预)。devices 目录失败没有等价的
-  // 自动重试,保持告警 + 手动重试。
+  // 全自动,红色 alert + 按钮读起来像必须人工干预)。设备目录失败不在侧栏展示:
+  // 本地与已缓存内容仍然可用,无需用连接状态打断用户。
   const autoRetrying = isError && kind === 'tasks';
   const alarming = isError && !autoRetrying;
+  const quietDeviceLoading = kind === 'devices' && status === 'loading';
   const messageKey =
     kind === 'tasks'
       ? status === 'loading'
@@ -344,22 +345,22 @@ function RemoteSidebarLoadNotice({
         : partial
           ? 'ccAgent.sidebar.machineSwitcher.tasksPartiallyFailed'
           : 'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'
-      : status === 'loading'
-        ? 'ccAgent.sidebar.machineSwitcher.devicesLoading'
-        : partial
-          ? 'ccAgent.sidebar.machineSwitcher.devicesPartiallyFailed'
-          : 'ccAgent.sidebar.machineSwitcher.devicesLoadFailed';
+      : 'ccAgent.sidebar.machineSwitcher.devicesLoading';
   return (
     <div
       role={alarming ? 'alert' : 'status'}
       className={cn(
-        'border',
-        alarming
-          ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
-          : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
-        partial
-          ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-          : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center',
+        quietDeviceLoading
+          ? 'mx-3 flex flex-col items-center gap-3 px-4 py-8 text-center text-[var(--text-secondary)]'
+          : 'border',
+        !quietDeviceLoading &&
+          (alarming
+            ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
+            : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]'),
+        !quietDeviceLoading &&
+          (partial
+            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
       )}
     >
       {isError ? (
@@ -374,21 +375,6 @@ function RemoteSidebarLoadNotice({
           {t(messageKey, { device: deviceLabel })}
         </p>
       </div>
-      {alarming && onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full font-medium',
-            'text-[var(--error-fg-strong)] transition-colors hover:bg-[var(--surface-hover)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-            partial ? 'h-6 px-2 text-11' : 'h-7 px-3 text-xs',
-          )}
-        >
-          <RefreshCw size={12} />
-          {t('ccAgent.sidebar.machineSwitcher.retryDevices')}
-        </button>
-      )}
     </div>
   );
 }
@@ -488,9 +474,8 @@ export function CCAgentSidebarUpper() {
   const filesMatch = useMatch('/cc-agent/files/:sessionId');
   const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
   const filesSessionId = filesMatch?.params.sessionId;
-  // files 路由下用户注视的就是该会话(ExpandedView 的 viewedSessionId 同一口径),
-  // 可见成功同样不该给它点 done 角标。
-  const scheduleSessionIndex = useAutomationScheduleSessionIndex(activeSessionId ?? filesSessionId);
+  const scheduleSessionIndex = usePublishedAutomationScheduleSessionIndex();
+  const remoteScheduleIndex = useRemoteScheduleIndex();
   // 侧栏右侧 urgent 红点的"额外"来源:定时任务未读且失败(status != 'success')。
   // sessionAttentionStore 只跟踪 chat 内 attention;schedule 未读通过 sidebarNotifications
   // 合并进 hasAttentionNotification,但 attentionKind 缺失导致默认走绿(见 SessionItem
@@ -498,11 +483,11 @@ export function CCAgentSidebarUpper() {
   // 把它们提到 urgent 红档,避免"失败的 automation 被涂成 Completed"的误导。
   const unreadFailedScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadFailedRun) next.add(sessionId);
     }
     return next;
-  }, [scheduleSessionIndex]);
+  }, [scheduleSessionIndex, remoteScheduleIndex]);
   const navigate = useNavigate();
 
   // Workdir-browse mode (skillhub Market sidebar pattern). When the user
@@ -657,12 +642,12 @@ export function CCAgentSidebarUpper() {
   // 完成未读(如重启后 attention store 还没填充)会丢绿点(codex review)。
   const railNotifications = useMemo(() => {
     const unread = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadRun) unread.add(sessionId);
     }
     if (unread.size === 0) return attentionNotifications;
     return new Set([...attentionNotifications, ...unread]);
-  }, [attentionNotifications, scheduleSessionIndex]);
+  }, [attentionNotifications, scheduleSessionIndex, remoteScheduleIndex]);
 
   useOrcaWorkerAttentionWatcher(sessionsHook.sessions, activeSessionId);
 
@@ -798,7 +783,7 @@ interface ExpandedProps {
   filter: UseSidebarFilterReturn;
   hiddenProjects: UseHiddenProjectsReturn;
   projectAliases: ReturnType<typeof useProjectAliases>;
-  scheduleSessionIndex: ReturnType<typeof useAutomationScheduleSessionIndex>;
+  scheduleSessionIndex: ReturnType<typeof usePublishedAutomationScheduleSessionIndex>;
 }
 
 /** rail 未分类隐藏态的空列表(引用稳定,免得 lampScope 发布 effect 空转)。 */
@@ -1030,6 +1015,9 @@ function ExpandedView({
         return;
       }
 
+      // Bot automation is owned by the Bots domain and must never be mutated
+      // through the generic Scheduler sidebar, even if a stale cache leaks it.
+      if (group.scheduleSource === 'bot') return;
       requestDeleteSchedule({
         id: scheduleId,
         name: scheduleName,
@@ -1044,11 +1032,8 @@ function ExpandedView({
 
   const [confirm, setConfirm] = useState<ConfirmState>(CONFIRM_INITIAL);
 
-  // 系统级通知触发：sessions 数组每次渲染都新引用，但 hook 用 ref 转储 callback，
-  // 不会因此重跑 transition effect。
-  // 静音 + 失焦 gate 在这里，主进程不持有 enabled 状态。
-  // Dock/taskbar 角标不是外发通知通道：App 在后台时即使桌面/飞书通知关闭,
-  // 也要标记当前 session 需要关注；真正的 toast / 飞书仍然服从各自开关。
+  // 系统级通知触发：sessions 数组每次渲染都新引用，但 callback 读 ref，
+  // 不会因此重跑 transition effect。通道、失焦与灵动岛去重由共享入口收口。
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   // 通知文案里的「尚未起名」兜底。走 ref 与 sessionsRef 同款:fireSessionNotification
@@ -1076,6 +1061,15 @@ function ExpandedView({
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
+      // Bot-owned 任务不在普通任务列表中，沿用主干共享通知入口解析标题和通道。
+      // 普通任务继续走下方提示音路径，以便在发送 toast 前确认应用音是否真正启动。
+      if (!session) {
+        void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
+          if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;
+          sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
+        });
+        return;
+      }
       // 先尝试或合并应用提示音,再决定 toast 是否静音(review P2):
       // 已播放／已被同类提示音覆盖 → 静音 OS 通知音,避免同批声音叠加;
       // 主播放失败 → 保持 Electron 默认,让这一条 OS 通知音兜底。
@@ -1098,7 +1092,7 @@ function ExpandedView({
       // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
       // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
       //  locale 投影要改协议,超出本 PR 范围;但无论如何都比露出哨兵好。)
-      const title = projectDraftSessionTitle(session?.title, unnamedLabelRef.current);
+      const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
       // mobile 通道恒开:桌面侧不设第二个开关,是否收到由手机端注册/注销推送 token
       // 决定;发送侧防打扰(远程正在看该会话 / 去重 / relay 能力)在 main 收口。
       // 因此桌面/飞书都关时也要 invoke(不再提前 return)。
@@ -1144,15 +1138,16 @@ function ExpandedView({
       onSessionNeedsReply: handleSessionNeedsReply,
     },
   );
+  const remoteScheduleIndex = useRemoteScheduleIndex();
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   const unreadScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadRun) next.add(sessionId);
     }
     return next;
-  }, [scheduleSessionIndex]);
+  }, [scheduleSessionIndex, remoteScheduleIndex]);
   const sidebarNotifications = useMemo(() => {
     if (unreadScheduleSessionIds.size === 0) return notifications;
     return new Set([...notifications, ...unreadScheduleSessionIds]);
@@ -1161,17 +1156,16 @@ function ExpandedView({
 
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
-      const info = scheduleSessionIndex.get(sessionId);
-      // 成功未读可以看过即已读;失败未读必须等横幅或组菜单显式「标为已读」,
-      // 否则点进去横幅立刻消失,红点又没有可处置入口。
+      const info = remoteProjectsStore.getSessionScheduleInfo(sessionId) ?? scheduleSessionIndex.get(sessionId);
+      // 成功进入即已读；历史失败在任务内容实际展示时确认，保留横幅、只清红点。
       const successUnreadRunIds = info ? unreadSuccessScheduleRunIds(info) : [];
       if (successUnreadRunIds.length === 0) return;
       // …AndSync:settle 后无条件触发 renderer 本地刷新。跨实例场景下这些 runId
       // 可能在 DB 里早已被另一实例标为已读(main no-op 且不广播),没有本地刷新
       // 通道的话,这里的过期未读快照永远等不到事件、红点无法自愈。
-      void markScheduleRunsReadAndSync(successUnreadRunIds);
+      void markScheduleRunsReadAndSync(successUnreadRunIds, getSessionDeviceId(sessionId));
     },
-    [scheduleSessionIndex],
+    [scheduleSessionIndex, remoteScheduleIndex],
   );
   const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
   const effectiveRunningSessionIds = useMemo(() => {
@@ -3487,22 +3481,7 @@ function ExpandedView({
           ) : null}
           {/* 搜索时原列表只隐藏、不卸载:置顶段折叠等本地 state 才能保住。 */}
           <div hidden={searchActive} className="flex flex-col gap-2">
-            {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
-              <>
-                <MainListScopeHeader
-                  filter={filter}
-                  allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
-                  hasRemoteDevices={deviceGroupingAvailable}
-                />
-                <RemoteSidebarLoadNotice
-                  kind="devices"
-                  status="error"
-                  partial={false}
-                  onRetry={retryDeviceLinkDeviceList}
-                />
-              </>
-            ) : remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
+            {remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
               <>
                 <MainListScopeHeader
                   filter={filter}
@@ -3560,14 +3539,6 @@ function ExpandedView({
               </>
             ) : (
               <>
-                {remoteDeviceDirectoryStatus === 'error' && (
-                  <RemoteSidebarLoadNotice
-                    kind="devices"
-                    status="error"
-                    partial
-                    onRetry={retryDeviceLinkDeviceList}
-                  />
-                )}
                 {remoteSessionBootstrapFailures.length > 0 && (
                   <RemoteSidebarLoadNotice
                     kind="tasks"
@@ -3579,8 +3550,8 @@ function ExpandedView({
                 {/*
                  * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
                  * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
-                 * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
-                 * 在列表前，便于用户知道已有内容不是本轮权威结果。
+                 * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。设备目录失败
+                 * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
                 <PinnedSection
                   entries={visiblePinnedEntries}
@@ -3650,6 +3621,8 @@ function ExpandedView({
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
+                  bots={groups.bots}
+                  onOpenBot={(botId) => navigate(`/bots/${botId}`)}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}
@@ -3831,6 +3804,7 @@ function CollapsedView({
   const startingSessionIds = useStartingSessionIds(runningSessionIds);
   // 瓷砖未读点颜色按 attention kind(done 绿 / awaiting TapTap 蓝 / error 红);组件层
   // 取一次,renderItem 里查表(renderItem 非组件,不能 per-item 用 hook)。
+
   const attentionKinds = useSessionAttentionKinds();
   // 失败 automation urgency 集合 —— rail 瓷砖也要按此把 failed schedule 涂红,不能
   // 让"失败的定时任务"落到默认绿色 done tone(否则和 SessionItem 不一致,
@@ -4114,6 +4088,7 @@ function RailPanels({
   // onOpenChange —— openSection 离开 projects 就同步清掉菜单状态,否则组件常驻
   // (只是 return null),下次打开面板旧菜单会按旧坐标复现并引用旧项目(review)。
   // 与下方 showAllProjects 的复位同构。
+
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   // 项目列表「显示全部」:面板关闭后复位(与 ProjectsSection 的段收起复位同语义)。

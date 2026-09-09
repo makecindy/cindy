@@ -202,32 +202,53 @@ describe('renderOAuthResultPage', () => {
 const BRAND_BASE = {
   htmlLang: 'zh-CN',
   title: '登录成功',
-  body: '你可以关闭此页面，回到 Cindy 继续。',
+  body: '登录已成功，现在可以关闭此页面了。',
+  closeCountdown: '{{count}}秒后自动关闭',
   action: { href: 'cindy://focus/desktop-login', label: '回到 Cindy' },
 } as const;
 
 describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
-  it('renders the 680 brand card with the frozen U-10 scale formula', () => {
+  it('renders the compact success card with the frozen U-10 scale formula', () => {
     const html = renderOAuthResultPage({
       ...BRAND_BASE,
       variant: 'success',
       pageKind: 'desktop-login',
     });
-    // 卡内几何零响应式:680×680 r36 + 立绘/标题/副文案/CTA 冻结坐标(figma §6.1)
-    expect(html).toContain('width:680px;height:680px');
+    // 成功态移除 CTA 后使用紧凑流式卡,避免沿用失败态卡片的底部空白。
+    expect(html).toContain('data-cindy-oauth-layout="compact"');
+    expect(html).toContain('data-card-width="560" data-card-height="500"');
+    expect(html).toContain('.card.success{width:560px;height:500px;display:flex;flex-direction:column;align-items:center;padding:48px 40px 44px}');
+    expect(html).toContain('.card.success .visual{position:static;flex:0 0 240px;width:240px;height:240px}');
+    expect(html).toContain('.card.success .content{display:flex;flex-direction:column;align-items:center;width:100%;margin-top:24px;gap:10px}');
+    expect(html).toContain('.card.success .body{position:static;flex:0 0 auto;width:100%;max-width:480px;height:auto;min-height:28px;margin:0;font-size:20px;line-height:28px;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}');
+    expect(html).toContain('.card.success .close-countdown{flex:0 0 auto;margin:auto 0 0;color:var(--detail);font-size:16px;line-height:23px;text-align:center;white-space:nowrap}');
+    expect(html).toContain('id="close-countdown" data-template="{{count}}秒后自动关闭">3秒后自动关闭</p>');
+    expect(html).not.toContain('尝试自动关闭');
     expect(html).toContain('border-radius:36px');
-    expect(html).toContain('left:200px;top:60px;width:280px;height:280px');
-    expect(html).toContain('left:42px;top:352px;width:598px');
-    expect(html).toContain('left:41px;top:396px;width:599px');
-    expect(html).toContain('left:70px;top:529px;width:540px;height:80px;border-radius:40px');
     // U-10 demo 冻结公式逐字面出现在内联脚本中
     expect(html).toContain('w<760?88:80');
-    expect(html).toContain('Math.min(1,(w-32)/680,(h-topOffset-24)/680)');
+    expect(html).toContain('Math.min(1,(w-32)/cardWidth,(h-topOffset-24)/cardHeight)');
     // chibi data URI(U-7)+ 加载失败降级
     expect(html).toContain(LOGIN_CALLBACK_CHIBI.success.slice(0, 64));
     expect(html).toContain('onerror=');
     expect(html).toContain('data-cindy-oauth-visual="success"');
+    expect(html).toContain("document.body.dataset.cindyOauthResult==='success'");
+    expect(html).toContain('var remaining=3,timer');
+    expect(html).toContain('remaining-=1');
+    expect(html).toContain('countdown.remove()');
+    expect(html).toContain('window.close()');
+    expect(html).not.toContain('<a class="cta"');
+  });
+
+  it('keeps the return CTA on branded error pages', () => {
+    const html = renderOAuthResultPage({
+      ...BRAND_BASE,
+      variant: 'error',
+      title: '登录未完成',
+      body: '请回到 Cindy 重新登录。',
+    });
     expect(html).toContain('<a class="cta" href="cindy://focus/desktop-login">回到 Cindy</a>');
+    expect(html).not.toContain('id="close-countdown"');
   });
 
   it('maps legacy variants to visual kinds (error→failure, warning→neutral)', () => {
@@ -314,8 +335,14 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
         });
         expect(html).toContain(`data-theme="${theme}"`);
         expect(html).toContain(`data-cindy-oauth-visual="${visualKind}"`);
-        expect(html).toContain('width:680px;height:680px');
-        expect(html).toContain('left:70px;top:529px;width:540px;height:80px;border-radius:40px');
+        if (variant === 'success') {
+          expect(html).toContain('width:560px;height:500px');
+          expect(html).toContain('data-card-width="560" data-card-height="500"');
+        } else {
+          expect(html).toContain('width:680px;height:680px');
+          expect(html).toContain('data-card-width="680" data-card-height="680"');
+          expect(html).toContain('left:70px;top:529px;width:540px;height:80px;border-radius:40px');
+        }
       }
     }
   });

@@ -1,3 +1,4 @@
+import { pickModelMetadata } from '@cindy/model-providers';
 /**
  * model-discovery/anthropic —— Anthropic(Claude.ai 订阅)模型清单的动态发现。
  * ---------------------------------------------------------------------------
@@ -45,11 +46,7 @@ import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import type {
-  CatalogModel,
-  Effort,
-  ProviderModelDiscoveryFailure,
-} from '@cindy/model-providers';
+import type { CatalogModel, Effort, ProviderModelDiscoveryFailure } from '@cindy/model-providers';
 
 import { createLogger } from '../../logger.js';
 import {
@@ -64,7 +61,14 @@ import { outboundFetch } from '../outbound-fetch.js';
 
 const log = createLogger('model-discovery:anthropic');
 
-const VALID_EFFORTS: ReadonlySet<string> = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const VALID_EFFORTS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
 const HTTP_TIMEOUT_MS = 15_000;
 /** /v1/models 游标分页的最大页数(现实模型数远小于单页 1000,纯防御)。 */
 const MAX_MODEL_PAGES = 5;
@@ -205,7 +209,9 @@ function resetHttpShrinkStreak(): void {
  */
 function persistPendingShrink(): void {
   const state =
-    httpShrinkSignature !== null ? { signature: httpShrinkSignature, streak: httpShrinkStreak } : null;
+    httpShrinkSignature !== null
+      ? { signature: httpShrinkSignature, streak: httpShrinkStreak }
+      : null;
   const generation = authGeneration;
   void enqueueCacheMutation(async () => {
     if (generation !== authGeneration || !hasClaudeAiOAuth()) return;
@@ -221,9 +227,10 @@ function persistPendingShrink(): void {
     }
     if (!raw) return;
     if (state) raw.pendingShrink = state;
-    else if (raw.pendingShrink === undefined) return; // 无变化不写盘
+    else if (raw.pendingShrink === undefined)
+      return; // 无变化不写盘
     else delete raw.pendingShrink;
-    const temp = `${file}.${process.pid}.${cacheTempSequence += 1}.tmp`;
+    const temp = `${file}.${process.pid}.${(cacheTempSequence += 1)}.tmp`;
     try {
       await fsp.writeFile(temp, JSON.stringify(raw, null, 2), 'utf-8');
       if (generation !== authGeneration || !hasClaudeAiOAuth()) return;
@@ -245,7 +252,10 @@ function persistPendingShrink(): void {
  * 只有 HTTP 通道参与收敛:它是 Anthropic 官方列模型端点,连续一致可作可用性证据;
  * SDK 捕获(本地 CLI 注册表,正是打塌事故的退化来源)永不收敛,等 HTTP 纠正。
  */
-export function evaluateHttpShrink(prevCount: number, nextIds: readonly string[]): 'accept' | 'reject' {
+export function evaluateHttpShrink(
+  prevCount: number,
+  nextIds: readonly string[],
+): 'accept' | 'reject' {
   let verdict: 'accept' | 'reject';
   if (!isDegenerateModelListShrink(prevCount, nextIds.length)) {
     resetHttpShrinkStreak();
@@ -280,9 +290,7 @@ export interface SdkMappedModel {
 function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort: Effort | null } {
   const catalogBaseline = getCindyModelEffortBaseline(id);
   if (catalogBaseline) return catalogBaseline;
-  const efforts: Effort[] = /haiku/.test(id)
-    ? []
-    : ['low', 'medium', 'high', 'xhigh', 'max'];
+  const efforts: Effort[] = /haiku/.test(id) ? [] : ['low', 'medium', 'high', 'xhigh', 'max'];
   return { efforts, defaultEffort: pickDefaultEffort(efforts) };
 }
 
@@ -311,8 +319,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     const id = normalizeModelId(e.value);
     if (!id.startsWith('claude') || seen.has(id)) continue;
     seen.add(id);
-    const hasEffortInfo =
-      e.supportsEffort !== undefined || e.supportedEffortLevels !== undefined;
+    const hasEffortInfo = e.supportsEffort !== undefined || e.supportedEffortLevels !== undefined;
     const hasFastModeInfo = e.supportsFastMode !== undefined;
     const fallback = fallbackEffortBaseline(id);
     let efforts: Effort[];
@@ -326,7 +333,8 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     } else {
       const levels = toEfforts(e.supportedEffortLevels);
       // supportsEffort=true 但没给档位清单:按目录基线 / 确定性默认合成,不解读为不可调。
-      efforts = levels && levels.length > 0 ? levels : e.supportsEffort === true ? fallback.efforts : [];
+      efforts =
+        levels && levels.length > 0 ? levels : e.supportsEffort === true ? fallback.efforts : [];
       defaultEffort =
         levels && levels.length > 0
           ? pickDefaultEffort(efforts)
@@ -339,6 +347,13 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
       hasFastModeInfo,
       model: {
         id,
+        discoveredMetadata: pickModelMetadata({
+          name: e.displayName,
+          description: e.description,
+          efforts:
+            e.supportsEffort === false ? [] : (toEfforts(e.supportedEffortLevels) ?? undefined),
+          supportsFastMode: e.supportsFastMode,
+        }),
         name: typeof e.displayName === 'string' && e.displayName.length > 0 ? e.displayName : id,
         group: 'anthropic',
         sortOrder: out.length,
@@ -378,9 +393,7 @@ interface CapabilityMappedModel {
  * 把一份完整存在性快照与上一轮能力状态逐字段合并。缺席字段只有上一轮已标记为明确
  * 来源时才保留旧值；否则直接使用 mapper 生成的当前目录基线。
  */
-function mergeCapabilitiesWithPrevious(
-  mapped: readonly CapabilityMappedModel[],
-): {
+function mergeCapabilitiesWithPrevious(mapped: readonly CapabilityMappedModel[]): {
   models: CatalogModel[];
   explicitEffortIds: Set<string>;
   explicitFastModeIds: Set<string>;
@@ -397,6 +410,13 @@ function mergeCapabilitiesWithPrevious(
       nextExplicitEffort.add(model.id);
       merged = {
         ...merged,
+        discoveredMetadata: {
+          ...merged.discoveredMetadata,
+          ...pickModelMetadata({
+            efforts: prev.discoveredMetadata?.efforts,
+            defaultEffort: prev.discoveredMetadata?.defaultEffort,
+          }),
+        },
         efforts: prev.efforts,
         defaultEffort: prev.defaultEffort,
       };
@@ -405,7 +425,14 @@ function mergeCapabilitiesWithPrevious(
       nextExplicitFastMode.add(model.id);
     } else if (prev && explicitFastModeModelIds.has(model.id)) {
       nextExplicitFastMode.add(model.id);
-      merged = { ...merged, supportsFastMode: prev.supportsFastMode };
+      merged = {
+        ...merged,
+        discoveredMetadata: {
+          ...merged.discoveredMetadata,
+          ...pickModelMetadata({ supportsFastMode: prev.discoveredMetadata?.supportsFastMode }),
+        },
+        supportsFastMode: prev.supportsFastMode,
+      };
     }
     return merged;
   });
@@ -460,6 +487,12 @@ export function mapAnthropicHttpModels(raw: unknown): HttpMappedModel[] {
       explicitContextWindow: maxInput,
       model: {
         id,
+        discoveredMetadata: pickModelMetadata({
+          name: e.display_name,
+          contextWindow: maxInput,
+          efforts: capEfforts ?? undefined,
+          supportsFastMode: caps?.fast_mode,
+        }),
         name: typeof e.display_name === 'string' && e.display_name.length > 0 ? e.display_name : id,
         group: 'anthropic',
         sortOrder: out.length,
@@ -534,7 +567,7 @@ async function applyModels(
     await enqueueCacheMutation(async () => {
       if (!generationCanApply(generation, models)) return;
       const file = cacheFilePath();
-      const temp = `${file}.${process.pid}.${cacheTempSequence += 1}.tmp`;
+      const temp = `${file}.${process.pid}.${(cacheTempSequence += 1)}.tmp`;
       try {
         await fsp.mkdir(path.dirname(file), { recursive: true });
         if (!generationCanApply(generation, models)) return;
@@ -653,6 +686,15 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
       const { contextWindowVerified: _staleProvenance, ...rest } = model;
       return {
         ...rest,
+        discoveredMetadata:
+          model.discoveredMetadata ??
+          pickModelMetadata({
+            contextWindow: explicitWindows.get(model.id),
+            efforts: restoredExplicitEffortIds.has(model.id) ? model.efforts : undefined,
+            supportsFastMode: restoredExplicitFastModeIds.has(model.id)
+              ? model.supportsFastMode
+              : undefined,
+          }),
         ...contextWindowFor(model.id, explicitWindows.get(model.id)),
         ...(effortBaseline ?? {}),
       };
@@ -689,7 +731,12 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
     // provenance 静默擦掉, 之后就不再拿这个真实上限去收敛虚高的上报值了。
     const base =
       explicit !== undefined
-        ? { ...model, contextWindow: explicit, contextWindowVerified: true as const }
+        ? {
+            ...model,
+            discoveredMetadata: { ...model.discoveredMetadata, contextWindow: explicit },
+            contextWindow: explicit,
+            contextWindowVerified: true as const,
+          }
         : model;
     return { model: base, hasEffortInfo, hasFastModeInfo };
   });
@@ -718,12 +765,28 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
       if (patch.hasEffortInfo) {
         next = {
           ...next,
+          discoveredMetadata: {
+            ...next.discoveredMetadata,
+            ...pickModelMetadata({
+              efforts: patch.model.discoveredMetadata?.efforts,
+              defaultEffort: patch.model.discoveredMetadata?.defaultEffort,
+            }),
+          },
           efforts: patch.model.efforts,
           defaultEffort: patch.model.defaultEffort,
         };
       }
       if (patch.hasFastModeInfo) {
-        next = { ...next, supportsFastMode: patch.model.supportsFastMode };
+        next = {
+          ...next,
+          discoveredMetadata: {
+            ...next.discoveredMetadata,
+            ...pickModelMetadata({
+              supportsFastMode: patch.model.discoveredMetadata?.supportsFastMode,
+            }),
+          },
+          supportsFastMode: patch.model.supportsFastMode,
+        };
       }
       return next;
     });
@@ -749,9 +812,11 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
     return;
   }
   log.info(`anthropic models captured from SDK init: ${models.length}`);
-  void applyModels(models, true, generation, explicitEffortIds, explicitFastModeIds).catch((err) => {
-    log.warn('apply anthropic SDK models failed', { error: String(err) });
-  });
+  void applyModels(models, true, generation, explicitEffortIds, explicitFastModeIds).catch(
+    (err) => {
+      log.warn('apply anthropic SDK models failed', { error: String(err) });
+    },
+  );
 }
 
 /** 非 2xx 响应:带上状态码与响应体片段抛出 —— 地域拒绝只能从响应体认出来。 */
@@ -1088,7 +1153,8 @@ export function refreshAnthropicModelsFromHttp(options?: {
         // 可用 —— 那两种同样是 unauthorized。凭证还在、也还能刷,才是暂时性故障。
         if (refreshed == null) {
           const credential = readClaudeAiOAuth();
-          const stillRefreshable = typeof credential?.refreshToken === 'string' && credential.refreshToken.length > 0;
+          const stillRefreshable =
+            typeof credential?.refreshToken === 'string' && credential.refreshToken.length > 0;
           if (refreshError !== null || stillRefreshable) {
             noteDiscoveryFailure(
               gen,
@@ -1131,7 +1197,12 @@ export function refreshAnthropicModelsFromHttp(options?: {
     // 退化判定必须先于任何状态写入:被拒快照连 explicitWindows 也不许污染,
     // 否则后续 SDK 捕获会把退化响应带来的窗口值用作精确记账(review P2)。
     // 连续多次相同的骤减快照经 evaluateHttpShrink 收敛放行(真实批量下架自愈)。
-    if (evaluateHttpShrink(lastApplied.length, mapped.map((m) => m.model.id)) === 'reject') {
+    if (
+      evaluateHttpShrink(
+        lastApplied.length,
+        mapped.map((m) => m.model.id),
+      ) === 'reject'
+    ) {
       log.warn(
         `anthropic /v1/models response looks degenerate (${lastApplied.length} -> ${mapped.length}); keeping current list (streak ${httpShrinkStreak}/${CONFIRMED_SHRINK_STREAK})`,
       );

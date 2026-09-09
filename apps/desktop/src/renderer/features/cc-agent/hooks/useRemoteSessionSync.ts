@@ -23,6 +23,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { isSessionTurnRunningFor } from '@/lib/makerTransport';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
+import { createRemoteContentRecovery, type RemoteContentRecoveryState } from './remoteContentRecovery';
 
 const log = createLogger('useRemoteSessionSync');
 
@@ -39,6 +40,8 @@ export interface RemoteSyncTarget {
 
 /** engine 的外部副作用依赖(测试注入 spy)。 */
 export interface RemoteSyncEngineDeps {
+  /** Offline cached views must not start reads or turn-status probes. */
+  canRead?: () => boolean;
   subscribe: (deviceId: string, topics: string[]) => void;
   unsubscribe: (deviceId: string, topics: string[]) => void;
   reconcile: (sessionId: string) => void;
@@ -116,6 +119,7 @@ export function createRemoteSessionSyncEngine(
   let prevRunning = false;
 
   const subscribeHeavy = (): void => {
+    if (deps.canRead?.() === false) return;
     const { sessionId, deviceId } = getTarget();
     if (!sessionId || !deviceId) return;
     deps.subscribe(deviceId, [`session:${sessionId}`]);
@@ -128,7 +132,7 @@ export function createRemoteSessionSyncEngine(
     timer = setTimeout(() => {
       timer = null;
       const t = getTarget();
-      if (t.sessionId && t.deviceId) deps.reconcile(t.sessionId);
+      if (t.sessionId && t.deviceId && deps.canRead?.() !== false) deps.reconcile(t.sessionId);
     }, debounceMs);
   };
 
@@ -163,7 +167,7 @@ export function createRemoteSessionSyncEngine(
   const watchdogTick = async (): Promise<void> => {
     const { sessionId, deviceId } = getTarget();
     // 目标无效 / 恢复进行中 → 跳过本拍。
-    if (!sessionId || !deviceId || recovering) { scheduleTick(baseIntervalMs); return; }
+    if (!sessionId || !deviceId || recovering || deps.canRead?.() === false) { scheduleTick(baseIntervalMs); return; }
     // turn 不在跑(可能已正常收尾)/ 还没静默够久 → 已恢复:清残留兜底态 + 复位 backoff,常规巡检。
     if (!deps.isRunningNow!(sessionId) || now() - lastSeen(sessionId) < stallThresholdMs) {
       deps.onRecovered?.(sessionId);
@@ -179,7 +183,7 @@ export function createRemoteSessionSyncEngine(
       // await 期间可能已 dispose / stop(切会话 / 卸载)→ watchdogStopped 是真正的 abort token。
       // (getTarget() 是本 effect 常量闭包,sessionId 恒等,不能用它判过期 —— 那是死代码。)
       // 迟到结果一律丢弃,绝不在已停的看门狗上 finalize / 弹兜底(否则会把 stall 态错挂到新会话)。
-      if (watchdogStopped) return;
+      if (watchdogStopped || deps.canRead?.() === false) return;
       // 查询成功本身 = 连上了被控端 → 清掉之前查询失败残留的 suspectStall 兜底态。
       deps.onRecovered?.(sessionId);
       if (!stillRunning) {
@@ -195,7 +199,7 @@ export function createRemoteSessionSyncEngine(
     } catch {
       // 查询不可达 / 旧被控端无此 channel / 超时 / 离线 → 不 auto-finalize,弹兜底让用户处理。
       // 同样:await 期间若已 dispose,迟到的失败不应把兜底态挂到新会话。
-      if (watchdogStopped) return;
+      if (watchdogStopped || deps.canRead?.() === false) return;
       deps.onSuspectStall?.(sessionId);
       backoff = Math.min(backoff * 2, 4);
     } finally {
@@ -248,7 +252,7 @@ export function createRemoteSessionSyncEngine(
     mountReconcileTimer = setTimeout(() => {
       mountReconcileTimer = null;
       const { sessionId: sid } = getTarget();
-      if (!sid || watchdogStopped) return;
+      if (!sid || watchdogStopped || deps.canRead?.() === false) return;
       if (!deps.isRunningNow!(sid)) {
         // 延迟期间已收到 done(正常 push 到达或边沿检测触发了 reconcile)→ 无需操作
         return;
@@ -257,7 +261,7 @@ export function createRemoteSessionSyncEngine(
       void (async () => {
         try {
           const stillRunning = await deps.queryTurnRunning!(sid);
-          if (watchdogStopped) return;
+          if (watchdogStopped || deps.canRead?.() === false) return;
           // 核实**成功**本身就是「被控端可达」的证据 → 收起 suspect-stall 兜底
           // (与看门狗路径对齐)。否则此前因查询失败挂起的兜底横幅会在连接已恢复后
           // 继续要求用户手动处理,直到下一次看门狗巡检(退避后可能约 60s)才消失
@@ -309,6 +313,7 @@ export function createRemoteSessionSyncEngine(
       scheduleReconcile();
     },
     resync() {
+      if (deps.canRead?.() === false) return;
       const { deviceId } = getTarget();
       if (!deviceId) return;
       subscribeHeavy();
@@ -336,6 +341,7 @@ export function createRemoteSessionSyncEngine(
 // ─── React adapter ────────────────────────────────────────────────────────────
 
 export interface RemoteSessionSync {
+  contentState: RemoteContentRecoveryState;
   /** 手动重新同步(banner 按钮):重订阅重 topic + 对账消息 + 重拉会话列表。 */
   resync: () => void;
   /**
@@ -353,6 +359,7 @@ export function useRemoteSessionSync(
 ): RemoteSessionSync {
   const engineRef = useRef<RemoteSyncEngine | null>(null);
   const [suspectStall, setSuspectStall] = useState(false);
+  const [content, setContent] = useState({ sessionId, deviceId, state: 'syncing' as RemoteContentRecoveryState });
 
   const resync = useCallback(() => {
     setSuspectStall(false);
@@ -369,12 +376,26 @@ export function useRemoteSessionSync(
       engineRef.current = null;
       return;
     }
+    setContent({ sessionId, deviceId, state: 'syncing' });
+    let relayAvailable: boolean | undefined;
+    let peerAvailable = remoteProjectsStore.getDeviceIds().includes(deviceId);
+    let peerResponsive: boolean | undefined;
+    const canRead = () => relayAvailable !== false && peerAvailable && peerResponsive !== false;
+    const recovery = createRemoteContentRecovery({
+      subscribe: () => window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]),
+      reconcile: () => makerChatStore.reconcileRemoteMessages(sessionId, { freshHistory: true }),
+      changed: (state) => setContent({ sessionId, deviceId, state }),
+      completed: (elapsedMs) => log.info('remote content recovered', { elapsedMs }),
+      phaseCompleted: (phase, elapsedMs) => log.debug('remote recovery phase completed', { phase, elapsedMs }),
+    });
     // 每个 (sessionId, deviceId) 绑定一个 engine;getTarget 返回本 effect 的常量,
     // dispose 退订的就是本次订阅的 topic(不受后续 session 切换影响)。
     const engine = createRemoteSessionSyncEngine(
       () => ({ sessionId, deviceId }),
       {
+        canRead,
         subscribe: (d, topics) => {
+          if (!recovery.isReady()) { recovery.request(); return; }
           return window.electronAPI.deviceLink
             .subscribe(d, topics)
             .catch((err) => log.warn('device-link subscribe(session) failed', err));
@@ -383,11 +404,12 @@ export function useRemoteSessionSync(
           return window.electronAPI.deviceLink.unsubscribe(d, topics).catch(() => {});
         },
         reconcile: (s) => {
+          if (!recovery.isReady()) { recovery.request(); return; }
           // 挂起交互(permission/ask/plan)重建已并入 reconcileRemoteMessages 的同一代
           // (远程回执的新鲜度语义需要两者同代落地),这里不再单独调用。
           void makerChatStore.reconcileRemoteMessages(s);
         },
-        refreshList: (d) => void refreshRemoteDeviceSessions(d, remoteProjectsStore.getDeviceName(d) ?? d),
+        refreshList: (d) => { if (canRead()) void refreshRemoteDeviceSessions(d, remoteProjectsStore.getDeviceName(d) ?? d); },
         // ── stall 看门狗 deps(全套提供 → 启用)──
         getLastEventAt: (s) => makerChatStore.getLastInboundEventAt(s),
         isRunningNow: (s) => makerChatStore.getSnapshot(s).agentStatus.isRunning,
@@ -409,6 +431,7 @@ export function useRemoteSessionSync(
     engineRef.current = engine;
 
     // mount:订阅重 topic;首拉由 ensureInitialMessages 负责,这里不立即对账(避免与首拉竞争)。
+    recovery.invalidate(canRead());
     engine.subscribeHeavy();
     // 用当前 turn 态初始化边沿检测(mount-mid-run 时不误把第一次 false 当 turn 结束)。
     engine.primeRunning(makerChatStore.getSnapshot(sessionId).agentStatus.isRunning);
@@ -416,11 +439,35 @@ export function useRemoteSessionSync(
     // 切回时如果 isRunning=true → 可能是切走期间 done 丢了 → 延迟核实被控端
     engine.reconcileOnMount();
 
+    const offDevices = remoteProjectsStore.subscribe(() => {
+      const available = remoteProjectsStore.getDeviceIds().includes(deviceId);
+      if (peerAvailable === available) return;
+      peerAvailable = available;
+      recovery.invalidate(canRead());
+      if (canRead()) engine.handleOnline();
+    });
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.((p) => {
+      if (p.deviceId !== deviceId) return;
+      recovery.invalidate(relayAvailable !== false && peerAvailable !== false && peerResponsive !== false);
+      // subscribe already waits for the existing per-peer openLink. Only its new
+      // ACK followed by an applied snapshot can restore this view's readiness.
+      recovery.request();
+    });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      const online = p.status === 'online';
+      const changed = relayAvailable !== online;
+      relayAvailable = online;
+      if (changed) recovery.invalidate(canRead());
       if (p.status !== 'online') return;
       engine.handleOnline();
     });
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {
+      if (snap.deviceId === deviceId) {
+        const available = snap.online && snap.remoteControlEnabled;
+        const changed = peerAvailable !== available;
+        peerAvailable = available;
+        if (changed) recovery.invalidate(canRead());
+      }
       engine.handlePresence(snap.deviceId, snap.online);
     });
     // 「设备无响应」熔断恢复(main 权威)→ 与 relay 上线同处理:重订阅 + 对账。
@@ -429,6 +476,11 @@ export function useRemoteSessionSync(
     // (relay online / presence online / focus / turn 结束)一个都不会发生,恢复后
     // 视图会继续缺消息。连接类状态的恢复必须全自动,不能靠横幅按钮兜(review P2)。
     const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
+      if (p.deviceId === deviceId) {
+        const responsive = !p.unresponsive;
+        if (peerResponsive !== responsive) recovery.invalidate(responsive && relayAvailable !== false && peerAvailable !== false);
+        peerResponsive = responsive;
+      }
       if (p.unresponsive) return;
       engine.handleResponsivenessRecovered(p.deviceId);
     });
@@ -441,9 +493,12 @@ export function useRemoteSessionSync(
     window.addEventListener('focus', onFocus);
 
     return () => {
+      recovery.dispose();
+      offDevices();
       offStatus();
       offPresence();
       offResponsiveness();
+      offPeerReset?.();
       offStore();
       window.removeEventListener('focus', onFocus);
       engine.dispose();
@@ -451,5 +506,6 @@ export function useRemoteSessionSync(
     };
   }, [sessionId, deviceId]);
 
-  return { resync, suspectStall, forceFinalize };
+  const contentState = content.sessionId === sessionId && content.deviceId === deviceId ? content.state : 'syncing';
+  return { resync, suspectStall, forceFinalize, contentState };
 }

@@ -18,6 +18,15 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  it('uses the same model access guidance for persisted failures as the live banner', () => {
+    render(createElement(ErrorMessageCard, {
+      message: 'Failed to authenticate. API Error: 403 user not allowed to access model',
+      reason: 'user_model_access_denied',
+      providerId: 'custom-provider',
+    }));
+    expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
+    expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
+  });
   it('shows friendly stream-interrupt copy plus a raw-error expander', () => {
     render(
       createElement(ErrorMessageCard, {

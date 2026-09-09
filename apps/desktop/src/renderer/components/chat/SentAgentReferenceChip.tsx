@@ -1,4 +1,4 @@
-import { CornerDownRight, FolderOpen, Globe2, Monitor, Plug } from 'lucide-react';
+import { Bot, CornerDownRight, FolderOpen, Globe2, Monitor, Plug } from 'lucide-react';
 
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
 import { InlineReferenceChip } from './InlineReferenceChip';
@@ -26,6 +26,7 @@ export function sentAgentReferenceDisplayLabel(reference: AgentInputReference): 
   if (reference.kind === 'desktop-window') {
     return oneLine(reference.title ?? '') || oneLine(reference.appName);
   }
+  if (reference.kind === 'bot') return oneLine(reference.name) || reference.botId;
   return oneLine(reference.label) || reference.resourceId;
 }
 
@@ -55,6 +56,8 @@ export function SentAgentReferenceChip({
         <Globe2 aria-hidden />
       ) : reference.kind === 'desktop-window' ? (
         <Monitor aria-hidden />
+      ) : reference.kind === 'bot' ? (
+        <Bot aria-hidden />
       ) : (
         <Plug aria-hidden />
       );
@@ -96,6 +99,8 @@ export function SentAgentReferenceChip({
       <Globe2 aria-hidden />
     ) : reference.kind === 'desktop-window' ? (
       <Monitor aria-hidden />
+    ) : reference.kind === 'bot' ? (
+      <Bot aria-hidden />
     ) : (
       <Plug aria-hidden />
     );

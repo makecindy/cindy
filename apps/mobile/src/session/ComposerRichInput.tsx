@@ -1,12 +1,17 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { File, Paths } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import {
   normalizeComposerDocument,
+  composerDocumentProjectedText,
+  composerCaretPosition,
+  composerSelectionOffset,
   parseStoredComposerDocument,
   type ComposerDocument,
+  type ComposerSelection,
   type ComposerNode,
   type ResolvedSessionLinkSemantic,
 } from '@/session/composerDocument';
@@ -18,9 +23,13 @@ import {
   type ComposerWebMessage,
 } from '@/session/composerRichInputProtocol';
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
+import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 
 export interface ComposerRichInputHandle {
+  getSelection(draft: string): ComposerSelection;
+  rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
+  applyDocumentAndFocusSelection(document: ComposerDocument, offset: number): void;
   blur(): void;
   focus(): void;
   insertNode(node: ComposerNode): void;
@@ -32,6 +41,8 @@ export interface ComposerRichInputProps {
   document: ComposerDocument;
   editable?: boolean;
   height: number;
+  /** Resize follows the UI thread without an RN render or WebView reload. */
+  animatedHeight?: SharedValue<number>;
   hidden?: boolean;
   maxHeight: number;
   onBlur?: () => void;
@@ -59,6 +70,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
   function ComposerRichInput({
     accessibilityHint,
     accessibilityLabel,
+    animatedHeight,
     document,
     editable = true,
     height,
@@ -78,11 +90,16 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     theme,
   }, forwardedRef) {
     const webViewRef = useRef<WebView | null>(null);
+    useEffect(() => registerMobileMessageWebView('composer'), []);
     const readyRef = useRef(false);
     const webSignatureRef = useRef('');
+    const projectedDraft = useMemo(() => composerDocumentProjectedText(document), [document]);
+    const webDocumentRef = useRef({ document, draft: projectedDraft, id: 0 });
+    const selectionRef = useRef<(ComposerSelection & { draft: string }) | null>(null);
     const pendingDocumentRef = useRef<{
       document: ComposerDocument;
       focusAfter: boolean;
+      caret?: { nodeIndex: number; offset: number };
     } | null>(null);
     const pendingFocusRef = useRef(false);
     const pendingNodeInsertionsRef = useRef<ComposerNode[]>([]);
@@ -138,12 +155,15 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       }
       inject('window.cindyComposer.focus();');
     }, [inject]);
-    const applyDocument = useCallback((value: ComposerDocument, focusAfter = false) => {
+    const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
+      const documentId = webDocumentRef.current.id + 1;
+      webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
       if (!readyRef.current) {
-        pendingDocumentRef.current = { document: value, focusAfter };
+        pendingDocumentRef.current = { document: value, focusAfter, caret };
         return;
       }
-      inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter});`);
+      inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
     }, [inject]);
 
     useEffect(() => {
@@ -159,9 +179,23 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     useEffect(() => {
       if (!forwardedRef) return undefined;
       const handle: ComposerRichInputHandle = {
+        getSelection: (draft) => {
+          const saved = selectionRef.current;
+          return saved?.draft === draft
+            ? { start: saved.start, end: saved.end, ...(saved.atomRange ? { atomRange: saved.atomRange } : {}) }
+            : { start: draft.length, end: draft.length };
+        },
+        // Cache the dictated range without focusing the hidden editor (which opens the keyboard).
+        rememberSelection: (draft, selection) => {
+          selectionRef.current = { draft, ...selection };
+        },
         applyDocumentAndSetSelectionToEnd: (value) => {
           webSignatureRef.current = JSON.stringify(value);
           applyDocument(value, true);
+        },
+        applyDocumentAndFocusSelection: (value, offset) => {
+          webSignatureRef.current = JSON.stringify(value);
+          applyDocument(value, true, composerCaretPosition(value, offset));
         },
         blur: () => {
           pendingFocusRef.current = false;
@@ -313,6 +347,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     }, [inject, resolveSessionLinkLabel]);
 
     const handleMessage = useCallback((event: WebViewMessageEvent) => {
+      if (disposedRef.current) return;
       const message = parseComposerWebMessage(event.nativeEvent.data);
       if (!message) return;
       if (message.type === 'ready') {
@@ -320,7 +355,10 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         inject(`window.cindyComposer.setConfig(${JSON.stringify(runtimeConfig)});`);
         const pending = pendingDocumentRef.current;
         pendingDocumentRef.current = null;
-        if (pending) applyDocument(pending.document, pending.focusAfter);
+        if (pending) applyDocument(pending.document, pending.focusAfter, pending.caret);
+        // A reloaded page starts at id 0; restore the latest accepted draft and
+        // synchronize its id through the same path, without replaying focus.
+        else applyDocument(webDocumentRef.current.document);
         const pendingNodeInsertions = pendingNodeInsertionsRef.current;
         pendingNodeInsertionsRef.current = [];
         for (const node of pendingNodeInsertions) {
@@ -333,11 +371,25 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         return;
       }
       if (message.type === 'change') {
+        if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
         if (!next) return;
         const normalized = normalizeComposerDocument(next);
+        if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
+        webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
         onChangeDocument(normalized);
+        return;
+      }
+      if (message.type === 'selection') {
+        const current = webDocumentRef.current;
+        if (hidden || message.documentId !== current.id) return;
+        const start = composerSelectionOffset(current.document, message.before);
+        const end = composerSelectionOffset(current.document, message.through);
+        if (start !== null && end !== null && start <= end && end <= current.draft.length) {
+          selectionRef.current = { draft: current.draft, start, end,
+            atomRange: { start: message.before.atomCount, end: message.through.atomCount } };
+        }
         return;
       }
       if (message.type === 'height') {
@@ -371,9 +423,13 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
           .then((uri) => settlePastedImage(message.requestId, message.index, uri))
           .catch(() => settlePastedImage(message.requestId, message.index));
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage]);
 
+    const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     return (
+      // WebView's imperative ref is a command handle, not a Fabric host ref.
+      // Animate its native View container and let the WebView fill that frame.
+      <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
       <WebView
         ref={webViewRef}
         accessibilityHint={accessibilityHint}
@@ -401,10 +457,12 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         scrollEnabled={false}
         setSupportMultipleWindows={false}
         source={{ html }}
-        style={[styles.webView, { height, opacity: hidden ? 0 : 1 }]}
+        containerStyle={styles.webView}
+        style={styles.webView}
         testID={testID}
         textInteractionEnabled
       />
+      </Animated.View>
     );
   },
 );
@@ -425,11 +483,13 @@ async function deleteComposerPastedImageUris(uris: readonly string[]): Promise<v
 }
 
 const styles = StyleSheet.create({
+  frame: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: COMPOSER_SINGLE_LINE_HEIGHT,
+  },
   webView: {
     backgroundColor: 'transparent',
-    // react-native-webview defaults the native child to flex: 1. Override it
-    // because this composer drives the child with an explicit measured height.
-    flex: 0,
-    minHeight: COMPOSER_SINGLE_LINE_HEIGHT,
+    flex: 1,
   },
 });
