@@ -196,7 +196,7 @@ function buildHomeGuidance(homeDir: string): string {
     '- `skills/` —— 你自己的技能；通过 Bot Skill 工具维护。',
     '- `SOUL.md`、`memories/USER.md`、`system_prompt.md` —— 身份和高级覆盖，用户需要纠正你时可以直接编辑，下一任务加载。不要自行改写 SOUL 或 system_prompt；日常积累写进记忆和技能。',
     '',
-    '不要查找或修改 Home 根部的宿主配置。外部目录、项目、Skill 和 MCP 只有用户显式挂载后才属于当前能力面。',
+    '不要修改 Home 根部的宿主配置。可以按需发现 Cindy 已安装的插件、Skill 和 MCP，并通过能力工具加入自己；已有连接沿用宿主授权。外部文件与命令遵循当前任务权限，workspace 是默认工作目录，不是只能访问这里。',
   ].join('\n');
 }
 

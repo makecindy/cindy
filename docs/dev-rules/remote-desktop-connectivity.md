@@ -1,0 +1,100 @@
+# Remote desktop connectivity
+
+DeviceLink WSS remains the authorized signaling/control transport. WebRTC media
+and its input channel use ICE, with the existing JPEG path retained when video
+cannot connect. Object-storage transfer is unaffected.
+
+## ICE configuration
+
+Each viewer attempt requests `GET /api/device-link/ice-servers` from its authenticated
+device-link service. The controlled Desktop independently requests that same API
+while preparing its capture window. API credentials stay in Main / native Mobile;
+only short-term TURN allocation credentials cross the dedicated capture/WebView
+bridge. These scoped WebRTC credentials cannot authorize desktop input or invoke
+business APIs. They are never embedded in static HTML, persisted or logged.
+
+Response: `{iceServers: [{urls: string[], username: string, credential: string}],
+expiresAt: string | null}`. At most four entries and four STUN/TURN URLs per entry;
+URL scheme/length/ports and credential lifetime are checked before bridge delivery.
+Require two minutes of remaining lifetime for cold capture/SDP/ICE headroom.
+The owning backend supplies its deployment's node pool; no new user region setting.
+
+Missing endpoint, empty configuration, invalid response and a three-second timeout
+fall back to the old public STUN list. With a valid self-hosted list, public STUN
+is not added. All configured nodes participate in ICE checks; a dead first node
+does not prevent using candidates from the others. URI ordering is not a promise
+of priority. Candidate statistics already distinguish direct, relay and JPEG paths.
+
+Every existing bounded media retry fetches fresh configuration on both peers.
+No configuration cache, WSS reconnect or new global retry loop. The WebView bounds
+its native bridge wait at 3.5 seconds. Lease/generation/attempt checks reject stale
+responses; explicit stop takes precedence. A failed media attempt affects only its
+owner. Credential expiry may require rebuilding the connection; this change does
+not promise uninterrupted in-place renewal of TURN allocations.
+
+Old clients continue unchanged. New viewer + old Desktop can still use viewer-side
+TURN; old viewer + new Desktop can use host-side TURN. Existing full-SDP and trickle
+ICE capabilities stay unchanged. There are no new wire kinds, IPC entry points,
+native dependencies, fingerprint changes or file-transfer capabilities.
+
+## Verification
+
+Unit tests cover invalid/expired tickets, old/disabled backends, bounded requests,
+fresh credentials/backup lists on retries, and stop/late-response isolation.
+The Server repository contains the coturn deployment template and matching API
+contract (`docs/device-link-server.md`, `infra/turn/README.md`).
+
+For a real relay test, store an authenticated API response in a task-specific
+temporary directory outside this repository (mode 0600), then run:
+
+```sh
+node scripts/remote-desktop-turn-smoke.mjs /absolute/external/ice-config.json /absolute/path/to/chrome
+```
+
+The probe uses an isolated sandboxed browser, forces relay on both peers, checks
+16 KiB data round-trip and the selected relay pair for each TURN URL, then repeats
+with an unreachable first node. Output excludes URLs, IPs, credentials and SDP.
+Delete the temporary credential file after use. This operator probe makes real
+network requests and is intentionally excluded from unit tests.
+
+Local test evidence for this change: coturn 4.18.0, two loopback nodes, real Chrome,
+UDP/TCP for both nodes and unreachable-primary case passed. Separately, coturn's
+client verified a temporary test CA and received 40 TLS-relayed messages using the
+deployment template with loopback-only test overrides. This proves TURN data flow
+with the Server credential algorithm; it does not prove platform UI behavior,
+publicly trusted browser TLS, the Linux container deployment, or Mainland China reachability.
+For rollout, repeat on the deployed nodes and real Desktop/Mobile with trusted TLS,
+node failure, >1-hour sessions, two viewers and network switching. Compare STUN-only
+versus configured TURN on identical network pairs, recording sample count,
+connection success, first moving frame time, selected path, RTT and recovery time.
+
+## QA handoff
+
+Before external QA, deploy the matching ICE API to the test environment and inject
+its TURN node configuration through deployment secrets. Distribute Desktop and
+Mobile builds from this change that use that environment. Both devices must use
+the same account/session realm. A loopback proxy or an inspector-only endpoint
+override on a developer machine is not a usable QA environment. Keep login realm
+discovery intact; Desktop local-server mode pins both realms to the local manifest
+and is unsuitable for testing production enterprise SSO across realms.
+
+On 2026-09-09, a macOS Desktop and an iOS simulator on the same machine displayed
+real desktop video and delivered a pointer movement to the expected OS position.
+With a separately hosted public coturn node, forced UDP relay and TCP relay with
+an unreachable first candidate server connected. Closing an established media
+connection recovered via UDP relay in approximately 16 seconds. The deployed ACL
+was corrected to omit `denied-peer-ip=::`, which coturn interprets as an unbounded
+range; coturn already rejects unspecified peers before its ACL checks.
+
+These are functional probes, not a network-quality acceptance result. A direct
+sample had 1 ms RTT and a UDP-relay sample had 84 ms RTT; neither is an average or
+end-to-end input latency. Receiver loss and jitter were not collected. Publicly
+trusted TLS, Linux Compose, physical phones, Windows/Android, concurrent viewers,
+active-node failover, and hour-long sessions still need QA coverage.
+
+For each network pair, record client versions, session realm, transport, attempts,
+successes, first moving frame time, RTT p50/p95, receiver packet-loss deltas, jitter,
+frame rate/freezes and recovery duration. Distinguish connection recovery from
+initial selection of a reachable backup, and RTT from input-to-visible-response
+latency. Test the previous STUN-only behavior on the same pairs. Include JPEG and
+object-storage transfer regression checks; do not report unavailable metrics as zero.

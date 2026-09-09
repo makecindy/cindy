@@ -18,6 +18,7 @@ export interface ApiFetchOptions {
   token?: string | null;
   body?: unknown;
   timeoutMs?: number;
+  cache?: 'no-store';
 }
 
 const DEFAULT_API_TIMEOUT_MS = 20_000;
@@ -44,6 +45,11 @@ export async function apiFetchRaw<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  if (opts.cache === 'no-store') {
+    // Also tell native HTTP caches not to reuse or store short-lived responses.
+    headers['Cache-Control'] = 'no-cache, no-store';
+    headers.Pragma = 'no-cache';
+  }
 
   let response: Response;
   let data: unknown = null;
@@ -57,6 +63,7 @@ export async function apiFetchRaw<T>(
         headers,
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
         signal: controller?.signal,
+        ...(opts.cache ? { cache: opts.cache } : {}),
       });
       let nextData: unknown = null;
       try {

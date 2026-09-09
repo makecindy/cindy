@@ -26,7 +26,8 @@ describe('mobile Home connection feedback', () => {
     expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
     expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
     expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
-    expect(source).toContain('const showConnectionRow = homeRecoveringDeviceIds.size > 0 ||');
+    expect(source).toContain('const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility(');
+    expect(source).toContain('deviceUnresponsive: homeDeviceUnresponsive,');
     expect(source).toContain("homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')");
     expect(source).toContain("recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'");
     const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
@@ -497,7 +498,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
     expect(source).toContain(
-      "const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+      'const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility(',
     );
     expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
     expect(source).toContain("connectionStates={deviceConnectionStates}");

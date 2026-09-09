@@ -214,7 +214,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
         }
         stream = captured;
         const rtc = new RTCPeerConnection({
-          iceServers: REMOTE_DESKTOP_ICE_SERVERS,
+          iceServers: command.iceServers ?? REMOTE_DESKTOP_ICE_SERVERS,
         });
         peer = rtc;
         rtc.onicecandidate = ({ candidate }) => {

@@ -1,3 +1,4 @@
+import { registerPluginListHandler } from './pluginListHandler.js';
 import { initializeBotAuthorizationHost } from './botAuthorizationHost.js';
 import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, commitBotAuthorizationInput, type BotAuthorizationInputGuard, getBotAuthorizationService } from './botAuthorizationService.js';
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
@@ -33,8 +34,8 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
-import { restoreAutoReviewSteerIntent } from './autoReviewUserIntent.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import type {
   AgentEvent,
   AgentKind,
@@ -111,6 +112,8 @@ import {
   type GhostGrantConfirmInteractionSnapshot,
 } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { createFeishuDesktopConfirmNotifier } from '../im/desktopConfirmNoticeWiring.js';
+import { bindingStore } from '../im/binding.js';
+import { isHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import {
   initGhostSetupInteractionBridge,
   parseGhostSetupInteractionCommand,
@@ -415,11 +418,14 @@ import {
   getMaker,
   getMakerIfReady,
   getPluginRegistry,
+  isBotToolsetAvailable,
+  listBotRuntimeMcpServers,
   preflightBotRuntimeResources,
   prepareCodexForAuthModeChange,
   prepareCodexForCustomProviderHostChange,
   restartCodexAfterAuthModeChange,
   setBeforeLocalCodexSessionStartHook,
+  setBotCapabilityAgentKindResolver,
   setModelContextRuntimeRefreshListener,
 } from '../maker-host/index.js';
 import {
@@ -5549,6 +5555,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+    listMcpServers: listBotRuntimeMcpServers,
+    resolveBotContext: async (sessionId, chain) => {
+      const route = await reconcileBotModelRoute.preview(sessionId, chain);
+      if (!route) return null;
+      const meta = await maker.getSessionMeta(sessionId);
+      return meta ? { agentKind: route.agentKind, remoteHostId: meta.remoteHostId } : null;
+    },
     refreshProviders: () => refreshCustomMcpProviders(),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
     // 内置 server 名对自定义 MCP 是保留名：撞名会在装配层顶替内置 server 并继承
@@ -9151,6 +9164,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   botDelegationServiceHolder?.dispose();
   botDelegationServiceHolder = createBotDelegationService({
+    readCallerPermission: (sessionId) => {
+      const state = maker.getSession(sessionId)?.stablePermissionModeState;
+      return state?.mode ? { mode: state.mode, generation: state.generation } : null;
+    },
     readCallerRuntime: (sessionId) => {
       const session = maker.getSession(sessionId);
       return session ? {
@@ -10755,7 +10772,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const reconcileBotModelRoute = createBotModelRouteReconciler({
     ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
-    read: async (sessionId) => {
+    read: async (sessionId, purpose) => {
       const [row] = await getDbClient().drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
         agentKind: sessions.agentKind,
@@ -10774,7 +10791,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(botSessionLinks.sessionId, sessionId),
           eq(botSessionLinks.role, 'canonical'),
           isNull(botSessionLinks.archivedAt),
-          eq(botProfiles.status, 'active'),
+          // Paused settings may preview grants; sending still requires an active Bot.
+          purpose === 'preview'
+            ? inArray(botProfiles.status, ['active', 'paused'])
+            : eq(botProfiles.status, 'active'),
           eq(sessions.source, 'bot'),
           eq(sessions.status, 'active'),
         )).limit(1);
@@ -10793,6 +10813,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: live ? getSessionFastMode(sessionId) : !!row.fastMode,
         },
         hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null,
+        next: control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
     },
     apply: async (sessionId, route, current) => {
@@ -10817,6 +10838,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
   });
+
+  setBotCapabilityAgentKindResolver(async (sessionId, chain) =>
+    (await reconcileBotModelRoute.preview(sessionId, chain))?.agentKind ?? null);
 
   const readBotFallbackCandidate = async (
     sessionId: string,
@@ -11848,10 +11872,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   };
   contextOverflowRolloverHolder = createContextOverflowRollover({
+    hasExternalRecoveryOwner: (sessionId) =>
+      isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: async (sessionId) => {
       const [row] = await getDbClient()
         .drizzle.select({
           status: sessions.status,
+          source: sessions.source,
           agentKind: sessions.agentKind,
           remoteHostId: sessions.remoteHostId,
           clearedAt: sessions.clearedAt,
@@ -11986,7 +12013,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rehydrateColdPiRuntimeForWindowVerification,
     closeSession: (sessionId) => maker.closeSession(sessionId),
     drainPersistQueue,
-    commitRebuild: async (sessionId, handoff, meta) => {
+    commitRebuild: async (sessionId, handoff, meta, signal) => {
       // Read projection metadata before the transaction: after a successful
       // context.rebuild there must be no fallible step before the zero-usage push.
       const ownerScope = captureDataOwnerBroadcastScope();
@@ -12006,6 +12033,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) {
         throw new Error('context rebuild owner changed before commit');
       }
+      signal?.throwIfAborted();
       const { updatedAt } = await commitContextRebuild(sessionId, handoff, meta);
       if (
         !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
@@ -12079,13 +12107,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // recovery 和错误横幅。重放绕开 coordinator，随后的 done 会被 recovery 吃掉。
       agentInputCoordinatorHolder?.clearError(sessionId);
     },
-    replayUserMessage: async (sessionId, content, agentFacingWireContent) => {
+    getRecoveryAbortSignal: (sessionId) => {
+      const coordinator = agentInputCoordinatorHolder!;
+      if (coordinator.hasPendingQueuedWork(sessionId)) {
+        // The terminal error may have installed recovery after this input was
+        // queued. Release that old error so the queued input can actually drain.
+        coordinator.clearError(sessionId);
+        return AbortSignal.abort();
+      }
+      return coordinator.getInputAbortSignal(sessionId);
+    },
+    replayUserMessage: async (sessionId, content, agentFacingWireContent, recovery) => {
       const [row] = await getDbClient()
         .drizzle.select()
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       if (!row?.workingDir) return { accepted: false };
+      if (recovery?.signal?.aborted) return { accepted: false };
       const createOpts = buildCreateOptsWithStderr({
         id: sessionId,
         agentKind: dbToMakerAgentKind(row.agentKind),
@@ -12098,6 +12137,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         planMode: !!row.planModeEnabled,
         title: row.title ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
+        ...(recovery?.resumeRetainedHistory ? { resumeSessionId: row.sdkSessionId ?? undefined } : {}),
       });
       if (createOpts.extraDirs === undefined) {
         try {
@@ -12114,10 +12154,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
         if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
       }
+      const recoveryIntent = recovery?.resumeRetainedHistory
+        ? restoreAutoReviewUserIntent(await readAutoReviewHistory(sessionId), {
+            clientId: recovery.sourceUserClientId,
+            content: recovery.sourceUserContent,
+          })
+        : undefined;
+      if (recovery?.resumeRetainedHistory &&
+        (row.source !== 'desktop' || isHeadlessGhostSetupTurn(sessionId) || bindingStore.findByTarget(sessionId))) {
+        return { accepted: false };
+      }
       const result = await sendToAgentAcceptedUnlocked(
         sessionId,
         persistedUserContentToWireMessage(agentFacingWireContent ?? content),
         createOpts,
+        recovery?.resumeRetainedHistory
+          ? {
+              signal: recovery.signal,
+              [INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
+              // The internal continuation is not fresh user authorization. Restore
+              // intent from authored history, never attachment/quote projections.
+              [AUTO_REVIEW_SOURCE_CONTENT]: readAutoReviewUserText(recovery.sourceUserContent) ?? '',
+              [AUTO_REVIEW_USER_INTENT]: recoveryIntent,
+            }
+          : { signal: recovery?.signal },
       );
       return { accepted: result.accepted === true };
     },
@@ -13221,6 +13281,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         autoResumeBookkeeping.bindSuppressedErrorToClient(sessionId, attemptToken, clientId);
       }
       if (source === 'manual') {
+        contextOverflowRolloverHolder?.cancelRecovery(sessionId);
         // UI continuation can dispatch before the scheduler backoff callback.
         // Retire that pending waiter first so it cannot consume the manual retry.
         failPendingSchedulerAutoResume(sessionId);
@@ -13235,6 +13296,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
     onUserEnqueue: (sessionId) => {
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its
       // recovery was superseded. Fail the scheduler waiter synchronously so it
@@ -13250,6 +13312,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     onAutomaticEnqueue: (sessionId) => {
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
       // Orca 等自动输入会推进同一会话，必须撤销旧 retry owner，避免它消费这轮事件；
       // 但预算充值仍只发生在真人消息的持久化路径，自动输入不会重置 episode。
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
@@ -17068,9 +17131,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // ── Plugin system (Phase 1) ──────────────────────────────────────────────
-  ipcMain.handle(MAKER_INVOKE.PLUGINS_LIST, async (_e, workingDir: unknown) => {
-    const wd = typeof workingDir === 'string' ? workingDir : undefined;
-    return getPluginRegistry().listPlugins(wd);
+  registerPluginListHandler(createElectronIpcHandlerRegistry(), {
+    getPluginRegistry,
+    isBotToolsetAvailable,
+    assertBotQuery: (event) => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    },
   });
 
   // Read one plugin's enable state by id. Unlike PLUGINS_LIST this does NOT skip

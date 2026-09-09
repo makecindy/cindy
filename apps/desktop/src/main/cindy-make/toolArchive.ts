@@ -40,7 +40,7 @@ export function safeArchiveLink(name: string, link: string, hard: boolean): void
 export async function extractMakeToolArchive(
   archive: string,
   destination: string,
-  artifact: MakeToolArtifact,
+  artifact: Pick<MakeToolArtifact, 'format' | 'executable'>,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();

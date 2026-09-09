@@ -541,15 +541,18 @@ describe('session runtime control wiring', () => {
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
     const commitRebuild = handlerBody(
       registerSource,
-      'commitRebuild: async (sessionId, handoff, meta) => {',
+      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
       'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
     );
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
+    const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');
     const broadcast = commitRebuild.indexOf('broadcastSessionPatched(\n        sessionId,');
 
     expect(query).toBeGreaterThan(-1);
     expect(commit).toBeGreaterThan(query);
+    expect(cancellation).toBeGreaterThan(query);
+    expect(commit).toBeGreaterThan(cancellation);
     expect(broadcast).toBeGreaterThan(commit);
     expect(commitRebuild).toContain('contextTokens: 0,');
     expect(commitRebuild).toContain('{ contextWindow: projectionContextWindow }');

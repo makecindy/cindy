@@ -86,7 +86,7 @@ describe('Bot Skill config', () => {
 });
 
 describe('Bot MCP config', () => {
-  it('keeps only narrow Bot MCPs and explicitly selected custom servers', () => {
+  it('keeps shared plugin discovery and explicitly selected MCP servers', () => {
     expect(buildCodexBotMcpConfigOverrides({
       mode: 'allowlist',
       configured: ['custom-a'],
@@ -99,7 +99,6 @@ describe('Bot MCP config', () => {
         { name: 'custom.with.dot', source: 'custom' },
       ],
     }, new Set(['cindy_memory', 'cindy_helper', 'cindy', 'cindy_group_history', 'cindy_orca', 'custom-a', 'custom.with.dot']))).toEqual({
-      'mcp_servers.cindy.enabled': false,
       'mcp_servers.cindy_group_history.enabled': false,
       'mcp_servers.cindy_orca.enabled': false,
       'mcp_servers."custom.with.dot".enabled': false,
@@ -124,7 +123,6 @@ describe('Bot MCP config', () => {
       ],
     }, new Set(['cindy_memory', 'cindy_helper', 'cindy_docs', 'cindy_scheduler', 'cindy', 'cindy_group_history', 'cindy_orca', 'cindy_docs']))).toEqual({
       'mcp_servers.cindy_scheduler.enabled': false,
-      'mcp_servers.cindy.enabled': false,
       'mcp_servers.cindy_group_history.enabled': false,
       'mcp_servers.cindy_orca.enabled': false,
     });

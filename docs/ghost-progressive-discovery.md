@@ -91,6 +91,10 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 纯格式化函数下沉在 `packages/cindy-tools`，主进程与 MCP server 共用，避免两处
   实现漂移。
 
+伙伴仅保留插件发现网关，不默认注入全量花名册；按需调用 `ghost_list` / `ghost_info`
+复用同账号已有插件。伙伴内置工具集的冻结名单不适用于插件 ID，插件仍由 §4 的实时可见性与
+调用授权守门。
+
 ### 3.3 快照语义
 
 - 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
@@ -102,9 +106,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - formatter 的调用方必须传入**已解析的会话 workingDir**；拿不到语境（ALS 缺失、
   bridge 建线期 `workingDir === ''`）时**不注入，绝不回退全量**——否则会把当前
   目录已停用插件的元数据送进高权重 prompt。
-- 远端 SSH 会话（`remoteHostId`）一律不注入：固定 `cindy` MCP server 不在远端
-  注入白名单，远端 agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
-  无法匹配本地的目录停用记录。Claude 与 Codex 行为一致；Pi 仅支持本地会话。
+- 远端 SSH 的 Claude / Codex（`remoteHostId`）不注入花名册：固定 `cindy` MCP
+  不在远端注入白名单，agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
+  无法匹配本地的目录停用记录。远端 Pi 经 MCP bridge 隧道可达 in-process
+  `cindy`，伙伴提示词与 helper 工具描述应保留 `ghost_list` / `ghost_info` /
+  `ghost_call`；花名册 system 段仍 fail-closed（远端路径对不上本地停用记录，
+  伙伴会话也不注入全量花名册，按需 `ghost_list`）。
 - 空花名册 = 零注入（不留空壳标签）。
 
 ## 4. 安全设计（威胁模型：插件作者不守约）

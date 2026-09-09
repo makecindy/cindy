@@ -26,6 +26,8 @@ import {
 } from '../transport.js';
 import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
+import { resolveDesktopIceServers, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from '../remoteDesktopIceConfig.js';
+import { REMOTE_DESKTOP_ICE_SERVERS } from '../remoteDesktopIce.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -378,6 +380,80 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  it('keeps a second controller link and in-flight invoke alive while shared host ICE config times out', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'desktop');
+    const a = makeRelayClient(relay, 'viewer-a');
+    const b = makeRelayClient(relay, 'viewer-b');
+    const pump = () => relay.settle(() => vi.advanceTimersByTimeAsync(1));
+    let finishConfig!: (value: unknown) => void;
+    const config = new Promise<unknown>((resolve) => { finishConfig = resolve; });
+    const fetchConfig = vi.fn(() => config);
+    const received: Envelope[] = [];
+    const off = host.onFrame((env) => {
+      if (!env.src || !env.id) return;
+      if (env.kind === 'link-open') {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      } else if (env.kind === 'invoke') {
+        received.push(env);
+        if (env.src === 'viewer-a') {
+          const { src, id } = env;
+          void resolveDesktopIceServers(fetchConfig).then((iceServers) => {
+            host.sendInvokeResult(src, id, { ok: true, result: iceServers });
+          });
+        }
+      }
+    });
+    try {
+      for (const client of [host, a, b]) client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      await pump();
+      for (const client of [a, b]) {
+        const opening = client.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+        await pump();
+        await opening;
+      }
+      const healthy = b.invoke('desktop', { channel: 'maker:test-inflight', args: [] }, 10_000);
+      let healthySettled = false;
+      void healthy.then(() => { healthySettled = true; });
+      await pump();
+      const stalled = a.invoke('desktop', { channel: 'maker:remote-desktop:video', args: [] }, 10_000);
+      await pump();
+      expect(fetchConfig).toHaveBeenCalledTimes(1);
+      expect(healthySettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS);
+      await pump();
+      await expect(stalled).resolves.toEqual({
+        ok: true, result: REMOTE_DESKTOP_ICE_SERVERS.map((server) => ({ urls: [server.urls] })),
+      });
+      expect(healthySettled).toBe(false);
+      const request = received.find((env) => env.src === 'viewer-b')!;
+      host.sendInvokeResult(request.src!, request.id!, { ok: true, result: 'preserved' });
+      await pump();
+      await expect(healthy).resolves.toEqual({ ok: true, result: 'preserved' });
+      const beforeLate = relay.deliveredTo.get('viewer-a')!.length;
+      finishConfig({ iceServers: [], expiresAt: null });
+      await pump();
+      expect(relay.deliveredTo.get('viewer-a')).toHaveLength(beforeLate);
+      expect(received.filter((env) => env.src === 'viewer-b')).toHaveLength(1);
+      expect(host.isLinkReady('viewer-b')).toBe(true);
+      expect(b.isLinkReady('desktop')).toBe(true);
+      expect(host.getStatus()).toBe('online');
+      expect(sockets).toHaveBeenCalledTimes(3);
+      for (const socket of sockets.mock.results) {
+        expect(socket.value.closed).toBeNull();
+        expect(socket.value.terminated).toBe(false);
+      }
+    } finally {
+      off();
+      for (const client of [host, a, b]) client.stop();
+      sockets.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('gives hello/ack a full window after a slow but successful socket upgrade', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { handshakeTimeoutMs: 15, pingIntervalMs: 60_000 } });

@@ -16,7 +16,11 @@ const h = vi.hoisted(() => ({
   nativeFrame: vi.fn(async () => 'frame'),
   input: vi.fn(),
   viewHeartbeat: vi.fn(),
+  iceConfig: vi.fn(async (): Promise<any[]> => [
+    { urls: ['turn:relay.example.test:3478'], username: 'temporary', credential: 'test-only' },
+  ]),
 }));
+vi.mock('../iceConfig', () => ({ loadDesktopIceServers: h.iceConfig }));
 vi.mock('electron', () => ({
   app: { on: vi.fn() },
   powerMonitor: { on: vi.fn() },
@@ -158,6 +162,7 @@ beforeEach(() => {
   h.nativeFrame.mockClear();
   h.input.mockReset();
   h.viewHeartbeat.mockClear();
+  h.iceConfig.mockClear();
   registerRemoteDesktopIpc();
 });
 afterEach(() => {
@@ -317,4 +322,64 @@ it('retains the capture owner on ICE timeout and rejects old-owner replies after
   expect(h.owner.dead).toBe(false);
   h.deps.stopVideo();
   await nextRejected;
+});
+
+it('passes freshly fetched ICE credentials only to the active capture owner', async () => {
+  const pending = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  const command = h.owner.send.mock.calls[0][1];
+  expect(command.iceServers).toEqual(await h.iceConfig());
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), command.id, 'answer');
+  await pending;
+});
+
+it('revocation while fetching ICE config prevents a late credential from starting capture', async () => {
+  let finish!: (servers: any[]) => void;
+  h.iceConfig.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const pending = offer();
+  const rejected = expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+  const old = h.owner;
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.deps.stopVideo();
+  finish([]);
+  await rejected;
+  expect(old.send).not.toHaveBeenCalled();
+});
+
+it('keeps replacement capture and its in-flight ICE exchange when revoked config arrives late', async () => {
+  let finish!: (servers: any[]) => void;
+  h.iceConfig.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = offer();
+  const rejected = expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+  const old = h.owner;
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.deps.stopVideo();
+  h.lease = 'replacement';
+  const next = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  const owner = h.owner;
+  const command = owner.send.mock.calls[0][1];
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), command.id, 'new-answer');
+  await expect(next).resolves.toBe('new-answer');
+  const ice = h.deps.ice({
+    op: 'ice', lease: 'replacement', attemptId: 'attempt', after: 0, candidates: [],
+  });
+  const exchange = owner.send.mock.calls.at(-1)[1];
+  finish([]);
+  await rejected;
+  expect(old.send).not.toHaveBeenCalled();
+  expect(h.owner).toBe(owner);
+  expect(owner.dead).toBe(false);
+  const reply = { attemptId: 'attempt', candidates: [], next: 0, complete: true };
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), exchange.id, reply);
+  await expect(ice).resolves.toEqual(reply);
 });

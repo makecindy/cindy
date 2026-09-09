@@ -3,6 +3,7 @@
  */
 export const DESKTOP_RTC_SCRIPT = String.raw`
   let trickleIce=false,attemptId=null,retries=0,exchangeId=0;
+  let configPending=false;
   let retryTimer=null,deadlineTimer=null,disconnectTimer=null,stableTimer=null,iceTimer=null,gatherTimer=null,gatherDone=null;
   let localCandidates=[],localAck=0,remoteAfter=0,icePending=null,remoteSeen=new Set(),exchangeUntil=0,remoteComplete=false;
   function clearRtcTimers(){
@@ -11,6 +12,7 @@ export const DESKTOP_RTC_SCRIPT = String.raw`
     if(gatherDone){gatherDone();gatherDone=null;}
   }
   function closeRtc(preserveFrame=true){
+    configPending=false;
     if(preserveFrame)retainFrame();generation++;clearRtcTimers();
     localCandidates=[];localAck=remoteAfter=0;icePending=null;remoteSeen=new Set();attemptId=null;
     clearInterval(statsTimer);statsTimer=null;statsSample=null;
@@ -69,8 +71,18 @@ export const DESKTOP_RTC_SCRIPT = String.raw`
   async function connect(){
     closeRtc();const g=generation;attemptId=String(g);
     if(!window.RTCPeerConnection){failRtc('unsupported',false);return;}
+    configPending=true;
+    deadlineTimer=setTimeout(()=>{if(g===generation&&configPending){configPending=false;void startRtc(g,iceServers);}},3500);
+    return post({type:'iceConfig',attemptId});
+  }
+  async function receiveIceConfig(message){
+    if(!epoch||!configPending||message.attemptId!==attemptId)return;
+    configPending=false;clearTimeout(deadlineTimer);deadlineTimer=null;
+    await startRtc(generation,message.iceServers);
+  }
+  async function startRtc(g,servers){
     try{
-      const rtc=new RTCPeerConnection({iceServers});pc=rtc;
+      const rtc=new RTCPeerConnection({iceServers:servers});pc=rtc;
       dc=rtc.createDataChannel('input-v1');rtc.addTransceiver('video',{direction:'recvonly'});rtc.addTransceiver('audio',{direction:'recvonly'});
       rtc.onicecandidate=({candidate})=>{
         if(g!==generation||!candidate?.candidate||!trickleIce)return;

@@ -7310,6 +7310,16 @@
       "thisDevice": "このコンピュータ",
       "offlineDescription": "{{name}} はオフラインです。{{device}} が再接続すると続けられます。",
       "preparing": "準備ができるのを待っています…"
+    },
+    "capabilities": {
+      "title": "機能",
+      "search": "機能を検索",
+      "loading": "読み込み中…",
+      "skill": "スキル",
+      "mcp": "MCP",
+      "toolset": "組み込みツール",
+      "unavailable": "利用不可",
+      "empty": "一致する機能はありません"
     }
   },
   "common": {
@@ -7784,7 +7794,7 @@
           },
           "bypassPermissions": {
             "label": "フルアクセス",
-            "description": "通常のツールは確認なしで実行しますが、Pi 拡張のインストール、更新、アンインストールには引き続き確認が必要です。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+            "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
           }
         }
       }
@@ -8765,7 +8775,7 @@
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
-        "labelStrip": "大きな画像を除いて続行しました",
+        "labelStrip": "履歴の画像を整理しました",
         "toggleHint": "引き継ぎ内容を表示",
         "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
         "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
@@ -9324,6 +9334,8 @@
         "all": "すべて"
       },
       "filterSortBy": {
+        "created": "作成日時",
+        "activity": "最近のアクティビティ",
         "recency": "時間順",
         "manual": "手動",
         "priority": "優先度"
@@ -9339,7 +9351,7 @@
       "filterTaskSortHeading": "セッション順",
       "filterProjectOrderHeading": "プロジェクト順",
       "filterProjectOrder": {
-        "activity": "最近のアクティビティ順",
+        "activity": "セッションの並び順に従う",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
@@ -11397,7 +11409,7 @@
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy は内蔵 iOS シミュレータを迂回するシェルコマンドをブロックしました。デバイスの操作、アプリの起動、画面操作、スクリーンショット、診断には iOS シミュレータツールを使用してください。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
-      "codexHistoryOversized": "履歴に過大な画像があり、リモート圧縮を完了できません。Cindy がそれらの画像を省略し、このタスクのまま続けます。",
+      "codexHistoryOversized": "画像履歴の自動復旧と続行が完了しませんでした。「続けて」と送信して、このタスクを再開してください。",
       "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",
       "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
       "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",

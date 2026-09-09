@@ -82,6 +82,33 @@ function history(): UsageHistoryPayload {
 }
 
 describe('Usage history selection behavior', () => {
+  it('registers every historical model even when absent from the 30-day chart window', () => {
+    state.history = history();
+    state.history.models.push(
+      ...Array.from({ length: 35 }, (_, i) => ({
+        ...state.history!.models[0],
+        model: `old-model-${i}`,
+        inputTokens: i + 1,
+      })),
+    );
+    state.history.days.unshift({ day: '2026-05-01', money, tokens: 1 });
+    state.history.modelDaily.push({
+      ...state.history.modelDaily[0],
+      day: '2026-05-01',
+      model: 'old-model-34',
+      tokens: 35,
+      inputTokens: 35,
+    });
+    const view = render(<UsageHistorySection />);
+    const colors = () => JSON.parse(view.getByTestId('models').textContent!).colorOrder;
+    const before = colors();
+    expect(before).toHaveLength(36);
+    expect(before).toContain('claude-code old-model-34');
+    fireEvent.click(view.getAllByRole('button', { name: /May 1, 2026/ })[0]);
+    expect(colors()).toEqual(before);
+    expect(JSON.parse(view.getByTestId('models').textContent!).rows[0].model).toBe('old-model-34');
+  });
+
   it('keeps both chart filters equivalent and preserves default, repeated and outside clicks', () => {
     state.history = history();
     const view = render(<UsageHistorySection />);

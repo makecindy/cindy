@@ -16,6 +16,7 @@ import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from 
 import type { BotGender } from '../../../shared/botGender';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotTemplatePresetId } from '../../../shared/botTemplatePreset';
+import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -950,17 +951,20 @@ export type BotProfileUpdatePatch = Partial<
     | 'avatarColor'
     | 'enabled'
     | 'skills'
-    | 'capabilities'
     | 'canonicalSessionId'
     | 'sessions'
   >
-> & { avatarUploadToken?: string };
+> & {
+  avatarUploadToken?: string;
+  capabilities?: Partial<BotCapabilities>;
+  capabilityBaseline?: BotCapabilityBaseline;
+};
 
 export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Promise<BotProfile> {
   ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
-  const { avatarUploadToken, ...profilePatch } = patch;
+  const { avatarUploadToken, capabilityBaseline, ...profilePatch } = patch;
   // 这一行的写入代际。回填与回滚都要求「我仍然是这一行最新的那次写」——
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
@@ -968,15 +972,20 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   const owner = getDataOwnerGeneration();
   const isLatestWrite = () => isDataOwnerGenerationCurrent(owner)
     && profileWriteGenerations.get(id) === generation;
-  profiles = profiles.map((bot) => (bot.id === id ? { ...bot, ...profilePatch } : bot));
+  const applyPatch = (bot: BotProfile): BotProfile => ({
+    ...bot, ...profilePatch,
+    capabilities: { ...bot.capabilities, ...profilePatch.capabilities },
+  });
+  profiles = profiles.map((bot) => (bot.id === id ? applyPatch(bot) : bot));
   emit();
-  const optimistic = profiles.find((bot) => bot.id === id) ?? { ...before, ...profilePatch };
+  const optimistic = profiles.find((bot) => bot.id === id) ?? applyPatch(before);
   const api = botsApi();
   if (!api) return Promise.resolve(optimistic);
   return api
     .update({
       id,
       ...profilePatch,
+      ...(capabilityBaseline ? { capabilityBaseline } : {}),
       ...(avatarUploadToken ? { avatarUploadToken } : {}),
       ...(profilePatch.avatar !== undefined || avatarUploadToken
         ? { expectedAvatar: before.avatar }
