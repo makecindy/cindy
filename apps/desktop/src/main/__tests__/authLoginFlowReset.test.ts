@@ -829,9 +829,13 @@ describe('auth login-flow reset', () => {
     const getLoginStart = source.indexOf('export async function getLoginState(');
     const getLoginEnd = source.indexOf('\n}\n\nasync function completeLogin(', getLoginStart);
     const getLoginBody = source.slice(getLoginStart, getLoginEnd);
-    expect(getLoginBody.indexOf('await ownerChangeShellGate.waitForSettled();')).toBeLessThan(
-      getLoginBody.indexOf('const expectedLoginFlowEpoch = loginFlowEpoch;'),
+    const waitForOwnerChange = getLoginBody.indexOf('await ownerChangeShellGate.waitForSettled();');
+    const captureLoginEpoch = getLoginBody.indexOf(
+      'const expectedLoginFlowEpoch = loginFlowEpoch;',
     );
+    expect(waitForOwnerChange).toBeGreaterThan(-1);
+    expect(captureLoginEpoch).toBeGreaterThan(-1);
+    expect(waitForOwnerChange).toBeLessThan(captureLoginEpoch);
     expect(getLoginBody).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
     expect(getLoginBody).toContain('mapLoginProvidersLoadFailure(error)');
   });
