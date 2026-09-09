@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { scheduleConnectionNotice } from '@/components/connectionNoticeDelay';
+import { scheduleConnectionNotice, updateConnectionNoticeVisibility } from '@/components/connectionNoticeDelay';
 
 describe('floating connection notice', () => {
   afterEach(() => vi.useRealTimers());
@@ -28,7 +28,33 @@ describe('floating connection notice', () => {
     const root = readFileSync('app/_layout.tsx', 'utf8');
     expect(root).toContain('<ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>');
     const banner = readFileSync('src/components/ConnectionBanner.tsx', 'utf8');
-    expect(banner).toContain('useDelayedConnectionNotice(cachedOnly || active)');
+    expect(banner).toContain("useDelayedConnectionNotice(cachedOnly || active, recovery === 'recovered')");
     expect(banner).toContain('<ConnectionNoticeOverlay>');
+  });
+  it('holds completion for two seconds only after a visible incident and cancels it on a new outage', () => {
+    vi.useFakeTimers();
+    let visible = false;
+    let cancel: (() => void) | undefined;
+    const update = (active: boolean, completed: boolean) => {
+      cancel?.();
+      cancel = updateConnectionNoticeVisibility(active, completed, visible, (next) => { visible = next; });
+    };
+    update(true, false);
+    vi.advanceTimersByTime(500);
+    update(false, true);
+    vi.advanceTimersByTime(2_000);
+    expect(visible).toBe(false);
+    update(true, false);
+    vi.advanceTimersByTime(1_000);
+    expect(visible).toBe(true);
+    update(false, true);
+    vi.advanceTimersByTime(1_999);
+    expect(visible).toBe(true);
+    update(true, false);
+    vi.advanceTimersByTime(2_000);
+    expect(visible).toBe(true);
+    update(false, true);
+    vi.advanceTimersByTime(2_000);
+    expect(visible).toBe(false);
   });
 });

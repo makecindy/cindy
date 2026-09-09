@@ -32,7 +32,7 @@ export function useShowConnectionBanner(
   recovery?: 'syncing' | 'recovered',
 ): boolean {
   const offline = status !== 'online' || recovery === 'syncing';
-  return resolveConnectionBannerVisibility({
+  return recovery === 'recovered' || resolveConnectionBannerVisibility({
     offline,
     offlineLongEnough: true,
     // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
@@ -76,8 +76,8 @@ export function ConnectionBanner({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const active = useShowConnectionBanner(status, error, issue, deviceUnresponsive, recovery);
-  const visible = useDelayedConnectionNotice(cachedOnly || active);
+  const active = useShowConnectionBanner(status, error, issue, deviceUnresponsive, recovery === 'recovered' ? undefined : recovery);
+  const visible = useDelayedConnectionNotice(cachedOnly || active, recovery === 'recovered');
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;

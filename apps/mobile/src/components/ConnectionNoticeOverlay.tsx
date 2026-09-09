@@ -2,16 +2,15 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { spacing } from '@/theme/tokens';
-import { scheduleConnectionNotice } from './connectionNoticeDelay';
+import { updateConnectionNoticeVisibility } from './connectionNoticeDelay';
 
 /** Each continuous incident gets one delay; clearing it cancels pending display. */
-export function useDelayedConnectionNotice(active: boolean): boolean {
+export function useDelayedConnectionNotice(active: boolean, completed = false): boolean {
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    if (!active) { setReady(false); return; }
-    return scheduleConnectionNotice(() => setReady(true));
-  }, [active]);
-  return active && ready;
+    return updateConnectionNoticeVisibility(active, completed, ready, setReady);
+  }, [active, completed, ready]);
+  return (active || completed) && ready;
 }
 
 type Notice = { top: number; children: ReactNode };
