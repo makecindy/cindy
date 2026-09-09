@@ -436,8 +436,23 @@ export async function refreshActiveModelContextSettings(input: {
       if ((!targets || source === null) && !await session.requiresModelSwitchRebuild?.(session.model, { providerId: source })) return;
       assertCurrent();
       if (hasPending() || runtime.maker.getSession(active.id) !== session) return;
-      await applyRuntimeSetModelChange({ ...runtime, sessionId: active.id, model: session.model,
-        providerId: getSessionProvider(active.id), forceSessionRebuild: true });
+      try {
+        await applyRuntimeSetModelChange({ ...runtime, sessionId: active.id, model: session.model,
+          providerId: getSessionProvider(active.id), forceSessionRebuild: true });
+      } catch (error) {
+        // Catalog notifications have no caller to retry a failed idle close. Keep
+        // this task pending and continue the batch, without replacing newer choices.
+        if (targets || !runtime.registerPendingCredentialSwitch) throw error;
+        assertCurrent();
+        if (!hasPending() && runtime.maker.getSession(active.id) === session) {
+          await runtime.registerPendingCredentialSwitch(active.id, {
+            model: session.model, providerId: getSessionProvider(active.id), forceSessionRebuild: true,
+          });
+        }
+        runtime.logger?.info('catalog context reload failed; continuing remaining tasks', {
+          sessionId: active.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
     });
   }
   assertCurrent();

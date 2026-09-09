@@ -1641,6 +1641,42 @@ describe('context configuration refresh across live routes', () => {
     expect(sessions[4]!.requiresModelSwitchRebuild).not.toHaveBeenCalled();
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('retains a failed %s catalog reload and continues later tasks', async (agentKind) => {
+    const sessions = ['failed', 'later'].map(suffix => ({
+      id: rememberSession(`catalog-${agentKind}-${suffix}`), agentKind, remoteHostId: 'ssh-host',
+      model: 'model', setModel: vi.fn(), requiresModelSwitchRebuild: () => true,
+    }));
+    const registerPendingCredentialSwitch = vi.fn();
+    const closeSession = vi.fn(async () => {}).mockRejectedValueOnce(new Error('temporary transport failure'));
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { listActiveSessions: () => sessions, getSession: id => sessions.find(s => s.id === id), closeSession },
+        registerPendingCredentialSwitch },
+      hasPendingSelection: () => false, withSessionLock: withSendToSessionLock,
+      inferProviderId: () => 'xd', assertCurrent: () => {},
+    });
+    expect(closeSession.mock.calls).toEqual([[sessions[0]!.id], [sessions[1]!.id]]);
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledExactlyOnceWith(sessions[0]!.id, {
+      model: 'model', providerId: null, forceSessionRebuild: true,
+    });
+  });
+
+  it.each(['selection', 'account'] as const)('preserves a newer %s change while a catalog close fails', async (change) => {
+    const id = rememberSession(`catalog-close-${change}`);
+    let changed = false;
+    const session = { id, agentKind: 'pi' as const, remoteHostId: 'ssh-host', model: 'model',
+      setModel: vi.fn(), requiresModelSwitchRebuild: () => true };
+    const registerPendingCredentialSwitch = vi.fn();
+    const run = refreshActiveModelContextSettings({
+      runtime: { maker: { listActiveSessions: () => [session], getSession: () => session,
+        closeSession: async () => { changed = true; throw new Error('close failed'); } }, registerPendingCredentialSwitch },
+      hasPendingSelection: () => changed && change === 'selection', withSessionLock: withSendToSessionLock,
+      inferProviderId: () => 'xd', assertCurrent: () => { if (changed && change === 'account') throw new Error('owner changed'); },
+    });
+    if (change === 'account') await expect(run).rejects.toThrow('owner changed');
+    else await expect(run).resolves.toBeUndefined();
+    expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+  });
+
   it('stops a default refresh if the account changes during native preflight', async () => {
     const sessionId = rememberSession('owner-context-refresh');
     let current = true;
