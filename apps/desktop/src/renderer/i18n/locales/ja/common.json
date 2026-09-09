@@ -178,6 +178,7 @@
       "restoreFailed": "デフォルト設定に戻せませんでした"
     },
     "tabs": {
+      "storage": "ストレージ",
       "general": "一般",
       "billing": "使用量と請求",
       "usage": "使用履歴",
@@ -920,10 +921,23 @@
         "unknown": "不明"
       },
       "storage": {
+        "mediaSectionTitle": "メディアファイル",
+        "databaseSectionTitle": "データベース",
+        "overviewTitle": "ローカルストレージ",
+        "overviewDescription": "データベースとメディアキャッシュはこのコンピューターに保存されます。Cindy は履歴を自動削除しません。",
+        "mediaSectionHint": "タスク履歴に影響せず個別に管理",
+        "databaseUsage": "使用量 {{size}}",
+        "databaseWarningNote": "まずスキャンしてから、削除する項目を選択してください。スキャンだけでは削除されません。",
+        "dbSizeWarningThresholdLabel": "データベース通知のしきい値",
+        "dbSizeWarningThresholdDescription": "データベースがこのサイズ（G）を超えたらクリーンアップを通知する",
+        "dbSizeWarningDisableLabel": "今後通知しない",
+        "dbSizeWarningDisableDescription": "有効にするとデータベース容量の通知を非表示にします。",
+        "unknown": "不明",
         "title": "ストレージ",
         "usageLabel": "メディア使用容量",
-        "usageValue": "{{size}}({{count}} ファイル、うちキャッシュ {{cacheSize}})",
-        "statsFailed": "統計は一時的に利用できません",
+        "usageValue": "{{size}}（{{count}} ファイル、キャッシュ {{cacheSize}}）",
+        "statsFailed": "統計を一時的に利用できません",
+        "refreshStatsButton": "更新",
         "legacyUsage": "旧バージョンのデータ(読み取り専用、クリーンアップ対象外): {{size}}",
         "legacyImagesLabel": "画像キャッシュディレクトリ",
         "legacyImagesDescription": "Cindy はこのディレクトリを自動でスキャンまたはクリーンアップしません。ファイルを削除するとメッセージ履歴の画像が表示できなくなる場合があるため、内容を確認してから操作してください。",
@@ -7011,6 +7025,12 @@
       "binary-missing": "コンポーネントを利用できません"
     },
     "ariaLabel": "サイドバーナビゲーション",
+    "databaseSizeWarning": {
+      "title": "データベースの使用容量が大きくなっています",
+      "description": "データベースは約 {{size}} で、{{threshold}} G を超えています。ストレージでのクリーンアップをおすすめします。",
+      "openSettings": "ストレージを開く",
+      "disable": "今後通知しない"
+    },
     "horizontalTabbarAria": "メインビュー切り替え",
     "tabs": {
       "projects": "プロジェクト",

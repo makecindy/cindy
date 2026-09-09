@@ -178,6 +178,7 @@
       "restoreFailed": "기본 설정으로 복원하지 못했습니다"
     },
     "tabs": {
+      "storage": "저장 공간",
       "general": "일반",
       "billing": "사용량 및 결제",
       "usage": "사용 기록",
@@ -920,10 +921,23 @@
         "unknown": "알 수 없음"
       },
       "storage": {
+        "mediaSectionTitle": "미디어 파일",
+        "databaseSectionTitle": "데이터베이스",
+        "overviewTitle": "로컬 저장 공간",
+        "overviewDescription": "데이터베이스와 미디어 캐시는 이 컴퓨터에 저장됩니다. Cindy는 기록을 자동으로 삭제하지 않습니다.",
+        "mediaSectionHint": "작업 기록에 영향을 주지 않고 별도로 관리",
+        "databaseUsage": "사용량 {{size}}",
+        "databaseWarningNote": "먼저 검사한 다음 정리할 항목을 선택하세요. 검사만으로는 파일이 삭제되지 않습니다.",
+        "dbSizeWarningThresholdLabel": "데이터베이스 알림 기준",
+        "dbSizeWarningThresholdDescription": "데이터베이스가 이 크기(G)를 초과하면 정리 알림",
+        "dbSizeWarningDisableLabel": "다시 알리지 않기",
+        "dbSizeWarningDisableDescription": "사용하면 데이터베이스 공간 알림이 숨겨집니다.",
+        "unknown": "알 수 없음",
         "title": "저장 공간",
         "usageLabel": "미디어 사용량",
-        "usageValue": "{{size}}({{count}}개 파일, 캐시 {{cacheSize}} 포함)",
+        "usageValue": "{{size}} ({{count}}개 파일, 캐시 {{cacheSize}})",
         "statsFailed": "통계를 일시적으로 사용할 수 없습니다",
+        "refreshStatsButton": "새로 고침",
         "legacyUsage": "이전 버전 데이터(읽기 전용, 정리 대상 아님): {{size}}",
         "legacyImagesLabel": "이미지 캐시 디렉터리",
         "legacyImagesDescription": "Cindy는 이 디렉터리를 자동으로 검사하거나 정리하지 않습니다. 파일을 삭제하면 메시지 기록의 이미지가 표시되지 않을 수 있으므로 확인 후 작업해 주세요.",
@@ -7011,6 +7025,12 @@
       "binary-missing": "구성 요소를 사용할 수 없음"
     },
     "ariaLabel": "사이드바 네비게이션",
+    "databaseSizeWarning": {
+      "title": "데이터베이스가 많은 공간을 사용 중입니다",
+      "description": "데이터베이스는 약 {{size}}이며 {{threshold}} G를 초과했습니다. 저장 공간에서 정리하는 것이 좋습니다.",
+      "openSettings": "저장 공간 열기",
+      "disable": "다시 알리지 않기"
+    },
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
       "projects": "프로젝트",

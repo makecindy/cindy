@@ -178,6 +178,7 @@
       "restoreFailed": "恢復預設設定失敗"
     },
     "tabs": {
+      "storage": "儲存空間",
       "general": "通用",
       "billing": "用量和計費",
       "usage": "用量歷史",
@@ -920,10 +921,23 @@
         "unknown": "未知"
       },
       "storage": {
+        "mediaSectionTitle": "媒體檔案",
+        "databaseSectionTitle": "資料庫",
+        "overviewTitle": "本機儲存空間",
+        "overviewDescription": "資料庫和媒體快取保存在這台電腦上，Cindy 不會自動刪除歷史記錄。",
+        "mediaSectionHint": "單獨管理，不影響任務歷史",
+        "databaseUsage": "佔用 {{size}}",
+        "databaseWarningNote": "請先掃描，再選擇要清理的內容。掃描不會立即刪除檔案。",
+        "dbSizeWarningThresholdLabel": "資料庫提醒門檻",
+        "dbSizeWarningThresholdDescription": "當資料庫超過此大小（G）時提醒我清理",
+        "dbSizeWarningDisableLabel": "不再提醒",
+        "dbSizeWarningDisableDescription": "開啟後會隱藏資料庫空間提醒。",
+        "unknown": "未知",
         "title": "儲存空間",
         "usageLabel": "媒體檔案佔用",
-        "usageValue": "{{size}}({{count}} 個檔案，含快取 {{cacheSize}})",
-        "statsFailed": "統計暫不可用",
+        "usageValue": "{{size}}（{{count}} 個檔案，快取 {{cacheSize}}）",
+        "statsFailed": "統計暫時無法使用",
+        "refreshStatsButton": "重新整理",
         "legacyUsage": "舊版本資料(只讀，不參與清理)：{{size}}",
         "legacyImagesLabel": "圖片快取目錄",
         "legacyImagesDescription": "Cindy 不會自動掃描或清理此目錄。刪除檔案後，歷史訊息中的圖片可能無法顯示，請自行確認後操作。",
@@ -7011,6 +7025,12 @@
       "binary-missing": "元件不可用"
     },
     "ariaLabel": "側邊欄導航",
+    "databaseSizeWarning": {
+      "title": "資料庫佔用空間較大",
+      "description": "資料庫約佔 {{size}}，已超過 {{threshold}} G。建議前往儲存空間進行清理。",
+      "openSettings": "開啟儲存空間",
+      "disable": "不再提醒"
+    },
     "horizontalTabbarAria": "主區域檢視切換",
     "tabs": {
       "projects": "專案",

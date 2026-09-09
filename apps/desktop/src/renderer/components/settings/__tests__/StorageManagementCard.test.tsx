@@ -87,13 +87,36 @@ function maintenanceApi() {
   };
 }
 
+function databaseSizeWarningApi() {
+  return {
+    getStatus: vi.fn(async () => ({ databaseBytes: 0 })),
+    measure: vi.fn(async () => ({ databaseBytes: 0 })),
+    getSettings: vi.fn(async () => ({
+      thresholdGiB: 10,
+      disabled: false,
+      isCustomized: false,
+      defaultThresholdGiB: 10,
+    })),
+    setSettings: vi.fn(async (patch: { thresholdGiB?: number; disabled?: boolean }) => ({
+      thresholdGiB: patch.thresholdGiB ?? 10,
+      disabled: patch.disabled ?? false,
+      isCustomized: true,
+      defaultThresholdGiB: 10,
+    })),
+    onChanged: vi.fn(() => () => undefined),
+  };
+}
+
 beforeEach(() => {
   toast.success.mockReset();
   toast.error.mockReset();
   toast.info.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { cindyMediaStorage: storageApi(), localDb: { maintenance: maintenanceApi() } },
+    value: {
+      cindyMediaStorage: storageApi(),
+      localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+    },
   });
 });
 
@@ -120,6 +143,63 @@ describe('StorageManagementCard fixed cache directories', () => {
     ).toBeTruthy();
     expect(window.electronAPI.cindyMediaStorage.scan).not.toHaveBeenCalled();
     expect(window.electronAPI.cindyMediaStorage.cleanup).not.toHaveBeenCalled();
+  });
+
+  it('refreshes storage stats only when the refresh button is requested', async () => {
+    render(<StorageManagementCard />);
+
+    await waitFor(() => {
+      expect(window.electronAPI.cindyMediaStorage.stats).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.refreshStatsButton' }),
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.cindyMediaStorage.stats).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('shows unknown storage values when a manual refresh fails', async () => {
+    const api = storageApi();
+    vi.mocked(api.stats).mockRejectedValueOnce(new Error('stats unavailable'));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        cindyMediaStorage: api,
+        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+      },
+    });
+    render(<StorageManagementCard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('settings.about.storage.unknown')).toBeTruthy();
+      expect(screen.getByText('settings.about.storage.statsFailed')).toBeTruthy();
+    });
+  });
+
+  it('restores the persisted threshold when saving a new threshold fails', async () => {
+    const warningApi = databaseSizeWarningApi();
+    vi.mocked(warningApi.setSettings).mockRejectedValueOnce(new Error('write failed'));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        cindyMediaStorage: storageApi(),
+        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: warningApi },
+      },
+    });
+    render(<StorageManagementCard />);
+
+    const input = await screen.findByRole('spinbutton', {
+      name: 'settings.about.storage.dbSizeWarningThresholdLabel',
+    });
+    fireEvent.change(input, { target: { value: '20' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe('10');
+    });
   });
 
   it('opens the fixed legacy image directory through the dedicated API', async () => {

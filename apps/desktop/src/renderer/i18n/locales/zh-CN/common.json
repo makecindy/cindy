@@ -178,6 +178,7 @@
       "restoreFailed": "恢复默认设置失败"
     },
     "tabs": {
+      "storage": "存储空间",
       "general": "通用",
       "billing": "用量和计费",
       "usage": "用量历史",
@@ -920,10 +921,23 @@
         "unknown": "未知"
       },
       "storage": {
+        "mediaSectionTitle": "媒体文件",
+        "databaseSectionTitle": "数据库",
+        "overviewTitle": "本地存储空间",
+        "overviewDescription": "数据库和媒体缓存保存在这台电脑上，Cindy 不会自动删除历史记录。",
+        "mediaSectionHint": "单独管理，不影响任务历史",
+        "databaseUsage": "占用 {{size}}",
+        "databaseWarningNote": "请先扫描，再选择要清理的内容。扫描不会立即删除文件。",
+        "dbSizeWarningThresholdLabel": "数据库提醒阈值",
+        "dbSizeWarningThresholdDescription": "当数据库超过此大小（G）时提醒我清理",
+        "dbSizeWarningDisableLabel": "不再提醒",
+        "dbSizeWarningDisableDescription": "开启后将隐藏数据库空间提醒。",
+        "unknown": "未知",
         "title": "存储空间",
         "usageLabel": "媒体文件占用",
-        "usageValue": "{{size}}({{count}} 个文件，含缓存 {{cacheSize}})",
-        "statsFailed": "统计暂不可用",
+        "usageValue": "{{size}}（{{count}} 个文件，缓存 {{cacheSize}}）",
+        "statsFailed": "统计暂时不可用",
+        "refreshStatsButton": "刷新",
         "legacyUsage": "旧版本数据(只读，不参与清理)：{{size}}",
         "legacyImagesLabel": "图片缓存目录",
         "legacyImagesDescription": "Cindy 不会自动扫描或清理此目录。删除文件后，历史消息中的图片可能无法显示，请自行确认后操作。",
@@ -7011,6 +7025,12 @@
       "binary-missing": "组件不可用"
     },
     "ariaLabel": "侧边栏导航",
+    "databaseSizeWarning": {
+      "title": "数据库占用空间较大",
+      "description": "数据库约占 {{size}}，已超过 {{threshold}} G。建议前往存储空间进行清理。",
+      "openSettings": "打开存储空间",
+      "disable": "不再提醒"
+    },
     "horizontalTabbarAria": "主区域视图切换",
     "tabs": {
       "projects": "项目",

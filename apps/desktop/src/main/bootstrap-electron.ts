@@ -364,6 +364,12 @@ import {
   getDbClient,
   setCurrentDbClient,
 } from './localDb/client/current';
+import {
+  readDatabaseSizeWarningSettingsState,
+  parseDatabaseSizeWarningSettingsPatch,
+  writeDatabaseSizeWarningSettings,
+  DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+} from './database-size-warning-settings';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
@@ -4038,6 +4044,57 @@ let lastPluginMarketSyncAt = 0;
 let pluginMarketPeriodicSyncTimer: ReturnType<typeof setInterval> | null = null;
 const PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000;
 
+type DatabaseSizeWarningStatus = { databaseBytes: number | null };
+
+let startupDatabaseSizeWarningStatus: DatabaseSizeWarningStatus = { databaseBytes: null };
+let startupDatabaseSizeWarningStatusChecked = false;
+let startupDatabaseSizeWarningOwnerScope: string | null = null;
+
+function collectDatabaseSizeWarningStatus(): DatabaseSizeWarningStatus {
+  const userId = getCurrentDbClientUserId();
+  const dbFilePath = localDbGetCurrentDbPath() ?? (userId ? getDbPathForUser(userId) : null);
+  if (!dbFilePath) return { databaseBytes: null };
+
+  let databaseBytes = 0;
+  let found = false;
+  for (const candidate of [
+    dbFilePath,
+    `${dbFilePath}-wal`,
+    `${dbFilePath}-shm`,
+    `${dbFilePath}-journal`,
+  ]) {
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile()) {
+        databaseBytes += stat.size;
+        found = true;
+      }
+    } catch {
+      // SQLite sidecar files are optional.
+    }
+  }
+  return { databaseBytes: found ? databaseBytes : null };
+}
+
+/** Capture the database size once after the first local DB startup completes. */
+function checkDatabaseSizeWarningAtStartup(): void {
+  const ownerScope = activeOwnerScopeKey();
+  if (
+    startupDatabaseSizeWarningStatusChecked &&
+    startupDatabaseSizeWarningOwnerScope === ownerScope
+  ) return;
+  startupDatabaseSizeWarningStatus = collectDatabaseSizeWarningStatus();
+  startupDatabaseSizeWarningStatusChecked = true;
+  startupDatabaseSizeWarningOwnerScope = ownerScope;
+  dbClientLog.info(
+    'database size warning startup check completed',
+    startupDatabaseSizeWarningStatus,
+  );
+  if (mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()) {
+    mainWindowRef.webContents.send('database-size-warning:changed');
+  }
+}
+
 /** Run market discovery and automatic updates for the current stable owner. */
 function syncPluginMarketForActiveOwner(minIntervalMs = 0): void {
   const session = getActiveAppSession();
@@ -4073,6 +4130,31 @@ function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefi
 }
 
 const registerIpcHandlers = () => {
+  ipcMain.handle('database-size-warning:get-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const state = readDatabaseSizeWarningSettingsState();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:set-settings', (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const parsed = parseDatabaseSizeWarningSettingsPatch(payload);
+    if ('error' in parsed) throwIpcError('INVALID_PARAMS', parsed.error);
+    const value = writeDatabaseSizeWarningSettings(parsed.patch);
+    return { ...value, defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB };
+  });
+  ipcMain.handle('database-size-warning:get-status', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return startupDatabaseSizeWarningStatus;
+  });
+  ipcMain.handle('database-size-warning:measure', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return collectDatabaseSizeWarningStatus();
+  });
+
   // Find the primary app window, skipping transient utility BrowserWindows like
   // the voice-input overlay (minimizable:false, maximizable:false). Electron's
   // BrowserWindow.getAllWindows() ordering is not guaranteed to be stable across
@@ -8412,6 +8494,7 @@ app.on('ready', async () => {
         }
         return;
       }
+      checkDatabaseSizeWarningAtStartup();
       // Bot recovery is owner-scoped and must start only after DbClient
       // takeover. registerMakerIpc also invokes this once its services exist,
       // covering both possible splash/login orderings without duplicate runs.

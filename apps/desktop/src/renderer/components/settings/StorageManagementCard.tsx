@@ -18,7 +18,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, RefreshCw } from 'lucide-react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as Select from '@radix-ui/react-select';
 
@@ -46,6 +46,8 @@ type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage
 type CleanupResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.cleanup>>;
 type ReconcileResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.reconcile>>;
 
+const GIB_BYTES = 1024 ** 3;
+
 type CleanPhase =
   | { kind: 'idle' }
   | { kind: 'scanned'; scan: ScanResult }
@@ -54,19 +56,44 @@ type CleanPhase =
 export function StorageManagementCard() {
   const { t } = useTranslation();
   const [stats, setStats] = useState<StatsResult | null>(null);
+  const [databaseBytes, setDatabaseBytes] = useState<number | null>(null);
+  const [warningThresholdGiB, setWarningThresholdGiB] = useState(10);
   const [phase, setPhase] = useState<CleanPhase>({ kind: 'idle' });
   const [reconcile, setReconcile] = useState<ReconcileResult | null>(null);
   // in-flight 防重入标志(不进 state:操作期间界面零变化,见文件头)。
   const cleanupBusyRef = useRef(false);
   const reconcileBusyRef = useRef(false);
   const directoryCleanupBusyRef = useRef(false);
+  const statsBusyRef = useRef(false);
+  const [statsRefreshing, setStatsRefreshing] = useState(false);
+  const [statsFailed, setStatsFailed] = useState(false);
 
   const refreshStats = async () => {
+    if (statsBusyRef.current) return;
+    statsBusyRef.current = true;
+    setStatsRefreshing(true);
     try {
-      const res = await window.electronAPI.cindyMediaStorage.stats();
-      setStats(res);
-    } catch {
-      // 保持上一份显示;错误由具体操作路径提示。
+      const databaseApi = window.electronAPI.localDb?.databaseSizeWarning;
+      const [mediaResult, databaseResult] = await Promise.allSettled([
+        window.electronAPI.cindyMediaStorage.stats(),
+        databaseApi?.measure?.() ?? databaseApi?.getStatus?.() ?? Promise.resolve({ databaseBytes: null }),
+      ]);
+      const mediaSucceeded = mediaResult.status === 'fulfilled';
+      const databaseSucceeded = databaseResult.status === 'fulfilled';
+      setStats(mediaSucceeded ? mediaResult.value : null);
+      setDatabaseBytes(databaseSucceeded ? databaseResult.value.databaseBytes : null);
+      setStatsFailed(!mediaSucceeded || !databaseSucceeded);
+      if (databaseApi) {
+        try {
+          const settings = await databaseApi.getSettings();
+          setWarningThresholdGiB(settings.thresholdGiB);
+        } catch {
+          // Keep the last known threshold when settings cannot be read.
+        }
+      }
+    } finally {
+      statsBusyRef.current = false;
+      setStatsRefreshing(false);
     }
   };
 
@@ -193,91 +220,185 @@ export function StorageManagementCard() {
     scan.deadDirs.some((d) => d.eligible) ||
     scan.tmpFileCount > 0;
 
+  const mediaBytes = stats?.success ? stats.blobs.totalBytes : null;
+  const totalBytes = databaseBytes !== null && mediaBytes !== null
+    ? databaseBytes + mediaBytes
+    : null;
+  const overviewPercent = totalBytes === null
+    ? null
+    : Math.min(100, (totalBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
+
   return (
-    <div
-      className={cn(
-        'flex flex-col rounded-xl',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
-    >
+    <div id="settings-storage-section" className="flex flex-col gap-3">
+      <div className="flex items-end justify-between gap-4 px-0.5">
+        <div className="min-w-0">
+          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+            {t('settings.about.storage.title')}
+          </h2>
+          <p className="mt-1 text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+            {t('settings.about.storage.overviewDescription')}
+          </p>
+        </div>
+      </div>
+
       {/* 占用总览 */}
-      <div className="flex flex-col gap-1.5 px-[18px] py-4">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.usageLabel')}
-          </span>
-          <span
-            className={cn(
-              'truncate text-13 font-medium',
-              stats && !stats.success
-                ? 'text-[var(--settings-section-sublabel)] opacity-70'
-                : 'text-[var(--settings-section-title)]',
+      <div
+        className={cn(
+          'grid gap-4 rounded-2xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+          'shadow-[var(--shadow-menu)]',
+        )}
+      >
+        <div>
+          <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+            {t('settings.about.storage.overviewTitle')}
+          </h3>
+          <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.overviewDescription')}
+          </p>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]">
+            {overviewPercent !== null && (
+              <span
+                className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
+                style={{ width: `${overviewPercent}%` }}
+              />
             )}
+          </div>
+        </div>
+        <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
+          <div className="text-right">
+            <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
+              {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
+            </strong>
+            <span className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+              {t('settings.about.storage.databaseUsage', {
+                size: databaseBytes === null
+                  ? t('settings.about.storage.unknown')
+                  : formatBytes(databaseBytes),
+              })}{' '}
+              · {t('settings.about.storage.mediaSectionTitle')} {mediaBytes === null
+                ? t('settings.about.storage.unknown')
+                : formatBytes(mediaBytes)}
+            </span>
+            {statsFailed && (
+              <span className="mt-1 block text-11 text-[var(--warning-fg)]">
+                {t('settings.about.storage.statsFailed')}
+              </span>
+            )}
+          </div>
+          <CardButton
+            onClick={() => void refreshStats()}
+            disabled={statsRefreshing}
+            busy={statsRefreshing}
           >
-            {stats
-              ? stats.success
-                ? t('settings.about.storage.usageValue', {
-                    size: formatBytes(stats.blobs.totalBytes),
-                    count: stats.blobs.totalCount,
-                    cacheSize: formatBytes(stats.blobs.cacheBytes),
-                  })
-                : t('settings.about.storage.statsFailed')
-              : ''}
-          </span>
-        </div>
-      </div>
-
-      <Divider />
-
-      <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.legacyImagesLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.legacyImagesDescription')}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <CardButton onClick={handleOpenLegacyImagesDir}>
-            {t('settings.about.storage.legacyImagesOpenButton')}
-          </CardButton>
-          <CardButton onClick={handleClearLegacyImagesDir}>
-            {t('settings.about.storage.legacyImagesClearButton')}
+            <span className={cn('inline-flex', statsRefreshing && 'motion-safe:animate-spin motion-reduce:animate-none')}>
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+            </span>
+            {t('settings.about.storage.refreshStatsButton')}
           </CardButton>
         </div>
       </div>
 
-      <Divider />
-
-      <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.chatAttachmentsLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.chatAttachmentsDescription')}
-          </p>
+      <div className="flex items-baseline justify-between gap-3 px-0.5">
+        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+          {t('settings.about.storage.mediaSectionTitle')}
+        </h3>
+        <span className="text-11 text-[var(--settings-section-sublabel)]">
+          {t('settings.about.storage.mediaSectionHint')}
+        </span>
+      </div>
+      <div
+        className={cn(
+          'overflow-hidden rounded-2xl',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+          'shadow-[var(--shadow-menu)]',
+        )}
+      >
+        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-13 text-[var(--settings-section-sublabel)]">
+              {t('settings.about.storage.legacyImagesLabel')}
+            </span>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.about.storage.legacyImagesDescription')}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <CardButton onClick={handleOpenLegacyImagesDir}>
+              {t('settings.about.storage.legacyImagesOpenButton')}
+            </CardButton>
+            <CardButton onClick={handleClearLegacyImagesDir}>
+              {t('settings.about.storage.legacyImagesClearButton')}
+            </CardButton>
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <CardButton onClick={handleOpenChatAttachmentsDir}>
-            {t('settings.about.storage.chatAttachmentsOpenButton')}
-          </CardButton>
-          <CardButton onClick={handleClearChatAttachmentsDir}>
-            {t('settings.about.storage.chatAttachmentsClearButton')}
-          </CardButton>
+
+        <div
+          aria-hidden
+          className="h-px w-full bg-[var(--settings-theme-card-border)]"
+        />
+
+        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-13 text-[var(--settings-section-sublabel)]">
+              {t('settings.about.storage.chatAttachmentsLabel')}
+            </span>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.about.storage.chatAttachmentsDescription')}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <CardButton onClick={handleOpenChatAttachmentsDir}>
+              {t('settings.about.storage.chatAttachmentsOpenButton')}
+            </CardButton>
+            <CardButton onClick={handleClearChatAttachmentsDir}>
+              {t('settings.about.storage.chatAttachmentsClearButton')}
+            </CardButton>
+          </div>
         </div>
       </div>
 
-      <Divider />
+      <div className="flex items-baseline justify-between gap-3 px-0.5">
+        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+          {t('settings.about.storage.databaseSectionTitle')}
+        </h3>
+        <span className="text-11 text-[var(--settings-section-sublabel)]">
+          {databaseBytes === null
+            ? t('settings.about.storage.unknown')
+            : t('settings.about.storage.databaseUsage', { size: formatBytes(databaseBytes) })}
+        </span>
+      </div>
+      <div
+        className={cn(
+          'overflow-hidden rounded-2xl',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+          'shadow-[var(--shadow-menu)]',
+        )}
+      >
+        <DatabaseSlimmingSection
+          warningThresholdGiB={warningThresholdGiB}
+          onWarningThresholdChange={setWarningThresholdGiB}
+        />
+      </div>
 
-      <DatabaseSlimmingSection />
-
-      <Divider />
+      <div className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3.5 py-3 text-12 text-[var(--warning-fg)]">
+        <span className="text-14 font-semibold leading-none" aria-hidden>
+          !
+        </span>
+        <span>{t('settings.about.storage.databaseWarningNote')}</span>
+      </div>
 
       {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
-      <div className="flex flex-col gap-2 px-[18px] py-4">
+      <div
+        className={cn(
+          'flex flex-col gap-2 rounded-xl px-[18px] py-4',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+        )}
+      >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <span className="text-13 text-[var(--settings-section-sublabel)]">
@@ -369,10 +490,14 @@ export function StorageManagementCard() {
         )}
       </div>
 
-      <Divider />
-
       {/* 体检(对账,只报不删) */}
-      <div className="flex flex-col gap-1.5 px-[18px] py-4">
+      <div
+        className={cn(
+          'flex flex-col gap-1.5 rounded-xl px-[18px] py-4',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+        )}
+      >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <span className="text-13 text-[var(--settings-section-sublabel)]">
@@ -408,9 +533,17 @@ type DbSlimmingPhase =
   | { kind: 'scanned'; scan: DbSlimmingScanResult }
   | { kind: 'done'; result: DbSlimmingResult };
 
-function DatabaseSlimmingSection() {
+function DatabaseSlimmingSection({
+  warningThresholdGiB,
+  onWarningThresholdChange,
+}: {
+  warningThresholdGiB: number;
+  onWarningThresholdChange: (value: number) => void;
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const [warningDisabled, setWarningDisabled] = useState(false);
+  const warningThresholdPersistedRef = useRef(warningThresholdGiB);
   const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
     DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
   );
@@ -425,6 +558,50 @@ function DatabaseSlimmingSection() {
   const busyRef = useRef(false);
   const activeTasksConfirmationPendingRef = useRef(false);
   const interactionLockReleaseRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.databaseSizeWarning;
+    if (!api) return undefined;
+    let cancelled = false;
+    void api
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        warningThresholdPersistedRef.current = settings.thresholdGiB;
+        onWarningThresholdChange(settings.thresholdGiB);
+        setWarningDisabled(settings.disabled);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveWarningThreshold = async () => {
+    const value = Number(warningThresholdGiB);
+    if (!Number.isFinite(value) || value < 1 || value > 1024) {
+      onWarningThresholdChange(warningThresholdPersistedRef.current);
+      return;
+    }
+    try {
+      const saved = await window.electronAPI.localDb.databaseSizeWarning.setSettings({
+        thresholdGiB: value,
+      });
+      warningThresholdPersistedRef.current = saved.thresholdGiB;
+      onWarningThresholdChange(saved.thresholdGiB);
+    } catch {
+      onWarningThresholdChange(warningThresholdPersistedRef.current);
+    }
+  };
+
+  const setWarningDisabledAndPersist = async (disabled: boolean) => {
+    setWarningDisabled(disabled);
+    try {
+      await window.electronAPI.localDb.databaseSizeWarning.setSettings({ disabled });
+    } catch {
+      setWarningDisabled(!disabled);
+    }
+  };
 
   const acquireInteractionLock = () => {
     if (!interactionLockReleaseRef.current) {
@@ -594,6 +771,56 @@ function DatabaseSlimmingSection() {
 
   return (
     <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
+      <div className="order-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+        <label htmlFor="db-size-warning-threshold" className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSizeWarningThresholdLabel')}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.dbSizeWarningThresholdDescription')}
+          </span>
+        </label>
+        <div className="flex items-center gap-1.5">
+          <input
+            id="db-size-warning-threshold"
+            type="number"
+            min={1}
+            max={1024}
+            step={1}
+            value={warningThresholdGiB}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isFinite(value)) onWarningThresholdChange(value);
+            }}
+            onBlur={() => void saveWarningThreshold()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void saveWarningThreshold();
+            }}
+            className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            aria-label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
+          />
+          <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
+        </div>
+
+        <label
+          htmlFor="db-size-warning-disabled"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSizeWarningDisableLabel')}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.dbSizeWarningDisableDescription')}
+          </span>
+        </label>
+        <Switch
+          id="db-size-warning-disabled"
+          checked={warningDisabled}
+          onCheckedChange={(checked) => void setWarningDisabledAndPersist(checked)}
+          aria-label={t('settings.about.storage.dbSizeWarningDisableLabel')}
+        />
+      </div>
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-13 text-[var(--settings-section-sublabel)]">
@@ -603,13 +830,18 @@ function DatabaseSlimmingSection() {
             {t('settings.about.storage.dbSlimmingDescription')}
           </p>
         </div>
-        <CardButton onClick={handleScan} disabled={scanLoading} busy={scanLoading}>
+        <CardButton
+          emphasis
+          onClick={handleScan}
+          disabled={scanLoading}
+          busy={scanLoading}
+        >
           {scanLoading && <Spinner size={12} />}
           {t('settings.about.storage.dbSlimmingScanButton')}
         </CardButton>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+      <div className="order-1 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <label
           htmlFor="db-slimming-archive-age"
           className="text-12 text-[var(--settings-section-sublabel)]"
@@ -988,15 +1220,5 @@ function CardButton({
     >
       {children}
     </button>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      aria-hidden
-      className="h-px w-full"
-      style={{ background: 'var(--settings-theme-card-border)' }}
-    />
   );
 }
