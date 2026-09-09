@@ -562,6 +562,7 @@ export function CCAgentSidebarUpper() {
    * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
    * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
   const publishedTaskKeyRef = useRef<string>('');
+  const sidebarRootRef = useRef<HTMLDivElement>(null);
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
     const renderedIds = getVisibleSidebarSessionIds();
@@ -570,8 +571,9 @@ export function CCAgentSidebarUpper() {
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
     const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
+    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
     const visibleProjection = visibleSessionsWithRemote
-      .filter((session) => !catalogSessions.some((active) => active.id === session.id))
+      .filter((session) => !catalogSessionIds.has(session.id))
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
     const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
@@ -607,21 +609,59 @@ export function CCAgentSidebarUpper() {
     // 观察面是整个 document(展开态与 rail 是两个组件),流式输出时 mutation 会非常
     // 密集 —— 每帧最多重算一次,别让它变成热路径。
     let frame: number | null = null;
-    const observer = new MutationObserver(() => {
+    const schedulePublish = () => {
       if (frame !== null) return;
       frame = requestAnimationFrame(() => {
         frame = null;
         publishSidebarTasks();
       });
-    });
-    observer.observe(document.body, {
+    };
+    const observerOptions: MutationObserverInit = {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['class', 'hidden', 'aria-hidden'],
+    };
+    const observer = new MutationObserver(schedulePublish);
+    const sidebarRoot = sidebarRootRef.current;
+    if (!sidebarRoot) return;
+    observer.observe(sidebarRoot, observerOptions);
+    const portalObservers = new Map<Element, MutationObserver>();
+    const portalSelector =
+      '[data-rail-panel],[data-conversation-search-overlay],[data-radix-popper-content-wrapper]';
+    const attachPortalObserver = (portal: Element) => {
+      if (portalObservers.has(portal)) return;
+      const portalObserver = new MutationObserver(schedulePublish);
+      portalObserver.observe(portal, observerOptions);
+      portalObservers.set(portal, portalObserver);
+    };
+    const syncPortalObservers = () => {
+      for (const portal of document.querySelectorAll(portalSelector)) attachPortalObserver(portal);
+      for (const [portal, portalObserver] of portalObservers) {
+        if (!portal.isConnected) {
+          portalObserver.disconnect();
+          portalObservers.delete(portal);
+        }
+      }
+    };
+    syncPortalObservers();
+    const portalLifecycleObserver = new MutationObserver((records) => {
+      if (
+        records.some((record) =>
+          [...record.addedNodes, ...record.removedNodes].some(
+            (node) => node instanceof Element && (node.matches(portalSelector) || node.querySelector(portalSelector)),
+          ),
+        )
+      ) {
+        syncPortalObservers();
+        schedulePublish();
+      }
     });
+    portalLifecycleObserver.observe(document.body, { childList: true });
     return () => {
       observer.disconnect();
+      portalLifecycleObserver.disconnect();
+      for (const portalObserver of portalObservers.values()) portalObserver.disconnect();
       if (frame !== null) cancelAnimationFrame(frame);
     };
   }, [publishSidebarTasks]);
@@ -670,7 +710,7 @@ export function CCAgentSidebarUpper() {
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
     <Tooltip.Provider skipDelayDuration={1500}>
       <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
-        <div className="relative flex flex-1 flex-col overflow-hidden">
+        <div ref={sidebarRootRef} className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
           min-w-0 让内层跟着外层 aside 的实际宽度走，配合 SessionItem 里的
           `min-w-0 flex-1 truncate` 才能正确截断。原来写死 min-w-[260px] 是
