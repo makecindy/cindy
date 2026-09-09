@@ -311,6 +311,7 @@ export function findLatestRebuildableError(
 export interface ContextOverflowRolloverDeps {
   getSessionRow(sessionId: string): Promise<{
     status: string;
+    source?: string | null;
     agentKind: string;
     remoteHostId: string | null;
     clearedAt: number | null;
@@ -363,6 +364,7 @@ export interface ContextOverflowRolloverDeps {
       expectedClearedAt?: number | null;
       replacementRoute?: NativeSessionRecoveryTarget & { expectedSdkSessionId: string };
     },
+    signal?: AbortSignal,
   ): Promise<void>;
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
   readPendingHandoffGeneration?(sessionId: string): number;
@@ -370,7 +372,7 @@ export interface ContextOverflowRolloverDeps {
     sessionId: string,
     content: unknown,
     agentFacingWireContent?: unknown,
-    recovery?: {
+    recovery?: { signal?: AbortSignal; resumeRetainedHistory?: false } | {
       signal?: AbortSignal;
       resumeRetainedHistory: true;
       sourceUserContent: unknown;
@@ -379,6 +381,8 @@ export interface ContextOverflowRolloverDeps {
     },
   ): Promise<{ accepted: boolean }>;
   getRecoveryAbortSignal?(sessionId: string): AbortSignal;
+  /** Synchronous: external dispatch may release its turn marker on this same terminal event. */
+  hasExternalRecoveryOwner?(sessionId: string): boolean;
   onRebuilt?(sessionId: string): void;
   withSessionLock?<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
   withCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
@@ -491,9 +495,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!isContextOverflowErrorData(errorData) && !oversized) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
+    signal?.throwIfAborted();
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
+    if (oversized && sessionRow.source !== 'desktop') return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
@@ -515,14 +521,16 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           [...source].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message)) ??
           (await deps.findLatestUser?.(sessionId));
         if (signal?.aborted) return true;
+        if (deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         if (sourceUser && continuedInputs.get(sessionId) === sourceUser.clientId) return false;
         const strip = await runStripRelink(sessionId, sessionRow);
+        signal?.throwIfAborted();
         const next = afterStripAttempt(strip, { local: true, tokens });
         if (next === 'done' || (strip === 'not-needed' && next === 'none')) {
           // A repaired thread still needs a turn. Continue from retained history,
           // never replay the original input after tools may already have run.
-          if (signal?.aborted) return true;
-          if (!sourceUser || isExternalDispatchOwner(sourceUser.agentMeta)) return false;
+          if (!sourceUser || isExternalDispatchOwner(sourceUser.agentMeta) ||
+            deps.hasExternalRecoveryOwner?.(sessionId)) return false;
           const sourceWire = persistedUserContentToWireMessage(
             sourceUser.agentMeta?.agentFacingWireContent ?? sourceUser.content,
           );
@@ -559,6 +567,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         deps.listMessages(sessionId),
         deps.findLatestRebuildMeta(sessionId),
       ]);
+      signal?.throwIfAborted();
       const alreadyRolled =
         rebuildMeta?.reason === 'context-overflow' ? rebuildMeta.sourceUserClientId : null;
       const plan = planContextOverflowRollover(source, alreadyRolled);
@@ -571,6 +580,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
 
       if (live) await deps.closeSession(sessionId);
+      signal?.throwIfAborted();
       const label = engineLabelForOverflow(sessionRow.agentKind);
       const handoff = buildHandoffText(plan.handoffMessages, {
         fromLabel: label,
@@ -585,7 +595,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         sourceModel: sessionRow.model ?? null,
         sourceProviderId: sessionRow.providerId ?? null,
         expectedClearedAt: sessionRow.clearedAt,
-      });
+      }, signal);
+      signal?.throwIfAborted();
       deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
       if (plan.skipGenericReplay) {
         deps.log.info('overflow rebuilt; external owner must retry send', {
@@ -594,14 +605,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         });
         return true;
       }
-      const replay =
-        plan.sourceUserAgentFacingWireContent !== undefined
-          ? await deps.replayUserMessage(
-              sessionId,
-              plan.sourceUserContent,
-              plan.sourceUserAgentFacingWireContent,
-            )
-          : await deps.replayUserMessage(sessionId, plan.sourceUserContent);
+      const replay = await deps.replayUserMessage(
+        sessionId,
+        plan.sourceUserContent,
+        plan.sourceUserAgentFacingWireContent,
+        { signal },
+      );
+      signal?.throwIfAborted();
       if (!replay.accepted) {
         deps.log.warn('context overflow rollover replay was not accepted', {
           sessionId,
@@ -958,6 +968,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     async tryRecover(sessionId: string, errorData: unknown): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
+        // IM may not persist this input (protected content), and an attached IM
+        // turn can outlive its binding. Check live ownership before any await.
+        if (isOversizedHistoryErrorData(errorData) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         const claim = inFlight.get(sessionId) ?? new AbortController();
         inFlight.set(sessionId, claim);
         const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);

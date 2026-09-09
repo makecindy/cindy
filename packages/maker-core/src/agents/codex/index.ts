@@ -5516,6 +5516,7 @@ export class CodexAgent extends BaseAgent {
       reason: string;
       cleanup: () => Promise<void>;
       retireHostOnFailure?: boolean;
+      closeHandleOnFailure?: boolean;
     }): Promise<boolean> => {
       try {
         await params.cleanup();
@@ -5538,13 +5539,13 @@ export class CodexAgent extends BaseAgent {
             });
           }
         }
-        terminateHandleAfterThreadCleanupFailure(params.reason);
+        if (params.closeHandleOnFailure !== false) terminateHandleAfterThreadCleanupFailure(params.reason);
         return false;
       }
     };
     const releaseCurrentThreadSubscription = async (
       reason: string,
-      opts: { retireHostOnFailure?: boolean } = {},
+      opts: { retireHostOnFailure?: boolean; closeHandleOnFailure?: boolean } = {},
     ): Promise<boolean> => {
       const currentSubscription = subscription;
       if (!currentSubscription) return true;
@@ -5553,6 +5554,7 @@ export class CodexAgent extends BaseAgent {
         reason,
         cleanup: () => currentSubscription.release(),
         retireHostOnFailure: opts.retireHostOnFailure ?? true,
+        closeHandleOnFailure: opts.closeHandleOnFailure,
       });
       if (subscription === currentSubscription) subscription = null;
       return released;
@@ -7832,24 +7834,26 @@ export class CodexAgent extends BaseAgent {
       // 进入旧 transport。
       const turnGenBeforeInterrupt = turnStartGeneration;
       void (async () => {
+        // All ACK/release outcomes use the same authoritative-success decision.
+        const settleInterruptedTurn = (fallback?: TurnCompletedParams): boolean => {
+          const completedNormally = deferOversizedError &&
+            reconnectStallDeferredTurnCompletion?.turn.status === 'completed';
+          if (completedNormally) terminalErroredTurnIds.delete(turnId);
+          const settled = settleReconnectStallCleanup(turnId, fallback);
+          if (settled && deferOversizedError && !completedNormally) emitTimeout(true);
+          return settled;
+        };
         const interrupted = await interruptTurnForPermissionTighten(turnId, {
           suppressFailureEvent: true,
         });
-        const completedNormally = deferOversizedError
-          && reconnectStallDeferredTurnCompletion?.turn.status === 'completed';
-        // No error has been published for oversized recovery yet. An
-        // authoritative success wins over the watchdog and settles normally.
-        if (completedNormally) terminalErroredTurnIds.delete(turnId);
         if (interrupted) {
-          if (!settleReconnectStallCleanup(turnId, {
+          if (!settleInterruptedTurn({
               threadId,
               turn: { id: turnId, status: 'failed' },
             } as TurnCompletedParams)) clearReconnectStallCleanup(turnId);
-          if (deferOversizedError && !completedNormally) emitTimeout(true);
           return;
         }
-        if (settleReconnectStallCleanup(turnId)) {
-          if (deferOversizedError && !completedNormally) emitTimeout(true);
+        if (settleInterruptedTurn()) {
           log.info('reconnect-stall turn completed while interrupt was settling; keeping shared host', {
             threadId,
             turnId,
@@ -7886,9 +7890,17 @@ export class CodexAgent extends BaseAgent {
           'upstream-idle watchdog: turn interrupt not confirmed — closing this codex host so the next send rebuilds it',
           { threadId, turnId },
         );
-        // Unconfirmed interruption is a real failure, not a successful recovery.
-        // Surface it before close ends the event stream; Main will refuse busy.
-        if (deferOversizedError) emitTimeout();
+        let completedDuringRelease = false;
+        if (deferOversizedError) {
+          // Keep the terminal stream open through unsubscribe, including a failed
+          // release. This caller closes the handle after publishing its one result.
+          await releaseCurrentThreadSubscription('reconnect-stall subscription release', {
+            retireHostOnFailure: false,
+            closeHandleOnFailure: false,
+          });
+          completedDuringRelease = settleInterruptedTurn();
+          if (!completedDuringRelease) emitTimeout();
+        }
         try {
           // thread/unsubscribe 失败本身不能先强退共享 host：同 turn 的权威
           // completion 仍可能在 close 等待期间到达。先只终止当前 handle，等下方
@@ -7897,7 +7909,7 @@ export class CodexAgent extends BaseAgent {
         } catch (e) {
           log.warn('upstream-idle watchdog close threw', { error: String(e) });
         }
-        if (settleReconnectStallCleanup(turnId)) {
+        if (completedDuringRelease || settleInterruptedTurn()) {
           log.info('reconnect-stall turn completed during handle close; keeping shared host', {
             threadId,
             turnId,

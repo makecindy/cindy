@@ -285,6 +285,7 @@ describe('createContextOverflowRollover', () => {
       getSessionRow: vi.fn(
         async (): Promise<{
           status: string;
+          source?: string;
           agentKind: string;
           remoteHostId: string | null;
           clearedAt: number | null;
@@ -296,6 +297,7 @@ describe('createContextOverflowRollover', () => {
           workingDir?: string | null;
         }> => ({
           status: 'active',
+          source: 'desktop',
           agentKind: 'pi',
           remoteHostId: null,
           clearedAt: null,
@@ -823,6 +825,7 @@ describe('createContextOverflowRollover', () => {
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -847,8 +850,9 @@ describe('createContextOverflowRollover', () => {
         sourceUserClientId: 'u2',
         sourceAgentKind: 'codex',
       }),
+      expect.any(AbortSignal),
     );
-    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B');
+    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B', undefined, { signal: expect.any(AbortSignal) });
   });
 
   it('rebuilds once, injects handoff, and wire-replays the same user content', async () => {
@@ -875,11 +879,12 @@ describe('createContextOverflowRollover', () => {
         sourceProviderId: 'xai',
         expectedClearedAt: null,
       }),
+      expect.any(AbortSignal),
     );
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.any(String), 3);
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('先做 A');
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).not.toContain('再做 B');
-    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B');
+    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B', undefined, { signal: expect.any(AbortSignal) });
     expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
     expect(deps.replayUserMessage.mock.invocationCallOrder[0]).toBeLessThan(
       deps.onRebuilt.mock.invocationCallOrder[0],
@@ -947,7 +952,7 @@ describe('createContextOverflowRollover', () => {
         agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead', displayText: '派给 worker' } },
       },
     ]);
-    const rollover = createContextOverflowRollover(deps);
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
     rollover.claim('s1');
     await expect(
       rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
@@ -977,6 +982,7 @@ describe('createContextOverflowRollover', () => {
     const deps = makeDeps([msg('user', '继续', 'u1'), msg('error', compactError, 'e1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1104,6 +1110,7 @@ describe('createContextOverflowRollover', () => {
     const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1304,6 +1311,7 @@ describe('createContextOverflowRollover', () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1325,6 +1333,7 @@ describe('createContextOverflowRollover', () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: 'remote-1',
       clearedAt: null,
@@ -1358,6 +1367,7 @@ describe('createContextOverflowRollover', () => {
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1461,10 +1471,71 @@ describe('createContextOverflowRollover', () => {
     expect(rollover.claim('s1')).toBe('claimed');
   });
 
+  it.each(['strip', 'plan', 'close', 'commit', 'replay'] as const)(
+    'cancels failed-strip fallback during %s without advancing the old request', async (phase) => {
+      const deps = makeDeps([msg('user', 'old request', 'u1')]);
+      deps.getSessionRow.mockResolvedValue({
+        ...(await deps.getSessionRow()), agentKind: 'codex', sdkSessionId: 'fat-thread',
+      });
+      const cancelAt = (point: string) => {
+        if (phase === point) rollover.cancelRecovery('s1');
+      };
+      const rollover = createContextOverflowRollover({
+        ...deps,
+        tryStripOversizedCodexHistory: async () => { cancelAt('strip'); return 'failed'; },
+        findLatestRebuildMeta: async () => { cancelAt('plan'); return null; },
+        closeSession: async () => { await deps.closeSession(); cancelAt('close'); },
+        commitRebuild: async (...args) => {
+          expect(args[3]?.aborted).toBe(false);
+          await deps.commitRebuild();
+          cancelAt('commit');
+        },
+        replayUserMessage: async (...args) => {
+          await deps.replayUserMessage();
+          cancelAt('replay');
+          expect(args[3]?.signal?.aborted).toBe(true);
+          return { accepted: false };
+        },
+      });
+      rollover.claim('s1');
+      await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(true);
+      expect(deps.closeSession).toHaveBeenCalledTimes(['strip', 'plan'].includes(phase) ? 0 : 1);
+      expect(deps.commitRebuild).toHaveBeenCalledTimes(['commit', 'replay'].includes(phase) ? 1 : 0);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(phase === 'replay' ? 1 : 0);
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['slack-hook', 'telegram', undefined, 'bound', 'detached-active'])(
+    'leaves oversized recovery to its external owner: %s', async (origin) => {
+      // Protected IM input may not be persisted: this row can be an older desktop input.
+      const deps = makeDeps([msg('user', 'old desktop request', 'u1')]);
+      deps.getSessionRow.mockResolvedValue({
+        ...(await deps.getSessionRow()), agentKind: 'codex', sdkSessionId: 'fat-thread',
+        source: origin === 'bound' || origin === 'detached-active' ? 'desktop' : origin,
+      });
+      let externalTurnActive = origin === 'bound' || origin === 'detached-active';
+      const strip = vi.fn(async () => 'recovered' as const);
+      const rollover = createContextOverflowRollover({
+        ...deps,
+        hasExternalRecoveryOwner: () => externalTurnActive,
+        tryStripOversizedCodexHistory: strip,
+      });
+      rollover.claim('s1');
+      const recovery = rollover.tryRecover('s1', { reason: 'codex_history_oversized' });
+      externalTurnActive = false; // IM's later terminal subscriber releases its marker.
+      await expect(recovery).resolves.toBe(false);
+      expect(strip).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+    },
+  );
+
   it('falls back to rollover when oversized strip fails', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1494,6 +1565,7 @@ describe('createContextOverflowRollover', () => {
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1523,6 +1595,7 @@ describe('createContextOverflowRollover', () => {
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,
@@ -1551,6 +1624,7 @@ describe('createContextOverflowRollover', () => {
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
+      source: 'desktop',
       agentKind: 'codex',
       remoteHostId: null,
       clearedAt: null,

@@ -29093,9 +29093,14 @@ describe('CodexAgent reconnect-stall watchdog', () => {
   it.each([
     { cancelled: false, completion: undefined, rejectAck: false },
     { cancelled: true, completion: undefined, rejectAck: false },
+    { cancelled: false, completion: undefined, rejectAck: true },
+    { cancelled: true, completion: undefined, rejectAck: true },
     ...(['completed', 'failed', 'interrupted'] as const).flatMap((completion) =>
       [false, true].map((rejectAck) => ({ cancelled: false, completion, rejectAck }))),
-  ])('settles oversized recovery: %j', async ({ cancelled, completion, rejectAck }) => {
+  ].flatMap((scenario) => [
+    { ...scenario, releaseFailure: undefined as boolean | undefined },
+    ...(scenario.rejectAck ? [false, true].map((releaseFailure) => ({ ...scenario, releaseFailure })) : []),
+  ]))('settles oversized recovery: %j', async ({ cancelled, completion, rejectAck, releaseFailure }) => {
     vi.useFakeTimers();
     const agent = new CodexAgent(createDeps());
     const proto = Object.getPrototypeOf(agent) as {
@@ -29118,7 +29123,12 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       let reject!: (reason: Error) => void;
       const ack = new Promise((resolve, rejectPromise) => { acknowledge = resolve; reject = rejectPromise; });
       const cancellation = new AbortController();
-      const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal);
+      const retire = vi.spyOn(agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey').mockResolvedValue(undefined);
+      const { host, handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal);
+      const releasing = deferred<void>();
+      const release = host.subscribeThread.mock.results[0]?.value.release;
+      if (releaseFailure !== undefined) release.mockImplementationOnce(() => releasing.promise);
       handlers.itemCompleted?.({
         threadId: 'start-thread-id', turnId: 'turn-1',
         item: { id: 'answer-1', type: 'agentMessage', text: 'Work finished.', phase: 'final_answer' },
@@ -29133,6 +29143,13 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       }));
       expect(seen.some((event) => event.type === 'error' &&
         (event.data as { reason?: string }).reason === 'codex_history_oversized')).toBe(false);
+      if (releaseFailure !== undefined) {
+        reject(new Error('interrupt unavailable'));
+        await vi.advanceTimersByTimeAsync(1);
+        expect(release).toHaveBeenCalledOnce();
+        expect(seen.some((event) => event.type === 'error' &&
+          (event.data as { reason?: string }).reason === 'codex_history_oversized')).toBe(false);
+      }
       if (cancelled) cancellation.abort();
       if (completion) {
         handlers.turnCompleted?.({
@@ -29140,16 +29157,19 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         } as never);
         expect(handle.isTurnRunning?.()).toBe(true);
       }
-      if (rejectAck) reject(new Error('turn already ended'));
+      if (releaseFailure !== undefined) {
+        if (releaseFailure) releasing.reject(new Error('unsubscribe failed'));
+        else releasing.resolve();
+      } else if (rejectAck) reject(new Error('turn already ended'));
       else acknowledge({});
       await vi.advanceTimersByTimeAsync(1);
-      expect(handle.isTurnRunning?.()).toBe(false);
+      if (completion || !rejectAck) expect(handle.isTurnRunning?.()).toBe(false);
       const oversizedIndex = seen.findIndex((event) => event.type === 'error' &&
         (event.data as { reason?: string }).reason === 'codex_history_oversized');
       if (cancelled || completion === 'completed') expect(oversizedIndex).toBe(-1);
       else {
         expect(oversizedIndex).toBeGreaterThanOrEqual(0);
-        expect(seen[oversizedIndex + 1]).toMatchObject({
+        if (completion || !rejectAck) expect(seen[oversizedIndex + 1]).toMatchObject({
           type: 'status', data: { isRunning: false },
         });
       }
@@ -29157,8 +29177,11 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         const done = seen.filter((event) => event.type === 'done');
         expect(done).toHaveLength(1);
         expect(done[0]).toMatchObject({ data: { result: 'Work finished.' } });
-        await handle.send({ type: 'user', content: 'next task' });
-        expect(handle.isTurnRunning?.()).toBe(true);
+        expect(retire).not.toHaveBeenCalled();
+        if (releaseFailure === undefined) {
+          await handle.send({ type: 'user', content: 'next task' });
+          expect(handle.isTurnRunning?.()).toBe(true);
+        }
       }
       await handle.close();
     } finally {
