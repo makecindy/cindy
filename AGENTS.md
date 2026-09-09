@@ -193,3 +193,20 @@
 - 发现任务会触及系统提示词、更新器、协议兼容、数据库历史 migration、权限边界
   或用户数据安全时，必须先停下来核对专项规则，并在动手前向用户说明风险或
   请求确认。
+
+## Agent skills
+
+### Issue tracker
+
+工程 spec 和 ticket 使用本地 Markdown issue tracker，存放在 `.scratch/<feature>/`。
+详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认五角色词表：`needs-triage`、`needs-info`、`ready-for-agent`、
+`ready-for-human`、`wontfix`。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+本仓采用 single-context：根 `CONTEXT.md` 为术语表，根 `docs/adr/` 保存跨模块
+架构决策。详见 `docs/agents/domain.md`。
