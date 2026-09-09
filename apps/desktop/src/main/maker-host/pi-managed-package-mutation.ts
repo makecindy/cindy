@@ -15,6 +15,7 @@ import {
 } from './pi-package-mutation-grant.js';
 import {
   mutatePiPackage,
+  executePiNativeManagementCommand,
   piPackageMutationMayHaveChangedState,
   type PiPackageMutationHooks,
 } from './pi-package-store.js';
@@ -56,12 +57,7 @@ export async function mutateAuthorizedPiManagedPackage(
   request: PiManagedPackageMutationRequest,
   deps: PiManagedPackageMutationDeps = defaultDeps,
   hooks?: PiPackageMutationHooks,
-): Promise<PiPackageMutationResult> {
-  const storeRequest = {
-    action: request.action,
-    source: request.source,
-  } as const;
-
+): Promise<PiPackageMutationResult | Record<string, unknown>> {
   if (
     request.authorization !== 'local-desktop-command'
     && request.authorization !== 'authenticated-im-command'
@@ -71,6 +67,8 @@ export async function mutateAuthorizedPiManagedPackage(
   }
 
   try {
+    if (request.action === 'command') return await executePiNativeManagementCommand(request.command);
+    const storeRequest = { action: request.action, source: request.source };
     const grant = deps.issueGrant(storeRequest);
     return await (hooks
       ? deps.mutate(storeRequest, grant, hooks)

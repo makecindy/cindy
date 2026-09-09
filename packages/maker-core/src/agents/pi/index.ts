@@ -1,3 +1,4 @@
+import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
 import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
  * PiAgent —— pi coding agent(earendil-works/pi)接入。
@@ -721,19 +722,9 @@ interface ParsedPiManagedPackageCommand {
 
 /** Exact Pi CLI syntax entered as the whole message belongs to Cindy's store, not bash. */
 function parsePiManagedPackageCommand(text: string): ParsedPiManagedPackageCommand | undefined {
-  const original = text.trim();
-  if (!original || /[\r\n\0]/.test(original)) return undefined;
-  const match = original.match(/^\/?pi\s+(install|update|remove)\s+(.+)$/i);
-  if (!match?.[1] || !match[2]) return undefined;
-  let source = match[2].trim();
-  if (source.length >= 2 && ((source.startsWith('"') && source.endsWith('"')) || (source.startsWith("'") && source.endsWith("'")))) {
-    source = source.slice(1, -1).trim();
-  }
-  return {
-    action: match[1].toLowerCase() as ParsedPiManagedPackageCommand['action'],
-    source,
-    original,
-  };
+  const parsed = parsePiManagementText(text);
+  return parsed && !('error' in parsed) && parsed.action !== 'command'
+    ? { ...parsed, original: text.trim() } : undefined;
 }
 
 function resolvePiManagedPackageSource(source: string, workingDir: string): string {
@@ -828,6 +819,16 @@ function piManagedPackageResultSummary(
 ): Record<string, unknown> {
   if (!result || typeof result !== 'object') return {};
   const record = result as Record<string, unknown>;
+  if (typeof record.kind === 'string' && ['self', 'all', 'extensions', 'version', 'help', 'list', 'models'].includes(record.kind)) {
+    const version = (v: unknown) => typeof v === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v) ? v : undefined;
+    return { kind: record.kind, nativeSucceeded: record.nativeSucceeded === true,
+      execution: record.execution === 'host-binary-update' ? record.execution : 'native',
+      beforeVersion: version(record.beforeVersion), afterVersion: version(record.afterVersion),
+      version: version(record.version), versionVerified: record.versionVerified === true,
+      activeTasksPreserved: record.activeTasksPreserved === true,
+      activation: record.activation === 'new-pi-processes' ? record.activation : undefined,
+      output: typeof record.output === 'string' ? record.output.slice(0, 6000) : undefined };
+  }
   const affected = record.affectedPackage;
   if (!affected || typeof affected !== 'object') {
     return { changed: record.changed === true };
@@ -1483,7 +1484,7 @@ export class PiAgent extends BaseAgent {
       // 权限执行层在 cindy-bridge extension 的 tool_call 拦截:ask 档下只读内置
       // 工具放行,bash/edit/write 与全部桥接 MCP 工具逐次经 cindy 审批;
       // bypassPermissions 放行普通工具；用户直接发送的 Pi 扩展命令本身即授权，
-      // Agent 发起的 cindy_pi_extension 仍走一次工具批准。档位从权限文件热读，
+      // Agent 发起的 Pi 管理调用同样复用通用权限档。档位从权限文件热读，
       // setPermissionMode 即时生效。
       // auto 档:bridge 行为同 ask(非只读全部冒泡),Cindy 侧 dispatcher 先过
       // Auto-Review Core(shared/auto-review.ts)—— 区内写/安全命令静默放行,
@@ -1507,7 +1508,7 @@ export class PiAgent extends BaseAgent {
           id: 'bypassPermissions',
           displayName: 'Full access',
           description:
-            'Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks.',
+            'Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks.',
         },
       ],
       setPermissionModeMidSession: { supported: true },
@@ -4994,6 +4995,24 @@ export class PiAgent extends BaseAgent {
       const authenticatedImCommand = mainOwnedContext?.origin.kind === 'im';
       if (!directDesktopCommand && !authenticatedImCommand) return { text, accepted: false };
       const commandText = mainOwnedContext.rawChannelText;
+      const parsed = commandText === undefined ? undefined : parsePiManagementText(commandText);
+      if (parsed && ('error' in parsed || parsed.action === 'command')) {
+        let receipt: Record<string, unknown>;
+        try {
+          receipt = 'error' in parsed ? { ok: false, error: parsed.error } : {
+            ok: true, result: piManagedPackageResultSummary(await this.deps.mutatePiManagedPackage!({
+              ...parsed,
+              authorization: authenticatedImCommand ? 'authenticated-im-command' : 'local-desktop-command',
+            }), ''),
+          };
+        } catch (error) {
+          receipt = { ok: false, error: piManagedPackageFailureMessage(resolvePiExtensionUiStrings(this.deps), error) };
+        }
+        const receiptText = JSON.stringify(receipt);
+        queue.push({ type: 'text', data: { text: receiptText, isFinal: false }, source: 'pi' });
+        return { accepted: true, text: '[Cindy Pi command receipt] ' + receiptText
+          + '\nThis command was already handled. Report the result; do not execute it again. Core updates apply to new Pi processes; existing tasks remain running. Never claim an upgrade unless afterVersion is verified.' };
+      }
       const command = commandText === undefined ? undefined : parsePiManagedPackageCommand(commandText);
       if (!command) return { text, accepted: false };
       const uiStrings = resolvePiExtensionUiStrings(this.deps);
@@ -7173,20 +7192,34 @@ export class PiAgent extends BaseAgent {
             action?: unknown;
             source?: unknown;
             token?: unknown;
+            args?: unknown;
           };
-          const action = payload.action;
-          const source = typeof payload.source === 'string' ? payload.source.trim() : '';
+          if (payload.args !== undefined && (!Array.isArray(payload.args) || payload.action !== undefined || payload.source !== undefined)) throw new Error('Invalid Pi command arguments.');
+          const parsed = Array.isArray(payload.args) && payload.args.every(arg => typeof arg === 'string')
+            ? parsePiManagementArgs(payload.args)
+            : typeof payload.action === 'string' && typeof payload.source === 'string'
+              ? parsePiManagementArgs([payload.action, payload.source.trim()]) : undefined;
+          if (parsed && 'error' in parsed) throw new Error(parsed.error);
+          const nativeCommand = parsed?.action === 'command' ? parsed : undefined;
+          const action = parsed?.action ?? payload.action;
+          const source = parsed && parsed.action !== 'command' ? parsed.source : typeof payload.source === 'string' ? payload.source.trim() : '';
           if (
             typeof payload.token !== 'string' ||
             payload.token !== context.piPackageManagementToken ||
-            (action !== 'install' && action !== 'update' && action !== 'remove') ||
-            source.length === 0 ||
+            (!nativeCommand && action !== 'install' && action !== 'update' && action !== 'remove') ||
+            (!nativeCommand && source.length === 0) ||
             source.length > MAX_PI_MANAGED_PACKAGE_SOURCE_LENGTH ||
             /[\r\n\0]/.test(source)
           ) {
             throw new Error('Invalid Cindy Pi extension request.');
           }
           if (context.isPermissionContextClosed()) return;
+          const toolName = payload.args === undefined ? 'cindy_pi_extension' : 'cindy_pi_command';
+          const toolInput = payload.args === undefined ? { action: payload.action, source } : { args: payload.args };
+          const forcePrompt = (() => {
+            try { return context.turnPermissionPolicy?.forceConfirmToolCall(toolName, toolInput) === true; }
+            catch { return true; }
+          })();
           let autoDecision: AutoReviewDecision | undefined;
           let reviewCancelled = false;
           if (context.permissionMode === 'auto') {
@@ -7202,7 +7235,7 @@ export class PiAgent extends BaseAgent {
             });
             try {
               autoDecision = await Promise.race([
-                context.reviewAutoAction(toolAutoReviewAction('cindy_pi_extension', { action, source })),
+                context.reviewAutoAction(toolAutoReviewAction(toolName, toolInput)),
                 cancelled,
               ]);
             } finally {
@@ -7217,7 +7250,8 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable();
-          const approved = (autoDecision?.verdict === 'allow' && getPermissionCtx().permissionMode === 'auto')
+          const approved = (!forcePrompt && getPermissionCtx().permissionMode === 'bypassPermissions')
+            || (!forcePrompt && autoDecision?.verdict === 'allow' && getPermissionCtx().permissionMode === 'auto')
             || await new Promise<boolean>((resolve) => {
             if (!context.resolver) {
               this.deps.logger.warn('pi extension mutation has no interaction resolver', {
@@ -7237,7 +7271,7 @@ export class PiAgent extends BaseAgent {
               resolve(value);
             };
             unregister = context.registerPendingPrompt(`${id}:pi-extension-mutation`, {
-              forcePrompt: true,
+              forcePrompt,
               unavailableHandoff: autoDecision?.unavailable,
               settle: (resolveAs, reason) => {
                 if (settled) return;
@@ -7250,10 +7284,10 @@ export class PiAgent extends BaseAgent {
                 context.resolver!(autoDecision?.unavailable
                   ? annotatePermissionRequestForUnavailableReview({
                     kind: 'permission', requestId: `${id}:pi-extension-mutation`,
-                    toolName: 'cindy_pi_extension', input: { action, source },
+                    toolName, input: toolInput,
                   })
                   : { kind: 'permission', requestId: `${id}:pi-extension-mutation`,
-                    toolName: 'cindy_pi_extension', input: { action, source } }),
+                    toolName, input: toolInput }),
               )
               .then((decision) => {
                 if (settled) return;
@@ -7278,8 +7312,7 @@ export class PiAgent extends BaseAgent {
           try {
             result = boundedPiManagedPackageToolResult(
               await mutate({
-                action,
-                source: resolvePiManagedPackageSource(source, context.workingDir),
+                ...(nativeCommand ?? { action: action as 'install' | 'update' | 'remove', source: resolvePiManagedPackageSource(source, context.workingDir) }),
                 authorization: 'confirmed-tool-call',
               }),
               source,
@@ -7301,7 +7334,7 @@ export class PiAgent extends BaseAgent {
                 error: piManagedPackageFailureMessage(uiStrings, error),
               }),
             });
-            if (error instanceof PiManagedPackageMutationFailedError
+            if (!nativeCommand && error instanceof PiManagedPackageMutationFailedError
               && error.mayHaveChangedState) {
               await notifyPiManagedPackageMutationSettled(
                 this.deps,
@@ -7318,8 +7351,8 @@ export class PiAgent extends BaseAgent {
           // runtimes. Pi RPC has no response acknowledgement, so relying only
           // on extension_ui_response can close the tool caller before its turn
           // consumes the successful result.
-          context.emitExtensionNotification(piManagedPackageToolVisibleReceipt(
-            action,
+          context.emitExtensionNotification(nativeCommand ? JSON.stringify({ ok: true, result }) : piManagedPackageToolVisibleReceipt(
+            action as 'install' | 'update' | 'remove',
             result,
             resolvePiExtensionUiStrings(this.deps),
           ));
@@ -7328,7 +7361,7 @@ export class PiAgent extends BaseAgent {
             id,
             value: responseValue,
           });
-          await notifyPiManagedPackageMutationSettled(
+          if (!nativeCommand) await notifyPiManagedPackageMutationSettled(
             this.deps,
             context.sessionId,
             (convergence) => context.emitExtensionNotification(
@@ -7517,7 +7550,6 @@ export class PiAgent extends BaseAgent {
         }
       })();
       const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-      const requiresIndependentUserConfirmation = toolName === 'cindy_pi_extension';
       const hostApprovalPresentation = (() => {
         const presenter = this.deps.getMcpToolApprovalPresentation;
         if (!presenter || !mcpTarget) return undefined;
@@ -7672,17 +7704,8 @@ export class PiAgent extends BaseAgent {
         // 本轮策略命中时不吃 Full Access 短路:policy + bypassPermissions 已在 send 预检
         // 拒绝、且 policy turn 持 host lease 堵死热切到 bypass,故此处 turnPolicyForcePrompt
         // 为真本不可达;仍显式 fail-closed,避免任一上游闸门被绕过就静默放行破坏性调用。
-        if (isFullAccessNow() && !turnPolicyForcePrompt && !requiresIndependentUserConfirmation) {
+        if (isFullAccessNow() && !turnPolicyForcePrompt) {
           sendPermissionResolution('allow');
-          return;
-        }
-        // Auto reviews extension mutations against the user's authorization.
-        // Other modes retain the existing independent confirmation domain.
-        if (requiresIndependentUserConfirmation && permissionMode !== 'auto') {
-          sendPermissionResolution(await requestUserConfirmation({
-            forcePrompt: true,
-            requireExplicitDecision: true,
-          }));
           return;
         }
         // Trusted MCP shortcuts remain local. Other Auto actions are reviewed
@@ -7732,7 +7755,7 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
-          const action = mcpTarget || requiresIndependentUserConfirmation
+          const action = mcpTarget || toolName === 'cindy_pi_extension' || toolName === 'cindy_pi_command'
             ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
@@ -7760,9 +7783,7 @@ export class PiAgent extends BaseAgent {
           //   - 仍是 auto → 按本次审查 verdict 收口(下方原逻辑)。
           const modeAfterReview = getPermissionCtx().permissionMode;
           if (modeAfterReview === 'bypassPermissions') {
-            sendPermissionResolution(requiresIndependentUserConfirmation
-              ? await requestUserConfirmation({ forcePrompt: true, requireExplicitDecision: true })
-              : turnPolicyForcePrompt ? 'system-deny' : 'allow');
+            sendPermissionResolution(turnPolicyForcePrompt ? 'system-deny' : 'allow');
             return;
           }
           if (modeAfterReview !== 'auto') {

@@ -7783,7 +7783,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
+            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
           }
         }
       }

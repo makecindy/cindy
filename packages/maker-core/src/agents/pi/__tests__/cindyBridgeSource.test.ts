@@ -1584,7 +1584,6 @@ describe('cindy-bridge extension source', () => {
       "printf '%s\\0' 'pi update npm:context-mode' | xargs -0 sh -c",
       "printf '%s\\0' 'pi remove npm:context-mode' | parallel",
       'find . -exec env -u PI_CODING_AGENT_DIR pi install npm:context-mode +',
-      '$(printf pi) install npm:context-mode',
       'echo safe && pi install npm:context-mode',
     ];
     for (const command of commands) {
@@ -1610,6 +1609,9 @@ describe('cindy-bridge extension source', () => {
     }
 
     for (const command of [
+      '$SHELL -c echo',
+      'backup=$(mktemp -d); echo ready',
+      '$(printf pi) install npm:context-mode',
       'pi --version',
       'pi help install',
       'npm install context-mode',
@@ -1646,9 +1648,9 @@ describe('cindy-bridge extension source', () => {
     expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
   });
 
-  it('does not let Full Access bypass Cindy-managed extension confirmation', () => {
+  it('routes both Pi command names to the single host permission service', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "if (event.toolName === 'cindy_pi_extension') return;",
+      "if (event.toolName === 'cindy_pi_extension' || event.toolName === 'cindy_pi_command') return;",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "if (permission.mode === 'bypassPermissions') return;",
