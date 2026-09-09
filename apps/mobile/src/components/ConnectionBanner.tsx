@@ -22,18 +22,18 @@ import {
 import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
-/** Eligibility only. ConnectionBanner owns the shared one-second display delay,
+/** Eligibility only. ConnectionBanner owns the shared three-second display delay,
  * including screens that mount the component unconditionally. */
 export function useShowConnectionBanner(
   status: DeviceLinkStatus,
   error: string | null,
   issue: DeviceLinkConnectionIssue | null,
   deviceUnresponsive = false,
-  recovery?: 'syncing' | 'recovered',
 ): boolean {
-  const offline = status !== 'online' || recovery === 'syncing';
-  return recovery === 'recovered' || resolveConnectionBannerVisibility({
+  const offline = status !== 'online';
+  return resolveConnectionBannerVisibility({
     offline,
+    connecting: status === 'connecting',
     offlineLongEnough: true,
     // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
     // 否则恢复后 banner 会带着"自动重试中"文案常驻到用户手动同步。
@@ -76,8 +76,8 @@ export function ConnectionBanner({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const active = useShowConnectionBanner(status, error, issue, deviceUnresponsive, recovery === 'recovered' ? undefined : recovery);
-  const visible = useDelayedConnectionNotice(cachedOnly || active, recovery === 'recovered');
+  const active = useShowConnectionBanner(status, error, issue, deviceUnresponsive);
+  const visible = useDelayedConnectionNotice(cachedOnly || active);
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;

@@ -115,7 +115,8 @@ import {
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
 import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
-import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerVisibility, resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -1844,12 +1845,21 @@ function HomeScreenContent() {
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const selectedDeviceDisconnected = home.deviceFilters.some((item) => item.deviceId !== null
+  const selectedDeviceDisconnected = status !== 'connecting' && home.deviceFilters.some((item) => item.deviceId !== null
     && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.sessionCount > 0)
     && !home.deviceFilters.some((item) => item.deviceId !== null
       && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.available);
-  const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility({
+    offline: status !== 'online',
+    connecting: status === 'connecting',
+    offlineLongEnough: true,
+    hasError: !!connectionError,
+    hasIssue: activeConnectionIssue !== null,
+    hasUnstableIssue: activeConnectionIssue?.kind === 'unstable',
+    deviceUnresponsive: homeDeviceUnresponsive,
+  });
   const showConnectionNotice = useDelayedConnectionNotice(showConnectionRow);
+  const quietSyncing = !showConnectionRow && (refreshing || homeRecoveringDeviceIds.size > 0 || status === 'connecting');
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
@@ -2458,6 +2468,7 @@ function HomeScreenContent() {
     >
       {nativeHomeHeader ? (
         <HomeNativeStackHeader
+          syncing={quietSyncing}
           displayA11y={t('devices.list.a11y.openDisplaySettings')}
           displayActions={homeDisplayPullDownActions}
           menuA11y={t('devices.list.a11y.openMenu')}
@@ -2515,6 +2526,7 @@ function HomeScreenContent() {
               <View style={styles.headerTitleCluster}>
                 <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
                 <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
+                <QuietSyncIndicator active={quietSyncing} />
               </View>
             </Pressable>
           </NativePullDownMenu>

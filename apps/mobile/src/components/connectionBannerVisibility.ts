@@ -1,7 +1,8 @@
 /**
  * connectionBannerVisibility.ts — ConnectionBanner 可见性判定的决策核。
  * 纯函数(不依赖 React / react-native),node 可单测;useShowConnectionBanner
- * 只负责喂时间维度的 offlineLongEnough,判定逻辑全在这里:
+ * 只负责传入状态,浮窗统一经过三秒防闪延迟:
+ *  - 没有故障证据的 connecting / 内容同步 / 同步完成 → 标题轻量反馈,不弹浮窗;
  *  - 请求级 error / 可分类连接问题(鉴权失效、被顶号等)→ 立即显示;
  *  - 关联设备熔断 open(电脑端未响应)→ 立即显示——relay 可能仍 online,
  *    只看 status 的旧判定对「进程活着但内部卡死」的半死态完全失明
@@ -10,6 +11,7 @@
  */
 export function resolveConnectionBannerVisibility(input: {
   offline: boolean;
+  connecting?: boolean;
   offlineLongEnough: boolean;
   hasError: boolean;
   hasIssue: boolean;
@@ -19,7 +21,7 @@ export function resolveConnectionBannerVisibility(input: {
   return input.hasError
     || input.deviceUnresponsive
     || input.hasUnstableIssue
-    || (input.offline && (input.hasIssue || input.offlineLongEnough));
+    || (input.offline && (input.hasIssue || (!input.connecting && input.offlineLongEnough)));
 }
 
 /**

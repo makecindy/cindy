@@ -43,6 +43,10 @@ vi.mock("react-native", async () => {
     );
   };
   return {
+    AccessibilityInfo: {
+      isReduceMotionEnabled: async () => false,
+      addEventListener: () => ({ remove() {} }),
+    },
     View: view("div"),
     Modal: (p: any) => p.visible ? createElement("div", {}, p.children) : null,
     Pressable: view("button"),

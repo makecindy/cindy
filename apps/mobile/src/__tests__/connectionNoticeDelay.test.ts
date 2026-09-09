@@ -4,17 +4,17 @@ import { scheduleConnectionNotice, updateConnectionNoticeVisibility } from '@/co
 
 describe('floating connection notice', () => {
   afterEach(() => vi.useRealTimers());
-  it('waits one second and cancels a brief outage without flashing', () => {
+  it('waits three seconds and cancels a brief outage without flashing', () => {
     vi.useFakeTimers();
     const reveal = vi.fn();
     const cancel = scheduleConnectionNotice(reveal);
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(2_999);
     expect(reveal).not.toHaveBeenCalled();
     cancel();
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(3_000);
     expect(reveal).not.toHaveBeenCalled();
     const cancelNext = scheduleConnectionNotice(reveal);
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(2_999);
     expect(reveal).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(reveal).toHaveBeenCalledTimes(1);
@@ -28,32 +28,33 @@ describe('floating connection notice', () => {
     const root = readFileSync('app/_layout.tsx', 'utf8');
     expect(root).toContain('<ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>');
     const banner = readFileSync('src/components/ConnectionBanner.tsx', 'utf8');
-    expect(banner).toContain("useDelayedConnectionNotice(cachedOnly || active, recovery === 'recovered')");
+    expect(banner).toContain('useDelayedConnectionNotice(cachedOnly || active)');
     expect(banner).toContain('<ConnectionNoticeOverlay>');
   });
-  it('holds completion for two seconds only after a visible incident and cancels it on a new outage', () => {
+  it('clears immediately on completion and delays each new incident independently', () => {
     vi.useFakeTimers();
     let visible = false;
     let cancel: (() => void) | undefined;
-    const update = (active: boolean, completed: boolean) => {
+    const update = (active: boolean) => {
       cancel?.();
-      cancel = updateConnectionNoticeVisibility(active, completed, visible, (next) => { visible = next; });
+      cancel = updateConnectionNoticeVisibility(active, visible, (next) => { visible = next; });
     };
-    update(true, false);
+    update(true);
     vi.advanceTimersByTime(500);
-    update(false, true);
+    update(false);
     vi.advanceTimersByTime(2_000);
     expect(visible).toBe(false);
-    update(true, false);
-    vi.advanceTimersByTime(1_000);
+    update(true);
+    vi.advanceTimersByTime(3_000);
     expect(visible).toBe(true);
-    update(false, true);
-    vi.advanceTimersByTime(1_999);
+    update(false);
+    expect(visible).toBe(false);
+    update(true);
+    vi.advanceTimersByTime(2_999);
+    expect(visible).toBe(false);
+    vi.advanceTimersByTime(1);
     expect(visible).toBe(true);
-    update(true, false);
-    vi.advanceTimersByTime(2_000);
-    expect(visible).toBe(true);
-    update(false, true);
+    update(false);
     vi.advanceTimersByTime(2_000);
     expect(visible).toBe(false);
   });
