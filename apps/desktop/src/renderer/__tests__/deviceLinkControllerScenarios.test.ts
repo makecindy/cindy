@@ -308,6 +308,8 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     finish([durable]);
     await flush();
     await flush();
+    await flush();
+    await flush();
     const row = makerChatStore.getSnapshot(s).messages.find((message) => message.clientId === 'live');
     expect(row?.content).toBe(concurrent ? 'prefix newer' : 'prefix complete');
     expect(row?.isStreaming).toBe(concurrent);
@@ -1104,6 +1106,51 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     ]);
     expect(view.getSnapshot().expanded.has(group.key)).toBe(false);
     view.setActive(false);
+  });
+
+  it('coalesces concurrent force reconciliation while HistoryView reads its page', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:00.000Z')]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+
+    const original = host.invoke.getMockImplementation()!;
+    let releaseFirstPage!: () => void;
+    let pageCalls = 0;
+    let activePages = 0;
+    let maxActivePages = 0;
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel !== 'local-db:messages:view') return original(device, channel, args);
+      pageCalls += 1;
+      activePages += 1;
+      maxActivePages = Math.max(maxActivePages, activePages);
+      try {
+        const result = await original(device, channel, args);
+        if (pageCalls === 1) await new Promise<void>((done) => { releaseFirstPage = done; });
+        return result;
+      } finally {
+        activePages -= 1;
+      }
+    });
+
+    const first = makerChatStore.reconcileRemoteMessages(s, { force: true });
+    await flush();
+    const second = makerChatStore.reconcileRemoteMessages(s, { force: true });
+    expect(second).toBe(first);
+    releaseFirstPage();
+    await first;
+    await flush();
+
+    // The duplicate force is coalesced into one in-flight read. A trailing
+    // refresh is allowed after it settles so a view replacement during the
+    // first read cannot leave the session on a stale snapshot.
+    expect(pageCalls).toBe(2);
+    expect(maxActivePages).toBe(1);
+    getRemoteHistoryView(s)?.setActive(false);
   });
 
   it('完整镜像回路:开会话见历史 → live push 追加 → 丢帧 reconcile heal → 设置变更镜像', async () => {

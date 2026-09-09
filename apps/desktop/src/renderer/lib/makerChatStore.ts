@@ -11701,6 +11701,20 @@ const _remoteReconcileInFlight = new Map<
   { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean; preserveClientIds: Set<string> }
 >();
 
+type HistoryViewForceFlight = {
+  run: Promise<boolean>;
+  rerun: boolean;
+  rowsAtStart: ReadonlyMap<string, unknown>;
+  latestOpts: {
+    force?: boolean;
+    repair?: boolean;
+    freshHistory?: boolean;
+    preserveClientIds?: ReadonlySet<string>;
+  };
+};
+
+const _historyViewForceInFlight = new Map<string, HistoryViewForceFlight>();
+
 function reconcileRemoteMessages(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
@@ -11711,63 +11725,112 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
   const view = getRemoteHistoryView(sessionId);
   if (view && (view.getSnapshot().ready || opts?.freshHistory || opts?.repair)) {
-    const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
-    const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
-    // Force needs a post-signal page, even when a normal repair is in flight.
-    // Keep this view and its expansion state instead of falling back to raw history.
-    return Promise.all([
-      view.refresh(false, opts?.freshHistory ?? opts?.force),
-      reconcilePendingInteractions(sessionId),
-    ]).then(async () => {
-      if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
-      if (isHistoryViewUnavailable(view.getSnapshot().error)) {
-        releaseRemoteHistoryView(sessionId, view);
-        return reconcileRemoteMessages(sessionId, { ...opts, force: true });
-      }
-      if (opts?.force) {
-        // readPage starts expanded details without awaiting them. Join those
-        // same reads before hydrating; their cached display may still be old.
-        await Promise.all(historyWorkSummaries(view.getSnapshot().items)
-          .map((summary) => view.loadDetails(summary, { allowCollapsed: true })));
-        const detailError = historyWorkSummaries(view.getSnapshot().items)
-          .map((summary) => view.getSnapshot().details.get(summary.key))
-          .find((detail) => detail?.error)?.error;
-        if (detailError) {
-          // A failed expanded read must not look like a successful repair with
-          // the work-group body silently omitted. Fall back to the raw,
-          // authoritative window so a transient details failure can still heal
-          // the lost terminal row; if that read also fails, preserve rejection.
-          return runRemoteReconcile(sessionId, opts);
+    const runHistoryView = () => {
+      const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
+      const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
+      // Force needs a post-signal page, even when a normal repair is in flight.
+      // Keep this view and its expansion state instead of falling back to raw history.
+      return Promise.all([
+        view.refresh(false, opts?.freshHistory ?? opts?.force),
+        reconcilePendingInteractions(sessionId),
+      ]).then(async () => {
+        if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
+        if (isHistoryViewUnavailable(view.getSnapshot().error)) {
+          releaseRemoteHistoryView(sessionId, view);
+          return runRemoteReconcile(sessionId, { ...opts, force: true });
         }
+        if (opts?.force) {
+          // readPage starts expanded details without awaiting them. Join those
+          // same reads before hydrating; their cached display may still be old.
+          await Promise.all(historyWorkSummaries(view.getSnapshot().items)
+            .map((summary) => view.loadDetails(summary, { allowCollapsed: true })));
+          const detailError = historyWorkSummaries(view.getSnapshot().items)
+            .map((summary) => view.getSnapshot().details.get(summary.key))
+            .find((detail) => detail?.error)?.error;
+          if (detailError) {
+            // A failed expanded read must not look like a successful repair with
+            // the work-group body silently omitted. Fall back to the raw,
+            // authoritative window so a transient details failure can still heal
+            // the lost terminal row; if that read also fails, preserve rejection.
+            return runRemoteReconcile(sessionId, opts);
+          }
+        }
+        if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
+        const snapshot = view.getSnapshot();
+        if (snapshot.error) throw snapshot.error;
+        if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
+        if (opts?.force && snapshot.ready) {
+          // Host thinking snapshots use synthetic IDs and carry no terminal
+          // marker. Only durable rows may seal an existing live row; provisional
+          // rows already participate in the ordinary add-only subscription.
+          const details = historyWorkSummaries(snapshot.items).flatMap((summary) => {
+            const detail = snapshot.details.get(summary.key);
+            return detail?.complete
+              && !detail.error && detail.revision === summary.revision ? detail.messages : [];
+          });
+          const available = details.concat(historyViewLeaves(snapshot.items)
+            .flatMap((item) => item.type === 'messages' ? item.messages : []))
+            .filter((row) => !row.id.startsWith('history-live:')
+              && !opts?.preserveClientIds?.has(row.clientId));
+          setState(sessionId, (state) => {
+            // The ordinary view subscriber is add-only. Explicit recovery must
+            // hydrate stale live shells, or their handoff keeps masking sealed rows.
+            // Preserve rows changed by live events while this read was pending.
+            const untouched = new Set(state.messages.filter((row) => rowsAtStart.get(row.clientId) === row).map((row) => row.clientId));
+            const messages = mergeMessages(available, state.messages, { addOnly: true, addOnlyExcept: untouched });
+            return messages === state.messages ? state : { ...state, messages };
+          });
+        }
+        return snapshot.ready;
+      });
+    };
+    if (!opts?.force) return runHistoryView();
+    const existing = _historyViewForceInFlight.get(sessionId);
+    if (existing) {
+      existing.rerun = true;
+      existing.latestOpts = opts;
+      return existing.run;
+    }
+    const entry: HistoryViewForceFlight = {
+      run: Promise.resolve(false),
+      rerun: false,
+      rowsAtStart: new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row])),
+      latestOpts: opts,
+    };
+    _historyViewForceInFlight.set(sessionId, entry);
+    entry.run = (async () => {
+      try {
+        let applied: boolean;
+        try {
+          applied = await runHistoryView();
+        } catch (error) {
+          // Replacing the view while its page is in flight rejects the old
+          // controller read. A coalesced force signal still needs to retry on
+          // the replacement view; without a pending force, preserve the
+          // original error for callers that explicitly await this promise.
+          if (!entry.rerun || !sessions.has(sessionId)) throw error;
+          applied = false;
+        }
+        if (entry.rerun && sessions.has(sessionId)) {
+          _historyViewForceInFlight.delete(sessionId);
+          const preserveClientIds = new Set(entry.latestOpts.preserveClientIds);
+          for (const row of sessions.get(sessionId)?.messages ?? []) {
+            if (entry.rowsAtStart.has(row.clientId) && entry.rowsAtStart.get(row.clientId) !== row) {
+              preserveClientIds.add(row.clientId);
+            }
+          }
+          applied = await reconcileRemoteMessages(sessionId, {
+            ...entry.latestOpts,
+            preserveClientIds,
+          });
+        }
+        return applied;
+      } finally {
+        if (_historyViewForceInFlight.get(sessionId) === entry) _historyViewForceInFlight.delete(sessionId);
       }
-      if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
-      const snapshot = view.getSnapshot();
-      if (snapshot.error) throw snapshot.error;
-      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
-      if (opts?.force && snapshot.ready) {
-        // Host thinking snapshots use synthetic IDs and carry no terminal
-        // marker. Only durable rows may seal an existing live row; provisional
-        // rows already participate in the ordinary add-only subscription.
-        const details = historyWorkSummaries(snapshot.items).flatMap((summary) => {
-          const detail = snapshot.details.get(summary.key);
-          return detail?.complete
-            && !detail.error && detail.revision === summary.revision ? detail.messages : [];
-        });
-        const available = details.concat(historyViewLeaves(snapshot.items)
-          .flatMap((item) => item.type === 'messages' ? item.messages : []))
-          .filter((row) => !row.id.startsWith('history-live:')
-            && !opts?.preserveClientIds?.has(row.clientId));
-        setState(sessionId, (state) => {
-          // The ordinary view subscriber is add-only. Explicit recovery must
-          // hydrate stale live shells, or their handoff keeps masking sealed rows.
-          // Preserve rows changed by live events while this read was pending.
-          const untouched = new Set(state.messages.filter((row) => rowsAtStart.get(row.clientId) === row).map((row) => row.clientId));
-          const messages = mergeMessages(available, state.messages, { addOnly: true, addOnlyExcept: untouched });
-          return messages === state.messages ? state : { ...state, messages };
-        });
-      }
-      return snapshot.ready;
-    });
+    })();
+    void entry.run.catch(() => undefined);
+    return entry.run;
   }
   // 返回完成 promise 供调用方需要时等待;既有调用方均按 fire-and-forget 使用。
   if (!sessionId || !isRemoteSession(sessionId)) return Promise.resolve(false);
