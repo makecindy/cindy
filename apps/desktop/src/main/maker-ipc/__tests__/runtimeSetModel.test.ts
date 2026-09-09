@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { acceptSessionRuntimeMutation, getPendingSessionRuntimeMutation, clearSessionRuntimeControlState } from '../sessionRuntimeControl.js';
+import { createPendingAgentSwitchRegistry } from '../sessionAgentSwitchHandler.js';
+import { withSendToSessionLock } from '../sendToSessionLock.js';
 
 import {
   clearSessionProvider,
@@ -1552,6 +1555,48 @@ describe('applyRuntimeSetModelChange', () => {
 });
 
 describe('context configuration refresh across live routes', () => {
+  it.each(['explicit', 'default'] as const)('preserves accepted runtime and harness selections during a %s refresh', async (kind) => {
+    const switches = createPendingAgentSwitchRegistry();
+    const ids = ['remote-pending-route', 'pending-harness'];
+    const sessions = ids.map((id) => ({ id: rememberSession(id), agentKind: 'codex' as const,
+      model: 'old-model', setModel: vi.fn(), isTurnRunning: () => true,
+      requiresModelSwitchRebuild: vi.fn(() => true) }));
+    const next = { agentKind: 'codex' as const, model: 'next-model', providerId: 'next-provider', effort: null, fastMode: false };
+    acceptSessionRuntimeMutation({ sessionId: ids[0]!, source: 'agent', deferred: true, profile: next });
+    switches.set(ids[1]!, { targetAgentKind: 'pi', model: 'pi-model', providerId: 'pi-provider' });
+    const registerPendingCredentialSwitch = vi.fn();
+    const closeSession = vi.fn();
+    try {
+      await refreshActiveModelContextSettings({
+        runtime: { maker: { getSession: (id) => sessions.find((s) => s.id === id), listActiveSessions: () => sessions, closeSession },
+          isSessionInTurn: () => true, registerPendingCredentialSwitch },
+        ...(kind === 'explicit' ? { targets: [{ agent: 'codex' as const, providerId: 'old-provider', modelId: 'old-model' }] } : {}),
+        inferProviderId: () => 'old-provider', assertCurrent: () => {}, withSessionLock: withSendToSessionLock,
+        hasPendingSelection: (id) => !!getPendingSessionRuntimeMutation(id) || !!switches.get(id),
+      });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+      expect(getPendingSessionRuntimeMutation(ids[0]!)?.profile).toEqual(next);
+      expect(switches.get(ids[1]!)?.model).toBe('pi-model');
+    } finally { clearSessionRuntimeControlState(ids[0]!); }
+  });
+
+  it('rechecks accepted selections after asynchronous context preflight', async () => {
+    const id = rememberSession('context-preflight-selection');
+    let pending = false;
+    const closeSession = vi.fn();
+    const registerPendingCredentialSwitch = vi.fn();
+    const session = { id, agentKind: 'pi' as const, model: 'old', setModel: vi.fn(),
+      requiresModelSwitchRebuild: async () => { pending = true; return true; } };
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession }, registerPendingCredentialSwitch },
+      inferProviderId: () => 'xd', assertCurrent: () => {}, hasPendingSelection: () => pending,
+      withSessionLock: withSendToSessionLock,
+    });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+  });
+
   it.each(['explicit', 'default'] as const)('refreshes all three engines for a %s edit while preserving other routes and pending choices', async (kind) => {
     const ids = ['claude-code', 'codex', 'pi', 'other-route', 'pending'] as const;
     const sessions = ids.map((id) => {
@@ -1566,6 +1611,7 @@ describe('context configuration refresh across live routes', () => {
       runtime: { maker: { getSession: (id) => sessions.find((s) => s.id === id), listActiveSessions: () => sessions, closeSession },
         getPendingCredentialSwitch: (id) => id === 'pending' ? { model: 'next-model', providerId: 'xd' } : undefined },
       ...(kind === 'explicit' ? { targets: sessions.slice(0, 3).map((s) => ({ agent: s.agentKind, providerId: 'xd', modelId: s.model })) } : {}),
+      hasPendingSelection: () => false, withSessionLock: async (_id, run) => run(),
       inferProviderId: () => null, assertCurrent: () => {},
     });
     expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['claude-code', 'codex', 'pi']);
@@ -1580,6 +1626,7 @@ describe('context configuration refresh across live routes', () => {
       requiresModelSwitchRebuild: async () => { current = false; return true; } };
     await expect(refreshActiveModelContextSettings({
       runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession } },
+      hasPendingSelection: () => false, withSessionLock: async (_id, run) => run(),
       inferProviderId: () => 'xd', assertCurrent: () => { if (!current) throw new Error('owner changed'); },
     })).rejects.toThrow('owner changed');
     expect(closeSession).not.toHaveBeenCalled();

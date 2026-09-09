@@ -296,6 +296,19 @@ describe('piEnvironment per-session identity', () => {
     config?.disposeSessionCtx?.();
   });
 
+  it('keeps native companion helpers available when memory is disabled', async () => {
+    const config = await getPiExtraSpawnConfig([
+      makeProvider('cindy_memory'), makeProvider('cindy_helper'),
+    ], noopLogger(), {
+      sessionId: 'pi-bot-no-memory', workingDir: '/repo',
+      memoryEnabled: false,
+      botMcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+    });
+    expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(['cindy_helper']);
+    expect(config?.mcpBridge?.botMemoryFacade).toBe(true);
+    config?.disposeSessionCtx?.();
+  });
+
   it('does not expose cindy_memory without this Session explicitly enabling memory', async () => {
     const config = await getPiExtraSpawnConfig([
       makeProvider('cindy_memory'),

@@ -175,7 +175,7 @@ const unreadTerminalRunWhere = () =>
   sql`${scheduleRuns.readAt} IS NULL AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted', 'interrupted')`;
 
 function toScheduleSource(value: string | null): Schedule['source'] | undefined {
-  if (value === 'user' || value === 'project') return value;
+  if (value === 'user' || value === 'project' || value === 'bot') return value;
   return undefined;
 }
 
@@ -325,6 +325,11 @@ function legacyRunFromSession(
     // so old imported history does not create new attention dots.
     readAt: finishedAt,
   };
+}
+
+/** Public automation history must not expose or mutate the routine execution ledger. */
+function publicScheduleRunWhere() {
+  return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
@@ -597,6 +602,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * - 每个 session 保留最近一次失败/中断，即使已读也能查看历史失败提示。
    * - 未读旧 run 先返回以累计 session 红点，最新映射最后返回以裁决 Automation 归属。
    * - 非最新 running 不携带 sessionId，只参与运行标记对账。
+   * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
    */
   async listSidebarIndexRuns(): Promise<ScheduleSidebarIndexRun[]> {
     const db = this.getDb();
@@ -620,17 +626,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .from(scheduleSessionLatestRuns)
         .innerJoin(scheduleRuns, eq(scheduleSessionLatestRuns.runId, scheduleRuns.id))
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(isNotNull(scheduleRuns.sessionId)),
+        .where(and(isNotNull(scheduleRuns.sessionId), publicScheduleRunWhere())),
       db
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(unreadTerminalRunWhere()),
+        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere())),
       db
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(eq(scheduleRuns.status, 'running')),
+        .where(and(eq(scheduleRuns.status, 'running'), publicScheduleRunWhere())),
       db
         .select(projection)
         .from(scheduleSessionLatestRuns)
@@ -646,7 +652,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           )`,
           ),
         )
-        .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id)),
+        .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+        .where(publicScheduleRunWhere()),
     ]);
     const latestRunIds = new Set(latestSessionRows.map((row) => row.runId));
     const unreadRunIds = new Set(unreadRows.map((row) => row.runId));
@@ -725,7 +732,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       });
     }
 
-    return [...indexedRuns, ...legacyRuns];
+    return [...indexedRuns, ...legacyRuns].filter((run) => run.scheduleSource !== 'bot');
   }
 
   /**
@@ -1034,13 +1041,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     });
   }
 
-  async deleteRun(id: string): Promise<ScheduleRun | null> {
+  async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const db = this.getDb();
     // 先 select 一次拿到 scheduleId（callers 需要它来定位 'changed' 事件目标 schedule）；
     // 找不到直接返回 null，不抛错（与 update/updateRun 的契约对齐）。
-    const [row] = await db.select().from(scheduleRuns).where(eq(scheduleRuns.id, id)).limit(1);
+    const condition = and(
+      eq(scheduleRuns.id, id),
+      options?.excludeBotSchedules ? publicScheduleRunWhere() : undefined,
+    );
+    const [row] = await db.select().from(scheduleRuns).where(condition).limit(1);
     if (!row) return null;
-    await db.delete(scheduleRuns).where(eq(scheduleRuns.id, id));
+    await db.delete(scheduleRuns).where(condition);
     return scheduleRunToCamel(row);
   }
 
@@ -1184,7 +1195,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const [row] = await db
       .select({ n: sql<number>`count(*)` })
       .from(scheduleRuns)
-      .where(unreadTerminalRunWhere());
+      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()));
     return Number(row?.n ?? 0);
   }
 
@@ -1241,7 +1252,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const result = await db
       .update(scheduleRuns)
       .set({ readAt: Date.now() })
-      .where(unreadTerminalRunWhere())
+      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
     return typeof changes === 'number' ? changes : 0;

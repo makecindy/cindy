@@ -1778,6 +1778,9 @@ export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
 /** Call-local user content before Session replaces images with generated descriptions. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
 
+/** Host-restored user authorization for this send; never accepted from wire options. */
+export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1790,6 +1793,7 @@ export interface MainOwnedSendContext {
  */
 export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**

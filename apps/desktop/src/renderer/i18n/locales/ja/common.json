@@ -4953,7 +4953,8 @@
         "nodeChildSpawn": "Node プログラムは、パッケージ内で申告済みのサブプロセスの起動をホストに依頼できます",
         "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
         "skill": "AI アシスタントにスキル「{{name}}」を追加します",
-        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。"
+        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
+        "routineEvents": "ルーティンイベント"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -12013,6 +12014,67 @@
     "embedding": "意味の近い内容を探すために。",
     "compression": "長い内容を短くまとめるために。"
   },
+  "routines": {
+    "title": "ルーティン",
+    "add": "ルーティンを追加",
+    "back": "ルーティンに戻る",
+    "error": "ルーティンを更新できませんでした。設定を確認して再試行してください。",
+    "empty": "ルーティンを追加して、実行する内容とタイミングを指定します。",
+    "enabled": "有効",
+    "paused": "一時停止中",
+    "runNow": "今すぐ実行",
+    "running": "実行中…",
+    "name": "名前",
+    "instructions": "指示",
+    "when": "実行タイミング",
+    "addTrigger": "トリガーを追加",
+    "removeTrigger": "トリガーを削除",
+    "schedule": "スケジュール",
+    "hourly": "毎時",
+    "daily": "毎日",
+    "weekdays": "平日",
+    "weekly": "毎週",
+    "monthly": "毎月",
+    "interval": "間隔",
+    "advanced": "詳細設定…",
+    "everyMinutes": "{{count}} 分ごと",
+    "minutes": "分",
+    "expression": "Cron 式",
+    "timezone": "タイムゾーン",
+    "delete": "ルーティンを削除",
+    "save": "ルーティンを保存",
+    "deleteConfirm": "このルーティンを削除し、待機中の実行をキャンセルしますか？",
+    "keep": "ルーティンを残す",
+    "history": "実行履歴",
+    "noRuns": "このルーティンはまだ実行されていません。",
+    "field": "フィールド",
+    "operator": "条件",
+    "value": "値",
+    "addFilter": "条件を追加",
+    "removeFilter": "条件を削除",
+    "pluginCapability": "宣言されたイベントを発行し、設定済みのルーティンのみを実行します。",
+    "time": "時刻",
+    "day": "日",
+    "weekday": "曜日",
+    "status": {
+      "queued": "待機中",
+      "running": "実行中",
+      "success": "完了",
+      "failed": "失敗",
+      "interrupted": "中断",
+      "cancelled": "キャンセル済み"
+    },
+    "sourceStatus": {
+      "listening": "受信中",
+      "disconnected": "未接続",
+      "error": "接続元を確認してください"
+    },
+    "operators": {
+      "equals": "一致",
+      "contains": "含む",
+      "not-equals": "一致しない"
+    }
+  },
   "cindyMakeDoctor": {
     "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",
     "title": "Cindy Make · 環境チェック",
@@ -12123,7 +12185,6 @@
       "expand": "上流の結果を表示",
       "collapse": "上流の結果を隠す",
       "count": "関連する可能性のあるオープン Issue／PR が {{count}} 件見つかりました",
-
       "kind": {
         "issue": "Issue",
         "pr": "PR"

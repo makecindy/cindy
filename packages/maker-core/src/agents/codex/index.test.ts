@@ -14752,9 +14752,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
     let resolverCalled = false;
+    let releaseDenial!: (decision: InteractionDecision) => void;
     handle.setInteractionResolver(() => {
       resolverCalled = true;
-      return new Promise<InteractionDecision>(() => {});
+      return new Promise<InteractionDecision>((resolve) => { releaseDenial = resolve; });
     });
     const notices: string[] = [];
     void (async () => {
@@ -14780,6 +14781,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     await vi.waitFor(() => expect(resolverCalled).toBe(true));
 
+    // Queue a late UI reply, then synchronously settle cancellation first.
+    releaseDenial({ kind: 'permission', behavior: 'deny', reason: 'User denied' });
     if (action === 'close') {
       await handle.close();
     } else {
@@ -15074,7 +15077,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         review.resolve({ verdict });
         const accepted = lifecycle === 'child-root-completed' || lifecycle === 'same-turn-started';
         expect(await pending, `${kind}/${lifecycle}/${verdict}`).toEqual(kind === 'dynamic'
-          ? { success: accepted, contentItems: accepted ? [] : [{ type: 'inputText', text: 'The user declined this tool call.' }] }
+          ? { success: accepted, contentItems: accepted ? [] : [{ type: 'inputText', text: expect.stringMatching(/^Cindy could not approve this tool call:/) }] }
           : kind === 'mcp'
           ? { action: accepted ? 'accept' : 'decline', content: null, _meta: null }
           : kind === 'permissions'
@@ -16215,7 +16218,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       { requestId: 'request-ios' },
     );
     expect(result).toEqual({
-      contentItems: [{ type: 'inputText', text: 'The user declined this tool call.' }],
+      contentItems: [{ type: 'inputText', text: 'Cindy could not approve this tool call: interaction_resolver_error' }],
       success: false,
     });
     expect(presentation).toHaveBeenCalledWith({

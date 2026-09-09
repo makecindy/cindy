@@ -417,20 +417,26 @@ export async function refreshActiveModelContextSettings(input: {
   targets?: readonly { agent: AgentKind; providerId: string; modelId: string }[];
   inferProviderId: (model: string, agent: AgentKind) => string | null;
   assertCurrent: () => void;
+  hasPendingSelection: (sessionId: string) => boolean;
+  withSessionLock: (sessionId: string, run: () => Promise<void>) => Promise<void>;
 }): Promise<void> {
   const { runtime, targets, inferProviderId, assertCurrent } = input;
   for (const active of runtime.maker.listActiveSessions()) {
-    assertCurrent();
-    const session = runtime.maker.getSession(active.id);
-    if (!session) continue;
-    const source = getSessionProvider(active.id) ?? inferProviderId(session.model, session.agentKind);
-    if (targets && !targets.some((t) => t.agent === session.agentKind && t.providerId === source && t.modelId === session.model)) continue;
-    // The pending route is a later user choice; its rebuild reads current settings.
-    if (runtime.getPendingCredentialSwitch?.(active.id)) continue;
-    if (!targets && !await session.requiresModelSwitchRebuild?.(session.model, { providerId: source })) continue;
-    assertCurrent();
-    await applyRuntimeSetModelChange({ ...runtime, sessionId: active.id, model: session.model,
-      providerId: getSessionProvider(active.id), forceSessionRebuild: true });
+    await input.withSessionLock(active.id, async () => {
+      assertCurrent();
+      const session = runtime.maker.getSession(active.id);
+      if (!session) return;
+      const source = getSessionProvider(active.id) ?? inferProviderId(session.model, session.agentKind);
+      if (targets && !targets.some((t) => t.agent === session.agentKind && t.providerId === source && t.modelId === session.model)) return;
+      // The pending route is a later user choice; its rebuild reads current settings.
+      const hasPending = () => input.hasPendingSelection(active.id) || !!runtime.getPendingCredentialSwitch?.(active.id);
+      if (hasPending()) return;
+      if (!targets && !await session.requiresModelSwitchRebuild?.(session.model, { providerId: source })) return;
+      assertCurrent();
+      if (hasPending() || runtime.maker.getSession(active.id) !== session) return;
+      await applyRuntimeSetModelChange({ ...runtime, sessionId: active.id, model: session.model,
+        providerId: getSessionProvider(active.id), forceSessionRebuild: true });
+    });
   }
   assertCurrent();
 }

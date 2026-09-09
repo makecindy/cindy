@@ -4953,7 +4953,8 @@
         "nodeChildSpawn": "Node 程序可请宿主再启动包内申报过的子进程",
         "nodeChildSpawnDetail": "只能启动它自己包里申报过的 JS 文件(与主程序同样的本机权限)，不能执行任意命令；插件停用或退出时子进程一并关闭。",
         "skill": "为 AI 助手添加技能「{{name}}」",
-        "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。"
+        "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
+        "routineEvents": "例行任务事件"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -12013,6 +12014,67 @@
     "embedding": "按语义查找相关内容。",
     "compression": "用于精简冗长内容。"
   },
+  "routines": {
+    "title": "例行任务",
+    "add": "添加例行任务",
+    "back": "返回例行任务",
+    "error": "无法更新例行任务，请检查设置后重试",
+    "empty": "添加例行任务，告诉伙伴做什么、何时运行",
+    "enabled": "已启用",
+    "paused": "已暂停",
+    "runNow": "立即运行",
+    "running": "运行中…",
+    "name": "名称",
+    "instructions": "指令",
+    "when": "何时运行",
+    "addTrigger": "再添加一个",
+    "removeTrigger": "移除触发器",
+    "schedule": "定时",
+    "hourly": "每小时",
+    "daily": "每天",
+    "weekdays": "工作日",
+    "weekly": "每周",
+    "monthly": "每月",
+    "interval": "间隔",
+    "advanced": "高级…",
+    "everyMinutes": "每 {{count}} 分钟",
+    "minutes": "分钟",
+    "expression": "Cron 表达式",
+    "timezone": "时区",
+    "delete": "删除例行任务",
+    "save": "保存例行任务",
+    "deleteConfirm": "删除这条例行任务，并取消等待中的运行？",
+    "keep": "保留例行任务",
+    "history": "运行历史",
+    "noRuns": "这条例行任务还未运行",
+    "field": "字段",
+    "operator": "条件",
+    "value": "值",
+    "addFilter": "添加条件",
+    "removeFilter": "移除条件",
+    "pluginCapability": "向例行任务提交已声明的事件，只触发你配置的例行任务",
+    "time": "时间",
+    "day": "日期",
+    "weekday": "星期",
+    "status": {
+      "queued": "等待中",
+      "running": "运行中",
+      "success": "已完成",
+      "failed": "运行失败",
+      "interrupted": "已中断",
+      "cancelled": "已取消"
+    },
+    "sourceStatus": {
+      "listening": "监听中",
+      "disconnected": "未监听",
+      "error": "来源需要检查"
+    },
+    "operators": {
+      "equals": "等于",
+      "contains": "包含",
+      "not-equals": "不等于"
+    }
+  },
   "cindyMakeDoctor": {
     "description": "检查本机构建 Cindy 所需的环境。用法：/cindy-make-doctor",
     "title": "Cindy Make · 环境检查",
@@ -12123,7 +12185,6 @@
       "expand": "展开上游结果",
       "collapse": "收起上游结果",
       "count": "找到 {{count}} 条可能相关的开放 Issue 或 PR",
-
       "kind": {
         "issue": "Issue",
         "pr": "PR"

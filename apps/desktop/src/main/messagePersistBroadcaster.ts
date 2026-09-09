@@ -1603,7 +1603,8 @@ export function onInteractionMessage(
   const createdAt = Date.now();
   const requestId = typeof req.requestId === 'string' ? req.requestId : '';
   if (!requestId) return undefined;
-  const meta = lastAgentMetaBySession.get(sessionId) ?? null;
+  const meta: AgentMeta & { autoReviewUserText?: unknown } = { ...lastAgentMetaBySession.get(sessionId) };
+  delete meta.autoReviewUserText;
 
   if (req.kind === 'ask_user_question') {
     const persistId = createId();
@@ -1673,6 +1674,7 @@ export function onInteractionResolved(
   const requestId = typeof request.requestId === 'string' ? request.requestId : '';
   if (!requestId) return;
   if (!claimInteractionPersistId(sessionId, persistId)) return;
+  const acceptedAt = Date.now();
 
   if (kind === 'ask_user_question') {
     const answers = (decision.answers as Record<string, string> | undefined) ?? {};
@@ -1683,7 +1685,9 @@ export function onInteractionResolved(
         questions: request.questions ?? [],
         status: cancelled ? 'cancelled' : 'answered',
         answers,
-      }),
+      }, { acceptedAt, text: cancelled ? '' : 'Clarifications:\n' + Object.entries(answers)
+        .filter(([, answer]) => typeof answer === 'string' && answer.trim())
+        .map(([question, answer]) => `- ${question} → ${answer}`).join('\n') }),
     );
     return;
   }
@@ -1710,7 +1714,8 @@ export function onInteractionResolved(
       planFilePath,
       status,
       feedback,
-    }),
+    }, { acceptedAt, text: behavior === 'allow' ? `Approved plan:\n${plan}`
+      : dismissed ? '' : feedback ?? '' }),
   );
 }
 

@@ -1035,13 +1035,26 @@ async function readMessagesJsonl(zip: JSZip, entryPath: string): Promise<BundleM
       role: m.role,
       content: m.content,
       toolUseId: typeof m.toolUseId === 'string' ? m.toolUseId : null,
-      agentMeta: typeof m.agentMeta === 'string' ? m.agentMeta : null,
+      agentMeta: stripImportedAuthorization(m.agentMeta),
       agentKind: typeof m.agentKind === 'string' ? m.agentKind : null,
       createdAt: m.createdAt,
       rewindAt: typeof m.rewindAt === 'number' ? m.rewindAt : null,
     });
   }
   return rows;
+}
+
+/** Imported history is display/context data, never locally accepted authorization. */
+function stripImportedAuthorization(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const meta = JSON.parse(value) as unknown;
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return value;
+    delete (meta as Record<string, unknown>).autoReviewUserText;
+    return JSON.stringify(meta);
+  } catch {
+    return value;
+  }
 }
 
 async function readMediaMap(zip: JSZip): Promise<MediaMapEntry[]> {

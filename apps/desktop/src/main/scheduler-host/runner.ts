@@ -1,3 +1,5 @@
+import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import { routinePermissionSnapshot } from './routinePermission.js';
 /**
  * Phase 3: MakerScheduleRunner
  *
@@ -60,7 +62,7 @@ import type {
 } from '@cindy/maker-scheduler';
 
 import { createMessage } from '../localDb/ipc/messages.js';
-import { getSessionRowSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import { getSessionRowSnapshot, getSessionFsSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import {
   getSessionProvider,
   setSessionProvider,
@@ -180,9 +182,9 @@ const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
  * ⚠️ 必须与 UI 显示的空值回退一致（ModelEffortChip 也走 getScheduleDefaultModel），
  * 否则用户看到"已选 X"实际跑的却是 Y（2026-06 实际踩坑：UI 显示 Opus 4.8、跑的 4.7）。
  *
- * permissionMode 两个 agent 都用 'bypassPermissions'（types/common.ts:23 注释确认
+ * 普通 schedule 的 permissionMode 两个 agent 都用 'bypassPermissions'（types/common.ts:23 注释确认
  * codex 支持子集 ask/auto/bypassPermissions）—— 调度本质是 unattended，bypass 是
- * 唯一行得通的策略；用户想要更严格可未来给 Schedule schema 加显式 permissionMode 字段。
+ * 既有无人值守策略。伙伴例行任务不使用此默认值，继承伙伴的权限与计划模式。
  */
 function defaultPermissionModeForSchedule(): PermissionMode {
   // 两个 agent 都支持 bypassPermissions（types/common.ts:23），暂不按 agentKind 分支
@@ -205,8 +207,9 @@ export interface SchedulerQueueDeps {
     sessionId: string;
     text: string;
     persistedContent: string;
+    inheritTargetPlanMode?: boolean;
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
-    onAccepted: () => void | Promise<void>;
+    onAccepted: (queuedPermissions?: { permissionMode?: string; planMode?: boolean }) => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     onDiscarded?: () => void;
   }): Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
@@ -327,6 +330,8 @@ class QueuedDispatchTimeoutError extends Error {}
  */
 class QueuedSlotUnavailableError extends Error {}
 
+class RoutineDispatchDeferredError extends Error {}
+
 /** createTurnCompletionWaiter 的返回:turn 终态等待 + 文本缓冲 + 幂等摘除。 */
 interface TurnCompletionWaiter {
   turnFinished: Promise<void>;
@@ -437,6 +442,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       | 'session-running'
       | 'already-queued'
       | 'queue-restore-pending'
+      | 'routine-permission-unavailable'
+      | 'routine-dispatch-invalidated'
       | 'queue-wait-timeout',
   ): FireResult {
     this.deps.logger.info?.(
@@ -459,8 +466,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * (review #944 第十九轮 P1;本函数原来的注释已经把 manual 算在排除项里,代码没跟上)。
    * 排除后走可见失败:用户知道这次没跑成,可以自己再点一次,不会莫名多出自动运行。
    */
-  private canDefer(schedule: Schedule): boolean {
+  private canDefer(schedule: Schedule, ctx: FireContext): boolean {
+    // RoutineEngine explicitly owns retries; no nextFireAt is armed in this mode.
+    if (ctx.deferToCaller) return true;
     return schedule.recurring === true && schedule.status === 'active' && schedule.manual !== true;
+  }
+
+  private async readRoutinePermissions(sessionId: string, live?: Session) {
+    const stored = await getSessionFsSnapshot(sessionId);
+    return routinePermissionSnapshot(live ?? this.deps.maker.getSession(sessionId), stored);
   }
 
   private async failOrDeferSessionRunning(
@@ -469,7 +483,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     sessionId: string,
     allowDefer: boolean,
   ): Promise<FireResult> {
-    if (allowDefer && this.canDefer(schedule)) {
+    if (allowDefer && this.canDefer(schedule, ctx)) {
       return this.deferFire(schedule, sessionId, 'session-running');
     }
     const sendContext = buildSchedulerSendContext(schedule, ctx, sessionId);
@@ -701,7 +715,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 落点一致,无功能回退,仅 telemetry reason 偏"user-active"。
         const recentlyUserDriven =
           row?.userSendAt != null && Date.now() - row.userSendAt < ACTIVE_YIELD_WINDOW_MS;
-        if (recentlyUserDriven && isSessionInTurn(sessionId) && this.canDefer(schedule)) {
+        if (recentlyUserDriven && isSessionInTurn(sessionId) && this.canDefer(schedule, ctx)) {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
           return this.deferFire(schedule, sessionId, 'user-active');
@@ -811,7 +825,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // heartbeat 且 schedule.model 留空才沿用绑定 session 的 meta.model；
     // 都空时按 agentKind 兜底 (与 renderer schedulerFallbackModel 同源)，
     // 不留空字符串 — UI picker 显示 placeholder。
-    // permissionMode: schedule 没字段，runner 强制 'bypassPermissions'（headless 唯一可行）。
+    // 普通 schedule 沿用既有默认权限；伙伴例行任务继承当前伙伴的权限和计划模式。
     const effectiveAgentKind = isHeartbeat
       ? (heartbeatAgentKind ?? schedule.agentKind)
       : schedule.agentKind;
@@ -866,7 +880,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const materializedDefaultProviderId = shouldMaterializeFreshClaudeProvider
       ? (dynamicDefaultRoute?.providerId ?? null)
       : null;
-    const permissionMode = defaultPermissionModeForSchedule();
+    let routinePermissions = schedule.source === 'bot' ? await this.readRoutinePermissions(sessionId) : null;
+    if (schedule.source === 'bot' && !routinePermissions)
+      return this.deferFire(schedule, sessionId, 'routine-permission-unavailable');
     // fastMode 对 Codex / Pi 生效（claude-code agent 忽略此字段）；Claude 恒不传，
     // 确保「不影响 Claude」。heartbeat 沿用 session meta 里的 fast 态，非 heartbeat 取 schedule。
     let fastMode =
@@ -1072,6 +1088,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // The worktree path can also await filesystem work, so cancellation may
     // have arrived after the preceding guard.  Never create a late session.
     throwIfFireAborted(ctx.signal, 'session creation');
+    if (schedule.source === 'bot') {
+      routinePermissions = await this.readRoutinePermissions(sessionId);
+      if (!routinePermissions) return this.deferFire(schedule, sessionId, 'routine-permission-unavailable');
+      throwIfFireAborted(ctx.signal, 'session creation');
+    }
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
       session = await this.deps.maker.createSession({
@@ -1081,7 +1102,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         model,
         effort: reconciledEffort,
         fastMode,
-        permissionMode,
+        permissionMode: routinePermissions?.permissionMode ?? defaultPermissionModeForSchedule(),
+        ...(routinePermissions ? { planMode: routinePermissions.planMode } : {}),
         title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
         resumeSessionId,
         // Pi distinguishes an explicit null (Cindy default route) from undefined
@@ -1256,6 +1278,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       this.deps.getDb(),
       session.id,
       {
+        // The routine owns no permission choice; never overwrite the teammate (including a concurrent edit).
+        ...(schedule.source === 'bot' ? { permissionMode: null } : {}),
         // 复用路径 setEffort 失败时跳过落库 —— 保留旧 meta.effort, 下次 fire
         // heartbeatEffortChanged 仍为 true 会重试同步（4.4.1 注释的固化问题）。
         // 落 runtimeReconciledEffort（按实际运行模型 clamp 后的值),session 行 effort 反映真跑的档,
@@ -1462,9 +1486,23 @@ export class MakerScheduleRunner implements ScheduleRunner {
           setSessionProvider(session.id, verdict.providerId);
         }
       }
+      if (schedule.source === 'bot') {
+        routinePermissions = await this.readRoutinePermissions(session.id, session);
+        if (!routinePermissions) {
+          waiter.stopListening();
+          ctx.signal.removeEventListener('abort', onAbort);
+          return this.deferFire(schedule, session.id, 'routine-permission-unavailable');
+        }
+        throwIfFireAborted(ctx.signal, 'agent turn dispatch');
+      }
+      if (ctx.canDispatch && !ctx.canDispatch()) {
+        waiter.stopListening();
+        ctx.signal.removeEventListener('abort', onAbort);
+        return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
+      }
       const sendResult = await session.send(outgoingMessage as never, {
         origin,
-        planMode: false,
+        planMode: routinePermissions?.planMode ?? false,
         onAccepted: async () => {
           // createSession 之后到真正 dispatch 之间仍会 await 模型切换、baseline
           // 等准备工作。复用 desktop session 时不能在这些准备阶段把用户正在跑的
@@ -1485,7 +1523,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             await createMessage(session.id, {
               clientId: randomUUID(),
               role: 'user',
-              content: schedule.prompt,
+              content: schedule.source === 'bot' ? `${UI_ACTION_TRIGGER_PREFIX}${schedule.prompt}` : schedule.prompt,
               agentMeta: { origin },
             });
           } catch (err) {
@@ -1504,6 +1542,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (this.deps.beforeDispatchUserTurn) {
             await this.deps.beforeDispatchUserTurn(session.id);
             baselineStarted = true;
+          }
+          if (ctx.canDispatch && !ctx.canDispatch()) {
+            // abort synchronously cancels the send reservation; do not wait for
+            // a potentially stalled provider interrupt before deferring the run.
+            void session.abort().catch((err) => {
+              this.deps.logger.warn?.('[runner] obsolete routine turn abort failed', err);
+            });
+            throw new RoutineDispatchDeferredError('Routine revision changed before dispatch');
           }
           // bump userSendAt:侧栏排序主键已切到 userSendAt ?? updatedAt,自动化任务
           // fire 属"这个会话有了新一轮输入",与用户按下发送同权重,让 fire 出来的会话
@@ -1561,11 +1607,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
         throw err;
       }
       const normalized = normalizeSchedulerSendError(err);
+      if (err instanceof RoutineDispatchDeferredError) {
+        waiter.stopListening();
+        ctx.signal.removeEventListener('abort', onAbort);
+        return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
+      }
       // B2 撞忙顺延:仅 heartbeat(复用 session)场景 —— session 正跑别的 turn
       // (用户远程控制 / 上轮心跳未完)→ 不记失败,顺延重排。非 heartbeat 是新建
       // session,SESSION_RUNNING 属异常,维持原 failed(可见)。先就近摘掉本轮挂
       // 的 listener(turnFinished + abort),否则它们持有 session 引用阻止 GC。
-      if (isHeartbeat && normalized.reason === 'SESSION_RUNNING' && this.canDefer(schedule)) {
+      if (isHeartbeat && normalized.reason === 'SESSION_RUNNING' && this.canDefer(schedule, ctx)) {
         waiter.stopListening();
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'session-running');
@@ -1629,7 +1680,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     ctx: FireContext,
     sessionId: string,
   ): Promise<FireResult> {
-    if (this.canDefer(schedule)) {
+    if (this.canDefer(schedule, ctx)) {
       return this.deferFire(schedule, sessionId, 'already-queued');
     }
     const errMsg = formatSchedulerSendError(
@@ -1854,9 +1905,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const enqueueResult = await sq.enqueuePrompt({
       sessionId,
       text: promptToSend,
-      persistedContent: schedule.prompt,
+      ...(schedule.source === 'bot' ? { inheritTargetPlanMode: true } : {}),
+      persistedContent: schedule.source === 'bot' ? `${UI_ACTION_TRIGGER_PREFIX}${schedule.prompt}` : schedule.prompt,
       origin,
-      onAccepted: async () => {
+      onAccepted: async (queuedPermissions) => {
         dispatched = true;
         // Queue admission happens while another (possibly user-driven)
         // Desktop turn still owns the session. Only the accepted scheduler
@@ -1910,9 +1962,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           return;
         }
         if (!live) {
-          const unavailable = new Error(
-            'queued heartbeat live session unavailable before route sync and vendor dispatch',
-          );
+          const message = 'queued heartbeat live session unavailable before route sync and vendor dispatch';
+          const unavailable = schedule.source === 'bot'
+            ? new RoutineDispatchDeferredError(message)
+            : new Error(message);
           failAfterAccept(unavailable);
           failDispatch(unavailable);
           blockAcceptedDispatch(undefined, 'session unavailable for queued route sync');
@@ -1956,6 +2009,26 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           this.deps.logger.warn?.('[runner] queued heartbeat routing sync failed (non-fatal)', err);
         }
+        if (schedule.source === 'bot') {
+          const permissions = await this.readRoutinePermissions(sessionId, live);
+          if (!permissions || this.deps.maker.getSession(sessionId) !== live ||
+            live.stablePermissionModeState?.mode !== permissions.permissionMode ||
+            queuedPermissions?.permissionMode !== permissions.permissionMode ||
+            queuedPermissions?.planMode !== permissions.planMode) {
+            const error = new RoutineDispatchDeferredError('Queued routine permissions changed before dispatch');
+            failAfterAccept(error);
+            failDispatch(error);
+            blockAcceptedDispatch(live, 'routine permissions changed');
+            return;
+          }
+        }
+        if (ctx.canDispatch && !ctx.canDispatch()) {
+          const error = new RoutineDispatchDeferredError('Routine revision changed before dispatch');
+          failAfterAccept(error);
+          failDispatch(error);
+          blockAcceptedDispatch(live, 'routine revision changed');
+          return;
+        }
         if (live) {
           waiterSlot.current = this.createTurnCompletionWaiter(live, {
             onProgress: ctx.onProgress,
@@ -1990,7 +2063,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if ('retry' in enqueueResult) {
       // 崩溃恢复快照尚未成功读回 → 持久化去重做不了,顺延本次 fire(90s 后重试,
       // 届时恢复多半已完成);一次性任务无法顺延,按可见失败收口。
-      if (this.canDefer(schedule)) {
+      if (this.canDefer(schedule, ctx)) {
         return this.deferFire(schedule, sessionId, 'queue-restore-pending');
       }
       const errMsg = formatSchedulerSendError(
@@ -2126,8 +2199,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 同语义:撤销预插的 running run、不通知不亮红点,下次到点重新排队(会话届时
       // 若空闲就直发,槽位届时也可能腾出来)。
       // 不能顺延的(一次性 / manual / 已 paused)退回可见失败,否则任务静默消失。
+      if (err instanceof RoutineDispatchDeferredError) {
+        return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
+      }
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
-        if (this.canDefer(schedule)) {
+        if (this.canDefer(schedule, ctx)) {
           return this.deferFire(schedule, sessionId, 'queue-wait-timeout');
         }
         const errMsg = formatSchedulerSendError(

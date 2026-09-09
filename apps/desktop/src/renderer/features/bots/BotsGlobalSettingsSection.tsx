@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
+import { useProviders } from '@/hooks/useProviders';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import {
   getEffectiveBotModelChain,
   isBotGlobalModelChainCustomized,
@@ -24,6 +26,10 @@ const ROW_HINT_CLASS =
 
 export function BotsGlobalSettingsSection() {
   const { t } = useBotTranslation();
+  // Re-render derived defaults when the shared picker inputs change, including
+  // when the empty-chain editor has no ModelSelector mounted yet.
+  useProviders();
+  useAvailableAgents();
   const [, bumpModelSettings] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -66,6 +72,7 @@ export function BotsGlobalSettingsSection() {
         </div>
         <fieldset disabled={pending} aria-busy={pending} className="min-w-0">
           <BotModelChainEditor
+            disabled={pending}
             value={modelChain}
             onChange={(next) => changeModelChain(() => setBotGlobalModelChain(next))}
             onRestoreDefault={customized !== false

@@ -450,7 +450,9 @@ async function requestGrantConfirm(params: {
     message:
       decision.reason === 'timeout'
         ? '过户确认超时:用户未在时限内响应,本次调用已取消;如仍需要,请提醒用户后重试'
-        : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
+        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+          ? `Cindy 已取消本次过户请求（${decision.reason}），并非用户手动拒绝。`
+          : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
   };
 }
 
@@ -528,7 +530,9 @@ async function requestMediaPathRevealConfirm(params: {
     message:
       decision.reason === 'timeout'
         ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
-        : '用户未允许把本机路径返回给 Agent，不要重试',
+        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+          ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
+          : '用户未允许把本机路径返回给 Agent，不要重试',
   };
 }
 
