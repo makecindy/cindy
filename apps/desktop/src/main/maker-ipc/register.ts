@@ -5416,7 +5416,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     writeModelContextLimit: async (targets, limit) => {
-      await writeModelContextLimitsWithRefresh(targets, limit, () => refreshContextSettings(targets));
+      await writeModelContextLimitsWithRefresh(targets, limit,
+        () => refreshContextSettings(targets),
+        () => refreshContextSettings());
     },
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。

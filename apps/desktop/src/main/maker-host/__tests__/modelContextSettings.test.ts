@@ -87,6 +87,22 @@ describe('implicit context settings use the startup source in history protection
     expect(resolveConfiguredContextWindow(catalog, agent, null, 'shared-model')).toBe(272_000);
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('%s protects history with an explicit budget on an unverified route', (agent) => {
+    const catalog = dualCatalog(agent);
+    const row = catalog.providers.find(provider => provider.id === 'xd')!.models[agent]![0]!;
+    row.contextWindowVerified = false;
+    expect(resolveConfiguredContextWindow(catalog, agent, 'xd', 'shared-model')).toBeNull();
+    state.limits.set(`${agent}:xd:shared-model`, 100_000);
+    const target = resolveConfiguredContextWindow(catalog, agent, 'xd', 'shared-model');
+    expect(target).toBe(100_000);
+    expect(shouldRebuildForModelWindowSwitch({ contextTokens: 180_000, currentContextWindow: 272_000,
+      targetContextWindow: target! })).toBe(true);
+    expect(resolveConfiguredContextWindow(catalog, agent, 'xd', 'missing-model')).toBeNull();
+    const provider = catalog.providers.find(provider => provider.id === 'xd')!;
+    provider.routing[agent] = { ...provider.routing[agent]!, disabled: true };
+    expect(resolveConfiguredContextWindow(catalog, agent, 'xd', 'shared-model')).toBeNull();
+  });
+
   it('keeps unknown Claude sources unknown without borrowing another provider', () => {
     state.gateway = false;
     expect(resolveConfiguredContextWindow(dualCatalog('claude-code'), 'claude-code', null, 'shared-model')).toBeNull();
