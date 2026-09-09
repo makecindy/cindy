@@ -30,6 +30,8 @@ import { createLogger } from '../logger';
 const log = createLogger('device-link-settings');
 
 export interface DeviceLinkSettings {
+  /** Full desktop viewing/input is a separate, local opt-in. */
+  remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
   /**
    * 「保持电脑唤醒」:开启后 main 用 powerSaveBlocker('prevent-app-suspension')
@@ -46,6 +48,7 @@ export interface DeviceLinkSettings {
 }
 
 const DEFAULTS: DeviceLinkSettings = {
+  remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
@@ -61,6 +64,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
   return {
+    remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
     revokedControllers: Array.isArray(r.revokedControllers)

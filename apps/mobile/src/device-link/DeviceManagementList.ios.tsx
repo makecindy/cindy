@@ -1,9 +1,10 @@
 import { Host, ListItem } from '@expo/ui';
-import { Button, List, SwipeActions, Text } from '@expo/ui/swift-ui';
+import { Button, Circle, HStack, List, SwipeActions, Text } from '@expo/ui/swift-ui';
 import {
   disabled,
   font,
   foregroundStyle,
+  frame,
   labelStyle,
   listRowBackground,
   listStyle,
@@ -45,25 +46,31 @@ export function DeviceManagementList({
                 <Monitor
                   size={iconSize.md}
                   strokeWidth={iconStroke.regular}
-                  color={
-                    device.online ? colors.statusReady : colors.textSecondary
-                  }
+                  color={colors.textSecondary}
                 />
               }
               supportingText={
-                <Text
-                  modifiers={[
-                    font({ textStyle: 'caption' }),
-                    foregroundStyle({
-                      type: 'hierarchical',
-                      style: 'secondary',
-                    }),
-                  ]}
-                >
-                  {device.online
-                    ? statusLabel
-                    : `${statusLabel} · ${statusDetail}`}
-                </Text>
+                <HStack spacing={4} alignment="center">
+                  <Circle
+                    modifiers={[
+                      frame({ width: 6, height: 6 }),
+                      foregroundStyle(device.online ? colors.statusReady : colors.textTertiary),
+                    ]}
+                  />
+                  <Text
+                    modifiers={[
+                      font({ textStyle: 'caption' }),
+                      foregroundStyle({
+                        type: 'hierarchical',
+                        style: 'secondary',
+                      }),
+                    ]}
+                  >
+                    {device.online
+                      ? statusLabel
+                      : `${statusLabel} · ${statusDetail}`}
+                  </Text>
+                </HStack>
               }
               testID={`deviceManagement.open.${device.deviceId}`}
             >

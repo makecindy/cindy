@@ -16,6 +16,7 @@ import {
   List,
   ListTodo,
   Menu,
+  Monitor,
   Mic,
   Pencil,
   Pin,
@@ -8734,6 +8735,13 @@ export default function SessionScreen() {
               }}
               onOpenSettings={() => openSessionMenu('menu')}
               onOpenUsage={() => openSessionMenu('info')}
+              onOpenRemoteDesktop={() => {
+                if (!deviceId) return;
+                router.push({
+                  pathname: '/devices/desktop/[deviceId]',
+                  params: { deviceId, deviceName },
+                });
+              }}
               onToggleSearch={() => {
                 if (searchOpen) closeSearch();
                 else setSearchOpen(true);
@@ -9501,6 +9509,7 @@ function SessionHeaderBar({
   onOpenSessionList,
   onOpenSettings,
   onOpenUsage,
+  onOpenRemoteDesktop,
   onToggleSearch,
   pendingCount,
   queueCount,
@@ -9530,6 +9539,7 @@ function SessionHeaderBar({
   onOpenFiles(): void;
   onOpenSettings(): void;
   onOpenUsage(): void;
+  onOpenRemoteDesktop(): void;
   onToggleSearch(): void;
   pendingCount: number;
   queueCount: number;
@@ -9635,6 +9645,14 @@ function SessionHeaderBar({
       </View>
 
       <View style={styles.sessionHeaderActions}>
+        <SessionHeaderIconButton
+          accessibilityLabel={t('remoteDesktop.title')}
+          active={false}
+          disabled={!currentSession}
+          icon={Monitor}
+          onPress={currentSession ? onOpenRemoteDesktop : undefined}
+          testID="session.remoteDesktop"
+        />
         {headerActions.map((action) => (
           <SessionHeaderIconButton
             accessibilityHint={action.disabledReason ?? undefined}

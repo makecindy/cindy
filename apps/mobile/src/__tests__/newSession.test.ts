@@ -2186,7 +2186,7 @@ describe('new session worktree wiring (source locks)', () => {
       resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'),
       'utf8',
     );
-    expect(contextSource).toContain('resolveMobileInvokeTimeoutMs(channel)');
+    expect(contextSource).toContain('resolveMobileInvokeTimeoutMs(channel, args)');
     const timeoutsSource = readTextLf(
       resolve(process.cwd(), 'src/device-link/invokeTimeouts.ts'),
       'utf8',

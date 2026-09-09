@@ -1675,7 +1675,7 @@ async function sendInvoke<T>(
       { channel, args },
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
-      resolveMobileInvokeTimeoutMs(channel),
+      resolveMobileInvokeTimeoutMs(channel, args),
     );
   } catch (err) {
     settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));

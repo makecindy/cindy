@@ -1028,6 +1028,36 @@ function buildSwiftHelperForForgeArch(
   }
 }
 
+function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
+  const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
+  fs.mkdirSync(destDir, { recursive: true });
+  if (process.platform === 'darwin' && isMacForgePlatform(platform)) {
+    const dest = path.join(destDir, 'cindy-macos-desktop-input');
+    buildSwiftHelperForForgeArch(path.join(__dirname, 'native', 'remote-desktop', 'macos-input.swift'), dest, arch, '10.15', [], 'remote desktop input');
+    fs.chmodSync(dest, 0o755);
+    const capture = path.join(destDir, 'cindy-macos-desktop-capture');
+    const captureArch = arch === 'universal' ? ['-arch', 'arm64', '-arch', 'x86_64'] : ['-arch', arch === 'arm64' ? 'arm64' : 'x86_64'];
+    const result = spawnSync('xcrun', ['clang', path.join(__dirname, 'native', 'remote-desktop', 'macos-capture.m'),
+      ...captureArch, '-mmacosx-version-min=10.15', '-fobjc-arc', '-fblocks', '-O2',
+      '-framework', 'Foundation', '-framework', 'AppKit', '-framework', 'CoreGraphics', '-framework', 'CoreImage',
+      '-framework', 'IOSurface', '-framework', 'ImageIO', '-framework', 'IOKit', '-o', capture], { stdio: 'inherit' });
+    if (result.error || result.status !== 0) throw new Error('Remote desktop capture build failed');
+    fs.chmodSync(capture, 0o755);
+  } else if (process.platform === 'win32' && platform === 'win32') {
+    if (arch !== 'x64' && arch !== 'arm64') throw new Error('Unsupported Windows desktop architecture');
+    const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+    for (const helper of ['windows-input', 'windows-host']) {
+      const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const result = spawnSync('cargo', ['build', '--release', '--locked', '--target', target, '--manifest-path', path.join(root, 'Cargo.toml')], { stdio: 'inherit' });
+      if (result.error || result.status !== 0) throw new Error(`Remote desktop ${helper} build failed`);
+      const output = path.join(root, 'target', target, 'release');
+      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
+      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
+      if (helper === 'windows-host') fs.copyFileSync(path.join(output, 'cindy_windows_desktop_host.dll'), path.join(destDir, `${name}.node`));
+    }
+  }
+}
+
 function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
@@ -1416,6 +1446,7 @@ const config: ForgeConfig = {
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
       NSDesktopFolderUsageDescription:
@@ -1484,6 +1515,7 @@ const config: ForgeConfig = {
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
       NSDocumentsFolderUsageDescription:
@@ -1554,6 +1586,7 @@ const config: ForgeConfig = {
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
       buildMacSessionDragReleaseHelper(platform, arch);
+      buildRemoteDesktopInput(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
@@ -1695,6 +1728,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/preload/desktopCapturePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
           config: 'vite.preload.config.ts',
@@ -1730,6 +1768,7 @@ const config: ForgeConfig = {
         },
       ],
       renderer: [
+        { name: 'desktop_capture', config: 'vite.capture.config.ts' },
         {
           name: 'main_window',
           config: 'vite.renderer.config.ts',
