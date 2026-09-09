@@ -86,14 +86,6 @@ export function StorageManagementCard() {
       setStats(mediaSucceeded ? mediaResult.value : null);
       setDatabaseBytes(databaseSucceeded ? databaseResult.value.databaseBytes : null);
       setStatsFailed(!mediaSucceeded || !databaseSucceeded);
-      if (databaseApi) {
-        try {
-          const settings = await databaseApi.getSettings();
-          setWarningThresholdGiB(settings.thresholdGiB);
-        } catch {
-          // Keep the last known threshold when settings cannot be read.
-        }
-      }
     } finally {
       statsBusyRef.current = false;
       setStatsRefreshing(false);
@@ -120,6 +112,7 @@ export function StorageManagementCard() {
       const result = await window.electronAPI.cindyMediaStorage.clearLegacyImagesDir();
       if (!result.cleared) return;
       toast.success(t('settings.about.storage.legacyImagesCleared'));
+      void refreshStats();
     } catch {
       toast.error(t('settings.about.storage.legacyImagesClearFailed'));
     } finally {
@@ -145,6 +138,7 @@ export function StorageManagementCard() {
       const result = await window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir();
       if (!result.cleared) return;
       toast.success(t('settings.about.storage.chatAttachmentsCleared'));
+      void refreshStats();
     } catch {
       toast.error(t('settings.about.storage.chatAttachmentsClearFailed'));
     } finally {
@@ -227,6 +221,7 @@ export function StorageManagementCard() {
   const fixedCacheBytes = stats?.success
     ? stats.fixedCaches.legacyImages.bytes + stats.fixedCaches.chatAttachments.bytes
     : null;
+  const fixedCaches = stats?.success ? stats.fixedCaches : null;
   const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
     ? databaseBytes + mediaBytes + fixedCacheBytes
     : null;
@@ -291,7 +286,13 @@ export function StorageManagementCard() {
               })}{' '}
               · {t('settings.about.storage.mediaSectionTitle')} {mediaBytes === null
                 ? t('settings.about.storage.unknown')
-                : formatBytes(mediaBytes)}
+                : formatBytes(mediaBytes)}{' '}
+              · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
+                ? t('settings.about.storage.unknown')
+                : formatBytes(fixedCaches?.legacyImages.bytes ?? 0)}{' '}
+              · {t('settings.about.storage.chatAttachmentsLabel')} {fixedCacheBytes === null
+                ? t('settings.about.storage.unknown')
+                : formatBytes(fixedCaches?.chatAttachments.bytes ?? 0)}
             </span>
             {statsFailed && (
               <span className="mt-1 block text-11 text-[var(--warning-fg)]">

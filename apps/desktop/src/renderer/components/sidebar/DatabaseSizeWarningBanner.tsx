@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
+import { toast } from '@/lib/toast';
 
 const GIB_BYTES = 1024 ** 3;
 
@@ -65,7 +66,7 @@ export function DatabaseSizeWarningBanner({
       await window.electronAPI.localDb.databaseSizeWarning.setSettings({ disabled: true });
       setDisabled(true);
     } catch {
-      // Keep the reminder visible when persistence fails.
+      toast.error(t('settings.about.storage.statsFailed'));
     }
   };
 
