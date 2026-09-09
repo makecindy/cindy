@@ -10,7 +10,7 @@
  *  - ✅ Approval:  setRequestHandler 接 commandExecution / fileChange RequestApproval
  *                  → dispatchInteraction (复用 Claude 那条 PermissionPrompt 通道)
  *  - ✅ 运行时切:  setModel / setEffort / setPermissionMode 都生效, 下一 turn 自动透传
- *  - ✅ Fork:      thread/fork(lastTurnId)；旧历史回退 fork + rollback → 新 thread_id
+ *  - ✅ Fork:      thread/fork(lastTurnId)；分页历史查询原生边界，旧 daemon 回退 rollback
  *  - ✅ oneShot:   走 host 临时 thread (起标题), Phase 4 删 SDK dep 后唯一通路
  *
  * 输出契约:
@@ -183,6 +183,7 @@ import {
 } from './rollout-sanitize.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
+import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -13537,7 +13538,7 @@ export class CodexAgent extends BaseAgent {
    * 与 Claude 不同:
    *  - Claude fork 可 truncate 到指定 message uuid (sdkForkSession upToMessageId)
    *  - Codex 新消息保存原生 turn id,直接用 lastTurnId 精确 fork
-   *  - 老消息没有原生锚点时,仍先 fork latest 再 rollback 尾部 turn
+   *  - 老消息没有原生锚点时,分页 daemon 查 turn 元数据；旧 daemon 才用 rollback
    *
    * opts.upToMessageId 在 Codex 这里被忽略。uuidMap 返回空 — Codex 不使用
    * Claude message uuid；原生 turn 锚点由 usedNativeForkAnchor 单独声明可复用。
@@ -13603,7 +13604,7 @@ export class CodexAgent extends BaseAgent {
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
-    const lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
+    let lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
     const forkCredentialMode = resolveAgentCredentialMode({
       agentKind: 'codex',
       providerId: opts.providerId,
@@ -13706,6 +13707,19 @@ export class CodexAgent extends BaseAgent {
         // Check before allocating a child: indexed native history must go through
         // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
         await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+      }
+      if (
+        !lastTurnId && (tailTurnsToDrop > 0 || opts.forkAtTimestampMs !== undefined) && !opts.stripEncryptedReasoning
+        && codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])
+      ) {
+        // Older/failed messages have no persisted UI anchor. Paginated threads
+        // reject rollback, so resolve the requested boundary with metadata only
+        // before allocating a child. Never rewrite indexed rollout files.
+        lastTurnId = await resolveForkTurnAnchor(
+          (method, params) => host.request(method, params),
+          opts.sourceSdkSessionId,
+          opts.forkAtTimestampMs,
+        );
       }
       const usedNativeForkAnchor = Boolean(
         lastTurnId && !opts.stripEncryptedReasoning && supportsCodexNativeTurnFork(initResp.userAgent),
