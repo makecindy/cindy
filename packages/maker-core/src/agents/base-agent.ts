@@ -599,7 +599,10 @@ export interface PiExtensionUiStrings {
   cancel: string;
   mutationFailed: string;
   mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
-  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string> & {
+    /** Only used when the returned package explicitly confirms enablement. */
+    installEnabled?: string;
+  };
 }
 
 export interface PiManagedPackageRuntimeConvergence {

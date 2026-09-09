@@ -1886,7 +1886,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
         'native-command-failed': t('settings.piPackages.failure.nativeCommandFailed'),
       },
       mutationSuccess: {
-        install: t('settings.piPackages.success.installEnabled'),
+        install: t('settings.piPackages.success.install'),
+        installEnabled: t('settings.piPackages.success.installEnabled'),
         update: t('settings.piPackages.success.update'),
         remove: t('settings.piPackages.success.remove'),
       },

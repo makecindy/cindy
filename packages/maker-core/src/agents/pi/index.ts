@@ -1003,6 +1003,19 @@ function piManagedPackageReceiptPayload(
       };
 }
 
+function piManagedPackageSuccessHeadline(
+  action: ParsedPiManagedPackageCommand['action'],
+  result: Record<string, unknown> | undefined,
+  strings: PiExtensionUiStrings,
+): string {
+  const affectedPackage = result?.affectedPackage;
+  return action === 'install'
+    && affectedPackage !== null && typeof affectedPackage === 'object'
+    && (affectedPackage as Record<string, unknown>).enabled === true
+    ? strings.mutationSuccess.installEnabled ?? strings.mutationSuccess.install
+    : strings.mutationSuccess[action];
+}
+
 function piManagedPackageVisibleReceipt(
   command: ParsedPiManagedPackageCommand,
   outcome: PiManagedPackageCommandOutcome,
@@ -1010,7 +1023,7 @@ function piManagedPackageVisibleReceipt(
 ): string {
   const receipt = piManagedPackageReceiptPayload(command, outcome);
   const headline = outcome.ok
-    ? strings.mutationSuccess[command.action]
+    ? piManagedPackageSuccessHeadline(command.action, receipt.result as Record<string, unknown> | undefined, strings)
     : outcome.cancelled
       ? strings.cancel
       : strings.mutationFailed;
@@ -1032,7 +1045,7 @@ function piManagedPackageToolVisibleReceipt(
   strings: PiExtensionUiStrings,
 ): string {
   const build = (receipt: Record<string, unknown>): string => [
-    strings.mutationSuccess[action],
+    piManagedPackageSuccessHeadline(action, result, strings),
     '```json',
     JSON.stringify(receipt),
     '```',

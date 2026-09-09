@@ -1622,6 +1622,58 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it.each([
+    ['command', true], ['command', false], ['command', undefined],
+    ['tool', true], ['tool', false], ['tool', undefined],
+  ] as const)('reports enablement only with package evidence: %s / %s', async (route, enabled) => {
+    const deps = buildDeps();
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm', cancel: 'Cancel', mutationFailed: 'Failed',
+      mutationSuccess: {
+        install: 'Installed only', installEnabled: 'Installed and enabled',
+        update: 'Updated', remove: 'Removed',
+      },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true, nativeCommandSucceeded: true,
+      ...(enabled === undefined
+        ? { projectionUnavailable: true }
+        : { affectedPackage: { source: 'npm:sample', enabled } }),
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `visible-install-${route}-${enabled}`, workingDir: cwd, model: 'm',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      if (route === 'command') {
+        await handle.send(
+          { type: 'user', content: 'pi install npm:sample' },
+          desktopCommandOptions('pi install npm:sample'),
+        );
+      } else {
+        handle.setInteractionResolver?.(
+          vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+        );
+        fireManagedPackageRequest('visible-install', 'install', 'npm:sample');
+        expect(JSON.parse(String((await waitForResponse('visible-install')).value))).toMatchObject({ ok: true });
+      }
+      let receipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Installed')) {
+          receipt = data.text;
+          break;
+        }
+      }
+      expect(receipt.split('\n')[0]).toBe(enabled === true ? 'Installed and enabled' : 'Installed only');
+      expect(deps.mutatePiManagedPackage).toHaveBeenCalledOnce();
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each([true, undefined])('explains missing install projection using native success evidence %s', async (nativeCommandSucceeded) => {
     const deps = buildDeps();
     deps.mutatePiManagedPackage = vi.fn(async () => ({
