@@ -270,6 +270,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
+  // Read-only visible history and recoverable work ranges; same session authorization as list.
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:view-intent',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
   'local-db:messages:around',
   // 以 message clientId 定位上下文,供移动端轻量跳转 / fork 来源定位；只读,与 messages:around 同安全级。
@@ -580,6 +584,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:bot-direct-message:changed',
   // maker-ipc MAKER_PUSH
   'maker:event',
+  'maker:history-view-changed',
   // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
   'maker:agents:changed',
   // Host-owned resource provider 的通用失效通知；payload 只含 collection/ref/revision。

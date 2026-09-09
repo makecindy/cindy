@@ -77,6 +77,8 @@ function startMediaRefCompensationReconcile(
 }
 
 export interface RegisterLocalDbIpcOpts {
+  isSessionTurnPendingCompletion?: (sessionId: string) => boolean;
+  readHistoryLiveMessages?: (sessionId: string) => import('../../../renderer/lib/ccAgent.types').Message[];
   resolveContextWindow?: RegisterSessionIpcOpts['resolveContextWindow'];
   /** Current stable app-session owner. False makes queued/in-flight work stale. */
   isOwnerCurrent?: (userId: string) => boolean;
@@ -254,7 +256,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
   });
-  registerMessageIpc();
+  registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerBotIpc();
   registerRoutinesIpc();

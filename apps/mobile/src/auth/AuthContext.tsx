@@ -120,6 +120,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
+import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
 import {
   clearAllMobileVoiceDictionaryCaches,
@@ -850,6 +851,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages().catch(() => undefined),
+      clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
     ]);
@@ -2580,6 +2582,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // deviceId,不清就会让下一个账号读到上一个账号的词条并发给润色模型。
     await clearAllMobileVoiceDictionaryCaches().catch(() => undefined);
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);

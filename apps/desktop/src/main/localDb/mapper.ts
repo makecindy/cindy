@@ -8,6 +8,9 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
+import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 
@@ -274,6 +277,19 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
             ),
     summary: row.summary ?? null,
   };
+  // Only the owning host can distinguish a pre-boot interruption from a live
+  // turn. Keep the generation so existing ended/clear patches revoke it without
+  // another query; a normal read acknowledgement must not revoke this evidence.
+  const candidate = { ...base, interruptedTurnStartedAt: base.activeTurnStartedAt };
+  base.interruptedTurnStartedAt =
+    row.source != null &&
+    DESKTOP_VISIBLE_SESSION_SOURCES.includes(
+      row.source as (typeof DESKTOP_VISIBLE_SESSION_SOURCES)[number],
+    ) &&
+    (base.activeTurnStartedAt ?? Infinity) < getSessionInterruptionBootAt() &&
+    hasPendingSessionInterruption(candidate)
+      ? base.activeTurnStartedAt
+      : null;
   return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
 }
 

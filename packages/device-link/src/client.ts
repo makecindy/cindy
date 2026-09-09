@@ -2709,7 +2709,11 @@ export class DeviceLinkClient {
     // pending,不碰共享 ws;其它 peer 占满 send buffer 不得让它 BACKPRESSURE。
     // 真会发送时仍在驱逐/腾位之前预检(旧 P1:先驱逐再拒会清空镜像历史)。
     const additionalFrames = Math.max(1, frames.length);
+    const previousBaseSeq = this.getTransportBaseSeq(peer);
     const willSendNow = this.isPeerSendReady(peer)
+      // Admission may evict a discardable prefix and move this message into
+      // the window. Preserve the socket preflight before that mutation.
+      && (!this.isOutsideReceiveWindow(peer, seq) || !hasPendingCapacity())
       && !this.shouldHoldRecoverySend(peer, additionalFrames)
       && (this.congestionCloseStreak === 0 || this.congestionSendBudget.canTake(
         env.dst, additionalFrames, this.getReadyReliablePeers(env.dst), this.monotonicNow(),
@@ -2776,7 +2780,12 @@ export class DeviceLinkClient {
         this.log.debug(`reliable transport initial send interrupted for ${env.dst.slice(0, 8)}`, err);
       }
     }
-    if (this.isPeerSendReady(peer)) this.ensureRetryTimer(env.dst);
+    if (this.isPeerSendReady(peer)) {
+      if (this.getTransportBaseSeq(peer) !== previousBaseSeq) {
+        this.retryPending(env.dst, { ignoreInterval: false, onlyUnsent: true });
+      }
+      this.ensureRetryTimer(env.dst);
+    }
     return true;
   }
 
@@ -2785,6 +2794,7 @@ export class DeviceLinkClient {
    * 一分片都没写出才抛;中途竞态只返回已上网的帧数,让恢复预算能结算部分突发。
    */
   private sendReliableFrames(peer: PeerTransportState, pending: PendingReliableMessage): number {
+    if (!pending.sent && this.isOutsideReceiveWindow(peer, pending.seq)) return 0;
     const frames = encodeReliableFrames(
       pending.envelope,
       peer.streamId,
@@ -2822,6 +2832,15 @@ export class DeviceLinkClient {
       }
     }
     return sent;
+  }
+
+  private isOutsideReceiveWindow(peer: PeerTransportState, seq: number): boolean {
+    // Keep future messages at the sender until cumulative ACK advances. A
+    // receiver has only this many reassembly/ready slots; sending 64 pending
+    // messages into 16 slots can discard a large response, then block the stream
+    // for its entire byte-paced retry interval. Prefix eviction advances this
+    // same base, so skipped/discardable messages cannot strand the window.
+    return seq - this.getTransportBaseSeq(peer) >= MAX_TRANSPORT_REASSEMBLIES;
   }
 
   private getReadyReliablePeers(target: string): string[] {
@@ -3444,6 +3463,10 @@ export class DeviceLinkClient {
       peer.recoveryNeedsAck = false;
       peer.recoveryFramesSent = 0;
       this.retryPending(src, { ignoreInterval: true });
+    } else {
+      // Release locally queued first sends promptly, without replaying already
+      // in-flight large responses every time a partial ACK arrives.
+      this.retryPending(src, { ignoreInterval: false, onlyUnsent: true });
     }
     if (peer.pending.size === 0 && peer.retryTimer) {
       clearInterval(peer.retryTimer);
@@ -3629,7 +3652,7 @@ export class DeviceLinkClient {
    */
   private retryPending(
     dst: string,
-    opts: { ignoreInterval: boolean },
+    opts: { ignoreInterval: boolean; onlyUnsent?: boolean },
   ): void {
     const peer = this.peerTransport.get(dst);
     if (
@@ -3665,6 +3688,7 @@ export class DeviceLinkClient {
     let framesSpent = 0;
     const head = peer.pending.values().next().value;
     for (const pending of peer.pending.values()) {
+      if (opts.onlyUnsent && pending.sent) continue;
       // Cumulative ACK cannot confirm a tail while a byte-paced head is still
       // missing. Allow one early tail retry to fill the receiver's buffer, but
       // do not burn its whole retry budget (and reset this healthy slow link)
@@ -3690,7 +3714,7 @@ export class DeviceLinkClient {
         sizeIntervals,
         Math.min(4, 2 ** Math.max(0, pending.attempts - 1)),
       );
-      if (!opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
+      if (pending.sent && !opts.ignoreInterval && now - pending.lastSentAt < retryDelayMs) {
         // A large head frame may still be inside its byte-based cooldown while
         // a later small request is already eligible. Cumulative ACK cannot
         // advance past the head, but one early retry lets the receiver buffer
@@ -3709,7 +3733,15 @@ export class DeviceLinkClient {
       if (framesSpent > 0 && framesSpent + this.estimateReliableFrameCount(pending) > budget) break;
       let sentFrames = 0;
       try {
+        const previousAttempts = pending.attempts;
+        const sinceSendMs = now - pending.lastSentAt;
         sentFrames = this.sendReliableFrames(peer, pending);
+        if (sentFrames > 0 && pending === head && previousAttempts > 0 && pending.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL) {
+          this.log.debug(`reliable head retry dst=${dst.slice(0, 8)} seq=${pending.seq}`
+            + ` request=${pending.envelope.id?.slice(0, 8) ?? 'none'} bytes=${pending.bytes}`
+            + ` attempts=${previousAttempts} sinceSendMs=${sinceSendMs} frames=${sentFrames}`
+            + ` pending=${peer.pending.size} ack=${peer.highestAckSeq}`);
+        }
       } catch (err) {
         this.log.debug(`reliable transport retry failed for ${dst.slice(0, 8)}`, err);
         break;
@@ -4414,6 +4446,9 @@ const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
   'local-db:sessions:get',
   'local-db:history:messages',
   'local-db:messages:list',
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:view-intent',
   'local-db:messages:around',
   'local-db:messages:around-client-id',
   'local-db:messages:estimatedSessionValue',

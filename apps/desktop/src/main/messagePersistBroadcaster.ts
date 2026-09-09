@@ -66,7 +66,7 @@ import {
 import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
-import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import type { AgentMeta, Message } from '../renderer/lib/ccAgent.types';
 import { parseToolLoopErrorDetails, type ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('messagePersistBroadcaster');
@@ -82,6 +82,21 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+// In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
+// so expanding midway does not depend on deltas a collapsed controller never received.
+const historyThinkingBlocks = new Map<string, Map<string, Message>>();
+const historyThinkingOwners = new Map<string, OwnerScope>();
+export function clearSessionThinkingSnapshots(sessionId: string): void {
+  historyThinkingBlocks.delete(sessionId);
+  historyThinkingOwners.delete(sessionId);
+}
+export function getSessionThinkingSnapshots(sessionId: string): Message[] {
+  if (!isOwnerScopeCurrent(historyThinkingOwners.get(sessionId) ?? null)) {
+    clearSessionThinkingSnapshots(sessionId);
+    return [];
+  }
+  return [...(historyThinkingBlocks.get(sessionId)?.values() ?? [])];
+}
 
 /** Read the in-flight block without flushing or changing its persistence identity. */
 export function getSessionTextSnapshot(sessionId: string) {
@@ -149,6 +164,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   if (!Number.isFinite(parsed)) return;
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
+    clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
     // A cleared transcript must not be revived by a late terminal update from an
@@ -522,9 +538,14 @@ function enqueueVisibleDbMessage(
   label: string,
   sessionId: string,
   body: CreateDbMessageBody,
+  onPersisted?: () => void,
 ): void {
   const stamped = withAgentKindStamp(sessionId, body);
-  enqueueWrite(label, (ownerScope) => createVisibleDbMessage(sessionId, stamped, ownerScope));
+  enqueueWrite(label, async (ownerScope) => {
+    const result = await createVisibleDbMessage(sessionId, stamped, ownerScope);
+    onPersisted?.();
+    return result;
+  });
 }
 
 /**
@@ -646,6 +667,10 @@ const codexPlanRowByTurnToolUseId = new Map<
 >();
 
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
+export function getHistoryToolName(sessionId: string, toolUseId: string): string {
+  return toolUseInfoBySession.get(sessionId)?.get(toolUseId)?.toolName ?? '';
+}
+
 const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
 /**
  * Agent/Task terminal events are live-only, while the originating tool_use is durable.
@@ -1311,16 +1336,43 @@ export function prepareSyntheticToolEventForBroadcast(
  */
 export function onThinkingEvent(
   sessionId: string,
-  data: { stage?: unknown; blockId?: unknown; text?: unknown; durationMs?: unknown },
+  data: { stage?: unknown; blockId?: unknown; text?: unknown; durationMs?: unknown; startedAt?: unknown },
   agentMeta: AgentMeta | null,
 ): void {
   const blockId = typeof data.blockId === 'string' ? data.blockId : '';
   if (!blockId) return;
+  const receivedAt = Date.now();
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
   noteAssistantTranscriptUuid(sessionId, meta);
 
+  getSessionThinkingSnapshots(sessionId);
+  const blocks = historyThinkingBlocks.get(sessionId) ?? new Map<string, Message>();
+  const previous = blocks.get(blockId);
+  if (data.stage === 'start' || data.stage === 'delta' || data.stage === 'final') {
+    const previousText = (previous?.content as { text?: string } | undefined)?.text ?? '';
+    const text = typeof data.text === 'string' ? data.text : '';
+    blocks.set(blockId, {
+      id: `history-live:${blockId}`, clientId: blockId, sessionId, role: 'thinking', toolUseId: null,
+      agentMeta: meta,
+      createdAt: previous?.createdAt ?? new Date(typeof data.startedAt === 'number' ? data.startedAt : receivedAt).toISOString(),
+      content: { kind: 'thinking', text: data.stage === 'delta' ? previousText + text : text,
+        durationMs: typeof data.durationMs === 'number' ? data.durationMs : 0 },
+    });
+    historyThinkingBlocks.set(sessionId, blocks);
+    historyThinkingOwners.set(sessionId, captureOwnerScope());
+  }
+  const finalSnapshot = blocks.get(blockId);
+  const releaseSnapshot = () => {
+    if (blocks.get(blockId) !== finalSnapshot) return;
+    blocks.delete(blockId);
+    if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
+      historyThinkingBlocks.delete(sessionId);
+      historyThinkingOwners.delete(sessionId);
+    }
+  };
+
   if (data.stage === 'final') {
-    const finishedAt = Date.now();
+    const finishedAt = receivedAt;
     const text = typeof data.text === 'string' ? data.text : '';
     const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
     enqueueVisibleDbMessage(`thinking:${sessionId}:${blockId}`, sessionId, {
@@ -1329,10 +1381,11 @@ export function onThinkingEvent(
       content: { kind: 'thinking', text, durationMs, isRedacted: false, finishedAt },
       agentMeta: meta,
       createdAt: finishedAt,
-    });
+    }, releaseSnapshot);
     notePersistedMessage(sessionId, 'thinking', blockId);
   } else if (data.stage === 'redacted') {
-    const finishedAt = Date.now();
+    releaseSnapshot();
+    const finishedAt = receivedAt;
     enqueueVisibleDbMessage(`thinking_redacted:${sessionId}:${blockId}`, sessionId, {
       clientId: blockId,
       role: 'thinking',
@@ -1645,8 +1698,8 @@ export function onInteractionMessage(
  * 不在 device-link allowlist;远程会话被控端的 row 因此永留 pending,reload 经 mapServerMessages
  * 被映射成 expired → 用户回答/批准记录丢失。这里在 RESOLVE_INTERACTION(任何调用方:本机 renderer /
  * 远程控制端隧道 / 未来手机)成功后由 main 落库,使被控端 DB 成为真相,所有端 reload 拿到正确状态。
- * 复用 onInteractionMessage 同款 enqueueWrite 串行写队列;不广播(对齐 updateMessageContent 语义,
- * 其它端 panel 已由 INTERACTION_DISMISSED 清,reload 时读这条真值)。
+ * 复用 onInteractionMessage 同款 enqueueWrite 串行写队列；写入完成后广播权威行，
+ * 让本机及远程历史投影接管最终状态，不依赖后续 turn。
  *
  * 仅 ask_user_question / plan_review 落库(permission 无 chat 消息,persistId 为空时直接跳过)。
  */
@@ -1679,16 +1732,17 @@ export function onInteractionResolved(
   if (kind === 'ask_user_question') {
     const answers = (decision.answers as Record<string, string> | undefined) ?? {};
     const cancelled = decision.dismissed === true;
-    enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, () =>
-      updateDbMessageContent(sessionId, persistId, {
+    enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, async (ownerScope) => {
+      const updated = await updateDbMessageContent(sessionId, persistId, {
         requestId,
         questions: request.questions ?? [],
         status: cancelled ? 'cancelled' : 'answered',
         answers,
       }, { acceptedAt, text: cancelled ? '' : 'Clarifications:\n' + Object.entries(answers)
         .filter(([, answer]) => typeof answer === 'string' && answer.trim())
-        .map(([question, answer]) => `- ${question} → ${answer}`).join('\n') }),
-    );
+        .map(([question, answer]) => `- ${question} → ${answer}`).join('\n') });
+      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+    });
     return;
   }
 
@@ -1707,16 +1761,17 @@ export function onInteractionResolved(
   const planFilePath = typeof request.planFilePath === 'string' ? request.planFilePath : '';
   const feedback =
     behavior === 'deny' && !dismissed ? ((decision.reason as string | undefined) ?? null) : null;
-  enqueueWrite(`plan_review_resolved:${sessionId}:${persistId}`, () =>
-    updateDbMessageContent(sessionId, persistId, {
+  enqueueWrite(`plan_review_resolved:${sessionId}:${persistId}`, async (ownerScope) => {
+    const updated = await updateDbMessageContent(sessionId, persistId, {
       requestId,
       plan,
       planFilePath,
       status,
       feedback,
     }, { acceptedAt, text: behavior === 'allow' ? `Approved plan:\n${plan}`
-      : dismissed ? '' : feedback ?? '' }),
-  );
+      : dismissed ? '' : feedback ?? '' });
+    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+  });
 }
 
 /**
@@ -1785,6 +1840,8 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
  * + knownToolUseIds + lastAgentMeta。必须在 flushOrphanToolResults 之后调用。
  */
 export function resetTurnPersistState(sessionId: string): void {
+  // Event-stream completion is not a persistence barrier. Thinking snapshots
+  // survive until their write succeeds or an explicit history/owner cleanup.
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
@@ -2393,6 +2450,7 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 }
 
 export function clearSessionPersistState(sessionId: string): void {
+  clearSessionThinkingSnapshots(sessionId);
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);
   sealedAssistantLateFinalBySession.delete(sessionId);
