@@ -1,6 +1,6 @@
 import type { Schedule } from '@cindy/maker-scheduler';
 
-import { buildPreRunHook } from './scheduleFormLogic';
+import { buildPreRunHook, scheduleAgentKindForForm } from './scheduleFormLogic';
 import type { ScheduleFormState } from '../hooks/useScheduleForm';
 import { stripTrailingPathSeparators } from '../../../../shared/pathText';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
@@ -89,7 +89,7 @@ export function formToProjectConfig(
     recurring: form.recurring,
     manual: form.manual,
     intervalMs: form.intervalMs,
-    agentKind: form.agentKind,
+    agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: form.model.trim() ? form.modelAgentKind : undefined,
     model: form.model.trim() || undefined,
     providerId: form.providerId.trim() || undefined,

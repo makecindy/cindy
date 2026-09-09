@@ -54,6 +54,8 @@ export interface MobileScheduleDraft {
   intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;
+  /** Form-only baseline; changing the selected model must not overwrite this binding. */
+  boundAgent?: { sessionId: string; agentKind: RemoteScheduleAgentKind };
   model: string;
   providerId: string;
   effort: string;
@@ -171,6 +173,8 @@ export function createMobileScheduleDraft(
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
     agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',
     modelAgentKind: schedule.modelAgentKind,
+    boundAgent: schedule.targetSessionId
+      ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
     model: schedule.model ?? defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code'),
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
@@ -396,7 +400,8 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
           && typeof draft.sourceIntervalMs === 'number'
         ? draft.sourceIntervalMs
         : null,
-    agentKind: draft.agentKind,
+    agentKind: draft.executionMode !== 'script' && targetSessionId && draft.boundAgent?.sessionId === targetSessionId
+      ? draft.boundAgent.agentKind : draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
     persistentSession: draft.persistentSession,

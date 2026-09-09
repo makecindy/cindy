@@ -121,6 +121,8 @@ export interface ScheduleFormState {
   manual: boolean;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  /** The bound task's baseline, independent of the editable model choice. Form-only. */
+  boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
   model: string;
   /**
    * 显式选定的来源(供应商)id。'' = 跟随该 agent 原生默认来源（no-break，与未升级
@@ -277,6 +279,7 @@ export interface RememberedBinding {
   fastMode: boolean;
   agentKind: ScheduleFormState['agentKind'];
   modelAgentKind?: ScheduleFormState['modelAgentKind'];
+  boundAgent?: ScheduleFormState['boundAgent'];
 }
 
 /** 从 form 提取绑定快照;无真实绑定返回 null。 */
@@ -290,6 +293,7 @@ export function captureBinding(form: ScheduleFormState): RememberedBinding | nul
     fastMode: form.fastMode,
     agentKind: form.agentKind,
     modelAgentKind: form.modelAgentKind,
+    boundAgent: form.boundAgent,
   };
 }
 
@@ -324,6 +328,7 @@ export function applyRunMode(
           fastMode: remembered.fastMode,
           agentKind: remembered.agentKind,
           modelAgentKind: remembered.modelAgentKind,
+          boundAgent: remembered.boundAgent,
         }
       : f;
 
@@ -501,6 +506,13 @@ export function parseScriptTimeoutMs(sec: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? Math.floor(n * 1000) : undefined;
 }
 
+/** Preserve a binding's baseline when saving; unbound tasks use the selected Harness. */
+export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormState['agentKind'] {
+  return form.executionMode !== 'script' && hasRealBinding(form) &&
+    form.boundAgent?.sessionId === form.targetSessionId.trim()
+    ? form.boundAgent.agentKind : form.agentKind;
+}
+
 export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput {
   const isHeartbeat = !!form.targetSessionId.trim();
   const isScript = (form.executionMode ?? 'agent') === 'script';
@@ -518,7 +530,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     // 恒带 key：编辑 Cron 任务时 undefined 会沿 storage patch 契约清空旧 intervalMs；
     // 相对间隔任务则原样保留权威值，不能从可能陈旧的 cronExpr 重新推导。
     intervalMs: form.intervalMs,
-    agentKind: form.agentKind,
+    agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: !isScript && form.model.trim() ? form.modelAgentKind : undefined,
     workspaceKind: form.workspaceKind,
     useWorktree: !isScript && form.workspaceKind === 'project' && form.useWorktree,

@@ -1299,8 +1299,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
     //     时内存为空,这一步把 DB 里的 provider_id 补回来 → honor 聊天所选来源)。
     //   - 非 heartbeat Claude 且留空 → 把实时解析出的默认来源显式写入，确保 spawn
     //     credential mode、proxy 路由、coordinator baseline 与落库使用同一个 provider。
+    //   - fresh 显式模型选择 → 同步本轮解析来源，避免入队后把新 handle 的已选路由
+    //     误判成凭证切换；不把本轮默认来源回写到自动化偏好。
     //   - 其它非 heartbeat 且留空 → 保持既有默认路由语义。
-    if (explicitProviderId) {
+    if (!isHeartbeat && resolvedSelection) {
+      setSessionProvider(session.id, resolvedSelection.providerId);
+    } else if (explicitProviderId) {
       setSessionProvider(session.id, explicitProviderId);
     } else if (reroutedProviderId) {
       // 停用轴 reroute:隐式默认落点被停用,fire 前已裁决出启用替代 —— 复用的 live

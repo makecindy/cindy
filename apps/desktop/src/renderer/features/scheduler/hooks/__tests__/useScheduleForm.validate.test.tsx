@@ -6,6 +6,7 @@ import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { Session } from '@/lib/ccAgent.types';
 
 import { useScheduleForm } from '../useScheduleForm';
+import { formToProjectConfig } from '../../lib/projectAutomationConfig';
 
 /**
  * 回归(codex review #966):script 模式不展示前置检查区块,buildScheduleInput
@@ -57,7 +58,7 @@ describe('saved automation model selection', () => {
       ...template, agentKind, model: 'template-model', providerId: 'custom', effort: 'medium', fastMode: true,
     }));
     expect(result.current.toInput()).toMatchObject({
-      targetSessionId: 'bound-codex', agentKind, modelAgentKind: agentKind,
+      targetSessionId: 'bound-codex', agentKind: 'codex', modelAgentKind: agentKind,
       model: 'template-model', providerId: 'custom', effort: 'medium', fastMode: true,
     });
 
@@ -80,12 +81,13 @@ describe('saved automation model selection', () => {
 
   it('saves every selected axis for the next fire and clears all overrides when following the task', () => {
     const { result } = renderHook(() => useScheduleForm(null));
+    const baselineAgent = result.current.form.agentKind;
     act(() => result.current.setField('targetSessionId', 'existing-task'));
     act(() => result.current.selectModelConfiguration({
       agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: true,
     }));
     expect(result.current.toInput()).toMatchObject({
-      targetSessionId: 'existing-task', agentKind: 'pi', modelAgentKind: 'pi',
+      targetSessionId: 'existing-task', agentKind: baselineAgent, modelAgentKind: 'pi',
       model: 'test-model', providerId: 'custom', effort: 'medium', fastMode: true,
     });
     act(() => result.current.setRunMode('fresh'));
@@ -126,6 +128,26 @@ describe('saved automation model selection', () => {
     }));
     act(() => result.current.selectModelConfiguration(null));
     expect(result.current.toInput()).toMatchObject({ agentKind: 'codex', modelAgentKind: undefined });
+  });
+
+  it.each([false, true])('preserves the bound baseline across save, reopen and follow (persistent: %s)', (persistentSession) => {
+    const { result } = renderHook(() => useScheduleForm(null));
+    const saved = { ...result.current.toInput(), id: 'schedule', targetSessionId: 'bound-codex',
+      agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model', persistentSession } as Schedule;
+    act(() => result.current.reset(saved));
+    act(() => result.current.setField('name', 'Renamed'));
+    expect(result.current.form.agentKind).toBe('pi');
+    const input = result.current.toInput();
+    expect(input).toMatchObject({ name: 'Renamed', agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model' });
+    expect(input).not.toHaveProperty('boundAgent');
+    expect(formToProjectConfig(result.current.form, 'daily')).toMatchObject({ agentKind: 'codex', modelAgentKind: 'pi' });
+    act(() => result.current.reset({ ...saved, ...input } as Schedule));
+    act(() => result.current.setRunMode('fresh'));
+    expect(result.current.toInput()).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', targetSessionId: undefined });
+    act(() => result.current.setRunMode(persistentSession ? 'persistent' : 'bound'));
+    expect(result.current.toInput()).toMatchObject({ agentKind: 'codex', modelAgentKind: 'pi' });
+    act(() => result.current.selectModelConfiguration(null));
+    expect(result.current.toInput()).toMatchObject({ agentKind: 'codex', modelAgentKind: undefined, model: undefined });
   });
 
   it('does not restore a previous target Harness after selecting another bound task', () => {

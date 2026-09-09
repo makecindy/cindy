@@ -469,7 +469,8 @@ describe('mobile explicit Harness round-trip', () => {
     expect(selected.modelAgentKind).toBe('codex');
     // Complete the pending picker before simulating the device-link JSON boundary.
     const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, targetSessionId: 'bound' })));
-    expect(input).toMatchObject({ targetSessionId: 'bound', agentKind: 'codex', modelAgentKind: 'codex',
+    expect(input).toMatchObject({ targetSessionId: 'bound',
+      agentKind: targetSessionId === 'bound' ? 'claude-code' : 'codex', modelAgentKind: 'codex',
       model: 'gpt-5.5', providerId: '', effort: '', fastMode: false });
     expect(draft.modelAgentKind).toBeUndefined();
     expect(updateDraftAgentKind(draft, 'claude-code')).toBe(draft);
@@ -480,7 +481,7 @@ describe('mobile explicit Harness round-trip', () => {
     const selected = updateDraftAgentKind(draft, 'pi');
     expect(selected).toMatchObject({ modelAgentKind: 'pi', model: '' });
     const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, model: 'pi-model', providerId: 'pi-source' })));
-    expect(input).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', model: 'pi-model', providerId: 'pi-source' });
+    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'pi', model: 'pi-model', providerId: 'pi-source' });
   });
 
   it.each([false, true])('materializes a template model on a followed binding (worktree: %s)', (useWorktree) => {
@@ -489,7 +490,7 @@ describe('mobile explicit Harness round-trip', () => {
       source: 'user', agentKind: 'pi', model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true, useWorktree };
     const selected = applyTemplateToMobileScheduleDraft(draft, template);
     const input = JSON.parse(JSON.stringify(buildMobileScheduleInput(selected)));
-    expect(input).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', model: 'pi-model',
+    expect(input).toMatchObject({ agentKind: useWorktree ? 'pi' : 'codex', modelAgentKind: 'pi', model: 'pi-model',
       providerId: 'pi-source', effort: 'high', fastMode: true, useWorktree });
     if (useWorktree) expect(input).not.toHaveProperty('targetSessionId');
     else expect(input.targetSessionId).toBe('bound');
@@ -509,8 +510,17 @@ describe('mobile explicit Harness round-trip', () => {
       model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: true, targetSessionId: 'bound' }));
     expect(draft.agentKind).toBe('pi');
     const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...draft, name: 'Renamed' })));
-    expect(input).toMatchObject({ agentKind: 'pi', modelAgentKind: 'pi', model: 'shared-model',
+    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'pi', model: 'shared-model',
       providerId: 'selected', effort: 'high', fastMode: true, targetSessionId: 'bound' });
+    expect(input).not.toHaveProperty('boundAgent');
+    const reopened = createMobileScheduleDraft(schedule(input));
+    expect(buildMobileScheduleInput(reopened)).toMatchObject({ agentKind: 'codex', modelAgentKind: 'pi' });
+    expect(buildMobileScheduleInput(updateDraftSessionMode(reopened, 'fresh'))).toMatchObject({
+      agentKind: 'pi', modelAgentKind: 'pi', targetSessionId: undefined,
+    });
+    expect(buildMobileScheduleInput(updateDraftBoundSessionId(reopened, 'another-task'))).toMatchObject({
+      agentKind: 'pi', targetSessionId: 'another-task',
+    });
   });
   it('replaces a saved Pi marker and clears its provider when Mobile chooses Codex', () => {
     const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
