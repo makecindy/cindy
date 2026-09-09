@@ -4,13 +4,15 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const sidebarSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
+  resolve(__dirname, '..', 'lib', 'sessionEventNotification.ts'),
   'utf8',
 );
 
-describe('session notification owner fence', () => {
+describe('shared session notification owner fence', () => {
   it('rechecks focus and account ownership after the sound await before any notification side effect', () => {
-    const capture = sidebarSource.indexOf('const dataOwnerAtNotification = getDataOwnerGeneration();');
+    const capture = sidebarSource.indexOf(
+      'ownerAtNotification: DataOwnerGeneration = getDataOwnerGeneration(),',
+    );
     const focusListener = sidebarSource.indexOf(
       "window.addEventListener('focus', abortPendingSound, { once: true });",
       capture,
@@ -24,7 +26,7 @@ describe('session notification owner fence', () => {
       soundAwait,
     );
     const ownerFence = sidebarSource.indexOf(
-      'if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;',
+      'if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;',
       focusFence,
     );
     const markAttention = sidebarSource.indexOf(

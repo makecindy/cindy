@@ -144,7 +144,7 @@ function BotsSidebarContent() {
           owner.title.trim() && owner.title !== owner.bot.name
             ? `${owner.bot.name} · ${owner.title}`
             : owner.bot.name;
-        sendSessionEventNotification(targetSessionId, title, kind);
+        void sendSessionEventNotification(targetSessionId, title, kind);
         return;
       }
       // useSessionRunningStatus observes the shared runtime map, so it also
@@ -154,14 +154,14 @@ function BotsSidebarContent() {
         .get(targetSessionId)
         .then((session) => {
           if (isOrcaWorkerSession(session)) return;
-          sendSessionEventNotification(
+          void sendSessionEventNotification(
             targetSessionId,
             projectDraftSessionTitle(session.title, t('ccAgent.common.unnamedSession')),
             kind,
           );
         })
         .catch(() => {
-          sendSessionEventNotification(
+          void sendSessionEventNotification(
             targetSessionId,
             t('ccAgent.common.unnamedSession'),
             kind,

@@ -49,7 +49,6 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import {
   getDataOwnerGeneration,
-  isDataOwnerGenerationCurrent,
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -100,13 +99,6 @@ import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
-import {
-  getNotificationsEnabled,
-  getSoundNotificationsEnabled,
-} from '@/hooks/useNotificationSettings';
-import { playSessionEventSound } from '@/lib/notificationSound';
-import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import {
   botOwnedSessionNotificationTitle,
   sendSessionEventNotification,
@@ -1046,14 +1038,6 @@ function ExpandedView({
       // current account boundary before that await and drop the event if the user logs
       // out or switches accounts while the old session notification is still pending.
       const dataOwnerAtNotification = getDataOwnerGeneration();
-      // 灵动岛启用时,完成提示由灵动岛承载,不再走系统 toast,避免同一事件双重打扰;
-      // 灵动岛未启用(或平台不支持)时,继续用系统通知。飞书是独立外发通道,不受影响。
-      const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
-      const desktopEnabled = getNotificationsEnabled() && !islandActive;
-      const feishuEnabled = getFeishuNotificationsEnabled();
-      // 应用级提示音(#3177):与桌面通知同一去重形状——岛已承载该事件时岛会播
-      // 自己的音效,这里不再重响。
-      const soundRequested = getSoundNotificationsEnabled() && !islandActive;
       // 失焦才推 —— 见上注释。
       if (typeof document !== 'undefined' && document.hasFocus()) return;
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -1061,52 +1045,22 @@ function ExpandedView({
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
-      // Bot-owned 任务不在普通任务列表中，沿用主干共享通知入口解析标题和通道。
-      // 普通任务继续走下方提示音路径，以便在发送 toast 前确认应用音是否真正启动。
+      // Bot-owned 任务不在普通任务列表中，沿用共享通知入口解析标题和通道；
+      // 普通任务也走同一入口，保证声音、焦点和账号边界语义一致。
       if (!session) {
         void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
-          if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;
-          sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
+          if (typeof document !== 'undefined' && document.hasFocus()) return;
+          void sendSessionEventNotification(
+            sessionId,
+            botTitle ?? unnamedLabelRef.current,
+            kind,
+            dataOwnerAtNotification,
+          );
         });
         return;
       }
-      // 先尝试或合并应用提示音,再决定 toast 是否静音(review P2):
-      // 已播放／已被同类提示音覆盖 → 静音 OS 通知音,避免同批声音叠加;
-      // 主播放失败 → 保持 Electron 默认,让这一条 OS 通知音兜底。
-      let suppressSystemSound = false;
-      if (soundRequested) {
-        const focusAbortController = new AbortController();
-        const abortPendingSound = () => focusAbortController.abort();
-        window.addEventListener('focus', abortPendingSound, { once: true });
-        try {
-          suppressSystemSound = await playSessionEventSound(kind, focusAbortController.signal);
-        } finally {
-          window.removeEventListener('focus', abortPendingSound);
-        }
-      }
-      // play() 最多会等待 500ms；等待期间用户可能已经切回 Cindy。焦点恢复既取消
-      // 待播音频，也终止桌面/飞书/手机与角标的整条通知分发。
-      if (typeof document !== 'undefined' && document.hasFocus()) return;
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;
-      void window.electronAPI.notificationMarkSessionAttention(sessionId);
-      // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
-      // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
-      //  locale 投影要改协议,超出本 PR 范围;但无论如何都比露出哨兵好。)
       const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
-      // mobile 通道恒开:桌面侧不设第二个开关,是否收到由手机端注册/注销推送 token
-      // 决定;发送侧防打扰(远程正在看该会话 / 去重 / relay 能力)在 main 收口。
-      // 因此桌面/飞书都关时也要 invoke(不再提前 return)。
-      void window.electronAPI.notificationShowSessionEvent({
-        sessionId,
-        title,
-        kind,
-        channels: {
-          desktop: desktopEnabled,
-          feishu: feishuEnabled,
-          mobile: true,
-          sound: suppressSystemSound,
-        },
-      });
+      void sendSessionEventNotification(sessionId, title, kind, dataOwnerAtNotification);
     },
     [],
   );
