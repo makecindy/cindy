@@ -111,6 +111,7 @@ import {
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../shared/interruptedTurn';
+import { piReplyText, piReplyThinking } from '../../test/fixtures/piSuccessfulReply';
 
 const SESSION_ID = 'text-delta-batching';
 const MODEL = 'gpt-5';
@@ -541,6 +542,44 @@ describe('makerChatStore text delta batching', () => {
     for (const sessionId of MULTI_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     for (const sessionId of LRU_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     vi.useRealTimers();
+  });
+
+  it.each([true, false])('keeps the Pi reply through early persistence and history reload (DB first=%s)', async (dbFirst) => {
+    const persisted = [
+      serverMessage({
+        id: 'pi-thinking-row', clientId: 'pi-thinking', sessionId: SESSION_ID, role: 'thinking',
+        content: { kind: 'thinking', text: piReplyThinking, durationMs: 20_000, isRedacted: false },
+        createdAt: '2026-08-31T12:34:19.000Z',
+      }),
+      serverMessage({
+        id: 'pi-text-row', clientId: 'pi-text', sessionId: SESSION_ID, role: 'assistant', content: piReplyText,
+        agentMeta: { model: 'z-ai/glm-5.3-flash', stopReason: 'stop' },
+        createdAt: '2026-08-31T12:34:19.001Z',
+      }),
+    ];
+    const echo = () => persisted.forEach((message) => onDbMessageCreated?.({ sessionId: SESSION_ID, message }));
+    if (dbFirst) echo();
+    onEvent?.({ sessionId: SESSION_ID, event: {
+      type: 'thinking', source: 'pi', data: { stage: 'final', blockId: 'pi-thinking', text: piReplyThinking, durationMs: 20_000 },
+    } });
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'pi-text', event: {
+      type: 'text', source: 'pi', data: { text: piReplyText.slice(0, 5), isFinal: false },
+    } });
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'pi-text', event: {
+      type: 'text', source: 'pi', data: { text: piReplyText, isFinal: true, isFullText: true },
+    } });
+    if (!dbFirst) echo();
+    vi.advanceTimersByTime(32);
+    const assertReply = () => expect(makerChatStore.getSnapshot(SESSION_ID).messages.map(({ role, content }) => ({ role, content })))
+      .toEqual([{ role: 'thinking', content: piReplyThinking }, { role: 'assistant', content: piReplyText }]);
+    assertReply();
+    onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'pi', data: { status: 'completed', result: piReplyText } } });
+    assertReply();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce(persisted);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertReply();
   });
 
   it('coalesces consecutive text deltas into one store notification', () => {
