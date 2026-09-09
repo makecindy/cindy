@@ -15,6 +15,7 @@ import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
+import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId } from '../maker-host/model-context-settings.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -786,7 +787,7 @@ import {
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
 import { readCompactionPct } from '../maker-host/compaction-settings-store.js';
-import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow, resolveModelContextProviderId } from '../maker-host/catalog-to-descriptors.js';
+import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import {
   isModelContextLimitCustomized,
   readModelContextLimit,
@@ -4560,21 +4561,13 @@ export function registerModelVisibilitySyncIpc(): void {
   );
 }
 
-/** User budgets must also govern existing-history protection, not only engine startup. */
-function resolveConfiguredContextWindow(...args: Parameters<typeof resolveVerifiedContextWindow>): number | null {
-  const [catalog, agent, providerId, modelId] = args;
-  const source = resolveModelContextProviderId(catalog, agent, providerId, modelId);
-  return resolveVerifiedContextWindow(catalog, agent, source, modelId,
-    source ? readModelContextLimit(agent, source, modelId) : null);
-}
-
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   // Catalog updates and explicit budget edits share one serial refresh boundary.
   let contextRefresh = Promise.resolve();
   const refreshContextSettings = (targets?: readonly { agent: AgentKind; providerId: string; modelId: string }[]) => {
     const owner = getActiveAppSession();
     const next = contextRefresh.then(() => refreshActiveModelContextSettings({
-      targets, inferProviderId: (model, agent) => resolveModelContextProviderId(getActiveCatalog(), agent, null, model),
+      targets, inferProviderId: (model, agent) => resolveDesktopModelContextProviderId(getActiveCatalog(), agent, null, model),
       withSessionLock: withSendToSessionLock,
       hasPendingSelection: (sessionId) => {
         const pending = getPendingSessionRuntimeMutation(sessionId);
