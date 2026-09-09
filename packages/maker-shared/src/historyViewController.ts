@@ -208,8 +208,9 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     });
   }
 
-  async loadDetails(summary: HistoryWorkSummary): Promise<void> {
-    if (!this.isActive() || !this.state.expanded.has(summary.key)) return;
+  async loadDetails(summary: HistoryWorkSummary, options?: { allowCollapsed?: boolean }): Promise<void> {
+    const allowCollapsed = options?.allowCollapsed === true;
+    if (!this.isActive() || (!allowCollapsed && !this.state.expanded.has(summary.key))) return;
     const inFlight = this.detailRuns.get(summary.key);
     if (inFlight) return inFlight.promise;
     const existing = this.state.details.get(summary.key);
@@ -218,7 +219,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const generation = this.generation;
     this.detailRuns.set(summary.key, token);
     const current = () => this.active && generation === this.generation
-      && this.detailRuns.get(summary.key) === token && this.state.expanded.has(summary.key);
+      && this.detailRuns.get(summary.key) === token
+      && (allowCollapsed || this.state.expanded.has(summary.key));
     // A changed revision may include late edits anywhere in the range, even
     // when its endpoint also advances. Keep the old display while rereading.
     let collected: T[] = [];

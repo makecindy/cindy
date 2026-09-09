@@ -445,6 +445,28 @@ describe('shared history view lifecycle', () => {
       isLive: () => true, build: (rows) => rows.map((item) => item.content), structure: ungroupedStructure });
     expect(rendered).toEqual(['complete thinking', 'latest answer']);
   });
+
+  it('loads a collapsed work range for recovery without changing expansion state', async () => {
+    const target = row(1, 'thinking', 'authoritative terminal');
+    const details = vi.fn(async () => ({ version: 1 as const, messages: [target], hasMore: false, nextCursor: null }));
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([target], false), hasMore: false, nextCursor: null }),
+      details,
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+
+    await view.loadDetails(group.summary, { allowCollapsed: true });
+
+    expect(details).toHaveBeenCalledOnce();
+    expect(view.getSnapshot().expanded).toEqual(new Set());
+    expect(view.getSnapshot().details.get(group.key)).toMatchObject({
+      complete: true,
+      messages: [target],
+    });
+  });
 });
 
 

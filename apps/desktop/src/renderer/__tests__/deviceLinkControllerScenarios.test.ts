@@ -1078,6 +1078,34 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     view.setActive(false);
   });
 
+  it('force reconciliation hydrates a terminal row from a collapsed work range', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    const history = [dbMessage(s, 'u', 'question', '2026-06-15T00:00:00.000Z', 'user'),
+      { ...dbMessage(s, 'thought', '', '2026-06-15T00:00:01.000Z', 'thinking'), content: { kind: 'thinking', text: 'terminal body', durationMs: 500, isRedacted: false } },
+      dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:02.000Z')];
+    host.seedSession(s, {}, history);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+    const view = getRemoteHistoryView(s)!;
+    const group = view.getSnapshot().items.find((item) => item.type === 'work')!;
+    expect(view.getSnapshot().expanded.has(group.key)).toBe(false);
+    expect(makerChatStore.getSnapshot(s).messages.map((row) => row.clientId)).toEqual([
+      'client-u', 'client-answer',
+    ]);
+
+    await makerChatStore.reconcileRemoteMessages(s, { force: true });
+
+    expect(makerChatStore.getSnapshot(s).messages.map((row) => row.clientId)).toEqual([
+      'client-u', 'client-thought', 'client-answer',
+    ]);
+    expect(view.getSnapshot().expanded.has(group.key)).toBe(false);
+    view.setActive(false);
+  });
+
   it('完整镜像回路:开会话见历史 → live push 追加 → 丢帧 reconcile heal → 设置变更镜像', async () => {
     const s = sid();
     // 被控端已有 1 条历史 + 注册到远程项目(getSessionDeviceId 命中 → 传输层走隧道)。

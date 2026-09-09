@@ -11728,8 +11728,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         // readPage starts expanded details without awaiting them. Join those
         // same reads before hydrating; their cached display may still be old.
         await Promise.all(historyWorkSummaries(view.getSnapshot().items)
-          .filter((summary) => view.getSnapshot().expanded.has(summary.key))
-          .map((summary) => view.loadDetails(summary)));
+          .map((summary) => view.loadDetails(summary, { allowCollapsed: true })));
         const detailError = historyWorkSummaries(view.getSnapshot().items)
           .map((summary) => view.getSnapshot().details.get(summary.key))
           .find((detail) => detail?.error)?.error;
@@ -11751,7 +11750,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         // rows already participate in the ordinary add-only subscription.
         const details = historyWorkSummaries(snapshot.items).flatMap((summary) => {
           const detail = snapshot.details.get(summary.key);
-          return snapshot.expanded.has(summary.key) && detail?.complete
+          return detail?.complete
             && !detail.error && detail.revision === summary.revision ? detail.messages : [];
         });
         const available = details.concat(historyViewLeaves(snapshot.items)
