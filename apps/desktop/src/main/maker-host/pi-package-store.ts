@@ -1068,8 +1068,7 @@ export async function executePiNativeManagementCommand(
       ...(['help', 'list'].includes(command.kind)
         ? { output: command.kind === 'list'
           ? JSON.stringify(parsePiPackageListOutput(output.stdout).map(pkg => ({
-              source: isLocalPackageSource(pkg.source) || path.win32.isAbsolute(pkg.source)
-                ? path.basename(pkg.source) : projectPackageSource(pkg.source).displaySource,
+              source: projectPiListSource(pkg.source),
               filtered: pkg.filtered === true,
             })))
           : redactPackageCommandMessage(output.stdout) } : {}),
@@ -2352,6 +2351,23 @@ async function resolvePackageMutationTarget(
   ));
   if (!match) throw new Error('Pi package mutation target is no longer installed');
   return match.source;
+}
+
+/** Model-visible list output must not expose local package locations. */
+function projectPiListSource(source: string): string {
+  let localPath = source;
+  if (/^file:/i.test(source)) {
+    try {
+      // Decode before taking the basename: encoded separators are paths too.
+      localPath = decodeURIComponent(new URL(source).pathname);
+    } catch {
+      return '[local-package]';
+    }
+  } else if (!isLocalPackageSource(source) && !path.win32.isAbsolute(source)) {
+    return projectPackageSource(source).displaySource;
+  }
+  // win32.basename recognizes both separators, independently of the Host OS.
+  return truncateDisplayField(path.win32.basename(localPath) || '[local-package]', MAX_SOURCE_LENGTH);
 }
 
 function projectPackageSource(source: string): PackageSourceProjection {

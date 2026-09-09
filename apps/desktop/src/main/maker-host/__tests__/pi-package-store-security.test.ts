@@ -4431,6 +4431,27 @@ describe('Pi package executable-code boundary', () => {
 
 
 describe('native Pi core management', () => {
+  it.each([
+    ['file:/home/alice/private-extension', 'private-extension'],
+    ['file:///Users/alice/private-extension', 'private-extension'],
+    ['FILE://localhost/Users/alice/private-extension', 'private-extension'],
+    ['file://private-host/share/private-extension', 'private-extension'],
+    ['file:///Users/alice%2Fprivate-extension', 'private-extension'],
+    ['file:///C:/Users/alice/private-extension', 'private-extension'],
+    ['file:///%ZZ/alice/private-extension', '[local-package]'],
+    ['file://private-host/', '[local-package]'],
+    ['/home/alice/private-extension', 'private-extension'],
+    [String.raw`C:\Users\alice\private-extension`, 'private-extension'],
+    ['npm:public-extension', 'npm:public-extension'],
+    ['https://user:secret@example.test/package?token=secret', 'https://example.test/package'],
+  ])('redacts local locations in list receipts: %s', async (source, expected) => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    runtime.listOutput = `User packages:\n  ${source}\n    /Users/alice/install-location\n`;
+    const result = await executePiNativeManagementCommand({ kind: 'list' });
+    expect(JSON.parse(String(result.output))).toEqual([{ source: expected, filtered: false }]);
+    expect(JSON.stringify(result)).not.toMatch(/alice|private-host|install-location|secret/);
+  });
+
   it.each(['native-core', 'host-binary-update'] as const)('preserves completed packages when %s fails', async phase => {
     const { executePiNativeManagementCommand, piNativeManagementFailure, piPackageMutationMayHaveChangedState } = await import('../pi-package-store.js');
     if (phase === 'host-binary-update') runtime.fallbackError = new Error('network failure with private data');
