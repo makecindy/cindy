@@ -111,7 +111,9 @@ describe('Grok Build 出现在与 cc/codex/pi 相同的 harness 选择入口', (
 
   it('Hook 工作目录偏好不再隐藏 grok-build,并认它为合法 agent', () => {
     expect(workspacePrefs).not.toContain("HOOK_HIDDEN_VENDORS");
-    expect(workspacePrefs).toContain("if (vendor === 'grok-build') return 'grok-build'");
+    expect(workspacePrefs).toContain(
+      "if (agentKind === 'codex' || agentKind === 'pi' || agentKind === 'grok-build') return agentKind",
+    );
     const hookLogic = read('components/settings/hookWorkspacePrefsLogic.ts');
     expect(hookLogic).toContain("'grok-build'");
     expect(hookLogic).toMatch(
