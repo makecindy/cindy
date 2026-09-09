@@ -126,7 +126,7 @@ const LAST_ACTIVITY_OPTIONS: ReadonlyArray<Option<FilterLastActivity>> = [
 
 /** 「最早优先」(旧 time)与旧「手动排序」都已从任务排序里拿掉。 */
 const SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
-  { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.updated' },
+  { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.activity' },
   { value: 'created', labelKey: 'ccAgent.sidebar.filterSortBy.created' },
   {
     value: 'priority',

@@ -43,5 +43,13 @@ export function sortProjectsForSidebar(
     );
   }
 
+  if (sortBy === 'created') {
+    return withSortedSessions.sort((a, b) =>
+      Math.max(0, ...b.sessions.map(sessionCreatedMs)) -
+        Math.max(0, ...a.sessions.map(sessionCreatedMs)) ||
+      (a.sessions[0]?.id ?? '').localeCompare(b.sessions[0]?.id ?? ''),
+    );
+  }
+
   return withSortedSessions;
 }

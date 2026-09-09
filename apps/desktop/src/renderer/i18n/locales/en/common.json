@@ -9337,7 +9337,7 @@
       },
       "filterSortBy": {
         "created": "Created Time",
-        "updated": "Updated Time",
+        "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
         "priority": "Priority"
