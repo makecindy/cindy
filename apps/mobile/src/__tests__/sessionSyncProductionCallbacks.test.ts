@@ -7,6 +7,7 @@ import { runConnectionScopedSessionMetadataRead, waitForIndependentSnapshotReads
 import { syncSessionMessageWindow } from '@/session/sessionMessageWindowSync';
 import { shouldClearOperationErrorAfterSync } from '@/session/sessionSyncErrorRecovery';
 import { hasOlderMessagesAfterReopen, shouldKeepOlderMessagesAffordance } from '@/session/messagePaging';
+import { HistoryViewController, isHistoryViewUnavailable, projectHistoryView } from '@cindy/maker-shared/message-window';
 
 // Execute the actual page callbacks, not a duplicate orchestration written for tests.
 // This catches a helper becoming disconnected from the screen during integration.
@@ -39,7 +40,7 @@ const tick = () => new Promise((done) => setTimeout(done, 0));
 const session = { id: 's1', updatedAt: '2026-09-06T00:00:00Z', _count: { messages: 100 } };
 const page = { messages: [{ id: 'm1' }], limit: 1, reducedByPayloadTooLarge: false };
 
-function fixture(reopen = false) {
+function fixture(reopen = false, remoteHistoryAvailable = true) {
   const state = {
     rows: reopen ? [{ id: 'cached', clientId: 'cached' }] : [] as { id: string; clientId?: string }[],
     older: false, loading: false, historyLoading: false,
@@ -78,8 +79,10 @@ function fixture(reopen = false) {
     listActiveSessions: vi.fn(async () => []),
   };
   const bindings = {
+    remoteHistoryAvailable,
     deviceId: 'd1', deviceName: 'test', sessionId: 's1',
-    remoteSessionStore: store, maker, shouldBlockSessionSync: () => false,
+    historyView: { snapshot: { ready: false }, view: { refresh: async (): Promise<void> => undefined, getSnapshot: (): { ready: boolean; error: unknown } => ({ ready: false, error: new Error('[CHANNEL_NOT_ALLOWED] legacy host') }) } },
+    remoteSessionStore: store, maker, isHistoryViewUnavailable, shouldBlockSessionSync: () => false,
     readAckEpochRef: { current: 1 }, readAckGateGenRef: { current: 1 },
     sessionSubscriptionIdentityRef: { current: JSON.stringify(['d1', 's1', 1]) },
     createRemoteSyncReopenCoordinator: () => ({ captureVersion: () => 0 }),
@@ -94,7 +97,7 @@ function fixture(reopen = false) {
     listMessagesWithPayloadRetry: (read: (limit: number) => unknown) => read(20),
     withTransientRemoteRetry: (read: () => unknown) => read(),
     REOPEN_MESSAGE_WINDOW_LIMITS: [20],
-    getSubscriptionIdentity: () => null, notificationResponse: null,
+    getSubscriptionIdentity: (): number | null => null, notificationResponse: null,
     syncedNotificationResponseRef: { current: null },
     shouldKeepOlderMessagesAffordance, hasOlderMessagesAfterReopen,
     messageWindowReconciledRef: { current: false },
@@ -124,6 +127,86 @@ function fixture(reopen = false) {
 }
 
 describe('production session recovery callbacks', () => {
+  it('keeps cached rows offline without fetching metadata, projection, history or earlier pages', async () => {
+    const f = fixture(true, false);
+    const rows = f.state.rows;
+    await f.sync();
+    await f.earlier();
+    expect(f.state.rows).toBe(rows);
+    expect(f.state.loading).toBe(false);
+    expect(f.maker.getSession).not.toHaveBeenCalled();
+    expect(f.maker.listMessages).not.toHaveBeenCalled();
+    expect(f.maker.input.getProjection).not.toHaveBeenCalled();
+    expect(f.state.readAck).toBeNull();
+  });
+  it('reads after ACK when restored history is ready but the captured snapshot is not', async () => {
+    const f = fixture(true);
+    f.store.isSessionMessageWindowSynced.mockReturnValue(true);
+    const read = vi.fn(async () => ({ version: 1 as const, items: [], hasMore: false, nextCursor: null }));
+    const view = new HistoryViewController({ page: read,
+      details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined });
+    await view.refresh();
+    f.bindings.historyView.view = view;
+    f.bindings.getSubscriptionIdentity = () => 7;
+    const coordinator = createRemoteSyncCoordinator(pageCallback('syncSession', f.bindings));
+    coordinator.setContext('d1:s1:ack');
+    await coordinator.request({ reason: 'subscription-acked' });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(f.state.synced).not.toBeNull();
+  });
+
+  it('waits for a page begun after subscription ACK even when an initial page is pending', async () => {
+    const f = fixture();
+    const pending = deferred<{ version: 1; items: []; hasMore: false; nextCursor: null }>();
+    const read = vi.fn(async () => ({ version: 1 as const, items: [], hasMore: false, nextCursor: null }));
+    read.mockImplementationOnce(() => pending.promise);
+    const view = new HistoryViewController({ page: read,
+      details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined });
+    const initial = view.refresh();
+    f.bindings.historyView.view = view;
+    f.bindings.getSubscriptionIdentity = () => 7;
+    const coordinator = createRemoteSyncCoordinator(pageCallback('syncSession', f.bindings));
+    coordinator.setContext('d1:s1:ack');
+    const recovery = coordinator.request({ reason: 'subscription-acked' });
+    await tick();
+    expect(read).toHaveBeenCalledTimes(1);
+    pending.resolve({ version: 1, items: [], hasMore: false, nextCursor: null });
+    await Promise.all([initial, recovery]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(f.state.synced).not.toBeNull();
+  });
+
+  it('commits raw history after a previously ready projection loses Host support', async () => {
+    const f = fixture(true);
+    const read = vi.fn(async () => ({ version: 1 as const, items: projectHistoryView([
+      { id: 'old', clientId: 'old', role: 'user', content: 'old', createdAt: session.updatedAt },
+    ], false), hasMore: false, nextCursor: null }));
+    const view = new HistoryViewController({ page: read,
+      details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined });
+    await view.refresh();
+    f.bindings.historyView.snapshot.ready = true;
+    f.bindings.historyView.view = view;
+    read.mockRejectedValueOnce(new Error('[CHANNEL_NOT_ALLOWED] downgraded Host'));
+    // Call the actual callback again with the new view binding.
+    const coordinator = createRemoteSyncCoordinator(pageCallback('syncSession', f.bindings));
+    coordinator.setContext('d1:s1:2');
+    await coordinator.request({ reason: 'manual' });
+    expect(view.getSnapshot().ready).toBe(false);
+    expect(f.store.setLatestMessageWindow).toHaveBeenCalled();
+    expect(f.state.rows).toEqual(page.messages);
+    expect(f.store.markSessionMessagesSynced).toHaveBeenCalled();
+  });
+  it('accepts a history view without certifying sparse rows as a complete raw window', async () => {
+    const f = fixture();
+    f.bindings.historyView.view.getSnapshot = () => ({ ready: true, error: null });
+    await f.sync();
+    expect(f.maker.listMessages).not.toHaveBeenCalled();
+    expect(f.store.setMessages).not.toHaveBeenCalled();
+    expect(f.store.setLatestMessageWindow).not.toHaveBeenCalled();
+    expect(f.store.markSessionMessagesSynced).not.toHaveBeenCalled();
+    expect(f.state.synced).not.toBeNull();
+  });
+
   it('routes the visible history retry to pagination rather than full sync', () => {
     const screen = source.getFullText().replace(/\r\n/g, '\n');
     expect(screen).toContain('const bannerError = connectionRecoveryError ?? historyError;');
@@ -271,5 +354,43 @@ describe('production session recovery callbacks', () => {
     await newer;
     expect(f.state.historyLoading).toBe(false);
     expect(f.store.mergeEarlierMessages).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Run the production push routing tail with real projection generations.
+describe('destructive remote history pushes', () => {
+  // Delete (including initial-page races) is exercised through the real store in remoteHistoryReentry.test.ts.
+  it.each(['clear', 'archive'])('retires old pages on %s without an unrelated activity event', async (operation) => {
+    const context = readFileSync(resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'), 'utf8');
+    const body = context.slice(context.indexOf('  const historySessionId ='), context.indexOf('/** provider revision')).trim().slice(0, -1);
+    const stale = { id: 'old', clientId: 'old', role: 'user', content: 'old', createdAt: '2026-09-08T00:00:00Z' };
+    const oldPage = { version: 1 as const, items: projectHistoryView([stale], false), hasMore: false, nextCursor: null };
+    let reads = 0;
+    const view = new HistoryViewController({
+      page: async () => ++reads === 1 ? oldPage
+        : { ...oldPage, items: [] },
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    const first = view.refresh();
+    await first;
+    let raw = [stale];
+    const store = {
+      applyRemotePush: vi.fn(() => { if (operation !== 'clear') raw = []; }),
+      invalidateSessionMessageWindow: vi.fn(() => { raw = []; }),
+    };
+    const push = { channel: 'local-db:sessions:patched', payload: { sessionId: 's', patch: operation === 'clear'
+      ? { clearedAt: '2026-09-08T01:00:00Z' } : { status: 'archived' } } };
+    const compiled = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const route = new Function('push', 'env', 'findRemoteHistoryView', 'remoteSessionStore', compiled);
+    route(push, { src: 'device-a' }, (device: string, session: string) => device === 'device-a' && session === 's' ? view : undefined, store);
+    expect(raw).toEqual([]);
+    expect(view.getSnapshot().items).toEqual([]);
+    expect(view.getSnapshot().details.size).toBe(0);
+    await first; await tick();
+    expect(view.getSnapshot().items).toEqual([]);
+    expect(view.isActive()).toBe(operation !== 'archive');
+    if (operation === 'clear') expect(store.invalidateSessionMessageWindow).toHaveBeenCalledWith('s', 'device-a');
+    view.setActive(false);
   });
 });

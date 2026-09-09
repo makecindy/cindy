@@ -21,6 +21,7 @@
  * - User-initiated stopSession (NOT called on session switch anymore)
  */
 
+import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
@@ -114,6 +115,7 @@ import {
 } from '@/lib/makerTransport';
 import {
   remoteProjectsStore,
+  isRemoteDeviceMarkedDisconnected,
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
@@ -3416,6 +3418,7 @@ function _purgeSession(sessionId: string): void {
   backgroundTaskStaleRetrySessions.delete(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
+  releaseRemoteHistoryView(sessionId);
   invalidateMessageHistoryWindow(sessionId);
   invalidateInputProjectionRequests(sessionId);
   // 删除 / 归档 / LRU 都是 renderer owner 边界。作废仍在附件物化或 composer
@@ -3903,10 +3906,19 @@ function resolveGatewayRecoveryProviderId(
 }
 
 function enterView(sessionId: string): () => void {
+  const view = getRemoteHistoryView(sessionId);
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (deviceId) view?.setNetworkAvailable(!isRemoteDeviceMarkedDisconnected(deviceId));
+  const resumingHistory = view && !view.isActive();
+  view?.setActive(true);
   _activeViewSessions.set(sessionId, (_activeViewSessions.get(sessionId) ?? 0) + 1);
   _lastViewedAt.delete(sessionId);
   _ensureDemoteTimer();
-  scheduleIdlePlanDiscoveryIfNeeded(sessionId);
+  if (resumingHistory) {
+    void view.refresh().then(() => {
+      if (!view.getSnapshot().error) scheduleIdlePlanDiscoveryIfNeeded(sessionId);
+    });
+  } else scheduleIdlePlanDiscoveryIfNeeded(sessionId);
   return () => leaveView(sessionId);
 }
 
@@ -4006,6 +4018,7 @@ function leaveView(sessionId: string): void {
     return;
   }
   _activeViewSessions.delete(sessionId);
+  getRemoteHistoryView(sessionId)?.setActive(false);
   cancelIdlePlanDiscovery(sessionId);
   _lastViewedAt.set(sessionId, Date.now());
   if (_pendingErrorClearOnLeave.has(sessionId)) {
@@ -4040,6 +4053,9 @@ function _demoteIdleSessions(): void {
     // 分页锁。漏 bump 的后果是 in-flight 那一页按 demote 前的游标提交,把一段脱离上下文
     // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
     cancelIdlePlanDiscovery(sessionId);
+    // Discard the view with its message slice. Resetting an active prefetch would
+    // start another read and immediately repopulate the cache being evicted.
+    releaseRemoteHistoryView(sessionId);
     invalidateMessageHistoryWindow(sessionId);
     setState(sessionId, (s) => ({
       ...s,
@@ -8433,6 +8449,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // stall 看门狗信号:只用重会话流刷新 lastInboundEventAt。列表级轻量 activity/patch
       // 可能仍在持续抵达,但 maker:event 重 topic 已经断流;若这里也刷新会掩盖卡死。
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
+      if (inboundSid) {
+        const view = getRemoteHistoryView(inboundSid);
+        if (view && ['maker:history-view-changed', 'local-db:messages:created', 'maker:status-changed'].includes(push.channel)) view.invalidate();
+      }
       switch (push.channel) {
         case 'maker:event':
           handleMakerEventRaw(push.payload, remoteIngress);
@@ -8515,6 +8535,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             const ownsSession = getStickySessionDeviceId(p.sessionId) === push.deviceId;
             if (Object.prototype.hasOwnProperty.call(p.patch, 'clearedAt')) {
               observeRemoteInputClearBoundary(p.sessionId, p.patch.clearedAt);
+              if (!terminal && ownsSession && typeof p.patch.clearedAt === 'string' && getRemoteHistoryView(p.sessionId)) {
+                reloadMessages(p.sessionId);
+              }
             }
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, p.patch);
             if (terminal && ownsSession) {
@@ -8595,6 +8618,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   // 纯来源漂移驱动,正常 patched 推送(current===loaded)不误重载。teardown 时随其它监听一并清。
   {
     const unsub = remoteProjectsStore.subscribe(() => {
+      for (const [sessionId, entry] of remoteHistoryViews) {
+        const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+        if (deviceId) entry.view?.setNetworkAvailable(!isRemoteDeviceMarkedDisconnected(deviceId));
+      }
       // Snapshot/reseed can be the first clear signal (the projection or patch
       // may have been dropped). Reconcile boundaries before any subscriber or
       // outbox pump can observe the new shard.
@@ -10443,6 +10470,7 @@ function bumpMessagesEpoch(sessionId: string): void {
  * bumpMessagesEpoch。
  */
 function invalidateMessageHistoryWindow(sessionId: string): void {
+  getRemoteHistoryView(sessionId)?.reset();
   bumpMessagesEpoch(sessionId);
   resetSessionAutomaticHistoryLoadCompletion(sessionId);
 }
@@ -10627,8 +10655,111 @@ function releaseCacheHydrationAfterFailure(sessionId: string): void {
   _cacheHydrateStarted.delete(sessionId);
 }
 
+export type HistoryChatMessage = ChatMessage & { id: string; createdAt: string };
+const remoteHistoryViews = new Map<string, {
+  view: HistoryViewController<HistoryChatMessage> | undefined;
+  intentQueue: { tail: Promise<void> };
+  isCurrent(): boolean;
+}>();
+function releaseRemoteHistoryView(sessionId: string, expected?: HistoryViewController<HistoryChatMessage>): void {
+  const entry = remoteHistoryViews.get(sessionId);
+  if (!entry?.view || (expected && entry.view !== expected)) return;
+  // Detach before publishing inactivity; the old subscriber cannot refill the slice.
+  const view = entry.view;
+  entry.view = undefined;
+  view.setActive(false);
+  // Keep the ordering through an immediate A -> B -> A replacement. Remove
+  // an unused slot only after its final release has reached the old Host.
+  const tail = entry.intentQueue.tail;
+  void tail.finally(() => {
+    if (remoteHistoryViews.get(sessionId) === entry && !entry.view && entry.intentQueue.tail === tail) {
+      remoteHistoryViews.delete(sessionId);
+    }
+  });
+}
+export function getRemoteHistoryView(sessionId: string) {
+  const entry = remoteHistoryViews.get(sessionId);
+  if (entry?.view && !entry.isCurrent()) {
+    releaseRemoteHistoryView(sessionId, entry.view);
+    return undefined;
+  }
+  return entry?.view;
+}
+function createRemoteHistoryView(sessionId: string) {
+  const existing = getRemoteHistoryView(sessionId);
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return undefined;
+  if (existing) return existing;
+  const entry = remoteHistoryViews.get(sessionId) ?? {
+    view: undefined, intentQueue: { tail: Promise.resolve() }, isCurrent: () => false,
+  };
+  const owner = getDataOwnerGeneration();
+  const isCurrent = (): boolean => isDataOwnerGenerationCurrent(owner)
+    && remoteProjectsStore.getSessionDeviceId(sessionId) === deviceId
+    && remoteHistoryViews.get(sessionId)?.view === view;
+  const mapRows = (rows: Message[]): HistoryChatMessage[] => mapServerMessages(rows).map((row) => ({
+    ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '',
+  }));
+  const call = async <T,>(channel: string, args: unknown[]): Promise<T> => {
+    if (!isCurrent()) throw new Error('History source changed');
+    const value = await window.electronAPI.deviceLink.invoke(deviceId, channel, args);
+    if (!isCurrent()) throw new Error('History source changed');
+    return value as T;
+  };
+  const view = new HistoryViewController<HistoryChatMessage>({
+    page: async (before) => {
+      const page = await call<HistoryViewPage<Message>>('local-db:messages:view', [sessionId, { before }]);
+      if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
+      return { ...page, items: mapHistoryViewMessages(page.items, mapRows) };
+    },
+    details: async (ref, after) => {
+      const page = await call<HistoryDetailPage<Message>>('local-db:messages:work-details', [sessionId, ref, { after }]);
+      return { ...page, messages: mapRows(page.messages) };
+    },
+    expanded: async (refs) => {
+      // Releasing an old view must still clear its original Host's interest.
+      // The existing intent queue orders this after any in-flight expand.
+      if (!refs.length) {
+        if (isDataOwnerGenerationCurrent(owner)) {
+          await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:messages:view-intent', [sessionId, []]);
+        }
+      } else await call<void>('local-db:messages:view-intent', [sessionId, refs]);
+    },
+  }, entry.intentQueue);
+  entry.view = view;
+  entry.isCurrent = isCurrent;
+  remoteHistoryViews.set(sessionId, entry);
+  view.setNetworkAvailable(!isRemoteDeviceMarkedDisconnected(deviceId));
+  view.subscribe(() => {
+    if (!isCurrent() || !sessions.has(sessionId)) return;
+    const snapshot = view.getSnapshot();
+    if (!snapshot.ready) {
+      if (view.isActive() && isHistoryViewUnavailable(snapshot.error)) {
+        void reconcileRemoteMessages(sessionId, { force: true }).catch(() => undefined);
+      }
+      return;
+    }
+    const available = historyViewLeaves(snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : []);
+    for (const detail of snapshot.details.values()) available.push(...detail.messages);
+    setState(sessionId, (state) => ({ ...state, historyLoaded: true,
+      messages: mergeMessages(available, state.messages.filter((message) => !message.cacheHydrated), { addOnly: true }),
+      hasMoreMessages: snapshot.hasMore, isLoadingMore: snapshot.loading,
+      oldestMessageId: snapshot.nextCursor,
+      historyWindowHasIsland: false,
+    }));
+  });
+  return view;
+}
+
 function ensureInitialMessages(sessionId: string): void {
   const state = getOrCreateState(sessionId);
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) {
+    _historyLoadOrigin.set(sessionId, deviceId);
+    noteInputProjectionOrigin(sessionId, deviceId);
+    hydrateRemoteMessagesFromCache(sessionId);
+    return;
+  }
   requestInputProjection(sessionId);
   // Prefetch and other non-mounted callers still create a cache entry. Give
   // that entry the same bounded lifetime as a viewed session so a cancelled
@@ -10751,8 +10882,34 @@ function ensureInitialMessages(sessionId: string): void {
       }
     });
 
-  listMessagesFor(sessionId)
+  (async () => {
+    const view = createRemoteHistoryView(sessionId);
+    if (view) {
+      await view.refresh();
+      if (!isCurrentHistoryLoad() || getRemoteHistoryView(sessionId) !== view) {
+        retryInvalidatedInitialHistoryFetchIfNeeded(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart);
+        return null;
+      }
+      const snapshot = view.getSnapshot();
+      if (!snapshot.error && snapshot.ready) {
+        if (isCurrentHistoryLoad()) {
+          // This path bypasses the raw latest-page cache write. Retire that old
+          // cache instead of persisting an incomplete projection as raw history.
+          clearCachedMessages(historyOriginAtStart!, sessionId);
+          settleCacheHydration(sessionId);
+        }
+        releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+        void reconcilePendingInteractions(sessionId);
+        scheduleIdlePlanDiscoveryIfNeeded(sessionId);
+        return null;
+      }
+      if (!isHistoryViewUnavailable(snapshot.error)) throw snapshot.error;
+      releaseRemoteHistoryView(sessionId, view);
+    }
+    return listMessagesFor(sessionId);
+  })()
     .then(async (existing) => {
+      if (existing === null) return;
       if (
         !isCurrentHistoryFetch(
           sessionId,
@@ -11084,7 +11241,7 @@ function scheduleIdlePlanDiscoveryIfNeeded(sessionId: string): void {
 
   const run = () => {
     _idlePlanDiscoveryHandles.delete(sessionId);
-    void loadOneOlderPageForPlanDiscovery(sessionId);
+    void loadOneOlderPageForPlanDiscovery(sessionId).catch(() => undefined);
   };
 
   _idlePlanDiscoveryHandles.set(sessionId, setTimeout(run, IDLE_PLAN_DISCOVERY_DELAY_MS));
@@ -11341,6 +11498,7 @@ function reconcileOpenSessionOrigins(): void {
     // 最初按 A 发起的旧查询在来源恢复后重新通过检查,覆盖恢复后的权威投影。
     const originChange = noteInputProjectionOrigin(sessionId, current);
     if (originChange.changed) {
+      releaseRemoteHistoryView(sessionId);
       bumpInteractionReconcileEpoch(sessionId);
       // 来源变更后旧设备的 owner / capability 都失效。在新来源 projection 回来前
       // fail closed，不能让 B 的历史沿用 A 的精确 owner 或 legacy 兜底。
@@ -11353,7 +11511,12 @@ function reconcileOpenSessionOrigins(): void {
     }
     if (current === undefined) continue;
     const loaded = _historyLoadOrigin.get(sessionId);
-    if (current === loaded) continue;
+    if (current === loaded && !originChange.changed) {
+      if (_activeViewSessions.has(sessionId) && !sessions.get(sessionId)?.historyLoaded && !isRemoteDeviceMarkedDisconnected(current)) {
+        ensureInitialMessages(sessionId);
+      }
+      continue;
+    }
     // undefined → deviceId 是启动竞速的**首次解析**(上一次首拉命中的是本机空库),
     // 缓存并未因此过期 → 放开 hydrate,让被控端离线时也能看到上次的最近一页。
     // 设备之间真的换了 origin(string → 另一个 string)时不放开:那是另一台机器的历史。
@@ -11401,7 +11564,19 @@ const _remoteReconcileInFlight = new Map<
   { run: Promise<boolean>; rerun: boolean; rerunForce: boolean }
 >();
 
-function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }): Promise<boolean> {
+function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean; freshHistory?: boolean }): Promise<boolean> {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
+  const view = getRemoteHistoryView(sessionId);
+  if (view && (view.getSnapshot().ready || opts?.freshHistory)) return Promise.all([view.refresh(false, opts?.freshHistory), reconcilePendingInteractions(sessionId)]).then(() => {
+    if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
+    if (isHistoryViewUnavailable(view.getSnapshot().error)) {
+      releaseRemoteHistoryView(sessionId, view);
+      return reconcileRemoteMessages(sessionId, { force: true });
+    }
+    if (view.getSnapshot().error) throw view.getSnapshot().error;
+    return view.getSnapshot().ready;
+  });
   // 返回完成 promise 供调用方需要时等待;既有调用方均按 fire-and-forget 使用。
   if (!sessionId || !isRemoteSession(sessionId)) return Promise.resolve(false);
   const inFlight = _remoteReconcileInFlight.get(sessionId);
@@ -11714,6 +11889,24 @@ function loadOlderMessages(
   automatic = false,
   maxPages = MAX_LOAD_OLDER_PAGES,
 ): Promise<boolean> {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
+  const view = getRemoteHistoryView(sessionId);
+  if (view?.getSnapshot().ready) {
+    const before = view.getSnapshot().nextCursor;
+    const epoch = _messagesEpoch.get(sessionId) ?? 0;
+    return view.refresh(true).then(() => {
+      if (getRemoteHistoryView(sessionId) !== view) return false;
+      if (isHistoryViewUnavailable(view.getSnapshot().error)) {
+        releaseRemoteHistoryView(sessionId, view);
+        return reconcileRemoteMessages(sessionId, { force: true }).then(() => loadOlderMessages(sessionId, automatic, maxPages));
+      }
+      if (view.getSnapshot().error) throw view.getSnapshot().error;
+      const snapshot = view.getSnapshot();
+      return getRemoteHistoryView(sessionId) === view && snapshot.ready && view.isActive()
+        && (_messagesEpoch.get(sessionId) ?? 0) === epoch && snapshot.nextCursor !== before;
+    });
+  }
   const state = getOrCreateState(sessionId);
   if (state.isLoadingMore || !state.hasMoreMessages) return Promise.resolve(false);
 
@@ -12292,7 +12485,19 @@ async function loadAroundMessage(
   // around 行会被当成新代际 merge 回窗口。
   const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
   // 按来源路由:远程会话经隧道 local-db:messages:around(直连本机会查控制端空库,跳转必失败)。
-  const rows = await aroundMessagesFor(sessionId, messageId, opts);
+  const view = getRemoteHistoryView(sessionId);
+  const rows = await aroundMessagesFor(sessionId, messageId, view?.getSnapshot().ready ? { radius: 0 } : opts);
+  if (view?.getSnapshot().ready) {
+    const target = rows.find((row) => row.id === messageId);
+    try {
+      return target ? await view.locate(target.clientId, target.createdAt) : null;
+    } catch (error) {
+      if (!isHistoryViewUnavailable(error)) throw error;
+      if (getRemoteHistoryView(sessionId) !== view || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return null;
+      releaseRemoteHistoryView(sessionId, view);
+      return loadAroundMessage(sessionId, messageId, opts);
+    }
+  }
   if (rows.length === 0) return null;
 
   const mapped = mapServerMessages(rows);
@@ -12357,7 +12562,19 @@ async function loadAroundMessageClientId(
 ): Promise<ChatMessage | null> {
   // 同 loadAroundMessage:epoch 在 around 请求之前快照,覆盖该请求自身的竞态窗口。
   const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
-  const rows = await aroundMessagesByClientIdFor(sessionId, clientId, opts);
+  const view = getRemoteHistoryView(sessionId);
+  const rows = await aroundMessagesByClientIdFor(sessionId, clientId, view?.getSnapshot().ready ? { radius: 0 } : opts);
+  if (view?.getSnapshot().ready) {
+    const target = rows.find((row) => row.clientId === clientId);
+    try {
+      return target ? await view.locate(clientId, target.createdAt) : null;
+    } catch (error) {
+      if (!isHistoryViewUnavailable(error)) throw error;
+      if (getRemoteHistoryView(sessionId) !== view || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return null;
+      releaseRemoteHistoryView(sessionId, view);
+      return loadAroundMessageClientId(sessionId, clientId, opts);
+    }
+  }
   if (rows.length === 0) return null;
 
   const mapped = mapServerMessages(rows);

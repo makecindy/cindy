@@ -10,7 +10,12 @@ const source = ts.createSourceFile('renderer.tsx', readFileSync(
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let callbackSource = '';
 let progressKeySource = '';
+const pagingCallbacks = new Map<string, string>();
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)
+    && ['requestLoadEarlier', 'flushQueuedLoadEarlier', 'scheduleQueuedLoadEarlierFlush'].includes(node.name.getText(source))) {
+    pagingCallbacks.set(node.name.getText(source), node.initializer.arguments[0].getText(source));
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'attemptAutoLoadEarlier'
     && node.initializer && ts.isCallExpression(node.initializer)) {
     callbackSource = node.initializer.arguments[0].getText(source);
@@ -96,5 +101,74 @@ describe('history autofill production callback', () => {
     attempt();
     expect(requestLoadEarlier).toHaveBeenCalledTimes(2);
     expect(bindings.initialHistoryAutofillRemainingRef.current).toBe(3);
+  });
+});
+
+describe('history prefetch during a gesture', () => {
+  function pagingFixture(appOwnedAnchor: boolean) {
+    const frames: Array<() => void> = [];
+    const bindings = {
+      MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR: appOwnedAnchor,
+      onLoadEarlier: vi.fn(),
+      beginLoadEarlier: vi.fn(),
+      readingOlderRef: { current: false },
+      queuedLoadEarlierRef: { current: false },
+      queuedLoadEarlierFlushFrameRef: { current: null as number | null },
+      userScrollForOlderRef: { current: true },
+      nearBottomRef: { current: false },
+      setIsAwayFromBottom: vi.fn(),
+      isDraggingRef: { current: false },
+      isMomentumScrollingRef: { current: false },
+      historyTouchStartYRef: { current: null as number | null },
+      historyPrependNativeMvcpDisabledRef: { current: false },
+      setHistoryPrependNativeMvcpDisabled: vi.fn(),
+      requestAnimationFrame: (fn: () => void) => frames.push(fn),
+    };
+    const compiled = ts.transpileModule([...pagingCallbacks].map(([name, body]) =>
+      `const ${name} = ${body};`).join('\n'), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    const callbacks = new Function(...Object.keys(bindings), `${compiled}
+return { requestLoadEarlier, flushQueuedLoadEarlier };`)(...Object.values(bindings));
+    return { bindings, callbacks, frame: () => frames.shift()?.() };
+  }
+
+  it.each(['drag', 'momentum', 'touch'])('starts iOS prefetch without waiting for %s to end', (gesture) => {
+    const h = pagingFixture(false);
+    h.bindings.isDraggingRef.current = gesture === 'drag';
+    h.bindings.isMomentumScrollingRef.current = gesture === 'momentum';
+    h.bindings.historyTouchStartYRef.current = gesture === 'touch' ? 100 : null;
+    h.callbacks.requestLoadEarlier();
+    h.callbacks.requestLoadEarlier();
+    h.frame();
+    expect(h.bindings.beginLoadEarlier).toHaveBeenCalledTimes(1);
+    expect(h.bindings.setHistoryPrependNativeMvcpDisabled).not.toHaveBeenCalled();
+    h.callbacks.requestLoadEarlier();
+    h.frame();
+    expect(h.bindings.beginLoadEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Android gesture and committed native-anchor handoff protection', () => {
+    const h = pagingFixture(true);
+    h.bindings.isDraggingRef.current = true;
+    h.callbacks.requestLoadEarlier();
+    h.frame();
+    expect(h.bindings.beginLoadEarlier).not.toHaveBeenCalled();
+    expect(h.bindings.setHistoryPrependNativeMvcpDisabled).not.toHaveBeenCalled();
+    h.bindings.isDraggingRef.current = false;
+    h.callbacks.flushQueuedLoadEarlier();
+    expect(h.bindings.setHistoryPrependNativeMvcpDisabled).toHaveBeenCalledWith(true);
+    expect(h.bindings.beginLoadEarlier).not.toHaveBeenCalled();
+    h.bindings.historyPrependNativeMvcpDisabledRef.current = true;
+    h.callbacks.flushQueuedLoadEarlier();
+    expect(h.bindings.beginLoadEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a queued request invalidated before the next frame', () => {
+    const h = pagingFixture(false);
+    h.callbacks.requestLoadEarlier();
+    h.bindings.queuedLoadEarlierRef.current = false;
+    h.frame();
+    expect(h.bindings.beginLoadEarlier).not.toHaveBeenCalled();
   });
 });

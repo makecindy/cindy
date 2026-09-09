@@ -477,6 +477,7 @@ import {
 import { libraryExtraDirSyncTargets } from './libraryExtraDirSyncTargets.js';
 import {
   clearSessionPersistState,
+  clearSessionThinkingSnapshots,
   consumeLastAssistantPersistId,
   consumeLastTopLevelAssistantPersistId,
   drainPersistQueue,
@@ -16508,6 +16509,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         return { result, hiddenClientIds, now };
       });
+      clearSessionThinkingSnapshots(sessionId);
       resetTurnPersistState(sessionId);
 
       // 多窗口与 device-link 控制端先清旧投影，再按 DB 真相补当前活动路径。

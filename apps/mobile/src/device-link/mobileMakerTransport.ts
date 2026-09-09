@@ -21,6 +21,7 @@ import {
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from '@cindy/maker-shared/device-link-contract';
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
+import type { HistoryViewPage, HistoryDetailPage, HistoryWorkSummary } from '@cindy/maker-shared/message-window';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatusPayload,
@@ -415,6 +416,9 @@ export interface MobileMakerTransport {
    */
   regenerateSessionTitle(sessionId: string): Promise<{ title: string | null }>;
   listMessages(sessionId: string, opts?: MessageListOptions): Promise<RemoteMessage[]>;
+  readHistoryView(sessionId: string, before?: string): Promise<HistoryViewPage<RemoteMessage>>;
+  readWorkDetails(sessionId: string, ref: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<RemoteMessage>>;
+  setHistoryExpanded(sessionId: string, refs: readonly HistoryWorkSummary[]): Promise<void>;
   aroundMessages(sessionId: string, messageId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   aroundMessagesByClientId(sessionId: string, clientId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   send(
@@ -681,6 +685,9 @@ export function createMobileMakerTransport({
     ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
     regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
     listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
+    readHistoryView: (sessionId, before) => call('local-db:messages:view', [sessionId, { before }]),
+    readWorkDetails: (sessionId, ref, after) => call('local-db:messages:work-details', [sessionId, ref, { after }]),
+    setHistoryExpanded: (sessionId, refs) => call('local-db:messages:view-intent', [sessionId, refs]),
     aroundMessages: (sessionId, messageId, opts) =>
       call('local-db:messages:around', [sessionId, messageId, opts]),
     aroundMessagesByClientId: (sessionId, clientId, opts) =>

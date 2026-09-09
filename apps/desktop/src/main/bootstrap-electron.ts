@@ -22,6 +22,7 @@ import {
   type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
+import { getSessionThinkingSnapshots, getHistoryToolName } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import {
   rememberResolvedAppTheme,
@@ -481,6 +482,7 @@ import {
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  setHistoryToolNameReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
@@ -8254,7 +8256,10 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  setHistoryToolNameReader(getHistoryToolName);
   registerLocalDbIpc({
+    isSessionTurnPendingCompletion,
+    readHistoryLiveMessages: getSessionThinkingSnapshots,
     resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     requestWorktreeRecycle,
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,

@@ -112,6 +112,32 @@ afterEach(() => {
 });
 
 describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)', () => {
+  it('keeps offline cached rows stable through store updates and starts first read when the host returns', async () => {
+    const s = sid();
+    const cached = dbMessage(s, 'cached', 'Saved answer');
+    const getMessages = vi.fn(async () => ({ accountCounter: 0, messages: [cached] }));
+    Object.assign(window.electronAPI.deviceLink, { mirrorCache: { getMessages } });
+    seedRemote(s);
+    remoteProjectsStore.markDeviceDisconnected(DEVICE_ID);
+    const leave = makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    const messages = makerChatStore.getSnapshot(s).messages;
+    expect(messages.map((message) => message.clientId)).toEqual([cached.clientId]);
+    makerChatStore.reconcileOpenSessionOrigins();
+    makerChatStore.reconcileOpenSessionOrigins();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages).toBe(messages);
+    expect(getMessages).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalled();
+    remoteHistory = [cached, dbMessage(s, 'new', 'New answer')];
+    seedRemote(s);
+    makerChatStore.reconcileOpenSessionOrigins();
+    await flush();
+    expect(invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(makerChatStore.getSnapshot(s).messages.map((message) => message.clientId)).toContain('client-new');
+    leave();
+  });
   it('启动竞速:origin 解析后经隧道重载被控端真历史(不再停留本机空库)', async () => {
     const s = sid();
     // 1) 竞速:mapping 未注入,ensureInitialMessages 命中本机空库 → 空历史 historyLoaded=true。

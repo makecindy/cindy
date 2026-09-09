@@ -23,6 +23,7 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 
 import { getDbClient } from '../client/current';
 import type { ContextRebuildArgs } from '../client/tx/types';
@@ -45,7 +46,7 @@ import {
 } from '../../cindy-media/ledger';
 import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
 import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
-import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
@@ -66,6 +67,8 @@ import { capReferenceMessageRows } from './history.js';
 import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
+import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS } from './historyViewReader';
 
 const log = createLogger('localDb/messages');
 
@@ -236,8 +239,7 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'thinking',
 ] as const);
 
-export function registerMessageIpc(): void {
-  ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
+export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false) {
     const sid = requireString(sessionId, 'sessionId');
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
@@ -248,7 +250,7 @@ export function registerMessageIpc(): void {
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
     // 只在首页请求跑(分页跳过,#318 性能语义;首页判定 = 无任何分页游标),
     // 覆盖「被控端从未本机打开该会话」的导入缺口。
-    await runMessagesListImportSideEffects(
+    if (!skipImport) await runMessagesListImportSideEffects(
       sid,
       {},
       {
@@ -344,6 +346,73 @@ export function registerMessageIpc(): void {
         });
     }
     return listed;
+}
+
+export function registerMessageIpc(
+  readRunning: (sessionId: string) => boolean = () => false,
+  readLive: (sessionId: string) => Message[] = () => [],
+): void {
+  ipcMain.handle('local-db:messages:list', (_e, sessionId: unknown, opts: unknown) =>
+    readMessagesList(sessionId, opts));
+
+  const historyView = createHistoryViewReader({
+    list: readMessagesList,
+    running: readRunning,
+    live: readLive,
+    anchor: async (sessionId, id) => {
+      const db = getDbClient().drizzle;
+      const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
+      if (id.startsWith('history-live:')) {
+        const live = readLive(sessionId).find((row) => row.id === id);
+        if (live && (session.clearedAt === null || Date.parse(live.createdAt) > session.clearedAt)) return live;
+      }
+      const [row] = await db.select({ ...getMessageSelectFields(), rowid: messageRowid }).from(messages)
+        .where(and(eq(messages.sessionId, sessionId),
+          id.startsWith('history-live:') ? eq(messages.clientId, id.slice('history-live:'.length)) : eq(messages.id, id),
+          isNull(messages.rewindAt),
+          session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined)).limit(1);
+      if (!row) throwIpcError('NOT_FOUND', 'History range changed');
+      return messageToCamelWithRowid(row);
+    },
+  });
+  ipcMain.handle('local-db:messages:view', async (event, sessionId: unknown, opts: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const sid = requireString(sessionId, 'sessionId');
+    const before = (opts as { before?: unknown } | null)?.before;
+    const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before')).catch((error) => {
+      if (isHistoryViewUnavailable(error)) getDeviceLinkInvokeContext()?.historyView?.disable();
+      throw error;
+    });
+    if (before == null) {
+      const liveKeys = historyViewLeaves(page.items)
+        .filter((item) => item.type === 'work' && item.summary.isStreaming).map((item) => item.key);
+      getDeviceLinkInvokeContext()?.historyView?.update(liveKeys);
+    }
+    return page;
+  });
+  ipcMain.handle('local-db:messages:view-intent', (event, sessionId: unknown, refs: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    requireString(sessionId, 'sessionId');
+    if (!Array.isArray(refs) || refs.length > 100) throwIpcError('INVALID_PARAMS', 'Invalid expanded work groups');
+    const keys = refs.map((ref) => requireString(ref?.key, 'key').replace(/^preview-work-/, 'work-'));
+    getDeviceLinkInvokeContext()?.historyView?.setExpanded(keys);
+  });
+  ipcMain.handle('local-db:messages:work-details', async (event, sessionId: unknown, ref: unknown, opts: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const sid = requireString(sessionId, 'sessionId');
+    const value = ref as { key?: unknown; firstMessageId?: unknown; lastMessageId?: unknown; firstStoredMessageId?: unknown; lastStoredMessageId?: unknown; liveMessageIds?: unknown } | null;
+    const after = (opts as { after?: unknown } | null)?.after;
+    if (value?.liveMessageIds != null && (!Array.isArray(value.liveMessageIds) || value.liveMessageIds.length > MAX_HISTORY_SCAN_ROWS)) throwIpcError('INVALID_PARAMS', 'Invalid live work range');
+    return historyView.details(sid, {
+      key: requireString(value?.key, 'key'),
+      firstMessageId: requireString(value?.firstMessageId, 'firstMessageId'),
+      lastMessageId: requireString(value?.lastMessageId, 'lastMessageId'),
+      ...(value?.firstStoredMessageId == null ? {} : { firstStoredMessageId: requireString(value.firstStoredMessageId, 'firstStoredMessageId') }),
+      ...(value?.lastStoredMessageId == null ? {} : { lastStoredMessageId: requireString(value.lastStoredMessageId, 'lastStoredMessageId') }),
+      ...(Array.isArray(value?.liveMessageIds) ? { liveMessageIds: value.liveMessageIds.map((id) => requireString(id, 'liveMessageId')) } : {}),
+    }, after == null ? undefined : requireString(after, 'after'));
   });
 
   ipcMain.handle(

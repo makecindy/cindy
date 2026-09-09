@@ -3,6 +3,9 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
+import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
+import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -176,6 +179,39 @@ function insertCostMessage(
 }
 
 describe('local-db:messages:list cursor', () => {
+  it.each([101, MAX_HISTORY_SCAN_ROWS])('reads all %i live rows from a generated work reference', async (count) => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const live = Array.from({ length: count }, (_, i) => ({ id: `history-live:c${i}`, clientId: `c${i}`,
+      sessionId: 's1', role: 'thinking', content: 'detail', toolUseId: null,
+      agentMeta: { isStreaming: true }, createdAt: new Date(1000 + i).toISOString() })) as ReturnType<NonNullable<Parameters<typeof registerMessageIpc>[1]>>;
+    registerMessageIpc(() => true, () => live);
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', {}) as HistoryViewPage<HistoryMessageSource>;
+    const work = historyViewLeaves(page.items).find(item => item.type === 'work');
+    expect(work?.type).toBe('work');
+    if (work?.type !== 'work') throw new Error('missing work');
+    expect(work.summary.liveMessageIds).toHaveLength(count);
+    const ids: string[] = [];
+    let after: string | undefined;
+    do {
+      const detail = await invoke('local-db:messages:work-details', work.summary, { after }) as HistoryDetailPage<HistoryMessageSource>;
+      ids.push(...detail.messages.map(row => row.id));
+      after = detail.nextCursor ?? undefined;
+    } while (after);
+    expect(ids).toEqual(live.map(row => row.id));
+    sqlite.close();
+  });
+
+  it('rejects a live reference above the scan budget before reading anchors', async () => {
+    const live = vi.fn(() => []);
+    registerMessageIpc(() => true, live);
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel: 'local-db:messages:work-details' },
+      () => h.handlers.get('local-db:messages:work-details')!({}, 's1', { liveMessageIds: Array(MAX_HISTORY_SCAN_ROWS + 1).fill('x') }, {})))
+      .rejects.toThrow('[INVALID_PARAMS]');
+    expect(live).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.handlers.clear();
