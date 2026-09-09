@@ -55,6 +55,14 @@ function createSessionHarness() {
 }
 
 describe('backfillSessionMeta', () => {
+  it('preserves teammate permissions while updating routine runtime metadata', async () => {
+    const { db, set } = createUpdateDb();
+    const { logger } = createLogger();
+    await backfillSessionMeta(db, 'bot-session', { permissionMode: null, effort: 'high' }, logger);
+    expect(set).toHaveBeenCalledWith({ effort: 'high', updatedAt: expect.any(Number) });
+    expect(set.mock.calls[0][0]).not.toHaveProperty('permissionMode');
+  });
+
   it('writes unattended metadata for newly created scheduler sessions', async () => {
     const { db, update, set, where } = createUpdateDb();
     const { logger, warn } = createLogger();

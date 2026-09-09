@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { win32 as win32Path } from 'node:path';
 
 export const DEFAULT_ANDROID_AVD = 'cindy-api36';
@@ -48,6 +48,8 @@ export function resolveAndroidSdkTools({
   env = process.env,
   platform = process.platform,
   exists = existsSync,
+  readDir = readdirSync,
+  requireTools = true,
 } = {}) {
   if (platform !== 'win32') return null;
 
@@ -60,11 +62,28 @@ export function resolveAndroidSdkTools({
   for (const sdkRoot of [...new Set(candidates)]) {
     const adb = win32Path.join(sdkRoot, 'platform-tools', 'adb.exe');
     const emulator = win32Path.join(sdkRoot, 'emulator', 'emulator.exe');
-    if (exists(adb) && exists(emulator)) return { sdkRoot, adb, emulator };
+    const platforms = win32Path.join(sdkRoot, 'platforms');
+    const buildTools = win32Path.join(sdkRoot, 'build-tools');
+    let hasBuildPackages = false;
+    if (!requireTools && exists(platforms) && exists(buildTools)) {
+      try {
+        const platformPackages = readDir(platforms);
+        const buildToolPackages = readDir(buildTools);
+        hasBuildPackages = platformPackages.some((entry) => /^android-\d+$/.test(String(entry.name ?? entry)))
+          && buildToolPackages.some((entry) => /^\d+\.\d+\.\d+$/.test(String(entry.name ?? entry)));
+      } catch {
+        hasBuildPackages = false;
+      }
+    }
+    if (requireTools ? (exists(adb) && exists(emulator)) : hasBuildPackages) {
+      return { sdkRoot, adb, emulator };
+    }
   }
 
   throw new Error(
-    '未找到完整 Android SDK。请设置 ANDROID_SDK_ROOT / ANDROID_HOME，或通过 Android Studio 安装 Platform Tools 与 Emulator。',
+    requireTools
+      ? '未找到完整 Android SDK。请设置 ANDROID_SDK_ROOT / ANDROID_HOME，或通过 Android Studio 安装 Platform Tools 与 Emulator。'
+      : '未找到 Android SDK 目录。请设置有效的 ANDROID_SDK_ROOT / ANDROID_HOME，或通过 Android Studio 安装 SDK。',
   );
 }
 

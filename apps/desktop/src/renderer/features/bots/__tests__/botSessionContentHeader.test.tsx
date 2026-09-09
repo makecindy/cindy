@@ -8,6 +8,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const navigate = vi.fn();
+const openRoutines = vi.hoisted(() => vi.fn());
+vi.mock('../../right-sidebar/lib/openRoutinesTab', () => ({ openRoutinesTab: openRoutines }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
@@ -51,6 +53,16 @@ describe('BotSessionContentHeader', () => {
 
     fireEvent.click(screen.getByLabelText('bots.settings'));
     expect(navigate).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens routines from an icon in the right-hand controls', () => {
+    render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
+    const button = screen.getByRole('button', { name: 'routines.title' });
+    expect(button.textContent).toBe('');
+    expect(button.querySelector('svg')).toBeTruthy();
+    expect(button.parentElement?.className).toContain('ml-auto');
+    fireEvent.click(button);
+    expect(openRoutines).toHaveBeenCalledWith('sess-1', 'bot-1');
   });
 
   it('renders without a session id', () => {

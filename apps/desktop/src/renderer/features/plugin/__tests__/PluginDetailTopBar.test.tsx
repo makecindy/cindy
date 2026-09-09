@@ -42,6 +42,64 @@ function Harness({ onBack = () => {} }: { onBack?: () => void }) {
 }
 
 describe('PluginDetailTopBar', () => {
+  it('returns to the owning list when Escape is pressed', () => {
+    stubPlatform('darwin');
+    const onBack = vi.fn();
+
+    render(<Harness onBack={onBack} />);
+
+    const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('leaves Escape to editable controls, modifiers, and consumed events', () => {
+    stubPlatform('darwin');
+    const onBack = vi.fn();
+    render(<Harness onBack={onBack} />);
+
+    fireEvent.keyDown(window, { key: 'Escape', metaKey: true });
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    input.remove();
+
+    const consumed = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    consumed.preventDefault();
+    window.dispatchEvent(consumed);
+
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it.each(['altKey', 'ctrlKey', 'metaKey', 'shiftKey', 'isComposing'])(
+    'does not navigate back when Escape carries %s',
+    (flag) => {
+      const onBack = vi.fn();
+      render(<Harness onBack={onBack} />);
+
+      fireEvent.keyDown(window, { key: 'Escape', [flag]: true });
+
+      expect(onBack).not.toHaveBeenCalled();
+    },
+  );
+
+  it('lets a nested surface stop Escape before it reaches the detail listener', () => {
+    const onBack = vi.fn();
+    render(
+      <div onKeyDown={(event) => event.stopPropagation()}>
+        <Harness onBack={onBack} />
+        <button>Nested surface</button>
+      </div>,
+    );
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Nested surface' }), { key: 'Escape' });
+
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
   it('carries the window drag region on macOS and keeps the back button clickable', () => {
     stubPlatform('darwin');
     const onBack = vi.fn();

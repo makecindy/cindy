@@ -86,6 +86,8 @@ import {
   onInteractionMessage,
   onInteractionResolved,
   onThinkingEvent,
+  getSessionThinkingSnapshots,
+  clearSessionThinkingSnapshots,
   flushAssistantBlock,
   sealAssistantBlockForLateFinal,
   flushOrphanToolResults,
@@ -1683,6 +1685,75 @@ describe('done orphan:残留 buffer 在 turn 末 flush', () => {
 });
 
 describe('thinking persistence', () => {
+  it('keeps final thinking across terminal resets until the queued write succeeds', async () => {
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'pending-final', text: 'complete thought' }, null);
+    resetTurnPersistState(SESSION);
+    await flushWrites();
+    try {
+      resetTurnPersistState(SESSION);
+      expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+        clientId: 'pending-final', content: expect.objectContaining({ text: 'complete thought' }),
+      })]);
+    } finally {
+      finishWrite();
+      await flushWrites();
+    }
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
+  it.each(['clear', 'session', 'tree', 'owner'] as const)(
+    'keeps failed final thinking until explicit %s cleanup', async (boundary) => {
+      vi.mocked(createMessage).mockRejectedValueOnce(new Error('write failed'));
+      onThinkingEvent(SESSION, { stage: 'final', blockId: 'failed-final', text: 'recoverable' }, null);
+      resetTurnPersistState(SESSION);
+      await flushWrites();
+      expect(getSessionThinkingSnapshots(SESSION)).toHaveLength(1);
+      if (boundary === 'clear') noteSessionClearBoundary(SESSION, Date.now());
+      if (boundary === 'session') clearSessionPersistState(SESSION);
+      if (boundary === 'tree') clearSessionThinkingSnapshots(SESSION);
+      if (boundary === 'owner') ownerScopeState.current = false;
+      expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+      ownerScopeState.current = true;
+      expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+    },
+  );
+
+  it('does not let an old write release a replacement snapshot after history cleanup', async () => {
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'old' }, null);
+    await flushWrites();
+    clearSessionThinkingSnapshots(SESSION);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'reused', text: 'new' }, null);
+    finishWrite();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'reused', content: expect.objectContaining({ text: 'new' }),
+    })]);
+    onThinkingEvent(SESSION, { stage: 'redacted', blockId: 'reused' }, null);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+    await flushWrites();
+  });
+
+  it('recovers thinking accumulated while folded, then rejects it after an owner change', () => {
+    onThinkingEvent(SESSION, { stage: 'start', blockId: 'live-thought' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'live-thought', text: 'first ' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'live-thought', text: 'second' }, null);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'live-thought', content: expect.objectContaining({ text: 'first second' }),
+    })]);
+    ownerScopeState.current = false;
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+    ownerScopeState.current = true;
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('uses the final event timestamp instead of delayed write time', async () => {
     const finishedAt = Date.parse('2026-06-20T09:10:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T09:10:04.000Z');
@@ -3091,6 +3162,31 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 });
 
 describe('ask_user persist first-write-wins', () => {
+  it.each([
+    [{ behavior: 'allow', editedPlan: 'Only change build.' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'deny', reason: 'Never change src.' }, 'Never change src.'],
+    [{ behavior: 'deny', dismissed: true, reason: 'session_closed' }, ''],
+  ])('records only the accepted plan or user feedback: %j', async (decision, text) => {
+    const request = { kind: 'plan_review', requestId: 'plan-receipt', plan: 'Delete src.' };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'plan_review', request, decision);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text, acceptedAt: expect.any(Number),
+    });
+  });
+
+  it('retains a complete long clarification until the authorization budget is applied', async () => {
+    const text = 'x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000);
+    const request = { kind: 'ask_user_question', requestId: 'long-answer', questions: [] };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request, { answers: { Scope: text } });
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text: `Clarifications:\n- Scope → ${text}`, acceptedAt: expect.any(Number),
+    });
+  });
+
   it('ignores a later cancelled write after the winner already answered', async () => {
     const persistId = onInteractionMessage(SESSION, {
       kind: 'ask_user_question',
@@ -3120,6 +3216,28 @@ describe('ask_user persist first-write-wins', () => {
         status: 'answered',
         answers: { 'Pick one': 'Keep going' },
       }),
+      { text: 'Clarifications:\n- Pick one → Keep going', acceptedAt: expect.any(Number) },
     );
+  });
+});
+
+
+describe('resolved interactions publish authoritative history rows', () => {
+  it.each(['ask_user_question', 'plan_review'] as const)('broadcasts %s only after persistence completes', async (kind) => {
+    let finish!: (value: unknown) => void;
+    const updated = { id: 'resolved-row', clientId: 'resolved-row', role: kind };
+    vi.mocked(updateMessageContent).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }) as never);
+    onInteractionResolved(SESSION, `resolved-${kind}`, kind, { requestId: `request-${kind}`, plan: 'plan' }, { dismissed: true, behavior: 'deny' });
+    await flushWrites();
+    expect(broadcastMessageRow).not.toHaveBeenCalled();
+    finish(updated);
+    await flushWrites();
+    expect(broadcastMessageRow).toHaveBeenCalledWith(SESSION, updated, ownerScopeState.scope);
+  });
+  it('does not publish a row removed before its decision is persisted', async () => {
+    vi.mocked(updateMessageContent).mockResolvedValueOnce(null);
+    onInteractionResolved(SESSION, 'removed', 'plan_review', { requestId: 'removed' }, { dismissed: true });
+    await flushWrites();
+    expect(broadcastMessageRow).not.toHaveBeenCalled();
   });
 });

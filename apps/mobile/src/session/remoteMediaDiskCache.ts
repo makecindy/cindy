@@ -40,7 +40,7 @@ export interface RemoteMediaDiskCacheIO {
 }
 
 export interface RemoteMediaDiskCacheOptions {
-  /** 缓存总量上限(字节),默认 150MB。 */
+  /** 可选缓存总量上限(字节),默认不限额。 */
   maxBytes?: number;
   now?(): number;
 }
@@ -73,7 +73,7 @@ export interface RemoteMediaDiskCache {
   storeBytes(sourceUrl: string, base64: string, mimeType: string): Promise<boolean>;
 }
 
-const DEFAULT_MAX_BYTES = 150 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = Infinity;
 const INDEX_VERSION = 1;
 
 interface IndexEntry {
@@ -167,7 +167,7 @@ export function createRemoteMediaDiskCache(
 
   /** 超出预算按 lastUsedAt 淘汰最旧(调用方随后统一 persistIndex)。 */
   async function evictOverBudget(): Promise<void> {
-    if (!entries) return;
+    if (!entries || !Number.isFinite(maxBytes)) return;
     let total = 0;
     for (const entry of entries.values()) total += entry.size;
     if (total <= maxBytes) return;

@@ -1,3 +1,6 @@
+import { loadLightweightSessionScheduleIndex } from './scheduleIndex';
+import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 /**
  * SessionListDrawer —— 宽屏(iPad / 折叠屏展开 / 横屏手机)会话页的任务列表抽屉。
  *
@@ -65,7 +68,7 @@ import {
   useSessionRunning,
 } from '@/session/remoteSessionStore';
 import type { RemoteSessionLiveActivity } from '@/session/sessionList';
-import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
+import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import {
   buildRemoteSessionCardPreview,
   buildSessionMessagePreviewIndex,
@@ -304,6 +307,37 @@ export function SessionListDrawer({
     sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
     status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
   });
+  const { invoke } = useDeviceLink();
+  const [scheduleIndex, setScheduleIndex] = useState<ReadonlyMap<string, import('./sessionList').RemoteSessionScheduleInfo>>(() => new Map());
+  const scheduleDeviceIdsKey = devices.map((device) => device.deviceId).sort().join(',');
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const perDevice = new Map<string, ReadonlyMap<string, import('./sessionList').RemoteSessionScheduleInfo>>();
+    const requestVersions = new Map<string, number>();
+    const ids = scheduleDeviceIdsKey.split(',').filter(Boolean);
+    const versions = new Map(ids.map((id) => [id, remoteScheduleEventStore.getSnapshot(id).sessionIndexVersion]));
+    const refresh = (id: string) => {
+      const request = (requestVersions.get(id) ?? 0) + 1;
+      requestVersions.set(id, request);
+      void loadLightweightSessionScheduleIndex(id, invoke).then((index) => {
+        if (cancelled || requestVersions.get(id) !== request) return;
+        perDevice.set(id, index);
+        setScheduleIndex(new Map([...perDevice.values()].flatMap((entries) => [...entries])));
+      }).catch(() => undefined);
+    };
+    ids.forEach(refresh);
+    const off = remoteScheduleEventStore.subscribe(() => {
+      for (const id of ids) {
+        const version = remoteScheduleEventStore.getSnapshot(id).sessionIndexVersion;
+        const previous = versions.get(id) ?? 0;
+        versions.set(id, version);
+        if (version <= previous) continue;
+        refresh(id);
+      }
+    });
+    return () => { cancelled = true; off(); };
+  }, [open, scheduleDeviceIdsKey, invoke]);
   const sections = useMemo<HomeSection[]>(() => {
     if (!mounted) return [];
     if (shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) {
@@ -347,19 +381,15 @@ export function SessionListDrawer({
       liveActivityIndex: new Map(liveActivityEntries),
       messagePreviewIndex,
       pendingInteractionIndex,
-      // scheduleIndex **刻意不接**:它靠 1+N×listRuns RPC 水合,仓内把这条链路限制在
-      // 首页/设备详情页并配 defer+30s 节流(见 scheduleIndex.ts / scheduleIndexDefer.ts,
-      // issue 324:单 WS 管道被背景 listRuns 拥塞会拖慢会话打开的关键读)。抽屉是瞬态
-      // 切换器:分组与名称由共享层 fallbackScheduleInfo 兜底,主选与运行态由
-      // pendingInteractionIndex / liveActivity / useSessionRunning 覆盖,仅缺 schedule
-      // 未读绿点这档次要徽标——不值得从会话页新开一个取数点。
+      // Visible drawer state only; the lightweight status index never replaces the home binding cache.
+      scheduleIndex,
       sessions: excludeOrcaWorkerSessions(sessions),
       statusFilter: 'active',
       // 已解析的 i18n 文案传给共享层(共享层不出中文串;en/ja/ko 不再回退「未命名任务」)。
       unnamedLabel: t('session.menu.unnamedTitle'),
     });
     return buildHomeSections(home, false, false);
-  }, [devices, homeStatusVersion, indexedSearch.results, indexedSearch.status, messageSearchVersion, mounted, searchQuery, sessions, t]);
+  }, [scheduleIndex, devices, homeStatusVersion, indexedSearch.results, indexedSearch.status, messageSearchVersion, mounted, searchQuery, sessions, t]);
   const hasRows = useMemo(
     () => sections.some((section) => section.data.length > 0),
     [sections],
@@ -527,21 +557,17 @@ const DrawerSessionRow = memo(function DrawerSessionRow({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 运行态走订阅(行 memo 化后命令式读取会 stale,与首页行同一取舍)。
-  const sessionIsRunning = useSessionRunning(item.session.id);
+  const latestItem = latestMobileSessionRow(item);
+  const sessionIsRunning = useSessionRunning(latestItem.session.id);
   const loadedMessagePreview = useRemoteSessionMessagePreview(item.session.id);
-  const running = sessionIsRunning || !!item.scheduleInfo?.running;
-  const rightStatus = resolveMobileSessionRightStatus({
-    liveAttention: item.liveActivity?.attention === true,
-    livePhase: item.liveActivity?.phase,
-    pendingInteractionCount: item.pendingInteractionCount,
-    running,
-    scheduleUnreadCount: item.scheduleInfo?.unreadCount ?? 0,
-  });
+  const running = sessionIsRunning || !!latestItem.scheduleInfo?.running;
+  const { status: rightStatus, target: statusTarget } = resolveMobileSessionRowStatus(item, sessionIsRunning);
   // 索引搜索展示命中摘要；普通行（含自动化代表行）才使用自己的最新消息预览。
+  const previewItem = item.automationGroup ? statusTarget : item;
   const preview = buildRemoteSessionCardPreview(
-    searchResult || loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
-      ? item
-      : { ...item, messagePreview: loadedMessagePreview },
+    searchResult || loadedMessagePreview === undefined || loadedMessagePreview === previewItem.messagePreview
+      ? previewItem
+      : { ...previewItem, messagePreview: loadedMessagePreview },
     { running },
   );
   return (

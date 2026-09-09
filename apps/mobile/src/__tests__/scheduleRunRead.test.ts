@@ -147,3 +147,20 @@ describe('unreadRunIdFromProjection', () => {
     expect(unreadRunIdFromProjection(failedEvent, 'session-1')).toBeNull();
   });
 });
+
+it('shares the supplied index with the notice and ignores a late result after leaving', async () => {
+  const markRunRead = vi.fn(async () => undefined);
+  const maker = makerWith([], markRunRead);
+  const onIndex = vi.fn();
+  const index = new Map([['session-1', { scheduleId: 's', scheduleName: 's', unreadRunIds: ['r'], unreadCount: 1,
+    running: false, latestRunAt: 1, latestFailedRun: { runId: 'r', firedAt: 1 } }]]);
+  let active = true;
+  let finish!: (value: typeof index) => void;
+  const pending = markSessionScheduleRunsRead(maker, 'session-1', {
+    isActive: () => active, onIndex, loadIndex: () => new Promise((resolve) => { finish = resolve; }),
+  });
+  active = false; finish(index); await pending;
+  expect(onIndex).not.toHaveBeenCalled(); expect(markRunRead).not.toHaveBeenCalled();
+  await markSessionScheduleRunsRead(maker, 'session-1', { isActive: () => true, onIndex, loadIndex: async () => index });
+  expect(onIndex).toHaveBeenCalledWith(index); expect(markRunRead).toHaveBeenCalledWith('r');
+});

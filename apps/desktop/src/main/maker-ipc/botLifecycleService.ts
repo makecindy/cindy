@@ -41,6 +41,9 @@ export interface BotLifecycleServiceDeps {
     keepTaskHistory: boolean,
   ) => Promise<void>;
   now?: () => number;
+  onPaused?: (botId: string) => void | Promise<void>;
+  /** Cleanup must finish before the owning profile disappears. Failure leaves deletion retryable. */
+  onBeforeDelete?: (botId: string) => void | Promise<void>;
   /** Resume durable work owned by the Bot after lifecycle state is active. */
   onResumed?: (botId: string) => void | Promise<void>;
   /** Refresh hidden runtime services after any lifecycle ownership change. */
@@ -171,6 +174,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
         'The Bot was paused by the user.',
       ) ?? Promise.resolve(0),
       closeBotSessions(botId),
+      deps.onPaused?.(botId),
     ]);
     const warnings = [...closed.warnings];
     const completedAt = now();
@@ -298,6 +302,8 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       closeBotSessions(request.botId),
     ]);
 
+    assertOwnerUnchanged();
+    await deps.onBeforeDelete?.(request.botId);
     assertOwnerUnchanged();
     await deleteProfileAndDetachSessions(
       request.botId,

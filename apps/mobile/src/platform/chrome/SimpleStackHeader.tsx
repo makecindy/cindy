@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import type { ReactNode } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import type { Edge } from "react-native-safe-area-context";
 import { Text } from "@/components/AppText";
@@ -33,6 +34,7 @@ export function simpleScreenSafeAreaEdges(): readonly Edge[] | undefined {
 
 export function SimpleStackHeader({
   action,
+  right,
   backTestID,
   eyebrow,
   onBack,
@@ -41,6 +43,7 @@ export function SimpleStackHeader({
   titleTestID,
 }: {
   action?: MainWindowAction;
+  right?: ReactNode;
   backTestID?: string;
   eyebrow?: string;
   onBack?: () => void;
@@ -55,6 +58,7 @@ export function SimpleStackHeader({
     return (
       <ScreenHeader
         action={action}
+        right={right}
         backTestID={backTestID}
         eyebrow={eyebrow}
         onBack={onBack}
@@ -89,7 +93,7 @@ export function SimpleStackHeader({
               />
             )
           : undefined,
-        headerRight: action
+        headerRight: right ? () => right : action
           ? () => <MainWindowActionButton action={action} density="compact" />
           : undefined,
       }}

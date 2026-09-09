@@ -11,7 +11,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Session } from './session.js';
-import { MAIN_OWNED_SEND_CONTEXT, type AgentSessionHandle, type SendOptions } from './agents/base-agent.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type AgentSessionHandle, type SendOptions } from './agents/base-agent.js';
 import { appendAutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import type { UserMessage } from './types/common.js';
 import type { VisionBridgeHook } from './types/vision-bridge.js';
@@ -71,6 +71,21 @@ function makeSession(
 }
 
 describe('Session.send vision bridge hook', () => {
+  it('preserves Host authorization through a decorated handoff before the adapter sees it', async () => {
+    const { handle } = makeRecordingHandle();
+    const send = vi.fn(async (msg: UserMessage, opts?: SendOptions) => {
+      expect(opts?.[AUTO_REVIEW_SOURCE_CONTENT]).toBe('修吧。');
+      expect(appendAutoReviewUserIntent('obsolete grant', msg.content, opts)).toBe('Fix the unread bug. Do not deploy. 修吧。');
+    });
+    handle.send = send;
+    const session = makeSession(handle);
+    await session.send({ type: 'user', content: 'handoff '.repeat(1000) + '修吧。' }, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '修吧。',
+      [AUTO_REVIEW_USER_INTENT]: 'Fix the unread bug. Do not deploy. 修吧。',
+    });
+    expect(send).toHaveBeenCalledOnce();
+    await session.close();
+  });
   it.each(['send', 'steer'] as const)('keeps original approval evidence through the %s vision bridge', async (method) => {
     for (const text of ['', 'Continue.', 'Send this image to Alex.']) {
       const { handle } = makeRecordingHandle();

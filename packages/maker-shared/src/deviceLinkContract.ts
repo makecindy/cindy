@@ -277,6 +277,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // 同一 handler;老被控端 CHANNEL_NOT_ALLOWED → 手机端展示失败提示,不阻塞手动改名)。
   'maker:regenerate-title',
   'local-db:messages:list',
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:view-intent',
   'local-db:messages:around',
   'local-db:messages:around-client-id',
   'maker:send',

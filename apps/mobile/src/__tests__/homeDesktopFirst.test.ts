@@ -388,7 +388,7 @@ describe('mobile home desktop-first surface', () => {
     expect(vendorIconSource).not.toContain('transform="translate(');
     expect(vendorIconSource).toContain('Easing.inOut(Easing.ease)');
     // 行运行态经订阅获取(memo 化后命令式读取会 stale,2026-07-18 重渲染风暴修复)
-    expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(item.session.id);');
+    expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(latestItem.session.id);');
     // 保鲜契约:项目/自动化折叠只订阅低频首页状态；消息预览下沉到 session 行。
     // 普通流式 token 不得再通过全局 storeVersion 唤醒整棵首页列表。
     expect(homeSource).not.toContain('useRemoteSessionStoreVersion();');
@@ -445,7 +445,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('|| item.liveActivity?.attention === true;');
     // 提醒点已从行首 icon 角标移到行右侧状态槽(替代时间位),五档判定与桌面
     // sidebarRightStatus 对齐:error 红 > awaiting TapTap 蓝 > running spinner > 完成绿 > 时间。
-    expect(source).toContain('resolveMobileSessionRightStatus({');
+    expect(source).toContain('resolveMobileSessionRowStatus(item, sessionIsRunning, groupExpanded)');
     expect(source).toContain('styles.sessionRightDot');
     expect(source).toContain('<SessionRightSpinner');
     expect(source).not.toContain('sessionAttentionDot');
@@ -460,7 +460,7 @@ describe('mobile home desktop-first surface', () => {
     const localSmokeSource = readSource('scripts/local-device-link-smoke.mjs');
     const deviceDetailFlow = readSource('e2e/maestro/session_list_controls.yaml');
 
-    expect(source).toContain('item.deviceId !== null && item.available');
+    expect(source).toContain('item.deviceId !== null && canBrowseMobileHomeDevice(item)');
     expect(source).toContain('`home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}`');
     expect(source).toContain('function sanitizeDeviceChipTestId');
     expect(source).toContain("return value.replace(/[^A-Za-z0-9_-]/g, '_');");
@@ -496,7 +496,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
     expect(source).toContain(
-      "const showConnectionRow = homeRecoveringDeviceIds.size > 0 || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+      "const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
     );
     expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
     expect(source).toContain("connectionStates={deviceConnectionStates}");
@@ -668,7 +668,8 @@ describe('mobile home desktop-first surface', () => {
 
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
-    expect(source).toContain('const { accountGeneration, apiFetch, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('const { accountGeneration, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('return readDeviceList();');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');
     expect(source).toContain('syncInFlightRef.current = null;');

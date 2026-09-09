@@ -44,7 +44,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     // banner 渲染条件(useShowConnectionBanner):请求级 / transport hold error、可分类连接问题、
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
-    expect(routeSource).toContain('{showConnectionBanner ? (');
+    expect(routeSource).toContain('{showConnectionBanner || !remoteHistoryAvailable ? (');
+    expect(routeSource).toContain('cachedOnly={!remoteHistoryAvailable}');
     expect(source.replace(/\r\n/g, '\n'))
       .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');

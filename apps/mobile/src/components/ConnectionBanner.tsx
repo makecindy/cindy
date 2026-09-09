@@ -77,6 +77,7 @@ export function ConnectionBanner({
   onSync,
   variant = 'bar',
   recovery,
+  cachedOnly = false,
 }: {
   status: DeviceLinkStatus;
   loading: boolean;
@@ -92,6 +93,7 @@ export function ConnectionBanner({
   onSync(): void;
   variant?: 'bar' | 'inline';
   recovery?: 'syncing' | 'recovered';
+  cachedOnly?: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
@@ -100,29 +102,29 @@ export function ConnectionBanner({
   const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;
   // 熔断 open 优先于请求级 error:open 期间的请求失败绝大多数就是熔断快速失败本身,
   // 状态级提示(未响应 + 自动重试中)比单次请求的错误原文更能解释现状。
-  const showUnresponsive = !activeIssue && deviceUnresponsive;
+  const showUnresponsive = !cachedOnly && !activeIssue && deviceUnresponsive;
   // 熔断已关后残留的 DEVICE_UNRESPONSIVE 错误是陈旧快照,按 null 处理(与
   // useShowConnectionBanner 同一判定,否则会出现可见但无内容的空壳 banner)。
   const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
-  const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
+  const friendlyError = cachedOnly || activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
   const autoRecoveringRequest = requestErrorAutoRecovering ?? isAutoRecoveringRemoteError(effectiveError);
-  const showRecoveryProgress = (!activeIssue || activeIssue.kind === 'unstable' || activeIssue.kind === 'replaced')
+  const showRecoveryProgress = !cachedOnly && (!activeIssue || activeIssue.kind === 'unstable' || activeIssue.kind === 'replaced')
     && (status === 'connecting' || deviceUnresponsive || recovery === 'syncing'
       || (friendlyError !== null && autoRecoveringRequest));
-  const showSyncAction = resolveConnectionBannerSyncActionVisibility({
+  const showSyncAction = !cachedOnly && resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeIssue !== null,
     deviceUnresponsive: showUnresponsive,
     hasRequestError: friendlyError !== null,
     requestErrorAutoRecovering: autoRecoveringRequest,
   });
-  const tone = activeIssue
+  const tone = cachedOnly ? 'off' : activeIssue
     ? 'off'
     : showUnresponsive
       ? 'busy'
       : friendlyError ? 'muted' : recovery === 'syncing' ? 'busy' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const compact = density === 'compact';
-  const title = activeIssue
+  const title = cachedOnly && !activeIssue ? t('deviceLink.cachedHistory.title') : activeIssue
     ? activeIssue.kind === 'unstable'
       ? t('deviceLink.unstableTitle')
       : connectionIssueTitle(activeIssue.kind)
@@ -130,7 +132,7 @@ export function ConnectionBanner({
       ? t('deviceLink.deviceUnresponsiveTitle')
       : friendlyError ? t('deviceLink.syncFailed') : status === 'online' && recovery
         ? t(`deviceLink.recovery.${recovery}`) : relayStatusLabel(status);
-  const copy = activeIssue
+  const copy = cachedOnly && !activeIssue ? t('deviceLink.cachedHistory.hint') : activeIssue
     ? activeIssue.kind === 'unstable'
       ? t('deviceLink.unstableHint')
       : connectionIssueHint(activeIssue.kind)
@@ -148,7 +150,7 @@ export function ConnectionBanner({
       ]}
       testID="connection.banner"
     >
-      <StatusDot tone={tone} pulsing={!activeIssue && (status === 'connecting' || showUnresponsive || recovery === 'syncing')} />
+      <StatusDot tone={tone} pulsing={!cachedOnly && !activeIssue && (status === 'connecting' || showUnresponsive || recovery === 'syncing')} />
       <View style={[styles.textBlock, compact && styles.textBlockCompact]}>
         <Text
           ellipsizeMode="tail"

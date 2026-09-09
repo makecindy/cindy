@@ -10,6 +10,8 @@ describe('native e2e environment', () => {
     const runner = readFileSync(resolve(process.cwd(), 'scripts/maestro-e2e.mjs'), 'utf8');
 
     expect(helper).toContain('const MIN_JAVA_MAJOR = 17');
+    expect(helper).toContain('env.ANDROID_STUDIO_JDK');
+    expect(helper).toContain("env.ProgramFiles, 'Android', 'Android Studio', 'jbr'");
     expect(helper).toContain("brew', ['--prefix', 'openjdk@17']");
     expect(helper).toContain("'/usr/libexec/java_home', ['-v', version]");
     expect(helper).toContain('JAVA_HOME: javaHome');

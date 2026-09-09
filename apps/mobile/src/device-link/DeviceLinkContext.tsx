@@ -1,4 +1,6 @@
 import Constants from 'expo-constants';
+import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { createBackgroundConnection } from './backgroundConnection';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
@@ -19,6 +21,7 @@ import {
   parseRemoteResourceChangedPayload,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
+  type DeviceView,
   type Envelope,
   type InvokeResultPayload,
   type LinkAcceptPayload,
@@ -28,7 +31,7 @@ import {
   type Topic,
 } from '@cindy/device-link';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { deviceLinkWsUrl } from '@/config/env';
+import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
 import {
@@ -71,6 +74,7 @@ import {
   type PeerRecoveryResult,
 } from '@/device-link/peerRecoveryScheduler';
 import {
+  clearSessionScheduleIndexCache,
   invalidateOfflineScheduleIndexFailureFor,
   invalidateScheduleIndexForDevice,
   invalidateTransientScheduleIndexFailureFor,
@@ -158,6 +162,7 @@ export interface DeviceLinkContextValue {
   lastPresenceSnapshot: PresenceSnapshot | null;
   /** 当前 relay 连接代内的逐设备 availability；null = 本代尚无权威 verdict。 */
   getPresenceAvailability(deviceId: string): boolean | null;
+  readDeviceList(): Promise<{ devices: DeviceView[] }>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
@@ -364,6 +369,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       openLinkInFlightRef.current.get(deviceId)?.pending === true,
   }), []);
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
+  const rosterConsumerRef = useRef<(() => (devices: DeviceView[]) => void) | null>(null);
+  const rosterRequestRef = useRef<{ client: DeviceLinkClient | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
   const presencePendingRecoveryDeviceIdsRef = useRef(new Set<string>());
   const presenceUnavailableVerdictsRef = useRef(
@@ -385,8 +392,27 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
   const accountGenerationRef = useRef<number | null>(null);
 
+  // Home and direct task entry share the same in-flight roster read. Evidence
+  // belongs to the connection that started it, not whichever one finishes it.
+  const readDeviceList = useCallback((): Promise<{ devices: DeviceView[] }> => {
+    const client = clientRef.current;
+    const epoch = connectionEpochRef.current;
+    const pending = rosterRequestRef.current;
+    if (pending?.client === client && pending.epoch === epoch) return pending.promise;
+    const apply = rosterConsumerRef.current?.();
+    const promise = auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
+      baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
+    }).then((result) => { apply?.(result.devices); return result; });
+    rosterRequestRef.current = { client, epoch, promise };
+    void promise.finally(() => {
+      if (rosterRequestRef.current?.promise === promise) rosterRequestRef.current = null;
+    }).catch(() => undefined);
+    return promise;
+  }, [auth.apiFetch, auth.accountGeneration]);
+
   const clearPerAccountDeviceLinkState = useCallback(() => {
     remoteSessionStore.clear();
+    clearSessionScheduleIndexCache();
     remoteScheduleEventStore.clearAll();
     revokedDevicesStore.clearAll();
     resetDeviceResponsivenessTracking();
@@ -421,12 +447,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     allowProbe = false,
     refreshSettled = false,
   ) => {
+    const checkAvailability = () => {
+      if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
+        const disabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
+        throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
+      }
+    };
     return getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
       deviceId,
-      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe),
+      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability),
       { retainSuccessful: true, refreshSettled },
     );
   }, []);
@@ -439,7 +471,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const releaseGeneration = backgroundReleaseGenerationRef.current;
     const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochRef.current);
     await confirmTrackedSubscription({
-      isCurrent: () => !backgroundReleaseInFlightRef.current
+      isCurrent: () => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !backgroundReleaseInFlightRef.current
         && backgroundReleaseGenerationRef.current === releaseGeneration && clientRef.current === client,
       generation: () => `${connectionEpochRef.current}:${remoteSubscribedTopicsRef.current.generation(deviceId)}`,
       missing: () => topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
@@ -449,7 +481,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         deviceId,
         toSend,
         () => (
-          !backgroundReleaseInFlightRef.current
+          presenceAvailableByDeviceRef.current.get(deviceId) !== false
+          && !backgroundReleaseInFlightRef.current
           && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic))
         ),
       ),
@@ -856,6 +889,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       setConnectionEpoch(connectionEpochRef.current);
       resetRemoteProjectOrderPushFence();
       void rehydrateWithClient(client);
+      // A new controller receives only presence deltas. Read the roster once so
+      // an already-offline host is known even when opening directly into history.
+      void readDeviceList().catch(() => undefined);
     });
     const offPeerTransportReset = client.onPeerTransportReset(({ deviceId }) => {
       // 这是本地 ACK 超时，不是对端可达证据：只失效该 peer 的建链缓存和
@@ -870,7 +906,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       );
       if (shouldRecover) void rehydrateWithClient(client, deviceId);
     });
-    const offPresence = client.onPresenceChanged((snap) => {
+    const applyPresence = (snap: PresenceSnapshot) => {
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
       // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
       // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
@@ -887,7 +923,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       } else {
         // Relay presence 是权威 availability verdict,普通目标应答不能推翻。
         presenceUnavailableVerdictsRef.current.set(snap.deviceId, {
-          kind: 'presence',
+          kind: snap.online && !snap.remoteControlEnabled ? 'disabled' : 'presence',
           responseEvidenceEpoch: capturePresenceAvailabilityEpoch(
             remoteResponseEvidenceEpochs,
             snap.deviceId,
@@ -938,7 +974,26 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 解除点只有:transport-timeout / 新连接代际 / 显式 openLink 成功
       // (见 linkClose.ts 的具名 lift 入口)。
       if (presence.recovered) void rehydrateWithClient(client, snap.deviceId);
-    });
+    };
+    const offPresence = client.onPresenceChanged(applyPresence);
+    rosterConsumerRef.current = () => {
+      const epoch = connectionEpochRef.current;
+      const presenceEpoch = presenceAvailabilityEpochsRef.current.next;
+      const responseEpoch = remoteResponseEvidenceEpochs.next;
+      return (devices) => {
+        if (clientRef.current !== client || connectionEpochRef.current !== epoch || client.getStatus() !== 'online') return;
+        for (const device of devices) {
+          const available = device.online && device.remoteControlEnabled;
+          const disabled = device.online && !device.remoteControlEnabled;
+          const wasDisabled = presenceUnavailableVerdictsRef.current.get(device.deviceId)?.kind === 'disabled';
+          if (device.isSelf || (presenceAvailableByDeviceRef.current.get(device.deviceId) === available && disabled === wasDisabled)
+            || (presenceAvailabilityEpochsRef.current.byDevice.get(device.deviceId) ?? 0) > presenceEpoch
+            || (!device.online && (remoteResponseEvidenceEpochs.byDevice.get(device.deviceId) ?? 0) > responseEpoch)) continue;
+          applyPresence({ ...device, deviceName: device.name, platform: device.platform ?? '',
+            appVersion: device.appVersion ?? '', lastSeenAt: Date.parse(device.lastSeenAt ?? '') || 0 });
+        }
+      };
+    };
     const offFrame = client.onFrame((env) => routeFrame(env, {
       currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => {
@@ -1186,6 +1241,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offStatus();
       offIssue();
       client.stop();
+      rosterConsumerRef.current = null;
+      rosterRequestRef.current = null;
       peerRecoverySchedulerRef.current?.clear();
       clearAllPresenceWipeTimers(presenceWipeTimersRef.current);
       openLinkInFlightRef.current.clear();
@@ -1207,6 +1264,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     publishPresenceAvailabilityMutation,
     rehydrateWithClient,
     requestForcedPeerRecovery,
+    readDeviceList,
   ]);
 
   const openLink = useCallback(
@@ -1243,7 +1301,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     args: unknown[] = [],
     opts?: { preSend?: () => void },
   ) => {
-    return sendInvokeWithAccessHandling<T>(requireClient(clientRef.current), deviceId, channel, args, opts);
+    const preSend = () => {
+      if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
+        const disabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
+        throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
+      }
+      opts?.preSend?.();
+    };
+    preSend();
+    return sendInvokeWithAccessHandling<T>(requireClient(clientRef.current), deviceId, channel, args, { preSend });
   }, []);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
@@ -1270,12 +1336,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
     markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
     noteSessionLiveStreamsInterrupted(toSend);
-    if (toSend.length === 0) return;
+    if (toSend.length === 0 || presenceAvailableByDeviceRef.current.get(deviceId) === false) return;
     await sendUnsubscribe(
       requireClient(clientRef.current),
       deviceId,
       toSend,
-      (topic) => !registryRef.current.hasTopic(deviceId, topic),
+      (topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic),
     );
   }, []);
 
@@ -1292,6 +1358,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     lastPresenceSnapshot,
     getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, topics),
     getPresenceAvailability,
+    readDeviceList,
     openLink,
     reopenLink,
     closeLink,
@@ -1306,6 +1373,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     connectionEpoch,
     connectionIssue,
     getPresenceAvailability,
+    readDeviceList,
     invoke,
     lastPresenceSnapshot,
     openLink,
@@ -1391,7 +1459,24 @@ export function routeFrame(env: Envelope, handlers: {
     );
     return;
   }
+  const historySessionId = (push.payload as { sessionId?: unknown } | null)?.sessionId;
+  const historyView = typeof historySessionId === 'string' ? findRemoteHistoryView(env.src, historySessionId) : undefined;
+  if (push.channel === 'maker:history-view-changed') {
+    historyView?.invalidate();
+    return;
+  }
   remoteSessionStore.applyRemotePush(env.src, push.channel, push.payload);
+  const patch = (push.payload as { patch?: { clearedAt?: unknown; status?: unknown } } | null)?.patch;
+  if (historyView && push.channel === 'local-db:sessions:patched'
+    && (patch?.status === 'deleted' || patch?.status === 'archived')) {
+    historyView.setActive(false);
+    historyView.reset();
+  } else if (historyView && push.channel === 'local-db:sessions:patched' && typeof patch?.clearedAt === 'string') {
+    // reset switches the screen back to its raw mirror until the fresh view arrives.
+    // Retire that mirror too so a failed refresh cannot reveal pre-clear messages.
+    remoteSessionStore.invalidateSessionMessageWindow(historySessionId as string, env.src);
+    historyView.reset();
+  } else if (historyView?.getSnapshot().ready && (push.channel === 'local-db:messages:created' || push.channel === 'maker:status-changed')) historyView.invalidate();
 }
 
 /** provider revision 后并行重拉所有 agent 的能力；旧代或异常结果都不触碰当前页面。 */
@@ -1508,8 +1593,8 @@ async function rebuildSessionSnapshot(
     }
     return false;
   };
-  const [history, pending, projection, goal] = await Promise.all([
-    measured('history', runSessionMessagesSnapshotSingleFlight(
+  const historyView = findRemoteHistoryView(deviceId, sessionId);
+  const readRawHistory = () => runSessionMessagesSnapshotSingleFlight(
       snapshotScope,
       RECONNECT_MESSAGE_WINDOW_LIMIT,
       messageAuthorityAtRequestStart
@@ -1526,7 +1611,21 @@ async function rebuildSessionSnapshot(
         [sessionId, { limit: RECONNECT_MESSAGE_WINDOW_LIMIT }],
         sendOpts,
       ),
-    ), applyHistory),
+    );
+  const readHistory = async () => {
+    if (historyView) {
+      if (!historyView.isActive()) return false;
+      await historyView.refresh(false, opts?.subscriptionIdentity != null);
+      if (!isCurrent() || !historyView.isActive()
+        || findRemoteHistoryView(deviceId, sessionId) !== historyView) return false;
+      const snapshot = historyView.getSnapshot();
+      if (!snapshot.error && snapshot.ready) return true;
+      if (!isHistoryViewUnavailable(snapshot.error)) throw snapshot.error;
+    }
+    return applyHistory(await readRawHistory());
+  };
+  const [history, pending, projection, goal] = await Promise.all([
+    measured('history', readHistory(), (applied) => applied),
     measured('pending', runSessionPendingInteractionsSnapshotSingleFlight(
       snapshotScope,
       pendingSnapshotAtRequestStart,
@@ -1590,15 +1689,18 @@ function sendOpenLinkWithAccessHandling(
   client: DeviceLinkClient,
   deviceId: string,
   allowProbe = false,
+  preSend?: () => void,
 ): Promise<LinkAcceptPayload> {
-  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe));
+  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend));
 }
 
 async function sendOpenLink(
   client: DeviceLinkClient,
   deviceId: string,
   allowProbe = false,
+  preSend?: () => void,
 ): Promise<LinkAcceptPayload> {
+  preSend?.();
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
   const slot = acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
   try {
@@ -1608,6 +1710,7 @@ async function sendOpenLink(
     throw err;
   }
   try {
+    preSend?.();
     const accepted = await client.openLink(deviceId, {
       controllerName: mobileDeviceName(),
       protocolVersion: PROTOCOL_VERSION,
@@ -1683,7 +1786,7 @@ async function sendInvoke<T>(
       { channel, args },
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
-      resolveMobileInvokeTimeoutMs(channel),
+      resolveMobileInvokeTimeoutMs(channel, args),
     );
   } catch (err) {
     settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));

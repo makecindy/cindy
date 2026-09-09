@@ -4,6 +4,7 @@ import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import {
   addBotProfile,
   addBotProfileAndWait,
+  BotModelSelectionRequiredError,
   duplicateBotProfile,
   getBotProfiles,
   removeBotProfile,
@@ -15,6 +16,8 @@ import {
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
+
+vi.mock('@/hooks/useAvailableAgents', () => ({ getCachedAvailableVendors: () => new Set(['cc', 'codex', 'pi']) }));
 
 vi.mock('@/lib/modelDefinitions', () => ({
   getDefaultModelForVendor: vi.fn(() => ({
@@ -50,6 +53,8 @@ function piModel(
     defaultEffort,
     supportsFastMode: false,
     status: 'active',
+    newSessionDefault: ['pi'],
+    supportsImageInput: true,
   } as CatalogModel;
 }
 
@@ -145,14 +150,14 @@ describe('bot profile store', () => {
     });
   });
 
-  it('does not invent an unconfigured fallback when GLM-5.3-Flash is unavailable', () => {
+  it('selects connected client defaults when GLM-5.3-Flash is unavailable', () => {
     setProviders([
       piProvider(
         'openai',
         true,
         [
           piModel('chatgpt/gpt-second', 9),
-          piModel('chatgpt/gpt-first', 0, 'medium'),
+          piModel('chatgpt/gpt-5.6-sol', 0, 'medium'),
         ],
         'subscription',
       ),
@@ -164,13 +169,19 @@ describe('bot profile store', () => {
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
-      providerId: 'xd',
-      effort: 'high',
+      model: 'chatgpt/gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'medium',
     });
   });
 
-  it('keeps the durable Pi + GLM default while the catalog is still unavailable', () => {
+  it('does not create an empty profile when a connected source has no recommended model', async () => {
+    setProviders([piProvider('custom', true, [piModel('custom-model')])]);
+    await expect(addBotProfileAndWait({ name: 'Needs model', description: '' }))
+      .rejects.toBeInstanceOf(BotModelSelectionRequiredError);
+  });
+
+  it('leaves the model empty when no source is configured', () => {
     setProviders([
       piProvider('xd', false, [piModel('z-ai/glm-5.3-flash')]),
     ]);
@@ -180,9 +191,9 @@ describe('bot profile store', () => {
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
-      providerId: 'xd',
-      effort: 'high',
+      model: '',
+      providerId: null,
+      effort: '',
     });
   });
 

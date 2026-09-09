@@ -152,6 +152,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
   return {
     status: 'online',
     recoveringDeviceIds: new Set(),
+    readDeviceList: async () => ({ devices: visualMockDevices() }),
     connectionIssue: null,
     presenceVersion: 1,
     connectionEpoch: 1,

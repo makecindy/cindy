@@ -567,6 +567,7 @@ export function GhostPluginDetailView({
                   </div>
                 )
               ) : null}
+              {ghost?.manifest.routineEvents ? <p className="text-13 text-[var(--text-secondary)]">{t('routines.pluginCapability')}</p> : null}
               {cindyCapabilities.length > 0 ? (
                 <CindyCapabilityPrefs
                   ghostId={detail.id}

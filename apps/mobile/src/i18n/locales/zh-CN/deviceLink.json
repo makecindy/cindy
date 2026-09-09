@@ -1,4 +1,8 @@
 {
+  "cachedHistory": {
+    "title": "电脑未连接",
+    "hint": "可查看已缓存内容，更多内容需电脑在线后加载。"
+  },
   "recovery": {
     "syncing": "正在同步…",
     "recovered": "已恢复",
