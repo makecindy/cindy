@@ -29,7 +29,7 @@ patchedDependencies:
     hash: 272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822
     path: dependency-patches/harmonyos-sans-sc-webfont-splitted.patch
   react-native-uitextview@2.2.0:
-    hash: d6eb1ea155bf2245746f79c5d2cc7c5abe165c34e55c464e04d641a78888cda0
+    hash: 011279d36eb98b42d6c0eb68482aa8429a58b15b9250841a74ce757861cfeb84
     path: dependency-patches/react-native-uitextview@2.2.0.patch
   react-native-webview@13.16.1:
     hash: 4f76ca2497d14d136ef6ff35060f4c35b57319a3edf53fa334b82771a9405c16
@@ -751,7 +751,7 @@ importers:
         version: 15.15.4(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       react-native-uitextview:
         specifier: 2.2.0
-        version: 2.2.0(patch_hash=d6eb1ea155bf2245746f79c5d2cc7c5abe165c34e55c464e04d641a78888cda0)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
+        version: 2.2.0(patch_hash=011279d36eb98b42d6c0eb68482aa8429a58b15b9250841a74ce757861cfeb84)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       react-native-web:
         specifier: ^0.21.2
         version: 0.21.2(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -20163,7 +20163,7 @@ snapshots:
       react-native: 0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
       warn-once: 0.1.1
 
-  react-native-uitextview@2.2.0(patch_hash=d6eb1ea155bf2245746f79c5d2cc7c5abe165c34e55c464e04d641a78888cda0)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
+  react-native-uitextview@2.2.0(patch_hash=011279d36eb98b42d6c0eb68482aa8429a58b15b9250841a74ce757861cfeb84)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
     dependencies:
       react: 19.2.3
       react-native: 0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)

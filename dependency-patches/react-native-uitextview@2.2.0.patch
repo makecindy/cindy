@@ -1,5 +1,5 @@
 diff --git a/ios/RNUITextView.mm b/ios/RNUITextView.mm
-index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65958a3fd5 100644
+index d0c31ed20b4865679ec1397543fc74056e47b978..34cd4ae4cf29c7ff99445485ab31206cee4dc22c 100644
 --- a/ios/RNUITextView.mm
 +++ b/ios/RNUITextView.mm
 @@ -1,4 +1,5 @@
@@ -107,7 +107,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  {
    if (!_state) {
      return;
-@@ -116,19 +165,23 @@ - (void)drawRect:(CGRect)rect
+@@ -116,19 +165,28 @@ - (void)drawRect:(CGRect)rect
  
    const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
  
@@ -127,14 +127,19 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
    if (!textChanged && !frameChanged) {
      return;
    }
-+  const auto convertedAttrString = RCTNSAttributedStringFromAttributedString(attrString);
++  // Fabric measures through RCTTextLayoutManager, which applies this offset
++  // after conversion. Apply the same correction when drawing: conversion alone
++  // leaves extra line-height space above the glyphs (especially visible in
++  // single-line user bubbles). Reuse RN's helper for mixed fonts and scaling.
++  const auto convertedAttrString = [RCTNSAttributedStringFromAttributedString(attrString) mutableCopy];
++  RCTApplyBaselineOffset(convertedAttrString);
    if (textChanged) {
 +    _lastAppliedAttributedString = attrString;
 +    _hasAppliedText = YES;
      // Reassigning attributedText clears any active selection. Save it and
      // restore after, while suppressing the synthetic textViewDidChangeSelection
      // events the clear-then-restore would otherwise produce — those would
-@@ -145,27 +198,56 @@ - (void)drawRect:(CGRect)rect
+@@ -145,27 +203,56 @@ - (void)drawRect:(CGRect)rect
      _textView.frame = _view.frame;
    }
  
@@ -210,7 +215,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  }
  
  - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps
-@@ -181,6 +263,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -181,6 +268,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
      _textView.selectable = newViewProps.selectable;
    }
  
@@ -221,7 +226,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
      if (@available(iOS 11.0, *)) {
        _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
-@@ -215,7 +301,15 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -215,7 +306,15 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
  - (void)updateState:(const facebook::react::State::Shared &)state oldState:(const facebook::react::State::Shared &)oldState
  {
    _state = std::static_pointer_cast<const RNUITextViewShadowNode::ConcreteState>(state);
@@ -238,7 +243,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  }
  
  // MARK: - UIGestureRecognizerDelegate
-@@ -328,6 +422,230 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
+@@ -328,6 +427,230 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
        static_cast<int>(selectedRange.location),
        static_cast<int>(selectedRange.location + selectedRange.length),
      });
