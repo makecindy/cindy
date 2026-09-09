@@ -4479,7 +4479,7 @@ describe('native Pi core management', () => {
       }
     };
     const result = await executePiNativeManagementCommand({ kind: 'self', force: true });
-    expect(result).toMatchObject({ execution: 'host-binary-update', nativeSucceeded: false, afterVersion: '0.85.1' });
+    expect(result).toMatchObject({ execution: 'host-binary-update', nativeSucceeded: false, afterVersion: '0.85.1', activation: 'new-root-tasks' });
     expect(runtime.fallbackCalls).toEqual([true]);
   });
 
@@ -4505,7 +4505,7 @@ describe('native Pi core management', () => {
     runtime.version = '0.84.4';
     runtime.spawnHook = args => { if (args.includes('--self')) runtime.version = '0.85.1'; };
     const result = await executePiNativeManagementCommand({ kind: 'self', force: false });
-    expect(result).toMatchObject({ beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true });
+    expect(result).toMatchObject({ beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true, activation: 'new-root-tasks' });
     expect(runtime.spawns.map(call => call.args)).toEqual([['--version'], ['update', '--self', '--no-approve'], ['--version']]);
     expect(await executePiNativeManagementCommand({ kind: 'version' })).toMatchObject({ version: '0.85.1' });
     expect((await fs.readdir(runtime.userData)).some(name => name.includes('runtime-change'))).toBe(false);

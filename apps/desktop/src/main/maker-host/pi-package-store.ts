@@ -1063,7 +1063,7 @@ export async function executePiNativeManagementCommand(
       execution,
       ...(core ? { beforeVersion, afterVersion,
         versionVerified: afterVersion !== undefined } : {}),
-      ...(core || packages ? { activation: 'new-pi-processes', activeTasksPreserved: true } : {}),
+      ...(core || packages ? { activation: core ? 'new-root-tasks' : 'new-pi-processes', activeTasksPreserved: true } : {}),
       ...(command.kind === 'version' ? { version: afterVersion } : {}),
       ...(['help', 'list'].includes(command.kind)
         ? { output: command.kind === 'list'

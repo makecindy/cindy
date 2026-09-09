@@ -697,10 +697,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it.each(['desktop', 'tool'] as const)('updates core through the shared service and preserves the %s caller', async origin => {
+  it.each([['desktop', 'new-root-tasks'], ['tool', 'new-root-tasks'], ['desktop', 'new-pi-processes'], ['tool', 'new-pi-processes']] as const)('updates core and preserves the %s caller with %s activation', async (origin, activation) => {
     const deps = buildDeps();
     deps.mutatePiManagedPackage = vi.fn(async () => ({ kind: 'self', nativeSucceeded: true,
-      beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true }));
+      beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true, activation }));
     deps.onPiManagedPackageMutationSettled = vi.fn();
     const handle = await new PiAgent(deps).startSession({ sessionId: 'core-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
     const resolver = vi.fn();
@@ -709,10 +709,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       if (origin === 'desktop') {
         await handle.send({ type: 'user', content: 'pi update' }, desktopCommandOptions('pi update'));
         expect(captured.requests.find(request => request.type === 'prompt')?.message).toContain('0.85.1');
+        expect(captured.requests.find(request => request.type === 'prompt')?.message).toContain('new-root-tasks');
+        expect(captured.requests.find(request => request.type === 'prompt')?.message).toContain('their subagents retain the binary path');
       } else {
         captured.onEvent?.({ type: 'extension_ui_request', id: 'core-tool', method: 'input',
           title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
-        expect(JSON.parse(String((await waitForResponse('core-tool')).value))).toMatchObject({ ok: true, result: { afterVersion: '0.85.1' } });
+        expect(JSON.parse(String((await waitForResponse('core-tool')).value))).toMatchObject({ ok: true, result: { afterVersion: '0.85.1', activation: 'new-root-tasks' } });
       }
       expect(deps.mutatePiManagedPackage).toHaveBeenCalledWith({ action: 'command', command: { kind: 'self', force: false }, authorization: origin === 'desktop' ? 'local-desktop-command' : 'confirmed-tool-call' });
       expect(deps.onPiManagedPackageMutationSettled).not.toHaveBeenCalled();

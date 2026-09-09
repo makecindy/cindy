@@ -878,7 +878,8 @@ function piManagedPackageResultSummary(
       beforeVersion: version(record.beforeVersion), afterVersion: version(record.afterVersion),
       version: version(record.version), versionVerified: record.versionVerified === true,
       activeTasksPreserved: record.activeTasksPreserved === true,
-      activation: record.activation === 'new-pi-processes' ? record.activation : undefined,
+      activation: ['new-root-tasks', 'new-pi-processes'].includes(String(record.activation))
+        ? (record.kind === 'self' || record.kind === 'all' ? 'new-root-tasks' : record.activation) : undefined,
       ...piManagedCommandOutputSummary(record) };
   }
   const affected = record.affectedPackage;
@@ -5063,7 +5064,7 @@ export class PiAgent extends BaseAgent {
         const receiptText = JSON.stringify(receipt);
         queue.push({ type: 'text', data: { text: receiptText, isFinal: false }, source: 'pi' });
         return { accepted: true, text: '[Cindy Pi command receipt] ' + receiptText
-          + '\nThis command was already handled. Report the result; do not execute it again. Core updates apply to new Pi processes; existing tasks remain running. Never claim an upgrade unless afterVersion is verified.' };
+          + '\nThis command was already handled. Report the result; do not execute it again. Core updates apply to newly started root Pi tasks. Existing tasks remain running, and their subagents retain the binary path captured when their root task started. Never claim an upgrade unless afterVersion is verified.' };
       }
       const command = commandText === undefined ? undefined : parsePiManagedPackageCommand(commandText);
       if (!command) return { text, accepted: false };
