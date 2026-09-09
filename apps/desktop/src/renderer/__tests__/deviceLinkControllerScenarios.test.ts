@@ -431,6 +431,39 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     makerChatStore.purgeSession(s);
   });
 
+  it('falls back to the authoritative raw window when expanded details fail during force repair', async () => {
+    const s = sid();
+    host.enableHistoryView(true);
+    const user = dbMessage(s, 'question', 'question', '2026-09-08T00:00:00Z', 'user');
+    host.seedSession(s, {}, [user]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    host.push('maker:event', { sessionId: s, event: { type: 'status', data: { status: 'Running', isRunning: true } } });
+    host.push('maker:event', { sessionId: s, event: { type: 'thinking', data: { blockId: 'client-thought', stage: 'start', startedAt: Date.now() } } });
+    host.push('maker:event', { sessionId: s, event: { type: 'thinking', data: { blockId: 'client-thought', stage: 'delta', text: 'stale thought' } } });
+    const durable = { ...dbMessage(s, 'thought', '', '2026-09-08T00:00:01Z', 'thinking'),
+      content: { kind: 'thinking', text: 'sealed thought', durationMs: 2000, finishedAt: Date.parse('2026-09-08T00:00:03Z') } };
+    host.seedSession(s, {}, [user, durable]);
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh();
+    const group = view.getSnapshot().items.find((item) => item.type === 'work');
+    if (!group) throw new Error('Expected an expanded work group');
+    const original = host.invoke.getMockImplementation()!;
+    host.invoke.mockImplementation(async (...args) => {
+      if (args[1] === 'local-db:messages:work-details') throw new Error('transient details timeout');
+      return original(...args);
+    });
+    view.setExpanded(group.key, true);
+    await flush();
+    await expect(makerChatStore.reconcileRemoteMessages(s, { force: true })).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'client-thought'))
+      .toMatchObject({ content: 'sealed thought', isStreaming: false, thinkingDurationMs: 2000 });
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    makerChatStore.purgeSession(s);
+  });
+
   it('resumes terminal handoff when the first projected page was not ready before leaving', async () => {
     const s = sid();
     host.enableHistoryView();

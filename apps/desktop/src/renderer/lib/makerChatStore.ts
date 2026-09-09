@@ -11730,6 +11730,16 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         await Promise.all(historyWorkSummaries(view.getSnapshot().items)
           .filter((summary) => view.getSnapshot().expanded.has(summary.key))
           .map((summary) => view.loadDetails(summary)));
+        const detailError = historyWorkSummaries(view.getSnapshot().items)
+          .map((summary) => view.getSnapshot().details.get(summary.key))
+          .find((detail) => detail?.error)?.error;
+        if (detailError) {
+          // A failed expanded read must not look like a successful repair with
+          // the work-group body silently omitted. Fall back to the raw,
+          // authoritative window so a transient details failure can still heal
+          // the lost terminal row; if that read also fails, preserve rejection.
+          return runRemoteReconcile(sessionId, opts);
+        }
       }
       if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
       const snapshot = view.getSnapshot();
