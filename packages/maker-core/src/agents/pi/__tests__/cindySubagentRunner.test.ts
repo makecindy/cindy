@@ -1374,7 +1374,12 @@ describe('Cindy durable PI Subagent runner', () => {
       childId: running.tasks[0]?.childId,
       message: 'continue from the completed result',
     })).resolves.toBe(1);
-    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    // A control receipt precedes the child consuming stdin and logging it.
+    const commands = await waitFor(async () => {
+      const recorded = await readCommandsIfPresent(fixture.commandsFile);
+      return recorded?.some((command) => command.type === 'follow_up'
+        && command.message === 'continue from the completed result') ? recorded : null;
+    }, undefined, 'the child to receive the follow-up command');
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'steer', message: 'late correction' }));
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'follow_up', message: 'continue from the completed result',

@@ -212,8 +212,22 @@ describe('companion invitation with SQLite and real skill files', () => {
       sqlite.prepare("UPDATE bot_profiles SET avatar = 'user-upload' WHERE id = 'bot-1'").run();
       return { url: 'ai-portrait', hash: 'a'.repeat(64) };
     });
+    // Real skill-file I/O has no one-second completion contract. Await its
+    // terminal notification under the unchanged test timeout instead of polling.
+    const completed = new Promise<void>((resolve, reject) => {
+      h.broadcast.mockImplementation(() => {
+        const stage = state().stage;
+        if (stage === 'ready') resolve();
+        if (stage === 'failed') reject(new Error('Invitation failed before avatar assertion'));
+      });
+    });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    try {
+      await completed;
+    } finally {
+      h.broadcast.mockReset();
+    }
+    expect(state().stage).toBe('ready');
     expect(sqlite.prepare('SELECT avatar FROM bot_profiles').get()).toEqual({
       avatar: 'user-upload',
     });

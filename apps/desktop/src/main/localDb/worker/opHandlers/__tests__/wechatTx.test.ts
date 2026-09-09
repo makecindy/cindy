@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
+import { transformSync } from 'esbuild';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
@@ -20,6 +22,247 @@ afterEach(() => {
 });
 
 describe('WeChat reliable worker transactions', () => {
+  it.each(
+    (['before', 'during', 'after'] as const).flatMap((timing) =>
+      (['hello', '/stop', '/stop all'] as const).map((command) => ({ timing, command })),
+    ),
+  )(
+    'linearizes $timing invalidation of $command against a real SQLite worker transaction',
+    async ({ timing, command }) => {
+      const db = createDb();
+      activate(db, 'epoch-1', null);
+      commitBatch(db, {
+        messages: [
+          message('existing', 'existing', 'session-2'),
+          message('delivery', 'delivery', 'session-1'),
+        ],
+      });
+      runTx(db, 'wechatLeaseNextTask', { bindingEpoch: 'epoch-1', now: 101, leaseUntil: 1000 });
+      db.prepare("UPDATE wechat_inbox SET status = 'accepted_running' WHERE id = 'delivery'").run();
+      runTx(db, 'wechatCommitTerminal', {
+        bindingEpoch: 'epoch-1',
+        taskId: 'delivery',
+        now: 102,
+        outbox: [
+          {
+            id: 'pending-reply',
+            clientId: 'pending-client',
+            kind: 'final',
+            chunkIndex: 0,
+            text: 'old reply',
+          },
+        ],
+      });
+      // Normalize the other row to pending after fixture setup.
+      db.prepare(
+        "UPDATE wechat_inbox SET status = 'pending', lease_until = NULL WHERE id = 'existing'",
+      ).run();
+      const fence = new Int32Array(new SharedArrayBuffer(4));
+      const gate = new Int32Array(new SharedArrayBuffer(4));
+      if (timing === 'before') Atomics.store(fence, 0, 1);
+      // The UDF pauses after inbox/media/outbox/cancellation writes, immediately
+      // before the cursor write. This is a second JS thread and actual SQLite,
+      // not a deferred mock of db.tx or a sleep guessing the race window.
+      const source = transformSync(
+        readFileSync(path.resolve(__dirname, '../wechatTx.ts'), 'utf8'),
+        {
+          loader: 'ts',
+          format: 'cjs',
+          target: 'node22',
+        },
+      ).code;
+      const worker = new Worker(
+        `
+          const { parentPort, workerData } = require('node:worker_threads');
+          const Database = require(workerData.sqlite);
+          const handlers = { exports: {} };
+          new Function('module', 'exports', workerData.source)(handlers, handlers.exports);
+          const db = new Database(Buffer.from(workerData.database));
+          db.pragma('foreign_keys = ON');
+          const { fence, gate, timing, batch } = workerData;
+          db.function('pause_poll', () => {
+            if (timing !== 'during') return 0;
+            parentPort.postMessage({ paused: true });
+            if (Atomics.wait(gate, 0, 0, 10000) === 'timed-out') throw Error('gate timeout');
+            return 0;
+          });
+          db.exec("CREATE TEMP TRIGGER pause_poll_commit BEFORE UPDATE OF sync_cursor ON wechat_sync_state BEGIN SELECT pause_poll(); END");
+          try {
+            const result = handlers.exports.wechatCommitPollBatch(db, { ...batch, commitFence: fence });
+            const snapshot = () => ({
+              cursor: db.prepare('SELECT sync_cursor FROM wechat_sync_state WHERE binding_epoch = ?').pluck().get('epoch-1'),
+              inbox: db.prepare('SELECT id, status FROM wechat_inbox ORDER BY id').all(),
+              files: db.prepare('SELECT * FROM wechat_file_attachments').all().length,
+              refs: db.prepare('SELECT * FROM media_refs').all().length,
+              outbox: db.prepare('SELECT * FROM wechat_outbox').all().length,
+              context: db.prepare("SELECT context_ciphertext FROM wechat_inbox WHERE id = 'delivery'").pluck().get(),
+            });
+            const beforeReauth = snapshot();
+            // Reauthorization is queued after the old transaction; cleanup still
+            // sees the old active binding and deletes only that binding's data.
+            handlers.exports.wechatActivateBindingEpoch(db, { bindingEpoch:'epoch-2', expectedActiveEpoch:'epoch-1', initialCursor:'new', now:200 });
+            const stale = handlers.exports.wechatCommitPollBatch(db, { ...batch, commitFence:undefined });
+            const cleanup = handlers.exports.wechatUnbindCleanup(db, { bindingEpoch:'epoch-1' });
+            const active = db.prepare('SELECT binding_epoch, sync_cursor FROM wechat_sync_state WHERE is_active = 1').get();
+            parentPort.postMessage({ result, beforeReauth, stale, cleanup, active });
+          } catch (e) { parentPort.postMessage({ error: e.stack }); }
+          finally { db.close(); }
+        `,
+        {
+          eval: true,
+          workerData: {
+            sqlite: require.resolve('better-sqlite3'),
+            source,
+            database: db.serialize(),
+            timing,
+            fence,
+            gate,
+            batch: {
+              bindingEpoch: 'epoch-1',
+              expectedCursor: 'cursor-1',
+              nextCursor: 'cursor-2',
+              now: 150,
+              maxQueuedTasks: 2,
+              controlCommands:
+                command === 'hello'
+                  ? []
+                  : [
+                      {
+                        commandTaskId: 'stop',
+                        ...(command === '/stop' ? { peerId: 'peer-session-2' } : {}),
+                      },
+                    ],
+              messages: [
+                message('media', 'media', 'session-1'),
+                {
+                  ...message('overload', 'overload', 'session-2'),
+                  overloadReply: {
+                    outboxId: 'overload-reply',
+                    clientId: 'overload-client',
+                    text: 'busy',
+                  },
+                },
+                {
+                  ...message('stop', 'stop', 'session-2'),
+                  payloadJson: JSON.stringify({ text: command }),
+                  overloadReply: {
+                    outboxId: 'stop-overload',
+                    clientId: 'stop-client',
+                    text: 'busy',
+                  },
+                },
+              ],
+              outboxContexts: [
+                {
+                  bindingEpoch: 'epoch-1',
+                  peerId: 'peer-session-1',
+                  now: 150,
+                  contexts: [
+                    {
+                      taskId: 'delivery',
+                      context: {
+                        ...CONTEXT,
+                        ciphertext: Buffer.from('refreshed').toString('base64'),
+                      },
+                    },
+                  ],
+                },
+              ],
+              mediaBlobs: [
+                {
+                  hash: HASH,
+                  ext: '.png',
+                  mimeType: 'image/png',
+                  bytes: 4,
+                  isCache: true,
+                  createdAt: 100,
+                  lastAccessAt: 100,
+                },
+              ],
+              mediaRefs: [{ id: 'ref', hash: HASH, taskId: 'media', createdAt: 100 }],
+              fileAttachments: [
+                {
+                  id: 'file',
+                  taskId: 'media',
+                  sessionId: 'session-1',
+                  absPath: path.join(__dirname, 'synthetic-attachment'),
+                  originalName: 'test.txt',
+                  mimeType: 'text/plain',
+                  bytes: 4,
+                  createdAt: 100,
+                },
+              ],
+            },
+          },
+        },
+      );
+      try {
+        const evidence = await new Promise<{
+          error?: string;
+          result: { committed: boolean; reason?: string };
+          beforeReauth: {
+            cursor: string;
+            inbox: Array<{ id: string; status: string }>;
+            files: number;
+            refs: number;
+            outbox: number;
+            context: string;
+          };
+          stale: { committed: boolean; reason?: string };
+          cleanup: { filePaths: string[] };
+          active: { binding_epoch: string; sync_cursor: string };
+        }>((resolve, reject) => {
+          worker.on('error', reject);
+          worker.on('message', (value) => {
+            if (value.paused) {
+              expect(Atomics.compareExchange(fence, 0, 0, 1)).toBe(0);
+              Atomics.store(gate, 0, 1);
+              Atomics.notify(gate, 0);
+            } else resolve(value);
+          });
+        });
+        expect(evidence.error).toBeUndefined();
+        if (timing === 'after') {
+          expect(Atomics.compareExchange(fence, 0, 0, 1)).toBe(2);
+          expect(evidence.result.committed).toBe(true);
+          expect(evidence.beforeReauth).toMatchObject({
+            cursor: 'cursor-2',
+            files: 1,
+            refs: command === '/stop all' ? 0 : 1,
+            outbox: command === 'hello' ? 3 : 2,
+            context: Buffer.from('refreshed').toString('base64'),
+          });
+          expect(evidence.beforeReauth.inbox).toHaveLength(5);
+          expect(evidence.beforeReauth.inbox).toContainEqual({
+            id: 'existing',
+            status: command === 'hello' ? 'pending' : 'cancelled',
+          });
+          expect(evidence.cleanup.filePaths).toHaveLength(1);
+        } else {
+          expect(evidence.result).toMatchObject({ committed: false, reason: 'invalidated' });
+          expect(evidence.beforeReauth).toEqual({
+            cursor: 'cursor-1',
+            inbox: [
+              { id: 'delivery', status: 'delivery_pending' },
+              { id: 'existing', status: 'pending' },
+            ],
+            files: 0,
+            refs: 0,
+            outbox: 1,
+            context: CONTEXT.ciphertext,
+          });
+          expect(evidence.cleanup.filePaths).toEqual([]);
+        }
+        expect(evidence.stale).toMatchObject({ committed: false, reason: 'stale-epoch' });
+        expect(evidence.active).toEqual({ binding_epoch: 'epoch-2', sync_cursor: 'new' });
+      } finally {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        await worker.terminate();
+      }
+    },
+  );
+
   it('uses binding epoch and cursor CAS to reject stale callbacks', () => {
     const db = createDb();
 

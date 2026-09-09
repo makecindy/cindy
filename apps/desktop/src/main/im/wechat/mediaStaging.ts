@@ -50,106 +50,111 @@ export async function stageWechatTaskMedia(args: {
     result.unsupportedMedia.push(`attachment-limit:${args.media.length - selected.length}`);
   }
 
-  for (const ref of selected) {
-    let bytes: Uint8Array;
-    try {
-      bytes = await args.transport.downloadMedia(ref, args.signal);
-    } catch (error) {
-      if (args.signal.aborted) throw error;
-      result.unsupportedMedia.push(`${ref.kind}:download-failed`);
-      continue;
-    }
-    if (ref.kind === 'voice' && ref.voiceEncoding === 6) {
+  try {
+    for (const ref of selected) {
+      let bytes: Uint8Array;
       try {
-        bytes = await decodeWechatSilkToWav(bytes, args.signal);
+        bytes = await args.transport.downloadMedia(ref, args.signal);
       } catch (error) {
         if (args.signal.aborted) throw error;
-        result.unsupportedMedia.push(`${ref.kind}:decode-failed`);
+        result.unsupportedMedia.push(`${ref.kind}:download-failed`);
         continue;
       }
-    }
-    const detected = detectWechatMedia(ref, bytes);
-    if (!detected) {
-      result.unsupportedMedia.push(`${ref.kind}:unsupported-format`);
-      continue;
-    }
-    try {
-      if (detected.storage === 'cindy-media') {
-        // Poll commit happens after downloads finish. Ingest with no refs
-        // before exposing the URL so duplicate, overload, stale-cursor, and
-        // interaction-only paths leave a recycler-visible zero-ref ledger row
-        // instead of an untracked content-addressed file.
-        const written = await ingestMedia({
-          buffer: bytes,
-          mimeType: detected.mimeType,
-          isCache: false,
-          refs: [],
-        });
-        const resolved = blobStore.resolveSafe(written.url);
+      if (ref.kind === 'voice' && ref.voiceEncoding === 6) {
+        try {
+          bytes = await decodeWechatSilkToWav(bytes, args.signal);
+        } catch (error) {
+          if (args.signal.aborted) throw error;
+          result.unsupportedMedia.push(`${ref.kind}:decode-failed`);
+          continue;
+        }
+      }
+      const detected = detectWechatMedia(ref, bytes);
+      if (!detected) {
+        result.unsupportedMedia.push(`${ref.kind}:unsupported-format`);
+        continue;
+      }
+      try {
+        if (detected.storage === 'cindy-media') {
+          // Poll commit happens after downloads finish. Ingest with no refs
+          // before exposing the URL so duplicate, overload, stale-cursor, and
+          // interaction-only paths leave a recycler-visible zero-ref ledger row
+          // instead of an untracked content-addressed file.
+          const written = await ingestMedia({
+            buffer: bytes,
+            mimeType: detected.mimeType,
+            isCache: false,
+            refs: [],
+          });
+          const resolved = blobStore.resolveSafe(written.url);
+          result.attachments.push({
+            kind: detected.attachmentKind,
+            absPath: resolved.absPath,
+            originalName: detected.fileName,
+            mimeType: detected.mimeType,
+            url: written.url,
+            storage: 'cindy-media',
+          });
+          result.mediaBlobs.push({
+            hash: written.hash,
+            ext: written.ext,
+            mimeType: written.mimeType,
+            bytes: written.bytes,
+            isCache: false,
+            createdAt: args.now,
+            lastAccessAt: args.now,
+          });
+          result.mediaRefs.push({
+            id: randomUUID(),
+            hash: written.hash,
+            taskId: args.taskId,
+            label: detected.fileName,
+            createdAt: args.now,
+          });
+          continue;
+        }
+
+        const root = ownerScopedImUserDataPath(
+          'im-attachments',
+          'wechat',
+          'sessions',
+          args.sessionId,
+        );
+        await fs.mkdir(root, { recursive: true });
+        const fileName = `${args.taskId}-${randomUUID()}-${detected.fileName}`;
+        const absPath = path.resolve(root, fileName);
+        const resolvedRoot = path.resolve(root);
+        if (!absPath.startsWith(`${resolvedRoot}${path.sep}`)) {
+          throw new Error('WECHAT_ATTACHMENT_PATH_OUT_OF_BOUNDS');
+        }
+        await fs.writeFile(absPath, bytes, { flag: 'wx' });
         result.attachments.push({
-          kind: detected.attachmentKind,
-          absPath: resolved.absPath,
+          kind: 'file',
+          absPath,
           originalName: detected.fileName,
           mimeType: detected.mimeType,
-          url: written.url,
-          storage: 'cindy-media',
+          storage: 'file',
         });
-        result.mediaBlobs.push({
-          hash: written.hash,
-          ext: written.ext,
-          mimeType: written.mimeType,
-          bytes: written.bytes,
-          isCache: false,
-          createdAt: args.now,
-          lastAccessAt: args.now,
-        });
-        result.mediaRefs.push({
+        result.fileAttachments.push({
           id: randomUUID(),
-          hash: written.hash,
           taskId: args.taskId,
-          label: detected.fileName,
+          sessionId: args.sessionId,
+          absPath,
+          originalName: detected.fileName,
+          mimeType: detected.mimeType,
+          bytes: bytes.byteLength,
           createdAt: args.now,
         });
-        continue;
+      } catch (error) {
+        if (args.signal.aborted) throw error;
+        result.unsupportedMedia.push(`${ref.kind}:staging-failed`);
       }
-
-      const root = ownerScopedImUserDataPath(
-        'im-attachments',
-        'wechat',
-        'sessions',
-        args.sessionId,
-      );
-      await fs.mkdir(root, { recursive: true });
-      const fileName = `${args.taskId}-${randomUUID()}-${detected.fileName}`;
-      const absPath = path.resolve(root, fileName);
-      const resolvedRoot = path.resolve(root);
-      if (!absPath.startsWith(`${resolvedRoot}${path.sep}`)) {
-        throw new Error('WECHAT_ATTACHMENT_PATH_OUT_OF_BOUNDS');
-      }
-      await fs.writeFile(absPath, bytes, { flag: 'wx' });
-      result.attachments.push({
-        kind: 'file',
-        absPath,
-        originalName: detected.fileName,
-        mimeType: detected.mimeType,
-        storage: 'file',
-      });
-      result.fileAttachments.push({
-        id: randomUUID(),
-        taskId: args.taskId,
-        sessionId: args.sessionId,
-        absPath,
-        originalName: detected.fileName,
-        mimeType: detected.mimeType,
-        bytes: bytes.byteLength,
-        createdAt: args.now,
-      });
-    } catch (error) {
-      if (args.signal.aborted) throw error;
-      result.unsupportedMedia.push(`${ref.kind}:staging-failed`);
     }
+    return result;
+  } catch (error) {
+    await removeUncommittedWechatFiles(result.fileAttachments, new Set());
+    throw error;
   }
-  return result;
 }
 
 export async function removeUncommittedWechatFiles(

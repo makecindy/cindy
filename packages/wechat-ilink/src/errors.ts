@@ -9,6 +9,7 @@ export type WechatIlinkErrorCode =
   | "NETWORK_ERROR"
   | "PROTOCOL_ERROR"
   | "TIMEOUT"
+  | "SEND_REJECTED"
   | "UNSUPPORTED";
 
 /** Stable, secret-free error surfaced across the package boundary. */

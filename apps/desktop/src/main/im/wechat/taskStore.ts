@@ -48,6 +48,10 @@ export interface WechatCommitBatchInput {
   mediaRefs?: WechatPollMediaRefInput[];
   fileAttachments?: WechatPollFileAttachmentInput[];
   maxQueuedTasks?: number;
+  signal?: AbortSignal;
+  commitFence?: Int32Array;
+  pollEffects?: { peerId: string; contextToken: string }[];
+  controlCommands?: { commandTaskId: string; peerId?: string }[];
 }
 
 export interface WechatTask {
@@ -219,36 +223,65 @@ export class WechatTaskStore {
     });
   }
 
-  commitPollBatch(input: WechatCommitBatchInput): Promise<WechatCommitPollBatchResult> {
-    return this.#db.tx('wechatCommitPollBatch', {
-      bindingEpoch: input.bindingEpoch,
-      expectedCursor: input.expectedCursor,
-      nextCursor: input.nextCursor,
-      now: input.now,
-      messages: input.messages.map((message) => ({
-        id: message.id,
-        platformMessageId: message.platformMessageId,
-        platformSeq: message.platformSeq,
-        peerId: message.peerId,
-        receivedAt: message.receivedAt,
-        platformCreatedAt: message.platformCreatedAt,
-        expiresAt: message.receivedAt + DEFAULT_TASK_TTL_MS,
-        sessionId: message.sessionId,
-        conversationEpoch: message.conversationEpoch,
-        payloadJson: message.payloadJson,
-        context: encryptWechatContextToken(
-          message.contextToken,
-          this.#dataKey,
-          input.bindingEpoch,
-          message.id,
-        ),
-        overloadReply: message.overloadReply,
-      })),
-      mediaBlobs: input.mediaBlobs ?? [],
-      mediaRefs: input.mediaRefs ?? [],
-      fileAttachments: input.fileAttachments ?? [],
-      maxQueuedTasks: input.maxQueuedTasks,
-    });
+  async commitPollBatch(input: WechatCommitBatchInput): Promise<WechatCommitPollBatchResult> {
+    // Shared with the SQLite worker, not a cloned boolean: invalidation can win
+    // while synchronous SQL is executing. 0 = open, 1 = invalid, 2 = committed.
+    const commitFence =
+      input.commitFence ?? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const invalidate = () => {
+      Atomics.compareExchange(commitFence, 0, 0, 1);
+    };
+    input.signal?.addEventListener('abort', invalidate, { once: true });
+    if (input.signal?.aborted) invalidate();
+    try {
+      const outboxContexts = [];
+      for (const effect of input.pollEffects ?? []) {
+        outboxContexts.push(
+          await this.#prepareOutboxContexts({
+            ...effect,
+            bindingEpoch: input.bindingEpoch,
+            now: input.now,
+          }),
+        );
+      }
+      return await this.#db.tx('wechatCommitPollBatch', {
+        bindingEpoch: input.bindingEpoch,
+        expectedCursor: input.expectedCursor,
+        nextCursor: input.nextCursor,
+        now: input.now,
+        messages: input.messages.map((message) => ({
+          id: message.id,
+          platformMessageId: message.platformMessageId,
+          platformSeq: message.platformSeq,
+          peerId: message.peerId,
+          receivedAt: message.receivedAt,
+          platformCreatedAt: message.platformCreatedAt,
+          expiresAt: message.receivedAt + DEFAULT_TASK_TTL_MS,
+          sessionId: message.sessionId,
+          conversationEpoch: message.conversationEpoch,
+          payloadJson: message.payloadJson,
+          context: encryptWechatContextToken(
+            message.contextToken,
+            this.#dataKey,
+            input.bindingEpoch,
+            message.id,
+          ),
+          overloadReply: message.overloadReply,
+        })),
+        mediaBlobs: input.mediaBlobs ?? [],
+        mediaRefs: input.mediaRefs ?? [],
+        fileAttachments: input.fileAttachments ?? [],
+        maxQueuedTasks: input.maxQueuedTasks,
+        commitFence,
+        outboxContexts,
+        controlCommands: input.controlCommands ?? [],
+      });
+    } catch (error) {
+      invalidate();
+      throw error;
+    } finally {
+      input.signal?.removeEventListener('abort', invalidate);
+    }
   }
 
   async leaseNextTask(args: {
@@ -300,6 +333,16 @@ export class WechatTaskStore {
     contextToken: string;
     now: number;
   }): Promise<void> {
+    const prepared = await this.#prepareOutboxContexts(args);
+    if (prepared.contexts.length > 0) await this.#db.tx('wechatRefreshOutboxContexts', prepared);
+  }
+
+  async #prepareOutboxContexts(args: {
+    bindingEpoch: string;
+    peerId: string;
+    contextToken: string;
+    now: number;
+  }) {
     const rows = await this.#db.query<{ taskId: string }>(
       `SELECT DISTINCT i.id AS taskId
        FROM wechat_inbox i
@@ -309,8 +352,7 @@ export class WechatTaskStore {
          AND o.status = 'pending'`,
       [args.bindingEpoch, args.peerId],
     );
-    if (rows.length === 0) return;
-    await this.#db.tx('wechatRefreshOutboxContexts', {
+    return {
       bindingEpoch: args.bindingEpoch,
       peerId: args.peerId,
       now: args.now,
@@ -323,7 +365,7 @@ export class WechatTaskStore {
           taskId,
         ),
       })),
-    });
+    };
   }
 
   releaseDispatch(bindingEpoch: string, taskId: string): Promise<boolean> {

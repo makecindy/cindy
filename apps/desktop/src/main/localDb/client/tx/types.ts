@@ -855,6 +855,10 @@ export interface WechatPollFileAttachmentInput {
 }
 
 export interface WechatCommitPollBatchArgs {
+  /** Per-batch main/worker linearization fence: open=0, invalid=1, committed=2. */
+  commitFence?: Int32Array;
+  outboxContexts?: WechatRefreshOutboxContextsArgs[];
+  controlCommands?: { commandTaskId: string; peerId?: string }[];
   bindingEpoch: string;
   expectedCursor: string;
   nextCursor: string;
@@ -875,7 +879,7 @@ export type WechatCommitPollBatchResult =
     }
   | {
       committed: false;
-      reason: 'stale-epoch' | 'stale-cursor';
+      reason: 'stale-epoch' | 'stale-cursor' | 'invalidated';
       activeBindingEpoch: string | null;
       currentCursor: string | null;
     };

@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { WechatTransport } from '@cindy/wechat-ilink';
 
 const mocks = vi.hoisted(() => ({
+  ownerPath: vi.fn(),
   decodeWechatSilkToWav: vi.fn(),
   ingestMedia: vi.fn(),
   resolveSafe: vi.fn(),
 }));
+
+vi.mock('../../ownerScopedStorage', () => ({ ownerScopedImUserDataPath: mocks.ownerPath }));
 
 vi.mock('../silkDecoder', () => ({
   decodeWechatSilkToWav: mocks.decodeWechatSilkToWav,
@@ -28,6 +35,36 @@ describe('WeChat media staging validation', () => {
     mocks.decodeWechatSilkToWav.mockReset();
     mocks.ingestMedia.mockReset();
     mocks.resolveSafe.mockReset();
+  });
+
+  it('removes an earlier staged file when a later download is aborted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wechat-partial-stage-'));
+    mocks.ownerPath.mockReturnValue(dir);
+    const abort = new AbortController();
+    const downloadMedia = vi
+      .fn()
+      .mockResolvedValueOnce(Buffer.from('first file'))
+      .mockImplementationOnce(async () => {
+        abort.abort();
+        throw new Error('aborted download');
+      });
+    try {
+      await expect(
+        stageWechatTaskMedia({
+          ...stageArgs({
+            media: [
+              { kind: 'file', fileName: 'one.txt' },
+              { kind: 'file', fileName: 'two.txt' },
+            ],
+            downloadMedia,
+          }),
+          signal: abort.signal,
+        }),
+      ).rejects.toThrow('aborted download');
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('detects supported image bytes instead of trusting platform metadata', () => {

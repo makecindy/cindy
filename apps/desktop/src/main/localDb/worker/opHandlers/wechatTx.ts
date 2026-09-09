@@ -95,6 +95,16 @@ export function wechatCommitPollBatch(
   args: unknown,
 ): WechatCommitPollBatchResult {
   const payload = asRecord(args, 'wechatCommitPollBatch args');
+  const fence = payload.commitFence;
+  if (
+    fence !== undefined &&
+    (!(fence instanceof Int32Array) ||
+      !(fence.buffer instanceof SharedArrayBuffer) ||
+      fence.length !== 1)
+  ) {
+    throw invalidArgs('commitFence must be a shared single Int32');
+  }
+  const invalidated = new Error('WeChat poll invalidated');
   const bindingEpoch = expectId(payload.bindingEpoch, 'bindingEpoch');
   const expectedCursor = expectString(payload.expectedCursor, 'expectedCursor', 65_536);
   const nextCursor = expectString(payload.nextCursor, 'nextCursor', 65_536);
@@ -114,6 +124,7 @@ export function wechatCommitPollBatch(
   enforceArrayLimit(fileAttachments, 'fileAttachments', MAX_MEDIA_ITEMS);
 
   const transaction = db.transaction((): WechatCommitPollBatchResult => {
+    if (fence && Atomics.load(fence, 0) !== 0) throw invalidated;
     const active = readActiveEpoch(db);
     if (active?.bindingEpoch !== bindingEpoch) {
       return {
@@ -219,6 +230,24 @@ export function wechatCommitPollBatch(
     commitMediaRefs(db, mediaRefs, acceptedTaskIds);
     commitFileAttachments(db, fileAttachments, acceptedTaskIds, bindingEpoch);
 
+    for (const context of expectArray(payload.outboxContexts ?? [], 'outboxContexts')) {
+      const refresh = asRecord(context, 'outboxContext');
+      if (refresh.bindingEpoch !== bindingEpoch) throw invalidArgs('outbox context epoch mismatch');
+      wechatRefreshOutboxContexts(db, refresh);
+    }
+    const commands = expectArray(payload.controlCommands ?? [], 'controlCommands');
+    enforceArrayLimit(commands, 'controlCommands', MAX_POLL_MESSAGES);
+    for (const raw of commands) {
+      const command = asRecord(raw, 'controlCommand');
+      const commandTaskId = expectId(command.commandTaskId, 'commandTaskId');
+      // Command text is classified by WechatIM before quote/media rendering.
+      // Only a command included in this batch may affect its binding.
+      if (!messages.some((message) => asRecord(message, 'message').id === commandTaskId)) {
+        throw invalidArgs('control command must belong to the poll batch');
+      }
+      wechatCancelForCommand(db, { ...command, bindingEpoch, now });
+    }
+
     const cursorResult = db
       .prepare(
         `UPDATE wechat_sync_state
@@ -230,6 +259,9 @@ export function wechatCommitPollBatch(
       throw invariantViolation('active WeChat cursor changed inside poll transaction');
     }
 
+    // Last operation before SQLite COMMIT. An earlier abort rolls back every
+    // write above; a later abort cannot retroactively revoke a winning batch.
+    if (fence && Atomics.compareExchange(fence, 0, 0, 2) !== 0) throw invalidated;
     return {
       committed: true,
       insertedTaskIds,
@@ -237,7 +269,18 @@ export function wechatCommitPollBatch(
       rejectedTaskIds,
     };
   });
-  return transaction();
+  try {
+    return transaction();
+  } catch (error) {
+    if (error !== invalidated) throw error;
+    const active = readActiveEpoch(db);
+    return {
+      committed: false,
+      reason: 'invalidated',
+      activeBindingEpoch: active?.bindingEpoch ?? null,
+      currentCursor: active?.syncCursor ?? null,
+    };
+  }
 }
 
 export function wechatLeaseNextTask(db: Database.Database, args: unknown): WechatLeasedTask | null {
