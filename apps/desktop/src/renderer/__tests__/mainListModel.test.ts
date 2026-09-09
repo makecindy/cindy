@@ -945,3 +945,84 @@ describe('splitEntriesByDevice — 拆段后按本段重排', () => {
     expect(labels(sections[0].entries)).toEqual(['s:remote-draft']);
   });
 });
+
+describe('creation-time ordering', () => {
+  it.each(['flat', 'project'] as const)('keeps %s tasks and groups in place after activity changes', (groupBy) => {
+    const older = session({ id: 'older', title: 'older', createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-20T00:00:00Z' });
+    const newer = session({ id: 'newer', title: 'newer', createdAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z' });
+    const middle = session({ title: 'middle', createdAt: '2026-08-05T00:00:00Z', updatedAt: '2026-08-21T00:00:00Z' });
+    const input = {
+      projects: [project('alpha', [older, newer])],
+      dialogues: [middle],
+      groupBy,
+      groupDialogue: false,
+      sortBy: 'created' as const,
+      manualProjectOrder: [],
+    };
+    const before = buildMainListEntries(input);
+    expect(labels(before)).toEqual(
+      groupBy === 'flat' ? ['s:newer', 's:middle', 's:older'] : ['p:alpha', 's:middle'],
+    );
+    if (before[0].kind === 'project') {
+      expect(before[0].project.sessions.map((s) => s.id)).toEqual(['newer', 'older']);
+    }
+    older.updatedAt = '2026-09-09T00:00:00Z';
+    older.userSendAt = '2026-09-09T00:00:00Z';
+    expect(labels(buildMainListEntries(input))).toEqual(labels(before));
+    expect(labels(buildMainListEntries({ ...input, sortBy: 'recency' }))).toEqual(
+      groupBy === 'flat' ? ['s:older', 's:middle', 's:newer'] : ['p:alpha', 's:middle'],
+    );
+  });
+
+  it('orders dialogue groups and cached remote device sections by creation time', () => {
+    const old = session({
+      title: 'old',
+      createdAt: '2026-08-01T00:00:00Z',
+      updatedAt: '2026-09-09T00:00:00Z',
+      deviceLinkDeviceId: 'old-device',
+    });
+    const recent = session({
+      title: 'recent',
+      createdAt: '2026-08-10T00:00:00Z',
+      updatedAt: '2026-08-10T00:00:00Z',
+      deviceLinkDeviceId: 'new-device',
+    });
+    const entries = buildMainListEntries({
+      projects: [], dialogues: [old, recent], groupBy: 'flat', groupDialogue: true,
+      sortBy: 'created', manualProjectOrder: [],
+    });
+    expect(getMainListEntrySessions(entries[0]).map((s) => s.title)).toEqual(['recent', 'old']);
+    const sections = splitEntriesByDevice(entries, [], { sortBy: 'created' });
+    expect(sections.map((section) => section.deviceId)).toEqual(['new-device', 'old-device']);
+  });
+});
+
+
+it('keeps manual project order while creation-time tasks stay stable inside each project', () => {
+  const old = session({
+    id: 'old', title: 'old',
+    createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-20T00:00:00Z',
+  });
+  const recent = session({
+    id: 'recent', title: 'recent',
+    createdAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z',
+  });
+  const alpha = project('alpha', [old, recent]);
+  const beta = project('beta', [session({ updatedAt: '2026-07-01T00:00:00Z' })]);
+  const input = {
+    projects: [alpha, beta], dialogues: [], groupBy: 'project' as const,
+    groupDialogue: false, sortBy: 'created' as const,
+    projectOrder: 'custom' as const, manualProjectOrder: ['local:beta', 'local:alpha'],
+  };
+  const before = buildMainListEntries(input);
+  expect(labels(before)).toEqual(['p:beta', 'p:alpha']);
+  expect(getMainListEntrySessions(before[1]).map((s) => s.id)).toEqual(['recent', 'old']);
+  old.userSendAt = '2026-09-09T00:00:00Z';
+  old.updatedAt = '2026-09-09T00:00:00Z';
+  const after = buildMainListEntries(input);
+  expect(labels(after)).toEqual(['p:beta', 'p:alpha']);
+  expect(getMainListEntrySessions(after[1]).map((s) => s.id)).toEqual(['recent', 'old']);
+  const activityOrder = buildMainListEntries({ ...input, sortBy: 'recency' });
+  expect(labels(activityOrder)).toEqual(['p:beta', 'p:alpha']);
+  expect(getMainListEntrySessions(activityOrder[1]).map((s) => s.id)).toEqual(['old', 'recent']);
+});

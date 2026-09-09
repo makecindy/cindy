@@ -118,3 +118,13 @@ describe('sidebar project sorting', () => {
     expect(sortSessionsForSidebar([b, a], 'priority').map((s) => s.id)).toEqual(['b', 'a']);
   });
 });
+
+it('sorts project-panel tasks by creation time, with stable ties and no activity fallback', () => {
+  const old = session({ id: 'old', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' });
+  const a = session({ id: 'a', createdAt: '2026-02-01T00:00:00Z' });
+  const b = session({ id: 'b', createdAt: a.createdAt });
+  const invalid = session({ id: 'invalid', createdAt: 'invalid', updatedAt: '2026-09-09T00:00:00Z' });
+  const input = [old, b, invalid, a];
+  expect(sortSessionsForSidebar(input, 'created').map((s) => s.id)).toEqual(['a', 'b', 'old', 'invalid']);
+  expect(input.map((s) => s.id)).toEqual(['old', 'b', 'invalid', 'a']);
+});

@@ -9336,6 +9336,8 @@
         "all": "All"
       },
       "filterSortBy": {
+        "created": "Created Time",
+        "updated": "Updated Time",
         "recency": "By time",
         "manual": "Manual",
         "priority": "Priority"

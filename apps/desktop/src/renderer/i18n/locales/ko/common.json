@@ -9321,6 +9321,8 @@
         "all": "전체"
       },
       "filterSortBy": {
+        "created": "생성 시간",
+        "updated": "업데이트 시간",
         "recency": "시간순",
         "manual": "수동",
         "priority": "우선순위"

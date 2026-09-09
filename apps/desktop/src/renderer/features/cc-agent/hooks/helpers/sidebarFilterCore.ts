@@ -64,10 +64,11 @@ export type FilterGroupBy = 'project' | 'flat';
 /** 最近活跃范围筛选。默认 all。 */
 export type FilterLastActivity = 'all' | '1d' | '3d' | '7d' | '30d';
 /** Sidebar 主列表任务排序。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
+ *  created = 创建时间倒序,不随任务活动重排。
  *  priority = 等待处理 > 运行中 > 其余按最近活动。
  *  旧值 'manual' 已从排序里拆出,存量回退 recency,并迁移到 projectOrder=custom。
  *  alphabetic / time(旧「最早优先」)同样回退 recency。 */
-export type FilterSortBy = 'recency' | 'priority';
+export type FilterSortBy = 'recency' | 'created' | 'priority';
 /** 按项目分组时的项目行顺序。activity = 跟任务排序走;custom = 拖拽持久序。 */
 export type FilterProjectOrder = 'activity' | 'custom';
 /**
@@ -456,7 +457,7 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 /* ============================== sortBy load/persist ============================== */
 
-const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'priority']);
+const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'created', 'priority']);
 const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',

@@ -9321,6 +9321,8 @@
         "all": "すべて"
       },
       "filterSortBy": {
+        "created": "作成日時",
+        "updated": "更新日時",
         "recency": "時間順",
         "manual": "手動",
         "priority": "優先度"

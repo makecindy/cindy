@@ -9321,6 +9321,8 @@
         "all": "全部"
       },
       "filterSortBy": {
+        "created": "创建时间",
+        "updated": "更新时间",
         "recency": "按时间排序",
         "manual": "手动排序",
         "priority": "优先级"
