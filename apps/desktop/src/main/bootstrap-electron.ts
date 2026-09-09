@@ -304,9 +304,13 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
-import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
+import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { openMakeToolsDirectory } from './cindy-make/toolsDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
+import {
+  collectDatabaseSizeWarningStatus,
+  type DatabaseSizeWarningStatus,
+} from './database-size-warning-status';
 import {
   getAllRegisteredDraftUrls,
   reportDraftUrls as registerWindowDraftUrls,
@@ -4045,36 +4049,16 @@ let lastPluginMarketSyncAt = 0;
 let pluginMarketPeriodicSyncTimer: ReturnType<typeof setInterval> | null = null;
 const PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000;
 
-type DatabaseSizeWarningStatus = { databaseBytes: number | null };
-
 let startupDatabaseSizeWarningStatus: DatabaseSizeWarningStatus = { databaseBytes: null };
 let startupDatabaseSizeWarningStatusChecked = false;
 let startupDatabaseSizeWarningOwnerScope: string | null = null;
 
-function collectDatabaseSizeWarningStatus(): DatabaseSizeWarningStatus {
-  const userId = getCurrentDbClientUserId();
-  const dbFilePath = localDbGetCurrentDbPath() ?? (userId ? getDbPathForUser(userId) : null);
-  if (!dbFilePath) return { databaseBytes: null };
-
-  let databaseBytes = 0;
-  let found = false;
-  for (const candidate of [
-    dbFilePath,
-    `${dbFilePath}-wal`,
-    `${dbFilePath}-shm`,
-    `${dbFilePath}-journal`,
-  ]) {
-    try {
-      const stat = fs.statSync(candidate);
-      if (stat.isFile()) {
-        databaseBytes += stat.size;
-        found = true;
-      }
-    } catch {
-      // SQLite sidecar files are optional.
-    }
-  }
-  return { databaseBytes: found ? databaseBytes : null };
+function collectCurrentDatabaseSizeWarningStatus(): DatabaseSizeWarningStatus {
+  return collectDatabaseSizeWarningStatus({
+    getCurrentDbPath: localDbGetCurrentDbPath,
+    getCurrentUserId: getCurrentDbClientUserId,
+    resolveDbPathForUser: getDbPathForUser,
+  });
 }
 
 /** Capture the database size once after the first local DB startup completes. */
@@ -4084,7 +4068,7 @@ function checkDatabaseSizeWarningAtStartup(): void {
     startupDatabaseSizeWarningStatusChecked &&
     startupDatabaseSizeWarningOwnerScope === ownerScope
   ) return;
-  startupDatabaseSizeWarningStatus = collectDatabaseSizeWarningStatus();
+  startupDatabaseSizeWarningStatus = collectCurrentDatabaseSizeWarningStatus();
   startupDatabaseSizeWarningStatusChecked = true;
   startupDatabaseSizeWarningOwnerScope = ownerScope;
   dbClientLog.info(
@@ -4168,7 +4152,7 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle('database-size-warning:measure', (event) => {
     assertTrustedAppRendererEvent(event);
-    return collectDatabaseSizeWarningStatus();
+    return collectCurrentDatabaseSizeWarningStatus();
   });
 
   // Find the primary app window, skipping transient utility BrowserWindows like
@@ -7721,6 +7705,7 @@ const registerIpcHandlers = () => {
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
       openLegacyImagesDir: () => openFixedDirectory(imageCacheStore.getCacheRoot()),
       clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
+      getLegacyImagesDirStats: () => getFixedDirectoryStats(imageCacheStore.getCacheRoot()),
       openChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
           openFixedDirectory(rootDir, isCurrentOwner),
@@ -7729,6 +7714,10 @@ const registerIpcHandlers = () => {
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
           clearFixedDirectory(rootDir, isCurrentOwner),
         ),
+      getChatAttachmentsDirStats: () =>
+        !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
+          ? Promise.resolve({ bytes: 0, fileCount: 0 })
+          : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>

@@ -47,7 +47,7 @@ function storageApi() {
     stats: vi.fn(async () => ({
       success: true,
       blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
-      legacy: { bytes: 0, fileCount: 0 },
+            fixedCaches: { legacyImages: { bytes: 0, fileCount: 0 }, chatAttachments: { bytes: 0, fileCount: 0 } },
       deadDirs: [],
     })),
     scan: vi.fn(),
@@ -190,7 +190,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     vi.mocked(api.stats).mockResolvedValueOnce({
       success: false,
       blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
-      legacy: { bytes: 0, fileCount: 0 },
+            fixedCaches: { legacyImages: { bytes: 0, fileCount: 0 }, chatAttachments: { bytes: 0, fileCount: 0 } },
       deadDirs: [],
     });
     Object.defineProperty(window, 'electronAPI', {
@@ -251,12 +251,17 @@ describe('StorageManagementCard fixed cache directories', () => {
       success: true,
       blobs: { totalCount: 1, totalBytes: 20 * 1024 ** 3, cacheCount: 1, cacheBytes: 20 * 1024 ** 3 },
       legacy: { bytes: 0, fileCount: 0 },
+      fixedCaches: {
+        legacyImages: { bytes: 2 * 1024 ** 3, fileCount: 2 },
+        chatAttachments: { bytes: 3 * 1024 ** 3, fileCount: 3 },
+      },
       deadDirs: [],
     });
     render(<StorageManagementCard />);
 
     await waitFor(() => {
       expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('10');
+      expect(screen.getByText('26.00 GB')).toBeTruthy();
     });
   });
 

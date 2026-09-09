@@ -1,6 +1,14 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 type FixedDirectoryFileSystem = Pick<typeof fs.promises, 'lstat' | 'mkdir'>;
+
+export interface FixedDirectoryStats {
+  bytes: number;
+  fileCount: number;
+}
+
+export type FixedDirectoryStatsFileSystem = Pick<typeof fs.promises, 'lstat' | 'readdir'>;
 
 const MAX_CREATE_ATTEMPTS = 2;
 
@@ -42,4 +50,46 @@ export async function openOrCreateFixedDirectory(
     throw new Error(error);
   }
   return true;
+}
+
+/** Read the size of a fixed cache directory without following symlinks. */
+export async function getFixedDirectoryStats(
+  rootDir: string,
+  fileSystem: FixedDirectoryStatsFileSystem = fs.promises,
+): Promise<FixedDirectoryStats> {
+  const walk = async (directory: string): Promise<FixedDirectoryStats> => {
+    let entries: Array<{ name: string; isDirectory(): boolean }>;
+    try {
+      entries = (await fileSystem.readdir(directory, { withFileTypes: true })) as Array<{
+        name: string;
+        isDirectory(): boolean;
+      }>;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { bytes: 0, fileCount: 0 };
+      throw error;
+    }
+    let bytes = 0;
+    let fileCount = 0;
+    for (const entry of entries) {
+      const child = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        const nested = await walk(child);
+        bytes += nested.bytes;
+        fileCount += nested.fileCount;
+        continue;
+      }
+      try {
+        const stat = await fileSystem.lstat(child);
+        if (stat.isFile()) {
+          bytes += stat.size;
+          fileCount += 1;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      }
+    }
+    return { bytes, fileCount };
+  };
+
+  return walk(rootDir);
 }

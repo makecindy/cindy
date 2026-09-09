@@ -224,8 +224,11 @@ export function StorageManagementCard() {
     scan.tmpFileCount > 0;
 
   const mediaBytes = stats?.success ? stats.blobs.totalBytes : null;
-  const totalBytes = databaseBytes !== null && mediaBytes !== null
-    ? databaseBytes + mediaBytes
+  const fixedCacheBytes = stats?.success
+    ? stats.fixedCaches.legacyImages.bytes + stats.fixedCaches.chatAttachments.bytes
+    : null;
+  const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
+    ? databaseBytes + mediaBytes + fixedCacheBytes
     : null;
   const overviewPercent = databaseBytes === null || warningThresholdGiB <= 0
     ? null
