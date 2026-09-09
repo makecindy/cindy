@@ -374,7 +374,9 @@ import {
   writeDatabaseSizeWarningSettings,
   resetDatabaseSizeWarningSettings,
   DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+  getDatabaseSizeWarningSettingsFilePath,
 } from './database-size-warning-settings';
+import { createDatabaseSizeWarningSettingsWatcher } from './database-size-warning-settings-watcher.js';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
@@ -4067,6 +4069,16 @@ function broadcastDatabaseSizeWarningChanged(): void {
       win.webContents.send('database-size-warning:changed');
     }
   }
+}
+
+const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatcher(() => {
+  broadcastDatabaseSizeWarningChanged();
+});
+
+app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+
+function rebindDatabaseSizeWarningSettingsWatcher(): void {
+  databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
 }
 
 /** Capture the database size once after the first local DB startup completes. */
@@ -8335,6 +8347,7 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
+  rebindDatabaseSizeWarningSettingsWatcher();
   startInputDeviceRuntime();
   startInputDevices();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。

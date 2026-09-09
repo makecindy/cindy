@@ -65,6 +65,10 @@ function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'database-size-warning-settings.json');
 }
 
+export function getDatabaseSizeWarningSettingsFilePath(): string {
+  return settingsFilePath();
+}
+
 function normalize(raw: unknown): DatabaseSizeWarningSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const value = raw as Record<string, unknown>;
