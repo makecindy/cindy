@@ -1686,6 +1686,38 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('replaces an in-flight or persisted item with a non-final authoritative full-text snapshot', () => {
+    emitTextDelta('prefix', SESSION_ID, 'assistant-1');
+    vi.advanceTimersByTime(32);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'codex',
+        data: { text: 'complete snapshot', isFinal: false, isFullText: true },
+      },
+      persistId: 'assistant-1',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'complete snapshot', isStreaming: true }),
+    ]);
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: { clientId: 'assistant-2', role: 'assistant', content: 'stale persisted text', createdAt: new Date().toISOString() },
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'codex',
+        data: { text: 'repaired persisted text', isFinal: false, isFullText: true },
+      },
+      persistId: 'assistant-2',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'assistant-2', content: 'repaired persisted text', isStreaming: false }),
+    ]));
+  });
+
   it('does not reset or duplicate thinking on a repeated start, including after its DB echo', () => {
     const start = {
       sessionId: SESSION_ID,

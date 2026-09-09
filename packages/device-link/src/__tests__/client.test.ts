@@ -884,46 +884,123 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('可靠接收按小批量推进累计 ACK，不等待整批 handler drain 完成', async () => {
-    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+  it.each([{ prefix: 2, bytes: 0 }, { prefix: 1, bytes: 300_000 }])(
+    'ACKs a completed prefix ($prefix messages, $bytes bytes) before a slow tail, without affecting another peer',
+    async ({ prefix, bytes }) => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    let releaseTail: (() => void) | undefined;
+    try {
     h.client.start();
     await tick();
     h.current().ack();
 
     const streamId = 'batched-ack-stream';
     await establishInboundReliableLink(h, streamId);
-    let releaseThird: (() => void) | undefined;
+    await establishInboundReliableLink(h, 'healthy-ack-stream', 1, 'dev-c');
+    const seen: number[] = [];
     h.client.onFrame((env) => {
-      if (env.kind !== 'push') return;
+      if (env.kind !== 'push' || env.src !== 'dev-b') return;
       const seq = (env.payload as { payload: { seq: number } }).payload.seq;
-      if (seq === 3) {
-        return new Promise<void>((resolve) => { releaseThird = resolve; });
+      seen.push(seq);
+      if (seq === prefix + 1) {
+        return new Promise<void>((resolve) => { releaseTail = resolve; });
       }
     });
-    const make = (seq: number) => ({
+    const deliver = (seq: number) => encodeReliableFrames({
       v: PROTOCOL_VERSION,
       kind: 'push' as const,
       src: 'dev-b',
-      payload: {
-        __cindyDeviceLinkTransport: { version: 1, streamId, seq },
-        data: JSON.stringify({ channel: 'maker:event', payload: { seq } }),
-      },
-    });
+      payload: { channel: 'maker:event', payload: { seq, text: 'x'.repeat(seq === 1 ? bytes : 0) } },
+    }, streamId, seq).forEach(frame => h.current().push(frame));
 
-    h.current().push(make(1));
-    h.current().push(make(2));
-    h.current().push(make(3));
+    for (let seq = 1; seq <= prefix + 1; seq++) deliver(seq);
     await tick();
 
-    expect(releaseThird).toBeTypeOf('function');
+    expect(releaseTail).toBeTypeOf('function');
     expect(h.current().sent.map(parseTransportAck).filter((ack) => ack?.streamId === streamId).at(-1))
-      .toMatchObject({ ackSeq: 2 });
+      .toMatchObject({ ackSeq: prefix });
+    deliver(1); // An early ACK must not make duplicate delivery execute twice.
+    encodeReliableFrames({
+      v: PROTOCOL_VERSION, kind: 'push', src: 'dev-c',
+      payload: { channel: 'maker:event', payload: {} },
+    }, 'healthy-ack-stream', 1).forEach(frame => h.current().push(frame));
+    await tick();
+    expect(h.current().sent.map(parseTransportAck).filter(ack => ack?.streamId === 'healthy-ack-stream').at(-1))
+      .toMatchObject({ ackSeq: 1 });
 
-    releaseThird!();
+    releaseTail!();
     await tick();
     expect(h.current().sent.map(parseTransportAck).filter((ack) => ack?.streamId === streamId).at(-1))
-      .toMatchObject({ ackSeq: 3 });
-    h.client.stop();
+      .toMatchObject({ ackSeq: prefix + 1 });
+    expect(seen).toEqual(Array.from({ length: prefix + 1 }, (_, i) => i + 1));
+    expect(h.sockets).toHaveLength(1);
+    expect(h.current().closed).toBeNull();
+    } finally { releaseTail?.(); h.client.stop(); }
+  });
+
+  it.each(['failure', 'closed', 'ack-write-failure'])('keeps ACK batch boundaries safe during %s', async (mode) => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      const streamId = 'ack-boundary';
+      await establishInboundReliableLink(h, streamId);
+      h.client.onFrame(env => {
+        if (env.kind !== 'push') return;
+        const seq = (env.payload as { payload: { seq: number } }).payload.seq;
+        if (seq !== 2) return;
+        if (mode === 'failure') throw new Error('handler did not finish');
+        if (mode === 'closed') h.client.closeLink('dev-b', 'user');
+      });
+      const send = h.current().send.bind(h.current());
+      let failed = false;
+      h.current().send = (data) => {
+        if (mode === 'ack-write-failure' && !failed && parseTransportAck(JSON.parse(data))) {
+          failed = true;
+          throw new Error('socket write failed once');
+        }
+        send(data);
+      };
+      for (let seq = 1; seq <= 2; seq++) {
+        encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+          payload: { channel: 'maker:event', payload: { seq } },
+        }, streamId, seq).forEach(frame => h.current().push(frame));
+      }
+      await tick();
+      const acks = h.current().sent.map(parseTransportAck).filter(ack => ack?.streamId === streamId);
+      if (mode === 'closed') expect(acks).toEqual([]);
+      else expect(acks.at(-1)).toMatchObject({ ackSeq: mode === 'failure' ? 1 : 2 });
+    } finally { h.client.stop(); }
+  });
+
+  it('bounds recovery stage logs, measures with monotonic time and records a fresh outbound handshake', async () => {
+    const debug = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 },
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      const open = h.client.openLink('dev-b', { controllerName: 'Test', protocolVersion: 1, appVersion: '1' });
+      const sent = h.current().sent.find(env => env.kind === 'link-open')!;
+      now += 25;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'link-accept', src: 'dev-b', id: sent.id,
+        payload: { appVersion: '1', allowlistHash: 'h', transportStreamId: 'trace-stream',
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT] } });
+      await open;
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('stage=link-accept-received elapsedMs=25.0'));
+      for (let seq = 1; seq <= 32; seq++) {
+        encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+          payload: { channel: 'maker:event', payload: { text: 'PRIVATE-PAYLOAD' } },
+        }, 'trace-stream', seq).forEach(frame => h.current().push(frame));
+      }
+      await tick();
+      expect(debug.mock.calls.filter(([line]) => String(line).includes('stage=ack-sent'))).toHaveLength(8);
+      expect(debug.mock.calls.flat().join(' ')).not.toContain('PRIVATE-PAYLOAD');
+      const count = debug.mock.calls.length;
+      now += 30_001;
+      h.client.sendInvokeResult('dev-b', 'after-trace-expiry', { ok: true, result: 'done' });
+      expect(debug.mock.calls).toHaveLength(count);
+    } finally { h.client.stop(); clock.mockRestore(); }
   });
 
   it('慢可靠业务 handler 不阻塞 pong，避免把本地处理拥塞误判成断网', async () => {

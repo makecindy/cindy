@@ -5271,6 +5271,28 @@ export function handleStreamEvent(
         isFullText?: boolean;
       };
 
+      // A full-text snapshot can be non-final while the item is still streaming.
+      // It is authoritative for the current block and must replace the delta
+      // prefix rather than being appended as another delta.
+      if (
+        !isFinal &&
+        isFullText === true &&
+        event.persistId &&
+        event.persistId === state.streamingClientId &&
+        typeof text === 'string'
+      ) {
+        const id = state.streamingClientId;
+        return {
+          ...state,
+          streamingText: text,
+          messages: replaceMessage(
+            state.messages,
+            (message) => message.clientId === id,
+            (message) => ({ ...message, content: text }),
+          ),
+        };
+      }
+
       // A DB/history snapshot can beat the first batched delta, or an old item's
       // final event can arrive after a newer item starts. Identity, not tail
       // position/content equality, decides whether this is a new bubble.
@@ -5281,7 +5303,28 @@ export function handleStreamEvent(
         if (existing) {
           // Persisted/finalized text already includes these late deltas. Only an
           // explicitly authoritative full-text event may calibrate it again.
-          if (!isFinal) return state;
+          if (!isFinal) {
+            if (isFullText !== true || typeof text !== 'string') return state;
+            const updated = {
+              ...existing,
+              content: text,
+              ...assistantMetaFields,
+            };
+            const isCurrentStream = state.streamingClientId === event.persistId;
+            const lastAgentMeta = state.streamingClientId
+              ? state.lastAgentMeta
+              : incomingMeta ?? state.lastAgentMeta;
+            const unchanged = shallowEqualChatMessage(existing, updated);
+            if (unchanged && !isCurrentStream && lastAgentMeta === state.lastAgentMeta) return state;
+            return {
+              ...state,
+              ...(isCurrentStream ? { streamingText: text } : {}),
+              lastAgentMeta,
+              messages: unchanged
+                ? state.messages
+                : replaceMessage(state.messages, (message) => message === existing, () => updated),
+            };
+          }
           const updated = {
             ...existing,
             ...(isFullText === true && text ? { content: text } : {}),

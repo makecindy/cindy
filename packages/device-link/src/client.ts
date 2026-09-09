@@ -111,11 +111,12 @@ const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
 /**
  * 接收端累计 ACK 的推进粒度。整批 drain 完成前完全不 ACK 会让发送端把
- * 正常的业务处理时间误判成链路丢包，恢复 replay 只能等下一轮 2s 定时器。
- * 小批量 ACK 仍保持累计、单调语义，同时限制 ACK 控制帧数量。
+ * 已成功处理的前缀也等在慢 handler 后面。小批量 ACK 让发送端及时释放
+ * 窗口；不提前确认尚未处理的消息，也不改变发送端的重试间隔与预算。
  */
 const RELIABLE_ACK_BATCH_MESSAGES = 2;
 const RELIABLE_ACK_BATCH_BYTES = 256 * 1024;
+const RECOVERY_TRACE_WINDOW_MS = 30_000;
 // Allow slow relay -> controller delivery before duplicating an entire message.
 // With the default 2s tick this allows 8KiB/s, capped at 30s per attempt. Small
 // messages retain their existing retry cadence; dead peers still exhaust retries.
@@ -515,6 +516,16 @@ interface OutboundLinkConfirmationAck {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+/** Bounded, per-link diagnostics only; never used to decide delivery or retries. */
+interface RecoveryTrace {
+  startedAt: number;
+  connectionEpoch: number;
+  requestId: string;
+  stages: Set<string>;
+  ackProgressLogs: number;
+  replayThroughSeq: number | null;
+}
+
 interface PeerTransportState {
   streamId: string;
   remoteStreamId: string | null;
@@ -573,8 +584,7 @@ interface PeerTransportState {
   recoveryNeedsAck: boolean;
   /** 本轮恢复探测已写出的帧数（含 replay 与恢复期内首发）。 */
   recoveryFramesSent: number;
-  /** 当前恢复阶段开始的单调时刻；仅用于阶段耗时日志，不参与超时判定。 */
-  recoveryStartedAt: number | null;
+  recoveryTrace: RecoveryTrace | null;
   /** latest-wins 腾位驱逐的聚合计数(自上次告警起),仅服务日志聚合。 */
   pushAdmissionDropCount: number;
   /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
@@ -1316,6 +1326,7 @@ export class DeviceLinkClient {
     if (peerSupportsReliable) {
       this.dropDiscardablePendingPrefix(dst, peer, false, 'before link re-establishment replay');
     }
+    this.beginRecoveryTrace(dst, requestId);
     const linkGeneration = peer.linkGeneration + 1;
     const linkAcceptId = this.sendRoutedEnvelope({
       v: PROTOCOL_VERSION,
@@ -1339,6 +1350,7 @@ export class DeviceLinkClient {
       },
     }, linkGeneration);
     this.markPeerRouteOnline(dst, linkGeneration);
+    this.logRecoveryStage(dst, 'link-accept-sent');
     if (!peerSupportsLinkConfirm && linkAcceptId) {
       // 旧端没有可等待的 confirmation；accept 是不可重放的单次控制帧，发送后
       // 不把它变成永久历史配额；近期迟到错误仍可按原代次归属。
@@ -1464,6 +1476,7 @@ export class DeviceLinkClient {
 
       try {
         const outbound = { ...env, id };
+        if (outbound.kind === 'link-open' && outbound.dst) this.beginRecoveryTrace(outbound.dst, id);
         if (outbound.kind === 'invoke' && outbound.dst) {
           const reliable = this.sendPeerEnvelope(outbound);
           if (reliable) {
@@ -1472,6 +1485,7 @@ export class DeviceLinkClient {
           }
         } else {
           this.sendRoutedEnvelope(outbound);
+          if (outbound.kind === 'link-open' && outbound.dst) this.logRecoveryStage(outbound.dst, 'link-open-sent');
         }
       } catch (err) {
         this.pending.delete(id);
@@ -2129,6 +2143,7 @@ export class DeviceLinkClient {
             );
             const peer = this.getPeerTransport(env.src);
             const acceptedLinkGeneration = this.markPeerRouteOnline(env.src);
+            this.logRecoveryStage(env.src, 'link-accept-received', ` baseSeq=${peer.remoteBaseSeq}`);
             // 这是本机先发送 link-open、对端收到后才可能返回的 accept。relay 对同一
             // 来源连接严格按发送顺序处理，因此任何更早物理发送若会产生 route error，
             // 错误必然排在这次 accept 之前；走到这里仍无错误的旧代记录就是已成功路由
@@ -2159,6 +2174,7 @@ export class DeviceLinkClient {
           }
           if (p.dst && env.id) this.discardOutboundRouteAttemptsForId(p.dst, env.id);
           this.pending.delete(env.id!);
+          if (env.kind === 'invoke-result' && env.src) this.logRecoveryStage(env.src, 'first-response-received');
           p.resolve(env);
           return true;
         }
@@ -2389,6 +2405,7 @@ export class DeviceLinkClient {
     }
     if (!peer.remoteStreamId) peer.remoteStreamId = parsed.meta.streamId;
     const { meta } = parsed;
+    this.logRecoveryStage(env.src, 'first-reliable-receive', ` seq=${meta.seq} baseSeq=${meta.baseSeq ?? 1}`);
     const stream = this.getReceiveStream(
       peer,
       meta.streamId,
@@ -2563,17 +2580,14 @@ export class DeviceLinkClient {
           deliveredSinceAck += 1;
           deliveredBytesSinceAck += deliveredBytes;
           if (
-            deliveredSinceAck >= RELIABLE_ACK_BATCH_MESSAGES
-            || deliveredBytesSinceAck >= RELIABLE_ACK_BATCH_BYTES
+            (deliveredSinceAck >= RELIABLE_ACK_BATCH_MESSAGES
+              || deliveredBytesSinceAck >= RELIABLE_ACK_BATCH_BYTES)
+            && this.isReceiveStreamActive(src, streamId, stream)
           ) {
-            this.sendTransportAck(src, streamId, stream.lastDeliveredSeq);
-            lastAckSentSeq = stream.lastDeliveredSeq;
-            sentAck = true;
-            this.log.debug(
-              `device-link recovery ack-progress src=${src.slice(0, 8)}`
-              + ` stream=${streamId.slice(0, 8)} ack=${stream.lastDeliveredSeq}`
-              + ` batchMessages=${deliveredSinceAck} batchBytes=${deliveredBytesSinceAck}`,
-            );
+            if (this.sendTransportAck(src, streamId, stream.lastDeliveredSeq)) {
+              lastAckSentSeq = stream.lastDeliveredSeq;
+              sentAck = true;
+            }
             deliveredSinceAck = 0;
             deliveredBytesSinceAck = 0;
           }
@@ -2869,6 +2883,10 @@ export class DeviceLinkClient {
         pending.sent = true;
         pending.attempts++;
         pending.lastSentAt = Date.now();
+        this.logRecoveryStage(pending.envelope.dst!, 'first-reliable-write', ` seq=${pending.seq} frames=${sent}`);
+        if (pending.envelope.kind === 'invoke-result') {
+          this.logRecoveryStage(pending.envelope.dst!, 'first-response-write', ` seq=${pending.seq} frames=${sent}`);
+        }
       }
     }
     return sent;
@@ -3200,7 +3218,7 @@ export class DeviceLinkClient {
         lastReplayRemoteStreamId: null,
         recoveryNeedsAck: false,
         recoveryFramesSent: 0,
-        recoveryStartedAt: null,
+        recoveryTrace: null,
         pushAdmissionDropCount: 0,
         pushAdmissionDropLogAt: 0,
         linkGeneration: 0,
@@ -3376,7 +3394,7 @@ export class DeviceLinkClient {
     streamId: string,
     ackSeq: number,
     linkRequestId?: string,
-  ): void {
+  ): boolean {
     const pendingConfirmation = this.peerTransport.get(dst)?.outboundLinkConfirmationAck;
     const effectiveLinkRequestId = linkRequestId ?? (
       pendingConfirmation?.streamId === streamId
@@ -3387,12 +3405,15 @@ export class DeviceLinkClient {
       this.sendBestEffortRoutedEnvelope(
         makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId),
       );
+      this.logRecoveryStage(dst, 'ack-sent', ` receiveStream=${streamId.slice(0, 8)} ack=${ackSeq}`, false);
+      return true;
     } catch (err) {
       this.log.debug(
         `reliable transport ACK send failed dst=${dst.slice(0, 8)}`
         + ` stream=${streamId.slice(0, 8)} ack=${ackSeq} conn=${this.connEpoch}`,
         err,
       );
+      return false;
     }
   }
 
@@ -3467,12 +3488,9 @@ export class DeviceLinkClient {
       this.log.info(
         `device-link recovery dst=${src.slice(0, 8)} trigger=link-confirm-ack`
         + ` stream=${peer.streamId.slice(0, 8)} request=${confirmation.requestId.slice(0, 8)}`
-        + ` ack=${ackSeq}`
-        + ` confirmAckElapsedMs=${peer.recoveryStartedAt === null
-          ? 0
-          : Math.max(0, this.monotonicNow() - peer.recoveryStartedAt)}`
-        + ` conn=${this.connEpoch}`,
+        + ` ack=${ackSeq} conn=${this.connEpoch}`,
       );
+      this.logRecoveryStage(src, 'link-confirm-received', ` ack=${ackSeq}`);
       // 新版入站重建的带 request id ACK 是 local → remote 的因果屏障：对端已经
       // 收到本代 link-accept，旧代成功路由却未 ACK 的尝试不会再产生 relay-error。
       // 必须在重放前淘汰旧代记录，否则当前重放真实失败会 FIFO 消费旧代并被当
@@ -3487,6 +3505,7 @@ export class DeviceLinkClient {
     // 不错误推进状态；高于 nextSeq-1 的未知 ACK 与倒退的 ACK 直接忽略。
     if (ackSeq > peer.nextSeq - 1 || ackSeq <= peer.highestAckSeq) return;
     peer.highestAckSeq = ackSeq;
+    this.logRecoveryStage(src, 'ack-received', ` ack=${ackSeq}`, false);
     for (const [seq, pending] of peer.pending) {
       if (seq > ackSeq) break;
       if (pending.envelope.id) {
@@ -3496,18 +3515,15 @@ export class DeviceLinkClient {
       peer.pendingBytes -= pending.bytes;
     }
     if (peer.recoveryNeedsAck) {
-      const recoveryElapsedMs = peer.recoveryStartedAt === null
-        ? 0
-        : Math.max(0, this.monotonicNow() - peer.recoveryStartedAt);
       peer.recoveryNeedsAck = false;
       peer.recoveryFramesSent = 0;
-      this.log.info(
-        `device-link recovery dst=${src.slice(0, 8)} trigger=recovery-ack`
-        + ` stream=${streamId.slice(0, 8)} ack=${ackSeq}`
-        + ` recoveryElapsedMs=${recoveryElapsedMs} conn=${this.connEpoch}`,
-      );
-      peer.recoveryStartedAt = null;
+      this.logRecoveryStage(src, 'recovery-probe-acked', ` ack=${ackSeq}`);
       this.retryPending(src, { ignoreInterval: true });
+    }
+    if (peer.recoveryTrace?.replayThroughSeq !== null
+      && peer.recoveryTrace?.replayThroughSeq !== undefined
+      && ackSeq >= peer.recoveryTrace.replayThroughSeq) {
+      this.logRecoveryStage(src, 'replay-backlog-acked', ` ack=${ackSeq}`);
     }
     if (peer.pending.size === 0 && peer.retryTimer) {
       clearInterval(peer.retryTimer);
@@ -3522,6 +3538,43 @@ export class DeviceLinkClient {
    */
   private monotonicNow(): number {
     return performance.now();
+  }
+
+  private beginRecoveryTrace(dst: string, requestId: string): void {
+    this.getPeerTransport(dst).recoveryTrace = {
+      startedAt: this.monotonicNow(),
+      connectionEpoch: this.connEpoch,
+      requestId,
+      stages: new Set(),
+      ackProgressLogs: 0,
+      replayThroughSeq: null,
+    };
+  }
+
+  /** Stage names and details are local transport metadata, never business payloads. */
+  private logRecoveryStage(dst: string, stage: string, detail = '', once = true): void {
+    const peer = this.peerTransport.get(dst);
+    const trace = peer?.recoveryTrace;
+    if (!peer || !trace) return;
+    const elapsedMs = Math.max(0, this.monotonicNow() - trace.startedAt);
+    if (trace.connectionEpoch !== this.connEpoch || elapsedMs > RECOVERY_TRACE_WINDOW_MS) {
+      peer.recoveryTrace = null;
+      return;
+    }
+    if (once) {
+      if (trace.stages.has(stage)) return;
+      trace.stages.add(stage);
+    } else {
+      // ACKs in steady traffic must not become a per-frame logging stream.
+      if (trace.ackProgressLogs >= 8) return;
+      trace.ackProgressLogs++;
+    }
+    this.log.debug(
+      `device-link recovery-stage dst=${dst.slice(0, 8)} stage=${stage}`
+      + ` elapsedMs=${elapsedMs.toFixed(1)} request=${trace.requestId.slice(0, 8)}`
+      + ` conn=${this.connEpoch} link=${peer.linkGeneration}`
+      + ` pending=${peer.pending.size}/${peer.pendingBytes}${detail}`,
+    );
   }
 
   /**
@@ -3846,6 +3899,7 @@ export class DeviceLinkClient {
 
   private commitReliableReceiveReady(dst: string, peer: PeerTransportState): void {
     peer.receiveReady = true;
+    this.logRecoveryStage(dst, 'receive-ready', ` baseSeq=${peer.remoteBaseSeq}`);
     this.staleLinkNotifiedAt.delete(dst);
     this.resumeReceiveStreams(dst, peer);
   }
@@ -3866,7 +3920,6 @@ export class DeviceLinkClient {
     const previousSendPhase: 'down' | 'ready' = previousConfirmation?.previousSendPhase
       ?? (peer.sendPhase === 'ready' ? 'ready' : 'down');
     peer.sendPhase = 'awaiting-confirm';
-    peer.recoveryStartedAt = resume.enterRecovery ? this.monotonicNow() : null;
     const confirmation: PendingLinkConfirmation = {
       requestId,
       minimumAckSeq: this.getTransportBaseSeq(peer) - 1,
@@ -3883,7 +3936,6 @@ export class DeviceLinkClient {
       `device-link recovery dst=${dst.slice(0, 8)} trigger=await-link-confirm`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` stream=${peer.streamId.slice(0, 8)} request=${requestId.slice(0, 8)}`
-      + ` recoveryStage=${resume.enterRecovery ? 'start' : 'probe'}`
       + ` conn=${this.connEpoch}`,
     );
     const attempts = normalizeTransportRetryAttempts(this.timing.transportMaxRetryAttempts);
@@ -3919,6 +3971,7 @@ export class DeviceLinkClient {
     }
     peer.sendPhase = 'ready';
     peer.pendingLinkConfirmation = null;
+    this.logRecoveryStage(dst, 'send-ready');
     this.cancelTimeoutCloseNotify(dst);
     if (resume.duplicateOpen) {
       // 同连接同 stream 的重复 open 仍可能带着未确认的可靠帧。确认阶段
@@ -3950,9 +4003,6 @@ export class DeviceLinkClient {
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` recoveryFrames=${peer.recoveryFramesSent}/${this.recoveryPassBudget()}`
       + ` needsAck=${peer.recoveryNeedsAck} duplicateOpen=${duplicateOpen}`
-      + ` replayElapsedMs=${peer.recoveryStartedAt === null
-        ? 0
-        : Math.max(0, this.monotonicNow() - peer.recoveryStartedAt)}`
       + ` stream=${peer.streamId.slice(0, 8)} conn=${this.connEpoch}`,
     );
   }
@@ -3973,7 +4023,9 @@ export class DeviceLinkClient {
         pending.lastSentAt = 0;
       }
     }
+    if (peer.recoveryTrace) peer.recoveryTrace.replayThroughSeq = peer.nextSeq - 1;
     this.retryPending(dst, { ignoreInterval: true });
+    this.logRecoveryStage(dst, 'first-replay-pass', ` frames=${peer.recoveryFramesSent}`);
     this.ensureRetryTimer(dst);
     this.logRecoverySend(dst, peer, 'link-replay', false);
   }
