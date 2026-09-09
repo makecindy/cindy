@@ -109,6 +109,13 @@ const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
 const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
+/**
+ * 接收端累计 ACK 的推进粒度。整批 drain 完成前完全不 ACK 会让发送端把
+ * 正常的业务处理时间误判成链路丢包，恢复 replay 只能等下一轮 2s 定时器。
+ * 小批量 ACK 仍保持累计、单调语义，同时限制 ACK 控制帧数量。
+ */
+const RELIABLE_ACK_BATCH_MESSAGES = 2;
+const RELIABLE_ACK_BATCH_BYTES = 256 * 1024;
 // Allow slow relay -> controller delivery before duplicating an entire message.
 // With the default 2s tick this allows 8KiB/s, capped at 30s per attempt. Small
 // messages retain their existing retry cadence; dead peers still exhaust retries.
@@ -566,6 +573,8 @@ interface PeerTransportState {
   recoveryNeedsAck: boolean;
   /** 本轮恢复探测已写出的帧数（含 replay 与恢复期内首发）。 */
   recoveryFramesSent: number;
+  /** 当前恢复阶段开始的单调时刻；仅用于阶段耗时日志，不参与超时判定。 */
+  recoveryStartedAt: number | null;
   /** latest-wins 腾位驱逐的聚合计数(自上次告警起),仅服务日志聚合。 */
   pushAdmissionDropCount: number;
   /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
@@ -2511,6 +2520,10 @@ export class DeviceLinkClient {
       return stream.drain;
     }
     const drain = async (): Promise<void> => {
+      let deliveredSinceAck = 0;
+      let deliveredBytesSinceAck = 0;
+      let lastAckSentSeq = stream.lastDeliveredSeq;
+      let sentAck = false;
       do {
         stream.drainRequested = false;
         this.applyReceiveStreamBase(stream);
@@ -2543,12 +2556,33 @@ export class DeviceLinkClient {
             break;
           }
           stream.ready.delete(nextSeq);
-          stream.bufferedBytes -= byteLength(ready.json);
+          const deliveredBytes = byteLength(ready.json);
+          stream.bufferedBytes -= deliveredBytes;
           stream.lastDeliveredSeq = nextSeq;
           this.applyReceiveStreamBase(stream);
+          deliveredSinceAck += 1;
+          deliveredBytesSinceAck += deliveredBytes;
+          if (
+            deliveredSinceAck >= RELIABLE_ACK_BATCH_MESSAGES
+            || deliveredBytesSinceAck >= RELIABLE_ACK_BATCH_BYTES
+          ) {
+            this.sendTransportAck(src, streamId, stream.lastDeliveredSeq);
+            lastAckSentSeq = stream.lastDeliveredSeq;
+            sentAck = true;
+            this.log.debug(
+              `device-link recovery ack-progress src=${src.slice(0, 8)}`
+              + ` stream=${streamId.slice(0, 8)} ack=${stream.lastDeliveredSeq}`
+              + ` batchMessages=${deliveredSinceAck} batchBytes=${deliveredBytesSinceAck}`,
+            );
+            deliveredSinceAck = 0;
+            deliveredBytesSinceAck = 0;
+          }
         }
       } while (stream.drainRequested);
-      if (this.isReceiveStreamActive(src, streamId, stream)) {
+      if (
+        this.isReceiveStreamActive(src, streamId, stream)
+        && (!sentAck || stream.lastDeliveredSeq !== lastAckSentSeq)
+      ) {
         this.sendTransportAck(src, streamId, stream.lastDeliveredSeq);
       }
     };
@@ -3166,6 +3200,7 @@ export class DeviceLinkClient {
         lastReplayRemoteStreamId: null,
         recoveryNeedsAck: false,
         recoveryFramesSent: 0,
+        recoveryStartedAt: null,
         pushAdmissionDropCount: 0,
         pushAdmissionDropLogAt: 0,
         linkGeneration: 0,
@@ -3432,7 +3467,11 @@ export class DeviceLinkClient {
       this.log.info(
         `device-link recovery dst=${src.slice(0, 8)} trigger=link-confirm-ack`
         + ` stream=${peer.streamId.slice(0, 8)} request=${confirmation.requestId.slice(0, 8)}`
-        + ` ack=${ackSeq} conn=${this.connEpoch}`,
+        + ` ack=${ackSeq}`
+        + ` confirmAckElapsedMs=${peer.recoveryStartedAt === null
+          ? 0
+          : Math.max(0, this.monotonicNow() - peer.recoveryStartedAt)}`
+        + ` conn=${this.connEpoch}`,
       );
       // 新版入站重建的带 request id ACK 是 local → remote 的因果屏障：对端已经
       // 收到本代 link-accept，旧代成功路由却未 ACK 的尝试不会再产生 relay-error。
@@ -3457,8 +3496,17 @@ export class DeviceLinkClient {
       peer.pendingBytes -= pending.bytes;
     }
     if (peer.recoveryNeedsAck) {
+      const recoveryElapsedMs = peer.recoveryStartedAt === null
+        ? 0
+        : Math.max(0, this.monotonicNow() - peer.recoveryStartedAt);
       peer.recoveryNeedsAck = false;
       peer.recoveryFramesSent = 0;
+      this.log.info(
+        `device-link recovery dst=${src.slice(0, 8)} trigger=recovery-ack`
+        + ` stream=${streamId.slice(0, 8)} ack=${ackSeq}`
+        + ` recoveryElapsedMs=${recoveryElapsedMs} conn=${this.connEpoch}`,
+      );
+      peer.recoveryStartedAt = null;
       this.retryPending(src, { ignoreInterval: true });
     }
     if (peer.pending.size === 0 && peer.retryTimer) {
@@ -3818,6 +3866,7 @@ export class DeviceLinkClient {
     const previousSendPhase: 'down' | 'ready' = previousConfirmation?.previousSendPhase
       ?? (peer.sendPhase === 'ready' ? 'ready' : 'down');
     peer.sendPhase = 'awaiting-confirm';
+    peer.recoveryStartedAt = resume.enterRecovery ? this.monotonicNow() : null;
     const confirmation: PendingLinkConfirmation = {
       requestId,
       minimumAckSeq: this.getTransportBaseSeq(peer) - 1,
@@ -3834,6 +3883,7 @@ export class DeviceLinkClient {
       `device-link recovery dst=${dst.slice(0, 8)} trigger=await-link-confirm`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` stream=${peer.streamId.slice(0, 8)} request=${requestId.slice(0, 8)}`
+      + ` recoveryStage=${resume.enterRecovery ? 'start' : 'probe'}`
       + ` conn=${this.connEpoch}`,
     );
     const attempts = normalizeTransportRetryAttempts(this.timing.transportMaxRetryAttempts);
@@ -3900,6 +3950,9 @@ export class DeviceLinkClient {
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` recoveryFrames=${peer.recoveryFramesSent}/${this.recoveryPassBudget()}`
       + ` needsAck=${peer.recoveryNeedsAck} duplicateOpen=${duplicateOpen}`
+      + ` replayElapsedMs=${peer.recoveryStartedAt === null
+        ? 0
+        : Math.max(0, this.monotonicNow() - peer.recoveryStartedAt)}`
       + ` stream=${peer.streamId.slice(0, 8)} conn=${this.connEpoch}`,
     );
   }

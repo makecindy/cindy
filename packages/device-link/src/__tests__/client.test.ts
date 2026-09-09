@@ -884,6 +884,48 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('可靠接收按小批量推进累计 ACK，不等待整批 handler drain 完成', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const streamId = 'batched-ack-stream';
+    await establishInboundReliableLink(h, streamId);
+    let releaseThird: (() => void) | undefined;
+    h.client.onFrame((env) => {
+      if (env.kind !== 'push') return;
+      const seq = (env.payload as { payload: { seq: number } }).payload.seq;
+      if (seq === 3) {
+        return new Promise<void>((resolve) => { releaseThird = resolve; });
+      }
+    });
+    const make = (seq: number) => ({
+      v: PROTOCOL_VERSION,
+      kind: 'push' as const,
+      src: 'dev-b',
+      payload: {
+        __cindyDeviceLinkTransport: { version: 1, streamId, seq },
+        data: JSON.stringify({ channel: 'maker:event', payload: { seq } }),
+      },
+    });
+
+    h.current().push(make(1));
+    h.current().push(make(2));
+    h.current().push(make(3));
+    await tick();
+
+    expect(releaseThird).toBeTypeOf('function');
+    expect(h.current().sent.map(parseTransportAck).filter((ack) => ack?.streamId === streamId).at(-1))
+      .toMatchObject({ ackSeq: 2 });
+
+    releaseThird!();
+    await tick();
+    expect(h.current().sent.map(parseTransportAck).filter((ack) => ack?.streamId === streamId).at(-1))
+      .toMatchObject({ ackSeq: 3 });
+    h.client.stop();
+  });
+
   it('慢可靠业务 handler 不阻塞 pong，避免把本地处理拥塞误判成断网', async () => {
     const h = makeHarness({
       timing: {
