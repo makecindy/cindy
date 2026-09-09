@@ -30,6 +30,7 @@ vi.mock('@/hooks/useGitSafetySettings', () => ({
   prefetchDeviceGitSafetySettings: vi.fn(),
   evictDeviceGitSafetySettings: vi.fn(),
 }));
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 
 afterEach(() => {
@@ -39,7 +40,7 @@ afterEach(() => {
   Reflect.deleteProperty(window, 'electronAPI');
 });
 
-it.each(['connecting', 'unknown'])('handles initial %s state without redundant bootstrap', async (initialStatus) => {
+it.each(['connecting', 'unknown', 'late-subscribe', 'late-snapshot'])('handles initial %s state without redundant bootstrap', async (initialStatus) => {
   vi.useFakeTimers();
   const listeners: Record<string, (...args: any[]) => void> = {};
   let release!: () => void;
@@ -49,8 +50,11 @@ it.each(['connecting', 'unknown'])('handles initial %s state without redundant b
         release = resolve;
       }),
   );
+  let finishState!: (value: { linkStatus: string }) => void;
+  const initialState = new Promise<{ linkStatus: string }>((resolve) => { finishState = resolve; });
   const api = {
     getState: async () => {
+      if (initialStatus.startsWith('late-')) return initialState;
       if (initialStatus === 'unknown') throw new Error('temporary IPC failure');
       return { linkStatus: initialStatus };
     },
@@ -78,6 +82,25 @@ it.each(['connecting', 'unknown'])('handles initial %s state without redundant b
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
+  if (initialStatus.startsWith('late-')) {
+    await act(async () => {
+      listeners.Presence({ deviceId: 'peer', deviceName: 'Peer', online: true, remoteControlEnabled: true });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    let finishRead: (() => void) | undefined;
+    if (initialStatus === 'late-snapshot') {
+      state.refresh.mockImplementationOnce(() => new Promise<string>((resolve) => { finishRead = () => resolve('ok'); }));
+      await act(async () => { release(); await vi.advanceTimersByTimeAsync(0); });
+    }
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().has('peer')).toBe(true);
+    await act(async () => { finishState({ linkStatus: 'connecting' }); await vi.advanceTimersByTimeAsync(0); });
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().has('peer')).toBe(false);
+    await act(async () => { finishRead?.(); release(); await vi.advanceTimersByTimeAsync(0); });
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().has('peer')).toBe(false);
+    expect(state.refresh).toHaveBeenCalledTimes(initialStatus === 'late-snapshot' ? 1 : 0);
+    unmount();
+    return;
+  }
   if (initialStatus === 'unknown') {
     expect(subscribe).toHaveBeenCalledTimes(1);
     await act(async () => { release(); await vi.advanceTimersByTimeAsync(0); });
@@ -106,6 +129,7 @@ it.each(['connecting', 'unknown'])('handles initial %s state without redundant b
   expect(subscribe).toHaveBeenCalledTimes(2);
   await act(async () => {
     listeners.Status({ status: 'connecting' });
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().has('peer')).toBe(false);
     release();
     await vi.advanceTimersByTimeAsync(0);
   });

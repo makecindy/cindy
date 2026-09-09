@@ -267,6 +267,17 @@ describe('production session recovery callbacks', () => {
     expect(f.state.hold).not.toBeNull();
   });
 
+  it('reports failed history without clearing the read-receipt barrier', async () => {
+    const f = fixture();
+    const error = new Error('history unavailable');
+    f.maker.listMessages.mockRejectedValue(error);
+    await expect(f.sync()).rejects.toBe(error);
+    expect(f.bindings.mobileDebugLog).toHaveBeenCalledWith('debug', 'recovery', 'detail sync phase',
+      expect.objectContaining({ phase: 'history', outcome: 'failed', connection: 1 }));
+    expect(f.state.readAck).toBeNull();
+    expect(f.state.hold).not.toBeNull();
+  });
+
   it('retains early progressive display while control state is pending', async () => {
     const f = fixture();
     const projection = deferred<object>();

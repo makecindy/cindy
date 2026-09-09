@@ -3424,7 +3424,10 @@ export default function SessionScreen() {
       // is applied independently, and a changed metadata response starts history
       // immediately rather than waiting for pending/projection/active.
       await waitForIndependentSnapshotReads([
-        messageRead.then(() => reportSyncPhase('history-settled')),
+        messageRead.then(() => reportSyncPhase('history-settled')).catch((error) => {
+          reportSyncPhase('history', { outcome: 'failed' });
+          throw error;
+        }),
         commitRead('pending', fetchPendingInteractions, (pendingInteractions) => {
           remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         }),

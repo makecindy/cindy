@@ -68,6 +68,8 @@ describe('background push recovery', () => {
     // Wall time passes without running timers: iOS suspended the JS runtime.
     vi.setSystemTime(Date.now() + 60_000);
     f.active();
+    expect(f.report).toHaveBeenCalledWith({ phase: 'active', generation: 1, elapsedMs: 62500 });
+    expect(f.report).toHaveBeenLastCalledWith({ phase: 'stop', generation: 1, elapsedMs: 62500, reason: 'suspended' });
     expect(f.stop).toHaveBeenCalledTimes(1);
     expect(f.connect).toHaveBeenCalledTimes(1);
     expect(f.stop.mock.invocationCallOrder[0]).toBeLessThan(f.connect.mock.invocationCallOrder[0]);

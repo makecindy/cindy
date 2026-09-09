@@ -637,6 +637,9 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
       .then((state) => {
         if (disposed) return;
         if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
+        // Presence can start bootstrap before this initial snapshot settles.
+        // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
+        if (!linkStatusPushSeen && !linkOnline) remoteProjectsStore.markAllDisconnected();
         disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
         // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
         // (store 初始为空,快照只需补写 unresponsive 的未覆盖设备)。

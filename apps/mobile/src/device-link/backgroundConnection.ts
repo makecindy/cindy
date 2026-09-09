@@ -94,6 +94,7 @@ export function createBackgroundConnection(
       }, options.graceMs);
     },
     active() {
+      const backgroundGeneration = generation;
       const elapsed = backgroundAt === null ? 0 : Date.now() - backgroundAt;
       report("active");
       backgroundAt = null;
@@ -102,7 +103,7 @@ export function createBackgroundConnection(
       // A timer reference cannot tell whether the socket was actually stopped:
       // JS can be suspended while the final unsubscribe is still awaiting ACK.
       if (elapsed > options.suspendMs) {
-        report("stop", { reason: "suspended", elapsedMs: elapsed });
+        report("stop", { reason: "suspended", elapsedMs: elapsed, generation: backgroundGeneration });
         options.stop();
       }
       options.connect();
