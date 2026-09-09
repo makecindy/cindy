@@ -273,7 +273,7 @@ describe("remote desktop controls", () => {
     });
     expect(fixture.apiFetch).toHaveBeenCalledWith(
       "/api/device-link/ice-servers",
-      { baseUrl: "https://relay.example.test", timeoutMs: 3000 },
+      { baseUrl: "https://relay.example.test", timeoutMs: 3000, cache: "no-store" },
     );
     expect(sent().find((m) => m.type === "iceConfig")).toEqual({
       type: "iceConfig",

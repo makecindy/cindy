@@ -769,6 +769,7 @@ export default function RemoteDesktopScreen() {
           auth.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
             baseUrl: DEVICE_LINK_API_BASE_URL,
             timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+            cache: "no-store",
           }),
         ).then((iceServers) => {
           if (
