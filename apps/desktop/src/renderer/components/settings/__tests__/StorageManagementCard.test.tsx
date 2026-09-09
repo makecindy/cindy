@@ -292,6 +292,21 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
   });
 
+  it('keeps reset clickable after a threshold blur queues persistence', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    vi.mocked(api.getSettings).mockResolvedValue({
+      thresholdGiB: 25, disabled: false, isCustomized: true, defaultThresholdGiB: 10,
+    });
+    render(<StorageManagementCard />);
+    const input = await screen.findByRole('spinbutton');
+    const reset = await screen.findByRole('button', { name: 'settings.defaults.restore' });
+    fireEvent.change(input, { target: { value: '30' } });
+    fireEvent.blur(input);
+    fireEvent.click(reset);
+
+    await waitFor(() => expect(api.resetSettings).toHaveBeenCalledOnce());
+  });
+
   it('restores warning overrides using the defaults returned by Main', async () => {
     const api = window.electronAPI.localDb.databaseSizeWarning;
     vi.mocked(api.getSettings).mockResolvedValue({

@@ -589,9 +589,12 @@ function DatabaseSlimmingSection({
   }, []);
 
   // Blur-save may precede a reset click. Keep that user action order through persistence.
-  const persistWarningSettings = (patch?: { thresholdGiB?: number; disabled?: boolean }) => {
+  const persistWarningSettings = (
+    patch?: { thresholdGiB?: number; disabled?: boolean },
+    blockControls = true,
+  ) => {
     const pending = warningWriteQueueRef.current.then(async () => {
-      setWarningSaving(true);
+      if (blockControls) setWarningSaving(true);
       try {
         const api = window.electronAPI.localDb.databaseSizeWarning;
         const saved = patch ? await api.setSettings(patch) : await api.resetSettings();
@@ -603,7 +606,7 @@ function DatabaseSlimmingSection({
         onWarningThresholdChange(warningThresholdPersistedRef.current);
         toast.error(t(mapIpcErrorToI18nKey(err)));
       } finally {
-        setWarningSaving(false);
+        if (blockControls) setWarningSaving(false);
       }
     });
     warningWriteQueueRef.current = pending;
@@ -617,7 +620,7 @@ function DatabaseSlimmingSection({
       return;
     }
     if (value !== warningThresholdPersistedRef.current) {
-      return persistWarningSettings({ thresholdGiB: value });
+      return persistWarningSettings({ thresholdGiB: value }, false);
     }
   };
 
@@ -809,7 +812,7 @@ function DatabaseSlimmingSection({
         </CardButton>
       </div>
 
-      <div className="order-1 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <label
           htmlFor="db-slimming-archive-age"
           className="text-12 text-[var(--settings-section-sublabel)]"
