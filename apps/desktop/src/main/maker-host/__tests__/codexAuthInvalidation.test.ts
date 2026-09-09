@@ -2801,7 +2801,8 @@ describe('deferred Codex OAuth dispatch proof', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'home'));
     const codexHome = path.join(h.userDataDir, 'codex-home');
     fs.mkdirSync(codexHome, { recursive: true });
-    const token = (account: string) => idToken({ exp: Math.floor(Date.now() / 1000) + 3600, sub: account });
+    const fixtureExpiry = Math.floor(Date.now() / 1000) + 3600;
+    const token = (account: string) => idToken({ exp: fixtureExpiry, sub: account });
     const write = (account: string) => fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: token(account), account_id: account } }));
     const { bindNativeProviderAuth } = await import('../nativeProviderAuthBinding.js');
     write('account-a');

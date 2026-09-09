@@ -490,6 +490,29 @@ const logger: Logger = {
 };
 
 describe('AppServerHost.request startup timeout', () => {
+  it.each([undefined, 1000])('checks dispatch after the final startup await (timeout=%s)', async (timeoutMs) => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      await host.ensureStarted();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const ensure = host.ensureStarted.bind(host);
+      vi.spyOn(host, 'ensureStarted').mockImplementationOnce(async () => { await gate; return ensure(); });
+      let valid = true;
+      const beforeDispatch = vi.fn(() => { if (!valid) throw new Error('route expired'); });
+      const pending = host.request('thread/start', {}, { timeoutMs, beforeDispatch });
+      expect(beforeDispatch).not.toHaveBeenCalled();
+      valid = false;
+      release();
+      await expect(pending).rejects.toThrow('route expired');
+      expect(transport.lines.some((line) => JSON.parse(line).method === 'thread/start')).toBe(false);
+      valid = true;
+      await host.request('thread/start', {}, { timeoutMs, beforeDispatch });
+      expect(transport.lines.filter((line) => JSON.parse(line).method === 'thread/start')).toHaveLength(1);
+    } finally { await host.shutdown(); }
+  });
+
   it('bounds a hung ensureStarted by the caller-provided timeoutMs (greptile R6 P1)', async () => {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 — 调用方显式
     // 给的 timeoutMs 必须同样覆盖启动路径, 否则「关键 RPC 加超时」形同虚设。

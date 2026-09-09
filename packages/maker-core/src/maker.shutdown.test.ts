@@ -1,3 +1,4 @@
+import { CodexAgent } from './agents/codex/index.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Maker } from './maker.js';
@@ -94,6 +95,36 @@ function createDeferred<T = void>(): { promise: Promise<T>; resolve: (value: T |
 }
 
 describe('Maker.shutdown', () => {
+  it.each(['cancel', 'exhaust'] as const)('releases the real Codex startup guard after route %s before any host exists', async (mode) => {
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const resolveRoute = vi.fn(async () => {
+      entered();
+      if (mode === 'cancel') await new Promise<void>(() => {});
+      return { policy: 'isolated' as const, isCurrent: () => false };
+    });
+    const agent = new CodexAgent({
+      logger, binaryPath: process.execPath, runtimeConfig: {},
+      auth: { getState: async () => ({ authenticated: true }), getAuthEnv: async () => ({}), triggerLogin: async () => ({ authenticated: true }), logout: async () => {} },
+      resolveCodexLocalAuthPolicy: resolveRoute,
+    });
+    let guarded = false;
+    const failed = vi.fn(({ runtimeMayBeAlive }: { runtimeMayBeAlive?: boolean }) => { if (!runtimeMayBeAlive) guarded = false; });
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger,
+      lifecycleHooks: { onBeforeStart: async () => { guarded = true; }, onStartFailed: failed },
+    });
+    const result = maker.createSession({ id: 'route-stop', agentKind: 'codex', model: 'fixture', providerId: 'cprov-fixture', workingDir: '/fixture' });
+    const rejection = expect(result).rejects.toThrow(mode === 'cancel' ? /cancelled/ : /changed repeatedly/);
+    await waiting;
+    if (mode === 'cancel') await agent.dispose();
+    await rejection;
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({ stage: 'agent-start', runtimeMayBeAlive: false }));
+    expect(guarded).toBe(false);
+    expect(maker.listActiveSessions()).toEqual([]);
+    if (mode === 'exhaust') expect(resolveRoute).toHaveBeenCalledTimes(8);
+    await maker.shutdown();
+  });
+
   it('waits for deferred startup cleanup hooks before resolving', async () => {
     const stopped = createDeferred();
     const cleanupGate = createDeferred();

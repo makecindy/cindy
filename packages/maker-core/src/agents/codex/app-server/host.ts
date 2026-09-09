@@ -865,7 +865,7 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; beforeDispatch?: () => void },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
@@ -900,10 +900,12 @@ export class AppServerHost {
         throw new Error(`app-server startup (for ${method}) consumed the entire ${opts.timeoutMs}ms timeout budget`);
       }
       if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+      opts?.beforeDispatch?.();
       return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
     }
     await started;
     if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+    opts?.beforeDispatch?.();
     return this.client.request<R>(method, params, opts);
   }
 

@@ -609,18 +609,17 @@ describe('Codex official OAuth host isolation', () => {
     MockCodexTransport.beforeInitializeResponse = async () => { entered(); await paused; };
     try {
       const pending = agent.startSession({ sessionId: 'creating-scope', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
-      const rejected = expect(pending).rejects.toThrow();
       await started;
       const guard = await agent.beginLocalHostCredentialChange();
       try {
         const retired = guard.retireActiveHost();
         resume();
         await retired;
-        await rejected;
         await guard.finalize();
       } finally { guard.release(); }
       MockCodexTransport.beforeInitializeResponse = null;
-      const replacement = await agent.startSession({ sessionId: 'creating-scope', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
+      const replacement = await pending;
+      expect(createdTransports[0].lines.some((line) => JSON.parse(line).method === Method.ThreadStart)).toBe(false);
       expect(createdTransports[0].closed).toBe(true);
       expect(createdTransports.at(-1)?.closed).toBe(false);
       await replacement.close();
@@ -629,6 +628,20 @@ describe('Codex official OAuth host isolation', () => {
       await agent.dispose();
       await fs.rm(workingDir, { recursive: true, force: true });
     }
+  });
+
+  it('does not replay an accepted thread start when the route changes before its response', async () => {
+    const deps = isolatedDeps();
+    let revision = 0;
+    deps.resolveCodexLocalAuthPolicy = () => { const captured = revision; return { policy: 'isolated', isCurrent: () => captured === revision }; };
+    MockCodexTransport.beforeThreadStartResponse = () => { revision++; };
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'accepted-once', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].lines.filter((line) => JSON.parse(line).method === Method.ThreadStart)).toHaveLength(1);
+      await handle.close();
+    } finally { await agent.dispose(); }
   });
 
   it('reselects after a route mutation during spawn preparation without allocating a stale transport', async () => {
@@ -24447,7 +24460,7 @@ describe('CodexAgent.forkSdkSession', () => {
     })).resolves.toMatchObject({ newSdkSessionId: 'fork-thread-id', usedNativeForkAnchor: true });
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
       threadId: 'source', lastTurnId: 'failed-boundary', excludeTurns: true,
-    });
+    }, { beforeDispatch: expect.any(Function) });
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
     expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
   });
@@ -24606,7 +24619,7 @@ describe('CodexAgent.forkSdkSession', () => {
       lastTurnId: 'turn-at-boundary',
       excludeTurns: true,
       cwd: '/repo',
-    });
+    }, { beforeDispatch: expect.any(Function) });
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
     expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
     expect(retireHostKey).toHaveBeenCalledExactlyOnceWith(
@@ -24642,7 +24655,7 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'imported-source-thread',
       lastTurnId: 'turn-at-boundary',
       excludeTurns: true,
-    });
+    }, { beforeDispatch: expect.any(Function) });
   });
 
   it('uses the isolated rollback fallback when bounded native-turn fork is unavailable', async () => {
@@ -24659,7 +24672,7 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.request).toHaveBeenNthCalledWith(1, Method.ThreadFork, {
       threadId: 'source-thread-id',
       persistExtendedHistory: true,
-    });
+    }, { beforeDispatch: expect.any(Function) });
     expect(host.request).toHaveBeenNthCalledWith(2, Method.ThreadRollback, {
       threadId: 'fork-thread-id',
       numTurns: 1,
@@ -24774,7 +24787,7 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(order).toEqual(['prepare', 'fork']);
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       threadId: 'imported-source-thread',
-    }));
+    }), { beforeDispatch: expect.any(Function) });
   });
 
   it('does not call thread/fork when source-thread preparation fails', async () => {
@@ -24810,7 +24823,7 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'source-thread-id',
       persistExtendedHistory: true,
       cwd: '/repo',
-    });
+    }, { beforeDispatch: expect.any(Function) });
     expect(host.request).toHaveBeenNthCalledWith(2, Method.ThreadRollback, {
       threadId: 'fork-thread-id',
       numTurns: 2,
@@ -24837,7 +24850,7 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
       threadId: 'source-thread-id',
       persistExtendedHistory: true,
-    });
+    }, { beforeDispatch: expect.any(Function) });
     expect(host.unsubscribeThread).toHaveBeenCalledTimes(1);
     expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
     expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
@@ -24932,7 +24945,7 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'source-thread-id',
       persistExtendedHistory: true,
       excludeTurns: true,
-    });
+    }, { beforeDispatch: expect.any(Function) });
   });
 
   it('omits excludeTurns for daemons older than 0.145.0', async () => {
@@ -24974,7 +24987,7 @@ describe('CodexAgent.forkSdkSession', () => {
     );
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       threadId: 'source-thread-id',
-    }));
+    }), { beforeDispatch: expect.any(Function) });
   });
 
   it('inspects indexed source history without requiring the outgoing provider credentials', async () => {
@@ -25090,7 +25103,7 @@ describe('CodexAgent.forkSdkSession', () => {
       expect(host.request).toHaveBeenCalledWith(
         Method.ThreadFork,
         expect.objectContaining({ path: sourceRollout }),
-      );
+        { beforeDispatch: expect.any(Function) });
     } finally {
       await fs.rm(externalHome, { recursive: true, force: true });
     }

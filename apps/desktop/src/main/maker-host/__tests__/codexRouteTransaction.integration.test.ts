@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
+import { AppServerHost } from '../../../../../../packages/maker-core/src/agents/codex/app-server/host.js';
 import { CodexAgent } from '../../../../../../packages/maker-core/src/agents/codex/index.js';
 import { buildUserProvider } from '@cindy/model-providers';
 import { setCustomProviders } from '../active-catalog.js';
@@ -19,10 +20,11 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each(['A', 'B', 'C'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))))('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each(['A', 'B', 'C', 'initialize', 'capability', 'resume'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))))('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
-    const revoked = true;
+    const lateWindow = ['initialize', 'capability', 'resume'].includes(window);
+    const revoked = !lateWindow;
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-host-auth-'));
     const home = path.join(root, 'codex');
     const workingDir = path.join(root, 'work');
@@ -72,11 +74,14 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     setCustomProviders([buildUserProvider({ id: 'cprov-fixture', name: 'Fixture', runtimes: { codex: { baseUrl: `${endpoint}/provider`, wireProtocol: 'openai-responses', models: [{ id: 'fixture-model', name: 'Fixture' }] } } })]);
     const spawnConfigs: string[] = [];
     let preparationGate: Promise<void> | undefined;
+    let delaySecondPreparation = false;
     const preparationEntered = vi.fn();
+    let latePreparation: (() => Promise<void>) | undefined;
     const agent = new CodexAgent({
       binaryPath: binaryPath!, logger, runtimeConfig: {},
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
-      prepareCodexResumeSession: async () => { preparationEntered(); await preparationGate; return undefined; },
+      resolveCapabilityRouting: async () => { if (window === 'capability') await latePreparation?.(); return undefined; },
+      prepareCodexResumeSession: async () => { preparationEntered(); if (window === 'resume') await latePreparation?.(); if (!delaySecondPreparation || preparationEntered.mock.calls.length >= 2) await preparationGate; return undefined; },
       prepareCodexExtraSpawnConfig: async (_providers, ctx) => { spawnConfigs.push(ctx?.localAuthPolicy ?? 'legacy-shared'); return { extraArgs: [], extraEnv: {}, codexProxyActive: true }; },
       auth: {
         getState: async () => ({ authenticated: true }),
@@ -89,7 +94,64 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         }),
       },
     });
+    const spies: Array<{ mockRestore: () => void }> = [];
     try {
+      if (lateWindow) {
+        // Start a shared sibling first; the target will initially select that host
+        // from an unknown route, then the real Desktop transaction installs API auth.
+        setCustomProviders([]);
+        const sibling = await agent.startSession({ sessionId: 'sibling', model: 'fixture-model', providerId: 'cprov-fixture', workingDir });
+        if (window === 'resume') {
+          const done = (async () => { for await (const event of sibling.events()) { if (event.type === 'error') throw new Error(JSON.stringify(event)); if (event.type === 'done') return; } })();
+          await sibling.send({ type: 'user', content: 'persist fixture' }, { throwOnStartFailure: true });
+          await done;
+        }
+        const hostMap = (agent as unknown as { hosts: Map<string, AppServerHost> }).hosts;
+        const siblingHost = hostMap.get('local')!;
+        const siblingConnection = siblingHost.getConnectionId();
+        const accepted: Array<{ host: AppServerHost; method: string }> = [];
+        const request = AppServerHost.prototype.request;
+        spies.push(vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
+          return request.call(this, method, params, { ...opts, beforeDispatch: () => {
+            opts?.beforeDispatch?.();
+            if (['thread/start', 'thread/resume'].includes(method)) accepted.push({ host: this, method });
+          } });
+        }));
+        let entered!: () => void;
+        let release!: () => void;
+        const waiting = new Promise<void>((resolve) => { entered = resolve; });
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        let once = false;
+        latePreparation = async () => { if (!once) { once = true; entered(); await gate; } };
+        const initialize = AppServerHost.prototype.ensureStartedWithTimeout;
+        if (window === 'initialize') spies.push(vi.spyOn(AppServerHost.prototype, 'ensureStartedWithTimeout').mockImplementation(async function (this: AppServerHost, ...args) {
+          const result = await initialize.apply(this, args);
+          await latePreparation?.();
+          return result;
+        }));
+        const target = agent.startSession({ sessionId: 'late-target', providerId: 'cprov-fixture', model: 'fixture-model', workingDir,
+          ...(reviewMode ? { reviewMode: true as const } : {}), ...(window === 'resume' ? { resumeSessionId: sibling.id } : {}),
+        });
+        try {
+          await waiting;
+          const finish = beginMutation();
+          setCustomProviders([buildUserProvider({ id: 'cprov-fixture', name: 'Fixture', runtimes: { codex: { baseUrl: `${endpoint}/provider`, wireProtocol: 'openai-responses', models: [{ id: 'fixture-model', name: 'Fixture' }] } } })]);
+          release();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(accepted).toEqual([]);
+          finish.commit(); finish();
+          const handle = await target;
+          expect(handle.codexHostKey).toContain('external-auth');
+          expect(accepted).toHaveLength(1);
+          expect(spawnConfigs.at(-1)).toBe('isolated');
+          // No forced retirement or cleanup of the live sibling on the shared host.
+          expect(hostMap.get('local')).toBe(siblingHost);
+          expect(siblingHost.getConnectionId()).toBe(siblingConnection);
+          await handle.close();
+          await sibling.close();
+        } finally { release(); }
+        return;
+      }
       const finish = beginMutation();
       let guard: Awaited<ReturnType<typeof agent.beginLocalHostCredentialChange>> | undefined;
       if (window === 'C') { guard = await agent.beginLocalHostCredentialChange(); await guard.finalize(); }
@@ -126,7 +188,18 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
       await events;
       await handle.close();
       if (!reviewMode && window === 'B') {
-        for (const delayPreparation of [false, true]) {
+        const acceptedForks: AppServerHost[] = [];
+        const forkRequest = AppServerHost.prototype.request;
+        spies.push(vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
+          return forkRequest.call(this, method, params, { ...opts, beforeDispatch: () => {
+            opts?.beforeDispatch?.();
+            if (method === 'thread/fork') acceptedForks.push(this);
+          } });
+        }));
+        for (const delay of ['none', 'first', 'second']) {
+          const acceptedBefore = acceptedForks.length;
+          const delayPreparation = delay !== 'none';
+          delaySecondPreparation = delay === 'second';
           let releasePreparation: () => void = () => {};
           if (delayPreparation) preparationGate = new Promise<void>((resolve) => { releasePreparation = resolve; });
           preparationEntered.mockClear();
@@ -135,7 +208,11 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           const forking = agent.forkSdkSession({ sourceSdkSessionId: handle.id, upToMessageId: undefined, providerId: 'cprov-fixture', model: 'fixture-model', stripEncryptedReasoning: true })
             .then((result) => { forkSettled = true; return result; });
           try {
-            await expect.poll(() => preparationEntered.mock.calls.length).toBeGreaterThan(0);
+            await expect.poll(() => preparationEntered.mock.calls.length).toBeGreaterThanOrEqual(delaySecondPreparation ? 2 : 1);
+            const pausedForkHost = delaySecondPreparation
+              ? [...(agent as unknown as { hosts: Map<string, AppServerHost> }).hosts].find(([key]) => key.startsWith('local-fork:'))?.[1]
+              : undefined;
+            if (delaySecondPreparation) expect(pausedForkHost).toBeDefined();
             if (delayPreparation) finishFork = beginMutation();
             releasePreparation();
             await new Promise((resolve) => setTimeout(resolve, 20));
@@ -143,6 +220,8 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
             finishFork?.();
             const fork = await forking;
             expect(fork.newSdkSessionId).not.toBe(handle.id);
+            expect(acceptedForks).toHaveLength(acceptedBefore + 1);
+            if (delaySecondPreparation) expect(acceptedForks.at(-1)).not.toBe(pausedForkHost);
             expect(spawnConfigs.every((policy) => policy === 'isolated')).toBe(true);
           } finally { releasePreparation(); finishFork?.(); }
         }
@@ -157,6 +236,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         finishCancel();
       }
     } finally {
+      for (const spy of spies) spy.mockRestore();
       for (const release of releases) release();
       setCustomProviders([]);
       await agent.dispose();

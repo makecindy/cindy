@@ -506,7 +506,9 @@ const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
 const LOCAL_MCP_REFRESH_KEY = 'local-mcp-refresh';
 const LOCAL_CONFIGURATION_CHANGE_KEY = LOCAL_MCP_REFRESH_KEY;
 // Only raised before a caller sends a thread RPC; safe to select a fresh route.
-class CodexRouteSelectionChangedError extends Error {}
+class CodexRouteSelectionChangedError extends Error {
+  constructor(message = 'Codex route changed during startup', readonly retryable = true) { super(message); }
+}
 
 async function awaitCodexRouteSelection<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return pending;
@@ -2440,7 +2442,7 @@ export class CodexAgent extends BaseAgent {
         && !this.hostCredentialModeSwitches.has(LOCAL_CONFIGURATION_CHANGE_KEY)
         && (typeof resolved === 'string' || resolved.isCurrent());
       if (isCurrent()) return { policy, isCurrent };
-      if (attempt >= 7) throw new CodexRouteSelectionChangedError('Codex route changed repeatedly during selection');
+      if (attempt >= 7) throw new CodexRouteSelectionChangedError('Codex route changed repeatedly during selection', false);
     }
   }
 
@@ -3486,20 +3488,37 @@ assertRouteCurrent();
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
-    const startupCleanup: { customContext?: () => Promise<void> } = {};
-    try {
-      return await this.startSessionInternal(opts, (cleanup) => {
-        startupCleanup.customContext = cleanup ?? undefined;
-      });
-    } catch (error) {
-      await startupCleanup.customContext?.();
-      throw error;
+    const signal = this.routeResolutionAbort.signal;
+    for (let attempt = 0; ; attempt++) {
+      const startup = {
+        signal, threadDispatched: false,
+        cleanup: undefined as (() => Promise<void>) | undefined,
+        customContext: undefined as (() => Promise<void>) | undefined,
+      };
+      try {
+        signal.throwIfAborted();
+        return await this.startSessionInternal(opts, (cleanup) => {
+          startup.customContext = cleanup ?? undefined;
+        }, startup);
+      } catch (error) {
+        if (!startup.threadDispatched
+          && (error instanceof CodexRouteSelectionChangedError || signal.aborted)) {
+          // No thread was submitted. Release this startup's lease and retire only
+          // an unused host; another live handle's process belongs to that handle.
+          await startup.cleanup?.();
+          if (!signal.aborted && error instanceof CodexRouteSelectionChangedError && error.retryable && attempt < 7) continue;
+          throw new AgentStartupStoppedError(signal.aborted ? signal.reason : error);
+        }
+        await startup.customContext?.();
+        throw error;
+      }
     }
   }
 
   private async startSessionInternal(
     opts: StartSessionOptions,
     registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
+    startup: { signal: AbortSignal; threadDispatched: boolean; cleanup?: () => Promise<void> },
   ): Promise<AgentSessionHandle> {
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
@@ -5030,6 +5049,17 @@ assertRouteCurrent();
         await retireSingleSessionHost();
       });
     }
+    startup.cleanup = async () => {
+      releaseHostBindingLeaseIfNeeded();
+      const retiring = this.retiringHosts.get(currentHostKey);
+      if (retiring?.host === host) await this.beginHostRetirement(currentHostKey, host, 'unsubmitted startup stopping');
+      if (this.hosts.get(currentHostKey) === host && this.hostActiveUseCount(currentHostKey, host) === 0) {
+        await this.retireHostKey(currentHostKey, 'Codex startup route changed before thread submission', {
+          failIfActive: true, logPrefix: 'codex unsubmitted startup cleanup',
+          expectedHost: host, expectedGeneration: hostGeneration, throwOnShutdownFailure: true,
+        });
+      }
+    };
     const connectionId = host.getConnectionId();
     // JSON-RPC IDs are connection-local (often 0). Desktop indexes interaction
     // requests across sessions, so never expose a raw server ID as a UI ID.
@@ -5044,6 +5074,10 @@ assertRouteCurrent();
     const staleHostError = (operation: string): Error =>
       new Error(`Codex session expired because its app-server was replaced before ${operation}; restart the session`);
     const assertCurrentHost = (operation: string): void => {
+      if (!startup.threadDispatched) {
+        startup.signal.throwIfAborted();
+        if (!routeSelection.isCurrent()) throw new CodexRouteSelectionChangedError();
+      }
       if (isCurrentHost()) return;
       log.warn('codex session handle rejected after app-server replacement', {
         operation,
@@ -6683,9 +6717,16 @@ assertRouteCurrent();
       };
       acquireHostBindingLeaseIfNeeded();
       assertCurrentHost('thread/start');
-      const resp = await withMcpDiscoveryContext(() => host.request<ThreadStartResponse>(Method.ThreadStart, params, {
-        timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-      }));
+      const resp = await withMcpDiscoveryContext(() => {
+          assertCurrentHost('thread/start dispatch');
+          return host.request<ThreadStartResponse>(Method.ThreadStart, params, {
+            timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+            beforeDispatch: () => {
+              assertCurrentHost('thread/start write');
+              startup.threadDispatched = true;
+            },
+          });
+        });
       assertCurrentHost('thread/start');
       if (Object.hasOwn(resp, 'serviceTier')) {
         mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -6785,9 +6826,16 @@ assertRouteCurrent();
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        const resp = await withMcpDiscoveryContext(() => host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
-          timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-        }));
+        const resp = await withMcpDiscoveryContext(() => {
+          assertCurrentHost('thread/resume dispatch');
+          return host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
+            timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+            beforeDispatch: () => {
+              assertCurrentHost('thread/resume write');
+              startup.threadDispatched = true;
+            },
+          });
+        });
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -6860,6 +6908,7 @@ assertRouteCurrent();
           serviceTier: mutableServiceTier ?? null,
         });
       } catch (e) {
+        if (!startup.threadDispatched && (e instanceof CodexRouteSelectionChangedError || startup.signal.aborted)) throw e;
         let freshThreadStarted = false;
         if (!preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
           && isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
@@ -6914,6 +6963,7 @@ assertRouteCurrent();
         await startFreshThread();
       } catch (e) {
         releaseHostBindingLeaseIfNeeded();
+        if (!startup.threadDispatched && (e instanceof CodexRouteSelectionChangedError || startup.signal.aborted)) throw e;
         log.error('thread/start failed', { error: String(e) });
         const message = `Failed to start Codex thread: ${String(e)}`;
         eventQueue.push({
@@ -14595,18 +14645,19 @@ assertRouteCurrent();
         await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
         historyChecked = true;
       }
-      // ID-only turn queries must use the source thread's index even when the
-      // account supplying credentials has changed. Keep the child in that index.
       const forkSqliteHome = forkStorage?.sqliteHome;
-      stage = 'host-create';
-      const leased = await this.acquireHostOperation(async () => {
-      const host = await (async () => {
+      let forkCodexHome: string | undefined;
+      let forkDispatched = false;
+      const { host, resp, usedNativeForkAnchor } = await (async () => {
         for (let attempt = 0; ; attempt++) {
           forkRouteSignal.throwIfAborted();
           const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model ?? '');
           forkHostKey = codexLocalAuthHostIdentity(forkBaseHostKey, selection.policy);
+          forkHostRetired = false;
+          stage = 'host-create';
           try {
-            return await this.getHost(undefined, forkCredentialMode, {
+            const leased = await this.acquireHostOperation(async () => {
+            const host = await this.getHost(undefined, forkCredentialMode, {
               keyOverride: forkHostKey,
               ...(forkAccountId ? { providerId: forkAccountId } : {}),
               ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
@@ -14616,72 +14667,83 @@ assertRouteCurrent();
               ...(selection.policy === 'isolated' ? { localAuthPolicy: selection.policy } : {}),
               hostPurpose: 'control-plane',
             });
-          } catch (error) {
+            return { key: forkHostKey, host };
+            });
+            const { host } = leased;
+            releaseForkLease = leased.release;
+            forkHost = host;
+            stage = 'host-start';
+            const initResp = await host.ensureStarted();
+            // Child rollout discovery scans this.codexHome. The fork host may be
+            // the first host started by this process, so hydrate it here.
+            forkCodexHome = initResp.codexHome ?? undefined;
+            if (forkCodexHome && !forkAccountId && !forkStorage) this.codexHome = forkCodexHome;
+            // Imported Codex threads may still live under another CODEX_HOME. Resume
+            // already asks the desktop host to link/adopt their state and rollout;
+            // fork must cross the same preparation boundary before thread/fork or the
+            // fork app-server cannot resolve a freshly imported thread.
+            // A first host may have just created the managed state DB needed for imports.
+            stage = 'source-prepare';
+            preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+            if (opts.stripEncryptedReasoning && !historyChecked) {
+              // Check before allocating a child: indexed native history must go through
+              // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
+              await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+            }
+            if (
+              !lastTurnId && (tailTurnsToDrop > 0 || opts.forkAtTimestampMs !== undefined) && !opts.stripEncryptedReasoning
+              && codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])
+            ) {
+              // Older/failed messages have no persisted UI anchor. Paginated threads
+              // reject rollback, so resolve the requested boundary with metadata only
+              // before allocating a child. Never rewrite indexed rollout files.
+              lastTurnId = await resolveForkTurnAnchor(
+                (method, params) => host.request(method, params),
+                opts.sourceSdkSessionId,
+                opts.forkAtTimestampMs,
+              );
+            }
             forkRouteSignal.throwIfAborted();
-            if (!(error instanceof CodexRouteSelectionChangedError) || attempt >= 7) throw error;
+            if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+            const usedNativeForkAnchor = Boolean(
+              lastTurnId && !opts.stripEncryptedReasoning && supportsCodexNativeTurnFork(initResp.userAgent),
+            );
+            const params: ThreadForkParams = {
+              threadId: opts.sourceSdkSessionId,
+              ...(preparedSourcePath ? { path: preparedSourcePath } : {}),
+              ...(!usedNativeForkAnchor ? { persistExtendedHistory: true } : {}),
+              ...(usedNativeForkAnchor ? { lastTurnId } : {}),
+              // 响应体瘦身:fork 后 Cindy 自己的会话数据负责历史展示,thread.turns 全量
+              // 回传只会撑爆单行上限。老 daemon 不认识该字段则保持 legacy 行为 —— 此时
+              // 一次性 host 的隔离仍兜住故障半径。
+              ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
+              ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
+            };
+            // Once dispatched, a lost response may still mean a child was allocated.
+            stage = 'thread-fork';
+            const resp = await host.request<ThreadForkResponse>(Method.ThreadFork, params, {
+              beforeDispatch: () => {
+                forkRouteSignal.throwIfAborted();
+                if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+                forkDispatched = true;
+              },
+            });
+            return { host, resp, usedNativeForkAnchor };
+          } catch (error) {
+            if (!forkDispatched && error instanceof CodexRouteSelectionChangedError && !forkRouteSignal.aborted) {
+              await retireForkHost(true);
+              releaseForkLease?.();
+              releaseForkLease = undefined;
+              forkHost = undefined;
+              if (attempt < 7) continue;
+            }
+            if (opts.stripEncryptedReasoning && error instanceof AgentNotAuthenticatedError) {
+              throw new CodexHistoryRecoveryRequiredError();
+            }
+            throw error;
           }
         }
-      })().catch((error) => {
-        // This is the outgoing source's offline fork host, not a target send.
-        // Missing old credentials must not trap a task on the provider it is leaving.
-        if (opts.stripEncryptedReasoning && error instanceof AgentNotAuthenticatedError) {
-          throw new CodexHistoryRecoveryRequiredError();
-        }
-        throw error;
-      });
-      return { key: forkHostKey, host };
-      });
-      const { host } = leased;
-      releaseForkLease = leased.release;
-      forkHost = host;
-      stage = 'host-start';
-      const initResp = await host.ensureStarted();
-      // Child rollout discovery scans this.codexHome. The fork host may be
-      // the first host started by this process, so hydrate it here.
-      const forkCodexHome = initResp.codexHome ?? undefined;
-      if (forkCodexHome && !forkAccountId && !forkStorage) this.codexHome = forkCodexHome;
-      // Imported Codex threads may still live under another CODEX_HOME. Resume
-      // already asks the desktop host to link/adopt their state and rollout;
-      // fork must cross the same preparation boundary before thread/fork or the
-      // fork app-server cannot resolve a freshly imported thread.
-      // A first host may have just created the managed state DB needed for imports.
-      stage = 'source-prepare';
-      preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
-      if (opts.stripEncryptedReasoning && !historyChecked) {
-        // Check before allocating a child: indexed native history must go through
-        // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
-        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
-      }
-      if (
-        !lastTurnId && (tailTurnsToDrop > 0 || opts.forkAtTimestampMs !== undefined) && !opts.stripEncryptedReasoning
-        && codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])
-      ) {
-        // Older/failed messages have no persisted UI anchor. Paginated threads
-        // reject rollback, so resolve the requested boundary with metadata only
-        // before allocating a child. Never rewrite indexed rollout files.
-        lastTurnId = await resolveForkTurnAnchor(
-          (method, params) => host.request(method, params),
-          opts.sourceSdkSessionId,
-          opts.forkAtTimestampMs,
-        );
-      }
-      const usedNativeForkAnchor = Boolean(
-        lastTurnId && !opts.stripEncryptedReasoning && supportsCodexNativeTurnFork(initResp.userAgent),
-      );
-      const params: ThreadForkParams = {
-        threadId: opts.sourceSdkSessionId,
-        ...(preparedSourcePath ? { path: preparedSourcePath } : {}),
-        ...(!usedNativeForkAnchor ? { persistExtendedHistory: true } : {}),
-        ...(usedNativeForkAnchor ? { lastTurnId } : {}),
-        // 响应体瘦身:fork 后 Cindy 自己的会话数据负责历史展示,thread.turns 全量
-        // 回传只会撑爆单行上限。老 daemon 不认识该字段则保持 legacy 行为 —— 此时
-        // 一次性 host 的隔离仍兜住故障半径。
-        ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
-        ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
-      };
-      // Once dispatched, a lost response may still mean a child was allocated.
-      stage = 'thread-fork';
-      const resp = await host.request<ThreadForkResponse>(Method.ThreadFork, params);
+      })();
       let newSdkSessionId = resp.thread.id;
       if (forkCodexHome && typeof resp.thread.path === 'string') {
         await this.deps.recordCodexThreadLocation?.(newSdkSessionId, forkSqliteHome ?? forkCodexHome, resp.thread.path);
