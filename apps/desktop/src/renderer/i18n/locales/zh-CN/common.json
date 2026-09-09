@@ -10734,6 +10734,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "查看技能详情",
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
@@ -10892,11 +10893,11 @@
         "market": "返回 Market",
         "skillhub": "返回 SkillHub"
       },
-      "uninstall": "卸载",
+      "uninstall": "卸载技能",
       "uninstallDialog": {
-        "title": "卸载 {{name}}？",
-        "description": "将删除本地文件夹\n{{path}}\n此操作不可撤销。",
-        "confirm": "确认卸载",
+        "title": "卸载「{{name}}」？",
+        "description": "本地文件及修改将移入回收站，可恢复。\n\n共用此技能的其他 Agent 也会受影响。云端发布和其他安装位置不受影响。",
+        "confirm": "卸载",
         "cancel": "取消"
       },
       "uninstalledToast": "{{name}} 已卸载",
@@ -11294,6 +11295,27 @@
     "marketEdit": {
       "saved": "市场展示信息已保存",
       "displayNameRequired": "显示名不能为空"
+    },
+    "management": {
+      "disabled": "已禁用",
+      "enabledLabel": "启用技能「{{name}}」",
+      "moreLabel": "管理技能「{{name}}」",
+      "activationHint": "仅控制 Cindy 内的技能加载，新开或重启 Agent 后生效",
+      "enabledToast": "已启用技能「{{name}}」，新开或重启 Agent 后生效",
+      "disabledToast": "已禁用技能「{{name}}」，新开或重启 Agent 后生效",
+      "toggleFailed": "无法保存技能开关，请重试",
+      "uninstallFailed": "无法将技能移入回收站，请检查文件权限后重试",
+      "refreshRequired": "技能正在变更或来源已改变，请刷新列表后重试",
+      "globalScope": "安装位置：全局技能",
+      "projectScope": "项目：{{project}}",
+      "trashDescription": "本地文件及修改将移入回收站，可恢复。",
+      "unlinkDescription": "仅移除本地技能入口，原文件及修改会保留。",
+      "sharedImpact": "共用此技能的其他 Agent 也会受影响。云端发布和其他安装位置不受影响。",
+      "managedElsewhere": "此技能由其他包或共享目录管理，需在其来源处移除",
+      "managedByPlugin": "此技能由插件提供，请到所属插件页面管理。",
+      "cleanupIncomplete": "“{{name}}”的卸载清理尚未完成。请重试；重开技能中心后也可继续。清理完成前无法重新安装。",
+      "retryCleanup": "重试清理",
+      "cleanupComplete": "清理完成"
     }
   },
   "makerExperimental": {

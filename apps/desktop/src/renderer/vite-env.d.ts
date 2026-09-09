@@ -3164,11 +3164,14 @@ interface ElectronAPI {
 
   // ── SkillHub (xdt-maker-技能中心 v0.2) ──
   skillhub: {
+    setEnabled: (params: { absolutePath: string; skillId?: string; enabled: boolean }) => Promise<{ cindyEnabled: boolean }>;
+    onLocalStateChanged: (callback: () => void) => () => void;
     scan: (params: { projects?: SkillhubProjectInput[] }) => Promise<{
       success: boolean;
       error?: string;
       skills?: SkillhubSkill[];
       sources?: SkillhubSourceReport[];
+      pendingCleanups?: Array<{ token: string; name: string }>;
     }>;
     readSkill: (params: { mdPath: string }) => Promise<{
       success: boolean;
@@ -3501,7 +3504,10 @@ interface ElectronAPI {
     cancelInstall: (name: string) => Promise<{ success: boolean }>;
     uninstall: (
       absolutePath: string,
-    ) => Promise<{ success: true } | { success: false; errorCode: string; message: string }>;
+      skillId?: string,
+    ) => Promise<{ success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }>;
+    retryUninstallCleanup: (token: string) => Promise<{ complete: boolean }>;
+
     /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
     pickLocal: () => Promise<
       | { success: true; canceled: true }
@@ -6654,6 +6660,11 @@ interface SkillhubFileEntry {
 }
 
 interface SkillhubSkill {
+  cindyEnabled?: boolean;
+  canUninstall?: boolean;
+  managedByPlugin?: boolean;
+  uninstallLinkOnly?: boolean;
+  discoveryPaths?: string[];
   id: string;
   /** URL 匹配键 — 不含 engine，和路由格式一致，用于侧栏选中高亮。 */
   urlKey: string;
@@ -6691,6 +6702,8 @@ interface SkillhubSkill {
    * Only set for kind=skill; command/agent always null.
    */
   registryEntry: StoredInstall | null;
+  /** Original market slug from the registry joined by physical path. */
+  registrySkillName?: string;
 }
 
 type SkillhubSourceStatus =

@@ -1,3 +1,4 @@
+import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 /**
  * apps/desktop/src/main/maker-host
  *
@@ -1013,6 +1014,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      getDisabledSkillPaths: readDisabledSkillPaths,
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
       binaryPath: claudePath,
@@ -1328,6 +1330,7 @@ export function getMaker(): Maker {
         ?? 'default';
     };
     const codexAgent = new CodexAgent({
+      getDisabledSkillPaths: readDisabledSkillPaths,
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,

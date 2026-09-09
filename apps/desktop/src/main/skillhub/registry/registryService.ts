@@ -182,11 +182,19 @@ export async function updateInstall(
  * 如果是该 skill 最后一条 install → 整个文件 unlink
  * 不存在的 (name, path) → no-op，不抛错
  */
-export async function removeInstall(skillName: string, installPath: string): Promise<void> {
+export async function removeInstall(
+  skillName: string,
+  installPath: string,
+  condition?: { expected: StoredInstall; canMutate: () => boolean; shouldRemove: () => boolean },
+): Promise<void> {
   const normalizedPath = path.normalize(installPath);
 
   await withLock(skillName, async () => {
     const existing = await readManifestWithBackup(skillName);
+    if (condition) {
+      if (!condition.canMutate()) throw new Error('Skill mutation context changed');
+      if (JSON.stringify(existing?.installs[normalizedPath]) !== JSON.stringify(condition.expected) || !condition.shouldRemove()) return;
+    }
     if (!existing || !existing.installs[normalizedPath]) {
       return; // no-op
     }

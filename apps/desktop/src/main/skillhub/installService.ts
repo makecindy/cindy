@@ -5,7 +5,7 @@
  *   install:  Hub broker download info → fetch signed zip → sha256 校验
  *             → JSZip 解压到 staging → final switch 到目标位置
  *             → registry.addInstall → best-effort Claude symlink → emit done
- *   uninstall: 路径白名单校验 → rm 目标目录 → registry.removeInstall
+ *   uninstall: 路径白名单校验 → 系统回收站 → registry.removeInstall
  *
  * 安装目标：
  *   - 未传 installPath → 默认 `~/.agents/skills/<name>/`（双引擎共享）
@@ -26,7 +26,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { app, net } from 'electron';
+import { app, net, shell } from 'electron';
+import { isLocalSkillTargetCurrent, type LocalSkillTarget } from './localSkillTarget';
+import { isCindySkillEnabled, setCindySkillEnabled, snapshotSkillActivation, clearSkillActivationSnapshot } from './activationPreferences';
+import { fileIdentity, writeUninstallCleanup, readUninstallCleanup, listUninstallCleanups, deleteUninstallCleanup, type UninstallCleanup } from './uninstallJournal';
 import JSZip from 'jszip';
 import { skillhubApiFetch } from './hubApi';
 import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
@@ -38,13 +41,14 @@ import {
 import { registryService } from './registry';
 import type { StoredInstall } from './registry/types';
 import { computeFolderHash } from './folderHash';
-import { getSkillInstallLockOwner, tryAcquireSkillInstallLock } from './installLock';
+import { getSkillInstallLockOwner, skillInstallLockKey, tryAcquireSkillInstallLock } from './installLock';
+import { acquireSharedSkillMutationLease, skillMutationNames, type SkillMutationRelease } from './sharedMutationLease';
 import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
 } from '../maker-host/shared-global-skills.js';
-import { clearIgnoredAutoSyncSkill, ignoreAutoSyncSkill, isKnownAutoSyncCandidateSkill } from './autoSyncPreferences';
+import { clearIgnoredAutoSyncSkill, ignoreAutoSyncSkill, listIgnoredAutoSyncSkills, isKnownAutoSyncCandidateSkill } from './autoSyncPreferences';
 import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 import { createLogger } from '../logger';
@@ -138,7 +142,7 @@ export type InstallResult =
   | { success: false; errorCode: InstallErrorCode; message: string };
 
 export type UninstallResult =
-  | ({ success: true } & ProjectSkillMutationMetadata)
+  | ({ success: true; cleanupToken?: string } & ProjectSkillMutationMetadata)
   | { success: false; errorCode: InstallErrorCode; message: string };
 
 // ── 内部状态：记录每个 name 当前正在跑的 AbortController ────────────────────────
@@ -177,13 +181,19 @@ async function pathExists(p: string): Promise<boolean> {
  * Skill 目录变化后维护项目级双 Agent 兼容链接，并返回需要失效缓存的 cwd。
  * 链接维护本身保持 best-effort；即使失败也返回 cwd，让调用层刷新实际磁盘状态。
  */
-async function reconcileProjectSkillLinksForPaths(...skillPaths: string[]): Promise<string | undefined> {
+function projectWorkingDirForSkillPaths(...skillPaths: string[]): string | undefined {
   const projectWorkingDir = skillPaths
     .map((skillPath) => projectWorkingDirFromSkillPath(skillPath))
     .find((workingDir): workingDir is string => Boolean(workingDir));
   if (!projectWorkingDir || path.resolve(projectWorkingDir) === path.resolve(os.homedir())) {
     return undefined;
   }
+  return projectWorkingDir;
+}
+
+async function reconcileProjectSkillLinksForPaths(...skillPaths: string[]): Promise<string | undefined> {
+  const projectWorkingDir = projectWorkingDirForSkillPaths(...skillPaths);
+  if (!projectWorkingDir) return undefined;
 
   try {
     const linkResult = await prepareSharedProjectSkillLinks({ workingDir: projectWorkingDir });
@@ -515,7 +525,14 @@ export async function install(
     return false;
   };
 
+  let releaseShared: SkillMutationRelease | null = null;
   try {
+    releaseShared = await acquireSharedSkillMutationLease([p.name]);
+    if (!releaseShared) {
+      const message = skillLockBusyMessage(p.name);
+      onProgress({ phase: 'failed', name: p.name, errorCode: 'INTERNAL', message });
+      return { success: false, errorCode: 'INTERNAL', message };
+    }
     // 链接拓扑必须在持锁后读取，避免 install / learn final-switch 之间的 TOCTOU。
     const finalDir = await resolvePhysicalInstallDir(logicalFinalDir, p.name);
     const stagingDir = path.join(path.dirname(finalDir), `.xdt-installing-${p.name}-${rand()}`);
@@ -794,6 +811,12 @@ export async function install(
       for (const { installPath } of physicalRegistrySnapshots) {
         await registryService.removeInstall(p.name, installPath);
       }
+      // Fresh installs reset a stale override only after registration succeeds.
+      // A failed reset uses the same file/registry rollback; existing installs
+      // keep their preference, including when a later backup step fails.
+      if (!rollbackState.backupDir && !isCindySkillEnabled(finalDir)) {
+        await setCindySkillEnabled(finalDir, true, () => !checkAbort());
+      }
     } catch (err) {
       log.error('[skillInstall] registry sync failed:', err);
       const registryMessage = err instanceof Error ? err.message : String(err);
@@ -881,14 +904,14 @@ export async function install(
         log.warn('[skillInstall] claude symlink failed (non-fatal):', claudeLink, err);
       }
     }
-    const projectWorkingDir = await reconcileProjectSkillLinksForPaths(logicalFinalDir, finalDir);
+    const projectWorkingDir = await releaseShared.run(() => reconcileProjectSkillLinksForPaths(logicalFinalDir, finalDir));
     try {
       const ownerId = getCurrentDataOwnerId();
       const linkResult = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-        prepareSharedGlobalSkillLinks({
+        releaseShared!.run(() => prepareSharedGlobalSkillLinks({
           assertOwnerStable: () =>
             assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-        }),
+        })),
       );
       for (const warning of linkResult.warnings) {
         log.warn('[skillInstall] shared global skill link warning:', warning);
@@ -907,6 +930,7 @@ export async function install(
       ...(projectWorkingDir ? { projectWorkingDir } : {}),
     };
   } finally {
+    await releaseShared?.();
     inflight.delete(p.name);
     releaseLock();
   }
@@ -914,29 +938,25 @@ export async function install(
 
 // ── uninstall ───────────────────────────────────────────────────────────────
 
-/**
- * 卸载一个 skill。
- *
- * 防御：absolutePath 必须落在受支持的 skill discovery root 下 —— 拒绝删除任意路径。
- * UI 层（F-UI-4）在按钮分流时已确保"未注册的本地技能"不显示卸载按钮，这层是双保险。
- *
- * 鉴权：
- *   - origin=imported / learned → 本地产物（导入 / 蒸馏），不要求登录 / SkillHub 云能力
- *   - 其它（市场 installed 等）→ 仍要求数据空间 + canUseSkillHubCloud
+/** Move a registered installation or Main-scanned standalone Skill to the system trash.
+ * Local management is available offline. External imports remove only their links.
  */
 export async function uninstall(
   absolutePath: string,
+  target?: LocalSkillTarget,
+  canMutate: () => boolean = () => true,
 ): Promise<UninstallResult> {
   // 防御：resolve 后验证路径是精确的 skill 根目录（只允许一层 slug，防 traversal）
   let resolved: string;
   try {
-    resolved = fs.realpathSync(absolutePath);
+    // Match the scan snapshot's native canonical path, including Windows 8.3 aliases.
+    resolved = fs.realpathSync.native(absolutePath);
   } catch {
     resolved = path.resolve(absolutePath);
   }
   const normResolved = resolved.replace(/\\/g, '/');
   // 必须匹配 <prefix>/.{claude,agents,codex}/skills/<slug> 形式，slug 不含 /
-  if (!/\/(\.(claude|agents|codex)\/skills|codex-home\/skills(\/\.system)?)\/[^/]+$/.test(normResolved)) {
+  if (!target && !/\/(\.(claude|agents|codex)\/skills|codex-home\/skills)\/[^/.][^/]*$/.test(normResolved)) {
     return { success: false, errorCode: 'INTERNAL', message: 'absolutePath 不在合法 skill 目录下' };
   }
 
@@ -945,48 +965,57 @@ export async function uninstall(
 
   // 共享安装锁:同名 install / learn apply 的 final-switch 进行中时拒绝删除,
   // 避免 rm 掉对方刚切入的目录、registry 写入交错。
-  const releaseLock = tryAcquireSkillInstallLock(skillName, 'market-uninstall');
-  if (!releaseLock) {
-    return { success: false, errorCode: 'INTERNAL', message: skillLockBusyMessage(skillName) };
-  }
-  try {
-    // 先读 registry 再判鉴权：本地导入 / 蒸馏产物允许离线卸载。
-    const registryMatch = await findRegistryInstallForPath(skillName, absolutePath, resolved);
-    if (!registryMatch) {
-      return { success: false, errorCode: 'INTERNAL', message: '该 skill 无安装记录，拒绝删除' };
+  const releaseLocks: Array<() => void> = [];
+  const lockNames = skillMutationNames([skillName, path.basename(absolutePath),
+    path.basename(target?.operationPath ?? absolutePath), ...(target?.aliases ?? []).map((alias) => path.basename(alias))]);
+  // An imported discovery link can have a different name from its source. Install
+  // replaces that entry under its discovery name, so hold both locks through trash.
+  for (const lockName of lockNames) {
+    const release = tryAcquireSkillInstallLock(lockName, 'market-uninstall');
+    if (!release) {
+      for (const unlock of releaseLocks) unlock();
+      return { success: false, errorCode: 'INTERNAL', message: skillLockBusyMessage(lockName) };
     }
-
-    const origin = registryMatch.entry.origin;
-    const isOfflineLocalOrigin = origin === 'imported' || origin === 'learned';
-    if (!isOfflineLocalOrigin) {
-      const ownerId = getCurrentDataOwnerId();
-      if (!ownerId) {
-        return { success: false, errorCode: 'AUTH_REQUIRED', message: '无可用数据空间' };
-      }
-      if (!getAppCapabilities().canUseSkillHubCloud) {
-        return {
-          success: false,
-          errorCode: 'AUTH_REQUIRED',
-          message: 'SkillHub 卸载需要 Cindy 云端账号',
-        };
-      }
+    releaseLocks.push(release);
+  }
+  let releaseShared: SkillMutationRelease | null = null;
+  try {
+    releaseShared = await acquireSharedSkillMutationLease(lockNames);
+    if (!releaseShared) return { success: false, errorCode: 'INTERNAL', message: skillLockBusyMessage(skillName) };
+    // Keep the exact registry identity for metadata cleanup after trash succeeds.
+    const registryMatch = target?.linkOnly
+      ? (await registryService.listAllInstalls()).find((record) =>
+        [skillName, path.basename(target.operationPath)].some((name) => skillInstallLockKey(name) === skillInstallLockKey(record.skillName))
+        && target.aliases.some((alias) => pathTextEquals(path.resolve(alias), path.resolve(record.installPath)))) ?? null
+      : await findRegistryInstallForPath(skillName, absolutePath, resolved);
+    if (!registryMatch && !target) {
+      return { success: false, errorCode: 'INTERNAL', message: 'No installation record or current local Skill grant' };
+    }
+    if (target && (target.sourcePath !== resolved || !isLocalSkillTargetCurrent(target))) {
+      return { success: false, errorCode: 'INTERNAL', message: 'Skill source changed; refresh and retry' };
     }
 
     const cloudUserId = getCurrentUserId();
     return await uninstallLocked(
       absolutePath,
       resolved,
-      skillName,
+      registryMatch?.skillName ?? skillName,
       cloudUserId,
       registryMatch,
+      releaseShared,
+      lockNames,
+      target,
+      canMutate,
     );
   } finally {
-    releaseLock();
+    await releaseShared?.();
+    for (const unlock of releaseLocks) unlock();
   }
 }
 
 /** Registry entry plus the exact key that must be removed after uninstall. */
 interface RegistryInstallMatch {
+  skillName: string;
   installPath: string;
   entry: StoredInstall;
 }
@@ -1014,100 +1043,207 @@ async function findRegistryInstallForPath(
   ]);
   for (const installPath of candidatePaths) {
     const entry = await registryService.getInstall(skillName, installPath).catch(() => null);
-    if (entry) return { installPath, entry };
+    if (entry) return { skillName, installPath, entry };
   }
 
   const manifest = await registryService.readManifest(skillName).catch(() => null);
-  if (!manifest) return null;
-  for (const [installPath, entry] of Object.entries(manifest.installs)) {
+  for (const [installPath, entry] of Object.entries(manifest?.installs ?? {})) {
     let realInstallPath: string;
     try {
       realInstallPath = fs.realpathSync(installPath);
     } catch {
       // 目录已删时仍允许用规范化路径与候选路径直接比对
       if (candidatePaths.some((candidate) => pathTextEquals(path.normalize(installPath), candidate))) {
-        return { installPath, entry };
+        return { skillName, installPath, entry };
       }
       continue;
     }
     if (candidatePaths.some((candidate) => resolvedPathEquals(realInstallPath, candidate))) {
-      return { installPath, entry };
+      return { skillName, installPath, entry };
     }
+  }
+  // A case-only directory rename does not rename the registry manifest. Resolve
+  // its original key by physical identity; do not loosen manifest self-validation.
+  const installs = await registryService.listAllInstalls();
+  for (const record of installs) {
+    if (skillInstallLockKey(record.skillName) !== skillInstallLockKey(skillName)) continue;
+    try {
+      if (fs.realpathSync.native(record.installPath) === resolved) return record;
+    } catch { /* Missing records do not prove ownership of a live source. */ }
   }
   return null;
 }
 
-/** uninstall 的持锁主体（锁获取/释放在 uninstall 外壳完成）。 */
+/** The durable receipt owns cleanup; window grants only authorize execution. */
 async function uninstallLocked(
   absolutePath: string,
   resolved: string,
   skillName: string,
   cloudUserId: string | null,
-  registryMatch: RegistryInstallMatch,
+  registryMatch: RegistryInstallMatch | null,
+  lease: SkillMutationRelease,
+  lockNames: string[],
+  target?: LocalSkillTarget,
+  canMutate: () => boolean = () => true,
 ): Promise<UninstallResult> {
-  const { installPath: registryInstallPath, entry: registryEntry } = registryMatch;
-
-  if (!(await pathExists(resolved))) {
-    // 目录已经不在 → 静默成功，顺便清 registry 残留
-    await registryService.removeInstall(skillName, registryInstallPath).catch(() => {});
-    if (cloudUserId && await shouldRecordAutoSyncIgnore(skillName, registryEntry, cloudUserId)) {
-      await ignoreAutoSyncSkill(skillName, cloudUserId).catch((err) => {
-        log.warn('[skillInstall] record auto-sync ignore failed:', err);
-      });
-    }
-    const projectWorkingDir = await reconcileProjectSkillLinksForPaths(resolved, absolutePath);
-    return { success: true, ...(projectWorkingDir ? { projectWorkingDir } : {}) };
-  }
-
-  try {
-    await fs.promises.rm(resolved, { recursive: true, force: true });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { success: false, errorCode: 'WRITE_FAILED', message };
-  }
-
-  // 如果原始路径是 symlink 指向已删目录，也一并清掉
-  if (resolved !== path.resolve(absolutePath)) {
-    await fs.promises.unlink(absolutePath).catch(() => {});
-  }
-
-  // 删 registry 条目。失败仅 warn，因为文件已删，scanner 会孤儿清理。
-  try {
-    await registryService.removeInstall(skillName, registryInstallPath);
-  } catch (err) {
-    log.warn('[skillInstall] uninstall registry.removeInstall failed:', err);
-  }
-
-  if (cloudUserId && await shouldRecordAutoSyncIgnore(skillName, registryEntry, cloudUserId)) {
-    await ignoreAutoSyncSkill(skillName, cloudUserId).catch((err) => {
-      log.warn('[skillInstall] record auto-sync ignore failed:', err);
-    });
-  }
-
-  // best-effort: 清理指向已删目录的 symlink（canonical + agent-link 场景）
-  const candidates = [
+  const ownerId = getCurrentDataOwnerId();
+  if (!ownerId || !canMutate()) return { success: false, errorCode: 'CANCELLED', message: 'Skill mutation context changed' };
+  const allowed = () => ownerId === getCurrentDataOwnerId() && canMutate();
+  const recordIgnore = !!(registryMatch && await shouldRecordAutoSyncIgnore(skillName, registryMatch.entry, cloudUserId ?? undefined));
+  const wasIgnored = recordIgnore && (await listIgnoredAutoSyncSkills(cloudUserId ?? undefined)).has(skillName);
+  const knownEntries = [...(target?.aliases ?? []), absolutePath, resolved,
+    ...(registryMatch ? [registryMatch.installPath] : [])];
+  // A repair can finish after the UI scan but before this lease. Include the
+  // sibling discovery entries for each known scope in the locked snapshot.
+  const compatibilityEntries = knownEntries.flatMap((entry) => {
+    if (!/\/\.(?:agents|claude|codex)\/skills\/[^/]+$/.test(entry.replace(/\\/g, '/'))) return [];
+    const base = path.dirname(path.dirname(path.dirname(entry)));
+    return ['.agents', '.claude', '.codex'].map((root) => path.join(base, root, 'skills', path.basename(entry)));
+  });
+  const candidates = target?.linkOnly ? [...new Set([...target.aliases, target.operationPath])] : [...new Set([
+    ...knownEntries, ...compatibilityEntries,
     path.join(os.homedir(), '.claude', 'skills', skillName),
     path.join(os.homedir(), '.codex', 'skills', skillName),
     path.join(os.homedir(), '.agents', 'skills', skillName),
-  ].filter((c) => c !== path.normalize(absolutePath) && c !== resolved);
-  for (const c of candidates) {
-    try {
-      const st = await fs.promises.lstat(c);
-      if (st.isSymbolicLink()) {
-        const linkTarget = path.resolve(path.dirname(c), await fs.promises.readlink(c));
-        if (!(await pathExists(linkTarget))) {
-          await fs.promises.unlink(c);
-        }
+  ])];
+  const operationPath = target?.operationPath ?? resolved;
+  let cleanup: UninstallCleanup;
+  try {
+    const sourceIdentity = fileIdentity(resolved, true);
+    const operationIdentity = fileIdentity(operationPath);
+    if (!allowed() || !sourceIdentity || !operationIdentity || (target && !isLocalSkillTargetCurrent(target))
+      || candidates.some((candidate) => !lockNames.includes(skillInstallLockKey(path.basename(candidate))))) {
+      throw new Error('Skill source changed; refresh and retry');
+    }
+    const links = candidates.flatMap((candidate) => {
+      try {
+        return fs.lstatSync(candidate).isSymbolicLink() && fs.realpathSync.native(candidate) === resolved
+          ? [{ path: candidate, value: fs.readlinkSync(candidate), identity: fileIdentity(candidate)! }] : [];
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
       }
-    } catch { /* ignore */ }
+    });
+    cleanup = {
+      version: 1, token: crypto.randomUUID(), ownerId, phase: 'prepared', lockNames,
+      skillName, resolved, sourceIdentity, operationPath, operationIdentity,
+      registryMatch, links, linkOnly: target?.linkOnly ?? false,
+      activation: target?.linkOnly ? null : snapshotSkillActivation(resolved),
+      undoIgnore: recordIgnore && !wasIgnored, cloudUserId,
+    };
+    // Journal first, then the shared barrier, then side effects. A crash in any
+    // gap leaves either no effects or enough information to finish without trashing twice.
+    writeUninstallCleanup(cleanup);
+    lease.retainUntilComplete(cleanup.token);
+  } catch (error) {
+    return { success: false, errorCode: 'WRITE_FAILED', message: error instanceof Error ? error.message : String(error) };
   }
 
-  const projectWorkingDir = await reconcileProjectSkillLinksForPaths(resolved, absolutePath);
+  let trashError: unknown;
+  try {
+    if (cleanup.undoIgnore) await ignoreAutoSyncSkill(skillName, cloudUserId ?? undefined);
+    if (!allowed() || (target && !isLocalSkillTargetCurrent(target))) throw new Error('Skill source changed; refresh and retry');
+    await shell.trashItem(operationPath);
+    cleanup.phase = 'removed';
+    writeUninstallCleanup(cleanup);
+  } catch (error) { trashError = error; }
 
-  return { success: true, ...(projectWorkingDir ? { projectWorkingDir } : {}) };
+  // Even a rejected trash call can have removed its entry. Recovery inspects
+  // the original identity; it never repeats the destructive operation.
+  const complete = await finishUninstallCleanup(cleanup, lease, allowed);
+  if (trashError && cleanup.phase === 'completed' && fileIdentity(operationPath) === cleanup.operationIdentity) {
+    return { success: false, errorCode: 'WRITE_FAILED', message: trashError instanceof Error ? trashError.message : String(trashError) };
+  }
+  // Cache invalidation needs the cwd, not a broad link reconciliation: that
+  // would project a remaining import back into an entry we just removed.
+  const projectWorkingDir = projectWorkingDirForSkillPaths(operationPath, resolved, absolutePath);
+  return { success: true, ...(!complete ? { cleanupToken: cleanup.token } : {}),
+    ...(projectWorkingDir ? { projectWorkingDir } : {}) };
 }
 
-async function shouldRecordAutoSyncIgnore(skillName: string, registryEntry: StoredInstall, userId: string): Promise<boolean> {
+/** Only the current profile/data owner can receive a new window grant. */
+export function listPendingUninstallCleanups(): Array<{ token: string; name: string }> {
+  const ownerId = getCurrentDataOwnerId();
+  return listUninstallCleanups().filter((record) => record.ownerId === ownerId)
+    .map((record) => ({ token: record.token, name: record.skillName }));
+}
+
+async function finishUninstallCleanup(
+  cleanup: UninstallCleanup,
+  lease: SkillMutationRelease,
+  canMutate: () => boolean,
+): Promise<boolean> {
+  if (!canMutate()) return false;
+  try {
+    if (cleanup.phase !== 'completed') {
+      if (cleanup.phase === 'prepared' && fileIdentity(cleanup.operationPath) === cleanup.operationIdentity) {
+        // The trash operation never committed (or the original was restored).
+        if (cleanup.undoIgnore) await clearIgnoredAutoSyncSkill(cleanup.skillName, cleanup.cloudUserId ?? undefined);
+      } else {
+        for (const link of cleanup.links) {
+          if (!canMutate()) return false;
+          if (fileIdentity(link.path) !== link.identity || fs.readlinkSync(link.path) !== link.value) continue;
+          const currentTarget = fileIdentity(link.path, true);
+          // Remove only links still serving the old source (external imports),
+          // or broken links whose source is still absent. A replaced source wins.
+          if ((cleanup.linkOnly && currentTarget === cleanup.sourceIdentity
+              && fileIdentity(cleanup.operationPath) !== cleanup.operationIdentity)
+            || (currentTarget === null && fileIdentity(cleanup.resolved, true) === null)) fs.unlinkSync(link.path);
+        }
+        const { registryMatch } = cleanup;
+        if (registryMatch && fileIdentity(registryMatch.installPath) === null) {
+          await registryService.removeInstall(registryMatch.skillName, registryMatch.installPath, {
+            expected: registryMatch.entry, canMutate,
+            shouldRemove: () => fileIdentity(registryMatch.installPath) === null,
+          });
+        }
+        if (cleanup.activation && fileIdentity(cleanup.resolved, true) === null) {
+          await clearSkillActivationSnapshot(cleanup.activation,
+            () => canMutate() && fileIdentity(cleanup.resolved, true) === null);
+        }
+      }
+      if (!canMutate()) return false;
+      // Completion is durable before the barrier opens. Failure to delete a
+      // completed receipt can only retry finalization, never old cleanup effects.
+      writeUninstallCleanup({ ...cleanup, phase: 'completed' });
+      cleanup.phase = 'completed';
+    }
+    lease.complete(cleanup.token);
+    deleteUninstallCleanup(cleanup.token);
+    return true;
+  } catch (error) {
+    log.warn('[skillInstall] uninstall cleanup remains pending:', error);
+    return false;
+  }
+}
+
+export async function retryUninstallCleanup(token: string, canMutate: () => boolean): Promise<boolean> {
+  const cleanup = readUninstallCleanup(token);
+  if (!cleanup) return true;
+  const allowed = () => cleanup.ownerId === getCurrentDataOwnerId() && canMutate();
+  if (!allowed()) return false;
+  const releases: Array<() => void> = [];
+  let lease: SkillMutationRelease | null = null;
+  try {
+    for (const name of cleanup.lockNames) {
+      const release = tryAcquireSkillInstallLock(name, 'market-uninstall');
+      if (!release) return false;
+      releases.push(release);
+    }
+    lease = await acquireSharedSkillMutationLease(cleanup.lockNames, token);
+    if (!lease) return false;
+    // A second process may have completed the same receipt while this caller
+    // waited for a lease. Always re-read under the acquired lock.
+    const current = readUninstallCleanup(token);
+    if (!current) return true;
+    return await finishUninstallCleanup(current, lease, allowed);
+  } finally {
+    await lease?.();
+    for (const release of releases) release();
+  }
+}
+
+async function shouldRecordAutoSyncIgnore(skillName: string, registryEntry: StoredInstall, userId?: string): Promise<boolean> {
   if (registryEntry.autoSynced === true) return true;
   if (registryEntry.origin !== 'installed' || registryEntry.autoSynced !== undefined) return false;
   // 兼容 auto-sync 首版：当时 registry 没有 autoSynced 字段，候选集合来自最近一次 auto-sync 配置。

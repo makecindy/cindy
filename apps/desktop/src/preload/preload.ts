@@ -502,6 +502,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
 const fanOutDbSlimmingStartupProgress = createIpcFanOut(
   DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL,
 );
@@ -2961,6 +2962,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ~/.claude/{skills,commands,agents}，project 来源由调用方传入的 projectRoot 决定。
   // 返回商店层 Skill[] 与兼容用 sources[]；scan 本身只读。
   skillhub: {
+    setEnabled: (params: { absolutePath: string; skillId?: string; enabled: boolean }): Promise<{ cindyEnabled: boolean }> =>
+      ipcRenderer.invoke('skillhub:set-enabled', params),
+    onLocalStateChanged: fanOutSkillhubLocalStateChanged,
     scan: (params: {
       projects?: import('../main/skillhub/scanner').ProjectInput[];
     }): Promise<{
@@ -2968,6 +2972,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       error?: string;
       skills?: import('../main/skillhub/scanner').Skill[];
       sources?: import('../main/skillhub/scanner').SourceReport[];
+      pendingCleanups?: Array<{ token: string; name: string }>;
     }> => ipcRenderer.invoke('skillhub:scan', params),
 
     readSkill: (params: {
@@ -3386,11 +3391,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancelInstall: (name: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('skillhub:cancel-install', { name }),
 
-    // 卸载（删本地文件夹）—— main 会校验目标必须有 registry 记录
+    // Main 原生确认并复核当前扫描实体后移入系统回收站。
     uninstall: (
       absolutePath: string,
-    ): Promise<{ success: true } | { success: false; errorCode: string; message: string }> =>
-      ipcRenderer.invoke('skillhub:uninstall', { absolutePath }),
+      skillId?: string,
+    ): Promise<{ success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
+      ipcRenderer.invoke('skillhub:uninstall', { absolutePath, skillId }),
+
+    retryUninstallCleanup: (token: string): Promise<{ complete: boolean }> =>
+      ipcRenderer.invoke('skillhub:retry-uninstall-cleanup', token),
 
     /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
     pickLocal: (): Promise<

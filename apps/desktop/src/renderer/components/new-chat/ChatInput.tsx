@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
 import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -4201,6 +4202,13 @@ export function ChatInput({
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
+
+  useEffect(() => {
+    return window.electronAPI.skillhub?.onLocalStateChanged?.(() => {
+      void reloadSlashCommands({ forceReload: true });
+    });
+  }, [reloadSlashCommands]);
+
   useEffect(
     () =>
       window.electronAPI.maker.onPiPackagesChanged(() => {
@@ -9019,6 +9027,13 @@ export function ChatInput({
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}
+              allowProjectSkillDetails={!!sessionId}
+              onOpenSkillDetails={!isRemoteSession && !deviceLinkDeviceId ? (cmd) => {
+                if (cmd.kind !== 'agent-skill' || cmd.source !== 'skill' || !cmd.path || cmd.origin === 'package') return;
+                if (!sessionId && cmd.scope !== 'global' && cmd.scope !== 'user') return;
+                draftSaveSchedulerRef.current?.flush();
+                navigate(buildLocalSkillPathRoute(cmd.path, { scope: cmd.scope, workingDir }), { state: { resetHistory: true } });
+              } : undefined}
               onClose={() => {
                 if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
               }}

@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fsp } from 'node:fs';
+import fs, { promises as fsp } from 'node:fs';
 
 type LinkStatus = 'linked' | 'kept' | 'conflict' | 'skipped' | 'error';
 
@@ -12,6 +12,7 @@ interface SkillEntry {
   path: string;
   realPath: string;
   isSymlink: boolean;
+  identity: string;
 }
 
 interface LinkAction {
@@ -54,6 +55,28 @@ export interface SharedProjectSkillLinksResult {
 
 interface PrepareProjectOptions {
   workingDir: string;
+}
+
+// Keep read-only path helpers importable outside Electron. Actual mutations
+// resolve the Main-owned lease only when they execute.
+async function withLinkMutation<T>(names: string[], operation: () => Promise<T>): Promise<T | undefined> {
+  const { withSkillMutation } = await import('../skillhub/sharedMutationLease');
+  return withSkillMutation(names, operation);
+}
+
+function sourceIdentity(file: string): string | null {
+  try {
+    const stat = fs.statSync(file);
+    return JSON.stringify([normalizeForCompare(fs.realpathSync.native(file)), stat.dev, stat.ino, stat.birthtimeMs]);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function linkIdentity(file: string): string {
+  const stat = fs.lstatSync(file);
+  return JSON.stringify([stat.dev, stat.ino, stat.birthtimeMs, fs.readlinkSync(file)]);
 }
 
 function normalizeForCompare(value: string): string {
@@ -151,8 +174,13 @@ async function listSkillEntries(
     const skillPath = path.join(rootPath, ent.name);
     if (!(await hasSkillFile(skillPath))) continue;
 
-    const realPath = await realPathOrNull(skillPath);
-    if (!realPath) continue;
+    let realPath: string;
+    let identity: string | null;
+    try {
+      realPath = normalizeForCompare(fs.realpathSync.native(skillPath));
+      identity = sourceIdentity(skillPath);
+    } catch { continue; }
+    if (!identity) continue;
 
     skills.push({
       name: ent.name,
@@ -160,6 +188,7 @@ async function listSkillEntries(
       path: skillPath,
       realPath,
       isSymlink: ent.isSymbolicLink(),
+      identity,
     });
   }
   return skills;
@@ -203,6 +232,8 @@ async function cleanupBrokenManagedLinks(
     if (!ent.isSymbolicLink()) continue;
 
     const linkPath = path.join(rootPath, ent.name);
+    let identity: string;
+    try { identity = linkIdentity(linkPath); } catch { continue; }
     if (await realPathOrNull(linkPath)) continue;
 
     let targetPath: string;
@@ -222,12 +253,16 @@ async function cleanupBrokenManagedLinks(
     );
     if (!pointsIntoCurrentRoots && !matchesMovedProjectLink) continue;
 
-    assertMutationAllowed?.();
     try {
-      await fsp.unlink(linkPath);
-      changed = true;
+      const removed = await withLinkMutation([ent.name, path.basename(targetPath)], async () => {
+        if (linkIdentity(linkPath) !== identity || sourceIdentity(linkPath) !== null) return false;
+        assertMutationAllowed?.();
+        fs.unlinkSync(linkPath);
+        return true;
+      });
+      changed = removed === true || changed;
     } catch {
-      // Broken symlink cleanup is best-effort; later link creation will report conflicts if needed.
+      // Replaced entries and inaccessible paths are not proof of a broken link.
     }
   }
   return changed;
@@ -302,12 +337,13 @@ async function linkEntriesIntoRoot(
     }
 
     const targetPath = path.join(targetRoot, entry.name);
-    const result = await ensureDirectoryLink(
-      entry,
-      targetPath,
-      useRelativeTarget,
-      assertMutationAllowed,
-    );
+    const result = await withLinkMutation([entry.name, path.basename(entry.realPath)], async () => {
+      if (sourceIdentity(entry.path) !== entry.identity) return { status: 'skipped' as const, changed: false };
+      return ensureDirectoryLink(entry, targetPath, useRelativeTarget, () => {
+        assertMutationAllowed?.();
+        if (sourceIdentity(entry.path) !== entry.identity) throw new Error('Skill source changed during link projection');
+      });
+    }) ?? { status: 'skipped' as const, changed: false };
     changed = changed || result.changed;
     const action: LinkAction = {
       name: entry.name,

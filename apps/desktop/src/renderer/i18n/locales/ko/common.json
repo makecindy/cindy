@@ -10734,6 +10734,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "스킬 상세 보기",
     "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
@@ -10892,11 +10893,11 @@
         "market": "Market 으로 돌아가기",
         "skillhub": "SkillHub 로 돌아가기"
       },
-      "uninstall": "제거",
+      "uninstall": "스킬 제거",
       "uninstallDialog": {
-        "title": "{{name}} 을 제거하시겠습니까?",
-        "description": "로컬 폴더를 삭제합니다\n{{path}}\n이 작업은 되돌릴 수 없습니다.",
-        "confirm": "제거 확인",
+        "title": "“{{name}}”을 제거하시겠습니까?",
+        "description": "로컬 파일과 수정 내용을 휴지통으로 옮깁니다. 복원할 수 있습니다.\n\n이 스킬을 공유하는 다른 Agent도 영향을 받습니다. 게시된 버전과 다른 위치에 설치된 스킬에는 영향을 주지 않습니다.",
+        "confirm": "제거",
         "cancel": "취소"
       },
       "uninstalledToast": "{{name}} 이 제거되었습니다",
@@ -11294,6 +11295,27 @@
     "marketEdit": {
       "saved": "마켓 표시 정보가 저장되었습니다",
       "displayNameRequired": "표시 이름을 입력하세요"
+    },
+    "management": {
+      "disabled": "비활성화됨",
+      "enabledLabel": "스킬 “{{name}}” 활성화",
+      "moreLabel": "스킬 “{{name}}” 관리",
+      "activationHint": "Cindy 내 스킬 로드에만 적용됩니다. Agent를 시작하거나 다시 시작하면 반영됩니다.",
+      "enabledToast": "스킬 “{{name}}”이 활성화되었습니다. Agent를 시작하거나 다시 시작하면 반영됩니다",
+      "disabledToast": "스킬 “{{name}}”이 비활성화되었습니다. Agent를 시작하거나 다시 시작하면 반영됩니다",
+      "toggleFailed": "스킬 설정을 저장하지 못했습니다. 다시 시도하세요",
+      "uninstallFailed": "스킬을 휴지통으로 옮기지 못했습니다. 파일 권한을 확인한 후 다시 시도하세요",
+      "refreshRequired": "스킬이 변경 중이거나 원본 위치가 변경되었습니다. 목록을 새로 고친 후 다시 시도하세요",
+      "globalScope": "설치 위치: 전역 스킬",
+      "projectScope": "프로젝트: {{project}}",
+      "trashDescription": "로컬 파일과 수정 내용을 휴지통으로 옮깁니다. 복원할 수 있습니다.",
+      "unlinkDescription": "로컬 스킬 등록만 제거합니다. 원본 파일과 수정 내용은 유지됩니다.",
+      "sharedImpact": "이 스킬을 공유하는 다른 Agent도 영향을 받습니다. 게시된 버전과 다른 위치에 설치된 스킬에는 영향을 주지 않습니다.",
+      "managedElsewhere": "이 스킬은 다른 패키지 또는 공유 디렉터리에서 관리됩니다. 원본 위치에서 제거하세요",
+      "managedByPlugin": "이 스킬은 플러그인이 제공합니다. 해당 플러그인 페이지에서 관리하세요.",
+      "cleanupIncomplete": "“{{name}}”의 제거 정리가 완료되지 않았습니다. 다시 시도하거나 나중에 스킬을 다시 열어 계속하세요. 정리가 완료될 때까지 재설치할 수 없습니다.",
+      "retryCleanup": "정리 다시 시도",
+      "cleanupComplete": "정리 완료"
     }
   },
   "makerExperimental": {

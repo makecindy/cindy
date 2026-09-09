@@ -6,8 +6,11 @@ interface LocalSkillRouteEntry {
   scope: SkillhubScope;
   name: string;
   absolutePath: string;
+  mdPath?: string;
   discoveredPath?: string;
+  discoveryPaths?: string[];
   projectHash?: string;
+  projectRoot?: string;
   sourceKey?: string;
   requiresSourceKey?: boolean;
 }
@@ -25,6 +28,22 @@ interface LocalSkillRouteParams {
   kind?: string;
   projectHash?: string;
   name?: string;
+}
+
+/** Resolve a palette's SKILL.md path after the SkillHub scanner has loaded. */
+export function buildLocalSkillPathRoute(path: string, context: { scope?: string; workingDir?: string | null } = {}): string {
+  const search = new URLSearchParams({ path });
+  const scope = context.scope === 'user' ? 'global' : context.scope === 'repo' ? 'project' : context.scope;
+  if (scope === 'global' || scope === 'project') search.set('scope', scope);
+  if (scope === 'project' && context.workingDir) search.set('workingDir', context.workingDir);
+  return `/skillhub/local/by-path?${search.toString()}`;
+}
+
+function skillDirectoryPath(path: string): string {
+  const windows = /^[a-z]:[\\/]|^\\\\/i.test(path);
+  const normalized = (windows ? path.replace(/\\/g, '/') : path)
+    .replace(/\/+$/, '').replace(/\/skill\.md$/i, '');
+  return windows ? normalized.toLowerCase() : normalized;
 }
 
 /** Builds a local detail URL while preserving the legacy pathname contract. */
@@ -46,6 +65,30 @@ export function findLocalSkillRouteEntry<T extends LocalSkillRouteEntry>(
   searchParams: Pick<URLSearchParams, 'get'>,
 ): T | null {
   const { kind, projectHash, name } = params;
+  const commandPath = searchParams.get('path');
+  if (!kind && !name && commandPath) {
+    const target = skillDirectoryPath(commandPath);
+    const scope = searchParams.get('scope');
+    const workingDir = searchParams.get('workingDir');
+    let matches = skills.filter((skill) => skill.kind === 'skill' && (!scope || skill.scope === scope) && [
+      skill.absolutePath, skill.mdPath, skill.discoveredPath, ...(skill.discoveryPaths ?? []),
+    ].some((path) => path && skillDirectoryPath(path) === target));
+    if (scope === 'project' && workingDir) {
+      const cwd = skillDirectoryPath(workingDir);
+      matches = matches.filter((skill) => skill.projectRoot &&
+        (cwd === skillDirectoryPath(skill.projectRoot) || cwd.startsWith(`${skillDirectoryPath(skill.projectRoot)}/`)));
+      const nearest = Math.max(0, ...matches.map((skill) => skillDirectoryPath(skill.projectRoot!).length));
+      matches = matches.filter((skill) => skillDirectoryPath(skill.projectRoot!).length === nearest);
+    }
+    // Older path-only URLs may still identify a unique lexical discovery entry.
+    // Never pick an arbitrary copy merely because they share a physical source.
+    if (matches.length > 1) {
+      const lexical = matches.filter((skill) => [skill.discoveredPath, ...(skill.discoveryPaths ?? [])]
+        .some((path) => path && skillDirectoryPath(path) === target));
+      if (lexical.length === 1) return lexical[0]!;
+    }
+    return matches.length === 1 ? matches[0]! : null;
+  }
   if (!kind || !name) return null;
   const decodedName = decodeURIComponent(name);
   const engine = searchParams.get('engine');
