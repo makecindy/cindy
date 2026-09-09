@@ -8570,7 +8570,6 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           if (sync.resyncRequired === true) {
             void reconcileRemoteMessages(sync.sessionId, {
               force: !hasSyncEvent,
-              bypassHistoryView: !hasSyncEvent,
               // A full snapshot has already repaired the live bubble; keep it
               // ahead of an older DB row. With only resyncRequired, the host
               // has no snapshot left and the DB window is authoritative even
@@ -11694,28 +11693,41 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   freshHistory?: boolean;
-  bypassHistoryView?: boolean;
 }): Promise<boolean> {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
   const view = getRemoteHistoryView(sessionId);
-  if (view && opts?.bypassHistoryView) {
-    // Drop the capability-specific projection before falling back to the raw
-    // list path; otherwise its stale ready state can continue to own the UI.
-    releaseRemoteHistoryView(sessionId, view);
+  if (view && (view.getSnapshot().ready || opts?.freshHistory)) {
+    const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
+    const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
+    // Force needs a post-signal page, even when a normal repair is in flight.
+    // Keep this view and its expansion state instead of falling back to raw history.
+    return Promise.all([
+      view.refresh(false, opts?.force || opts?.freshHistory),
+      reconcilePendingInteractions(sessionId),
+    ]).then(() => {
+      if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
+      if (isHistoryViewUnavailable(view.getSnapshot().error)) {
+        releaseRemoteHistoryView(sessionId, view);
+        return reconcileRemoteMessages(sessionId, { force: true });
+      }
+      const snapshot = view.getSnapshot();
+      if (snapshot.error) throw snapshot.error;
+      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
+      if (opts?.force && snapshot.ready) {
+        const available = historyViewLeaves(snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : []);
+        setState(sessionId, (state) => {
+          // The ordinary view subscriber is add-only. Explicit recovery must
+          // hydrate stale live shells, or their handoff keeps masking sealed rows.
+          // Preserve rows changed by live events while this read was pending.
+          const untouched = new Set(state.messages.filter((row) => rowsAtStart.get(row.clientId) === row).map((row) => row.clientId));
+          const messages = mergeMessages(available, state.messages, { addOnly: true, addOnlyExcept: untouched });
+          return messages === state.messages ? state : { ...state, messages };
+        });
+      }
+      return snapshot.ready;
+    });
   }
-  // Force recovery must bypass the HistoryView projection. Its add-only merge
-  // intentionally protects live rows, but a stall-confirmed not-running turn
-  // needs the authoritative DB row to replace a stale streaming shell.
-  if (view && !opts?.bypassHistoryView && (view.getSnapshot().ready || opts?.freshHistory)) return Promise.all([view.refresh(false, opts?.freshHistory), reconcilePendingInteractions(sessionId)]).then(() => {
-    if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
-    if (isHistoryViewUnavailable(view.getSnapshot().error)) {
-      releaseRemoteHistoryView(sessionId, view);
-      return reconcileRemoteMessages(sessionId, { force: true });
-    }
-    if (view.getSnapshot().error) throw view.getSnapshot().error;
-    return view.getSnapshot().ready;
-  });
   // 返回完成 promise 供调用方需要时等待;既有调用方均按 fire-and-forget 使用。
   if (!sessionId || !isRemoteSession(sessionId)) return Promise.resolve(false);
   const inFlight = _remoteReconcileInFlight.get(sessionId);

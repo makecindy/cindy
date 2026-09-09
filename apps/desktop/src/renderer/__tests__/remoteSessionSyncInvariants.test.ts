@@ -49,11 +49,6 @@ const chatInputSrc = readFileSync(
 );
 
 describe('useRemoteSessionSync 接线不变式', () => {
-  it('force 对账绕过 HistoryView 的 add-only 投影', () => {
-    expect(makerChatStoreSrc).toContain('if (view && !opts?.bypassHistoryView &&');
-    expect(makerChatStoreSrc).toContain('Force recovery must bypass the HistoryView projection');
-  });
-
   it('WS 重连(onStatusChanged online)重建重 topic 订阅 + 对账', () => {
     expect(syncSrc).toContain('onStatusChanged');
     expect(syncSrc).toContain("p.status !== 'online'");
