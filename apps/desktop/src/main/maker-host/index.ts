@@ -135,7 +135,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { inferProviderIdForModel, resolveCodexOfficialOAuthDependency, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { inferProviderIdForModel, resolveCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -1545,7 +1545,7 @@ export function getMaker(): Maker {
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
       resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
         readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
-      resolveCodexOfficialOAuthDependency,
+      resolveCodexLocalAuthPolicy,
       resolveCodexThreadContextWindow: (providerId, modelId) => {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
         const override = source ? readModelContextLimit('codex', source, modelId) : null;
@@ -1629,7 +1629,7 @@ export function getMaker(): Maker {
         const isControlPlane = ctx.hostPurpose === 'control-plane';
         const isReview = ctx.hostPurpose === 'review';
         const isCustomContext = ctx.hostPurpose === 'custom-context';
-        const usesScopedProxy = isCustomContext || ctx.officialOAuthDependency === false;
+        const usesScopedProxy = isCustomContext || ctx.localAuthPolicy === 'isolated';
         const customContextHostKey = usesScopedProxy
           ? (ctx.hostScopeKey ?? ctx.customContextHostKey)?.trim() ?? ''
           : '';

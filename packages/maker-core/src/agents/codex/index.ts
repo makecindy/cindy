@@ -497,8 +497,8 @@ export function hostKey(remoteHostId?: string | null): string {
 }
 
 /** Preserve legacy identities unless the concrete route excludes official OAuth. */
-export function codexOAuthHostIdentity(key: string, dependency?: boolean): string {
-  return dependency === false ? `${key}:external-auth` : key;
+export function codexLocalAuthHostIdentity(key: string, policy?: 'isolated' | 'legacy-shared'): string {
+  return policy === 'isolated' ? `${key}:external-auth` : key;
 }
 
 const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
@@ -2411,7 +2411,7 @@ export class CodexAgent extends BaseAgent {
     opts: {
       providerId?: string;
       ignoreBindingLeases?: number;
-      officialOAuthDependency?: boolean;
+      localAuthPolicy?: 'isolated' | 'legacy-shared';
       keyOverride?: string;
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
       customContextModel?: string;
@@ -2626,7 +2626,7 @@ export class CodexAgent extends BaseAgent {
         opts.providerId,
         opts.sqliteHome,
         opts.historyHome,
-        opts.officialOAuthDependency,
+        opts.localAuthPolicy,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2865,7 +2865,7 @@ export class CodexAgent extends BaseAgent {
     providerId?: string,
     sqliteHome?: string,
     historyHome?: string,
-    officialOAuthDependency?: boolean,
+    localAuthPolicy?: 'isolated' | 'legacy-shared',
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2891,7 +2891,7 @@ export class CodexAgent extends BaseAgent {
     // 同时还能服务订阅会话 —— 订阅/API 会话真正并行,不再因来源切换重建 host 排队。
     let spawnCredentialMode = credentialMode;
     let requestedGatewayState: AuthState | null = null;
-    if (!remoteHostId && officialOAuthDependency !== false && credentialMode === 'gateway-key') {
+    if (!remoteHostId && localAuthPolicy !== 'isolated' && credentialMode === 'gateway-key') {
       // 即使升格为 OAuth spawn,API 会话的出口仍依赖 gateway key,必须先验证原诉求。
       requestedGatewayState = await this.deps.auth.getState({ credentialMode: 'gateway-key' });
       assertCurrentGeneration('gateway credential validation');
@@ -2988,8 +2988,8 @@ export class CodexAgent extends BaseAgent {
               ...(!remoteHostId && historyHome ? { runtimeCodexHome: historyHome } : {}),
               ...(key.startsWith('local-account:') ? { accountHostKey: `${key}:${generation}` } : {}),
               credentialMode: spawnCredentialMode,
-              ...(officialOAuthDependency === false
-                ? { officialOAuthDependency, hostScopeKey: `${key}:${generation}` }
+              ...(localAuthPolicy === 'isolated'
+                ? { localAuthPolicy, hostScopeKey: `${key}:${generation}` }
                 : {}),
               ...(spawnCredentialMode !== credentialMode
                 ? { requestedCredentialMode: credentialMode }
@@ -3018,7 +3018,7 @@ export class CodexAgent extends BaseAgent {
             });
             await hostRetirementCleanup?.();
             hostRetirementCleanup = undefined;
-            if (officialOAuthDependency === false) {
+            if (localAuthPolicy === 'isolated') {
               throw Object.assign(new Error('Codex route requires official OAuth on an external-auth host'), { codexSpawnConfigFatal: true });
             }
             spawnCredentialMode = cfg.requiredSpawnCredentialMode;
@@ -3130,7 +3130,7 @@ export class CodexAgent extends BaseAgent {
     // Keep official OAuth hosts unchanged; the override is scoped to this process only.
     if (
       !remoteHostId
-      && officialOAuthDependency === false
+      && localAuthPolicy === 'isolated'
     ) {
       extraArgs.push('-c', 'cli_auth_credentials_store="ephemeral"');
     }
@@ -3214,7 +3214,7 @@ export class CodexAgent extends BaseAgent {
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
       // 防止在 JSON-RPC response 分发回调里同步收割自己。远端也走同一结构化协议路径。
       onAuthInvalidated: (reason) => {
-        const usesLocalAuth = !remoteHostId && officialOAuthDependency !== false;
+        const usesLocalAuth = !remoteHostId && localAuthPolicy !== 'isolated';
         this.deps.logger.warn('codex auth invalidated', {
           reason,
           key,
@@ -4817,11 +4817,11 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
-    const officialOAuthDependency = opts.remoteHostId
-      ? undefined
-      : await this.deps.resolveCodexOfficialOAuthDependency?.(opts.providerId, opts.model);
+    const localAuthPolicy = opts.remoteHostId
+      ? 'legacy-shared'
+      : await this.deps.resolveCodexLocalAuthPolicy?.(opts.providerId, opts.model) ?? 'legacy-shared';
     const credentialMode = requestedCredentialMode
-      ?? (officialOAuthDependency === false ? 'provider-oauth' : undefined);
+      ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     const initialCustomContextWindow = !reviewMode
       ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
@@ -4859,7 +4859,7 @@ export class CodexAgent extends BaseAgent {
       const nextProvider = setOpts && Object.hasOwn(setOpts, 'providerId') ? setOpts.providerId : mutableProviderId;
       return (this.deps.isCodexAccountProvider?.(nextProvider) ? nextProvider : undefined) !== accountProviderId ||
         (await resolveModelSwitchCatalogIdentity(newModel, setOpts)) !== initialCustomContextCatalogIdentity ||
-        (!opts.remoteHostId && (await this.deps.resolveCodexOfficialOAuthDependency?.(nextProvider, newModel)) !== officialOAuthDependency);
+        (!opts.remoteHostId && (await this.deps.resolveCodexLocalAuthPolicy?.(nextProvider, newModel) ?? 'legacy-shared') !== localAuthPolicy);
     };
     const baseSessionHostKey = reviewMode
       ? localReviewHostKey(sid)
@@ -4870,8 +4870,8 @@ export class CodexAgent extends BaseAgent {
       ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
     const sessionSqliteHome = sessionStorage?.sqliteHome;
-    const currentHostKey = codexOAuthHostIdentity((accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
-      + (sessionStorage ? `:storage:${sessionSqliteHome}:history:${sessionStorage.historyHome}` : ''), officialOAuthDependency);
+    const currentHostKey = codexLocalAuthHostIdentity((accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
+      + (sessionStorage ? `:storage:${sessionSqliteHome}:history:${sessionStorage.historyHome}` : ''), localAuthPolicy);
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -4900,10 +4900,10 @@ export class CodexAgent extends BaseAgent {
         ...(sessionStorage ? { historyHome: sessionStorage.historyHome } : {}),
         ...(accountSessionHost || reviewMode || usesCustomContextHost || sessionSqliteHome ? { keyOverride: currentHostKey } : {}),
         ignoreBindingLeases: 1,
-        ...(officialOAuthDependency === false || reviewMode || usesCustomContextHost
+        ...(localAuthPolicy === 'isolated' || reviewMode || usesCustomContextHost
           ? { keyOverride: currentHostKey }
           : {}),
-        ...(officialOAuthDependency === false ? { officialOAuthDependency } : {}),
+        ...(localAuthPolicy === 'isolated' ? { localAuthPolicy } : {}),
         ...(reviewMode
           ? { hostPurpose: 'review' as const }
           : usesCustomContextHost
@@ -5063,12 +5063,12 @@ export class CodexAgent extends BaseAgent {
         const useLocalSkillDiscoveryHost =
           !opts.remoteHostId && sessionCredentialMode === 'provider-oauth';
         const skillDiscoveryHostKey = useLocalSkillDiscoveryHost
-          ? codexOAuthHostIdentity(localControlPlaneHostKey('provider-oauth'), officialOAuthDependency)
+          ? codexLocalAuthHostIdentity(localControlPlaneHostKey('provider-oauth'), 'isolated')
           : currentHostKey;
         const skillDiscoveryHost = useLocalSkillDiscoveryHost
           ? await this.getHost(undefined, 'provider-oauth', {
               keyOverride: skillDiscoveryHostKey,
-              ...(officialOAuthDependency === false ? { officialOAuthDependency } : {}),
+              localAuthPolicy: 'isolated',
               hostPurpose: 'control-plane',
             })
           : host;
@@ -14443,10 +14443,10 @@ export class CodexAgent extends BaseAgent {
     // maxLineBytes 守卫后整条连接被熔断,当时共享 utility host 上挂着的 5 个活跃
     // session 全部同时报错。fork 是离线控制面操作(不跑 turn、无订阅者),改用
     // 唯一 key 的一次性 app-server:超限只让 fork 自己失败,不波及活跃任务。
-    const officialOAuthDependency = await this.deps.resolveCodexOfficialOAuthDependency?.(
+    const localAuthPolicy = await this.deps.resolveCodexLocalAuthPolicy?.(
       opts.providerId, opts.model ?? '',
     );
-    const forkHostKey = codexOAuthHostIdentity(forkAccountId ? `local-account:${forkAccountId}:${localForkHostKey()}` : localForkHostKey(), officialOAuthDependency);
+    const forkHostKey = codexLocalAuthHostIdentity(forkAccountId ? `local-account:${forkAccountId}:${localForkHostKey()}` : localForkHostKey(), localAuthPolicy);
     let releaseForkLease: (() => void) | undefined;
     let forkHost: AppServerHost | undefined;
     let forkHostRetired = false;
@@ -14517,7 +14517,7 @@ export class CodexAgent extends BaseAgent {
       const leased = await this.acquireHostOperation(async () => {
         const host = await this.getHost(undefined, forkCredentialMode, {
           keyOverride: forkHostKey,
-          ...(officialOAuthDependency === false ? { officialOAuthDependency } : {}),
+          ...(localAuthPolicy === 'isolated' ? { localAuthPolicy } : {}),
           ...(forkAccountId ? { providerId: forkAccountId } : {}),
           ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
           ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
@@ -14780,7 +14780,7 @@ export class CodexAgent extends BaseAgent {
     reason = 'CodexAgent local auth changed',
     options: { preserveExternalAuth?: boolean } = {},
   ): Promise<void> {
-    const keys = new Set<string>([hostKey(), codexOAuthHostIdentity(hostKey(), false)]);
+    const keys = new Set<string>([hostKey(), codexLocalAuthHostIdentity(hostKey(), 'isolated')]);
     for (const key of this.hosts.keys()) {
       if (
         key.startsWith('local-account:openai:') || isLocalControlPlaneHostKey(key) ||

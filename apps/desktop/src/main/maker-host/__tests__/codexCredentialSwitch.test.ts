@@ -759,20 +759,3 @@ describe('Codex host-scoped credential coordination', () => {
     expect(closeSession).toHaveBeenCalledExactlyOnceWith('target');
   });
 });
-
-
-describe('Codex frozen OAuth policy switch', () => {
-  it.each([false, true])('rebuilds both directions using the host snapshot (next requires OAuth=%s)', async (dependency) => {
-    const routing = await import('../provider-route.js');
-    const resolver = vi.spyOn(routing, 'resolveCodexOfficialOAuthDependency').mockReturnValue(dependency);
-    try {
-      expect(shouldCloseSessionForCredentialSwitch({
-        agentKind: 'codex', currentProviderId: 'same-provider', nextProviderId: 'same-provider',
-        currentModel: 'same-model', nextModel: 'same-model', currentCodexProxyActive: true,
-        currentCodexHostKey: dependency ? 'local:external-auth' : 'local',
-      })).toBe(true);
-    } finally {
-      resolver.mockRestore();
-    }
-  });
-});

@@ -23,7 +23,7 @@ import {
   getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
-  resolveCodexOfficialOAuthDependency,
+  resolveCodexLocalAuthPolicy,
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
@@ -94,25 +94,25 @@ afterEach(() => {
   setCustomProviderHeaderReader(() => null);
 });
 
-describe('Codex official OAuth dependency', () => {
+describe('Codex local auth policy', () => {
   it('uses the actual custom route even without image generation capabilities', () => {
     setCustomProviders([buildUserProvider({
       id: 'plain-key', name: 'Plain API',
       runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'plain-model', name: 'Plain' }] } },
     })]);
     try {
-      expect(resolveCodexOfficialOAuthDependency('plain-key', 'plain-model')).toBe(false);
-      expect(resolveCodexOfficialOAuthDependency(undefined, 'plain-model')).toBe(false);
-      expect(resolveCodexOfficialOAuthDependency('missing-provider', 'plain-model')).toBeUndefined();
+      expect(resolveCodexLocalAuthPolicy('plain-key', 'plain-model')).toBe('isolated');
+      expect(resolveCodexLocalAuthPolicy(undefined, 'plain-model')).toBe('isolated');
+      expect(resolveCodexLocalAuthPolicy('missing-provider', 'plain-model')).toBe('legacy-shared');
     } finally {
       setCustomProviders([]);
     }
   });
 
   it('keeps official subscriptions and gateway compatibility distinct from provider OAuth', () => {
-    expect(resolveCodexOfficialOAuthDependency('openai', 'gpt-5.4')).toBe(true);
-    expect(resolveCodexOfficialOAuthDependency('xd', 'gpt-5.4')).toBeUndefined();
-    expect(resolveCodexOfficialOAuthDependency('xai', 'xai/grok-4.3')).toBe(false);
+    expect(resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
+    expect(resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('legacy-shared');
+    expect(resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
   });
 });
 

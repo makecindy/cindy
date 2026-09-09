@@ -971,11 +971,11 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
-  /** false isolates disk OAuth reads without changing the Provider credential mode. */
-  resolveCodexOfficialOAuthDependency?: (
+  /** Local disk-auth policy, independent of the actual Provider credential mode. */
+  resolveCodexLocalAuthPolicy?: (
     providerId: string | null | undefined,
     modelId: string,
-  ) => boolean | undefined | Promise<boolean | undefined>;
+  ) => 'isolated' | 'legacy-shared' | Promise<'isolated' | 'legacy-shared'>;
 
   /**
    * Per-model requested context window (user override first, explicit provider default second).
@@ -1019,7 +1019,7 @@ export interface AgentDeps {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Frozen disk OAuth policy; independent of the actual Provider credential. */
-      officialOAuthDependency?: boolean;
+      localAuthPolicy?: 'isolated' | 'legacy-shared';
       hostScopeKey?: string;
       /** Original session request when the shared host was upgraded to a credential superset. */
       requestedCredentialMode?: AgentCredentialMode;

@@ -64,7 +64,7 @@ describe.skipIf(!binaryPath)('CodexAgent disk OAuth isolation with real app-serv
     ].join('\n'));
     const agent = new CodexAgent({
       binaryPath: binaryPath!, logger, runtimeConfig: {},
-      resolveCodexOfficialOAuthDependency: (providerId) => providerId === 'cprov-fixture' ? false : undefined,
+      resolveCodexLocalAuthPolicy: (providerId) => providerId === 'cprov-fixture' ? 'isolated' : 'legacy-shared',
       prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {}, codexProxyActive: true }),
       auth: {
         getState: async () => ({ authenticated: true }),

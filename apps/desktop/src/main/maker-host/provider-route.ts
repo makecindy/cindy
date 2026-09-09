@@ -625,18 +625,16 @@ export function getProviderRoutingDescriptor(
   return routing;
 }
 
-/** Resolve only routing metadata; third-party OAuth is injected by the host, not Codex. */
-export function resolveCodexOfficialOAuthDependency(
+/** Choose process isolation from routing metadata without loading any credentials. */
+export function resolveCodexLocalAuthPolicy(
   providerId: string | null | undefined,
   modelId: string,
-): boolean | undefined {
+): 'isolated' | 'legacy-shared' {
   const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
   const routing = getProviderRoutingDescriptor(source, 'codex', modelId);
-  if (!routing) return undefined;
-  // Preserve the gateway's existing OAuth superset behavior. Custom credentials,
-  // including provider OAuth, do not require Codex to load its official account.
-  if (routing.authStrategy === 'gateway-key') return undefined;
-  return routing.authStrategy === 'oauth-passthrough';
+  // Keep legacy reuse for gateway, third-party OAuth and unknown routes. This
+  // is compatibility policy, not a claim that they need official Codex OAuth.
+  return routing?.authStrategy === 'api-key-header' ? 'isolated' : 'legacy-shared';
 }
 
 export interface ResolvedSessionRoute {

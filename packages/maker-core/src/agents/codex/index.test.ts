@@ -369,8 +369,8 @@ function createDeps(
 describe('Codex official OAuth host isolation', () => {
   function isolatedDeps() {
     return createDeps({}, {
-      resolveCodexOfficialOAuthDependency: (providerId) =>
-        providerId === 'cprov-test' ? false : undefined,
+      resolveCodexLocalAuthPolicy: (providerId) =>
+        providerId === 'cprov-test' ? 'isolated' : 'legacy-shared',
       prepareCodexExtraSpawnConfig: async () => ({
         extraArgs: [], extraEnv: {}, codexProxyActive: true,
       }),
@@ -418,6 +418,36 @@ describe('Codex official OAuth host isolation', () => {
     }
   });
 
+  it.each(['isolated', 'legacy-shared'] as const)('rebuilds when the actual route policy changes from %s without changing model identity', async (initialPolicy) => {
+    const deps = isolatedDeps();
+    let policy: 'isolated' | 'legacy-shared' = initialPolicy;
+    deps.resolveCodexLocalAuthPolicy = () => policy;
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'policy-switch', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(await handle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'cprov-test' })).toBe(false);
+      policy = initialPolicy === 'isolated' ? 'legacy-shared' : 'isolated';
+      expect(await handle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'cprov-test' })).toBe(true);
+      await handle.close();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('normalizes an absent policy callback to legacy compatibility without a false rebuild', async () => {
+    const deps = isolatedDeps();
+    delete deps.resolveCodexLocalAuthPolicy;
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'legacy-policy', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo' });
+      deps.resolveCodexLocalAuthPolicy = () => 'legacy-shared';
+      expect(await handle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'openai' })).toBe(false);
+      await handle.close();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
   it('retires only the failing external host without invalidating shared OAuth', async () => {
     const deps = isolatedDeps();
     const invalidate = vi.fn(async () => undefined);
@@ -444,7 +474,7 @@ describe('Codex official OAuth host isolation', () => {
 
   it('uses host-injected credentials for an inferred custom route without gateway or OAuth login', async () => {
     const deps = isolatedDeps();
-    deps.resolveCodexOfficialOAuthDependency = () => false;
+    deps.resolveCodexLocalAuthPolicy = () => 'isolated';
     const getState = vi.fn<AuthAdapter['getState']>(async (options) => ({ authenticated: options?.credentialMode === 'provider-oauth' }));
     deps.auth.getState = getState;
     const agent = new CodexAgent(deps);
@@ -494,7 +524,7 @@ describe('Codex official OAuth host isolation', () => {
     try {
       const handle = await agent.startSession({ sessionId: 'external-context', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
       expect(prepare).toHaveBeenCalledWith([], expect.objectContaining({
-        hostPurpose: 'custom-context', officialOAuthDependency: false,
+        hostPurpose: 'custom-context', localAuthPolicy: 'isolated',
         hostScopeKey: 'local-custom-context:external-context:external-auth:1',
       }));
       expect(createdStdioOptions[0].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
@@ -539,8 +569,8 @@ describe('Codex official OAuth host isolation', () => {
     const deps = isolatedDeps();
     let releaseResolution!: () => void;
     const resolving = new Promise<void>((resolve) => { releaseResolution = resolve; });
-    const resolveDependency = vi.fn(async () => { await resolving; return false; });
-    deps.resolveCodexOfficialOAuthDependency = resolveDependency;
+    const resolveDependency = vi.fn(async () => { await resolving; return 'isolated' as const; });
+    deps.resolveCodexLocalAuthPolicy = resolveDependency;
     const agent = new CodexAgent(deps);
     try {
       const pending = agent.startSession({ sessionId: 'stale-policy', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
@@ -2275,11 +2305,11 @@ describe('CodexAgent capability routing', () => {
     const hosts = (agent as unknown as { hosts: Map<string, unknown> }).hosts;
     let displacedHost: unknown;
     MockCodexTransport.beforeSkillsListResponse = () => {
-      displacedHost = hosts.get('local-control:provider-oauth');
+      displacedHost = hosts.get('local-control:provider-oauth:external-auth');
       const sessionHost = hosts.get('local');
       expect(displacedHost).toBeDefined();
       expect(sessionHost).toBeDefined();
-      hosts.set('local-control:provider-oauth', sessionHost);
+      hosts.set('local-control:provider-oauth:external-auth', sessionHost);
     };
 
     await expect(agent.startSession({
@@ -2291,7 +2321,7 @@ describe('CodexAgent capability routing', () => {
       'Codex Skill discovery expired because its control-plane app-server was replaced',
     );
 
-    if (displacedHost) hosts.set('local-control:provider-oauth', displacedHost);
+    if (displacedHost) hosts.set('local-control:provider-oauth:external-auth', displacedHost);
     await agent.dispose();
   });
 

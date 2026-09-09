@@ -1102,7 +1102,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
             currentModel: liveSession.model,
             nextModel: model,
             currentCodexProxyActive: liveSession.codexProxyActive,
-            currentCodexHostKey: liveSession.codexHostKey,
             currentCodexThreadModelProviderId: liveSession.codexThreadModelProviderId,
             currentCodexCindyRemoteCompactionCompatible:
               liveSession.codexCindyRemoteCompactionCompatible,
@@ -1612,7 +1611,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
               currentModel: runtimeModel,
               nextModel: runtimeModel,
               currentCodexProxyActive: session.codexProxyActive,
-              currentCodexHostKey: session.codexHostKey,
               currentCodexThreadModelProviderId: session.codexThreadModelProviderId,
               currentCodexCindyRemoteCompactionCompatible:
                 session.codexCindyRemoteCompactionCompatible,
@@ -2546,7 +2544,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentModel: live.model,
         nextModel: live.model,
         currentCodexProxyActive: live.codexProxyActive,
-        currentCodexHostKey: live.codexHostKey,
         currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
         currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
       })
@@ -2564,7 +2561,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentModel: live.model,
         nextModel: targetModel,
         currentCodexProxyActive: live.codexProxyActive,
-        currentCodexHostKey: live.codexHostKey,
         currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
         currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
       })

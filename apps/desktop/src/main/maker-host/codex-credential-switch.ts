@@ -8,7 +8,6 @@ import {
   type AgentKind,
 } from '@cindy/maker-core';
 
-import { resolveCodexOfficialOAuthDependency } from './provider-route.js';
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import { isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
@@ -45,7 +44,6 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * provider-oauth 依赖 proxy 做供应商 OAuth 注入和 model rewrite；未知状态按 false 处理。
    */
   currentCodexProxyActive?: boolean | null;
-  currentCodexHostKey?: string;
   /**
    * 当前 Codex thread 由 app-server 的 start/resume 响应确认的 model provider。
    * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
@@ -317,12 +315,6 @@ export function shouldCloseSessionForCredentialSwitch(
 
   const currentProviderId = normalizeProviderId(input.currentProviderId);
   const nextProviderId = normalizeProviderId(input.nextProviderId);
-  if (input.agentKind === 'codex' && input.currentCodexHostKey) {
-    const nextDependency = resolveCodexOfficialOAuthDependency(nextProviderId, input.nextModel);
-    if (input.currentCodexHostKey.endsWith(':external-auth') !== (nextDependency === false)) {
-      return true;
-    }
-  }
   if (
     input.agentKind === 'pi'
     && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
