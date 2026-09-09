@@ -8569,7 +8569,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           }
           if (sync.resyncRequired === true) {
             void reconcileRemoteMessages(sync.sessionId, {
-              force: true,
+              force: !hasSyncEvent,
               // A full snapshot has already repaired the live bubble; keep it
               // ahead of an older DB row. With only resyncRequired, the host
               // has no snapshot left and the DB window is authoritative even
@@ -11874,6 +11874,15 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
         // 丢弃合并 = 拉回的窗口没进 UI:置 windowApplied=false,本次不得上报同步完成
         // (否则挂起的远程已读回执会在缺帧内容尚未展示时被放行),等 turn 结束的下一轮。
+        // A stall force signal means the controlled host has authoritatively
+        // reported not-running. It must win over an earlier repair trigger
+        // coalesced by the single-flight wrapper, otherwise addOnly would keep
+        // the stale streaming row and lose the sealed terminal message.
+        if (s.isStreaming && opts?.force) {
+          const messages = mergeMessages(mapped, s.messages, {}, 'newest-first');
+          if (messages === s.messages) return s;
+          return { ...s, messages };
+        }
         if (s.isStreaming && opts?.repair) {
           const repaired = mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first');
           if (repaired === s.messages) return s;

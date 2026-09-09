@@ -1628,6 +1628,45 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     ]);
   });
 
+  it('远程会话:单飞期间 force 触发会压过先到的 repair', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: { type: 'status', source: 'claude-code', data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 } },
+      },
+    });
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s, persistId: 'sealed-assistant',
+        event: { type: 'text', source: 'claude-code', data: { text: 'stale', isFinal: false } },
+      },
+    });
+    const firstRead = deferred<Message[]>();
+    remoteListResolver = () => firstRead.promise;
+    const repair = makerChatStore.reconcileRemoteMessages(s, { repair: true });
+    await flush();
+    remoteListResolver = null;
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'sealed-assistant', 'sealed authoritative text', '2026-06-15T00:00:02.000Z'),
+    ];
+    const forced = makerChatStore.reconcileRemoteMessages(s, { force: true });
+    firstRead.resolve(remoteList);
+    await repair;
+    await forced;
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+    expect(makerChatStore.getSnapshot(s).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'client-sealed-assistant', content: 'sealed authoritative text', isStreaming: false }),
+    ]));
+  });
+
   it('远程会话:普通 streaming text delta 不周期性触发历史修复', async () => {
     vi.useFakeTimers();
     try {
