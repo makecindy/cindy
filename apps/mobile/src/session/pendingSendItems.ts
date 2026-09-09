@@ -105,6 +105,21 @@ export function pendingSendItemKey(clientId: string): string {
 }
 
 /**
+ * History and queue snapshots can arrive independently. Deduplicate against the
+ * rows actually being rendered, even when the queue's hidden-id snapshot is stale.
+ * Duplicate keys reserve two list positions while mounting only one bubble.
+ */
+export function appendPendingSendItems<T extends { key: string }>(
+  rendered: readonly T[],
+  pending: readonly MobilePendingSendItem[],
+): readonly (T | MobilePendingSendItem)[] {
+  if (pending.length === 0) return rendered;
+  const renderedKeys = new Set(rendered.map((item) => item.key));
+  const remaining = pending.filter((item) => !renderedKeys.has(item.key));
+  return remaining.length === 0 ? rendered : [...rendered, ...remaining];
+}
+
+/**
  * 气泡显示文本:合成 UI 指令行(桌面「失败后继续」等隐藏 prompt)用遮蔽标签替代原文
  * —— 裸英文指令不能给用户看(对齐桌面 PendingQueuePanel 的 i18n 遮蔽标签)。
  */

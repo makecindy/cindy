@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
 import {
+  appendPendingSendItems,
   buildMobileMessageListExtraData,
   buildPendingSendItems,
   isPendingSendItemSelected,
@@ -70,6 +71,29 @@ function build(overrides: Partial<Parameters<typeof buildPendingSendItems>[0]> =
     ...overrides,
   });
 }
+
+describe('appendPendingSendItems', () => {
+  it.each(['text', 'image'])('replaces %s pending rows when history arrives before queue reconciliation', (kind) => {
+    const pending = build({ outbox: [outboxItem('sent', kind === 'image' ? {
+      text: '', attachmentCount: 1, uploadedCount: 1,
+      thumbnails: [{ key: 'sent-slot-0', uri: 'file:///image.png', ossRef: null, uploading: false }],
+    } : {}), outboxItem('next')] });
+    const previous = { key: 'message-previous', type: 'message' };
+    const delivered = { key: pendingSendItemKey('sent'), type: 'message' };
+    expect(appendPendingSendItems([previous], pending)).toEqual([previous, ...pending]);
+    // The history snapshot advanced, but raw-store token / pending snapshot did not.
+    const during = appendPendingSendItems([previous, delivered], pending);
+    expect(during).toEqual([previous, delivered, pending[1]]);
+    expect(new Set(during.map((row) => row.key)).size).toBe(during.length);
+    expect(appendPendingSendItems([previous, delivered], pending.slice(1))).toEqual(during);
+  });
+
+  it('retains the rendered list when no optimistic rows remain', () => {
+    const rendered = [{ key: pendingSendItemKey('sent') }];
+    expect(appendPendingSendItems(rendered, [])).toBe(rendered);
+    expect(appendPendingSendItems(rendered, build({ queue: [queued('sent')] }))).toBe(rendered);
+  });
+});
 
 describe('buildPendingSendItems', () => {
   it('shares the message item key so the bubble and the real message land in one place', () => {

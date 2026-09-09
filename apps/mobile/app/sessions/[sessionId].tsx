@@ -327,6 +327,7 @@ import {
   type QueueEditTextState,
 } from '@/session/inputProjection';
 import {
+  appendPendingSendItems,
   buildPendingSendItems,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -5599,7 +5600,7 @@ export default function SessionScreen() {
     ],
   );
   const messageListItems = useMemo(
-    () => (pendingSendItems.length === 0 ? renderItems : [...renderItems, ...pendingSendItems]),
+    () => appendPendingSendItems(renderItems, pendingSendItems),
     [pendingSendItems, renderItems],
   );
   const messageListStructureKey = useMemo(
