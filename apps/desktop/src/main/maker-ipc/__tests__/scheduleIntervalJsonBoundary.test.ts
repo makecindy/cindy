@@ -13,7 +13,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Schedule, CreateScheduleInput, UpdateScheduleInput } from '@cindy/maker-scheduler';
-import { BUILTIN_TEMPLATES } from '@cindy/maker-scheduler';
+import { BUILTIN_TEMPLATES, Scheduler } from '@cindy/maker-scheduler';
 import { applyTemplateToMobileScheduleDraft, buildMobileScheduleInput, createMobileScheduleDraft } from '@cindy/maker-shared/schedule-form';
 
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => Promise<unknown>>());
@@ -160,6 +160,33 @@ describe('scheduled model selection IPC compatibility', () => {
     expect(normalizeLegacyDeviceLinkModelSelection(existing, wire, true)).toMatchObject({
       modelAgentKind: undefined, model: undefined, providerId: undefined, effort: undefined, fastMode: false,
     });
+  });
+
+  it.each(['', '   '])('saves and reopens a Mobile bound form after clearing its model to %j', async (model) => {
+    let saved = { ...existing, ...fullForm, name: 'Bound', prompt: 'Run',
+      recurring: true, timezone: 'UTC', status: 'active', workspaceKind: 'dialogue' } as Schedule;
+    const storage = {
+      get: vi.fn(async () => ({ ...saved })),
+      update: vi.fn(async (_id: string, patch: Partial<Schedule>) => {
+        saved = { ...saved, ...patch };
+        return { ...saved };
+      }),
+    };
+    const scheduler = new Scheduler({ storage: storage as never, runner: { fire: vi.fn() } });
+    setSchedulerReady(scheduler, storage as never);
+    registerScheduleHandlers();
+    const draft = createMobileScheduleDraft({ ...saved, source: 'user' });
+    const wire = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...draft, model })));
+    expect(wire).not.toHaveProperty('modelAgentKind');
+    const result = await handlers.get('maker:schedule:update')!(null, existing.id, wire);
+    expect(result).toMatchObject({ agentKind: 'codex', targetSessionId: 'bound',
+      modelAgentKind: undefined, model: undefined, providerId: undefined, effort: 'high', fastMode: false });
+    expect(storage.update).toHaveBeenCalledTimes(1);
+    const reopened = createMobileScheduleDraft({ ...saved, source: 'user' });
+    expect(reopened).toMatchObject({ agentKind: 'codex', model: '', modelAgentKind: undefined });
+    const unchanged = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...reopened, name: 'Renamed' })));
+    await handlers.get('maker:schedule:update')!(null, existing.id, unchanged);
+    expect(saved).toMatchObject({ name: 'Renamed', agentKind: 'codex', model: undefined, modelAgentKind: undefined });
   });
 
   it.each([true, false])('passes a Mobile template choice and Fast=%s through the real creation handler', async (fastMode) => {

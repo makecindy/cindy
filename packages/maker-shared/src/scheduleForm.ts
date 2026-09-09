@@ -175,7 +175,7 @@ export function createMobileScheduleDraft(
     modelAgentKind: schedule.modelAgentKind,
     boundAgent: schedule.targetSessionId
       ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
-    model: schedule.model ?? defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code'),
+    model: schedule.model ?? (schedule.targetSessionId ? '' : defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code')),
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
@@ -430,7 +430,9 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     };
   }
 
-  if (draft.modelAgentKind) {
+  // An empty model follows the bound task. Omit the marker so the full-form
+  // device-link normalization can clear an existing explicit selection.
+  if (draft.modelAgentKind && draft.model.trim()) {
     input.modelAgentKind = draft.agentKind;
     input.model = draft.model.trim();
     input.providerId = draft.providerId.trim();
