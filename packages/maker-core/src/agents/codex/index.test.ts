@@ -631,7 +631,71 @@ describe('Codex official OAuth host isolation', () => {
     }
   });
 
-  it('rejects a route resolved before a configuration change instead of spawning with its stale policy', async () => {
+  it('reselects after a route mutation during spawn preparation without allocating a stale transport', async () => {
+    const deps = isolatedDeps();
+    let revision = 0;
+    deps.resolveCodexLocalAuthPolicy = () => {
+      const captured = revision;
+      return { policy: revision === 0 ? 'legacy-shared' : 'isolated', isCurrent: () => captured === revision };
+    };
+    const retired = vi.fn();
+    const prepare = vi.fn(async () => {
+      revision = 1;
+      return { extraArgs: [], extraEnv: {}, codexProxyActive: true, onHostRetired: retired };
+    });
+    deps.prepareCodexExtraSpawnConfig = prepare;
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'reselect', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(handle.codexHostKey).toBe('local:external-auth');
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(retired).toHaveBeenCalledOnce();
+      expect(createdTransports).toHaveLength(1);
+      expect(createdStdioOptions[0].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+      expect(createdTransports[0].lines.filter((line) => JSON.parse(line).method === 'thread/start')).toHaveLength(1);
+      await handle.close();
+    } finally { await agent.dispose(); }
+  });
+
+  it('waits for a stable route before comparing temporary context catalog omissions', async () => {
+    const deps = isolatedDeps();
+    let pending = false;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    deps.resolveCodexLocalAuthPolicy = async () => { if (pending) await barrier; return 'isolated' as const; };
+    const resolveWindow = vi.fn(() => pending ? null : 700_000);
+    deps.resolveCodexThreadContextWindow = resolveWindow;
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'context-switch', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      pending = true;
+      resolveWindow.mockClear();
+      const switching = handle.requiresModelSwitchRebuild!('gpt-5.4', { providerId: 'cprov-test' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(resolveWindow).not.toHaveBeenCalled();
+      pending = false;
+      release();
+      expect(await switching).toBe(false);
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(false);
+      await handle.close();
+    } finally { release(); await agent.dispose(); }
+  });
+
+  it('cancels a startup waiting for the configuration barrier without reserving a host', async () => {
+    const agent = new CodexAgent(isolatedDeps());
+    const guard = await agent.beginLocalHostCredentialChange();
+    try {
+      const pending = agent.startSession({ sessionId: 'cancelled-barrier', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      const rejection = expect(pending).rejects.toThrow(/cancelled/);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await agent.dispose();
+      await rejection;
+      expect(createdTransports).toHaveLength(0);
+    } finally { guard.release(); await agent.dispose(); }
+  });
+
+  it('reselects a route after a configuration change before sending a thread RPC', async () => {
     const deps = isolatedDeps();
     let releaseResolution!: () => void;
     const resolving = new Promise<void>((resolve) => { releaseResolution = resolve; });
@@ -640,13 +704,14 @@ describe('Codex official OAuth host isolation', () => {
     const agent = new CodexAgent(deps);
     try {
       const pending = agent.startSession({ sessionId: 'stale-policy', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
-      const rejected = expect(pending).rejects.toThrow('configuration changed');
       await waitForExpectation(() => expect(resolveDependency).toHaveBeenCalledOnce());
       const guard = await agent.beginLocalHostCredentialChange();
       await guard.finalize();
       releaseResolution();
-      await rejected;
-      expect(createdTransports).toHaveLength(0);
+      const handle = await pending;
+      expect(resolveDependency).toHaveBeenCalledTimes(2);
+      expect(createdTransports).toHaveLength(1);
+      await handle.close();
     } finally {
       releaseResolution();
       await agent.dispose();
@@ -24530,6 +24595,8 @@ describe('CodexAgent.forkSdkSession', () => {
 
     expect(host.getHost).toHaveBeenCalledWith(undefined, undefined, {
       keyOverride: expect.stringMatching(/^local-fork:/),
+      routeIsCurrent: expect.any(Function),
+      routeSignal: expect.any(AbortSignal),
       hostPurpose: 'control-plane',
     });
     expect(prepareCodexResumeSession).toHaveBeenCalledWith('source-thread-id');
@@ -34206,7 +34273,7 @@ describe('CodexAgent custom provider context window override', () => {
     expect(host.getHost).toHaveBeenCalledWith(
       undefined,
       'provider-oauth',
-      { ignoreBindingLeases: 1 },
+      { ignoreBindingLeases: 1, routeIsCurrent: expect.any(Function), routeSignal: expect.any(AbortSignal) },
     );
     await handle.close();
   });

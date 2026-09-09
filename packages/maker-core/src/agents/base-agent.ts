@@ -87,6 +87,12 @@ import type { AutoReviewDelegate, AutoReviewDecision, AutoReviewRequest } from '
 import type { ReviewableAction } from './shared/auto-review.js';
 import type { ClaudeSubagentModelAccessResult } from './claude-code/subagent-model-access.js';
 
+export type CodexLocalAuthPolicyResolution = 'isolated' | 'legacy-shared' | {
+  policy: 'isolated' | 'legacy-shared';
+  /** Synchronous check of the host routing transaction that produced this policy. */
+  isCurrent: () => boolean;
+};
+
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
   availableModels?: readonly ModelDescriptor[];
@@ -975,7 +981,8 @@ export interface AgentDeps {
   resolveCodexLocalAuthPolicy?: (
     providerId: string | null | undefined,
     modelId: string,
-  ) => 'isolated' | 'legacy-shared' | Promise<'isolated' | 'legacy-shared'>;
+    signal?: AbortSignal,
+  ) => CodexLocalAuthPolicyResolution | Promise<CodexLocalAuthPolicyResolution>;
 
   /**
    * Per-model requested context window (user override first, explicit provider default second).

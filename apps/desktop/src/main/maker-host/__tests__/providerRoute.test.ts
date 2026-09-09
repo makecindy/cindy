@@ -24,6 +24,7 @@ import {
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveCodexLocalAuthPolicy,
+  captureCodexLocalAuthPolicy,
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
@@ -126,6 +127,21 @@ describe('Codex local auth policy', () => {
     expect(settled).toBe(false);
     nested();
     await expect(policy).resolves.toBe('isolated');
+  });
+
+  it('invalidates a captured selection when a Desktop mutation starts, even without a core guard', async () => {
+    const before = await captureCodexLocalAuthPolicy('pending-key', 'pending-model');
+    expect(before.isCurrent()).toBe(true);
+    const finish = beginProviderRouteMutation('pending-key');
+    try {
+      expect(before.isCurrent()).toBe(false);
+      const abort = new AbortController();
+      const pending = captureCodexLocalAuthPolicy('pending-key', 'pending-model', abort.signal);
+      abort.abort(new Error('fixture cancelled'));
+      await expect(pending).rejects.toThrow('fixture cancelled');
+    } finally { finish(); }
+    expect(before.isCurrent()).toBe(false);
+    expect((await captureCodexLocalAuthPolicy('pending-key', 'pending-model')).isCurrent()).toBe(true);
   });
 
   it('keeps official subscriptions and gateway compatibility distinct from provider OAuth', async () => {

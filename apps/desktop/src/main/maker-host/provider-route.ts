@@ -632,20 +632,35 @@ export function getProviderRoutingDescriptor(
 }
 
 /** Choose process isolation from routing metadata without loading any credentials. */
-export async function resolveCodexLocalAuthPolicy(
+export async function captureCodexLocalAuthPolicy(
   providerId: string | null | undefined,
   modelId: string,
-): Promise<'isolated' | 'legacy-shared'> {
+  signal?: AbortSignal,
+): Promise<{ policy: 'isolated' | 'legacy-shared'; isCurrent: () => boolean }> {
   // With an inferred source the transaction may temporarily remove the model
   // from the catalog. Wait before inference, rather than freezing an unknown route.
   while (true) {
+    signal?.throwIfAborted();
     const pending = providerId
       ? [runtimeCustomProviderId(providerId)].filter(isProviderRouteMutationInProgress)
       : [...providerRouteMutationCounts.keys()];
     if (pending.length === 0) break;
-    await Promise.all(pending.map((id) => new Promise<void>((resolve) => {
+    await Promise.all(pending.map((id) => new Promise<void>((resolve, reject) => {
       const waiters = providerRouteMutationWaiters.get(id) ?? new Set<() => void>();
-      waiters.add(resolve);
+      const done = () => {
+        signal?.removeEventListener('abort', cancel);
+        waiters.delete(done);
+        if (waiters.size === 0) providerRouteMutationWaiters.delete(id);
+        resolve();
+      };
+      const cancel = () => {
+        signal?.removeEventListener('abort', cancel);
+        waiters.delete(done);
+        if (waiters.size === 0) providerRouteMutationWaiters.delete(id);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      waiters.add(done);
       providerRouteMutationWaiters.set(id, waiters);
     })));
   }
@@ -653,7 +668,18 @@ export async function resolveCodexLocalAuthPolicy(
   const routing = getProviderRoutingDescriptor(source, 'codex', modelId);
   // Keep legacy reuse for gateway, third-party OAuth and unknown routes. This
   // is compatibility policy, not a claim that they need official Codex OAuth.
-  return routing?.authStrategy === 'api-key-header' ? 'isolated' : 'legacy-shared';
+  const revision = nextProviderRouteCredentialRevision;
+  return {
+    policy: routing?.authStrategy === 'api-key-header' ? 'isolated' : 'legacy-shared',
+    isCurrent: () => revision === nextProviderRouteCredentialRevision,
+  };
+}
+
+export async function resolveCodexLocalAuthPolicy(
+  providerId: string | null | undefined,
+  modelId: string,
+): Promise<'isolated' | 'legacy-shared'> {
+  return (await captureCodexLocalAuthPolicy(providerId, modelId)).policy;
 }
 
 export interface ResolvedSessionRoute {

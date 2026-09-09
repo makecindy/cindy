@@ -133,7 +133,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { inferProviderIdForModel, resolveCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { inferProviderIdForModel, captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -1543,7 +1543,7 @@ export function getMaker(): Maker {
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
       resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
         readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
-      resolveCodexLocalAuthPolicy,
+      resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
       resolveCodexThreadContextWindow: (providerId, modelId) => {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
         const override = source ? readModelContextLimit('codex', source, modelId) : null;

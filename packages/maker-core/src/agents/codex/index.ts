@@ -505,6 +505,22 @@ const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
 // One bridge is shared by every local host, including account and utility hosts.
 const LOCAL_MCP_REFRESH_KEY = 'local-mcp-refresh';
 const LOCAL_CONFIGURATION_CHANGE_KEY = LOCAL_MCP_REFRESH_KEY;
+// Only raised before a caller sends a thread RPC; safe to select a fresh route.
+class CodexRouteSelectionChangedError extends Error {}
+
+async function awaitCodexRouteSelection<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    void pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
 const CODEX_MODEL_LIST_RPC_TIMEOUT_MS = 20_000;
 const CODEX_MODEL_REFRESH_DEADLINE_MS = 20_000;
 
@@ -2405,12 +2421,38 @@ export class CodexAgent extends BaseAgent {
     }
   }
 
+  private routeResolutionAbort = new AbortController();
+
+  private async resolveLocalAuthSelection(providerId: string | null | undefined, model: string) {
+    const signal = this.routeResolutionAbort.signal;
+    for (let attempt = 0; ; attempt++) {
+      signal.throwIfAborted();
+      await awaitCodexRouteSelection(this.waitForHostCredentialModeSwitch(LOCAL_CONFIGURATION_CHANGE_KEY), signal);
+      signal.throwIfAborted();
+      const generation = this.hostGenerations.get(LOCAL_CONFIGURATION_CHANGE_KEY);
+      const resolved = await awaitCodexRouteSelection(
+        Promise.resolve(this.deps.resolveCodexLocalAuthPolicy?.(providerId, model, signal) ?? 'legacy-shared'), signal,
+      );
+      signal.throwIfAborted();
+      const policy = typeof resolved === 'string' ? resolved : resolved.policy;
+      const isCurrent = () => !signal.aborted
+        && generation === this.hostGenerations.get(LOCAL_CONFIGURATION_CHANGE_KEY)
+        && !this.hostCredentialModeSwitches.has(LOCAL_CONFIGURATION_CHANGE_KEY)
+        && (typeof resolved === 'string' || resolved.isCurrent());
+      if (isCurrent()) return { policy, isCurrent };
+      if (attempt >= 7) throw new CodexRouteSelectionChangedError('Codex route changed repeatedly during selection');
+    }
+  }
+
   private async getHost(
     remoteHostId?: string,
     credentialMode?: AgentCredentialMode,
     opts: {
       providerId?: string;
       ignoreBindingLeases?: number;
+      routeIsCurrent?: () => boolean;
+      routeSignal?: AbortSignal;
+      reuseExistingUtilityHost?: boolean;
       localAuthPolicy?: 'isolated' | 'legacy-shared';
       keyOverride?: string;
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
@@ -2421,6 +2463,9 @@ export class CodexAgent extends BaseAgent {
     } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? (opts.providerId ? `local-account:${opts.providerId}` : hostKey(remoteHostId));
+    const assertRouteCurrent = (): void => {
+      if (opts.routeIsCurrent && !opts.routeIsCurrent()) throw new CodexRouteSelectionChangedError();
+    };
     // spawnMode = 调用方原始诉求(undefined 保持 adapter fallback,spawn 行为不变)。
     // 复用判定分两级(review P2:归一化解析走 getState、含 reconcile/fs,不允许进
     // 无条件路径):
@@ -2476,7 +2521,8 @@ export class CodexAgent extends BaseAgent {
       return true;
     };
     while (true) {
-      if (!remoteHostId) await this.waitForHostCredentialModeSwitch(key);
+      if (!remoteHostId) await awaitCodexRouteSelection(this.waitForHostCredentialModeSwitch(key), opts.routeSignal);
+      assertRouteCurrent();
       const retiring = this.retiringHosts.get(key);
       if (retiring) {
         await this.beginHostRetirement(key, retiring.host, 'recheck retirement before Host reuse');
@@ -2485,6 +2531,8 @@ export class CodexAgent extends BaseAgent {
 
       const existing = this.hosts.get(key);
       if (existing) {
+        // Preserve getUtilityHost's reuse semantics if a switch finished while it awaited getHost.
+        if (opts.reuseExistingUtilityHost) return existing;
         const currentMode = this.hostCredentialModes.get(key);
         const currentEffective = this.hostEffectiveCredentialModes.get(key);
         const subagentRoutingProfileCompatible = remoteHostId
@@ -2499,6 +2547,7 @@ export class CodexAgent extends BaseAgent {
         ) {
           if (this.hosts.get(key) !== existing || this.retiringHosts.has(key)
             || (!remoteHostId && this.hostCredentialModeSwitches.has(LOCAL_MCP_REFRESH_KEY))) continue;
+assertRouteCurrent();
           return existing;
         }
         await this.shutdownHostForCredentialModeChange(
@@ -2516,6 +2565,10 @@ export class CodexAgent extends BaseAgent {
 
       const inflight = this.hostPromises.get(key);
       if (inflight) {
+        if (opts.reuseExistingUtilityHost) {
+          await inflight.promise;
+          continue;
+        }
         // inflight 的归一化形态要等 createHost 内 getState 完成才知道,这里按
         // undefined(保守)参与仲裁:跨形态请求会走重建,与改动前语义一致。
         // in-flight host 还不知道 codexProxyActive。provider-oauth 只复用同为 provider-oauth
@@ -2563,6 +2616,7 @@ export class CodexAgent extends BaseAgent {
           ) {
             if (this.hosts.get(key) !== inflightHost || this.retiringHosts.has(key)
               || this.hostCredentialModeSwitches.has(LOCAL_MCP_REFRESH_KEY)) continue;
+assertRouteCurrent();
             return inflightHost;
           }
           continue;
@@ -2600,6 +2654,7 @@ export class CodexAgent extends BaseAgent {
 
       if (this.retiringHosts.has(key) || this.hosts.has(key) || this.hostPromises.has(key)) continue;
       if (!remoteHostId && this.hostCredentialModeSwitches.has(LOCAL_MCP_REFRESH_KEY)) continue;
+      assertRouteCurrent();
       const generation = this.bumpHostGeneration(key);
       // 超集归一化发生在 createHost 内(gateway-key → oauth-bearer);通过回调同步
       // in-flight 登记,让并发的 oauth-bearer 诉求命中复用而不是 supersede 重建。
@@ -2627,6 +2682,7 @@ export class CodexAgent extends BaseAgent {
         opts.sqliteHome,
         opts.historyHome,
         opts.localAuthPolicy,
+        opts.routeIsCurrent,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2642,6 +2698,7 @@ export class CodexAgent extends BaseAgent {
       const host = await promise;
       if (this.hosts.get(key) !== host || this.retiringHosts.has(key)
         || (!remoteHostId && this.hostCredentialModeSwitches.has(LOCAL_MCP_REFRESH_KEY))) continue;
+assertRouteCurrent();
       return host;
     }
   }
@@ -2694,7 +2751,7 @@ export class CodexAgent extends BaseAgent {
       const existing = this.hosts.get(key);
       if (existing) return { key, host: existing };
       const inflight = this.hostPromises.get(key);
-      if (!inflight) return { key, host: await this.getHost() };
+      if (!inflight) return { key, host: await this.getHost(undefined, undefined, { reuseExistingUtilityHost: true }) };
       const host = await inflight.promise;
       if (this.hosts.get(key) !== host || this.retiringHosts.has(key)) continue;
       return { key, host };
@@ -2866,6 +2923,7 @@ export class CodexAgent extends BaseAgent {
     sqliteHome?: string,
     historyHome?: string,
     localAuthPolicy?: 'isolated' | 'legacy-shared',
+    routeIsCurrent?: () => boolean,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2883,6 +2941,7 @@ export class CodexAgent extends BaseAgent {
       generation,
     });
     const assertCurrentGeneration = (stage: string): void => {
+      if (routeIsCurrent && !routeIsCurrent()) throw new CodexRouteSelectionChangedError();
       if ((this.hostGenerations.get(key) ?? 0) === generation) return;
       throw new Error(`Codex app-server host creation was superseded before ${stage}`);
     };
@@ -3060,6 +3119,7 @@ export class CodexAgent extends BaseAgent {
         } catch (e) {
           await hostRetirementCleanup?.();
           hostRetirementCleanup = undefined;
+          if (e instanceof CodexRouteSelectionChangedError) throw e;
           const isFatalSpawnConfigError =
             (typeof e === 'object' && e !== null &&
               (e as { codexSpawnConfigFatal?: unknown }).codexSpawnConfigFatal === true);
@@ -4808,8 +4868,10 @@ export class CodexAgent extends BaseAgent {
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
     const accountSessionHost = !opts.remoteHostId && (accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
     if (opts.remoteHostId && accountProviderId) throw new Error('This Codex account belongs to the local device');
-    if (!opts.remoteHostId) await this.waitForHostCredentialModeSwitch(LOCAL_CONFIGURATION_CHANGE_KEY);
-    const configurationGeneration = this.hostGenerations.get(LOCAL_CONFIGURATION_CHANGE_KEY);
+    const startupRouteSignal = this.routeResolutionAbort.signal;
+    let routeSelection = opts.remoteHostId
+      ? { policy: 'legacy-shared' as const, isCurrent: () => true }
+      : await this.resolveLocalAuthSelection(opts.providerId, opts.model);
     const requestedCredentialMode = opts.remoteHostId
       ? undefined
       : accountProviderId ? 'oauth-bearer' : resolveAgentCredentialMode({
@@ -4817,13 +4879,11 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
-    const localAuthPolicy = opts.remoteHostId
-      ? 'legacy-shared'
-      : await this.deps.resolveCodexLocalAuthPolicy?.(opts.providerId, opts.model) ?? 'legacy-shared';
-    const credentialMode = requestedCredentialMode
+    let localAuthPolicy = routeSelection.policy;
+    let credentialMode = requestedCredentialMode
       ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
-    const initialCustomContextWindow = !reviewMode
+    let initialCustomContextWindow = !reviewMode
       ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const customContextCatalogIdentity = (
@@ -4833,13 +4893,13 @@ export class CodexAgent extends BaseAgent {
       typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
         ? `${model}\0${Math.floor(contextWindow)}`
         : null;
-    const initialCustomContextCatalogIdentity = customContextCatalogIdentity(
+    let initialCustomContextCatalogIdentity = customContextCatalogIdentity(
       opts.model,
       initialCustomContextWindow,
     );
     // SSH shares a daemon across tasks; its context settings belong to each
     // thread/start or thread/resume config, never a local single-session host.
-    const usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
+    let usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
     const resolveModelSwitchCatalogIdentity = async (
       newModel: string,
       setOpts?: { providerId?: string | null },
@@ -4857,9 +4917,19 @@ export class CodexAgent extends BaseAgent {
       setOpts?: { providerId?: string | null },
     ): Promise<boolean> => {
       const nextProvider = setOpts && Object.hasOwn(setOpts, 'providerId') ? setOpts.providerId : mutableProviderId;
-      return (this.deps.isCodexAccountProvider?.(nextProvider) ? nextProvider : undefined) !== accountProviderId ||
-        (await resolveModelSwitchCatalogIdentity(newModel, setOpts)) !== initialCustomContextCatalogIdentity ||
-        (!opts.remoteHostId && (await this.deps.resolveCodexLocalAuthPolicy?.(nextProvider, newModel) ?? 'legacy-shared') !== localAuthPolicy);
+      if ((this.deps.isCodexAccountProvider?.(nextProvider) ? nextProvider : undefined) !== accountProviderId) return true;
+      for (let attempt = 0; ; attempt++) {
+        const selection = opts.remoteHostId ? null : await this.resolveLocalAuthSelection(
+          setOpts && Object.hasOwn(setOpts, 'providerId') ? setOpts.providerId : mutableProviderId,
+          newModel,
+        );
+        const catalogIdentity = await resolveModelSwitchCatalogIdentity(newModel, setOpts);
+        if (!selection || selection.isCurrent()) {
+          return catalogIdentity !== initialCustomContextCatalogIdentity
+            || (selection !== null && selection.policy !== localAuthPolicy);
+        }
+        if (attempt >= 7) throw new CodexRouteSelectionChangedError('Codex route changed repeatedly during model switch');
+      }
     };
     const baseSessionHostKey = reviewMode
       ? localReviewHostKey(sid)
@@ -4870,7 +4940,7 @@ export class CodexAgent extends BaseAgent {
       ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
     const sessionSqliteHome = sessionStorage?.sqliteHome;
-    const currentHostKey = codexLocalAuthHostIdentity((accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
+    let currentHostKey = codexLocalAuthHostIdentity((accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
       + (sessionStorage ? `:storage:${sessionSqliteHome}:history:${sessionStorage.historyHome}` : ''), localAuthPolicy);
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
@@ -4886,13 +4956,9 @@ export class CodexAgent extends BaseAgent {
       if (opts.remoteHostId) return await this.getHost(opts.remoteHostId, credentialMode);
       // 本地会话先等已有 credential switch 完成，再占用 startup reservation。否则
       // session 已拿到旧 host、但尚未 thread/start 订阅时，credential 切换看不到它。
-      do {
-        await this.waitForHostCredentialModeSwitch(currentHostKey);
-      } while (this.hostCredentialModeSwitches.has(LOCAL_MCP_REFRESH_KEY)
-        || this.hostCredentialModeSwitches.has(currentHostKey));
-      if (this.hostGenerations.get(LOCAL_CONFIGURATION_CHANGE_KEY) !== configurationGeneration) {
-        throw new Error('Codex provider configuration changed while preparing the session; retry with the current route');
-      }
+      await awaitCodexRouteSelection(this.waitForHostCredentialModeSwitch(currentHostKey), startupRouteSignal);
+      startupRouteSignal.throwIfAborted();
+      if (!routeSelection.isCurrent()) throw new CodexRouteSelectionChangedError();
       acquireHostBindingLeaseIfNeeded();
       return await this.getHost(opts.remoteHostId, credentialMode, {
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
@@ -4900,6 +4966,8 @@ export class CodexAgent extends BaseAgent {
         ...(sessionStorage ? { historyHome: sessionStorage.historyHome } : {}),
         ...(accountSessionHost || reviewMode || usesCustomContextHost || sessionSqliteHome ? { keyOverride: currentHostKey } : {}),
         ignoreBindingLeases: 1,
+        routeIsCurrent: routeSelection.isCurrent,
+        routeSignal: startupRouteSignal,
         ...(localAuthPolicy === 'isolated' || reviewMode || usesCustomContextHost
           ? { keyOverride: currentHostKey }
           : {}),
@@ -4915,10 +4983,28 @@ export class CodexAgent extends BaseAgent {
             : {}),
       });
     };
-    const host = await getSessionHost().catch((error) => {
-      releaseHostBindingLeaseIfNeeded();
-      throw error;
-    });
+    const host = await (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await getSessionHost();
+        } catch (error) {
+          releaseHostBindingLeaseIfNeeded();
+          startupRouteSignal.throwIfAborted();
+          if (!(error instanceof CodexRouteSelectionChangedError) || attempt >= 7) throw error;
+          routeSelection = await this.resolveLocalAuthSelection(opts.providerId, opts.model);
+          localAuthPolicy = routeSelection.policy;
+          credentialMode = requestedCredentialMode ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
+          initialCustomContextWindow = !reviewMode
+            ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null : null;
+          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.model, initialCustomContextWindow);
+          usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
+          currentHostKey = codexLocalAuthHostIdentity(
+            reviewMode ? localReviewHostKey(sid) : usesCustomContextHost ? localCustomContextHostKey(sid) : hostKey(),
+            localAuthPolicy,
+          );
+        }
+      }
+    })();
     const hostGeneration = this.hostGenerations.get(currentHostKey) ?? 0;
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
     const retireSingleSessionHost = async (): Promise<void> => {
@@ -14443,10 +14529,9 @@ export class CodexAgent extends BaseAgent {
     // maxLineBytes 守卫后整条连接被熔断,当时共享 utility host 上挂着的 5 个活跃
     // session 全部同时报错。fork 是离线控制面操作(不跑 turn、无订阅者),改用
     // 唯一 key 的一次性 app-server:超限只让 fork 自己失败,不波及活跃任务。
-    const localAuthPolicy = await this.deps.resolveCodexLocalAuthPolicy?.(
-      opts.providerId, opts.model ?? '',
-    );
-    const forkHostKey = codexLocalAuthHostIdentity(forkAccountId ? `local-account:${forkAccountId}:${localForkHostKey()}` : localForkHostKey(), localAuthPolicy);
+    const forkRouteSignal = this.routeResolutionAbort.signal;
+    const forkBaseHostKey = forkAccountId ? `local-account:${forkAccountId}:${localForkHostKey()}` : localForkHostKey();
+    let forkHostKey = forkBaseHostKey;
     let releaseForkLease: (() => void) | undefined;
     let forkHost: AppServerHost | undefined;
     let forkHostRetired = false;
@@ -14515,22 +14600,36 @@ export class CodexAgent extends BaseAgent {
       const forkSqliteHome = forkStorage?.sqliteHome;
       stage = 'host-create';
       const leased = await this.acquireHostOperation(async () => {
-        const host = await this.getHost(undefined, forkCredentialMode, {
-          keyOverride: forkHostKey,
-          ...(localAuthPolicy === 'isolated' ? { localAuthPolicy } : {}),
-          ...(forkAccountId ? { providerId: forkAccountId } : {}),
-          ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
-          ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
-          hostPurpose: 'control-plane',
-        }).catch((error) => {
-          // This is the outgoing source's offline fork host, not a target send.
-          // Missing old credentials must not trap a task on the provider it is leaving.
-          if (opts.stripEncryptedReasoning && error instanceof AgentNotAuthenticatedError) {
-            throw new CodexHistoryRecoveryRequiredError();
+      const host = await (async () => {
+        for (let attempt = 0; ; attempt++) {
+          forkRouteSignal.throwIfAborted();
+          const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model ?? '');
+          forkHostKey = codexLocalAuthHostIdentity(forkBaseHostKey, selection.policy);
+          try {
+            return await this.getHost(undefined, forkCredentialMode, {
+              keyOverride: forkHostKey,
+              ...(forkAccountId ? { providerId: forkAccountId } : {}),
+              ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
+              ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
+              routeIsCurrent: selection.isCurrent,
+              routeSignal: forkRouteSignal,
+              ...(selection.policy === 'isolated' ? { localAuthPolicy: selection.policy } : {}),
+              hostPurpose: 'control-plane',
+            });
+          } catch (error) {
+            forkRouteSignal.throwIfAborted();
+            if (!(error instanceof CodexRouteSelectionChangedError) || attempt >= 7) throw error;
           }
-          throw error;
-        });
-        return { key: forkHostKey, host };
+        }
+      })().catch((error) => {
+        // This is the outgoing source's offline fork host, not a target send.
+        // Missing old credentials must not trap a task on the provider it is leaving.
+        if (opts.stripEncryptedReasoning && error instanceof AgentNotAuthenticatedError) {
+          throw new CodexHistoryRecoveryRequiredError();
+        }
+        throw error;
+      });
+      return { key: forkHostKey, host };
       });
       const { host } = leased;
       releaseForkLease = leased.release;
@@ -14689,6 +14788,8 @@ export class CodexAgent extends BaseAgent {
    * SSH-bridged 各一份)。Windows 不会随父进程死, 必须显式收割。幂等。
    */
   async dispose(): Promise<void> {
+    this.routeResolutionAbort.abort(new Error('Codex route selection cancelled by dispose'));
+    this.routeResolutionAbort = new AbortController();
     this.deps.logger.error('codex dispose called', {
       hostCount: this.hosts.size,
       inflightCount: this.hostPromises.size,
