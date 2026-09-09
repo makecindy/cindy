@@ -2,6 +2,7 @@ import {
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
+  INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
   type MainOwnedSendContext,
@@ -212,6 +213,7 @@ type MakerSendOptions = {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   /** Main-only continuation: a restored intent is not an authored user turn. */
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
   userName?: string;
@@ -1296,6 +1298,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           : null;
         const sendResult = await sess.send(outgoing as never, {
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
+          ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
+            ? { [INHERITED_CAPABILITY_SELECTION]: so[INHERITED_CAPABILITY_SELECTION] }
+            : {}),
           ...(restoredAutoReviewIntent !== undefined
             ? { [AUTO_REVIEW_USER_INTENT]: restoredAutoReviewIntent }
             : {}),

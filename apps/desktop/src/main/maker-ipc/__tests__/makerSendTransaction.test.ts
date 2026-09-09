@@ -2,6 +2,7 @@ import {
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
+  INHERITED_CAPABILITY_SELECTION,
   appendAutoReviewUserIntent,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
@@ -2155,10 +2156,12 @@ describe('session-agent-switch handoff injection', () => {
     await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Internal continuation', undefined, {
       [AUTO_REVIEW_SOURCE_CONTENT]: 'Continue',
       [AUTO_REVIEW_USER_INTENT]: intent,
+      [INHERITED_CAPABILITY_SELECTION]: '$image-plugin',
     });
     const opts = vi.mocked(session.send).mock.calls[0]![1]!;
     expect(opts[AUTO_REVIEW_USER_INTENT]).toBe(intent);
     expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('Continue');
+    expect(opts[INHERITED_CAPABILITY_SELECTION]).toBe('$image-plugin');
     expect(deps.createDbMessage).not.toHaveBeenCalled();
   });
 

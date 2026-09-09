@@ -10,6 +10,7 @@ import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
+  INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
@@ -2065,7 +2066,8 @@ describe('CodexAgent capability routing', () => {
     }
   });
 
-  it('binds explicit capability selection before a pending turn/start response', async () => {
+  it.each([undefined, '', '请用 $feishu-delegate:message-feishu-coworkers 查消息'])(
+    'binds original capability selection before pending turn/start: %s', async (inheritedSelection) => {
     const pendingTurnStart = deferred<{ turn: { id: string } }>();
     const agent = new CodexAgent(
       createDeps(
@@ -2091,7 +2093,10 @@ describe('CodexAgent capability routing', () => {
     });
     const sendPromise = handle.send({
       type: 'user',
-      content: '请用 $feishu-delegate:message-feishu-coworkers 查消息',
+      content: inheritedSelection === undefined
+        ? '请用 $feishu-delegate:message-feishu-coworkers 查消息' : 'Continue the retained task.',
+    }, inheritedSelection === undefined ? undefined : {
+      [INHERITED_CAPABILITY_SELECTION]: inheritedSelection,
     });
     await vi.waitFor(() => {
       expect(
@@ -2141,7 +2146,7 @@ describe('CodexAgent capability routing', () => {
         message: 'Allow tool call',
         requestedSchema: {},
       }),
-    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    ).resolves.toEqual({ action: inheritedSelection === '' ? 'decline' : 'accept', content: null, _meta: null });
 
     pendingTurnStart.resolve({ turn: { id: 'early-capability-turn' } });
     await sendPromise;

@@ -375,6 +375,7 @@ export interface ContextOverflowRolloverDeps {
       resumeRetainedHistory: true;
       sourceUserContent: unknown;
       sourceUserClientId: string;
+      sourceCapabilitySelectionText: string;
     },
   ): Promise<{ accepted: boolean }>;
   getRecoveryAbortSignal?(sessionId: string): AbortSignal;
@@ -430,6 +431,7 @@ export function shouldRebuildForModelWindowSwitch(input: {
 
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string): OverflowClaimResult;
+  cancelRecovery(sessionId: string): void;
   tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
@@ -449,7 +451,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     },
   ): Promise<ModelWindowSwitchPreparationResult>;
 } {
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, AbortController | undefined>();
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
 
@@ -521,6 +523,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           // never replay the original input after tools may already have run.
           if (signal?.aborted) return true;
           if (!sourceUser || isExternalDispatchOwner(sourceUser.agentMeta)) return false;
+          const sourceWire = persistedUserContentToWireMessage(
+            sourceUser.agentMeta?.agentFacingWireContent ?? sourceUser.content,
+          );
+          const sourceText = typeof sourceWire === 'string' ? sourceWire : sourceWire.content;
           continuedInputs.set(sessionId, sourceUser.clientId);
           const continuation = await deps.replayUserMessage(
             sessionId,
@@ -531,6 +537,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
               resumeRetainedHistory: true,
               sourceUserContent: sourceUser.content,
               sourceUserClientId: sourceUser.clientId,
+              sourceCapabilitySelectionText: typeof sourceText === 'string'
+                ? sourceText : extractPlainText(sourceText),
             },
           );
           if (signal?.aborted) return true;
@@ -892,7 +900,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   return {
     async prepareNativeSessionRecovery(sessionId, target, assertCanCommit) {
       if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
-      inFlight.add(sessionId);
+      inFlight.set(sessionId, undefined);
       try {
         await deps.withCloseSuppressed(sessionId, async () => {
           await deps.drainPersistQueue();
@@ -937,14 +945,23 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     claim(sessionId: string): OverflowClaimResult {
       if (inFlight.has(sessionId)) return 'in-flight';
-      inFlight.add(sessionId);
+      inFlight.set(sessionId, new AbortController());
       return 'claimed';
+    },
+
+    cancelRecovery(sessionId: string): void {
+      // Keep the claim until its async work unwinds; only the hidden send is
+      // cancelled, never the newer input or the session's normal generation.
+      inFlight.get(sessionId)?.abort();
     },
 
     async tryRecover(sessionId: string, errorData: unknown): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
-        signal = deps.getRecoveryAbortSignal?.(sessionId);
+        const claim = inFlight.get(sessionId) ?? new AbortController();
+        inFlight.set(sessionId, claim);
+        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
+        signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () => runRecover(sessionId, errorData, signal));
         }
@@ -963,7 +980,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     async prepareUnhealthySession(sessionId: string): Promise<boolean> {
       if (inFlight.has(sessionId)) return false;
-      inFlight.add(sessionId);
+      inFlight.set(sessionId, undefined);
       try {
         return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId));
       } catch (error) {
@@ -981,7 +998,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     async prepareModelWindowSwitch(sessionId, target) {
       if (inFlight.has(sessionId)) return 'in-flight';
-      inFlight.add(sessionId);
+      inFlight.set(sessionId, undefined);
       try {
         return await deps.withCloseSuppressed(sessionId, () =>
           runPrepareModelWindowSwitch(sessionId, target),

@@ -33,7 +33,7 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import { readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import type {
   AgentEvent,
@@ -12079,8 +12079,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // recovery 和错误横幅。重放绕开 coordinator，随后的 done 会被 recovery 吃掉。
       agentInputCoordinatorHolder?.clearError(sessionId);
     },
-    getRecoveryAbortSignal: (sessionId) =>
-      agentInputCoordinatorHolder!.getInputAbortSignal(sessionId),
+    getRecoveryAbortSignal: (sessionId) => {
+      const coordinator = agentInputCoordinatorHolder!;
+      if (coordinator.hasPendingQueuedWork(sessionId)) {
+        // The terminal error may have installed recovery after this input was
+        // queued. Release that old error so the queued input can actually drain.
+        coordinator.clearError(sessionId);
+        return AbortSignal.abort();
+      }
+      return coordinator.getInputAbortSignal(sessionId);
+    },
     replayUserMessage: async (sessionId, content, agentFacingWireContent, recovery) => {
       const [row] = await getDbClient()
         .drizzle.select()
@@ -12131,6 +12139,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         recovery
           ? {
               signal: recovery.signal,
+              [INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
               // The internal continuation is not fresh user authorization. Restore
               // intent from authored history, never attachment/quote projections.
               [AUTO_REVIEW_SOURCE_CONTENT]: readAutoReviewUserText(recovery.sourceUserContent) ?? '',
@@ -13240,6 +13249,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         autoResumeBookkeeping.bindSuppressedErrorToClient(sessionId, attemptToken, clientId);
       }
       if (source === 'manual') {
+        contextOverflowRolloverHolder?.cancelRecovery(sessionId);
         // UI continuation can dispatch before the scheduler backoff callback.
         // Retire that pending waiter first so it cannot consume the manual retry.
         failPendingSchedulerAutoResume(sessionId);
@@ -13254,6 +13264,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
     onUserEnqueue: (sessionId) => {
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its
       // recovery was superseded. Fail the scheduler waiter synchronously so it
@@ -13269,6 +13280,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     onAutomaticEnqueue: (sessionId) => {
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
       // Orca 等自动输入会推进同一会话，必须撤销旧 retry owner，避免它消费这轮事件；
       // 但预算充值仍只发生在真人消息的持久化路径，自动输入不会重置 episode。
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);

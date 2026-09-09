@@ -1347,7 +1347,12 @@ describe('createContextOverflowRollover', () => {
 
   it('strips oversized Codex history in place instead of forking a Cindy session', async () => {
     const deps = makeDeps([
-      msg('user', '继续', 'u1'),
+      { ...msg('user', '继续', 'u1'), agentMeta: { agentFacingWireContent: {
+        type: 'user', content: [
+          { type: 'text', text: 'Use $image-plugin to finish this image' },
+          { type: 'image', path: '/retained/image.png' },
+        ],
+      } } },
       msg('assistant', 'Already changed files; still checking the result', 'a1'),
       msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
     ]);
@@ -1384,7 +1389,8 @@ describe('createContextOverflowRollover', () => {
     expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
     expect(deps.replayUserMessage).toHaveBeenCalledWith(
       's1', CODEX_HISTORY_CONTINUE_MESSAGE, undefined,
-      { signal: undefined, resumeRetainedHistory: true, sourceUserContent: '继续', sourceUserClientId: 'u1' },
+      { signal: expect.any(AbortSignal), resumeRetainedHistory: true, sourceUserContent: '继续', sourceUserClientId: 'u1',
+        sourceCapabilitySelectionText: 'Use $image-plugin to finish this image' },
     );
     rollover.claim('s1');
     await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(false);
@@ -1428,6 +1434,32 @@ describe('createContextOverflowRollover', () => {
       );
     },
   );
+
+  it.each(['claimed', 'strip', 'dispatch'] as const)('new input cancels recovery during %s', async (phase) => {
+    const deps = makeDeps([msg('user', 'old task', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()), agentKind: 'codex', sdkSessionId: 'fat-thread',
+    });
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: async () => {
+        if (phase === 'strip') rollover.cancelRecovery('s1');
+        return 'recovered';
+      },
+      replayUserMessage: async (...args) => {
+        deps.replayUserMessage();
+        rollover.cancelRecovery('s1');
+        expect(args[3]?.signal?.aborted).toBe(true);
+        return { accepted: false };
+      },
+    });
+    rollover.claim('s1');
+    if (phase === 'claimed') rollover.cancelRecovery('s1');
+    await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(true);
+    expect(deps.replayUserMessage).toHaveBeenCalledTimes(phase === 'dispatch' ? 1 : 0);
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
+    expect(rollover.claim('s1')).toBe('claimed');
+  });
 
   it('falls back to rollover when oversized strip fails', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);

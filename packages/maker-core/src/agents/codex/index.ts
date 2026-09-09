@@ -28,6 +28,7 @@ import { structuredPatch } from 'diff';
 
 import {
   BaseAgent,
+  INHERITED_CAPABILITY_SELECTION,
   CodexResumePreparationBlockedError,
   OneShotError,
   AgentNotAuthenticatedError,
@@ -12114,7 +12115,7 @@ export class CodexAgent extends BaseAgent {
         const capabilitySelectionText =
           (sendOpts as CodexInternalSendOptions | undefined)?.[
             CODEX_INHERITED_CAPABILITY_SELECTION
-          ] ?? userMessageText(message.content);
+          ] ?? sendOpts?.[INHERITED_CAPABILITY_SELECTION] ?? userMessageText(message.content);
         assertCurrentHost('turn/start');
         resubscribeAfterTransportErrorIfNeeded();
         // 新 turn 总是携带当前 (可能已收紧的) 策略, 上一轮残留的延迟中断标记
