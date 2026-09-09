@@ -103,6 +103,12 @@ function databaseSizeWarningApi() {
       isCustomized: true,
       defaultThresholdGiB: 10,
     })),
+    resetSettings: vi.fn(async () => ({
+      thresholdGiB: 10,
+      disabled: false,
+      isCustomized: false,
+      defaultThresholdGiB: 10,
+    })),
     onChanged: vi.fn(() => () => undefined),
   };
 }
@@ -223,6 +229,95 @@ describe('StorageManagementCard fixed cache directories', () => {
     await waitFor(() => {
       expect((input as HTMLInputElement).value).toBe('10');
     });
+  });
+
+  it('compares only database bytes with the reminder threshold', async () => {
+    vi.mocked(window.electronAPI.localDb.databaseSizeWarning.measure).mockResolvedValue({
+      databaseBytes: 1024 ** 3,
+    });
+    vi.mocked(window.electronAPI.cindyMediaStorage.stats).mockResolvedValue({
+      success: true,
+      blobs: { totalCount: 1, totalBytes: 20 * 1024 ** 3, cacheCount: 1, cacheBytes: 20 * 1024 ** 3 },
+      legacy: { bytes: 0, fileCount: 0 },
+      deadDirs: [],
+    });
+    render(<StorageManagementCard />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('10');
+    });
+  });
+
+  it('keeps database usage known when media statistics fail', async () => {
+    vi.mocked(window.electronAPI.localDb.databaseSizeWarning.measure).mockResolvedValue({
+      databaseBytes: 2 * 1024 ** 3,
+    });
+    vi.mocked(window.electronAPI.cindyMediaStorage.stats).mockRejectedValue(new Error('unavailable'));
+    render(<StorageManagementCard />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('20');
+      expect(screen.getByText('settings.about.storage.statsFailed')).toBeTruthy();
+    });
+  });
+
+  it('does not save on Enter, but persists when the threshold field loses focus', async () => {
+    render(<StorageManagementCard />);
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.databaseSizeWarning.getSettings).toHaveBeenCalled();
+    });
+    const input = screen.getByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '20' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(window.electronAPI.localDb.databaseSizeWarning.setSettings).not.toHaveBeenCalled();
+
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.databaseSizeWarning.setSettings).toHaveBeenCalledWith({
+        thresholdGiB: 20,
+      });
+    });
+  });
+
+  it('restores warning overrides using the defaults returned by Main', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    vi.mocked(api.getSettings).mockResolvedValue({
+      thresholdGiB: 25, disabled: true, isCustomized: true, defaultThresholdGiB: 12,
+    });
+    vi.mocked(api.resetSettings).mockResolvedValue({
+      thresholdGiB: 12, disabled: false, isCustomized: false, defaultThresholdGiB: 12,
+    });
+    render(<StorageManagementCard />);
+    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' });
+    await waitFor(() => expect((reset as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(reset);
+
+    await waitFor(() => {
+      expect(api.resetSettings).toHaveBeenCalledOnce();
+      expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('12');
+      expect(screen.getByRole('switch', {
+        name: 'settings.about.storage.dbSizeWarningDisableLabel',
+      }).getAttribute('aria-checked')).toBe('false');
+      expect((reset as HTMLButtonElement).disabled).toBe(true);
+    });
+    expect(api.setSettings).not.toHaveBeenCalled();
+  });
+
+  it('preserves warning settings and shows a localized error when reset fails', async () => {
+    const api = window.electronAPI.localDb.databaseSizeWarning;
+    vi.mocked(api.getSettings).mockResolvedValue({
+      thresholdGiB: 25, disabled: true, isCustomized: true, defaultThresholdGiB: 10,
+    });
+    vi.mocked(api.resetSettings).mockRejectedValue(new Error('[INTERNAL] failed to reset settings'));
+    render(<StorageManagementCard />);
+    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' });
+    await waitFor(() => expect((reset as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(reset);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('ipcError.INTERNAL'));
+    expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('25');
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('opens the fixed legacy image directory through the dedicated API', async () => {

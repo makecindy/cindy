@@ -4436,6 +4436,13 @@ interface ElectronAPI {
       }) => Promise<{
         thresholdGiB: number;
         disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }>;
+      resetSettings: () => Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
         defaultThresholdGiB: number;
       }>;
       getStatus: () => Promise<{ databaseBytes: number | null }>;

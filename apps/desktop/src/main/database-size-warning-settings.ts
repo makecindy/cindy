@@ -6,6 +6,7 @@ import {
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 import { createLogger } from './logger.js';
+import { throwIpcError } from './utils/ipcValidate.js';
 
 export const DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB = 10;
 const MIN_THRESHOLD_GIB = 1;
@@ -89,18 +90,35 @@ const store = createOverrideSettingsFile<DatabaseSizeWarningSettings>({
 });
 
 export function readDatabaseSizeWarningSettings(): DatabaseSizeWarningSettings {
+  store.invalidateIfChanged();
   return store.read();
 }
 
 export function readDatabaseSizeWarningSettingsState(): OverrideSettingsState<DatabaseSizeWarningSettings> {
+  store.invalidateIfChanged();
   return store.readState();
 }
 
-export function writeDatabaseSizeWarningSettings(
+export async function writeDatabaseSizeWarningSettings(
   patch: Partial<DatabaseSizeWarningSettings>,
-): DatabaseSizeWarningSettings {
-  store.writePatch(patch);
-  return store.read();
+): Promise<DatabaseSizeWarningSettings> {
+  try {
+    await store.writePatchAtomic(patch);
+    return store.read();
+  } catch {
+    log.warn('database size warning settings write failed');
+    throwIpcError('INTERNAL', 'failed to save database size warning settings');
+  }
+}
+
+/** Delete overrides under the same lock as writes, so future defaults remain effective. */
+export async function resetDatabaseSizeWarningSettings(): Promise<DatabaseSizeWarningSettings> {
+  try {
+    return await store.resetAtomic();
+  } catch {
+    log.warn('database size warning settings reset failed');
+    throwIpcError('INTERNAL', 'failed to reset database size warning settings');
+  }
 }
 
 export const __testing = { normalize, DEFAULTS, MIN_THRESHOLD_GIB, MAX_THRESHOLD_GIB };

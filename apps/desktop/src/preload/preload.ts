@@ -5092,8 +5092,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }): Promise<{
         thresholdGiB: number;
         disabled: boolean;
+        isCustomized?: boolean;
         defaultThresholdGiB: number;
       }> => ipcRenderer.invoke('database-size-warning:set-settings', settings),
+      resetSettings: (): Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }> => ipcRenderer.invoke('database-size-warning:reset-settings'),
       getStatus: (): Promise<{ databaseBytes: number | null }> =>
         ipcRenderer.invoke('database-size-warning:get-status'),
       measure: (): Promise<{ databaseBytes: number | null }> =>

@@ -32,6 +32,7 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -224,9 +225,9 @@ export function StorageManagementCard() {
   const totalBytes = databaseBytes !== null && mediaBytes !== null
     ? databaseBytes + mediaBytes
     : null;
-  const overviewPercent = totalBytes === null
+  const overviewPercent = databaseBytes === null || warningThresholdGiB <= 0
     ? null
-    : Math.min(100, (totalBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
+    : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
 
   return (
     <div id="settings-storage-section" className="flex flex-col gap-3">
@@ -244,10 +245,9 @@ export function StorageManagementCard() {
       {/* 占用总览 */}
       <div
         className={cn(
-          'grid gap-4 rounded-2xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
+          'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
-          'shadow-[var(--shadow-menu)]',
         )}
       >
         <div>
@@ -257,7 +257,14 @@ export function StorageManagementCard() {
           <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.overviewDescription')}
           </p>
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]">
+          <div
+            role="progressbar"
+            aria-label={t('settings.about.storage.databaseSectionTitle')}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={overviewPercent ?? undefined}
+            className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
+          >
             {overviewPercent !== null && (
               <span
                 className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
@@ -310,10 +317,9 @@ export function StorageManagementCard() {
       </div>
       <div
         className={cn(
-          'overflow-hidden rounded-2xl',
+          'overflow-hidden rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
-          'shadow-[var(--shadow-menu)]',
         )}
       >
         <div className="flex items-center justify-between gap-3 px-[18px] py-4">
@@ -372,10 +378,9 @@ export function StorageManagementCard() {
       </div>
       <div
         className={cn(
-          'overflow-hidden rounded-2xl',
+          'overflow-hidden rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
-          'shadow-[var(--shadow-menu)]',
         )}
       >
         <DatabaseSlimmingSection
@@ -543,6 +548,9 @@ function DatabaseSlimmingSection({
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [warningDisabled, setWarningDisabled] = useState(false);
+  const [warningCustomized, setWarningCustomized] = useState(false);
+  const [warningSaving, setWarningSaving] = useState(false);
+  const warningWriteQueueRef = useRef(Promise.resolve());
   const warningThresholdPersistedRef = useRef(warningThresholdGiB);
   const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
     DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -570,6 +578,7 @@ function DatabaseSlimmingSection({
         warningThresholdPersistedRef.current = settings.thresholdGiB;
         onWarningThresholdChange(settings.thresholdGiB);
         setWarningDisabled(settings.disabled);
+        setWarningCustomized(settings.isCustomized === true);
       })
       .catch(() => undefined);
     return () => {
@@ -577,29 +586,36 @@ function DatabaseSlimmingSection({
     };
   }, []);
 
-  const saveWarningThreshold = async () => {
+  // Blur-save may precede a reset click. Keep that user action order through persistence.
+  const persistWarningSettings = (patch?: { thresholdGiB?: number; disabled?: boolean }) => {
+    const pending = warningWriteQueueRef.current.then(async () => {
+      setWarningSaving(true);
+      try {
+        const api = window.electronAPI.localDb.databaseSizeWarning;
+        const saved = patch ? await api.setSettings(patch) : await api.resetSettings();
+        warningThresholdPersistedRef.current = saved.thresholdGiB;
+        onWarningThresholdChange(saved.thresholdGiB);
+        setWarningDisabled(saved.disabled);
+        setWarningCustomized(saved.isCustomized === true);
+      } catch (err) {
+        onWarningThresholdChange(warningThresholdPersistedRef.current);
+        toast.error(t(mapIpcErrorToI18nKey(err)));
+      } finally {
+        setWarningSaving(false);
+      }
+    });
+    warningWriteQueueRef.current = pending;
+    return pending;
+  };
+
+  const saveWarningThreshold = () => {
     const value = Number(warningThresholdGiB);
     if (!Number.isFinite(value) || value < 1 || value > 1024) {
       onWarningThresholdChange(warningThresholdPersistedRef.current);
       return;
     }
-    try {
-      const saved = await window.electronAPI.localDb.databaseSizeWarning.setSettings({
-        thresholdGiB: value,
-      });
-      warningThresholdPersistedRef.current = saved.thresholdGiB;
-      onWarningThresholdChange(saved.thresholdGiB);
-    } catch {
-      onWarningThresholdChange(warningThresholdPersistedRef.current);
-    }
-  };
-
-  const setWarningDisabledAndPersist = async (disabled: boolean) => {
-    setWarningDisabled(disabled);
-    try {
-      await window.electronAPI.localDb.databaseSizeWarning.setSettings({ disabled });
-    } catch {
-      setWarningDisabled(!disabled);
+    if (value !== warningThresholdPersistedRef.current) {
+      return persistWarningSettings({ thresholdGiB: value });
     }
   };
 
@@ -788,14 +804,12 @@ function DatabaseSlimmingSection({
             max={1024}
             step={1}
             value={warningThresholdGiB}
+            disabled={warningSaving}
             onChange={(event) => {
               const value = Number(event.target.value);
               if (Number.isFinite(value)) onWarningThresholdChange(value);
             }}
             onBlur={() => void saveWarningThreshold()}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void saveWarningThreshold();
-            }}
             className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
             aria-label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
           />
@@ -816,9 +830,19 @@ function DatabaseSlimmingSection({
         <Switch
           id="db-size-warning-disabled"
           checked={warningDisabled}
-          onCheckedChange={(checked) => void setWarningDisabledAndPersist(checked)}
+          disabled={warningSaving}
+          onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
           aria-label={t('settings.about.storage.dbSizeWarningDisableLabel')}
         />
+        <div className="col-span-2 flex justify-end">
+          <DefaultOverrideControls
+            isCustomized={warningCustomized}
+            alwaysVisible
+            showCustomizedBadge={false}
+            disabled={warningSaving}
+            onReset={() => void persistWarningSettings()}
+          />
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-3">

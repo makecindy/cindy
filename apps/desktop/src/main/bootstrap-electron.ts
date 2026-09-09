@@ -368,6 +368,7 @@ import {
   readDatabaseSizeWarningSettingsState,
   parseDatabaseSizeWarningSettingsPatch,
   writeDatabaseSizeWarningSettings,
+  resetDatabaseSizeWarningSettings,
   DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
 } from './database-size-warning-settings';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
@@ -4139,12 +4140,27 @@ const registerIpcHandlers = () => {
       defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
     };
   });
-  ipcMain.handle('database-size-warning:set-settings', (event, payload: unknown) => {
+  ipcMain.handle('database-size-warning:set-settings', async (event, payload: unknown) => {
     assertTrustedAppRendererEvent(event);
     const parsed = parseDatabaseSizeWarningSettingsPatch(payload);
     if ('error' in parsed) throwIpcError('INVALID_PARAMS', parsed.error);
-    const value = writeDatabaseSizeWarningSettings(parsed.patch);
-    return { ...value, defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB };
+    await writeDatabaseSizeWarningSettings(parsed.patch);
+    const state = readDatabaseSizeWarningSettingsState();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:reset-settings', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    await resetDatabaseSizeWarningSettings();
+    const state = readDatabaseSizeWarningSettingsState();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
   });
   ipcMain.handle('database-size-warning:get-status', (event) => {
     assertTrustedAppRendererEvent(event);
