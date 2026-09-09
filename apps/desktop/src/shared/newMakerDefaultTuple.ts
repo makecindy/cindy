@@ -10,6 +10,12 @@ import {
 type MakerVendor = 'cc' | 'codex' | 'pi' | 'orca';
 
 /**
+ * Runtime roster may also include grok-build. Product defaults still ignore it —
+ * callers pass the full available-agent set from maker:list-available-agents.
+ */
+type AvailableAgentVendor = MakerVendor | 'grok-build';
+
+/**
  * 产品默认 tuple 只覆盖走 provider 路由的三个 harness。grok-build 自带唯一内置
  * 模型、不参与来源/模型默认下放,所以不进这张种子表。
  */
@@ -77,7 +83,7 @@ function vendorForAgent(agent: NewMakerDefaultAgent): NewMakerDefaultTuple['vend
  * 也不产生默认值；真正下放仍只能走 resolveNewMakerDefaultTuple 的实时能力门控。
  */
 export function isKnownProductDefaultTupleIdentity(args: {
-  vendor: MakerVendor;
+  vendor: AvailableAgentVendor;
   providerId: string;
   model: string;
 }): boolean {
@@ -124,7 +130,7 @@ function matchingModel(
 export function resolveNewMakerDefaultTuples(args: {
   providers: readonly ProviderView[];
   providersLoading: boolean;
-  availableAgents: ReadonlySet<MakerVendor>;
+  availableAgents: ReadonlySet<AvailableAgentVendor>;
   availableAgentsLoaded: boolean;
 }): NewMakerDefaultTuple[] {
   const { providers, providersLoading, availableAgents, availableAgentsLoaded } = args;

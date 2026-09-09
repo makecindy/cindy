@@ -75,13 +75,13 @@ function currentStore(rootPath?: string) {
 }
 
 export async function readBotModelChainSettings(
-  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi'> },
+  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi' | 'grok-build'> },
 ): Promise<BotModelChainSettings> {
   return (await readBotModelChainSettingsState(options)).value;
 }
 
 export async function readBotModelChainSettingsState(
-  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi'> },
+  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi' | 'grok-build'> },
 ): Promise<OverrideSettingsState<BotModelChainSettings>> {
   const store = currentStore(options?.rootPath);
   store.invalidateIfChanged();
@@ -132,7 +132,7 @@ export async function resetBotModelChainSettings(
  */
 export async function readEffectiveBotModelChain(
   config: Record<string, unknown>,
-  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi'> },
+  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi' | 'grok-build'> },
 ): Promise<BotModelRoute[]> {
   if (Array.isArray(config.modelChainOverride)) {
     const explicit = normalizeBotModelChain(config.modelChainOverride);
