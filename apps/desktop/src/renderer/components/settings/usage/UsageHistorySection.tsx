@@ -14,7 +14,7 @@
  *   - 每日柱图固定展示近 30 天, 与筛选范围无关
  *
  * 首页的 HomeUsageDashboard 是金额口径的姊妹实现, 本页不复用它的外壳组件
- * (见 UsageTokenBars 的注释), 但共享同一条聚合链路与配色。
+ * (见 UsageTokenBars 的注释), 但共享同一条聚合链路。配色仅在用量历史页内统一。
  */
 
 import './usageCharts.css';
@@ -28,7 +28,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUsageHistory } from '@/hooks/useUsageHistory';
 import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
-import { USAGE_TOP_MODELS, usageModelKey } from '@/components/new-chat/usagePalette';
+import { usageModelKey } from '@/components/new-chat/usagePalette';
 import { UsageStatRow } from './UsageStatRow';
 import { UsageTokenBars } from './UsageTokenBars';
 import { UsageAgentTable, UsageModelTable } from './UsageBreakdownTables';
@@ -115,15 +115,11 @@ export function UsageHistorySection(): React.JSX.Element {
   const summary = useMemo(() => buildSummary(filteredHistory), [filteredHistory]);
   const modelRows = useMemo(() => buildModelRows(filteredHistory), [filteredHistory]);
   const agentRows = useMemo(() => buildAgentRows(filteredHistory), [filteredHistory]);
-  // 配色顺序必须来自 modelRows 而不是 history.models: 后者由 main 按**可比金额**降序排
-  // (usageHistory.ts 的 comparable), 本页只讲 token —— 直接用它会让同一个模型在柱图与
-  // 模型表里配到不同颜色, 还会让"金额高但 token 很少"的模型挤掉真正的 token 前 N 名。
+  // 完整历史按 token 排序建立所有模型的配色，不截断前五名，也不随日期筛选重排。
+  // 表格与柱图共用此顺序；history.models 的金额排序不适用于这里。
   const colorOrder = useMemo(
-    () =>
-      buildModelRows(chartHistory)
-        .slice(0, USAGE_TOP_MODELS)
-        .map((m) => usageModelKey(m.agentKind, m.model)),
-    [chartHistory],
+    () => buildModelRows(history).map((m) => usageModelKey(m.agentKind, m.model)),
+    [history],
   );
 
   // 任务行与用量聚合是两条数据源: 聚合里有 token, 本地任务却可能一条都没有

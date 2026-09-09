@@ -1837,7 +1837,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
-    binaryPath,
+    get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,

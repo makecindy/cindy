@@ -15,6 +15,7 @@ export * from './interfaces/index.js';
 
 // agents
 export * from './agents/index.js';
+export * from './agents/pi/managed-command.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 export {
   assertReviewMessageContentPaths,

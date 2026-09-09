@@ -10,6 +10,7 @@ import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
+  INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
@@ -2065,7 +2066,8 @@ describe('CodexAgent capability routing', () => {
     }
   });
 
-  it('binds explicit capability selection before a pending turn/start response', async () => {
+  it.each([undefined, '', '请用 $feishu-delegate:message-feishu-coworkers 查消息'])(
+    'binds original capability selection before pending turn/start: %s', async (inheritedSelection) => {
     const pendingTurnStart = deferred<{ turn: { id: string } }>();
     const agent = new CodexAgent(
       createDeps(
@@ -2091,7 +2093,10 @@ describe('CodexAgent capability routing', () => {
     });
     const sendPromise = handle.send({
       type: 'user',
-      content: '请用 $feishu-delegate:message-feishu-coworkers 查消息',
+      content: inheritedSelection === undefined
+        ? '请用 $feishu-delegate:message-feishu-coworkers 查消息' : 'Continue the retained task.',
+    }, inheritedSelection === undefined ? undefined : {
+      [INHERITED_CAPABILITY_SELECTION]: inheritedSelection,
     });
     await vi.waitFor(() => {
       expect(
@@ -2141,7 +2146,7 @@ describe('CodexAgent capability routing', () => {
         message: 'Allow tool call',
         requestedSchema: {},
       }),
-    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    ).resolves.toEqual({ action: inheritedSelection === '' ? 'decline' : 'accept', content: null, _meta: null });
 
     pendingTurnStart.resolve({ turn: { id: 'early-capability-turn' } });
     await sendPromise;
@@ -29027,6 +29032,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     agent: CodexAgent,
     sessionId: string,
     interruptAck?: Promise<unknown>,
+    signal?: AbortSignal,
   ) {
     const host = installReconnectHost(agent, false, interruptAck);
     const handle = await agent.startSession({ sessionId, model: 'gpt-5.4', workingDir: '/repo' });
@@ -29034,7 +29040,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     void (async () => {
       for await (const event of handle.events()) seen.push(event);
     })();
-    await handle.send({ type: 'user', content: 'go' });
+    await handle.send({ type: 'user', content: 'go' }, { signal });
     const handlers = host.getThreadHandlers();
     if (!handlers) throw new Error('expected thread handlers');
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
@@ -29084,7 +29090,17 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
-  it('classifies reconnect stall as oversized only when live-tail images are strip-worthy', async () => {
+  it.each([
+    { cancelled: false, completion: undefined, rejectAck: false },
+    { cancelled: true, completion: undefined, rejectAck: false },
+    { cancelled: false, completion: undefined, rejectAck: true },
+    { cancelled: true, completion: undefined, rejectAck: true },
+    ...(['completed', 'failed', 'interrupted'] as const).flatMap((completion) =>
+      [false, true].map((rejectAck) => ({ cancelled: false, completion, rejectAck }))),
+  ].flatMap((scenario) => [
+    { ...scenario, releaseFailure: undefined as boolean | undefined },
+    ...(scenario.rejectAck ? [false, true].map((releaseFailure) => ({ ...scenario, releaseFailure })) : []),
+  ]))('settles oversized recovery: %j', async ({ cancelled, completion, rejectAck, releaseFailure }) => {
     vi.useFakeTimers();
     const agent = new CodexAgent(createDeps());
     const proto = Object.getPrototypeOf(agent) as {
@@ -29103,19 +29119,70 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         scannedBytes: 20 * 1024 * 1024,
       });
     try {
-      const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized');
+      let acknowledge!: (value: unknown) => void;
+      let reject!: (reason: Error) => void;
+      const ack = new Promise((resolve, rejectPromise) => { acknowledge = resolve; reject = rejectPromise; });
+      const cancellation = new AbortController();
+      const retire = vi.spyOn(agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey').mockResolvedValue(undefined);
+      const { host, handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal);
+      const releasing = deferred<void>();
+      const release = host.subscribeThread.mock.results[0]?.value.release;
+      if (releaseFailure !== undefined) release.mockImplementationOnce(() => releasing.promise);
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { id: 'answer-1', type: 'agentMessage', text: 'Work finished.', phase: 'final_answer' },
+      } as never);
       emitReconnect(handlers, 1);
       await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
       await Promise.resolve();
       await Promise.resolve();
+      expect(handle.isTurnRunning?.()).toBe(true);
       expect(seen).toContainEqual(expect.objectContaining({
-        type: 'error',
-        data: expect.objectContaining({
-          reason: 'codex_history_oversized',
-          isTerminal: true,
-        }),
+        type: 'status', data: expect.objectContaining({ status: 'Compacting...', isRunning: true }),
       }));
-      expect(seen.filter((event) => event.type === 'error' && (event.data as { reason?: string }).reason === 'codex_history_oversized')).toHaveLength(1);
+      expect(seen.some((event) => event.type === 'error' &&
+        (event.data as { reason?: string }).reason === 'codex_history_oversized')).toBe(false);
+      if (releaseFailure !== undefined) {
+        reject(new Error('interrupt unavailable'));
+        await vi.advanceTimersByTimeAsync(1);
+        expect(release).toHaveBeenCalledOnce();
+        expect(seen.some((event) => event.type === 'error' &&
+          (event.data as { reason?: string }).reason === 'codex_history_oversized')).toBe(false);
+      }
+      if (cancelled) cancellation.abort();
+      if (completion) {
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id', turn: { id: 'turn-1', status: completion },
+        } as never);
+        expect(handle.isTurnRunning?.()).toBe(true);
+      }
+      if (releaseFailure !== undefined) {
+        if (releaseFailure) releasing.reject(new Error('unsubscribe failed'));
+        else releasing.resolve();
+      } else if (rejectAck) reject(new Error('turn already ended'));
+      else acknowledge({});
+      await vi.advanceTimersByTimeAsync(1);
+      if (completion || !rejectAck) expect(handle.isTurnRunning?.()).toBe(false);
+      const oversizedIndex = seen.findIndex((event) => event.type === 'error' &&
+        (event.data as { reason?: string }).reason === 'codex_history_oversized');
+      if (cancelled || completion === 'completed') expect(oversizedIndex).toBe(-1);
+      else {
+        expect(oversizedIndex).toBeGreaterThanOrEqual(0);
+        if (completion || !rejectAck) expect(seen[oversizedIndex + 1]).toMatchObject({
+          type: 'status', data: { isRunning: false },
+        });
+      }
+      if (completion === 'completed') {
+        const done = seen.filter((event) => event.type === 'done');
+        expect(done).toHaveLength(1);
+        expect(done[0]).toMatchObject({ data: { result: 'Work finished.' } });
+        expect(retire).not.toHaveBeenCalled();
+        if (releaseFailure === undefined) {
+          await handle.send({ type: 'user', content: 'next task' });
+          expect(handle.isTurnRunning?.()).toBe(true);
+        }
+      }
       await handle.close();
     } finally {
       localHome.mockRestore();

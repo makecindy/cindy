@@ -502,9 +502,7 @@ export interface TurnChangeCaptureHooks {
 
 export type PiNativePackageEntry = string | ({ source: string } & Record<string, unknown>);
 
-export interface PiManagedPackageMutationRequest {
-  action: 'install' | 'update' | 'remove';
-  source: string;
+export type PiManagedPackageMutationRequest = import('./pi/managed-command.js').PiManagementCommand & {
   /** Host-trusted evidence. This value is never accepted from Renderer or model input. */
   authorization:
     | 'local-desktop-command'
@@ -536,6 +534,7 @@ export class PiManagedPackageMutationFailedError extends Error {
   constructor(
     readonly mayHaveChangedState: boolean,
     readonly failureCode: PiManagedPackageMutationFailureCode,
+    readonly commandFailure?: import('./pi/managed-command.js').PiManagedCommandFailure,
   ) {
     super('Pi extension mutation failed');
     this.name = 'PiManagedPackageMutationFailedError';
@@ -547,7 +546,7 @@ export interface PiExtensionUiStrings {
   cancel: string;
   mutationFailed: string;
   mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
-  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+  mutationSuccess: Record<'install' | 'update' | 'remove', string>;
 }
 
 export interface PiManagedPackageRuntimeConvergence {
@@ -648,7 +647,8 @@ export interface AgentDeps {
   resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
 
   /**
-   * Pi-only: mutate the shared package home through Pi's own package CLI.
+   * Pi-only: shared Host service for typed Pi management commands and legacy
+   * package mutations. Core operations never invoke package retirement hooks.
    * Host routing binds an exact user/tool action but must not add a second
    * compatibility, fingerprint, or content-approval decision.
    */
@@ -1785,6 +1785,9 @@ export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-conte
 /** Host-restored user authorization for this send; never accepted from wire options. */
 export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
 
+/** Main-only selection from the original input for a retained-history continuation. */
+export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability-selection');
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1798,6 +1801,7 @@ export interface MainOwnedSendContext {
 export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**

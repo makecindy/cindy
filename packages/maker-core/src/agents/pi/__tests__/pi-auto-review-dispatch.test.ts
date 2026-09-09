@@ -697,6 +697,123 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it.each([['desktop', 'new-root-tasks'], ['tool', 'new-root-tasks'], ['desktop', 'new-pi-processes'], ['tool', 'new-pi-processes']] as const)('updates core and preserves the %s caller with %s activation', async (origin, activation) => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({ kind: 'self', nativeSucceeded: true,
+      beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true, activation }));
+    deps.onPiManagedPackageMutationSettled = vi.fn();
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'core-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    const resolver = vi.fn();
+    handle.setInteractionResolver?.(resolver);
+    try {
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi update' }, desktopCommandOptions('pi update'));
+        expect(captured.requests.find(request => request.type === 'prompt')?.message).toContain('0.85.1');
+        expect(captured.requests.find(request => request.type === 'prompt')?.message).toContain('new-root-tasks');
+        expect(captured.requests.find(request => request.type === 'prompt')?.message).toContain('their subagents retain the binary path');
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'core-tool', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        expect(JSON.parse(String((await waitForResponse('core-tool')).value))).toMatchObject({ ok: true, result: { afterVersion: '0.85.1', activation: 'new-root-tasks' } });
+      }
+      expect(deps.mutatePiManagedPackage).toHaveBeenCalledWith({ action: 'command', command: { kind: 'self', force: false }, authorization: origin === 'desktop' ? 'local-desktop-command' : 'confirmed-tool-call' });
+      expect(deps.onPiManagedPackageMutationSettled).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(false);
+      expect(resolver).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
+  it.each(['desktop', 'tool'] as const)('keeps long list receipts parseable and explicit for the %s caller', async origin => {
+    const packages = Array.from({ length: 150 }, (_, i) => ({ source: `npm:package-${i}-` + 'x'.repeat(80), filtered: i % 2 === 0 }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({ kind: 'list', nativeSucceeded: true, output: JSON.stringify(packages) }));
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'list-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    try {
+      let receipt;
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi list' }, desktopCommandOptions('pi list'));
+        const message = String(captured.requests.find(request => request.type === 'prompt')?.message ?? '');
+        receipt = JSON.parse(message.split('\n')[0].replace('[Cindy Pi command receipt] ', ''));
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'long-list', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['list'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        receipt = JSON.parse(String((await waitForResponse('long-list')).value));
+      }
+      const result = receipt.result;
+      const entries = JSON.parse(result.output);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries).toEqual(packages.slice(0, entries.length));
+      expect(result.output.length).toBeLessThanOrEqual(6000);
+      expect(result).toMatchObject({ outputTruncated: true, totalPackages: packages.length,
+        omittedPackages: packages.length - entries.length, detailsOmitted: 'receipt-size-limit' });
+    } finally { await handle.close(); }
+  });
+
+  it.each(['desktop', 'tool'] as const)('delivers partial Host-update failure to the %s caller without retiring it', async origin => {
+    const deps = buildDeps();
+    const details = { phase: 'host-binary-update', hostStage: 'download', packagesUpdated: true,
+      recovery: 'check-host-update-and-retry-core' } as const;
+    deps.mutatePiManagedPackage = vi.fn(async () => { throw new PiManagedPackageMutationFailedError(true, 'source-unavailable', details); });
+    deps.onPiManagedPackageMutationSettled = vi.fn();
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'partial-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    try {
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi update --all' }, desktopCommandOptions('pi update --all'));
+        const receipt = captured.requests.find(request => request.type === 'prompt')?.message;
+        expect(receipt).toContain('Pi packages updated successfully');
+        expect(receipt).toContain('host-binary-update');
+        expect(receipt).toContain('pi update --self');
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'partial-tool', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update', '--all'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        expect(JSON.parse(String((await waitForResponse('partial-tool')).value))).toMatchObject({ ok: false,
+          mayHaveChangedState: true, commandFailure: details });
+      }
+      expect(deps.onPiManagedPackageMutationSettled).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it.each([['ask', 'send', '--self'], ['auto', 'send', '--all'], ['ask', 'steer', '--self'], ['auto', 'steer', '--all']] as const)('routes exact IM updates through channel confirmation in %s/%s/%s', async (permissionMode, method, target) => {
+    const deps = buildDeps(vi.fn(async () => ({ verdict: 'allow' as const })));
+    deps.mutatePiManagedPackage = vi.fn(async () => ({ kind: 'self', nativeSucceeded: true }));
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'exact-im-' + permissionMode, workingDir: cwd, model: 'm', permissionMode });
+    const forceConfirmToolCall = vi.fn(() => true);
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'deny' as const }));
+    handle.setInteractionResolver?.(resolver);
+    try {
+      await handle[method]({ type: 'user', content: `pi update ${target}` }, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: `pi update ${target}` },
+        turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall },
+      });
+      expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(forceConfirmToolCall).toHaveBeenCalledWith('cindy_pi_command', { args: ['update', target] });
+      captured.onEvent?.({ type: 'extension_ui_request', id: 'exact-im-tool', method: 'input',
+        title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update', target], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+      expect(JSON.parse(String((await waitForResponse('exact-im-tool')).value))).toMatchObject({ ok: false });
+      expect(resolver).toHaveBeenCalled();
+      expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
+  it('retains channel-required confirmation for a core command even when Auto allows it', async () => {
+    const deps = buildDeps(vi.fn(async () => ({ verdict: 'allow' as const })));
+    deps.mutatePiManagedPackage = vi.fn();
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'core-policy', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'deny' as const }));
+    handle.setInteractionResolver?.(resolver);
+    try {
+      await handle.send({ type: 'user', content: 'Update Pi.' }, {
+        turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
+      });
+      captured.onEvent?.({ type: 'extension_ui_request', id: 'core-policy-tool', method: 'input',
+        title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+      expect(JSON.parse(String((await waitForResponse('core-policy-tool')).value))).toMatchObject({ ok: false });
+      expect(resolver).toHaveBeenCalled();
+      expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
   it('publishes a durable tool receipt before retiring the successful caller', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
@@ -977,7 +1094,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       sessionId: 'managed-package-confirm-failure-session',
       workingDir: cwd,
       model: 'm',
-      permissionMode: 'bypassPermissions',
+      permissionMode: 'ask',
     });
     try {
       const deny = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
@@ -1004,7 +1121,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('does not turn a pending extension confirmation into approval after a permission switch', async () => {
+  it('applies Full Access to a pending Pi command through the ordinary permission switch', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
     const deps = buildDeps();
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
@@ -1030,9 +1147,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       await handle.setPermissionMode?.('bypassPermissions');
       releaseDenial({ kind: 'permission', behavior: 'deny', reason: 'User denied' });
       expect(JSON.parse(String((await waitForResponse('pkg-switch')).value))).toEqual({
-        ok: false, error: 'Cindy could not approve this tool call: permission_mode_changed_to_bypassPermissions',
+        ok: true, result: { changed: true },
       });
-      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(mutatePiManagedPackage).toHaveBeenCalledOnce();
     } finally {
       await handle.close();
     }
@@ -2311,10 +2428,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   it('resolves task-relative Pi extension sources against the task working directory', async () => {
-    const mutatePiManagedPackage = vi.fn(async (input: { source: string }) => ({
-      changed: true,
-      affectedPackage: { source: input.source },
-    }));
+    const mutatePiManagedPackage = vi.fn(async (input: Parameters<NonNullable<AgentDeps['mutatePiManagedPackage']>>[0]) => {
+      if (input.action === 'command') throw new Error('Expected a package command');
+      return { changed: true, affectedPackage: { source: input.source } };
+    });
     const deps = buildDeps();
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     const handle = await new PiAgent(deps).startSession({
@@ -3719,7 +3836,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('requires an explicit user decision for extension mutations in Full Access', async () => {
+  it('uses Full Access for Pi management without a second confirmation', async () => {
     const handle = await start('bypassPermissions');
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
     handle.setInteractionResolver?.(resolver as never);
@@ -3732,9 +3849,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('extension-full-access')).toEqual({
       type: 'extension_ui_response',
       id: 'extension-full-access',
-      confirmed: false,
+      confirmed: true,
     });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it('lets Auto review extension mutations', async () => {
