@@ -3108,6 +3108,15 @@ export class CodexAgent extends BaseAgent {
         };
       }
     }
+    // Custom API-key routes must not let Codex preload shared OAuth credentials.
+    // Keep official OAuth hosts unchanged; the override is scoped to this process only.
+    if (
+      !remoteHostId
+      && spawnCredentialMode !== 'oauth-bearer'
+      && codexCustomProviderRoutes?.length
+    ) {
+      extraArgs.push('-c', 'cli_auth_credentials_store="ephemeral"');
+    }
     if (baseExtraArgs.length > 0) {
       this.deps.logger.info('Codex plugin runtime disabled for local app-server', {
         plugins: false,
