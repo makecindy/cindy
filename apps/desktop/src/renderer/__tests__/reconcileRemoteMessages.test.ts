@@ -1542,7 +1542,8 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
   });
 
-  it.each([false, true])('远程会话:session-sync 补回持久化行并保留在途文本 (queued=%s)', async (queued) => {
+  it.each(['direct', 'queued', 'queued-sealed'])('远程会话:session-sync 修复旧行且只保护当前快照 (%s)', async (mode) => {
+    const queued = mode !== 'direct';
     const s = sid();
     makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
@@ -1560,8 +1561,23 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
       },
     });
 
+    remotePush?.({
+      deviceId: DEVICE_ID, channel: 'maker:event', payload: { sessionId: s, event: {
+        type: 'thinking', data: { stage: 'start', blockId: 'client-previous-thought', startedAt: 1781481601000 },
+      } },
+    });
+    remotePush?.({
+      deviceId: DEVICE_ID, channel: 'maker:event', payload: { sessionId: s, event: {
+        type: 'thinking', data: { stage: 'delta', blockId: 'client-previous-thought', text: 'stale thought' },
+      } },
+    });
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.clientId === 'client-previous-thought'))
+      .toMatchObject({ content: 'stale thought', isStreaming: true });
+
     remoteList = [
       dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      { ...dbMessage(s, 'previous-thought', '', '2026-06-15T00:00:01.000Z', 'thinking'),
+        content: { kind: 'thinking', text: 'sealed thought', durationMs: 500 } },
       dbMessage(s, 'recovered-assistant', 'assistant row recovered from the host', '2026-06-15T00:00:02.000Z'),
       { ...dbMessage(s, 'in-flight-assistant', 'older persisted text', '2026-06-15T00:00:03.000Z'), clientId: 'in-flight-assistant' },
     ];
@@ -1587,6 +1603,11 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
         resyncRequired: true,
       },
     });
+    if (mode === 'queued-sealed') {
+      remoteList = remoteList.map(row => row.clientId === 'in-flight-assistant'
+        ? { ...row, content: 'sealed current text' } : row);
+      remotePush?.({ deviceId: DEVICE_ID, channel: 'maker:session-sync', payload: { sessionId: s, resyncRequired: true } });
+    }
     if (queued) {
       remoteListResolver = null;
       firstRead.resolve(remoteList);
@@ -1597,9 +1618,12 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain(
       'client-recovered-assistant',
     );
-    expect(
-      makerChatStore.getSnapshot(s).messages.find((m) => m.clientId === 'in-flight-assistant')?.content,
-    ).toBe('current in-flight text');
+    expect(makerChatStore.getSnapshot(s).messages.find((m) => m.clientId === 'in-flight-assistant'))
+      .toMatchObject(mode === 'queued-sealed'
+        ? { content: 'sealed current text', isStreaming: false }
+        : { content: 'current in-flight text', isStreaming: true });
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.clientId === 'client-previous-thought'))
+      .toMatchObject({ content: 'sealed thought', isStreaming: false, thinkingDurationMs: 500 });
   });
 
   it('远程会话:resyncRequired 强制对账可替换 streaming 中已封存消息的旧正文', async () => {

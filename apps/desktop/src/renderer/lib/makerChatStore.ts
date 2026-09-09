@@ -22,7 +22,7 @@ import { readBotAuthorizationCard } from '../../shared/botAuthorization';
  * - User-initiated stopSession (NOT called on session switch anymore)
  */
 
-import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
+import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
@@ -8556,17 +8556,24 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       }
       switch (push.channel) {
         case SESSION_SYNC_CHANNEL: {
-          let appliedSnapshot = false;
+          let preserveClientIds: ReadonlySet<string> | undefined;
           consumeRemoteSessionSync(push.payload, {
             applyEvent: (event) => {
               handleMakerEventRaw(event, remoteIngress);
-              appliedSnapshot = true;
+              const row = sessions.get(event.sessionId as string)?.messages.find(
+                (message) => message.clientId === event.persistId && message.isStreaming,
+              );
+              if (row) preserveClientIds = new Set([row.clientId]);
             },
             invalidateHistory: (sessionId) => {
               const state = sessions.get(sessionId);
               if (!state) return;
               if (getRemoteHistoryView(sessionId)) {
-                void reconcileRemoteMessages(sessionId, { force: !appliedSnapshot, repair: true, freshHistory: true });
+                // resyncRequired also repairs unrelated durable rows; a full
+                // text snapshot only protects its own live block.
+                void reconcileRemoteMessages(sessionId, {
+                  force: true, repair: true, freshHistory: true, preserveClientIds,
+                });
                 return;
               }
               if (!state.historyLoaded) {
@@ -8576,7 +8583,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
                 ensureInitialMessages(sessionId);
                 return;
               }
-              void reconcileRemoteMessages(sessionId, { force: !appliedSnapshot, repair: true });
+              void reconcileRemoteMessages(sessionId, {
+                force: true, repair: true, preserveClientIds,
+              });
             },
           });
           break;
@@ -11689,13 +11698,14 @@ function reconcileOpenSessionOrigins(): void {
  */
 const _remoteReconcileInFlight = new Map<
   string,
-  { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean }
+  { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean; preserveClientIds: Set<string> }
 >();
 
 function reconcileRemoteMessages(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   freshHistory?: boolean;
+  preserveClientIds?: ReadonlySet<string>;
 }): Promise<boolean> {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
@@ -11708,12 +11718,20 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
     return Promise.all([
       view.refresh(false, opts?.freshHistory ?? opts?.force),
       reconcilePendingInteractions(sessionId),
-    ]).then(() => {
+    ]).then(async () => {
       if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
       if (isHistoryViewUnavailable(view.getSnapshot().error)) {
         releaseRemoteHistoryView(sessionId, view);
-        return reconcileRemoteMessages(sessionId, { force: true });
+        return reconcileRemoteMessages(sessionId, { ...opts, force: true });
       }
+      if (opts?.force) {
+        // readPage starts expanded details without awaiting them. Join those
+        // same reads before hydrating; their cached display may still be old.
+        await Promise.all(historyWorkSummaries(view.getSnapshot().items)
+          .filter((summary) => view.getSnapshot().expanded.has(summary.key))
+          .map((summary) => view.loadDetails(summary)));
+      }
+      if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
       const snapshot = view.getSnapshot();
       if (snapshot.error) throw snapshot.error;
       if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
@@ -11721,9 +11739,15 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         // Host thinking snapshots use synthetic IDs and carry no terminal
         // marker. Only durable rows may seal an existing live row; provisional
         // rows already participate in the ordinary add-only subscription.
-        const available = historyViewLeaves(snapshot.items)
-          .flatMap((item) => item.type === 'messages' ? item.messages : [])
-          .filter((row) => !row.id.startsWith('history-live:'));
+        const details = historyWorkSummaries(snapshot.items).flatMap((summary) => {
+          const detail = snapshot.details.get(summary.key);
+          return snapshot.expanded.has(summary.key) && detail?.complete
+            && !detail.error && detail.revision === summary.revision ? detail.messages : [];
+        });
+        const available = details.concat(historyViewLeaves(snapshot.items)
+          .flatMap((item) => item.type === 'messages' ? item.messages : []))
+          .filter((row) => !row.id.startsWith('history-live:')
+            && !opts?.preserveClientIds?.has(row.clientId));
         setState(sessionId, (state) => {
           // The ordinary view subscriber is add-only. Explicit recovery must
           // hydrate stale live shells, or their handoff keeps masking sealed rows.
@@ -11741,16 +11765,22 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   const inFlight = _remoteReconcileInFlight.get(sessionId);
   if (inFlight) {
     inFlight.rerun = true;
-    if (opts?.force) inFlight.rerunForce = true;
+    if (opts?.force) {
+      inFlight.rerunForce = true;
+      // The latest forced signal identifies the current live block. A later
+      // snapshot-less resync can authoritatively seal the previous block.
+      inFlight.preserveClientIds = new Set(opts.preserveClientIds);
+    }
     if (opts?.repair) inFlight.rerunRepair = true;
     void reconcilePendingInteractions(sessionId).catch(() => undefined);
     return inFlight.run;
   }
-  const entry: { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean } = {
+  const entry: { run: Promise<boolean>; rerun: boolean; rerunForce: boolean; rerunRepair: boolean; preserveClientIds: Set<string> } = {
     run: Promise.resolve(false),
     rerun: false,
     rerunForce: false,
     rerunRepair: false,
+    preserveClientIds: new Set(),
   };
   _remoteReconcileInFlight.set(sessionId, entry);
   entry.run = (async () => {
@@ -11766,7 +11796,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       if (rerun && sessions.has(sessionId)) {
         applied = await reconcileRemoteMessages(
           sessionId,
-          { force: rerunForce, repair: rerunRepair },
+          { force: rerunForce, repair: rerunRepair, preserveClientIds: entry.preserveClientIds },
         );
       }
     }
@@ -11780,7 +11810,11 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   return entry.run;
 }
 
-function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?: boolean }): Promise<boolean> {
+function runRemoteReconcile(sessionId: string, opts?: {
+  force?: boolean;
+  repair?: boolean;
+  preserveClientIds?: ReadonlySet<string>;
+}): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
@@ -11882,7 +11916,9 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
         return;
       }
       if (collected.length === 0) return;
-      const mapped = mapServerMessages(collected);
+      const mapped = mapServerMessages(collected).filter(
+        (message) => !opts?.preserveClientIds?.has(message.clientId),
+      );
       // 翻满上限仍没接回已知区段 → 下面走权威重建分支:整片旧窗口被换掉、oldestMessageId
       // 也被改写。这是第八条"整体重建窗口"的路径,必须 bump epoch 作废 in-flight 的翻页 /
       // 跳转补齐 —— 否则那些请求会带着**重建前**的游标返回,把一段脱离上下文的旧历史接到

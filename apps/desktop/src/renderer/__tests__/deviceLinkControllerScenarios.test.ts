@@ -364,6 +364,73 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     makerChatStore.purgeSession(s);
   });
 
+  it.each(['force', 'resync', 'snapshot-resync', 'newer-live'] as const)(
+    'waits for expanded work details to heal a lost terminal row (%s)', async (recovery) => {
+    const s = sid();
+    host.enableHistoryView(true);
+    const startedAt = Date.parse('2026-09-08T00:00:01Z');
+    const user = dbMessage(s, 'question', 'question', '2026-09-08T00:00:00Z', 'user');
+    host.seedSession(s, {}, [user]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    host.push('maker:event', { sessionId: s, event: { type: 'status', data: { status: 'Running', isRunning: true } } });
+    const thinking = (data: Record<string, unknown>) => host.push('maker:event', {
+      sessionId: s, event: { type: 'thinking', data: { blockId: 'client-thought', ...data } },
+    });
+    thinking({ stage: 'start', startedAt });
+    thinking({ stage: 'delta', text: 'stale thought' });
+    const thought = () => makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'client-thought');
+    const durable = { ...dbMessage(s, 'thought', '', new Date(startedAt).toISOString(), 'thinking'),
+      content: { kind: 'thinking', text: 'sealed thought', durationMs: 2000, finishedAt: startedAt + 2000 } };
+    host.seedSession(s, {}, [user, durable, dbMessage(s, 'current', '# Current answer\nold text', '2026-09-08T00:00:04Z')]);
+    // The live current block is valid even if the same history page contains
+    // an older copy. No terminal event/persistence echo for the thought arrived.
+    const snapshot = (resyncRequired: boolean) => host.push('maker:session-sync', {
+      sessionId: s, persistId: 'client-current', resyncRequired,
+      event: { type: 'text', data: { text: 'current live snapshot', isFullText: true, isFinal: false } },
+    });
+    snapshot(false);
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh();
+    const group = view.getSnapshot().items.find((item) => item.type === 'work');
+    if (!group) throw new Error('Expected an expanded work group');
+    const original = host.invoke.getMockImplementation()!;
+    let finish!: () => void;
+    host.invoke.mockImplementation(async (...args) => {
+      const value = await original(...args);
+      if (args[1] === 'local-db:messages:work-details') await new Promise<void>(resolve => { finish = resolve; });
+      return value;
+    });
+    view.setExpanded(group.key, true);
+    await flush();
+    expect(finish).toBeTypeOf('function');
+    expect(thought()).toMatchObject({ content: 'stale thought', isStreaming: true });
+    let completed = false;
+    let pending: Promise<unknown> | undefined;
+    if (recovery === 'force') pending = makerChatStore.reconcileRemoteMessages(s, { force: true }).then(() => { completed = true; });
+    else if (recovery === 'resync') host.push('maker:session-sync', { sessionId: s, resyncRequired: true });
+    else snapshot(true);
+    await flush(); await flush();
+    expect(completed).toBe(false);
+    expect(thought()).toMatchObject({ content: 'stale thought', isStreaming: true });
+    if (recovery === 'newer-live') thinking({ stage: 'delta', text: ' updated during fetch' });
+    finish();
+    await pending;
+    await flush(); await flush();
+    expect(view.getSnapshot().details.get(group.key)?.messages[0]).toMatchObject({ clientId: 'client-thought', content: 'sealed thought' });
+    expect(thought()).toMatchObject(recovery === 'newer-live'
+      ? { content: 'stale thought updated during fetch', isStreaming: true }
+      : { content: 'sealed thought', isStreaming: false, thinkingDurationMs: 2000 });
+    if (recovery === 'snapshot-resync' || recovery === 'newer-live') expect(makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === 'client-current')).toMatchObject({
+      content: 'current live snapshot', isStreaming: true,
+    });
+    expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:work-details')).toHaveLength(1);
+    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    makerChatStore.purgeSession(s);
+  });
+
   it('resumes terminal handoff when the first projected page was not ready before leaving', async () => {
     const s = sid();
     host.enableHistoryView();
