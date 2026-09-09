@@ -8,6 +8,7 @@ import {
   type AgentKind,
 } from '@cindy/maker-core';
 
+import { resolveCodexOfficialOAuthDependency } from './provider-route.js';
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import { isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
@@ -44,6 +45,7 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * provider-oauth 依赖 proxy 做供应商 OAuth 注入和 model rewrite；未知状态按 false 处理。
    */
   currentCodexProxyActive?: boolean | null;
+  currentCodexHostKey?: string;
   /**
    * 当前 Codex thread 由 app-server 的 start/resume 响应确认的 model provider。
    * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
@@ -71,6 +73,7 @@ function credentialFamilyFromAuthInjection(
 }
 
 interface LocalAgentSession {
+  codexHostKey?: string;
   id: string;
   agentKind: AgentKind;
   remoteHostId?: string | null;
@@ -83,6 +86,8 @@ interface LocalCredentialModeSwitchMaker {
 }
 
 export interface PrepareLocalCodexCredentialModeSwitchInput {
+  /** Restrict arbitration to the host being replaced, preserving sibling hosts. */
+  hostKey?: string;
   maker: LocalCredentialModeSwitchMaker;
   isSessionInTurn?: (sessionId: string) => boolean;
   signal?: AbortSignal;
@@ -312,6 +317,12 @@ export function shouldCloseSessionForCredentialSwitch(
 
   const currentProviderId = normalizeProviderId(input.currentProviderId);
   const nextProviderId = normalizeProviderId(input.nextProviderId);
+  if (input.agentKind === 'codex' && input.currentCodexHostKey) {
+    const nextDependency = resolveCodexOfficialOAuthDependency(nextProviderId, input.nextModel);
+    if (input.currentCodexHostKey.endsWith(':external-auth') !== (nextDependency === false)) {
+      return true;
+    }
+  }
   if (
     input.agentKind === 'pi'
     && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
@@ -447,7 +458,10 @@ export async function prepareLocalCodexCredentialModeSwitch(
   input: PrepareLocalCodexCredentialModeSwitchInput,
 ): Promise<PrepareLocalCodexCredentialModeSwitchResult> {
   throwIfCredentialSwitchAborted(input.signal);
-  const localCodexSessions = input.maker.listActiveSessions().filter(isLocalCodexSession);
+  const localCodexSessions = input.maker.listActiveSessions().filter((session) =>
+    isLocalCodexSession(session) &&
+    (input.hostKey === undefined || (session.codexHostKey ?? 'local') === input.hostKey),
+  );
   const busySessions = localCodexSessions.filter((session) =>
     isSessionBusy(session, input.isSessionInTurn),
   );

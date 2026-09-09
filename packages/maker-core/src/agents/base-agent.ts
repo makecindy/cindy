@@ -462,6 +462,8 @@ export interface LocalAgentProcessRegistration {
 }
 
 export interface CodexLocalCredentialModeSwitchContext {
+  /** Exact local host being replaced; omitted by legacy hosts. */
+  hostKey?: string;
   fromMode?: AgentCredentialMode;
   /**
    * 当前 host 的归一化生效形态(createHost 时按 auth fallback 推出并登记)。
@@ -2163,6 +2165,8 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /** Local runtime identity, never serialized to the remote wire protocol. */
+  readonly codexHostKey?: string;
   /**
    * Codex-only: thread/start 或 thread/resume 响应确认的实际 model provider。
    * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。

@@ -504,6 +504,7 @@ export function codexOAuthHostIdentity(key: string, dependency?: boolean): strin
 const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
 // One bridge is shared by every local host, including account and utility hosts.
 const LOCAL_MCP_REFRESH_KEY = 'local-mcp-refresh';
+const LOCAL_CONFIGURATION_CHANGE_KEY = LOCAL_MCP_REFRESH_KEY;
 const CODEX_MODEL_LIST_RPC_TIMEOUT_MS = 20_000;
 const CODEX_MODEL_REFRESH_DEADLINE_MS = 20_000;
 
@@ -2233,10 +2234,11 @@ export class CodexAgent extends BaseAgent {
     }
   }
 
-  private async waitForHostCredentialModeSwitch(key: string): Promise<void> {
+  private async waitForHostCredentialModeSwitch(key: string, skipConfigurationGuard = false): Promise<void> {
     while (true) {
-      const switching = this.hostCredentialModeSwitches.get(LOCAL_MCP_REFRESH_KEY)
-        ?? this.hostCredentialModeSwitches.get(key);
+      const switching = (!skipConfigurationGuard && !key.startsWith('remote:')
+        ? this.hostCredentialModeSwitches.get(LOCAL_CONFIGURATION_CHANGE_KEY)
+        : undefined) ?? this.hostCredentialModeSwitches.get(key);
       if (!switching) return;
       await switching.catch(() => undefined);
     }
@@ -2262,6 +2264,7 @@ export class CodexAgent extends BaseAgent {
       if (pending.length === 0) break;
       await Promise.allSettled(pending);
     }
+    this.bumpHostGeneration(LOCAL_CONFIGURATION_CHANGE_KEY);
 
     let releaseSwitch!: () => void;
     const switchPromise = new Promise<void>((resolve) => {
@@ -2358,6 +2361,7 @@ export class CodexAgent extends BaseAgent {
     const coordinator = this.deps.prepareCodexLocalCredentialModeSwitch;
     if (coordinator) {
       await coordinator({
+        hostKey: key,
         fromMode: currentMode,
         fromModeEffective: currentEffective,
         toMode,
@@ -4804,6 +4808,8 @@ export class CodexAgent extends BaseAgent {
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
     const accountSessionHost = !opts.remoteHostId && (accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
     if (opts.remoteHostId && accountProviderId) throw new Error('This Codex account belongs to the local device');
+    if (!opts.remoteHostId) await this.waitForHostCredentialModeSwitch(LOCAL_CONFIGURATION_CHANGE_KEY);
+    const configurationGeneration = this.hostGenerations.get(LOCAL_CONFIGURATION_CHANGE_KEY);
     const requestedCredentialMode = opts.remoteHostId
       ? undefined
       : accountProviderId ? 'oauth-bearer' : resolveAgentCredentialMode({
@@ -4884,6 +4890,9 @@ export class CodexAgent extends BaseAgent {
         await this.waitForHostCredentialModeSwitch(currentHostKey);
       } while (this.hostCredentialModeSwitches.has(LOCAL_MCP_REFRESH_KEY)
         || this.hostCredentialModeSwitches.has(currentHostKey));
+      if (this.hostGenerations.get(LOCAL_CONFIGURATION_CHANGE_KEY) !== configurationGeneration) {
+        throw new Error('Codex provider configuration changed while preparing the session; retry with the current route');
+      }
       acquireHostBindingLeaseIfNeeded();
       return await this.getHost(opts.remoteHostId, credentialMode, {
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
@@ -12728,6 +12737,7 @@ export class CodexAgent extends BaseAgent {
       agentKind: 'codex',
       get model() { return mutableModel; },
       get codexProxyActive() { return hostUsesCodexProxy; },
+      get codexHostKey() { return currentHostKey; },
       get codexThreadModelProviderId() { return codexThreadModelProviderId; },
       get codexThreadMayHaveRollout() { return threadMayHaveRollout; },
       get codexCindyRemoteCompactionCompatible() {

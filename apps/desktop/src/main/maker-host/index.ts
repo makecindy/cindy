@@ -1599,6 +1599,7 @@ export function getMaker(): Maker {
         await prepareLocalCodexCredentialModeSwitch({
           maker,
           isSessionInTurn,
+          hostKey: ctx.hostKey,
           fromMode: ctx.fromMode,
           fromModeEffective: ctx.fromModeEffective,
           toMode: ctx.toMode,

@@ -506,6 +506,57 @@ describe('Codex official OAuth host isolation', () => {
     }
   });
 
+  it('retires custom-context snapshots and blocks newly named hosts until configuration persistence completes', async () => {
+    const deps = isolatedDeps();
+    deps.resolveCodexThreadContextWindow = () => 700_000;
+    const agent = new CodexAgent(deps);
+    try {
+      await agent.startSession({ sessionId: 'old-config', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      const guard = await agent.beginLocalHostCredentialChange();
+      try {
+        await guard.retireActiveHost();
+        expect(createdTransports[0].closed).toBe(true);
+        const pending = agent.startSession({ sessionId: 'new-config', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+        let completed = false;
+        void pending.then(() => { completed = true; });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(completed).toBe(false);
+        expect(createdTransports).toHaveLength(1);
+        await guard.finalize();
+        const handle = await pending;
+        expect(createdTransports).toHaveLength(2);
+        expect(handle.codexHostKey).toBe('local-custom-context:new-config:external-auth');
+        await handle.close();
+      } finally {
+        guard.release();
+      }
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('rejects a route resolved before a configuration change instead of spawning with its stale policy', async () => {
+    const deps = isolatedDeps();
+    let releaseResolution!: () => void;
+    const resolving = new Promise<void>((resolve) => { releaseResolution = resolve; });
+    const resolveDependency = vi.fn(async () => { await resolving; return false; });
+    deps.resolveCodexOfficialOAuthDependency = resolveDependency;
+    const agent = new CodexAgent(deps);
+    try {
+      const pending = agent.startSession({ sessionId: 'stale-policy', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      const rejected = expect(pending).rejects.toThrow('configuration changed');
+      await waitForExpectation(() => expect(resolveDependency).toHaveBeenCalledOnce());
+      const guard = await agent.beginLocalHostCredentialChange();
+      await guard.finalize();
+      releaseResolution();
+      await rejected;
+      expect(createdTransports).toHaveLength(0);
+    } finally {
+      releaseResolution();
+      await agent.dispose();
+    }
+  });
+
   it('does not let spawn preparation upgrade an external route back to disk OAuth', async () => {
     const deps = isolatedDeps();
     const retired = vi.fn(async () => undefined);
@@ -9011,6 +9062,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     })).rejects.toThrow(/still attached/i);
 
     expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledWith({
+      hostKey: 'local',
       fromMode: 'oauth-bearer',
       fromModeEffective: 'oauth-bearer',
       toMode: 'oauth-bearer',
@@ -9196,6 +9248,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledWith({
+      hostKey: 'local',
       fromMode: 'gateway-key',
       fromModeEffective: 'gateway-key',
       toMode: 'oauth-bearer',
@@ -9239,6 +9292,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledWith({
+      hostKey: 'local',
       fromMode: 'gateway-key',
       fromModeEffective: 'gateway-key',
       toMode: 'oauth-bearer',
@@ -9350,6 +9404,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await expect(oauthStart).rejects.toThrow(/still attached/i);
     expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledWith({
+      hostKey: 'local',
       fromMode: 'gateway-key',
       fromModeEffective: 'gateway-key',
       toMode: 'oauth-bearer',

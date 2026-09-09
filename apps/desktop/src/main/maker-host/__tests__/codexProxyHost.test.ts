@@ -8220,3 +8220,28 @@ describe('official Subagents on external credential Hosts', () => {
     }
   });
 });
+
+
+describe('external host proxy isolation', () => {
+  it('keeps subscription WebSocket routing when an external HTTP host starts and retires', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:41011', dispose: vi.fn(async () => undefined) })
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:41012', dispose: vi.fn(async () => undefined) });
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    await host.ensureCodexProxyReady();
+    try {
+      await host.ensureCodexCustomContextProxyReady('local:external-auth:1', 'provider-oauth', []);
+      const official = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+      const external = mockState.createAnthropicCompatProxy.mock.calls[1][0];
+      const context = { url: '/responses', headers: { 'thread-id': 'official-parent' } };
+      expect(host.getCodexProxyAuthInjection()).toBe('oauth-bearer');
+      expect(official.resolveWebSocketUpstream?.(context)).toBe('https://chatgpt.com/backend-api/codex');
+      expect(external.resolveWebSocketUpstream?.(context)).toBeNull();
+      await host.releaseCodexCustomContextProxy('local:external-auth:1');
+      expect(official.resolveWebSocketUpstream?.(context)).toBe('https://chatgpt.com/backend-api/codex');
+    } finally {
+      await host.disposeCodexProxy();
+    }
+  });
+});

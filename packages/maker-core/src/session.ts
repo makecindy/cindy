@@ -1597,6 +1597,11 @@ export class Session {
     return this.handle.model;
   }
 
+  /** Codex-only: 当前会话实际绑定的本地 host 身份。 */
+  get codexHostKey(): string | undefined {
+    return this.handle.codexHostKey;
+  }
+
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   get codexProxyActive(): boolean | undefined {
     return this.handle.codexProxyActive;
