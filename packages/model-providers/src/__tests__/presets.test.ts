@@ -1173,6 +1173,25 @@ describe('官方渠道预设契约', () => {
     },
   );
 
+  it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
+    '%s 的 Claude Code 提供 GLM-5.3 1M 独立入口,与 Pi 列表的 glm-5.3 窗口一致 (#3883)',
+    (id) => {
+      const claudeModels = preset(id)?.runtimes['claude-code']?.models ?? [];
+      expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toEqual({
+        id: 'glm-5.3[1m]',
+        name: 'GLM-5.3 (1M)',
+        contextWindow: 1_000_000,
+      });
+      // 窗口来源:同一端点族的 Pi 列表已声明 glm-5.3 为 1M,Claude Code 的 [1m] 形态不得比它小。
+      expect(
+        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.contextWindow,
+      ).toBe(1_000_000);
+      // 只补独立 1M 条目:既有裸条目保持原样(留空仍按 200K 保守默认),不静默抬窗。
+      expect(claudeModels.find((model) => model.id === 'glm-5.2')).toEqual({ id: 'glm-5.2', name: 'GLM-5.2' });
+      expect(claudeModels.find((model) => model.id === 'glm-5.3')).toBeUndefined();
+    },
+  );
+
   it('小米按量与 Token Plan 凭证不会混用端点', () => {
     expect(preset('xiaomi-mimo-api-cn')?.runtimes.codex?.baseUrl)
       .toBe('https://api.xiaomimimo.com/v1');
