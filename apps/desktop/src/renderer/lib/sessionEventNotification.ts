@@ -1,6 +1,7 @@
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  subscribeDataOwnerGeneration,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -59,10 +60,15 @@ export function sendSessionEventNotification(
       const focusAbortController = new AbortController();
       const abortPendingSound = () => focusAbortController.abort();
       window.addEventListener('focus', abortPendingSound, { once: true });
+      const unsubscribeOwnerChange = subscribeDataOwnerGeneration(abortPendingSound);
       try {
+        // Recheck after installing the cancellation hooks so an account switch
+        // cannot start the old owner's sound at this async boundary.
+        if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;
         suppressSystemSound = await playSessionEventSound(kind, focusAbortController.signal);
       } finally {
         window.removeEventListener('focus', abortPendingSound);
+        unsubscribeOwnerChange();
       }
     }
 

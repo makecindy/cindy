@@ -5,6 +5,11 @@ import {
   botOwnedSessionNotificationTitle,
   sendSessionEventNotification,
 } from '@/lib/sessionEventNotification';
+import {
+  getDataOwnerGeneration,
+  setDataOwnerGeneration,
+  __testing as dataOwnerGenerationTesting,
+} from '@/contexts/dataOwnerGeneration';
 
 const gates = vi.hoisted(() => ({
   desktop: true,
@@ -15,7 +20,7 @@ const gates = vi.hoisted(() => ({
 }));
 
 const sound = vi.hoisted(() => ({
-  play: vi.fn(async () => true),
+  play: vi.fn<(kind: string, signal?: AbortSignal) => Promise<boolean>>(async () => true),
 }));
 
 vi.mock('@/hooks/useNotificationSettings', () => ({
@@ -45,6 +50,7 @@ describe('shared session event notifications', () => {
     gates.islandSupported = false;
     vi.clearAllMocks();
     sound.play.mockResolvedValue(true);
+    dataOwnerGenerationTesting.reset();
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       notificationMarkSessionAttention: markAttention,
@@ -106,6 +112,50 @@ describe('shared session event notifications', () => {
         channels: { desktop: true, feishu: false, mobile: true, sound: false },
       }),
     );
+  });
+
+  it('does not start application sound for a stale owner', async () => {
+    const ownerAtNotification = getDataOwnerGeneration();
+    setDataOwnerGeneration('owner-new', 1);
+
+    await sendSessionEventNotification(
+      'session-stale',
+      'Old account task',
+      'done',
+      ownerAtNotification,
+    );
+
+    expect(sound.play).not.toHaveBeenCalled();
+    expect(showSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it('aborts a pending application sound when the owner generation changes', async () => {
+    setDataOwnerGeneration('owner-old', 1);
+    const ownerAtNotification = getDataOwnerGeneration();
+    let resolveSound: ((value: boolean) => void) | undefined;
+    sound.play.mockImplementationOnce(
+      (_kind: string, signal?: AbortSignal) =>
+        new Promise<boolean>((resolve) => {
+          resolveSound = resolve;
+          expect(signal).toBeInstanceOf(AbortSignal);
+        }),
+    );
+
+    const pending = sendSessionEventNotification(
+      'session-old',
+      'Old account task',
+      'done',
+      ownerAtNotification,
+    );
+    await vi.waitFor(() => expect(sound.play).toHaveBeenCalledOnce());
+
+    const signal = sound.play.mock.calls[0]?.[1];
+    setDataOwnerGeneration('owner-new', 2);
+
+    expect(signal?.aborted).toBe(true);
+    resolveSound?.(true);
+    await pending;
+    expect(showSessionEvent).not.toHaveBeenCalled();
   });
 
   it('resolves a Bot name for sessions omitted from the ordinary task list', async () => {
