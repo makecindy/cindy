@@ -227,6 +227,7 @@ describe('gitExec timeoutMs', () => {
       name: 'GitExecError',
       exitCode: null,
       stderr: expect.stringContaining('timed out after 1000ms'),
+      timedOut: true,
     });
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
@@ -618,6 +619,28 @@ describe('gitExec dubious-ownership safe.directory', () => {
   async function flushDeep() {
     for (let i = 0; i < 20; i += 1) await Promise.resolve();
   }
+
+  it.each(['read', 'add', 'retry'])('bounds the safe.directory %s stage with the caller timeout', async (stage) => {
+    setPlatform('linux');
+    const { calls, cbs } = installSequenceMock();
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 100 });
+    const rejected = expect(pending).rejects.toMatchObject({ timedOut: true });
+    cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+    if (stage !== 'read') {
+      cbs[1](Object.assign(new Error('absent'), { code: 1 }), '', '');
+      await flushDeep();
+    }
+    if (stage === 'retry') {
+      cbs[2](null, '', '');
+      await flushDeep();
+    }
+    const expectedCalls = stage === 'read' ? 2 : stage === 'add' ? 3 : 4;
+    expect(calls).toHaveLength(expectedCalls);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(calls).toHaveLength(expectedCalls);
+  });
 
   it('首次 dubious ownership → 幂等加入 safe.directory 后重试一次', async () => {
     const { calls, cbs } = installSequenceMock();

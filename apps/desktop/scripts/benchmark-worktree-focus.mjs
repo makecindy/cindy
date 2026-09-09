@@ -47,7 +47,27 @@ function functionsOnly(sourceText, names, tsx = false) {
       (ts.isVariableStatement(s) &&
         s.declarationList.declarations.some((d) => names.includes(d.name.getText(ast)))),
   );
-  assert.equal(statements.length, names.length, 'benchmark source extraction drifted');
+  const found = new Set();
+  for (const statement of statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) found.add(statement.name.text);
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        found.add(declaration.name.getText(ast));
+      }
+    }
+  }
+  assert.deepEqual(
+    [...new Set(names)].filter((name) => found.has(name)),
+    [...new Set(names)],
+    'benchmark source extraction drifted',
+  );
+  // Exported constants can reference a function declared later in the source.
+  // Hoist declarations in the extracted fragment so the VM behaves like a module.
+  statements.sort((a, b) => {
+    const aFunction = ts.isFunctionDeclaration(a) ? 0 : 1;
+    const bFunction = ts.isFunctionDeclaration(b) ? 0 : 1;
+    return aFunction - bFunction;
+  });
   return ts.transpileModule(statements.map((s) => s.getText(ast)).join('\n'), {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
@@ -76,6 +96,7 @@ async function run(version, dirs, scenario) {
     probes = 0,
     now = 0;
   let metas = {};
+  let snapshot = { metas: {}, invalid: new Set() };
   const effects = [],
     disposers = [],
     listeners = new Map(),
@@ -97,6 +118,7 @@ async function run(version, dirs, scenario) {
     exports: {},
     path,
     gitExec,
+    createCwdProbeScheduler: (probe) => probe,
     GitExecError: Error,
     getManagedWorktreeBasePath: () => null,
     log: {
@@ -109,12 +131,19 @@ async function run(version, dirs, scenario) {
     useRef: (current) => ({ current }),
     useCallback: (fn) => fn,
     useMemo: (fn) => fn(),
-    useState: () => [
-      metas,
-      (value) => {
-        metas = typeof value === 'function' ? value(metas) : value;
-      },
-    ],
+    useState: () => version.label === 'after'
+      ? [
+          snapshot,
+          (value) => {
+            snapshot = typeof value === 'function' ? value(snapshot) : value;
+          },
+        ]
+      : [
+          metas,
+          (value) => {
+            metas = typeof value === 'function' ? value(metas) : value;
+          },
+        ],
     useEffect: (fn) => effects.push(fn),
     Date: { now: () => now },
     setTimeout: (fn, ms) => {
@@ -139,10 +168,26 @@ async function run(version, dirs, scenario) {
       },
     },
   });
-  vm.runInContext(functionsOnly(version.manager, ['detectCwd']), context);
-  const names = ['isLiveOfficialPath', 'WorktreeProvider'];
-  if (version.label === 'after')
-    names.push('FOREGROUND_REFRESH_INTERVAL_MS', 'VALIDATION_CONCURRENCY');
+  const managerNames = ['detectCwd'];
+  if (version.manager.includes('detectCwdOnce')) managerNames.push('detectCwdOnce');
+  vm.runInContext(functionsOnly(version.manager, managerNames), context);
+  context.detectCwd = context.exports.detectCwd;
+  const names = version.label === 'after'
+    ? ['WorktreeProvider']
+    : ['isLiveOfficialPath', 'WorktreeProvider'];
+  // These knobs existed in the pre-snapshot implementation but were removed
+  // from later baselines. Extract them only when the selected ref still has
+  // the declarations, so the benchmark remains usable with either baseline.
+  if (version.label === 'before') {
+    for (const name of [
+      'FOREGROUND_REFRESH_INTERVAL_MS',
+      'VALIDATION_CONCURRENCY',
+      'BACKGROUND_CHECK_INTERVAL_MS',
+      'BACKGROUND_CHECK_CONCURRENCY',
+    ]) {
+      if (version.provider.includes(name)) names.push(name);
+    }
+  }
   vm.runInContext(functionsOnly(version.provider, names, true), context);
   const drain = async () => {
     const deadline = performance.now() + 120_000;
@@ -156,15 +201,18 @@ async function run(version, dirs, scenario) {
   context.WorktreeProvider({ children: null });
   effects.forEach((fn) => disposers.push(fn()));
   await drain();
-  assert.equal(Object.keys(metas).length, dirs.length);
+  assert.equal(
+    Object.keys(version.label === 'after' ? snapshot.metas : metas).length,
+    dirs.length,
+  );
   if (scenario !== 'cold') {
     statsReset();
     now = scenario === 'warm-focus' ? 1000 : 20_000;
     start = performance.now();
-    listeners.get('focus')();
+    listeners.get('focus')?.();
     // All ten focus events arrive while the first Git probe is still running.
     await tick();
-    for (let i = 1; i < 10; i++) listeners.get('focus')();
+    for (let i = 1; i < 10; i++) listeners.get('focus')?.();
     await drain();
   }
   const immediate = {
@@ -188,7 +236,10 @@ async function run(version, dirs, scenario) {
       elapsedMs: +(performance.now() - start).toFixed(2),
     };
   }
-  assert.equal(Object.keys(metas).length, dirs.length);
+  assert.equal(
+    Object.keys(version.label === 'after' ? snapshot.metas : metas).length,
+    dirs.length,
+  );
   disposers.forEach((dispose) => dispose?.());
   return { version: version.label, worktrees: dirs.length, scenario, ...immediate, trailing };
 }

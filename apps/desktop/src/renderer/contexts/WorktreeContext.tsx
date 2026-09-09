@@ -8,7 +8,7 @@
  *   - Scheduler / hook 等 main 侧后台创建完成后，复用 sessions:created 按
  *     sessionId 增量发现 worktree
  *   - 归档/删除的 worktree 回收跑完后，由 main 的 `worktree:changed` 推送按
- *     sessionId 增量更新；启动和窗口聚焦时才做全量存活校验
+ *     sessionId 增量更新；启动只读取快照，外部删除由打开中的任务按需校验
  *
  * 与项目内 AuthContext / EnvCheckContext 同
  * Provider+hooks 范式，不引入新状态库。
@@ -29,24 +29,12 @@ import type { WorktreeMeta } from '@/lib/worktree.types';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('WorktreeContext');
-const FOREGROUND_REFRESH_INTERVAL_MS = 15_000;
-const VALIDATION_CONCURRENCY = 2;
-
-/** store 仍可能留着已被 `git worktree remove` 的路径；探测失败不摘标，避免 IPC 抖动清空侧栏。 */
-async function isLiveOfficialPath(cwd: string): Promise<boolean> {
-  const detect = window.electronAPI?.worktreeDetectCwd;
-  if (!detect) return true;
-  try {
-    const result = await detect({ cwd });
-    return Boolean(result?.isInsideWorktree);
-  } catch {
-    return true;
-  }
-}
-
 interface WorktreeContextValue {
   /** sessionId → meta；非 null 即代表此 session 正绑定一个 worktree。 */
   metas: Record<string, WorktreeMeta>;
+  /** 保留失效目录的登记信息，供打开中的任务在聚焦/恢复时重新探测。 */
+  rawMetas: Record<string, WorktreeMeta>;
+  reportLiveness: (meta: WorktreeMeta, live: boolean) => void;
   /** 从 main 查询并更新单个 session 的 worktree 缓存。 */
   refreshSession: (sessionId: string) => Promise<void>;
 }
@@ -54,58 +42,39 @@ interface WorktreeContextValue {
 const WorktreeContext = createContext<WorktreeContextValue | null>(null);
 
 export function WorktreeProvider({ children }: { children: ReactNode }) {
-  const [metas, setMetas] = useState<Record<string, WorktreeMeta>>({});
+  const [snapshot, setSnapshot] = useState<{
+    metas: Record<string, WorktreeMeta>;
+    invalid: Set<string>;
+  }>({ metas: {}, invalid: new Set() });
   // 全量刷新彼此只接收最后一次；单条事件另按 sessionId 记代次，避免连续回收时
   // 一个 session 的迟到响应覆盖另一个 session 的新状态。
   const fullRefreshGenerationRef = useRef(0);
   const eventGenerationRef = useRef(0);
   const sessionEventGenerationsRef = useRef(new Map<string, number>());
-  const refreshInFlightRef = useRef<Promise<void> | null>(null);
-  const lastRefreshAtRef = useRef(-Infinity);
-
-  const refresh = useCallback(() => {
-    if (refreshInFlightRef.current) return refreshInFlightRef.current;
-    const pending = (async () => {
-      const myTurn = ++fullRefreshGenerationRef.current;
-      const eventGenerationAtStart = eventGenerationRef.current;
-      try {
-        const list = await window.electronAPI.worktreeListAll();
-        // 中间发生了更新的 refresh，丢弃本次结果
-        if (myTurn !== fullRefreshGenerationRef.current) return;
-        const next: Record<string, WorktreeMeta> = {};
-        let index = 0;
-        const validateNext = async () => {
-          while (index < (list?.length ?? 0)) {
-            if (myTurn !== fullRefreshGenerationRef.current) return;
-            const meta = list[index++];
-            if (!meta?.sessionId || !meta.path) continue;
-            if (!(await isLiveOfficialPath(meta.path))) continue;
-            next[meta.sessionId] = meta;
-          }
-        };
-        await Promise.all(Array.from({ length: VALIDATION_CONCURRENCY }, validateNext));
-        if (myTurn !== fullRefreshGenerationRef.current) return;
-        setMetas((current) => {
-          const merged = { ...next };
-          // 全量探测期间若某个 session 收到更晚的权威事件，只保留该 session 当前
-          // 的增量结果；未完成的增量请求随后会再落一次，不能让旧全量快照回写。
-          for (const [sessionId, generation] of sessionEventGenerationsRef.current) {
-            if (generation <= eventGenerationAtStart) continue;
-            if (current[sessionId]) merged[sessionId] = current[sessionId];
-            else delete merged[sessionId];
-          }
-          return merged;
-        });
-        lastRefreshAtRef.current = Date.now();
-      } catch (err) {
-        log.warn('refresh failed:', err);
-      }
-    })();
-    refreshInFlightRef.current = pending;
-    void pending.finally(() => {
-      refreshInFlightRef.current = null;
-    });
-    return pending;
+  const refresh = useCallback(async () => {
+    const myTurn = ++fullRefreshGenerationRef.current;
+    const eventGenerationAtStart = eventGenerationRef.current;
+    try {
+      const list = await window.electronAPI.worktreeListAll();
+      // 中间发生了更新的 refresh，丢弃本次结果
+      if (myTurn !== fullRefreshGenerationRef.current) return;
+      const entries = (list ?? []).filter((meta) => meta?.sessionId && meta.path);
+      const mergeSnapshot = (next: Record<string, WorktreeMeta>) => setSnapshot((current) => {
+        if (myTurn !== fullRefreshGenerationRef.current) return current;
+        const merged = { ...next };
+        // 快照读取期间若某个 session 收到更晚的权威事件，只保留该 session 当前
+        // 的增量结果；未完成的增量请求随后会再落一次，不能让旧全量快照回写。
+        for (const [sessionId, generation] of sessionEventGenerationsRef.current) {
+          if (generation <= eventGenerationAtStart) continue;
+          if (current.metas[sessionId]) merged[sessionId] = current.metas[sessionId];
+          else delete merged[sessionId];
+        }
+        return { ...current, metas: merged };
+      });
+      mergeSnapshot(Object.fromEntries(entries.map((meta) => [meta.sessionId, meta])));
+    } catch (err) {
+      log.warn('refresh failed:', err);
+    }
   }, []);
 
   const refreshSession = useCallback(async (sessionId: string) => {
@@ -121,53 +90,45 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
       const meta = await getForSession(sessionId);
       if (!isCurrent()) return;
       const next =
-        meta?.sessionId === sessionId && meta.path && (await isLiveOfficialPath(meta.path))
-          ? meta
-          : null;
+        meta?.sessionId === sessionId && meta.path ? meta : null;
       if (!isCurrent()) return;
-      setMetas((current) => {
-        if (next) return { ...current, [sessionId]: next };
-        if (!current[sessionId]) return current;
-        const updated = { ...current };
-        delete updated[sessionId];
-        return updated;
+      setSnapshot((current) => {
+        if (!isCurrent()) return current;
+        const metas = { ...current.metas };
+        if (next) metas[sessionId] = next;
+        else delete metas[sessionId];
+        const invalid = new Set(current.invalid);
+        invalid.delete(sessionId);
+        return { metas, invalid };
       });
     } catch (err) {
       log.warn('session refresh failed:', { sessionId, err });
     }
   }, []);
 
+  const reportLiveness = useCallback((meta: WorktreeMeta, live: boolean) => {
+    setSnapshot((current) => {
+      // 同路径恢复也会换一份元数据；旧探测不能覆盖新一代创建/恢复/回收结果。
+      if (current.metas[meta.sessionId] !== meta) return current;
+      if (current.invalid.has(meta.sessionId) === !live) return current;
+      const invalid = new Set(current.invalid);
+      if (live) invalid.delete(meta.sessionId);
+      else invalid.add(meta.sessionId);
+      return { ...current, invalid };
+    });
+  }, []);
+
   useEffect(() => {
-    let trailingRefresh: ReturnType<typeof setTimeout> | undefined;
     void refresh();
-    const onFocus = () => {
-      const remaining = refreshInFlightRef.current
-        ? FOREGROUND_REFRESH_INTERVAL_MS
-        : FOREGROUND_REFRESH_INTERVAL_MS - (Date.now() - lastRefreshAtRef.current);
-      if (remaining <= 0) {
-        if (trailingRefresh !== undefined) clearTimeout(trailingRefresh);
-        trailingRefresh = undefined;
-        void refresh();
-      } else if (trailingRefresh === undefined) {
-        // A final focus within the cooldown still gets a trailing check, even
-        // if the user stays here. External worktree removal cannot stay stale.
-        trailingRefresh = setTimeout(() => {
-          trailingRefresh = undefined;
-          onFocus();
-        }, remaining);
-      }
-    };
-    window.addEventListener('focus', onFocus);
     return () => {
-      window.removeEventListener('focus', onFocus);
-      if (trailingRefresh !== undefined) clearTimeout(trailingRefresh);
+      fullRefreshGenerationRef.current++;
     };
   }, [refresh]);
 
   // 权威时机在这条推送上：main 侧的 worktree 回收是 fire-and-forget 的异步链
   // （关子进程 → git worktree remove → 文件系统清理），store 条目被移除的时刻
   // 远晚于归档/删除的状态 IPC 返回。main 只为实际涉及 worktree 的 session 广播，
-  // 这里也只查询、校验并更新这一条，不再扫描其它 worktree。
+  // 这里也只查询并更新这一条，不再扫描其它 worktree；存活校验由打开中的任务负责。
   useEffect(() => {
     const subscribe = window.electronAPI?.onWorktreeChanged;
     if (!subscribe) return;
@@ -191,10 +152,13 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
     });
   }, [refreshSession]);
 
-  const value = useMemo<WorktreeContextValue>(
-    () => ({ metas, refreshSession }),
-    [metas, refreshSession],
-  );
+  const value = useMemo<WorktreeContextValue>(() => ({
+    metas: Object.fromEntries(Object.entries(snapshot.metas)
+      .filter(([sessionId]) => !snapshot.invalid.has(sessionId))),
+    rawMetas: snapshot.metas,
+    reportLiveness,
+    refreshSession,
+  }), [snapshot, reportLiveness, refreshSession]);
 
   return <WorktreeContext.Provider value={value}>{children}</WorktreeContext.Provider>;
 }
@@ -213,10 +177,18 @@ export function useWorktrees(): Record<string, WorktreeMeta> {
 }
 
 /** 单条快捷查询；徽标 (M4) / 各 session 视图都用它。 */
-export function useWorktreeForSession(sessionId: string | null | undefined): WorktreeMeta | null {
-  const { metas } = useCtx();
+export function useWorktreeForSession(
+  sessionId: string | null | undefined,
+  opts?: { includeInvalid?: boolean },
+): WorktreeMeta | null {
+  const { metas, rawMetas } = useCtx();
   if (!sessionId) return null;
-  return metas[sessionId] ?? null;
+  return (opts?.includeInvalid ? rawMetas : metas)[sessionId] ?? null;
+}
+
+/** 仅同步当前任务已有探测的结果，不额外启动 Git，也不修改 main store。 */
+export function useReportWorktreeLiveness(): WorktreeContextValue['reportLiveness'] {
+  return useCtx().reportLiveness;
 }
 
 /** 让创建/恢复等明确知道 sessionId 的调用方只刷新对应 worktree。 */
