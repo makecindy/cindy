@@ -1,18 +1,16 @@
 import { app } from 'electron';
 import path from 'node:path';
+import type { ProviderView } from '@cindy/model-providers';
+import { defaultBotModelChain } from '../../shared/botDefaultModelChain.js';
 
-import {
-  NEW_BOT_DEFAULT_HARNESS,
-  NEW_BOT_DEFAULT_PI_EFFORT,
-  NEW_BOT_DEFAULT_PI_MODEL,
-  NEW_BOT_DEFAULT_PI_PROVIDER,
-} from '../../shared/botDefaults.js';
 import {
   normalizeBotModelChain,
   type BotModelRoute,
 } from '../../shared/botModelChain.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { getMakerIfReady } from './index.js';
+import { getDesktopProviderService } from './createDesktopProviderService.js';
 import {
   createOverrideSettingsFile,
   type OverrideSettingsState,
@@ -24,22 +22,14 @@ export interface BotModelChainSettings {
   modelChain: BotModelRoute[];
 }
 
-const DEFAULT_MODEL_CHAIN: BotModelRoute[] = [{
-  harness: NEW_BOT_DEFAULT_HARNESS,
-  model: NEW_BOT_DEFAULT_PI_MODEL,
-  providerId: NEW_BOT_DEFAULT_PI_PROVIDER,
-  effort: NEW_BOT_DEFAULT_PI_EFFORT,
-  fastMode: false,
-}];
-
-const DEFAULTS: BotModelChainSettings = { modelChain: DEFAULT_MODEL_CHAIN };
+const DEFAULTS: BotModelChainSettings = { modelChain: [] };
 
 function normalize(raw: unknown): BotModelChainSettings {
   const record = raw && typeof raw === 'object' && !Array.isArray(raw)
     ? raw as Record<string, unknown>
     : {};
   const modelChain = normalizeBotModelChain(record.modelChain);
-  return { modelChain: modelChain.length > 0 ? modelChain : DEFAULT_MODEL_CHAIN };
+  return { modelChain };
 }
 
 function settingsFilePath(rootPath?: string): string {
@@ -50,6 +40,18 @@ const stores = new Map<
   string,
   ReturnType<typeof createOverrideSettingsFile<BotModelChainSettings>>
 >();
+
+let providerRead: { owner: string; promise: Promise<ProviderView[]> } | undefined;
+
+function readConnectedProviders(owner: string): Promise<ProviderView[]> {
+  if (providerRead?.owner === owner) return providerRead.promise;
+  // A roster read resolves several profiles together. Share only the in-flight
+  // credential read, never a cached connection state or another owner's result.
+  const promise = getDesktopProviderService().listProviders({ allowSideEffects: false })
+    .finally(() => { if (providerRead?.promise === promise) providerRead = undefined; });
+  providerRead = { owner, promise };
+  return promise;
+}
 
 function currentStore(rootPath?: string) {
   const ownerRoot = rootPath
@@ -65,27 +67,39 @@ function currentStore(rootPath?: string) {
       label: 'bot-model-chain',
       scopeKey: rootPath
         ? () => `root:${rootPath}`
-        : () => getActiveAppSession().dataOwnerId ?? '<global>',
+        : activeOwnerScopeKey,
     });
     stores.set(key, current);
   }
   return current;
 }
 
-export function readBotModelChainSettings(
-  options?: { rootPath?: string },
-): BotModelChainSettings {
-  const store = currentStore(options?.rootPath);
-  store.invalidateIfChanged();
-  return store.read();
+export async function readBotModelChainSettings(
+  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi'> },
+): Promise<BotModelChainSettings> {
+  return (await readBotModelChainSettingsState(options)).value;
 }
 
-export function readBotModelChainSettingsState(
-  options?: { rootPath?: string },
-): OverrideSettingsState<BotModelChainSettings> {
+export async function readBotModelChainSettingsState(
+  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi'> },
+): Promise<OverrideSettingsState<BotModelChainSettings>> {
   const store = currentStore(options?.rootPath);
   store.invalidateIfChanged();
-  return store.readState();
+  const state = store.readState();
+  if (state.isCustomized) return state;
+  // Capture the owner before reading live connections; never persist derived defaults.
+  const owner = activeOwnerScopeKey();
+  const providers = options?.providers ?? await readConnectedProviders(owner);
+  if (activeOwnerScopeKey() !== owner) throw new Error('Bot model defaults owner changed');
+  store.invalidateIfChanged();
+  const latest = store.readState();
+  if (latest.isCustomized) return latest;
+  const availableAgents = options?.availableAgents ?? new Set(
+    (getMakerIfReady()?.listAvailableAgents() ?? []).map((agent) => agent === 'claude-code' ? 'cc' : agent),
+  );
+  const value = { modelChain: defaultBotModelChain({ providers, providersLoading: false,
+    availableAgents, availableAgentsLoaded: true }) };
+  return { ...latest, value, defaults: value };
 }
 
 export async function writeBotModelChainSettings(
@@ -100,14 +114,26 @@ export async function writeBotModelChainSettings(
   return store.readState();
 }
 
+/** Clear only the current owner's global override, then use the normal default resolver. */
+export async function resetBotModelChainSettings(
+  options?: Parameters<typeof readBotModelChainSettingsState>[0],
+): Promise<OverrideSettingsState<BotModelChainSettings>> {
+  const owner = activeOwnerScopeKey();
+  await currentStore(options?.rootPath).resetAtomic();
+  if (!options?.rootPath && activeOwnerScopeKey() !== owner) {
+    throw new Error('Bot model settings owner changed');
+  }
+  return readBotModelChainSettingsState(options);
+}
+
 /**
  * A null override means the permanent Bot Profile follows the owner-scoped
  * global route chain. Explicit per-Bot chains remain frozen in its profile.
  */
-export function readEffectiveBotModelChain(
+export async function readEffectiveBotModelChain(
   config: Record<string, unknown>,
-  options?: { rootPath?: string },
-): BotModelRoute[] {
+  options?: { rootPath?: string; providers?: readonly ProviderView[]; availableAgents?: ReadonlySet<'cc' | 'codex' | 'pi'> },
+): Promise<BotModelRoute[]> {
   if (Array.isArray(config.modelChainOverride)) {
     const explicit = normalizeBotModelChain(config.modelChainOverride);
     if (explicit.length > 0) return explicit;
@@ -115,7 +141,8 @@ export function readEffectiveBotModelChain(
   // Before modelChainOverride existed, modelOverride:null was the durable
   // marker for “follow the Bot default”. Preserve that meaning on upgrade.
   if (config.modelChainOverride === null || config.modelOverride === null) {
-    return readBotModelChainSettings(options).modelChain;
+    return (await readBotModelChainSettings(options)).modelChain;
   }
-  return normalizeBotModelChain(config.modelChain, config);
+  const legacy = normalizeBotModelChain(config.modelChain, config);
+  return legacy.length || typeof config.model === 'string' ? legacy : (await readBotModelChainSettings(options)).modelChain;
 }

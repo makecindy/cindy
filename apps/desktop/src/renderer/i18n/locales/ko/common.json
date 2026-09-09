@@ -2009,8 +2009,8 @@
         "hostProfileApple": "Apple 칩 · 통합 메모리 약 {{memory}}GB",
         "hostProfileGeneric": "메모리 약 {{memory}}GB",
         "hostProfileUnknown": "이 컴퓨터의 메모리를 아직 확인할 수 없습니다",
-        "bestForYou": "가장 잘 맞음",
-        "alsoCoding": "코딩에도 좋음",
+        "bestForYou": "성능 추천",
+        "alsoCoding": "속도 대안",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2027,41 +2027,12 @@
         "noSearchResults": "일치하는 모델이 없습니다",
         "alreadyInstalled": "설치됨",
         "searchResults": "검색 결과",
-        "moreModels": "자주 쓰는 모델 더 보기",
-        "memoryWarning": "이 컴퓨터의 메모리가 부족합니다({{need}} GB 필요, 현재 약 {{have}} GB)",
+        "moreModels": "다른 후보 모델",
+        "memoryWarning": "추정 메모리 기준 미만({{need}} GB, 이 기기 약 {{have}} GB)",
         "manualDownload": "수동 다운로드",
         "manualDownloadPlaceholder": "Ollama 라이브러리 이름 또는 Hugging Face URL",
         "invalidLibraryName": "Ollama 라이브러리 이름을 입력하거나 huggingface.co 모델 페이지 URL을 붙여넣으세요",
         "advancedExactName": "고급: 정확한 라이브러리 이름",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다."
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택."
-          },
-          "gemma4-e2b": {
-            "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다."
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다."
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다."
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다."
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다."
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안."
-          },
-          "glm-47-flash": {
-            "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음."
-          }
-        },
         "onboardingTitle": "먼저 Ollama 런타임을 설치하세요",
         "onboardingBody": "Ollama를 설치하면 Ollama 앱을 열지 않고도 Cindy에서 로컬 모델을 다운로드하고 사용할 수 있습니다. Ollama는 무료 오픈소스 서드파티 런타임입니다.",
         "installInCindy": "Cindy에서 설치",
@@ -2130,8 +2101,8 @@
         "cancelDownload": "미완료 다운로드 삭제",
         "notRecommended": "이 Mac은 Qwen3.8 27B에 필요한 32GB 메모리 기준에 미달합니다. 정확한 라이브러리 이름을 입력해 직접 다운로드할 수 있습니다.",
         "sizeHint": "약 {{size}} · 통합 메모리 {{memory}}GB 필요",
-        "sizeHintApple": "약 {{size}} · 통합 메모리 {{memory}}GB 필요",
-        "sizeHintGeneric": "약 {{size}} · 메모리 {{memory}}GB 필요",
+        "sizeHintApple": "다운로드 {{size}} · 예상 통합 메모리 {{memory}} GB",
+        "sizeHintGeneric": "다운로드 {{size}} · 예상 메모리 {{memory}} GB",
         "deleteFromCindy": "Cindy에서 제거",
         "deleteConfirmTitle": "Cindy에서 Ollama를 제거할까요?",
         "deleteConfirmBody": "Cindy 연결만 제거합니다. Ollama에 이미 받은 모델은 디스크에 남고 서비스도 멈추지 않습니다.",
@@ -2140,7 +2111,8 @@
         "deleteModelConfirmBody": "이 컴퓨터에서 받은 모델 파일을 삭제하고 Cindy에서도 제거합니다. 필요하면 나중에 다시 받을 수 있습니다.",
         "deleteModelConfirm": "삭제",
         "deleteModelDone": "{{name}}을(를) 삭제했습니다",
-        "deleteModelFailed": "삭제하지 못했습니다. Ollama가 실행 중인지 확인한 뒤 다시 시도해 주세요."
+        "deleteModelFailed": "삭제하지 못했습니다. Ollama가 실행 중인지 확인한 뒤 다시 시도해 주세요.",
+        "noRecommendation": "아직 이 컴퓨터의 메모리에 맞고 근거가 충분한 추천 모델이 없습니다. 아래에서 후보를 직접 선택할 수 있습니다."
       },
       "xdSignin": {
         "badge": "추천",
@@ -7191,6 +7163,8 @@
       "composerPlaceholderLatin": "{{name}} 에게 말 걸기…"
     },
     "globalSettings": {
+      "restoreHint": "기본값으로 복원하면 클라이언트의 기본 모델 설정을 따릅니다. 개별 파트너의 사용자 지정 모델은 유지됩니다.",
+      "restoreFailed": "기본값을 복원하지 못했습니다. 다시 시도해 주세요.",
       "title": "파트너",
       "description": "파트너 전체에 적용되는 설정입니다. 개별 파트너 설정은 각자의 페이지에 있어요.",
       "rosterNote": "기본 제공되는 구성원은 버전마다 늘어납니다."

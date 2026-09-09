@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 
 import type { RpcRequest, RpcResponse, WorkerEvent } from '../client/DbTransport.js';
 import { dispatch, serializeWorkerError } from './dispatcher.js';
+import { readLocalWorktreeReferences } from './worktreeReferences.js';
 import {
   createWorkerDatabase,
   type DatabaseConstructor,
@@ -75,6 +76,9 @@ function setDatabase(opts: DbWorkerStartupOptions): void {
 
 async function dispatchRequest(req: RpcRequest): Promise<unknown> {
   const readyDb = requireReadyDb();
+  if (req.op === 'worktreeReferences') {
+    return readLocalWorktreeReferences(readyDb, DatabaseCtor, startupOptions.nativeBinding);
+  }
   if (req.op === 'echoTransfer') {
     const { buffer } = (req.args ?? {}) as { buffer?: { byteLength?: number } };
     return { byteLength: typeof buffer?.byteLength === 'number' ? buffer.byteLength : 0 };

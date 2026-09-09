@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as scrollModel from '@/session/messageScroll';
 import { createMobileTailFollower } from '@/session/messageTailFollower';
+import { mobileDebugEnabled, mobileDebugLog, setMobileDebugSink } from '@/debug/mobileDebugLog';
 
 // Execute the production callbacks without mounting Markdown/media/native views. Unlike source
 // assertions, this harness interleaves touch, native scroll, content-size, timers and frame delivery.
@@ -60,7 +61,7 @@ function harness() {
     metrics.offsetY = metrics.contentHeight - metrics.viewportHeight;
   });
   const environment = {
-    ...scrollModel, ...state, createMobileTailFollower,
+    ...scrollModel, ...state, createMobileTailFollower, mobileDebugEnabled, mobileDebugLog,
     listRef: ref({
       scrollToEnd: tailScroll,
       scrollToIndex: vi.fn(),
@@ -99,9 +100,23 @@ beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 16));
   vi.stubGlobal('cancelAnimationFrame', (timer: ReturnType<typeof setTimeout>) => clearTimeout(timer));
 });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  it.each(['off', 'on', 'failed'])('preserves reader ownership with Debug recording %s', (recording) => {
+    const sink = vi.fn(() => { if (recording === 'failed') throw new Error('storage unavailable'); });
+    setMobileDebugSink(recording === 'off' ? undefined : sink);
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(1180));
+    h.handleScrollEndDrag();
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+    expect(sink.mock.calls.length > 0).toBe(recording !== 'off');
+  });
+
   it.each([1196, 1180].flatMap((offset) => ['missing', 'before-verify', 'after-verify'].map((end) => ({ offset, end }))))(
     'releases a cancelled drag at $offset with end event $end', ({ offset, end }) => {
       const h = harness();

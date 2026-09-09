@@ -431,6 +431,59 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
+    'loads global %s with native precedence and keeps the prompt stable across turns',
+    { timeout: 60_000 },
+    async (winner) => {
+      const root = mkdtempSync(path.join(tmpdir(), 'pi-global-int-'));
+      const userHome = path.join(root, 'native-user');
+      const workingDir = path.join(root, 'workspace');
+      mkdirSync(userHome);
+      mkdirSync(workingDir);
+      const candidates = ['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'];
+      for (const name of candidates.slice(0, candidates.indexOf(winner) + 1)) {
+        writeFileSync(path.join(userHome, name), `GLOBAL_CANARY_${name}`);
+      }
+      writeFileSync(path.join(userHome, 'SYSTEM.md'), 'MUST_NOT_REPLACE_PI_SYSTEM');
+      writeFileSync(path.join(workingDir, 'AGENTS.md'), 'PROJECT_CONTEXT_CANARY');
+      const agent = new PiAgent({ ...buildDeps(), resolvePiGlobalContextHome: () => userHome });
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await agent.startSession({ sessionId: `global-${winner}`, workingDir, model: 'pi-test-model' });
+        const systems: unknown[] = [];
+        for (let turn = 0; turn < 2; turn++) {
+          const requestStart = seenRequests.length;
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: `ping ${turn}` });
+          await done;
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+          const request = seenRequests.slice(requestStart).find((entry) => entry.url.includes('/messages'))!;
+          expect(request, JSON.stringify(events)).toBeDefined();
+          const system = JSON.parse(request.body).system;
+          const text = JSON.stringify(system);
+          expect(text).toContain(`GLOBAL_CANARY_${winner}`);
+          for (const loser of candidates.filter((name) => name !== winner)) {
+            expect(text).not.toContain(`GLOBAL_CANARY_${loser}`);
+          }
+          expect(text).toContain('PROJECT_CONTEXT_CANARY');
+          expect(text).not.toContain('MUST_NOT_REPLACE_PI_SYSTEM');
+          systems.push(system);
+          writeFileSync(path.join(userHome, winner), 'CHANGED_AFTER_START');
+        }
+        expect(systems[1]).toEqual(systems[0]);
+      } finally {
+        await handle?.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it(
     'startSession → send → streams text and settles → usage/cost tracked → close',
     { timeout: 60_000 },
@@ -2920,6 +2973,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       // 端到端:父会话调 subagent → Cindy 自有扩展 spawn 真 pi 子进程 → 子进程走同一
       // fake gateway → 结论回父模型;进度经工具原生 onUpdate 翻成 agent_task_update。
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-'));
+      const nativeHome = path.join(workingDir, 'native-pi-home');
+      mkdirSync(nativeHome);
+      const globalFile = path.join(nativeHome, 'AGENTS.override.md');
+      writeFileSync(globalFile, 'SUBAGENT_GLOBAL_CONTEXT_SNAPSHOT');
+      const requestStart = seenRequests.length;
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
@@ -2929,7 +2987,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           anthropicStreamBody('parent turn finished'),
         );
 
-        const agent = new PiAgent(buildDeps());
+        const agent = new PiAgent({ ...buildDeps(), resolvePiGlobalContextHome: () => nativeHome });
         const resolverTools: string[] = [];
         let handle: AgentSessionHandle | null = null;
         const events: AgentEvent[] = [];
@@ -2940,6 +2998,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             model: 'pi-test-model',
             permissionMode: 'ask',
           });
+          writeFileSync(globalFile, 'GLOBAL_CHANGED_AFTER_PARENT_START');
           handle.setInteractionResolver?.(async (req) => {
             resolverTools.push((req as { toolName?: string }).toolName ?? '?');
             return {
@@ -2962,6 +3021,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         // Ask 档仍逐次由用户确认 spawn；Auto 档另有回归证明 spawn 本身静默放行。
         expect(resolverTools).toEqual(['subagent']);
+        const requests = seenRequests.slice(requestStart);
+        // Gateway attribution deliberately retains the parent session id.
+        const childRequests = requests.filter((request) =>
+          JSON.stringify(JSON.parse(request.body).system).includes('You are a scout subagent.'),
+        );
+        expect(childRequests.length).toBeGreaterThan(0);
+        for (const request of requests) {
+          const system = JSON.stringify(JSON.parse(request.body).system);
+          expect(system).toContain('SUBAGENT_GLOBAL_CONTEXT_SNAPSHOT');
+          expect(system).not.toContain('GLOBAL_CHANGED_AFTER_PARENT_START');
+        }
 
         // 卡片走的是与 Claude / Codex 同一条 agent_task_update 通道。
         const cardUpdates = events

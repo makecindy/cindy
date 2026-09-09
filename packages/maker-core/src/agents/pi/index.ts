@@ -26,6 +26,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
+import { readPiGlobalContext } from './global-context.js';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -56,6 +57,8 @@ function validateSdkSessionId(value: string): string {
 
 import {
   AgentNotAuthenticatedError,
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
@@ -1184,6 +1187,7 @@ interface FailedPiStartupCleanup {
   proc: PiRpcProcess;
   promise: Promise<void> | null;
   cleanupLocal?: () => void;
+  confirmStopped: () => void;
 }
 
 /**
@@ -1406,6 +1410,7 @@ export class PiAgent extends BaseAgent {
     }
     if (this.failedStartupCleanups.get(sessionId) === entry) {
       this.failedStartupCleanups.delete(sessionId);
+      entry.confirmStopped();
       entry.cleanupLocal?.();
     }
   }
@@ -2477,6 +2482,15 @@ export class PiAgent extends BaseAgent {
     // 远端再叠 models.json+settings.json hash:startSession 在 pi/ensure 之前就会写
     // 这两份快照。若只按 sessionId 分目录, 另一实例改路由或 retry 策略会先覆盖
     // 仍在跑的旧 Pi / 子代理热读快照。
+    // Bot contexts remain profile-only. SSH tasks use the remote user's rules,
+    // never the controlling desktop's personal instructions.
+    const globalContextFiles = opts.botRuntimeProfile ? [] : await readPiGlobalContext(
+      this.deps.resolvePiGlobalContextHome?.(opts.remoteHostId),
+      fileOps,
+    );
+    const globalContextHash = globalContextFiles.length > 0
+      ? createHash('sha256').update(JSON.stringify(globalContextFiles)).digest('hex').slice(0, 16)
+      : '';
     let configHome = remote
       ? joinRemotePosixPath(agentHome, 'run-tmp', stableSessionPathSegment(opts.sessionId))
       : joinRemotePosixPath(agentHome, 'run-tmp', randomBytes(8).toString('hex'));
@@ -2518,7 +2532,7 @@ export class PiAgent extends BaseAgent {
       configHome = joinRemotePosixPath(
         agentHome,
         'run-tmp',
-        `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}`,
+        `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}${globalContextHash ? `-${globalContextHash}` : ''}`,
       );
     }
     const { gatewayImageInputByModel, gatewayApiByModel, modelsJsonHash } = await this.writeModelsJson(
@@ -2639,7 +2653,15 @@ export class PiAgent extends BaseAgent {
       reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
-    const reviewReadGrants = reviewMode ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []) : [];
+    let reviewReadGrants: Awaited<ReturnType<typeof buildReviewReadGrants>> = [];
+    if (reviewMode) {
+      try {
+        reviewReadGrants = await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []);
+      } catch (error) {
+        // No Pi process exists until after the review grants are validated.
+        throw new AgentStartupStoppedError(error);
+      }
+    }
     const reviewReadPaths = reviewReadGrants.map((grant) => grant.realPath);
     // Keep ordinary permission files shape-compatible with older Cindy/Pi
     // sessions. The Review-only marker is capability-like: absence means the
@@ -4388,6 +4410,9 @@ export class PiAgent extends BaseAgent {
     };
     let durableSpawnEnv: NodeJS.ProcessEnv = {};
     try {
+      for (const file of globalContextFiles) {
+        await writeFile(joinRemotePosixPath(configHome, file.name), file.content);
+      }
       // 远端不 stage 本地 rg(本机二进制远端无意义)—— 远端走 PATH 上的 rg(远端 POSIX
       // 系统常见),与 CC/Codex 远端一致(不注入受管工具路径)。
       const managedRipgrepPath = remote
@@ -4449,6 +4474,13 @@ export class PiAgent extends BaseAgent {
       const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!) : null;
       const spawnEnv: NodeJS.ProcessEnv = {
         ...(remote ? {} : process.env),
+        ...(typeof this.deps.runtimeConfig.behaviorFlags === 'function'
+          ? this.deps.runtimeConfig.behaviorFlags({
+              credentialMode,
+              sessionProviderId: authProviderId,
+              spawnMode: remote ? 'remote' : 'local',
+            })
+          : this.deps.runtimeConfig.behaviorFlags),
         ...authEnv,
         ...(proxyEnv ?? {}),
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
@@ -5136,14 +5168,20 @@ export class PiAgent extends BaseAgent {
       // quarantine；后续同 session startSession 会先重试 cleanup，绝不直接 spawn。
       // 远端失败时不清 runtime 文件；本地也只有确认进程结束后才清，避免存活
       // 进程丢 bridge/permission 状态。
-      let closeError: unknown = null;
+      let cleanupPending: AgentStartupCleanupPendingError | null = null;
       try {
         await proc.close();
       } catch (error) {
-        closeError = error;
+        let confirmStopped!: () => void;
+        const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
+        cleanupPending = new AgentStartupCleanupPendingError(
+          `pi startup failed and process cleanup remains unconfirmed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: err, whenStopped },
+        );
         this.failedStartupCleanups.set(startupCleanupKey, {
           proc,
           promise: null,
+          confirmStopped,
           ...(!remote
             ? { cleanupLocal: () => {
                 cleanupConfigHome();
@@ -5152,17 +5190,13 @@ export class PiAgent extends BaseAgent {
             : {}),
         });
       }
-      if (!remote && !closeError) {
+      if (!remote && !cleanupPending) {
         cleanupConfigHome();
         cleanupRuntimeFiles();
       }
-      if (closeError) {
-        throw new Error(
-          `pi startup failed and process cleanup remains unconfirmed: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
-          { cause: err },
-        );
-      }
-      throw err;
+      if (cleanupPending) throw cleanupPending;
+      // Only a successful close proves exit; do not infer it from the startup error.
+      throw new AgentStartupStoppedError(err);
     }
 
     const launchSubagentRunner = (request: PiSubagentRunnerLaunchRequest): Promise<void> =>

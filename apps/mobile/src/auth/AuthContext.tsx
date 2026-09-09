@@ -817,7 +817,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? accountVaultKey(activeAuthRealmRef.current, next.id)
         : null;
       setDeferredSessionRecovery(false);
-      setMobileAuthOwner(next?.id);
+      setMobileAuthOwner(next?.id, activeAuthRealmRef.current);
       userRef.current = next;
       setUser(next);
       void serializeUserProfileMutation(() =>
@@ -1072,7 +1072,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // old owner and advance its generation after cleanup settles so
             // account-scoped effects reconnect from the restored session.
             activateMobileSessionRealm(previousRealm);
-            setMobileAuthOwner(userRef.current?.id ?? null);
+            setMobileAuthOwner(userRef.current?.id ?? null, previousRealm);
             setAccountGeneration((value) => value + 1);
           }
           throw error;
@@ -1436,7 +1436,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             activateMobileSessionRealm(storedSession.realm);
             activeAuthRealmRef.current = storedSession.realm;
             userRef.current = cachedUser;
-            setMobileAuthOwner(cachedUser.id);
+            setMobileAuthOwner(cachedUser.id, storedSession.realm);
             setUser(cachedUser);
             if (cachedProfile.accountKey === null) {
               void serializeUserProfileMutation(() =>
@@ -2472,14 +2472,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 authGenerationRef.current === generation
               ) {
                 activateMobileSessionRealm(previousRealm);
-                setMobileAuthOwner(userRef.current?.id ?? null);
+                setMobileAuthOwner(userRef.current?.id ?? null, previousRealm);
                 setAccountGeneration((value) => value + 1);
               }
               throw error;
             }
           });
         } catch (error) {
-          setMobileAuthOwner(userRef.current?.id ?? null);
+          setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
           throw error;
         }
 
@@ -2535,7 +2535,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionRecoverySuspendedRef.current = false;
     await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
     activateMobileSessionRealm(activeAuthRealmRef.current);
-    setMobileAuthOwner(userRef.current?.id ?? null);
+    setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
     updateLoginState(null);
     setAuthError(null);
   }, [updateLoginState]);

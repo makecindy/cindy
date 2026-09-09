@@ -67,6 +67,37 @@ describe('useAvailableAgents roster cache', () => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
+  it('revokes a loaded roster during refresh and keeps it unknown on failure', async () => {
+    const pending = deferred<RuntimeAgentKind[]>();
+    const { api, listeners } = installMakerApi();
+    api.listAvailableAgents.mockResolvedValue(['pi', 'codex']);
+    const { useAvailableAgents, getCachedAvailableVendors } = await import('../useAvailableAgents');
+    const first = renderHook(() => useAvailableAgents());
+    await waitFor(() => expect(first.result.current.loaded).toBe(true));
+    const second = renderHook(() => useAvailableAgents());
+    await act(async () => {});
+    api.listAvailableAgents.mockReturnValueOnce(pending.promise);
+    act(() => { for (const listener of listeners) listener(); });
+    for (const consumer of [first, second]) {
+      expect(consumer.result.current.loaded).toBe(false);
+      expect(consumer.result.current.availableVendors.size).toBe(0);
+    }
+    expect(getCachedAvailableVendors()).toBeNull();
+    await act(async () => { pending.resolve(['codex']); });
+    await waitFor(() => expect(first.result.current.loaded).toBe(true));
+    expect(first.result.current.availableVendors).toEqual(new Set(['codex']));
+    expect(second.result.current.availableVendors).toEqual(new Set(['codex']));
+
+    api.listAvailableAgents.mockRejectedValueOnce(new Error('roster unavailable'));
+    await act(async () => { for (const listener of listeners) listener(); });
+    expect(first.result.current.loaded).toBe(false);
+    expect(first.result.current.availableVendors.size).toBe(0);
+    expect(second.result.current.loaded).toBe(false);
+    expect(getCachedAvailableVendors()).toBeNull();
+    first.unmount();
+    second.unmount();
+  });
+
   it('ignores a pre-change roster response that resolves after the change push', async () => {
     const first = deferred<RuntimeAgentKind[]>();
     const second = deferred<RuntimeAgentKind[]>();

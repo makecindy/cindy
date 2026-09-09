@@ -38,14 +38,18 @@ export function normalizeBotProfileModelChain(
   const next = { ...value };
   if (Object.prototype.hasOwnProperty.call(next, 'modelChain')) {
     const chain = normalizeBotModelChain(next.modelChain);
-    if (chain.length === 0) throw new Error('modelChain must contain at least one valid route');
-    const primary = chain[0]!;
+    if (chain.length === 0 && next.modelChainOverride !== null && next.modelOverride !== null) {
+      throw new Error('modelChain must contain at least one valid route');
+    }
+    const primary = chain[0];
     next.modelChain = chain;
-    next.harness = primary.harness;
-    next.model = primary.model;
-    next.providerId = primary.providerId;
-    next.effort = primary.effort;
-    next.fastMode = primary.fastMode;
+    if (primary) {
+      next.harness = primary.harness;
+      next.model = primary.model;
+      next.providerId = primary.providerId;
+      next.effort = primary.effort;
+      next.fastMode = primary.fastMode;
+    }
   }
   if (Array.isArray(next.modelChainOverride)) {
     const override = normalizeBotModelChain(next.modelChainOverride);

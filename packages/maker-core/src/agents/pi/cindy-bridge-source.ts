@@ -2489,7 +2489,9 @@ interface ResolvedMcpGatewayCall {
   tool: ConnectedMcpTool;
 }
 
-class McpBridgeError extends Error {}
+class McpBridgeError extends Error {
+  constructor(message: string, readonly invalidParams = false) { super(message); }
+}
 
 function safeMcpFailure(error: unknown): string {
   return error instanceof McpBridgeError ? error.message : 'unexpected error';
@@ -2587,9 +2589,12 @@ class McpHttpClient {
     return h;
   }
 
-  private async post<T>(body: unknown, consume: (response: Response) => Promise<T>): Promise<T> {
+  private async post<T>(body: unknown, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const requestTimeoutMs = this.nextRequestTimeoutMs();
     const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) controller.abort();
     const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       const res = await fetch(this.requestUrl, {
@@ -2598,6 +2603,9 @@ class McpHttpClient {
         body: JSON.stringify(body),
         redirect: 'error',
         signal: controller.signal,
+        // Bun's idle timer must not preempt the explicit request deadline while
+        // a local MCP tool is waiting for a user's card interaction.
+        timeout: false,
       });
       const sid = res.headers.get('mcp-session-id');
       if (sid) this.sessionId = sid;
@@ -2605,12 +2613,21 @@ class McpHttpClient {
       // body 也会按 requestTimeoutMs 中止，不会无限阻塞后续 server 注册。
       return await consume(res);
     } catch (error) {
+      if (signal?.aborted) throw new McpBridgeError('request cancelled');
       if (controller.signal.aborted) throw new McpBridgeError('request timed out');
       if (error instanceof McpBridgeError) throw error;
       if (error instanceof SyntaxError) throw new McpBridgeError('invalid JSON response');
-      throw new McpBridgeError('request failed');
+      // Only known non-secret error codes may cross the bridge. Never include
+      // arbitrary messages/causes, which may contain URLs or authentication.
+      const codes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN',
+        'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+        'UND_ERR_BODY_TIMEOUT', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT']);
+      const err = error as { code?: unknown; cause?: { code?: unknown } } | null;
+      const code = [err?.code, err?.cause?.code].find((value) => typeof value === 'string' && codes.has(value));
+      throw new McpBridgeError('request failed' + (code ? ' (' + code + ')' : ''));
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', cancel);
     }
   }
 
@@ -2682,14 +2699,16 @@ class McpHttpClient {
     return res.json();
   }
 
-  async request(method: string, params?: unknown): Promise<any> {
+  async request(method: string, params?: unknown, signal?: AbortSignal): Promise<any> {
     const id = this.nextId++;
     const msg = await this.post(
       { jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) },
       (res) => this.readResponse(res, id),
+      signal,
     );
     if (msg.error) {
-      throw new McpBridgeError('MCP ' + method + ' returned an error');
+      const invalidParams = msg.error.code === -32602;
+      throw new McpBridgeError('MCP ' + method + (invalidParams ? ' rejected invalid parameters' : ' returned an error'), invalidParams);
     }
     return msg.result;
   }
@@ -3014,7 +3033,7 @@ class CindyMcpGateway {
       JSON.stringify(this.unavailable()).slice(0, 4_000);
   }
 
-  private async executeResolvedCall(resolved: ResolvedMcpGatewayCall): Promise<{
+  private async executeResolvedCall(resolved: ResolvedMcpGatewayCall, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
@@ -3024,11 +3043,12 @@ class CindyMcpGateway {
         name: resolved.tool.name,
         arguments: resolved.helperCommand
           ? { name: resolved.helperCommand, args: resolved.args } : resolved.args,
-      });
+      }, signal);
     } catch (error) {
       throw new Error(
         'MCP tool ' + resolved.tool.serverName + '/' + resolved.tool.name + ' failed: ' +
-        safeMcpFailure(error) + '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema),
+        safeMcpFailure(error) + (error instanceof McpBridgeError && error.invalidParams
+          ? '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema) : ''),
       );
     }
     const content = mcpContentToPi(result?.content);
@@ -3038,14 +3058,13 @@ class CindyMcpGateway {
         .join('\n')
         .trim();
       throw new Error(
-        (message.length > 0 ? message : 'MCP tool returned an error') +
-        '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema),
+        message.length > 0 ? message : 'MCP tool returned an error',
       );
     }
     return { content, details: result?.structuredContent ?? {} };
   }
 
-  private async executeCall(params: unknown): Promise<{
+  private async executeCall(params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
@@ -3057,35 +3076,35 @@ class CindyMcpGateway {
         JSON.stringify({ server: resolved.tool.serverName, tool: resolved.tool.name }) + '.',
       );
     }
-    return this.executeResolvedCall(resolved);
+    return this.executeResolvedCall(resolved, signal);
   }
 
-  private async executeDirectHelperTool(name: string, params: unknown): Promise<{
+  private async executeDirectHelperTool(name: string, params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
     const resolved = this.resolveDirectHelperTool(name, params);
     if (!resolved) throw new Error('Cindy tool ' + name + ' is unavailable in this task.');
-    return this.executeResolvedCall(resolved);
+    return this.executeResolvedCall(resolved, signal);
   }
 
-  private async executeStartSessionTask(params: unknown): Promise<{
+  private async executeStartSessionTask(params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    return this.executeDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, params);
+    return this.executeDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, params, signal);
   }
 
-  private async executeCreateTeammate(params: unknown): Promise<{
+  private async executeCreateTeammate(params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
     const resolved = this.resolveCreateTeammate(params);
     if (!resolved) throw new Error('Cindy teammate creation is unavailable in this task.');
-    return this.executeResolvedCall(resolved);
+    return this.executeResolvedCall(resolved, signal);
   }
 
-  private async executeBotMemory(params: unknown): Promise<{
+  private async executeBotMemory(params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
@@ -3095,7 +3114,7 @@ class CindyMcpGateway {
         'Invalid Bot Memory request. Choose list, read, search, write, delete, review, or consolidate and provide the fields required by that action.',
       );
     }
-    return this.executeResolvedCall(resolved);
+    return this.executeResolvedCall(resolved, signal);
   }
 
   register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
@@ -3133,7 +3152,7 @@ class CindyMcpGateway {
           required: ['action'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) => this.executeBotMemory(params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeBotMemory(params, signal),
       });
     }
 
@@ -3155,8 +3174,8 @@ class CindyMcpGateway {
           required: ['instruction'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) =>
-          this.executeStartSessionTask(params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeStartSessionTask(params, signal),
       });
     }
 
@@ -3175,8 +3194,8 @@ class CindyMcpGateway {
           required: ['target_id', 'message'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) =>
-          this.executeDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, params, signal),
       });
     }
 
@@ -3190,8 +3209,8 @@ class CindyMcpGateway {
           required: ['task_id'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) =>
-          this.executeDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, params, signal),
       });
     }
 
@@ -3213,8 +3232,8 @@ class CindyMcpGateway {
           required: ['task_id'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) =>
-          this.executeDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, params, signal),
       });
     }
 
@@ -3229,8 +3248,8 @@ class CindyMcpGateway {
           required: ['task_id'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) =>
-          this.executeDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, params, signal),
       });
     }
 
@@ -3251,7 +3270,7 @@ class CindyMcpGateway {
           required: ['name', 'description', 'identity_source', 'welcome_message'],
           additionalProperties: false,
         },
-        execute: async (_toolCallId: string, params: unknown) => this.executeCreateTeammate(params),
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeCreateTeammate(params, signal),
       });
     }
 
@@ -3299,7 +3318,7 @@ class CindyMcpGateway {
         required: ['server', 'tool', 'args'],
         additionalProperties: false,
       },
-      execute: async (_toolCallId: string, params: unknown) => this.executeCall(params),
+      execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeCall(params, signal),
     });
   }
 }

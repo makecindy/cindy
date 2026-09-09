@@ -80,6 +80,43 @@ function adaptItemId(item: Record<string, unknown>): Record<string, unknown> {
   return next;
 }
 
+/** Repair only known dialect mismatches; opaque provider ids and absent ids stay intact.
+ * `call_id` identifies the invocation/result pair and must never be rewritten.
+ */
+function normalizeToolItemId(item: Record<string, unknown>): Record<string, unknown> {
+  const prefixes: readonly [string, string] | null = item.type === 'custom_tool_call' ? ['fc_', 'ctc_']
+    : item.type === 'custom_tool_call_output' ? ['fco_', 'ctco_']
+      : item.type === 'function_call' ? ['ctc_', 'fc_']
+        : item.type === 'function_call_output' ? ['ctco_', 'fco_'] : null;
+  if (!prefixes || typeof item.id !== 'string' || !item.id.startsWith(prefixes[0])) return item;
+  return { ...item, id: prefixes[1] + item.id.slice(prefixes[0].length) };
+}
+
+/**
+ * Repair legacy histories on the wire, including tool-less compact requests and native-custom
+ * routes. Do not rewrite the rollout, tool payloads, opaque compaction blobs or unrelated ids.
+ * Return null for an unchanged body, following the proxy request-transform contract.
+ */
+export function normalizeResponsesToolItemIds(body: unknown): Record<string, unknown> | null {
+  if (!isObject(body) || !Array.isArray(body.input)) return null;
+  let changed = false;
+  const input = body.input.map((item: unknown) => {
+    if (!isObject(item)) return item;
+    const next = normalizeToolItemId(item);
+    if (next !== item) changed = true;
+    return next;
+  });
+  // item_reference ids address server-owned stored items, not local payloads. Keep them opaque.
+  return changed ? { ...body, input } : null;
+}
+
+/** SSE argument events reference the output item, not the invocation's call_id. */
+function customToolEvent(event: Record<string, unknown>): Record<string, unknown> {
+  return typeof event.item_id === 'string' && event.item_id.startsWith('fc_')
+    ? { ...event, item_id: 'ctc_' + event.item_id.slice(3) }
+    : event;
+}
+
 interface AdaptedCall {
   spec: ChatBridgeToolSpec;
   arguments: string;
@@ -118,7 +155,7 @@ class CustomToolResponseTransform extends Transform {
       input: call?.input ?? unwrapArguments(call?.arguments ?? item.arguments),
     };
     delete next.arguments;
-    return next;
+    return normalizeToolItemId(next);
   }
   private rewriteEvent(event: unknown): Record<string, unknown>[] | null {
     if (!isObject(event) || typeof event.type !== 'string') return null;
@@ -149,7 +186,7 @@ class CustomToolResponseTransform extends Transform {
         ...event.item, type: 'custom_tool_call', name: spec.name, input: '',
       };
       delete item.arguments;
-      return [{ ...event, item }];
+      return [{ ...customToolEvent(event), item: normalizeToolItemId(item) }];
     }
 
     const call = this.calls.get(index);
@@ -167,10 +204,10 @@ class CustomToolResponseTransform extends Transform {
     if (event.type === 'response.function_call_arguments.done' && call) {
       call.input = unwrapArguments(typeof event.arguments === 'string' ? event.arguments : call.arguments);
       const delta: Record<string, unknown> = {
-        ...event, type: 'response.custom_tool_call_input.delta', delta: call.input,
+        ...customToolEvent(event), type: 'response.custom_tool_call_input.delta', delta: call.input,
       };
       const done: Record<string, unknown> = {
-        ...event, type: 'response.custom_tool_call_input.done', input: call.input,
+        ...customToolEvent(event), type: 'response.custom_tool_call_input.done', input: call.input,
       };
       delete delta.arguments;
       delete done.arguments;
@@ -181,7 +218,7 @@ class CustomToolResponseTransform extends Transform {
       if (!item) return null;
       this.calls.delete(index);
       this.responseArgumentBytes -= call ? Buffer.byteLength(call.arguments, 'utf8') : 0;
-      return [{ ...event, item }];
+      return [{ ...customToolEvent(event), item }];
     }
     if (isObject(event.response) && Array.isArray(event.response.output)) {
       let changed = false;

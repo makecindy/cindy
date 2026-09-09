@@ -13,7 +13,12 @@ import {
 } from '../provider-model-fetch.js';
 
 function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec {
-  return { agent: 'claude-code', baseUrl: 'https://api.acme.example/anthropic', apiKey: 'sk-test', ...over };
+  return {
+    agent: 'claude-code',
+    baseUrl: 'https://api.acme.example/anthropic',
+    apiKey: 'sk-test',
+    ...over,
+  };
 }
 
 function fakeResponse(status: number, body: string): Response {
@@ -23,18 +28,28 @@ function fakeResponse(status: number, body: string): Response {
 describe('buildModelsFetchRequest', () => {
   it.each(
     (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
-      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({
+        field,
+        userinfo,
+      })),
     ),
   )('rejects credentials in $field before building a request: $userinfo', ({ field, userinfo }) => {
-    expect(() => buildModelsFetchRequest(spec({
-      [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
-    }))).toThrow('model discovery requires HTTP(S) URLs without embedded credentials');
+    expect(() =>
+      buildModelsFetchRequest(
+        spec({
+          [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
+        }),
+      ),
+    ).toThrow('model discovery requires HTTP(S) URLs without embedded credentials');
   });
 
   it('derives {base}/v1/models for non-/vN baseUrl; appends /models when baseUrl ends with /vN', () => {
-    expect(buildModelsFetchRequest(spec()).url).toBe('https://api.acme.example/anthropic/v1/models');
+    expect(buildModelsFetchRequest(spec()).url).toBe(
+      'https://api.acme.example/anthropic/v1/models',
+    );
     expect(
-      buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://openrouter.ai/api/v1' })).url,
+      buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://openrouter.ai/api/v1' }))
+        .url,
     ).toBe('https://openrouter.ai/api/v1/models');
   });
 
@@ -50,7 +65,10 @@ describe('buildModelsFetchRequest', () => {
     // 同主机（Moonshot 形态：baseUrl …/anthropic，列模型在同 host 的 /v1/models）→ 采用。
     expect(
       buildModelsFetchRequest(
-        spec({ baseUrl: 'https://api.moonshot.cn/anthropic', modelsUrl: 'https://api.moonshot.cn/v1/models' }),
+        spec({
+          baseUrl: 'https://api.moonshot.cn/anthropic',
+          modelsUrl: 'https://api.moonshot.cn/v1/models',
+        }),
       ).url,
     ).toBe('https://api.moonshot.cn/v1/models');
     // 跨主机（用户改了 baseUrl、快照仍指旧主机）→ 忽略隐藏字段，回退 baseUrl 推导，防 key 误投。
@@ -60,13 +78,15 @@ describe('buildModelsFetchRequest', () => {
   });
 
   it('cc wire sends anthropic-version + x-api-key + Bearer; codex wire sends Bearer only', () => {
-    const cc = buildModelsFetchRequest(spec({
-      headers: {
-        Authorization: 'Bearer stale',
-        'X-API-Key': 'stale',
-        'x-extra': '1',
-      },
-    })).init.headers as Record<string, string>;
+    const cc = buildModelsFetchRequest(
+      spec({
+        headers: {
+          Authorization: 'Bearer stale',
+          'X-API-Key': 'stale',
+          'x-extra': '1',
+        },
+      }),
+    ).init.headers as Record<string, string>;
     expect(cc['anthropic-version']).toBe('2023-06-01');
     expect(cc['x-api-key']).toBe('sk-test');
     expect(cc['authorization']).toBe('Bearer sk-test');
@@ -74,7 +94,10 @@ describe('buildModelsFetchRequest', () => {
     expect(cc['X-API-Key']).toBeUndefined();
     expect(cc['x-extra']).toBe('1');
 
-    const codex = buildModelsFetchRequest(spec({ agent: 'codex' })).init.headers as Record<string, string>;
+    const codex = buildModelsFetchRequest(spec({ agent: 'codex' })).init.headers as Record<
+      string,
+      string
+    >;
     expect(codex['anthropic-version']).toBeUndefined();
     expect(codex['x-api-key']).toBeUndefined();
     expect(codex['authorization']).toBe('Bearer sk-test');
@@ -106,15 +129,17 @@ describe('buildModelsFetchRequest', () => {
   it.each(['none', 'oauth'] as const)(
     'strips legacy credential headers for %s auth even without an apiKey',
     (authMethod) => {
-      const h = buildModelsFetchRequest(spec({
-        authMethod,
-        apiKey: null,
-        headers: {
-          Authorization: 'Bearer legacy',
-          'X-API-Key': 'legacy',
-          'x-extra': '1',
-        },
-      })).init.headers as Record<string, string>;
+      const h = buildModelsFetchRequest(
+        spec({
+          authMethod,
+          apiKey: null,
+          headers: {
+            Authorization: 'Bearer legacy',
+            'X-API-Key': 'legacy',
+            'x-extra': '1',
+          },
+        }),
+      ).init.headers as Record<string, string>;
 
       expect(h.Authorization).toBeUndefined();
       expect(h['X-API-Key']).toBeUndefined();
@@ -128,21 +153,30 @@ describe('buildModelsFetchRequest', () => {
 describe('fetchProviderModels', () => {
   it.each(
     (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
-      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({
+        field,
+        userinfo,
+      })),
     ),
-  )('does not dispatch a request with credentials in $field: $userinfo', async ({ field, userinfo }) => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    const result = await fetchProviderModels(spec({
-      [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
-      authMethod: 'apiKey',
-    }), fetchImpl);
-    expect(result).toEqual({
-      ok: false,
-      code: 'UNKNOWN',
-      detail: 'model discovery requires HTTP(S) URLs without embedded credentials',
-    });
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
+  )(
+    'does not dispatch a request with credentials in $field: $userinfo',
+    async ({ field, userinfo }) => {
+      const fetchImpl = vi.fn<typeof fetch>();
+      const result = await fetchProviderModels(
+        spec({
+          [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
+          authMethod: 'apiKey',
+        }),
+        fetchImpl,
+      );
+      expect(result).toEqual({
+        ok: false,
+        code: 'UNKNOWN',
+        detail: 'model discovery requires HTTP(S) URLs without embedded credentials',
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -188,9 +222,9 @@ describe('fetchProviderModels', () => {
     );
     expect(r.ok).toBe(true);
     expect(r.models).toEqual([
-      { id: 'kimi-k3', name: 'Kimi K3' },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6' },
-      { id: 'bare-id', name: 'bare-id' },
+      { id: 'kimi-k3', name: 'Kimi K3', discoveredMetadata: { name: 'Kimi K3' } },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', discoveredMetadata: { name: 'Kimi K2.6' } },
+      { id: 'bare-id', name: 'bare-id', discoveredMetadata: {} },
     ]);
   });
 
@@ -198,14 +232,14 @@ describe('fetchProviderModels', () => {
     const a = await fetchProviderModels(spec(), async () =>
       fakeResponse(200, JSON.stringify({ models: [{ id: 'm1' }] })),
     );
-    expect(a.models).toEqual([{ id: 'm1', name: 'm1' }]);
+    expect(a.models).toEqual([{ id: 'm1', name: 'm1', discoveredMetadata: {} }]);
 
     const b = await fetchProviderModels(spec(), async () =>
       fakeResponse(200, JSON.stringify({ data: ['m1', 'm2'] })),
     );
     expect(b.models).toEqual([
-      { id: 'm1', name: 'm1' },
-      { id: 'm2', name: 'm2' },
+      { id: 'm1', name: 'm1', discoveredMetadata: {} },
+      { id: 'm2', name: 'm2', discoveredMetadata: {} },
     ]);
   });
 
@@ -214,15 +248,18 @@ describe('fetchProviderModels', () => {
       fakeResponse(
         200,
         JSON.stringify({
-          models: [
-            { slug: 'glm-5.3', display_name: 'GLM-5.3', context_window: 202_752 },
-          ],
+          models: [{ slug: 'glm-5.3', display_name: 'GLM-5.3', context_window: 202_752 }],
         }),
       ),
     );
 
     expect(result.models).toEqual([
-      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 202_752 },
+      {
+        id: 'glm-5.3',
+        name: 'GLM-5.3',
+        contextWindow: 202_752,
+        discoveredMetadata: { name: 'GLM-5.3', contextWindow: 202_752 },
+      },
     ]);
   });
 
@@ -241,7 +278,9 @@ describe('fetchProviderModels', () => {
   });
 
   it('returns non-ok UNKNOWN for 200 with unrecognized / empty payload', async () => {
-    const empty = await fetchProviderModels(spec(), async () => fakeResponse(200, JSON.stringify({ data: [] })));
+    const empty = await fetchProviderModels(spec(), async () =>
+      fakeResponse(200, JSON.stringify({ data: [] })),
+    );
     expect(empty).toMatchObject({ ok: false, code: 'UNKNOWN' });
     const weird = await fetchProviderModels(spec(), async () => fakeResponse(200, '"not-a-list"'));
     expect(weird).toMatchObject({ ok: false, code: 'UNKNOWN' });
@@ -253,7 +292,10 @@ describe('fetchProviderModels', () => {
     let seenUrl = '';
     let seenHeaders: Record<string, string> = {};
     await fetchProviderModels(
-      spec({ baseUrl: 'https://api.moonshot.cn/anthropic', modelsUrl: 'https://api.moonshot.cn/v1/models' }),
+      spec({
+        baseUrl: 'https://api.moonshot.cn/anthropic',
+        modelsUrl: 'https://api.moonshot.cn/v1/models',
+      }),
       async (url, init) => {
         seenUrl = String(url);
         seenHeaders = (init?.headers ?? {}) as Record<string, string>;

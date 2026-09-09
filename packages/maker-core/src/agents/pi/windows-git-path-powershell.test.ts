@@ -129,12 +129,14 @@ describe('Windows Git PATH PowerShell probes', () => {
         try {
           output = execFileSync(
             path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-            ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsPathKindProbeScript(4, 3_000, 2)],
+            // Hosted Windows runners can spend several seconds starting the
+            // nested PowerShell probes before any candidate is inspected.
+            ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsPathKindProbeScript(4, 10_000, 2)],
             {
               encoding: 'utf8',
               input: Buffer.from(JSON.stringify(groups), 'utf8'),
               stdio: ['pipe', 'pipe', 'pipe'],
-              timeout: 5_000,
+              timeout: 15_000,
               windowsHide: true,
             },
           );
@@ -152,7 +154,7 @@ describe('Windows Git PATH PowerShell probes', () => {
         rmSync(tempRoot, { recursive: true, force: true });
       }
     },
-    12_000,
+    30_000,
   );
 
   it.runIf(process.platform === 'win32')(

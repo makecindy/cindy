@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
+import { buildStateVersionVector, createEmptySyncState, createHlcClock, materializeDictionary, recordLearningEvent } from '@cindy/voice-input-core';
 
 import {
   buildMobileVoiceDictionaryEntryViews,
@@ -170,6 +171,20 @@ describe('buildMobileVoiceDictionaryEntryViews — 多台电脑取最新那份',
 });
 
 describe('新鲜度判定', () => {
+  it('无别名词转正后，另一台电脑晚到的旧候选快照不能覆盖它', () => {
+    const first = recordLearningEvent(createEmptySyncState(), createHlcClock('desktop-a'), {
+      text: 'Slack', aliases: [], stage: 'candidate', nowMs: 1000,
+    });
+    const second = recordLearningEvent(first.state, first.clock, {
+      text: 'Slack', aliases: [], stage: 'candidate', nowMs: 2000,
+    });
+    const stale = { entries: materializeDictionary(first.state).entries, stateVector: buildStateVersionVector(first.state), fetchedAt: 9000 };
+    const fresh = { entries: materializeDictionary(second.state).entries, stateVector: buildStateVersionVector(second.state), fetchedAt: 1000 };
+    for (const snapshots of [[stale, fresh], [fresh, stale]]) {
+      expect(buildMobileVoiceDictionaryEntryViews(snapshots)).toMatchObject([{ text: 'Slack' }]);
+    }
+  });
+
   it('一方包含另一方时选包含者,不被响应到达顺序左右', () => {
     // B 已经合并过 A 的事件(向量逐节点 ≥),但它的响应更慢:按到达时间会挑错。
     const views = buildMobileVoiceDictionaryEntryViews([

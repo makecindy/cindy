@@ -33,6 +33,8 @@
  * 更新方式:PiAgent 每次 startSession 覆写该文件。
  */
 
+import { PI_GLOBAL_CONTEXT_FILE_NAMES } from './global-context.js';
+
 /** 工具名 —— 与 `@cindy/maker-shared` 的 `PI_SUBAGENT_TOOL_NAME` 必须一致(卡片判据靠它)。 */
 export const CINDY_SUBAGENT_TOOL_NAME = 'subagent';
 
@@ -896,6 +898,19 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
     copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
+    // Inherit the parent's frozen rules, not the possibly edited native user
+    // home. Child config outlives the parent when a durable run is detached.
+    for (const name of ${JSON.stringify(PI_GLOBAL_CONTEXT_FILE_NAMES)}) {
+      const childContextFile = join(childConfigHome, name);
+      try {
+        copyFileSync(join(configHome, name), childContextFile);
+      } catch (error) {
+        if (error && error.code === 'ENOENT') continue;
+        throw error;
+      }
+      try { chmodSync(childContextFile, 0o600); } catch (err) { /* best effort on Windows */ }
+      break;
+    }
     copyFileSync(join(configHome, 'internal-extensions', 'cindy-bridge.ts'), bridgeExtension);
     try { chmodSync(join(childConfigHome, 'models.json'), 0o600); } catch (err) { /* best effort on Windows */ }
     try { chmodSync(bridgeExtension, 0o600); } catch (err) { /* best effort on Windows */ }

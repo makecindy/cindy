@@ -211,6 +211,8 @@ import {
   isDbClientNotReadyError,
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
+import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -222,10 +224,7 @@ import {
   ensureDialogueWorkspaceDir,
   dialogueWorkspaceRootDir,
 } from '../localDb/dialogueWorkspace.js';
-import {
-  healMissingDialogueWorkdir,
-  matchDialogueWorkspacePath,
-} from '../localDb/dialogueWorkdirSelfHeal.js';
+import { matchDialogueWorkspacePath } from '../localDb/dialogueWorkdirSelfHeal.js';
 import {
   broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
@@ -1056,6 +1055,8 @@ import { handleSessionEvent, type SessionEventDependencies } from './sessionEven
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory }, async (sessionId) =>
+  ensureDialogueWorkspaceDir(sessionId, Date.now()));
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -3319,6 +3320,10 @@ export function clearDeferredCodexRestartForOwnerBoundary(): void {
   deferredCodexRestartHolder?.clear();
 }
 
+export function clearWorkingDirectoryRecoveryForOwnerBoundary(): void {
+  workingDirectoryRecovery.clear();
+}
+
 /**
  * Goal / IM / scheduler 直发 `Session.send()` 的 deferred agent-switch 锁桥。
  *
@@ -4608,6 +4613,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }),
   );
   setSessionRuntimeCleanup((sessionId) => {
+    workingDirectoryRecovery.discard(sessionId);
     clearSessionRuntimeControlState(sessionId);
     clearSessionProvider(sessionId);
     setSessionEffort(sessionId, null);
@@ -6262,6 +6268,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
   }> {
+    if (o.id && o.workingDir && !o.remoteHostId) {
+      o.workingDir = workingDirectoryRecovery.resolve(o.id, o.workingDir);
+      await workingDirectoryRecovery.observe(o.id, o.workingDir).catch(() => undefined);
+    }
+    o.hostStartupPreferences = {
+      userPrompt: o.userPrompt,
+      makerMemoryEnabled: o.makerMemoryEnabled,
+      displayReasoning: o.displayReasoning,
+    };
     await options.waitForAccountProviderModelsReady();
     const runtimeOverride =
       typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
@@ -6276,7 +6291,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const didInjectProjectContext =
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
 
+    const usingFallback = !!o.id && !!o.workingDir && !o.remoteHostId &&
+      workingDirectoryRecovery.isFallback(o.id, o.workingDir);
     await prepareDirectoryGrantsForBootstrap(o, {
+      statDirectory: usingFallback ? statWorkingDirectory : undefined,
+      realpathDirectory: usingFallback ? realpathWorkingDirectory : undefined,
+      preservePersistedGrants: usingFallback,
       readPersistedWritableDirs: readSessionWritableDirsFromDb,
       persistExistingSession: async (sessionId, patch) => {
         const [existing] = await getDbClient()
@@ -10661,7 +10681,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(sessions.status, 'active'),
         )).limit(1);
       if (!row) return null;
-      const chain = readEffectiveBotModelChain(JSON.parse(row.capabilitiesJson));
+      const chain = await readEffectiveBotModelChain(JSON.parse(row.capabilitiesJson));
       const control = getSessionRuntimeControlSnapshot(sessionId);
       const live = maker.getSession(sessionId);
       return {
@@ -10736,7 +10756,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     } catch {
       return { isBot: true, candidate: null };
     }
-    const chain = readEffectiveBotModelChain(config);
+    const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
     const currentHarness = current.agentKind === 'codex'
@@ -11556,6 +11576,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await ensureRemoteReadyForSessionStart(params);
     },
     checkWorkDirExists,
+    resolveRecoveredWorkingDir: (sessionId, dir) => workingDirectoryRecovery.resolve(sessionId, dir),
+    preflightBotRuntimeResources: async (opts) => { await preflightBotRuntimeResources(opts); },
+    readWorkingDirectoryRecoveryCreateOpts: async (sessionId) => {
+      const [row] = await getDbClient().drizzle.select().from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (!row?.workingDir) throw new Error(`Session ${sessionId} has no working directory`);
+      return {
+        id: sessionId,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        workspaceKind: row.workspaceKind,
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        effort: (row.effort ?? undefined) as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        planMode: !!row.planModeEnabled,
+        title: row.title ?? undefined,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+        codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
+      };
+    },
+    peekWorkingDirectoryRecoveryNote: (sessionId, workingDir) => workingDirectoryRecovery.peek(sessionId, workingDir),
+    consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
+      workingDirectoryRecovery.consume(sessionId, note),
     isOrcaMcpHydrated,
     buildCreateOptsWithStderr,
     synthesizeOrcaVendorOptionsFromDb,
@@ -14636,6 +14683,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        workingDirectoryRecovery.discard(sid);
         resetAutomaticRecoveryForExplicitStop(sid);
         // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
         // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
@@ -17301,12 +17349,13 @@ async function checkWorkDirExists(
   // 或者 agent 真跑起来时由远端 codex 自己报 ENOENT)。这里直接放行。
   if (remoteHostId) return true;
   if (!workingDir?.trim()) return true;
+  workingDir = workingDirectoryRecovery.resolve(sessionId, workingDir);
   const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
   // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
   const suppress = opts?.suppressMissingBroadcast === true;
   try {
-    const stat = await fsp.stat(workingDir);
+    const stat = await statWorkingDirectory(workingDir);
     if (!stat.isDirectory()) {
       if (suppress) {
         log.warn('send: workdir not a directory (broadcast suppressed, caller has fallback)', {
@@ -17336,22 +17385,39 @@ async function checkWorkDirExists(
         return false;
       }
     }
-    return true;
-  } catch {
-    // app 托管的 dialogue 工作目录(<userData>/dialogues/<日期>/<id>)本来就是
-    // 空的一次性目录:丢了直接 mkdir 重建放行,不打扰用户(自愈详见
-    // dialogueWorkdirSelfHeal.ts;legacy userData 前缀由启动 sweep 先行改写)。
-    const healed = await healMissingDialogueWorkdir(workingDir, dialogueWorkspaceRootDir());
-    if (healed) {
-      log.info('send: recreated missing dialogue workdir', { sessionId, workingDir });
-      return true;
+    if (getManagedWorktreeBasePath(normalizedWorkingDir) === null) {
+      if (!await workingDirectoryRecovery.recover(sessionId, workingDir)) return false;
+      await workingDirectoryRecovery.observe(sessionId, workingDir);
     }
+    return true;
+  } catch (error) {
     // Cindy 托管 worktree 被外部 PR cleanup / 手动 git 命令移除时，先按 DB 中
-    // 的精确 worktree_path 从本地或 origin tracking 分支重建。普通用户目录绝不
-    // 猜测 fallback；快照冲突也保持阻断，交给恢复横幅显式处理。
+    // 的精确 worktree_path 从本地或 origin tracking 分支重建，保留原代码与快照。
     const restored = await restoreMissingManagedWorktreeForSession(sessionId, workingDir);
     if (restored) {
       log.info('send: restored missing managed worktree', { sessionId, workingDir });
+      return true;
+    }
+    // Preserve the existing sibling-path diagnostic before mkdir makes the probe pass.
+    // A fuzzy match is a lead for the agent, not authority to switch project identity.
+    const unavailable = isUnavailableFilesystemError(error);
+    let similar: string | null = null;
+    // A missing ordinary/dialogue cwd must not stop the conversation. Prefer a repaired
+    // DB path when the caller has one; never turn a managed Git recovery into
+    // an empty project, or treat permission/non-directory failures as ENOENT.
+    if (
+      !suppress &&
+      ((error as NodeJS.ErrnoException).code === 'ENOENT' || unavailable) &&
+      getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) === null &&
+      await workingDirectoryRecovery.recover(sessionId, workingDir, async () => {
+        similar = await findSimilarDirOnDisk(workingDir);
+        return similar;
+      },
+        getMaker().listActiveSessions()
+          .filter((session) => !session.remoteHostId)
+          .map((session) => ({ id: session.id, workingDir: session.workDir })))
+    ) {
+      log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
       return true;
     }
     if (suppress) {
@@ -17361,7 +17427,6 @@ async function checkWorkDirExists(
       });
       return false;
     }
-    const similar = await findSimilarDirOnDisk(workingDir);
     emitWorkDirMissingError(sessionId, workingDir, source, 'not-exist', similar);
     return false;
   }
@@ -17371,22 +17436,13 @@ async function checkWorkDirExists(
  * ENOENT 兜底:扫一下 parent 目录,找一个 trim/大小写 后等于目标 basename 的真实条目。
  * 命中的最典型场景是 macOS Finder 里目录名末尾带了不可见空格,而 sessions.ts 写库时
  * 做了 .trim() 把空格砍了 —— DB 里存的路径在磁盘上不存在,但同名带空格的目录是存在的。
- * 失败一律返回 null,不要在错误兜底里再抛新错。
+ * 普通诊断失败返回 null；文件系统不可用交给 recovery 的统一 fallback。
  */
 async function findSimilarDirOnDisk(workingDir: string): Promise<string | null> {
-  try {
-    const parent = path.dirname(workingDir);
-    const target = path.basename(workingDir);
-    if (!parent || parent === workingDir || !target) return null;
-    const entries = await fsp.readdir(parent);
-    const trimMatch = entries.find((n) => n !== target && n.trim() === target.trim());
-    if (trimMatch) return path.join(parent, trimMatch);
-    const ciMatch = entries.find((n) => n !== target && n.toLowerCase() === target.toLowerCase());
-    if (ciMatch) return path.join(parent, ciMatch);
+  return findSimilarWorkingDirectory(workingDir).catch((error) => {
+    if (isUnavailableFilesystemError(error)) throw error;
     return null;
-  } catch {
-    return null;
-  }
+  });
 }
 
 function emitWorkDirMissingError(

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
+const catalogSpec = BUNDLED_CATALOG.modelRegistry!.localModels!;
 
 import {
   classifyOllamaPullError,
@@ -17,11 +19,8 @@ import {
   OLLAMA_OPENAI_BASE_URL,
   pickFeaturedOllamaModels,
   recommendForHost,
-  recommendQwen38,
   resolveCuratedOllamaCatalog,
   resolveManagedOllamaAgents,
-  QWEN38_MLX,
-  QWEN38_MXFP8,
 } from '../localModelRuntime.js';
 
 describe('localModelRuntime', () => {
@@ -66,9 +65,12 @@ describe('localModelRuntime', () => {
   it('treats an untagged Ollama name as its :latest alias', () => {
     expect(ollamaModelRefsEqual('glm-4.7-flash', 'glm-4.7-flash:latest')).toBe(true);
     expect(ollamaModelRefsEqual('library/foo', 'library/foo:latest')).toBe(true);
-    expect(ollamaModelRefsEqual('hf.co/unsloth/Qwen3.8-27B-GGUF', 'hf.co/unsloth/Qwen3.8-27B-GGUF:latest')).toBe(
-      true,
-    );
+    expect(
+      ollamaModelRefsEqual(
+        'hf.co/unsloth/Qwen3.8-27B-GGUF',
+        'hf.co/unsloth/Qwen3.8-27B-GGUF:latest',
+      ),
+    ).toBe(true);
     expect(ollamaModelRefsEqual('gpt-oss:20b', 'gpt-oss:latest')).toBe(false);
     expect(ollamaModelRefsEqual('qwen3.8:27b-mxfp8', 'qwen3.8:latest')).toBe(false);
   });
@@ -86,74 +88,119 @@ describe('localModelRuntime', () => {
     expect(classifyOllamaPullError('connection refused')).toBe('refused');
   });
 
-  it('does not recommend 27B below 32GB or off Apple Silicon', () => {
-    expect(
-      recommendQwen38({ platform: 'darwin', arch: 'x64', totalmemBytes: 128 * 1024 ** 3 }),
-    ).toBeNull();
-    expect(
-      recommendQwen38({ platform: 'darwin', arch: 'arm64', totalmemBytes: 24 * 1024 ** 3 }),
-    ).toBeNull();
-    expect(
-      recommendQwen38({ platform: 'win32', arch: 'arm64', totalmemBytes: 128 * 1024 ** 3 }),
-    ).toBeNull();
-  });
-
   it('picks mlx then mxfp8 by unified memory', () => {
     expect(
-      recommendQwen38({ platform: 'darwin', arch: 'arm64', totalmemBytes: 36 * 1024 ** 3 }),
-    ).toEqual(QWEN38_MLX);
+      recommendForHost({ platform: 'darwin', arch: 'arm64', totalmemBytes: 36 * 1024 ** 3 }).primary
+        ?.libraryName,
+    ).toBe('qwen3.8:27b-mlx');
     expect(
-      recommendQwen38({ platform: 'darwin', arch: 'arm64', totalmemBytes: 128 * 1024 ** 3 }),
-    ).toEqual(QWEN38_MXFP8);
+      recommendForHost({ platform: 'darwin', arch: 'arm64', totalmemBytes: 128 * 1024 ** 3 })
+        .primary?.libraryName,
+    ).toBe('qwen3.8:27b-mxfp8');
   });
 
-  it('keeps featured picks tiny and lets search find multilingual aliases', () => {
-    const appleMax = {
-      platform: 'darwin' as const,
-      arch: 'arm64',
-      totalmemBytes: 128 * 1024 ** 3,
-    };
-    const catalog = resolveCuratedOllamaCatalog(appleMax);
-    expect(pickFeaturedOllamaModels(appleMax).map((model) => model.id)).toEqual([
-      'qwen38-27b',
-      'ornith15-35b',
-    ]);
-    expect(catalog.some((model) => model.id === 'gemma4-e4b')).toBe(true);
-    expect(catalog.some((model) => model.id === 'gemma4-31b')).toBe(true);
-    expect(catalog.some((model) => model.id === 'glm-47-flash')).toBe(true);
-    expect(catalog.some((model) => model.id === 'llama3.2-3b')).toBe(false);
-    expect(catalog.some((model) => model.id === 'phi4')).toBe(false);
-    expect(catalog.some((model) => model.id === 'qwen25-7b')).toBe(false);
-    expect(catalog.some((model) => model.id === 'gemma3-12b')).toBe(false);
-    expect(
-      catalog.find((model) => model.id === 'ornith15-35b')?.libraryName,
-    ).toBe('hf.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M');
+  it('keeps recommendations separate from searchable candidates', () => {
+    const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 128 * 1024 ** 3 };
+    const catalog = resolveCuratedOllamaCatalog(host);
+    expect(pickFeaturedOllamaModels(host).map((model) => model.id)).toEqual(['qwen38-27b']);
+    expect(catalog).toHaveLength(7);
     expect(filterCuratedOllamaModels(catalog, '通义').map((model) => model.id)).toContain(
       'qwen38-27b',
     );
     expect(filterCuratedOllamaModels(catalog, '宝石').map((model) => model.id)).toEqual([
-      'gemma4-e2b',
-      'gemma4-e4b',
       'gemma4-12b',
-      'gemma4-31b',
-      'gemma4-26b',
     ]);
-    expect(filterCuratedOllamaModels(catalog, '编程').map((model) => model.id)).toContain(
-      'ornith15-35b',
-    );
-    expect(filterCuratedOllamaModels(catalog, '编程').map((model) => model.id)).not.toContain(
-      'gemma4-12b',
-    );
-    expect(
-      pickFeaturedOllamaModels({
-        platform: 'darwin',
-        arch: 'arm64',
-        totalmemBytes: 16 * 1024 ** 3,
-      }).map((model) => model.id),
-    ).toEqual(['gpt-oss-20b']);
+    expect(catalog.some((model) => model.id === 'ornith15-35b')).toBe(false);
+    expect(catalog.some((model) => model.id === 'gpt-oss-20b')).toBe(false);
   });
 
-  it('picks a machine-specific primary model for every host class', () => {
+  it.each([0, 4, 8, 16, 24])(
+    'leaves recommendations empty at %i GB without promoting candidates',
+    (memory) => {
+      const host = {
+        platform: 'darwin' as const,
+        arch: 'arm64',
+        totalmemBytes: memory * 1024 ** 3,
+      };
+      expect(recommendForHost(host).primary).toBeNull();
+      expect(pickFeaturedOllamaModels(host)).toEqual([]);
+      expect(resolveCuratedOllamaCatalog(host).some((model) => model.id === 'qwen35-4b')).toBe(
+        true,
+      );
+    },
+  );
+
+  it('honors the recommendation allowlist even when a larger model fits', () => {
+    const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 256 * 1024 ** 3 };
+    expect(
+      recommendForHost(host, { ...catalogSpec, models: [], featuredIds: [] }).primary,
+    ).toBeNull();
+    expect(recommendForHost(host, { ...catalogSpec, featuredIds: [] }).primary).toBeNull();
+    expect(recommendForHost(host, { ...catalogSpec, featuredIds: ['qwen35-4b'] }).primary?.id).toBe(
+      'qwen35-4b',
+    );
+  });
+
+  it('uses platform-specific download sizes and excludes Apple-only candidates elsewhere', () => {
+    const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 256 * 1024 ** 3 };
+    const apple = resolveCuratedOllamaCatalog(host);
+    const windows = resolveCuratedOllamaCatalog({ ...host, platform: 'win32', arch: 'x64' });
+    expect(apple.find((model) => model.id === 'qwen35-9b')).toMatchObject({
+      libraryName: 'qwen3.5:9b-mlx',
+      sizeBytes: 8903014479,
+      appleSiliconOnly: true,
+    });
+    expect(windows.find((model) => model.id === 'qwen35-9b')).toMatchObject({
+      libraryName: 'qwen3.5:9b-q4_K_M',
+      sizeBytes: 6594474236,
+      appleSiliconOnly: false,
+    });
+    expect(windows.some((model) => model.id === 'qwen38-flash-next')).toBe(false);
+    expect(apple.some((model) => model.id === 'qwen38-flash-next')).toBe(true);
+  });
+
+  it('rejects invalid platform metadata and preserves bundled fallback', () => {
+    const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 128 * 1024 ** 3 };
+    const remote = {
+      ...catalogSpec,
+      models: [{ ...catalogSpec.models[0], variants: [{ libraryName: '../bad', sizeBytes: -1 }] }],
+    };
+    expect(recommendForHost(host, remote).primary?.id).toBe('qwen38-27b');
+  });
+
+  it('uses remotely added models and exact packaging without a bundled name entry', () => {
+    const remote = {
+      version: 1,
+      featuredIds: ['new-model'],
+      models: [
+        {
+          id: 'new-model',
+          name: 'New model',
+          aliases: [],
+          variants: [
+            { libraryName: 'new-model:4b', sizeBytes: 4 * 1024 ** 3, minUnifiedMemoryGb: 8 },
+          ],
+          descriptions: { 'zh-CN': '测试简介' },
+        },
+      ],
+    };
+    const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 16 * 1024 ** 3 };
+    expect(recommendForHost(host, remote).primary).toMatchObject({
+      id: 'new-model',
+      descriptions: { 'zh-CN': '测试简介' },
+    });
+    expect(curatedOllamaDisplayName('new-model:4b', remote)).toBe('New model');
+    expect(pickFeaturedOllamaModels(host, { version: 1, models: [], featuredIds: [] })).toEqual([]);
+  });
+
+  it('does not label an unknown quantization as a different model size', () => {
+    expect(curatedOllamaDisplayName('qwen3.5:9b-mlx')).toBe('Qwen3.5 9B');
+    expect(curatedOllamaDisplayName('qwen3.5:9b-q8_0')).toBeUndefined();
+    expect(curatedOllamaDisplayName('gemma4:31b-mlx')).toBeUndefined();
+    expect(curatedOllamaDisplayName('qwen3.8:27b-mlx')).toBe('Qwen3.8 27B');
+  });
+
+  it('picks a fitting recommendation and leaves unsupported tiers empty', () => {
     expect(
       recommendForHost({
         platform: 'darwin',
@@ -181,7 +228,7 @@ describe('localModelRuntime', () => {
         arch: 'x64',
         totalmemBytes: 16 * 1024 ** 3,
       }),
-    ).toMatchObject({ reason: 'compact', primary: { id: 'gpt-oss-20b' } });
+    ).toMatchObject({ reason: 'compact', primary: null });
     expect(
       recommendForHost({
         platform: 'linux',

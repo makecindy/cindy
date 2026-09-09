@@ -9,12 +9,12 @@
  *   - 非 ephemeral worktree 的回收只由本模块驱动,触发点是 localDb 会话
  *     status → 'deleted' / 'archived' 的显式状态变更(见 localDb/ipc/sessions.ts)。
  *
- * 崩溃窗口兜底:状态已写库但回收未跑完(app 崩溃/被杀)会留下孤儿 worktree,
- * 启动时 reconcileWorktreesForDeletedSessions() 对账清理(只认 deleted/行已缺失,
- * archived 不在启动期回收——归档回收错过就保留,偏保守)。
+ * 回收意图在状态写库前持久化；数据库和关闭运行时的服务都就绪后恢复重试。
+ * 历史登记仅分类审计，查不到当前账号的任务不构成删除依据。
  */
 
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { auditRegisteredWorktrees } from './recycleMaintenance';
 
 import { hasLiveSessionReference, pathKey } from './liveSessionRefs';
 import { removeWorktreeForSession } from './WorktreeManager';
@@ -31,8 +31,7 @@ const log = createLogger('sessionRemovalRecycle');
  *
  * - ephemeral(scheduler 池)worktree 直接跳过:它的生命周期归 WorktreePool
  *   (onClose 池化、recoverPool、数量上限淘汰),这里删会与池内条目打架。
- * - 非 ephemeral 走 removeWorktreeForSession(内含 live-ref 守卫 + dirty
- *   auto-stash + 删除安全门)。
+ * - 非 ephemeral 走 removeWorktreeForSession，保存可恢复内容后通过删除安全门。
  *
  * 调用方约定:先确保该会话的 CLI 子进程已关闭(Windows 下子进程 cwd 在
  * worktree 内会锁目录,git worktree remove 必败),再调本函数。
@@ -214,52 +213,10 @@ async function readCurrentSessionStatus(
 }
 
 /**
- * 启动期对账:store 里登记的非 ephemeral worktree,若其 owning session 行已缺失
- * 或 status='deleted',说明删除时回收没跑完(崩溃窗口 / 回收失败),补一次回收。
- *
- * 刻意不处理 archived:升级前归档留下的 dirty worktree 存量(旧逻辑 dirty 保留)
- * 若在启动期一律补收,等于升级瞬间批量 stash+删目录,用户零感知——违背本次重构
- * 的初衷。归档场景只在归档动作发生时回收一次,错过就保留。
+ * 兼容旧启动入口：仅生成登记分类，不把历史状态或缺失任务推断成回收意图。
  */
 export async function reconcileWorktreesForDeletedSessions(): Promise<void> {
-  const candidates = store.getAll().filter((m) => !m.ephemeral);
-  if (candidates.length === 0) return;
-
-  let rows: Array<{ id: string; status: string | null; source: string | null }>;
-  try {
-    const db = getDbClient().drizzle;
-    rows = await db
-      .select({ id: sessions.id, status: sessions.status, source: sessions.source })
-      .from(sessions)
-      .where(
-        inArray(
-          sessions.id,
-          candidates.map((m) => m.sessionId),
-        ),
-      );
-  } catch (err) {
-    // DB 不可用时不做任何删除(保守方向:漏收一轮无害,误删不可逆)。
-    log.warn(
-      '[sessionRemovalRecycle] reconcile skipped: session lookup failed',
-      err instanceof Error ? err.message : String(err),
-    );
-    return;
-  }
-
-  const rowById = new Map(rows.map((r) => [r.id, r]));
-  for (const meta of candidates) {
-    const row = rowById.get(meta.sessionId);
-    const status = row?.status;
-    const orphaned = !row || (row.source !== 'bot' && status === 'deleted');
-    if (!orphaned) continue;
-    log.info(
-      `[sessionRemovalRecycle] reconciling orphaned worktree at ${meta.path} (session ${meta.sessionId}, status=${status ?? 'missing'})`,
-    );
-    await removeWorktreeForSession(meta.sessionId).catch((err) => {
-      log.warn(
-        `[sessionRemovalRecycle] reconcile remove failed for ${meta.path}:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    });
-  }
+  // Historical rows are evidence, not a deletion request. Durable retries are
+  // dispatched by recycleMaintenance after DB and runtime-close services are ready.
+  await auditRegisteredWorktrees();
 }

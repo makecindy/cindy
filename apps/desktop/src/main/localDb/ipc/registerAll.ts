@@ -16,6 +16,7 @@ import {
   type RegisterSessionIpcOpts,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionWorktreeRecycle,
 } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
@@ -85,6 +86,8 @@ export interface RegisterLocalDbIpcOpts {
   cancelSessionOperations?: (sessionId: string) => Promise<void>;
   /** Release Host-owned runtime and ownership after task removal is revalidated. */
   cleanupRemovedSession?: (sessionId: string) => Promise<void>;
+  /** Record worktree recycle intent before a terminal session status is persisted. */
+  requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
   /** Reconcile persisted Host-owned task runtimes once the owner DB is readable. */
@@ -113,6 +116,7 @@ export interface RegisterLocalDbIpcOpts {
 export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   setSessionRemovalCancelOperations(opts.cancelSessionOperations ?? null);
   setSessionRemovalCleanup(opts.cleanupRemovedSession ?? null);
+  setSessionWorktreeRecycle(opts.requestWorktreeRecycle ?? null);
   setSessionRouteLockImplementation(opts.withSessionLock ?? null);
   const runEnsureReady = createOwnerEnsureCoordinator({
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),

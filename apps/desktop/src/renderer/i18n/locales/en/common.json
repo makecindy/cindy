@@ -2010,8 +2010,8 @@
         "hostProfileApple": "Apple silicon · about {{memory}} GB unified memory",
         "hostProfileGeneric": "About {{memory}} GB memory",
         "hostProfileUnknown": "This computer’s memory isn’t available yet",
-        "bestForYou": "Best for you",
-        "alsoCoding": "Also good for coding",
+        "bestForYou": "Capability pick",
+        "alsoCoding": "Speed alternative",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2028,41 +2028,12 @@
         "noSearchResults": "No matching models",
         "alreadyInstalled": "Installed",
         "searchResults": "Search results",
-        "moreModels": "More local models",
-        "memoryWarning": "Not enough memory on this computer (needs {{need}} GB, about {{have}} GB available)",
+        "moreModels": "Other candidate models",
+        "memoryWarning": "Below the estimated memory threshold ({{need}} GB; this computer has about {{have}} GB)",
         "manualDownload": "Manual download",
         "manualDownloadPlaceholder": "Ollama library name or Hugging Face URL",
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines."
-          },
-          "gemma4-e2b": {
-            "blurb": "Smallest Gemma 4. Light machines, with vision."
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 small. Light daily use, with vision."
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 mid-size. Steadier chat and multimodal."
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory."
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
-          },
-          "glm-47-flash": {
-            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
-          }
-        },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
         "installInCindy": "Install in Cindy",
@@ -2131,8 +2102,8 @@
         "cancelDownload": "Delete Incomplete Download",
         "notRecommended": "This Mac doesn’t meet the 32 GB memory bar for Qwen3.8 27B. You can still enter an exact library name.",
         "sizeHint": "About {{size}} · needs {{memory}} GB unified memory",
-        "sizeHintApple": "About {{size}} · needs {{memory}} GB unified memory",
-        "sizeHintGeneric": "About {{size}} · needs {{memory}} GB memory",
+        "sizeHintApple": "Download {{size}} · estimated {{memory}} GB unified memory",
+        "sizeHintGeneric": "Download {{size}} · estimated {{memory}} GB memory",
         "deleteFromCindy": "Remove from Cindy",
         "deleteConfirmTitle": "Remove Ollama from Cindy?",
         "deleteConfirmBody": "This only removes the Cindy connection. Models already downloaded in Ollama stay on disk, and the service keeps running.",
@@ -2141,7 +2112,8 @@
         "deleteModelConfirmBody": "This deletes the downloaded model files from this computer and removes them from Cindy. You can download the model again later.",
         "deleteModelConfirm": "Delete",
         "deleteModelDone": "Deleted {{name}}",
-        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again."
+        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again.",
+        "noRecommendation": "No recommendation with sufficient evidence fits this computer yet. You can choose a candidate below."
       },
       "xdSignin": {
         "badge": "Recommended",
@@ -7193,6 +7165,8 @@
       "composerPlaceholderLatin": "Say something to {{name}}…"
     },
     "globalSettings": {
+      "restoreHint": "Restoring defaults follows the client’s default model settings. Individual teammates’ custom models stay unchanged.",
+      "restoreFailed": "Could not restore defaults. Try again.",
       "title": "Teammates",
       "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
       "rosterNote": "The shipped roster grows with each release."

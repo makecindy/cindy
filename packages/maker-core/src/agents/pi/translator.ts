@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { Logger } from '../../interfaces/logger.js';
 import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
@@ -773,8 +774,11 @@ export function translatePiEvent(
         type: 'tool_use',
         data: {
           toolUseId,
-          toolName,
-          input: toolArgs,
+          ...parseMessageToolUse({
+            role: 'tool_use',
+            content: { toolName, input: toolArgs },
+            toolUseId,
+          }),
         },
         source: 'pi',
       });
