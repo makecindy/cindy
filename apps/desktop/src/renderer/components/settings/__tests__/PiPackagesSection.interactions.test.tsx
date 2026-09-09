@@ -305,6 +305,38 @@ describe('PiPackagesSection interaction state machine', () => {
   });
 
   it.each([
+    ['native-command', 'failed', 'check-credentials', 'commandFailed', 'check-credentials'],
+    ['prepare', 'failed', 'check-runtime', 'commandNotStarted', 'check-runtime'],
+    ['native-command', 'timed-out', 'inspect-state-before-retry', 'commandTimedOut', 'inspect-state-before-retry'],
+    ['native-command', 'unknown', 'inspect-state-before-retry', 'commandUnknown', 'inspect-state-before-retry'],
+    ['native-command', 'failed', 'fake-private-recovery', 'commandFailed', 'inspect-state-before-retry'],
+  ])('localizes serialized IPC diagnostics for %s / %s', async (phase, outcome, recovery, statusKey, recoveryKey) => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => {
+      throw new Error('[PI_PACKAGE_MUTATION_FAILED] Legacy message ' + JSON.stringify({
+        phase, outcome, recovery, reason: 'unknown', exitCode: 1, stderr: 'fake-private-output',
+      }));
+    }) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith(
+      `settings.piPackages.failure.${statusKey} settings.piPackages.recovery.${recoveryKey}`,
+    ));
+    expect(toastMocks.success).not.toHaveBeenCalled();
+    expect(JSON.stringify(toastMocks.error.mock.calls)).not.toMatch(/Legacy message|fake-private|exitCode|"phase"/);
+  });
+
+  it('does not show malformed IPC diagnostic JSON', async () => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => {
+      throw new Error('[PI_PACKAGE_MUTATION_FAILED] Legacy message {"phase":');
+    }) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.operationFailed'));
+  });
+
+  it.each([
     ['build-failed', 'check-build-dependencies', 'check-build-dependencies'],
     ['network', 'check-network', 'check-network'],
     ['permission', 'check-permissions', 'check-permissions'],

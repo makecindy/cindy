@@ -52,6 +52,36 @@ const PACKAGE_RECOVERY_KEYS = {
   'inspect-state-before-retry': 'settings.piPackages.recovery.inspect-state-before-retry',
 } as const satisfies Record<NonNullable<PiPackageMutationResult['diagnostics']>[number]['recovery'], string>;
 
+function packageRecoveryKey(recovery: unknown) {
+  return typeof recovery === 'string' && Object.prototype.hasOwnProperty.call(PACKAGE_RECOVERY_KEYS, recovery)
+    ? PACKAGE_RECOVERY_KEYS[recovery as keyof typeof PACKAGE_RECOVERY_KEYS]
+    : PACKAGE_RECOVERY_KEYS['inspect-state-before-retry'];
+}
+
+function packageFailureMessage(message: string, t: ReturnType<typeof useTranslation>['t']): string {
+  // Electron preserves only code/message. Decode the existing optional suffix
+  // here; keep legacy plain messages, but never render machine diagnostic JSON.
+  const offset = message.lastIndexOf(' {');
+  if (offset < 0) return message;
+  try {
+    const diagnostic = JSON.parse(message.slice(offset + 1));
+    if (!diagnostic || !['prepare', 'native-command'].includes(diagnostic.phase)
+      || !['failed', 'timed-out', 'unknown'].includes(diagnostic.outcome)) {
+      return t('settings.piPackages.operationFailed');
+    }
+    const statusKey = diagnostic.outcome === 'timed-out'
+      ? 'settings.piPackages.failure.commandTimedOut'
+      : diagnostic.outcome === 'unknown'
+        ? 'settings.piPackages.failure.commandUnknown'
+        : diagnostic.phase === 'prepare'
+          ? 'settings.piPackages.failure.commandNotStarted'
+          : 'settings.piPackages.failure.commandFailed';
+    return `${t(statusKey)} ${t(packageRecoveryKey(diagnostic.recovery))}`;
+  } catch {
+    return t('settings.piPackages.operationFailed');
+  }
+}
+
 type PiPackagesLoadState = 'loading' | 'ready' | 'error';
 
 interface PiPackageBusyOperation {
@@ -245,9 +275,7 @@ export function PiPackagesSection() {
         if (diagnostic) {
           // Use the host's recovery decision: timeout/unknown outcomes may require
           // checking state first even when the output mentions a specific cause.
-          const recoveryKey = Object.prototype.hasOwnProperty.call(PACKAGE_RECOVERY_KEYS, diagnostic.recovery)
-            ? PACKAGE_RECOVERY_KEYS[diagnostic.recovery]
-            : PACKAGE_RECOVERY_KEYS['inspect-state-before-retry'];
+          const recoveryKey = packageRecoveryKey(diagnostic.recovery);
           toast.error(`${t('settings.piPackages.warning.analysisIncomplete')} ${t(recoveryKey)}`);
         }
       }
@@ -257,7 +285,7 @@ export function PiPackagesSection() {
       if (ipcError?.code === 'MUTATION_CANCELLED') return false;
       toast.error(
         ipcError?.code === 'PI_PACKAGE_MUTATION_FAILED'
-          ? ipcError.message
+          ? packageFailureMessage(ipcError.message, t)
           : t('settings.piPackages.operationFailed'),
       );
       return false;

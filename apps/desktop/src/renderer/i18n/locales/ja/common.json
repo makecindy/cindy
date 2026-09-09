@@ -3162,6 +3162,10 @@
         "inspect-state-before-retry": "拡張機能の現在の状態を確認してから、未完了の手順を再試行してください。"
       },
       "failure": {
+        "commandFailed": "Pi のネイティブパッケージコマンドが失敗しました。",
+        "commandNotStarted": "Pi のネイティブパッケージコマンドを開始できませんでした。",
+        "commandTimedOut": "Pi のネイティブパッケージコマンドがタイムアウトしました。",
+        "commandUnknown": "Pi のネイティブパッケージコマンドの結果を確認できませんでした。",
         "sourceUnavailable": "ソースにアクセスできません。ネットワークまたは URL を確認するか、別のソースをお試しください。",
         "packageNotFound": "パッケージが見つかりません。パッケージ名またはリポジトリ URL を確認してください。",
         "versionNotFound": "そのバージョンが見つかりません。利用可能なバージョンを選んで再試行してください。",

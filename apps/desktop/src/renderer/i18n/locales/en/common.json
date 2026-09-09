@@ -3163,6 +3163,10 @@
         "inspect-state-before-retry": "Check the current extension state before retrying unfinished steps."
       },
       "failure": {
+        "commandFailed": "The native Pi package command failed.",
+        "commandNotStarted": "The native Pi package command could not start.",
+        "commandTimedOut": "The native Pi package command timed out.",
+        "commandUnknown": "The result of the native Pi package command could not be confirmed.",
         "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
         "packageNotFound": "The package was not found. Check the package name or repository URL.",
         "versionNotFound": "That version was not found. Choose an available version and try again.",

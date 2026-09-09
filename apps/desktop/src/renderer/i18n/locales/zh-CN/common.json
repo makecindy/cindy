@@ -3162,6 +3162,10 @@
         "inspect-state-before-retry": "请先检查扩展当前状态，再重试未完成的步骤。"
       },
       "failure": {
+        "commandFailed": "Pi 原生包命令失败。",
+        "commandNotStarted": "Pi 原生包命令未能启动。",
+        "commandTimedOut": "Pi 原生包命令已超时。",
+        "commandUnknown": "尚无法确认 Pi 原生包命令的结果。",
         "sourceUnavailable": "无法访问这个来源。请检查网络或地址，也可以换一个来源重试。",
         "packageNotFound": "没有找到这个包。请检查包名或仓库地址。",
         "versionNotFound": "没有找到这个版本。请选择可用版本后重试。",

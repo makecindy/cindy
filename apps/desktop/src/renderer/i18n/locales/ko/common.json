@@ -3162,6 +3162,10 @@
         "inspect-state-before-retry": "확장의 현재 상태를 확인한 후 완료되지 않은 단계를 다시 시도하세요."
       },
       "failure": {
+        "commandFailed": "Pi 기본 패키지 명령이 실패했습니다.",
+        "commandNotStarted": "Pi 기본 패키지 명령을 시작하지 못했습니다.",
+        "commandTimedOut": "Pi 기본 패키지 명령의 시간이 초과되었습니다.",
+        "commandUnknown": "Pi 기본 패키지 명령의 결과를 확인할 수 없습니다.",
         "sourceUnavailable": "소스에 접근할 수 없습니다. 네트워크나 URL을 확인하거나 다른 소스로 다시 시도하세요.",
         "packageNotFound": "패키지를 찾지 못했습니다. 패키지 이름이나 저장소 URL을 확인하세요.",
         "versionNotFound": "해당 버전을 찾지 못했습니다. 사용 가능한 버전을 선택해 다시 시도하세요.",

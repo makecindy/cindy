@@ -3162,6 +3162,10 @@
         "inspect-state-before-retry": "請先檢查擴充功能目前狀態，再重試未完成的步驟。"
       },
       "failure": {
+        "commandFailed": "Pi 原生套件命令失敗。",
+        "commandNotStarted": "Pi 原生套件命令未能啟動。",
+        "commandTimedOut": "Pi 原生套件命令已逾時。",
+        "commandUnknown": "尚無法確認 Pi 原生套件命令的結果。",
         "sourceUnavailable": "無法存取這個來源。請檢查網路或網址，也可以改用其他來源重試。",
         "packageNotFound": "找不到這個套件。請檢查套件名稱或儲存庫網址。",
         "versionNotFound": "找不到這個版本。請選擇可用版本後重試。",
