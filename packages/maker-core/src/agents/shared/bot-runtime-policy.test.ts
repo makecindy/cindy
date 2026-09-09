@@ -14,10 +14,10 @@ describe('Bot MCP policy', () => {
     ],
   };
 
-  it('keeps only the narrow Bot-owned built-ins', () => {
+  it('keeps Bot memory and the shared discovery gateways', () => {
     expect(isBotMcpServerAllowed(policy, 'cindy_memory')).toBe(true);
     expect(isBotMcpServerAllowed(policy, 'cindy_helper')).toBe(true);
-    expect(isBotMcpServerAllowed(policy, 'cindy')).toBe(false);
+    expect(isBotMcpServerAllowed(policy, 'cindy')).toBe(true);
     expect(isBotMcpServerAllowed(policy, 'cindy_group_history')).toBe(false);
   });
 

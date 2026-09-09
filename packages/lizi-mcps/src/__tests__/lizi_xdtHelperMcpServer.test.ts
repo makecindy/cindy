@@ -633,6 +633,85 @@ describe("cindy_helper MCP server", () => {
 });
 
 describe("direct Bot MCP tools", () => {
+  it.each(["claude-code", "codex"] as const)("omits ghost plugin guidance from find_bot_capabilities on remote %s", async (agentKind) => {
+    let remoteHostId: string | undefined;
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => "bot",
+      botCapabilities: {
+        list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
+        select: vi.fn(async () => ({ ok: true as const, effective: "next-turn" as const, joined: true })),
+      },
+    }, {
+      agentKind,
+      workingDir: "",
+      getSessionContext: () => ({
+        agentKind,
+        workingDir: "/bot",
+        sessionId: "bot-parent",
+        ...(remoteHostId ? { remoteHostId } : {}),
+      }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "remote-bot-capability-desc", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const localTool = (await client.listTools()).tools.find((tool) => tool.name === "find_bot_capabilities");
+      expect(localTool?.description).toContain("ghost_list");
+      const localDiscovered = parsePayload(await client.callTool({
+        name: "list_tools",
+        arguments: { category: "bots" },
+      })).tools as Array<{ name: string; description: string }>;
+      expect(localDiscovered.find((tool) => tool.name === "find_bot_capabilities")?.description).toContain("ghost_list");
+
+      remoteHostId = "ssh-host";
+      const remoteTool = (await client.listTools()).tools.find((tool) => tool.name === "find_bot_capabilities");
+      expect(remoteTool?.description).toContain("Skill");
+      expect(remoteTool?.description).not.toMatch(/ghost_list|ghost_info|ghost_call/);
+      const remoteDiscovered = parsePayload(await client.callTool({
+        name: "list_tools",
+        arguments: { category: "bots" },
+      })).tools as Array<{ name: string; description: string }>;
+      expect(remoteDiscovered.find((tool) => tool.name === "find_bot_capabilities")?.description).not.toMatch(
+        /ghost_list|ghost_info|ghost_call/,
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("keeps ghost plugin guidance in Pi helper discovery on remote sessions", async () => {
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => "bot",
+      botCapabilities: {
+        list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
+        select: vi.fn(async () => ({ ok: true as const, effective: "next-turn" as const, joined: true })),
+      },
+    }, {
+      agentKind: "pi",
+      workingDir: "/bot",
+      sessionId: "bot-parent",
+      remoteHostId: "ssh-host",
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "remote-pi-capability-desc", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["call_tool", "list_tools"]);
+      const discovered = parsePayload(await client.callTool({
+        name: "list_tools",
+        arguments: { category: "bots" },
+      })).tools as Array<{ name: string; description: string }>;
+      const find = discovered.find((tool) => tool.name === "find_bot_capabilities");
+      expect(find?.description).toContain("Skill");
+      expect(find?.description).toContain("ghost_list");
+      expect(find?.description).toContain("ghost_info");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it.each(["claude-code", "codex"] as const)("exposes and executes tasks on %s without discovery", async (agentKind) => {
     let sessionId: string | undefined = "bot-parent";
     const start = vi.fn(async () => ({ ok: true as const, taskId: "task-1" }));

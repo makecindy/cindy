@@ -447,9 +447,10 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(screen).toContain('const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;');
 
     const bubble = readSource('src/session/PendingSendBubble.tsx');
-    expect(bubble).toContain("const identity = `${thumb.uri ?? ''}|${thumb.ossRef ?? ''}`;");
-    expect(bubble).toContain("const shown = shownRef.current?.identity === identity ? shownRef.current.uri : null;");
-    expect(bubble).toContain('remoteState?.identity === identity ? remoteState.uri : null');
+    // 上传补齐 ossRef 不改变本地图片身份；附件替换仍重置预览。
+    expect(bubble).toContain('const identity = thumb.uri ?? thumb.ossRef ?? thumb.key;');
+    expect(bubble).toContain('shownRef.current?.identity === identity && !failedUris.includes(shownRef.current.uri)');
+    expect(bubble).toContain('remoteState?.identity === identity && !failedUris.includes(remoteState.uri)');
   });
 
   it('routes every remote-session-dependent entry through one judgement', () => {

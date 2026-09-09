@@ -1,4 +1,4 @@
-import { loadLightweightSessionScheduleIndex } from './scheduleIndex';
+import { loadDeviceSessionScheduleIndex } from './scheduleIndex';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 /**
@@ -23,6 +23,7 @@ import { House, LoaderCircle, SquarePen } from 'lucide-react-native';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
+  AppState,
   BackHandler,
   findNodeHandle,
   Pressable,
@@ -317,16 +318,21 @@ export function SessionListDrawer({
     const requestVersions = new Map<string, number>();
     const ids = scheduleDeviceIdsKey.split(',').filter(Boolean);
     const versions = new Map(ids.map((id) => [id, remoteScheduleEventStore.getSnapshot(id).sessionIndexVersion]));
+    const canStart = () => !cancelled && openRef.current && AppState.currentState === 'active';
     const refresh = (id: string) => {
+      if (!canStart()) return;
       const request = (requestVersions.get(id) ?? 0) + 1;
       requestVersions.set(id, request);
-      void loadLightweightSessionScheduleIndex(id, invoke).then((index) => {
-        if (cancelled || requestVersions.get(id) !== request) return;
+      void loadDeviceSessionScheduleIndex(id, invoke, canStart).then((index) => {
+        if (!canStart() || requestVersions.get(id) !== request) return;
         perDevice.set(id, index);
         setScheduleIndex(new Map([...perDevice.values()].flatMap((entries) => [...entries])));
       }).catch(() => undefined);
     };
     ids.forEach(refresh);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') ids.forEach(refresh);
+    });
     const off = remoteScheduleEventStore.subscribe(() => {
       for (const id of ids) {
         const version = remoteScheduleEventStore.getSnapshot(id).sessionIndexVersion;
@@ -336,7 +342,7 @@ export function SessionListDrawer({
         refresh(id);
       }
     });
-    return () => { cancelled = true; off(); };
+    return () => { cancelled = true; off(); appStateSubscription.remove(); };
   }, [open, scheduleDeviceIdsKey, invoke]);
   const sections = useMemo<HomeSection[]>(() => {
     if (!mounted) return [];

@@ -4,7 +4,8 @@ import { REMOTE_DESKTOP_NETWORK as net } from "@cindy/device-link";
 import { DESKTOP_RTC_SCRIPT } from "../viewerRtc";
 
 // Executes the exact static script embedded in WKWebView, with only RTC/DOM replaced.
-function viewer(trickle = true) {
+function viewer(trickle = true, autoConfig = true) {
+  let api: any;
   const messages: any[] = [];
   const peers: any[] = [];
   class Peer {
@@ -24,7 +25,7 @@ function viewer(trickle = true) {
     setRemoteDescription = vi.fn(async (value: any) => {
       this.remoteDescription = value;
     });
-    constructor() {
+    constructor(public configuration: any) {
       peers.push(this);
     }
     createDataChannel() {
@@ -68,14 +69,18 @@ function viewer(trickle = true) {
     render() {},
     receiveCursor() {},
     networkStats: () => ({ sample: null }),
-    post: (message: any) => messages.push(message),
+    post: (message: any) => {
+      messages.push(message);
+      if (message.type === "iceConfig" && autoConfig)
+        return api.config({ ...message, iceServers: [] });
+    },
   });
-  const api = vm.runInContext(
+  api = vm.runInContext(
     `
     let pc=null,dc=null,generation=0,epoch='lease',statsTimer=null,statsSample=null;
     ${DESKTOP_RTC_SCRIPT}
     trickleIce=${trickle};
-    ({start:connect,answer:receiveAnswer,ice:receiveIce,fail:failRtc,
+    ({start:connect,answer:receiveAnswer,ice:receiveIce,config:receiveIceConfig,fail:failRtc,
       stop:()=>{epoch=null;closeRtc();}})
   `,
     context,
@@ -256,4 +261,66 @@ it("does not retry an unavailable platform or a permanent host error", async () 
   await vi.advanceTimersByTimeAsync(120_000);
   expect(h.peers).toHaveLength(1);
   h.api.stop();
+});
+
+it("reloads credentials on recovery and supplies the backup as well as the primary", async () => {
+  const h = viewer(true, false);
+  const nodes = [
+    {
+      urls: ["turn:primary.example.test:3478"],
+      username: "old",
+      credential: "test-only",
+    },
+    {
+      urls: ["turn:backup.example.test:3478"],
+      username: "old",
+      credential: "test-only",
+    },
+  ];
+  await h.api.start();
+  const first = h.latest("iceConfig");
+  expect(h.peers).toHaveLength(0);
+  await h.api.config({ ...first, iceServers: nodes });
+  expect(h.peers[0].configuration.iceServers).toEqual(nodes);
+  h.change("failed");
+  await vi.advanceTimersByTimeAsync(net.retryMs[0]);
+  const next = h.latest("iceConfig");
+  expect(next.attemptId).not.toBe(first.attemptId);
+  await h.api.config({ ...first, iceServers: nodes });
+  expect(h.peers).toHaveLength(1);
+  const renewed = nodes.map((n) => ({ ...n, username: "renewed" }));
+  await h.api.config({ ...next, iceServers: renewed });
+  expect(h.peers[1].configuration.iceServers).toEqual(renewed);
+  h.api.stop();
+});
+
+it("bounds native config wait, ignores late/duplicate config, and preserves another viewer", async () => {
+  const a = viewer(true, false),
+    b = viewer();
+  await a.api.start();
+  await b.api.start();
+  const pending = a.latest("iceConfig");
+  await vi.advanceTimersByTimeAsync(3500);
+  expect(a.peers).toHaveLength(1);
+  await a.api.config({
+    ...pending,
+    iceServers: [{ urls: ["turn:late.example.test:3478"] }],
+  });
+  expect(a.peers).toHaveLength(1);
+  a.api.stop();
+  await a.api.config({ ...pending, iceServers: [] });
+  expect(b.peers[0].close).not.toHaveBeenCalled();
+  b.api.stop();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("never starts media after exit while credentials are pending", async () => {
+  const h = viewer(true, false);
+  await h.api.start();
+  const pending = h.latest("iceConfig");
+  h.api.stop();
+  await h.api.config({ ...pending, iceServers: [] });
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(h.peers).toHaveLength(0);
+  expect(vi.getTimerCount()).toBe(0);
 });

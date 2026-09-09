@@ -93,6 +93,28 @@ export class PeerRecoveryScheduler {
   private readonly queued = new Set<string>();
   private active = 0;
   private paused = false;
+  private activeDeviceIds: ReadonlySet<string> = new Set();
+  private readonly listeners = new Set<() => void>();
+
+  /** Cached read-only UI projection; it never schedules recovery work. */
+  getActiveDeviceIds = (): ReadonlySet<string> => this.activeDeviceIds;
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
+
+  private publishActiveDeviceIds(): void {
+    const next = new Set<string>();
+    for (const [deviceId, entry] of this.entries) {
+      if (entry.phase !== 'idle' || entry.rerun) next.add(deviceId);
+    }
+    if (next.size === this.activeDeviceIds.size && [...next].every((id) => this.activeDeviceIds.has(id))) return;
+    this.activeDeviceIds = next;
+    for (const listener of this.listeners) {
+      try { listener(); } catch { /* UI observers must not affect recovery scheduling. */ }
+    }
+  }
 
   constructor(
     run: (deviceId: string) => Promise<PeerRecoveryResult>,
@@ -125,6 +147,7 @@ export class PeerRecoveryScheduler {
     // serialized behind it so one peer never has two recovery runs in flight.
     if (entry.running) {
       entry.rerun = true;
+      this.publishActiveDeviceIds();
       return;
     }
     this.enqueue(deviceId, entry);
@@ -150,6 +173,7 @@ export class PeerRecoveryScheduler {
       if (index >= 0) this.queue.splice(index, 1);
     }
     entry.phase = 'idle';
+    this.publishActiveDeviceIds();
   }
 
   /**
@@ -215,6 +239,7 @@ export class PeerRecoveryScheduler {
     entry.phase = 'queued';
     this.queued.add(deviceId);
     this.queue.push(deviceId);
+    this.publishActiveDeviceIds();
     this.drain();
   }
 
@@ -292,6 +317,7 @@ export class PeerRecoveryScheduler {
       this.enqueue(deviceId, entry);
     }
     this.drain();
+    this.publishActiveDeviceIds();
   }
 }
 

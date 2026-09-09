@@ -4,10 +4,10 @@
  * 由 HookConnectionsSection 在每个目录卡片下渲染(用户反馈: 偏好属于目录
  * 条目本身, 不该是独立区块): agent / 模型(含思考强度) / 权限模式三个字段。
  *
- * **三个控件一律复用应用标准选择器,本文件不自建任何选择 UI**(2026-07 用户
+ * **两个控件一律复用应用标准选择器,本文件不自建任何选择 UI**(2026-07 用户
  * 定稿: 这里曾私搭一套裸下拉, 露出 'claude-code' 原始 id、自己拼一遍可选模型
  * 清单、effort 直接显示未经 i18n 的 low/medium/high):
- *   - agent   -> AgentSelect(引擎下拉, 与首页新建对话工具条同一个)
+ *   - Harness 与模型由 ModelSelector 一次提交, 不保留独立引擎控件。
  *   - 模型    -> ModelSelector 的 field trigger, **composer 同款全功能形态**(供应商
  *                分段/订阅来源/推理强度全开; 2026-07 用户定稿基准: 全软件一个模型
  *                选择面板, 处处同行为, 差异只有样式)。来源落本地
@@ -35,6 +35,7 @@
  * 颜色一律走主题 token(规则 16)。
  */
 
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -44,8 +45,6 @@ import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
-import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
   getProviderModelEffort,
   setProviderModelChoice,
@@ -66,7 +65,6 @@ import {
   AGENT_KINDS,
   HOOK_DEFAULT_PERMISSION_MODE,
   isKnownAgent,
-  patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
   type ImDefaultsLike,
@@ -496,20 +494,7 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'grok-bu
   return 'cc';
 }
 
-/**
- * 选择器的 vendor key → hook prefs 的 agentKind。
- * MakerVendor 还含 'orca' 等本编辑器不支持的值 —— 若未来有人把别的 vendor 接进来,
- * fail-fast 好过静默写成 claude-code 偏好。
- */
-function toAgentKind(vendor: MakerVendor): KnownAgent {
-  if (vendor === 'codex') return 'codex';
-  if (vendor === 'pi') return 'pi';
-  if (vendor === 'grok-build') return 'grok-build';
-  if (vendor === 'cc') return 'claude-code';
-  throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
-}
-
-/** 目录卡片内的偏好编辑行(agent / 模型 / 权限三字段)。alias 为该行当前生效别名。 */
+/** 目录卡片内的偏好编辑行(完整模型配置 / 权限)。alias 为该行当前生效别名。 */
 export function WorkspacePrefsEditor({
   alias,
   state,
@@ -546,6 +531,8 @@ export function WorkspacePrefsEditor({
   const disabled = !state.editable || state.pendingWs === alias;
   const vendorKey = toVendorKey(eff.agentKind.id);
 
+  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey);
+
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {
     if (next === prefs.model || eff.agentKind.id === null) return;
@@ -557,46 +544,6 @@ export function WorkspacePrefsEditor({
 
   return (
     <div className="flex flex-wrap items-end gap-2">
-      {/* agent 分段是固定 168px 的 pill,不参与压缩 —— 卡片变窄时整块换行,
-          而不是把 Claude / Codex 两段挤到溢出容器。
-          禁用只看行级只读态,**不含 effAgentCaps === null**:patchForAgentChange 只清
-          model/effort、不做能力校准,切 agent 本身不需要当前 agent 的清单;若跟着
-          caps 一起禁,当前 agent 能力请求瞬时失败就把整行钉死,用户连切到另一个
-          (可用的)agent 都不行(codex review)。模型/权限字段仍按 caps 禁用 ——
-          它们的选项列表真的来自 caps。 */}
-      {/* 引擎选择用与新建对话工具条同一个下拉(AgentSelect, #1350): 定宽分段器每
-          多一个引擎就窄一截(168px 三等分 = 每段 56px, Pi 已贴边), 而下拉只渲染
-          当前引擎, 引擎数量不再影响布局; 未选中项也不再因为置灰而看着像不可用。 */}
-      {/* 确定宽度是 field 形态的前提: PrefsField 只有 min-w-0 时, trigger 的 w-full
-          解析不到包含块宽度, 字段会缩到当前标签的固有宽度(选 Pi 时 trigger 与绑定
-          它的面板只有一个短标签宽, 选项行图标/文字/勾选被截断, codex review #1490)。
-          168px = 被替换的定宽分段器原宽度, 视觉落位不变。 */}
-      <PrefsField
-        label={t('settings.tina.prefs.agentLabel')}
-        className="w-[168px] shrink-0 basis-[168px]"
-      >
-        <AgentSelect
-          value={vendorKey}
-          // 设置字段形态: trigger 撑满字段、面板绑 trigger 实测宽度
-          // (DESIGN.md §4 Select & Dropdown 宽度铁则); dense 与同排 ModelSelector 齐高。
-          triggerVariant="field"
-          dense
-          side="bottom"
-          // 可及名带行别名:每行目录都有一个同样的选择器,不带别名时读屏听到的
-          // 全部是同一个名字,行与行无法分辨(codex review)。
-          ariaContext={`${t('settings.tina.prefs.agentLabel')} · ${alias}`}
-          disabled={disabled}
-          // 当前值可能是**继承值**(prefs.agentKind 为 null / 过期未知值时显示解析出的
-          // 默认 agent),重选它 = 钉成显式偏好 —— 与模型字段的 reselectEmitsChange 同语义;
-          // 显式同值由下方 nextAgent === prefs.agentKind 去重,不产生空写。
-          reselectEmitsChange
-          onChange={(next) => {
-            const nextAgent = toAgentKind(next);
-            if (nextAgent === prefs.agentKind) return;
-            state.applyPatch(alias, patchForAgentChange(nextAgent));
-          }}
-        />
-      </PrefsField>
       {/* 模型 + 思考强度同一个控件, **composer 同款全功能标准面板**(2026-07 用户
           定稿基准: 全软件一个模型选择面板, 处处同行为, 差异只有样式):供应商分段、
           订阅来源、推理强度全开。来源(providerId)是纯客户端维度, 落本地
@@ -606,6 +553,13 @@ export function WorkspacePrefsEditor({
           不会拼出不可能路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
         <ModelSelector
+          fastModeConfigurable={false}
+          unifiedAgents={pickerAgents}
+          onUnifiedSelect={({ engine, modelId, providerId, effort }) => state.applyPatch(
+            alias,
+            { agentKind: engine === 'cc' ? 'claude-code' : engine, model: modelId, effort: effort || null },
+            providerId,
+          )}
           modelId={eff.model.id ?? ''}
           effort={eff.effort.id ?? ''}
           vendorKey={vendorKey}
@@ -615,9 +569,8 @@ export function WorkspacePrefsEditor({
           dense
           // 可及名上下文与 agent 分段同规则(字段名 · 行别名),多卡片同屏读屏可区分。
           ariaContext={`${t('settings.tina.prefs.modelLabel')} · ${alias}`}
-          // 能力清单未就绪才禁用; agent 未显式设置时也可直接选模型(随手把
-          // agent 显式配对写入, 与 Slack 卡「选中模型即落 (agent, model)」同规则)
-          disabled={disabled || effAgentCaps === null || eff.agentKind.id === null}
+          // 当前 Harness 的能力加载失败也能改选其它可用 Harness。
+          disabled={disabled}
           // 这一行的 modelId 可能是**解析出来的继承值**(prefs.model 为 null 时来自 IM
           // 新会话默认), 点它的语义是「把继承值钉成本目录的显式偏好」, 必须照常回调 ——
           // 否则用户点了没反应, 之后上游默认一变这条偏好就被静默改掉。

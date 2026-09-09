@@ -115,6 +115,7 @@ import {
   applyOAuthSpawnEntrypointGate,
   applySubagentModelEnv,
   buildClaudeEnv,
+  applyClaudeContextWindow,
   exploreInheritCapEnvNeedsSync,
   REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
 } from './env-builder.js';
@@ -1269,8 +1270,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const modelContextWindows = [...new Map([
       ...providerRoutedModels,
       ...(sessionRouteWindowEntry ? [sessionRouteWindowEntry] : []),
-      // Explicit local overrides win for this provider only. Uncustomized models
-      // retain their upstream/default metadata and continue to follow updates.
+      // The host resolves this route’s user budget or current catalog default.
+      // Never reuse another provider’s working-window policy.
       ...configuredWindows,
     ].map((entry) => [entry.id, entry])).values()];
     // #3557:会话模型 id 带命名空间前缀(anthropic/... 等网关目录形态)时,CLI
@@ -2352,8 +2353,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkModelFor(selectedModel),
       ]),
     ];
-    const resolveModelContextWindow = (model: string): number | undefined => {
-      const configured = this.deps.resolveModelContextLimit?.(mutableProviderId, model);
+    const resolveModelContextWindow = (model: string, providerId = mutableProviderId): number | undefined => {
+      const configured = this.deps.resolveModelContextLimit?.(providerId, model);
       if (configured && Number.isFinite(configured) && configured > 0) return configured;
 
       // 核实窗口按会话实际来源取。host 注入了 resolver 时,null = 不要收敛
@@ -2361,7 +2362,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 只有未注入 resolver 的路径(测试 / 无 host)才退回扁平目录。
       const resolveVerified = this.deps.resolveVerifiedContextWindow;
       if (resolveVerified) {
-        const verified = resolveVerified(mutableProviderId, model);
+        const verified = resolveVerified(providerId, model);
         return typeof verified === 'number' && verified > 0 ? verified : undefined;
       }
       const descriptor = this.capabilities.availableModels.find((item) => item.id === model);
@@ -3054,6 +3055,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       fresh?: boolean;
     }): Promise<Query> => {
       const currentSdkModel = sdkModelFor(mutableModel);
+      const workingWindow = resolveModelContextWindow(mutableModel);
+      applyClaudeContextWindow(env, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
+      if (remoteEnv) applyClaudeContextWindow(remoteEnv, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort);
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
@@ -6539,6 +6543,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       // (renderer 端表现为"设置切换失败,未生效" toast)。窗口内只更新闭包状态即可:
       // buildQuery 重建时读的就是 mutableModel / mutableEffort / mutableFastMode /
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
+
+      requiresModelSwitchRebuild: (model, target) => {
+        const provider = target?.providerId !== undefined ? target.providerId : mutableProviderId;
+        const window = resolveModelContextWindow(model, provider);
+        const expected = typeof window === 'number' && window > 0 ? String(Math.floor(window)) : undefined;
+        const liveEnv = opts.remoteHostId ? remoteEnv : env;
+        return expected !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+      },
 
       async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
         if (reviewMode) return;

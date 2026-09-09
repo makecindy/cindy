@@ -22,7 +22,8 @@
  *    回调(组件已经不在了)。
  */
 
-import type { BotCapabilities } from './botStore';
+import type { BotCapabilities, BotProfileUpdatePatch } from './botStore';
+import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection';
 
 /** 提交给 `updateBotProfile` 的字段集合(与手动保存时的载荷完全一致)。 */
 export interface BotSettingsPayload {
@@ -128,6 +129,48 @@ export function botSettingsPayloadEqual(a: BotSettingsPayload, b: BotSettingsPay
     stringListEqual(a.skills, b.skills) &&
     botCapabilitiesEqual(a.capabilities, b.capabilities)
   );
+}
+
+/** Send only edited fields, preserving capabilities joined concurrently by the companion. */
+export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettingsPayload, includeCapabilityBaseline = false): BotProfileUpdatePatch {
+  const { capabilities, ...values } = next;
+  const changed = Object.fromEntries(Object.entries(values).filter(([key, value]) =>
+    !capabilityValueEqual(value, previous[key as keyof typeof values])));
+  const capabilityChanges = Object.fromEntries(Object.entries(capabilities).filter(([key, value]) =>
+    !capabilityValueEqual(value, previous.capabilities[key as keyof BotCapabilities])));
+  const capabilityBaseline = {
+    ...('skills' in changed ? { skills: previous.skills } : {}),
+    ...('mcpServers' in capabilityChanges ? { mcpServers: previous.capabilities.mcpServers } : {}),
+    ...('toolsets' in capabilityChanges ? { toolsets: previous.capabilities.toolsets } : {}),
+  };
+  return {
+    ...changed,
+    ...(Object.keys(capabilityChanges).length ? { capabilities: capabilityChanges } : {}),
+    ...(includeCapabilityBaseline && Object.keys(capabilityBaseline).length ? { capabilityBaseline } : {}),
+  };
+}
+
+/** Advance untouched fields to a live profile without discarding pending local edits. */
+export function reconcileBotSettingsDraft(
+  baseline: BotSettingsPayload,
+  draft: BotSettingsDraft,
+  incoming: BotSettingsPayload,
+): BotSettingsDraft {
+  const normalized = normalizeBotSettingsPayload(draft, baseline.name);
+  const changes = botSettingsChanges(baseline, normalized);
+  return {
+    ...incoming,
+    ...Object.fromEntries(Object.keys(changes)
+      .filter((key) => key !== 'capabilities')
+      .map((key) => [key, draft[key as keyof BotSettingsDraft]])),
+    skills: reconcileBotCapabilityList(baseline.skills, draft.skills, incoming.skills),
+    capabilities: {
+      ...incoming.capabilities,
+      ...changes.capabilities,
+      mcpServers: reconcileBotCapabilityList(baseline.capabilities.mcpServers, draft.capabilities.mcpServers, incoming.capabilities.mcpServers),
+      toolsets: reconcileBotCapabilityList(baseline.capabilities.toolsets, draft.capabilities.toolsets, incoming.capabilities.toolsets),
+    },
+  };
 }
 
 /** 自动保存对用户可见的状态。`saved` 由 UI 侧短暂显示后淡出,不常驻。 */

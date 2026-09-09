@@ -82,15 +82,17 @@ export interface PendingSendBubbleActions {
 function useThumbCellUri(
   thumb: MobileOutboxThumb,
   resolveRemoteMedia?: ResolveRemoteMediaFn,
+  failedUris: readonly string[] = [],
 ): string | null {
   // 「这一格现在指的是哪张图」。排队消息被编辑、同一附件下标换成另一张图时,ThumbCell 的
   // key(clientId-file-index)不变、hook 实例被复用 —— 所有缓存都必须绑定这个身份,否则旧图
   // 会一直压住新图直到整行卸载,编辑后的气泡显示的是已被移除的附件(review P1)。
-  const identity = `${thumb.uri ?? ''}|${thumb.ossRef ?? ''}`;
-  const durableUri = thumb.ossRef ? getSentAttachmentThumbUri(thumb.ossRef) : null;
-  const localUri = durableUri ?? thumb.uri ?? null;
+  const identity = thumb.uri ?? thumb.ossRef ?? thumb.key;
+  const previewRef = thumb.previewRef ?? thumb.ossRef;
+  const durableUri = previewRef ? getSentAttachmentThumbUri(previewRef) : null;
+  const localUri = [durableUri, thumb.uri].find((uri) => uri && !failedUris.includes(uri)) ?? null;
   const [remoteState, setRemoteState] = useState<{ uri: string; identity: string } | null>(null);
-  const remoteUri = remoteState?.identity === identity ? remoteState.uri : null;
+  const remoteUri = remoteState?.identity === identity && !failedUris.includes(remoteState.uri) ? remoteState.uri : null;
   const remoteCandidate = localUri ? null : thumb.ossRef;
   useEffect(() => {
     if (!remoteCandidate || !resolveRemoteMedia || !isDesktopLocalMediaUrl(remoteCandidate)) {
@@ -119,13 +121,13 @@ function useThumbCellUri(
   // 等 store hydrate、远端取件更晚),换 uri 会让 Image 重新加载、中间露出底色(闪白)。
   // 锁同样绑身份:身份变了就解锁,重新按新图取。
   const shownRef = useRef<{ uri: string; identity: string } | null>(null);
-  const shown = shownRef.current?.identity === identity ? shownRef.current.uri : null;
+  const shown = shownRef.current?.identity === identity && !failedUris.includes(shownRef.current.uri) ? shownRef.current.uri : null;
   // 写 ref 放 layout effect(render 阶段不碰 ref:Concurrent 下被丢弃的 render 会污染它)。
   useLayoutEffect(() => {
-    if (candidate && shownRef.current?.identity !== identity) {
+    if (candidate && !shown) {
       shownRef.current = { uri: candidate, identity };
     }
-  }, [candidate, identity]);
+  }, [candidate, identity, shown]);
   return shown ?? candidate;
 }
 
@@ -134,16 +136,19 @@ function ThumbCell({
   resolveRemoteMedia,
   renderImage,
 }: {
-  renderImage: (uri: string | null) => ReactNode;
+  renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   thumb: MobileOutboxThumb;
   resolveRemoteMedia?: ResolveRemoteMediaFn;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const uri = useThumbCellUri(thumb, resolveRemoteMedia);
+  const [failedUris, setFailedUris] = useState<readonly string[]>([]);
+  const uri = useThumbCellUri(thumb, resolveRemoteMedia, failedUris);
   return (
     <View style={styles.thumbCell}>
-      {renderImage(uri)}
+      {renderImage(uri, thumb.uri, () => {
+        if (uri) setFailedUris((failed) => failed.includes(uri) ? failed : [...failed, uri]);
+      })}
       {thumb.uploading ? (
         <View style={styles.thumbUploadingOverlay}>
           <ActivityIndicator color={colors.ctaText} size="small" />
@@ -159,7 +164,7 @@ function AttachmentThumbStrip({
   renderImage,
   gap,
 }: {
-  renderImage: (uri: string | null) => ReactNode;
+  renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   gap: number;
   thumbs: readonly MobileOutboxThumb[];
   resolveRemoteMedia?: ResolveRemoteMediaFn;
@@ -185,7 +190,7 @@ export function PendingSendBubble({
   renderFile,
   screenWidth,
 }: {
-  renderImage: (uri: string | null) => ReactNode;
+  renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   renderText: (text: string, index: number) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
   screenWidth?: number;

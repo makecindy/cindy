@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBotModelRouteReconciler } from '../botModelRouteReconciler';
+import type { BotModelRoute } from '../../../shared/botModelChain';
+import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
 
 function harness() {
   let owner = 'owner-a';
-  const state = {
+  const state: { chain: BotModelRoute[]; current: SessionRuntimeProfile; hasRuntimeOverride: boolean; next?: SessionRuntimeProfile } = {
     chain: [{ harness: 'codex' as const, model: 'luna', providerId: 'xd', effort: 'medium', fastMode: false }],
     current: { agentKind: 'pi' as const, model: 'glm', providerId: 'xd', effort: 'high', fastMode: false },
     hasRuntimeOverride: false,
@@ -15,6 +17,68 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  it('reads paused profiles only for previews and does not consume their pending model edits', async () => {
+    const h = harness();
+    let paused = true;
+    const read = vi.fn(async (_id: string, purpose: 'apply' | 'preview') =>
+      paused && purpose !== 'preview' ? null : h.state);
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read, apply: h.apply });
+    await expect(reconcile.preview('canonical')).resolves.toMatchObject({ agentKind: 'codex' });
+    const draft: BotModelRoute[] = [{ ...h.state.chain[0]!, harness: 'claude' }];
+    await expect(reconcile.preview('canonical', draft)).resolves.toMatchObject({ agentKind: 'claude-code' });
+    await reconcile('canonical');
+    expect(h.apply).not.toHaveBeenCalled();
+    paused = false;
+    h.state.chain = draft;
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ agentKind: 'claude-code' }), h.state.current);
+  });
+  it('previews the preserved effective or pending fallback without changing the runtime', async () => {
+    const h = harness();
+    h.state.hasRuntimeOverride = true;
+    expect(await h.reconcile.preview('canonical')).toEqual(h.state.current);
+    h.state.next = { ...h.state.current, agentKind: 'claude-code', model: 'pending' };
+    expect(await h.reconcile.preview('canonical')).toEqual(h.state.next);
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+  it('previews a draft and then saved chain without consuming the next-send change', async () => {
+    const h = harness();
+    h.state.hasRuntimeOverride = true;
+    await h.reconcile('canonical');
+    const draft: BotModelRoute[] = [{ ...h.state.chain[0]!, harness: 'claude', model: 'new-primary' }];
+    const expected = expect.objectContaining({ agentKind: 'claude-code', model: 'new-primary' });
+    expect(await h.reconcile.preview('canonical', draft)).toEqual(expected);
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(await h.reconcile.preview('canonical')).toEqual(h.state.current);
+    h.state.chain = draft;
+    expect(await h.reconcile.preview('canonical', draft)).toEqual(expected);
+    expect(h.apply).not.toHaveBeenCalled();
+    await h.reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expected, h.state.current);
+    h.state.next = { ...h.state.current, model: 'new-fallback' };
+    expect(await h.reconcile.preview('canonical', draft)).toEqual(h.state.next);
+  });
+  it('invalidates fallback when a later chain candidate changes, even with the same primary', async () => {
+    const h = harness();
+    h.state.hasRuntimeOverride = true;
+    await h.reconcile('canonical');
+    const draft: BotModelRoute[] = [...h.state.chain, { ...h.state.chain[0]!, harness: 'pi', model: 'secondary' }];
+    expect(await h.reconcile.preview('canonical', draft)).toMatchObject({ agentKind: 'codex', model: 'luna' });
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+  it('normalizes draft chains the same way as the persisted profile', async () => {
+    const h = harness();
+    h.state.hasRuntimeOverride = true;
+    await h.reconcile('canonical');
+    expect(await h.reconcile.preview('canonical', [...h.state.chain, ...h.state.chain])).toEqual(h.state.current);
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+  it('rejects an owner change during a preview', async () => {
+    const h = harness();
+    h.read.mockImplementationOnce(async () => { h.changeOwner(); return h.state; });
+    await expect(h.reconcile.preview('canonical')).rejects.toThrow('owner changed');
+    expect(h.apply).not.toHaveBeenCalled();
+  });
   it('applies the configured harness before the first send after restart', async () => {
     const h = harness();
     await h.reconcile('canonical');

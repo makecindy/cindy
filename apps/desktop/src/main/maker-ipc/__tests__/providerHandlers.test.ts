@@ -22,6 +22,8 @@ import {
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
+import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
+import { extractIpcError } from '../../../renderer/utils/ipcError';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
@@ -170,6 +172,7 @@ describe('provider:list IPC handler', () => {
   it('keeps providers in catalog order and returns display order as owner-scoped metadata', async () => {
     const harness = new IpcHarness();
     const views = [fakeView('xd', true), fakeView('anthropic', false)];
+    const getVisibility = vi.fn(() => overrides);
     const listProviders = vi.fn(async () => views);
     const overrides = { 'claude-code:xd:claude-opus-4-8': false };
     const providerOrder = ['anthropic', 'xd'];
@@ -177,7 +180,7 @@ describe('provider:list IPC handler', () => {
       harness,
       makeDeps({
         listProviders,
-        getModelVisibilityOverrides: () => overrides,
+        getModelVisibilityOverrides: getVisibility,
         getProviderOrder: () => providerOrder,
         currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
       }),
@@ -191,10 +194,52 @@ describe('provider:list IPC handler', () => {
       providerOrder,
       modelVisibilityOverrides: overrides,
     });
+    expect(getVisibility).toHaveBeenCalledWith(views, false);
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
     });
+  });
+
+  it('encodes a real visibility timeout at the IPC boundary for message-only remote transport', async () => {
+    vi.useFakeTimers();
+    clearModelVisibilityMirror();
+    try {
+      const harness = new IpcHarness();
+      registerProviderHandlers(harness, makeDeps({
+        listProviders: async () => [],
+        getModelVisibilityOverrides: async () => {
+          await waitForModelVisibilityMirror(100);
+          return getModelVisibilityMirrorSnapshot();
+        },
+      }));
+      const request = harness.invoke(MAKER_INVOKE.PROVIDER_LIST).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      const error = await request;
+      expect(error).toMatchObject({ code: 'MODEL_VISIBILITY_NOT_READY' });
+      const received = new Error((error as Error).message);
+      expect(extractIpcError(received)).toEqual({
+        code: 'MODEL_VISIBILITY_NOT_READY',
+        message: 'Model preferences are still synchronizing. Retry shortly.',
+      });
+    } finally {
+      vi.useRealTimers();
+      clearModelVisibilityMirror();
+    }
+  });
+
+  it('waits for effective visibility and rejects an account change during that wait', async () => {
+    const harness = new IpcHarness();
+    let owner = { dataOwnerId: 'owner-a', generation: 1 };
+    let release!: (map: Record<string, boolean>) => void;
+    const getVisibility = vi.fn(() => new Promise<Record<string, boolean>>((resolve) => { release = resolve; }));
+    registerProviderHandlers(harness, makeDeps({ listProviders: async () => [fakeView('xd', true)],
+      currentOwnerSession: () => owner, getModelVisibilityOverrides: getVisibility }));
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    await vi.waitFor(() => expect(getVisibility).toHaveBeenCalledOnce());
+    owner = { dataOwnerId: 'owner-b', generation: 2 };
+    release({ 'pi:xd:old-account': true });
+    await expect(pending).rejects.toThrow('active account changed');
   });
 
   it('rejects a catalog snapshot after an A→B→A owner round trip during the async read', async () => {

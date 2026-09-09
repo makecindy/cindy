@@ -1,3 +1,4 @@
+import type { PiPackageCommandDiagnostic } from '@cindy/maker-core';
 import type { MakerAgentKindWire } from './agentKindConversion.js';
 
 export type PiPackageResourceKind = 'extension' | 'skill' | 'prompt' | 'theme';
@@ -138,6 +139,10 @@ export interface PiPackageMutationRequest {
 
 export interface PiPackageMutationResult extends PiPackageListResult {
   changed: boolean;
+  /** Set only after the native install/update/remove command exits with zero. */
+  nativeCommandSucceeded?: true;
+  /** Advisory Cindy assistance failures do not change native command success. */
+  diagnostics?: PiPackageCommandDiagnostic[];
   affectedPackage?: PiPackageView;
   /** The mutation succeeded, but packages is not an authoritative full roster. */
   projectionUnavailable?: true;

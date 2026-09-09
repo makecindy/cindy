@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { app } from 'electron';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,9 +33,15 @@ beforeEach(async () => {
   approvalStateRoot = path.join(workDir, 'owners', 'aaa', 'cindy-brain-install-state');
   await fs.promises.mkdir(homeDir, { recursive: true });
   await fs.promises.mkdir(brainRoot, { recursive: true });
+  // Keep real mutation leases and settings inside this fixture too. The shared
+  // Electron stub root can retain another test/worktree's pending Skill lease.
+  const getPath = app.getPath.bind(app);
+  vi.spyOn(app, 'getPath').mockImplementation((name) =>
+    name === 'appData' || name === 'userData' ? workDir : getPath(name));
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 

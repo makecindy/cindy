@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IM_DEFAULT_SETTINGS, type ImDefaultSettingsState } from '../../../../shared/imDefaultSettings';
@@ -59,12 +59,15 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: [] }),
 }));
 
-vi.mock('@/components/new-chat/AgentSelect', () => ({
-  AgentSelect: () => null,
+vi.mock('@/hooks/useAvailableAgents', () => ({
+  useModelPickerAgents: () => ['claude-code', 'codex', 'pi'],
 }));
 
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: () => null,
+  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable }: {
+    onUnifiedSelect: (selection: object) => void; fastModeConfigurable: boolean;
+  }) => <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
+    onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>,
 }));
 
 vi.mock('@/components/new-chat/PermissionSelector', () => ({
@@ -97,6 +100,19 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
 }
 
 describe('ImDefaultSettingsSection Pi channel warning', () => {
+  it('saves the complete selection in one update while preserving permissions', async () => {
+    const save = vi.fn(async (_patch: unknown) => defaults('codex'));
+    window.electronAPI.maker.imDefaultSettingsSet = save;
+    render(<ImDefaultSettingsSection />);
+    await screen.findByText('settings.imBot.defaults.modelLabel');
+    expect(screen.getByTestId('select-codex').getAttribute('data-fast-configurable')).toBe('false');
+    fireEvent.click(screen.getByTestId('select-codex'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]?.[0]).toEqual({ agentKind: 'codex', agents: {
+      codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'low' },
+    } });
+  });
+
   beforeEach(() => {
     capabilityMockState.loadingAgent = null;
     capabilityMockState.errorAgent = null;
@@ -157,7 +173,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     };
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(screen.queryByRole('status')).toBeNull();
   });
 
@@ -193,7 +209,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     } as unknown as typeof window.electronAPI;
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -203,7 +219,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     capabilityMockState.loadingAgent = 'pi';
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -213,7 +229,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     capabilityMockState.errorAgent = 'pi';
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -222,7 +238,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
   it('does not warn for Pi on channels without turn policy (feishu)', async () => {
     render(<ImDefaultSettingsSection channel="feishu" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -232,14 +248,14 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     // Telegram / 钉钉仅在群聊(event.speaker 存在)挂 turnPermissionPolicy,
     // 主人私聊 Pi 可用;设置 UI 不区分群聊/私聊,不能整体警告。
     const first = render(<ImDefaultSettingsSection channel="telegram" />);
-    await first.findByText('settings.imBot.defaults.agentLabel');
+    await first.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
     cleanup();
 
     const second = render(<ImDefaultSettingsSection channel="dingtalk" />);
-    await second.findByText('settings.imBot.defaults.agentLabel');
+    await second.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -254,7 +270,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     cleanup();
 
     const wechat = render(<ImDefaultSettingsSection channel="wechat" />);
-    await wechat.findByText('settings.imBot.defaults.agentLabel');
+    await wechat.findByText('settings.imBot.defaults.modelLabel');
     expect(
       wechat.queryByText('settings.imBot.defaults.groupPermissionLabel'),
     ).toBeNull();

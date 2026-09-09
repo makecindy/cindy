@@ -31,4 +31,11 @@ describe('model visibility legacy owner claim validation', () => {
       canInitialize: false,
     })).toBe(false);
   });
+
+  it.each(['new', 'existing', 'pending', undefined, true, 'unknown'])('validates optional profile provenance: %s', (profileOrigin) => {
+    expect(isModelVisibilityLegacyOwnerClaim({
+      dataOwnerId: 'owner-a', ownerGeneration: 1, canWriteOwnerScoped: true,
+      claimed: true, claimedByOtherOwner: false, canInitialize: true, profileOrigin,
+    })).toBe(profileOrigin !== true && profileOrigin !== 'unknown');
+  });
 });

@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
-import { usageModelKey, usageRankOf } from '@/components/new-chat/usagePalette';
+import { usageModelKey } from '@/components/new-chat/usagePalette';
 
 import { usageHistoryModelColor } from './usageHistoryColors';
 
@@ -72,7 +72,7 @@ export function UsageTokenBars({
   onDayClick,
 }: {
   modelDaily: UsageHistoryModelDay[];
-  /** 前 N 名模型 key (payload.models 排序), 决定分段与图例配色。 */
+  /** 完整历史的模型 key（按 token 排序），决定分段与表格配色。 */
   colorOrder: string[];
   todayKey: string;
   selectedDay?: string | null;
@@ -92,10 +92,11 @@ export function UsageTokenBars({
   );
 
   const bars = useMemo(() => {
+    const ranks = new Map(colorOrder.map((key, rank) => [key, rank]));
     const segsByDay = new Map<string, Map<number, DaySegment>>();
     for (const row of modelDaily) {
       if (row.tokens <= 0) continue;
-      const rank = usageRankOf(colorOrder, usageModelKey(row.agentKind, row.model));
+      const rank = ranks.get(usageModelKey(row.agentKind, row.model)) ?? colorOrder.length;
       let daySegs = segsByDay.get(row.day);
       if (!daySegs) {
         daySegs = new Map();
@@ -104,7 +105,7 @@ export function UsageTokenBars({
       const seg = daySegs.get(rank);
       if (seg) {
         seg.tokens += row.tokens;
-        // 尾部档 (rank === colorOrder.length) 会把所有非前 N 名模型并进同一分段,
+        // 防御性兜底：调用方未登记的模型合并到尾部档 (rank === colorOrder.length),
         // 保留首个模型名会把合计错误地挂到它头上 —— 改标「其它」, 与图例同义。
         if (rank >= colorOrder.length) seg.label = t('usageDashboard.othersLegend');
       } else {

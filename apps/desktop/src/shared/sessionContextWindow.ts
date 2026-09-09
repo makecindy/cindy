@@ -18,6 +18,7 @@ export function resolveVerifiedContextWindow(
   agent: AgentKind,
   providerId: string | null | undefined,
   modelId: string,
+  workingBudget?: number | null,
 ): number | null {
   const candidates: CatalogModel[] = [];
   for (const provider of catalog.providers) {
@@ -30,7 +31,15 @@ export function resolveVerifiedContextWindow(
   if (candidates.length !== 1) return null;
   const only = candidates[0];
   if (only.contextWindowVerified !== true) return null;
-  return Number.isFinite(only.contextWindow) && only.contextWindow > 0 ? only.contextWindow : null;
+  if (!Number.isFinite(only.contextWindow) || only.contextWindow <= 0) return null;
+  // The working default may be deliberately below the verified route maximum.
+  // An explicit budget can raise that default, but cannot raise physical capacity.
+  const maximum = typeof only.contextWindowMax === 'number' &&
+    Number.isFinite(only.contextWindowMax) && only.contextWindowMax > 0
+    ? only.contextWindowMax : only.contextWindow;
+  const budget = typeof workingBudget === 'number' && Number.isFinite(workingBudget) && workingBudget > 0
+    ? workingBudget : only.contextWindow;
+  return Math.min(budget, maximum);
 }
 
 /** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */

@@ -1,6 +1,6 @@
 import type { Schedule } from '@cindy/maker-scheduler';
 
-import { buildPreRunHook } from './scheduleFormLogic';
+import { buildPreRunHook, scheduleAgentKindForForm } from './scheduleFormLogic';
 import type { ScheduleFormState } from '../hooks/useScheduleForm';
 import { stripTrailingPathSeparators } from '../../../../shared/pathText';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
@@ -15,6 +15,8 @@ export interface ProjectScheduleConfig {
   manual?: boolean;
   intervalMs?: number;
   agentKind?: 'claude-code' | 'codex' | 'pi' | 'grok-build';
+  /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   model?: string;
   /** 显式来源(供应商)id;省略 = 使用该 Agent 的原生默认来源。 */
   providerId?: string;
@@ -58,6 +60,7 @@ export function scheduleToProjectConfig(
     manual: schedule.manual,
     intervalMs: schedule.intervalMs,
     agentKind: schedule.agentKind,
+    modelAgentKind: schedule.modelAgentKind,
     model: schedule.model,
     providerId: schedule.providerId || undefined,
     effort: schedule.effort,
@@ -86,7 +89,8 @@ export function formToProjectConfig(
     recurring: form.recurring,
     manual: form.manual,
     intervalMs: form.intervalMs,
-    agentKind: form.agentKind,
+    agentKind: scheduleAgentKindForForm(form),
+    modelAgentKind: form.model.trim() ? form.modelAgentKind : undefined,
     model: form.model.trim() || undefined,
     providerId: form.providerId.trim() || undefined,
     effort: form.effort || undefined,

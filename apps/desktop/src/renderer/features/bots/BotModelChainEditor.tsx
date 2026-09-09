@@ -76,7 +76,7 @@ export function BotModelChainEditor({
   };
   const move = (index: number, delta: -1 | 1) => {
     const target = index + delta;
-    if (target < 0 || target >= routes.length) return;
+    if (index < 1 || target < 1 || target >= routes.length) return;
     const next = [...routes];
     [next[index], next[target]] = [next[target]!, next[index]!];
     onChange(next);
@@ -149,43 +149,46 @@ export function BotModelChainEditor({
         </summary>
         {expanded ? (
           <div className="space-y-2 pt-2">
-            {routes.map((route, index) => (
-              <div key={index} className="flex min-w-0 items-center gap-2">
-                <span className="w-4 shrink-0 text-11">{index + 1}</span>
-                {picker(route, index)}
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    type="button"
-                    disabled={disabled || index === 0}
-                    onClick={() => move(index, -1)}
-                    aria-label={t('bots.modelChain.moveUp')}
-                    className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
-                  >
-                    <ArrowUp size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    disabled={disabled || index === routes.length - 1}
-                    onClick={() => move(index, 1)}
-                    aria-label={t('bots.modelChain.moveDown')}
-                    className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
-                  >
-                    <ArrowDown size={14} />
-                  </button>
-                  {routes.length > 1 ? (
+            {routes.slice(1).map((route, fallbackIndex) => {
+              const index = fallbackIndex + 1;
+              return (
+                <div key={index} className="flex min-w-0 items-center gap-2">
+                  <span className="w-4 shrink-0 text-11">{index}</span>
+                  {picker(route, index)}
+                  <div className="flex shrink-0 gap-1">
                     <button
                       type="button"
-                      disabled={disabled}
-                      onClick={() => onChange(routes.filter((_, at) => at !== index))}
-                      aria-label={t('bots.modelChain.remove')}
-                      className="rounded-lg p-1.5 hover:bg-[var(--danger-bg-soft)] hover:text-[var(--text-danger)]"
+                      disabled={disabled || index === 1}
+                      onClick={() => move(index, -1)}
+                      aria-label={t('bots.modelChain.moveUp')}
+                      className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
                     >
-                      <Trash2 size={14} />
+                      <ArrowUp size={14} />
                     </button>
-                  ) : null}
+                    <button
+                      type="button"
+                      disabled={disabled || index === routes.length - 1}
+                      onClick={() => move(index, 1)}
+                      aria-label={t('bots.modelChain.moveDown')}
+                      className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
+                    >
+                      <ArrowDown size={14} />
+                    </button>
+                    {routes.length > 1 ? (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => onChange(routes.filter((_, at) => at !== index))}
+                        aria-label={t('bots.modelChain.remove')}
+                        className="rounded-lg p-1.5 hover:bg-[var(--danger-bg-soft)] hover:text-[var(--text-danger)]"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <button
               type="button"
               disabled={disabled || routes.length >= BOT_MODEL_CHAIN_MAX || visibleVendors.length === 0}

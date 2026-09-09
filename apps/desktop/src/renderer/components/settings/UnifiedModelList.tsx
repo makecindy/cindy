@@ -731,11 +731,11 @@ export function UnifiedModelList({
 
   /** 开启只选推荐引擎；关闭清掉该行所有引擎的显示。写入始终使用各引擎真实模型 ID。 */
   const toggleRow = useCallback(
-    (row: UnionModelRow) => {
+    async (row: UnionModelRow) => {
       if (!selectionAvailable) return;
       const next = !rowAnyEnabled(provider.id, row);
       const targets = modelVisibilityTargets(provider, row, next);
-      if (setModelVisibilities(provider.id, targets, next) === false) {
+      if (await setModelVisibilities(provider.id, targets, next) === false) {
         showVisibilityWriteFailure();
       }
     },
@@ -744,7 +744,7 @@ export function UnifiedModelList({
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
   // models skips already selected rows, preserving every explicit advanced harness choice.
-  const handleBulk = (action: 'show' | 'hide' | 'reset') => {
+  const handleBulk = async (action: 'show' | 'hide' | 'reset') => {
     if (!selectionAvailable) return;
     const next = action === 'show';
     const rows = next
@@ -753,8 +753,8 @@ export function UnifiedModelList({
     const targets = rows.flatMap((row) => modelVisibilityTargets(provider, row, next));
     const success =
       action === 'reset'
-        ? resetModelVisibilities(provider.id, targets)
-        : setModelVisibilities(provider.id, targets, next);
+        ? await resetModelVisibilities(provider.id, targets)
+        : await setModelVisibilities(provider.id, targets, next);
     if (!success) showVisibilityWriteFailure();
   };
 

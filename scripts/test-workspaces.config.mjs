@@ -80,6 +80,7 @@ const desktopGitIntegrationInclude = [
 ];
 const makerCoreIntegrationInclude = [
   'src/agents/codex/*.integration.test.ts',
+  'src/agents/claude-code/__tests__/*.integration.test.ts',
   'src/agents/pi/__tests__/*.integration.test.ts',
 ];
 const makerPiManagerIntegrationInclude = [
@@ -261,7 +262,7 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Pi/Codex integration tests spawn real agent binaries and local protocol servers.',
+          reason: 'Claude/Pi/Codex integration tests spawn real agent binaries and local protocol servers.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--pool=forks', '--maxWorkers=1'),

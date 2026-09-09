@@ -25,7 +25,7 @@ describe('Input', () => {
     expect(cls).toContain('text-[var(--text-primary)]');
     expect(cls).toContain('placeholder:text-[var(--text-placeholder)]');
     expect(cls).toContain('border-[var(--border-default)]');
-    expect(cls).toContain('focus:ring-[var(--focus-ring)]');
+    expect(cls).toContain('focus:ring-[var(--focus-ring-soft)]');
     expect(cls).not.toContain('settings-input-placeholder');
   });
 
@@ -38,7 +38,7 @@ describe('Input', () => {
     expect(inputClass()).toContain('h-[40px]');
   });
 
-  it('keeps ivory as an explicit registered-debt variant', () => {
+  it('keeps ivory as an explicit white-panel variant', () => {
     render(<Input value="" onChange={() => {}} surface="ivory" />);
     expect(inputClass()).toContain('bg-[var(--settings-input-bg)]');
     expect(inputClass()).not.toContain('bg-[var(--surface-elevated)]');

@@ -631,6 +631,22 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex').map((model) => model.id)).toEqual(['chat-model']);
   });
 
+  it('keeps three declared working defaults separate from maximum capacity', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([{
+      id: 'context-policy-test', name: 'Context policy',
+      agents: ['claude-code', 'codex', 'pi'], contextWindow: 1_000_000,
+      efforts: [], perAgent: {
+        'claude-code': { contextWindow: 350_000 },
+        codex: { contextWindow: 450_000 },
+        pi: { contextWindow: 550_000, wireProtocol: 'openai-responses' },
+      },
+    }]);
+    for (const [agent, window] of [['claude-code', 350_000], ['codex', 450_000], ['pi', 550_000]] as const) {
+      expect(xdModels(agent)[0]).toMatchObject({ contextWindow: window, contextWindowMax: 1_000_000 });
+    }
+  });
+
   it('perAgent Fast 差异保留，GPT 工作窗口采用保守默认', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

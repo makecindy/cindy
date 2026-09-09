@@ -391,7 +391,9 @@ describe('browser-redirect / error / completed', () => {
     const ring = screen.getByRole('status');
     expect(ring.style.top).toBe('158px');
     expect(ring.style.width).toBe('64px');
-    expect(screen.getByText('login.cancel')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'login.cancel' }).dataset.testid).toBe(
+      'login-back-button',
+    );
   });
 
   it('error 全屏态:暂时无法登录 + 重试钮 + 错误码文案位(380)', () => {

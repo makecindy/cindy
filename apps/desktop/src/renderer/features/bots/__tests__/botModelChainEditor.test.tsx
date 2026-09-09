@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { modelSelectorProps, roster } = vi.hoisted(() => ({
@@ -12,6 +12,7 @@ vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => roster 
 
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: {
+    modelId: string;
     onEffortChange: (effort: string) => void;
     onFastModeChange: (enabled: boolean) => void;
     onUnifiedSelect: (selection: {
@@ -25,7 +26,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
   }) => {
     modelSelectorProps(props);
     return (
-      <>
+      <div data-testid={`model-selector-${props.modelId}`}>
         <button onClick={() => props.onEffortChange("high")}>set-high-effort</button>
         <button onClick={() => props.onFastModeChange(true)}>enable-fast-mode</button>
         <button
@@ -57,7 +58,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         >
           choose-official-claude-model
         </button>
-      </>
+      </div>
     );
   },
 }));
@@ -88,6 +89,71 @@ afterEach(() => {
 });
 
 describe('BotModelChainEditor', () => {
+  const primary = { harness: 'codex' as const, model: 'primary-model', providerId: 'openai', effort: 'medium', fastMode: false };
+  const firstFallback = { ...primary, model: 'first-fallback' };
+  const secondFallback = { ...primary, model: 'second-fallback' };
+
+  function expand(container: HTMLElement) {
+    const details = container.querySelector('details')!;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    return within(details);
+  }
+
+  it('lists and numbers only fallbacks, and edits the second route without replacing the primary', () => {
+    const onChange = vi.fn();
+    const view = render(<BotModelChainEditor value={[primary, firstFallback]} onChange={onChange} />);
+    const fallbacks = expand(view.container);
+
+    expect(screen.getAllByTestId('model-selector-primary-model')).toHaveLength(1);
+    expect(fallbacks.queryByTestId('model-selector-primary-model')).toBeNull();
+    expect(fallbacks.getByText('bots.modelChain.options:{"count":1}')).toBeTruthy();
+    expect(fallbacks.getByText('1')).toBeTruthy();
+    expect(fallbacks.queryByText('2')).toBeNull();
+    const picker = within(fallbacks.getByTestId('model-selector-first-fallback'));
+    fireEvent.click(picker.getByText('choose-official-codex-model'));
+    expect(onChange).toHaveBeenLastCalledWith([primary, {
+      harness: 'codex', providerId: 'openai', model: 'gpt-5.6-sol', effort: 'medium', fastMode: true,
+    }]);
+    fireEvent.click(picker.getByText('set-high-effort'));
+    expect(onChange).toHaveBeenLastCalledWith([primary, { ...firstFallback, effort: 'high' }]);
+    fireEvent.click(picker.getByText('enable-fast-mode'));
+    expect(onChange).toHaveBeenLastCalledWith([primary, { ...firstFallback, fastMode: true }]);
+  });
+
+  it('reorders and removes fallbacks while keeping the primary in place', () => {
+    const onChange = vi.fn();
+    const view = render(<BotModelChainEditor value={[primary, firstFallback, secondFallback]} onChange={onChange} />);
+    const fallbacks = expand(view.container);
+    const up = fallbacks.getAllByLabelText('bots.modelChain.moveUp');
+    expect((up[0] as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(up[0]!);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(up[1]!);
+    expect(onChange).toHaveBeenLastCalledWith([primary, secondFallback, firstFallback]);
+    fireEvent.click(fallbacks.getAllByLabelText('bots.modelChain.moveDown')[0]!);
+    expect(onChange).toHaveBeenLastCalledWith([primary, secondFallback, firstFallback]);
+    fireEvent.click(fallbacks.getAllByLabelText('bots.modelChain.remove')[0]!);
+    expect(onChange).toHaveBeenLastCalledWith([primary, secondFallback]);
+
+    view.rerender(<BotModelChainEditor value={[primary, secondFallback]} onChange={onChange} />);
+    expect(fallbacks.getByText('1')).toBeTruthy();
+    expect(fallbacks.queryByText('2')).toBeNull();
+    fireEvent.click(fallbacks.getByLabelText('bots.modelChain.remove'));
+    expect(onChange).toHaveBeenLastCalledWith([primary]);
+  });
+
+  it('shows no fallback rows for a primary-only chain and appends the first fallback', () => {
+    const onChange = vi.fn();
+    const view = render(<BotModelChainEditor value={[primary]} onChange={onChange} />);
+    const fallbacks = expand(view.container);
+    expect(fallbacks.getByText('bots.modelChain.options:{"count":0}')).toBeTruthy();
+    expect(fallbacks.queryByTestId('model-selector-primary-model')).toBeNull();
+    expect(fallbacks.queryByLabelText('bots.modelChain.remove')).toBeNull();
+    fireEvent.click(fallbacks.getByText('bots.modelChain.add'));
+    expect(onChange).toHaveBeenLastCalledWith([primary, expect.objectContaining({ model: 'default-model' })]);
+  });
+
   it('uses the standard configurable picker for the current harness', () => {
     render(
       <BotModelChainEditor

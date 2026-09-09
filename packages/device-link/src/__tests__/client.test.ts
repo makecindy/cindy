@@ -16,6 +16,7 @@ import {
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
+  MAX_TRANSPORT_CHUNK_BYTES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
   TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
   TRANSPORT_RETRY_PASS_BUDGET,
@@ -26,6 +27,8 @@ import {
 } from '../transport.js';
 import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
+import { resolveDesktopIceServers, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from '../remoteDesktopIceConfig.js';
+import { REMOTE_DESKTOP_ICE_SERVERS } from '../remoteDesktopIce.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -116,6 +119,27 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('network change probes', () => {
+  it.each([true, false])('only post-hint valid inbound activity avoids the redundant probe (valid=%s)', async (valid) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      await vi.advanceTimersByTimeAsync(1);
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(100);
+      socket.push(valid ? { v: PROTOCOL_VERSION, kind: 'pong' } : { v: 999, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(400);
+      expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(valid ? 0 : 1);
+      if (valid) {
+        // A later hint may mean another AP, even if its Wi-Fi label is unchanged.
+        h.client.notifyNetworkChanged();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(1);
+      }
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
   it.each([true, false])('debounces hints and retains only a responsive socket (responsive=%s)', async (responsive) => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
@@ -378,6 +402,80 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  it('keeps a second controller link and in-flight invoke alive while shared host ICE config times out', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'desktop');
+    const a = makeRelayClient(relay, 'viewer-a');
+    const b = makeRelayClient(relay, 'viewer-b');
+    const pump = () => relay.settle(() => vi.advanceTimersByTimeAsync(1));
+    let finishConfig!: (value: unknown) => void;
+    const config = new Promise<unknown>((resolve) => { finishConfig = resolve; });
+    const fetchConfig = vi.fn(() => config);
+    const received: Envelope[] = [];
+    const off = host.onFrame((env) => {
+      if (!env.src || !env.id) return;
+      if (env.kind === 'link-open') {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      } else if (env.kind === 'invoke') {
+        received.push(env);
+        if (env.src === 'viewer-a') {
+          const { src, id } = env;
+          void resolveDesktopIceServers(fetchConfig).then((iceServers) => {
+            host.sendInvokeResult(src, id, { ok: true, result: iceServers });
+          });
+        }
+      }
+    });
+    try {
+      for (const client of [host, a, b]) client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      await pump();
+      for (const client of [a, b]) {
+        const opening = client.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+        await pump();
+        await opening;
+      }
+      const healthy = b.invoke('desktop', { channel: 'maker:test-inflight', args: [] }, 10_000);
+      let healthySettled = false;
+      void healthy.then(() => { healthySettled = true; });
+      await pump();
+      const stalled = a.invoke('desktop', { channel: 'maker:remote-desktop:video', args: [] }, 10_000);
+      await pump();
+      expect(fetchConfig).toHaveBeenCalledTimes(1);
+      expect(healthySettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS);
+      await pump();
+      await expect(stalled).resolves.toEqual({
+        ok: true, result: REMOTE_DESKTOP_ICE_SERVERS.map((server) => ({ urls: [server.urls] })),
+      });
+      expect(healthySettled).toBe(false);
+      const request = received.find((env) => env.src === 'viewer-b')!;
+      host.sendInvokeResult(request.src!, request.id!, { ok: true, result: 'preserved' });
+      await pump();
+      await expect(healthy).resolves.toEqual({ ok: true, result: 'preserved' });
+      const beforeLate = relay.deliveredTo.get('viewer-a')!.length;
+      finishConfig({ iceServers: [], expiresAt: null });
+      await pump();
+      expect(relay.deliveredTo.get('viewer-a')).toHaveLength(beforeLate);
+      expect(received.filter((env) => env.src === 'viewer-b')).toHaveLength(1);
+      expect(host.isLinkReady('viewer-b')).toBe(true);
+      expect(b.isLinkReady('desktop')).toBe(true);
+      expect(host.getStatus()).toBe('online');
+      expect(sockets).toHaveBeenCalledTimes(3);
+      for (const socket of sockets.mock.results) {
+        expect(socket.value.closed).toBeNull();
+        expect(socket.value.terminated).toBe(false);
+      }
+    } finally {
+      off();
+      for (const client of [host, a, b]) client.stop();
+      sockets.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('gives hello/ack a full window after a slow but successful socket upgrade', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { handshakeTimeoutMs: 15, pingIntervalMs: 60_000 } });
@@ -469,6 +567,22 @@ describe('DeviceLinkClient', () => {
     expect(h.client.getStatus()).toBe('online');
     expect(statuses).toEqual(['connecting', 'online']);
     h.client.stop();
+  });
+
+  it('correlates request timeout logs without recording request arguments', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 }, logger: { warn, debug: vi.fn(), info: vi.fn(), error: vi.fn() } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const request = h.client.invoke('dev-b', { channel: 'maker:list-active', args: ['PRIVATE_ARGUMENT'] }, 1_000);
+      const assertion = expect(request).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      const sent = h.current().sent.find((env) => env.kind === 'invoke')!;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`request=${sent.id?.slice(0, 8)}`));
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE_ARGUMENT');
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it('invoke:同 id invoke-result 配对 resolve', async () => {
@@ -668,6 +782,65 @@ describe('DeviceLinkClient', () => {
       payload: { payload: { ackSeq: 16 } },
     });
     h.client.stop();
+  });
+
+  it('distinguishes receive capacity from declared size and recovers the missing head in order', async () => {
+    const warn = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 }, logger: { warn, debug: vi.fn(), info: vi.fn(), error: vi.fn() } });
+    h.client.start();
+    await tick(); h.current().ack();
+    try {
+      const streamId = 'capacity-stream';
+      await establishInboundReliableLink(h, streamId);
+      const received: number[] = [];
+      h.client.onFrame((env) => {
+        if (env.kind === 'push') received.push((env.payload as { payload: { seq: number } }).payload.seq);
+      });
+      const frames = (seq: number, large = false) => encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', id: `request-${seq}`,
+        payload: { channel: 'maker:event', payload: { seq, text: large ? 'PRIVATE'.repeat(30_000) : '' } },
+      }, streamId, seq);
+      for (let seq = 2; seq <= 17; seq++) h.current().push(frames(seq)[0]);
+      h.current().push(frames(18, true)[0]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('reason=receive_capacity_exceeded'));
+      const line = warn.mock.calls.at(-1)?.[0];
+      expect(line).toContain('src=dev-b stream=capacity seq=18 request=request-');
+      expect(line).toContain('next=1');
+      expect(line).not.toContain('PRIVATE');
+      expect(() => h.current().push({ ...frames(18, true)[0], id: 123 } as unknown as Envelope)).not.toThrow();
+      expect(warn.mock.calls.at(-1)?.[0]).toContain('request=none');
+      expect(received).toEqual([]);
+      // The full cache still makes room for the missing segmented head.
+      for (const frame of frames(1, true)) h.current().push(frame);
+      await tick();
+      for (const frame of frames(17)) h.current().push(frame);
+      for (const frame of frames(18, true)) h.current().push(frame);
+      await tick();
+      expect(received).toEqual(Array.from({ length: 18 }, (_, i) => i + 1));
+    } finally { h.client.stop(); }
+  });
+
+  it.each(['chunk_too_large', 'declared_size_exceeded'])('reports the actual malformed fragment reason: %s', async (reason) => {
+    const warn = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 }, logger: { warn, debug: vi.fn(), info: vi.fn(), error: vi.fn() } });
+    h.client.start(); await tick(); h.current().ack();
+    try {
+      const streamId = 'invalid-fragments';
+      await establishInboundReliableLink(h, streamId);
+      const received = vi.fn(); h.client.onFrame(received);
+      const frame = (index: number, bytes: number): Envelope => ({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', id: 'fragment-id',
+        payload: { __cindyDeviceLinkTransport: { version: 1, streamId, seq: 1,
+          segment: { index, total: 2, totalBytes: MAX_TRANSPORT_CHUNK_BYTES + 1 } }, data: 'x'.repeat(bytes) },
+      });
+      if (reason === 'declared_size_exceeded') {
+        h.current().push(frame(0, MAX_TRANSPORT_CHUNK_BYTES));
+        h.current().push(frame(1, 2));
+      } else h.current().push(frame(0, MAX_TRANSPORT_CHUNK_BYTES + 1));
+      await tick();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`reason=${reason}`));
+      expect(received).not.toHaveBeenCalled();
+    } finally { h.client.stop(); }
   });
 
   it('乱序分片只在缺口补齐后按 seq 交付，重复帧不重复触发 host', async () => {
@@ -1209,7 +1382,7 @@ describe('DeviceLinkClient', () => {
       expect(firstSocket.closed).toBeNull();
       expect(h.sockets).toHaveLength(1);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(
-        /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
+        /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push request=\S+ attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
       ));
 
       // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放

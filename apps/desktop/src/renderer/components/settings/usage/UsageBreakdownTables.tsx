@@ -1,7 +1,7 @@
 /**
  * UsageBreakdownTables — 用量历史页的两张明细表: 按 agent / harness 与按模型。
  *
- * 两张表共用同一套表格样式与 rank 配色 (usagePalette), 因此放在同一个文件里,
+ * 两张表共用同一套表格样式与分类配色 (usageHistoryColors), 因此放在同一个文件里,
  * 避免为了共享 5 行 class 再拆一层。
  *
  * 缓存命中率与 shared/turnUsageDetails.ts 的逐轮口径一致 (见 usageHistoryStats.cacheHitRate),
@@ -14,19 +14,12 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
-import { usageRankColor, usageRankOf } from '@/components/new-chat/usagePalette';
-import { type AgentTokenRow, type ModelTokenRow, type UsageAgentKind } from './usageHistoryStats';
-import { usageHistoryModelColor } from './usageHistoryColors';
+import { usageRankOf } from '@/components/new-chat/usagePalette';
+import { type AgentTokenRow, type ModelTokenRow } from './usageHistoryStats';
+import { usageHistoryAgentColor, usageHistoryModelColor } from './usageHistoryColors';
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
-/** 与 usagePalette 的 rank 阶梯对齐: Agent 标记保持独立的中性配色，不借用模型类别色。 */
-const AGENT_RANK: Record<UsageAgentKind, number> = {
-  'claude-code': 0,
-  codex: 1,
-  pi: 2,
-  'grok-build': 3,
-};
 
 const TH_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-12 font-medium text-[var(--text-secondary)]';
@@ -41,13 +34,7 @@ const TD_CLASS =
  */
 const FIRST_COL_CLASS = 'w-full max-w-0 pl-0';
 
-function Swatch({
-  rank,
-  color = usageRankColor(rank),
-}: {
-  rank: number;
-  color?: string;
-}): React.JSX.Element {
+function Swatch({ color }: { color: string }): React.JSX.Element {
   return <span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />;
 }
 
@@ -55,15 +42,7 @@ function HitRateCell({ value }: { value: number | null }): React.JSX.Element {
   return <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>;
 }
 
-function ShareCell({
-  share,
-  rank,
-  color = usageRankColor(rank),
-}: {
-  share: number;
-  rank: number;
-  color?: string;
-}): React.JSX.Element {
+function ShareCell({ share, color }: { share: number; color: string }): React.JSX.Element {
   return (
     <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
       <span
@@ -91,8 +70,7 @@ export function UsageAgentTable({
 
   return (
     <div>
-      {/* 占比条: 让"谁占大头"在读表之前就成立。
-          8px + 2px 圆角 = DESIGN.md §5 登记的「非交互 ≤8px 状态微格」豁免档。 */}
+      {/* 占比条与各行共用 harness 身份色；尺寸与既有布局一致。 */}
       <div className="mb-3 flex h-2 overflow-hidden rounded-[2px]">
         {rows.map((row) => (
           <div
@@ -102,7 +80,7 @@ export function UsageAgentTable({
             })}`}
             style={{
               width: `${total > 0 ? (row.tokens / total) * 100 : 0}%`,
-              backgroundColor: usageRankColor(AGENT_RANK[row.agentKind] ?? 3),
+              backgroundColor: usageHistoryAgentColor(row.agentKind),
             }}
           />
         ))}
@@ -128,19 +106,19 @@ export function UsageAgentTable({
         </thead>
         <tbody>
           {rows.map((row) => {
-            const rank = AGENT_RANK[row.agentKind] ?? 3;
+            const color = usageHistoryAgentColor(row.agentKind);
             return (
               <tr key={row.agentKind}>
                 <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                   <span className="flex min-w-0 items-center gap-2">
-                    <Swatch rank={rank} />
+                    <Swatch color={color} />
                     <span className="truncate font-medium" title={row.agentKind}>
                       {row.agentKind}
                     </span>
                   </span>
                 </td>
                 <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
-                <ShareCell share={row.share} rank={rank} />
+                <ShareCell share={row.share} color={color} />
                 {!hideToday ? (
                   <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
                     {row.todayTokens > 0 ? formatCompactTokens(row.todayTokens) : UNKNOWN_VALUE}
@@ -196,7 +174,7 @@ export function UsageModelTable({
             <tr key={row.key}>
               <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                 <span className="flex min-w-0 items-center gap-2">
-                  <Swatch rank={rank} color={color} />
+                  <Swatch color={color} />
                   <span className="truncate font-medium" title={row.model}>
                     {formatModelShort(row.model)}
                   </span>
@@ -207,7 +185,7 @@ export function UsageModelTable({
                 </span>
               </td>
               <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
-              <ShareCell share={row.share} rank={rank} color={color} />
+              <ShareCell share={row.share} color={color} />
               <td className={TD_CLASS}>{formatCompactTokens(row.inputTokens)}</td>
               <td className={TD_CLASS}>{formatCompactTokens(row.outputTokens)}</td>
               <td className={TD_CLASS}>{formatCompactTokens(row.cacheReadTokens)}</td>

@@ -22,6 +22,7 @@ import {
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
+import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { applyCodexPlanSnapshotOnDone, markCodexPlanTurnFailed } from '@cindy/maker-shared/message-render';
 import {
   buildSessionMessagePreviewIndex,
@@ -2449,11 +2450,10 @@ function applyRemoteTextEvent(
   const isFinal = data?.isFinal === true;
   // Legacy hosts already send isFullText on final events. Keep their existing
   // reconciliation semantics; only the new in-flight snapshot replaces text.
-  const isFullText = data?.isFullText === true && !isFinal;
-  const snapshotCreatedAt = isFullText && !isFinal && typeof data?.createdAt === 'string'
-    && Number.isFinite(Date.parse(data.createdAt))
-    ? new Date(data.createdAt).toISOString()
-    : undefined;
+  const snapshot = readRemoteTextSnapshot(event);
+  if (snapshot?.truncated) return false;
+  const isFullText = snapshot !== undefined;
+  const snapshotCreatedAt = snapshot?.createdAt;
   if (!text) return false;
 
   const authoritativeDeviceId = authoritativeSessionDeviceId(sessionId);
@@ -2599,9 +2599,7 @@ function applyRemoteTextEvent(
   }
 
   const currentText = existing ? contentToPreview(existing.content) : '';
-  const nextText = isFullText && !hasDeviceLinkTruncationMarker(event) && !hasDeviceLinkTruncationMarker(data)
-    ? text
-    : isFinal
+  const nextText = isFinal
     ? (finalTextWasTruncated && existing
       ? currentText
       : existing && currentText
@@ -2611,7 +2609,8 @@ function applyRemoteTextEvent(
             ? currentText
             : `${currentText}${text}`)
         : text)
-    : currentText + text;
+    : reconcileRemoteText(currentText, text, { snapshot: isFullText, durable: matchedExistingIsPersisted,
+      truncated: hasDeviceLinkTruncationMarker(event) || hasDeviceLinkTruncationMarker(data) });
   const nextMeta = isFinal
     ? (isRecord(event.agentMeta)
       ? { ...(existing?.agentMeta ?? {}), ...event.agentMeta }
@@ -2695,10 +2694,7 @@ function applyRemoteTextEvent(
 }
 
 function isRemoteTextDeltaEvent(event: Record<string, unknown>): boolean {
-  if (readString(event, 'type') !== 'text') return false;
-  const data = isRecord(event.data) ? event.data : null;
-  return typeof data?.text === 'string' && data.text.length > 0 && data.isFinal === false
-    && data.isFullText !== true;
+  return isRemoteTextDelta(event);
 }
 
 function enqueueRemoteTextDelta(
@@ -4127,17 +4123,17 @@ export const remoteSessionStore = {
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
-    if (channel === SESSION_SYNC_CHANNEL && isRecord(payload)) {
-      const sessionId = readString(payload, 'sessionId');
-      if (!sessionId) return;
-      if (isRecord(payload.event)) this.applyRemotePush(deviceId, 'maker:event', payload);
-      if (payload.resyncRequired === true) {
-        sessionMessageSyncMarkers.delete(sessionId);
-        forgetWindowCoverage(sessionId);
-        pendingRefreshSessions.add(sessionId);
-        bumpMessageVersion(sessionId);
-        emit();
-      }
+    if (channel === SESSION_SYNC_CHANNEL) {
+      consumeRemoteSessionSync(payload, {
+        applyEvent: (event) => this.applyRemotePush(deviceId, 'maker:event', event),
+        invalidateHistory: (sessionId) => {
+          sessionMessageSyncMarkers.delete(sessionId);
+          forgetWindowCoverage(sessionId);
+          pendingRefreshSessions.add(sessionId);
+          bumpMessageVersion(sessionId);
+          emit();
+        },
+      });
       return;
     }
     if (channel === SESSION_ACTIVITY_CHANNEL) {

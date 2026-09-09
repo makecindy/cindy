@@ -35,6 +35,13 @@ const deviceLinkSettings = vi.hoisted(() => ({
     revokedControllers: [] as string[],
   },
 }));
+const diagnosticLog = vi.hoisted(() => ({
+  debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), trace: vi.fn(), fatal: vi.fn(),
+}));
+vi.mock('../../logger', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../logger')>(),
+  createLogger: () => diagnosticLog,
+}));
 
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
@@ -214,6 +221,7 @@ function makeDispatchTestClient(relay: DispatchTestRelay, deviceId: string): Dev
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.clearAllMocks();
   deviceLinkSettings.value = {
     remoteControlEnabled: true,
     revokedControllers: [],
@@ -374,7 +382,7 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
         client as never,
         'ctrl-a',
         'req-1',
-        { ok: true, result: 1 },
+        { ok: true, result: 'PRIVATE_RESPONSE_BODY' },
         'local-db:sessions:list',
       ),
     ).toBe(true);
@@ -391,6 +399,10 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
     flushRemoteInvokeResultOutboxOnReconnect();
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+    expect(diagnosticLog.warn).toHaveBeenCalledWith(expect.stringContaining('request=req-1 queueMessages=1'));
+    expect(diagnosticLog.info).toHaveBeenCalledWith(expect.stringContaining('request=req-1 queuedMs=20000'));
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain('PRIVATE_RESPONSE_BODY');
+    expect(JSON.stringify(diagnosticLog.info.mock.calls)).not.toContain('PRIVATE_RESPONSE_BODY');
   });
 });
 

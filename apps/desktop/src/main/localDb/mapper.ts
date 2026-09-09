@@ -667,6 +667,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     manual: !!row.manual,
     intervalMs: row.intervalMs ?? undefined,
     agentKind: row.agentKind as SchedulerAgentKind,
+    modelAgentKind: row.modelAgentKind ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
     effort: row.effort ?? undefined,
@@ -718,6 +719,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     manual: s.manual,
     intervalMs: s.intervalMs ?? null,
     agentKind: s.agentKind,
+    modelAgentKind: s.modelAgentKind ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
@@ -772,6 +774,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   // intervalMs：undefined → null（清空，回退到 cron 槽位语义）；数字原样写
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
   if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
+  if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;

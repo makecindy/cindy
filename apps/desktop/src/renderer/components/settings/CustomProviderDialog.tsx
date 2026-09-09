@@ -15,7 +15,15 @@
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useId,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Check,
@@ -32,6 +40,9 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
+import { Tip } from '@/components/ui/tooltip';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   DropdownMenu,
@@ -557,6 +568,34 @@ export function CustomProviderDialog({
     );
   })();
 
+  const formId = useId();
+  const fieldId = (key: string) => `${formId}-${key}`;
+  const [fieldError, setFieldError] = useState<{ id: string; message: string } | null>(null);
+  const errorFor = (key: string) =>
+    fieldError?.id === fieldId(key) ? fieldError.message : undefined;
+  // UI identity is held outside business drafts and never enters saved configuration.
+  const rowIds = useRef(new WeakMap<object, number>());
+  const nextRowId = useRef(0);
+  const rowId = useCallback((row: object) => {
+    let key = rowIds.current.get(row);
+    if (key === undefined) {
+      key = nextRowId.current++;
+      rowIds.current.set(row, key);
+    }
+    return key;
+  }, []);
+  const reportFieldError = useCallback(
+    (key: string, message: string) => {
+      setFieldError({ id: `${formId}-${key}`, message });
+    },
+    [formId],
+  );
+  useLayoutEffect(() => {
+    if (!fieldError) return;
+    const input = document.getElementById(fieldError.id);
+    input?.focus();
+    input?.scrollIntoView?.({ block: 'nearest' });
+  }, [fieldError]);
   const [name, setName] = useState(initial?.name ?? '');
   const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
   const [activeTab, setActiveTab] = useState<DialogAgentKind>(
@@ -860,11 +899,21 @@ export function CustomProviderDialog({
         // A temporary route/model change can be reverted before Save; marker
         // ownership is decided once below from the persisted baseline and the
         // final serialized values.
+        for (const agent of AGENTS) {
+          for (const kind of ['models', 'headers'] as const) {
+            const before = prev[agent][kind];
+            const after = normalized[agent][kind];
+            if (before.length !== after.length) continue;
+            after.forEach((row, index) => {
+              if (!rowIds.current.has(row)) rowIds.current.set(row, rowId(before[index]));
+            });
+          }
+        }
         rtRef.current = normalized;
         return normalized;
       });
     },
-    [],
+    [rowId],
   );
 
   // 编辑态回填的已存明文 key(按 agent);测试连接据此判定凭证材料是否被改动。
@@ -1014,6 +1063,10 @@ export function CustomProviderDialog({
       setWindowDrafts({});
       const first = configuredPresetAgents(p).find(isDialogAgentKind);
       if (first) setActiveTab(first);
+      // 预设整体替换名称/鉴权/全部 runtime:任何既有字段错误的指向(字段值、
+      // 行结构、tab)都已失效。程序化赋值不触发输入的 change,须在此显式清除
+      // (review P1)。
+      setFieldError(null);
     },
     [i18n.language, setRtSynced],
   );
@@ -1703,10 +1756,11 @@ export function CustomProviderDialog({
   }, [picker, patch]);
 
   const handleSave = useCallback(async () => {
-    // 校验失败统一走 toast(规则 7:不在弹窗里塞会撑高/缩回的内联错误条,避免布局抖动闪烁)。
+    if (savingRef.current) return;
+    setFieldError(null);
     const trimmedName = name.trim();
     if (!trimmedName) {
-      toast.error(t('settings.providers.custom.errors.nameRequired'));
+      reportFieldError('name', t('settings.providers.custom.errors.nameRequired'));
       return;
     }
     if (editing && authMode === 'apiKey' && !keyHydrationReady) {
@@ -1749,7 +1803,10 @@ export function CustomProviderDialog({
       // OAuth 鉴权模式下模型列表(含窗口输入)折在「高级」里;不展开的话用户看不到
       // 需要修的这个输入框,报错后无从下手,只能瞎猜着点开(review P1)。
       if (authMode === 'oauth' && !showAdvanced) setShowAdvanced(true);
-      toast.error(t('settings.providers.custom.errors.contextWindowInvalid'));
+      reportFieldError(
+        `${draftAgent}:model:${rowId(row)}:context`,
+        t('settings.providers.custom.errors.contextWindowInvalid'),
+      );
       return;
     }
     const runtimes: CustomProviderConfig['runtimes'] = {};
@@ -1761,17 +1818,17 @@ export function CustomProviderDialog({
         const u = new URL(rf.baseUrl.trim());
         if (u.protocol !== 'http:' && u.protocol !== 'https:') {
           setActiveTab(a);
-          toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
+          reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
           return;
         }
       } catch {
         setActiveTab(a);
-        toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
+        reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
         return;
       }
       if (!areProviderRequestUrlsAllowed(authMode, rf.baseUrl, rf.modelsUrl)) {
         setActiveTab(a);
-        toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
+        reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
         return;
       }
       const models = rf.models
@@ -1801,13 +1858,21 @@ export function CustomProviderDialog({
       const requestPath = a === 'pi' ? '' : rf.requestPath.trim();
       if (requestPath && !isProviderRequestPath(requestPath)) {
         setActiveTab(a);
-        toast.error(t('settings.providers.custom.errors.requestPathInvalid'));
+        reportFieldError(
+          `${a}:requestPath`,
+          t('settings.providers.custom.errors.requestPathInvalid'),
+        );
         return;
       }
       // OAuth 形态模型可留空——授权成功后自动发现并持久化（与内置订阅统一）。
       if (models.length === 0 && authMode !== 'oauth') {
         setActiveTab(a);
-        toast.error(t('settings.providers.custom.errors.modelRequired'));
+        reportFieldError(
+          rf.models.length
+            ? `${a}:model:${rowId(rf.models[0])}:${rf.models[0].id.trim() ? 'name' : 'id'}`
+            : `${a}:add-model`,
+          t('settings.providers.custom.errors.modelRequired'),
+        );
         return;
       }
       const headers: Record<string, string> = {};
@@ -1859,7 +1924,10 @@ export function CustomProviderDialog({
       }
     }
     if (Object.keys(runtimes).length === 0) {
-      toast.error(t('settings.providers.custom.errors.runtimeRequired'));
+      reportFieldError(
+        `${activeTab}:baseUrl`,
+        t('settings.providers.custom.errors.runtimeRequired'),
+      );
       return;
     }
     // OAuth 形态：四个必填字段 + 端点必须 https（与 main 侧校验同规则，先在表单挡住）。
@@ -1888,7 +1956,17 @@ export function CustomProviderDialog({
         !httpsOk(flowUrl) ||
         !httpsOk(tokenUrl)
       ) {
-        toast.error(t('settings.providers.custom.errors.oauthInvalid'));
+        const invalid =
+          !flowUrl || !httpsOk(flowUrl)
+            ? oauthFlow === 'device-code'
+              ? 'deviceAuthorizationUrl'
+              : 'authorizeUrl'
+            : !tokenUrl || !httpsOk(tokenUrl)
+              ? 'tokenUrl'
+              : !clientId
+                ? 'clientId'
+                : 'scopes';
+        reportFieldError(`oauth:${invalid}`, t('settings.providers.custom.errors.oauthInvalid'));
         return;
       }
       auth = {
@@ -1942,12 +2020,14 @@ export function CustomProviderDialog({
       ...(auth ? { auth } : {}),
       runtimes,
     };
+    savingRef.current = true;
     setSaving(true);
     try {
       if (editing) {
         const result = await updateCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
+          savingRef.current = false;
           setSaving(false);
           return;
         }
@@ -1956,6 +2036,7 @@ export function CustomProviderDialog({
         const result = await createCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
+          savingRef.current = false;
           setSaving(false);
           return;
         }
@@ -1967,10 +2048,15 @@ export function CustomProviderDialog({
     } catch (e) {
       const ipc = extractIpcError(e);
       toast.error(ipc?.message ?? t('settings.providers.custom.toast.saveFailed'));
+      savingRef.current = false;
       setSaving(false); // 仅失败时复位:弹窗仍在,允许改后重试
     }
   }, [
     name,
+    activeTab,
+    rowId,
+    reportFieldError,
+    keyHydrationReady,
     rt,
     authMode,
     oauthFlow,
@@ -1991,6 +2077,7 @@ export function CustomProviderDialog({
     async (policy: CodexImageGenerationRestartPolicy) => {
       const pending = imageGenerationReloadConfirmationRef.current;
       if (!pending || savingRef.current) return;
+      savingRef.current = true;
       setSaving(true);
       try {
         const options = {
@@ -2004,6 +2091,7 @@ export function CustomProviderDialog({
           const next = { ...pending, busyCount: result.busyCount };
           imageGenerationReloadConfirmationRef.current = next;
           setImageGenerationReloadConfirmation(next);
+          savingRef.current = false;
           setSaving(false);
           return;
         }
@@ -2018,6 +2106,7 @@ export function CustomProviderDialog({
       } catch (error) {
         const ipc = extractIpcError(error);
         toast.error(ipc?.message ?? t('settings.providers.custom.toast.saveFailed'));
+        savingRef.current = false;
         setSaving(false);
       }
     },
@@ -2134,8 +2223,31 @@ export function CustomProviderDialog({
         aria-modal="true"
         aria-labelledby="custom-provider-dialog-title"
         tabIndex={-1}
+        onChangeCapture={(event) => {
+          // 错误清除粒度(review P2/P1 双向约束):
+          // - 报错字段自身被编辑时清除——改其它字段(名称/密钥/别的 runtime 行)
+          //   不得清掉当前字段的错误提示与 aria-invalid,保留到再次保存重新校验;
+          // - 例外是列表级错误(`${agent}:add-model`,模型列表为空,提示挂在
+          //   「添加模型」按钮旁、不依赖任何行存在):用户点该按钮新增行并填写
+          //   内容时,change 目标是新行输入而非按钮本身,这条填空路径正是对
+          //   列表错误的修正,须同步清除,否则提示要滞留到再次保存。
+          const target = event.target;
+          if (!(target instanceof HTMLElement) || !fieldError) return;
+          if (target.id === fieldError.id) {
+            setFieldError(null);
+            return;
+          }
+          const key = fieldError.id.slice(formId.length + 1);
+          const agent = key.slice(0, key.indexOf(':'));
+          if (
+            key === `${agent}:add-model` &&
+            target.id.startsWith(`${formId}-${agent}:model:`)
+          ) {
+            setFieldError(null);
+          }
+        }}
         className={cn(
-          'flex max-h-[88vh] w-[600px] flex-col rounded-[16px] outline-none',
+          'flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col rounded-xl outline-none',
           'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
           'shadow-[var(--shadow-menu)]',
           '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
@@ -2157,7 +2269,7 @@ export function CustomProviderDialog({
         </div>
 
         {/* Body (scrollable) */}
-        <div className="flex flex-col gap-[18px] overflow-y-auto px-6 pb-2 pt-1">
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1">
           <p className="text-13 leading-[1.55] text-[var(--settings-section-desc)]">
             {t('settings.providers.custom.dialog.desc')}
           </p>
@@ -2189,13 +2301,23 @@ export function CustomProviderDialog({
 
           {/* 显示名称（共享） */}
           <div className="flex flex-col gap-[7px]">
-            <FieldLabel>{t('settings.providers.custom.fields.name')}</FieldLabel>
-            <SettingsTextInput
-              surface="ivory"
-              value={name}
-              onChange={setName}
-              placeholder={t('settings.providers.custom.fields.namePlaceholder')}
-            />
+            <FormField
+              id={fieldId('name')}
+              label={t('settings.providers.custom.fields.name')}
+              error={errorFor('name')}
+              required
+              reserveFeedback
+            >
+              {(control) => (
+                <SettingsTextInput
+                  {...control}
+                  surface="ivory"
+                  value={name}
+                  onChange={setName}
+                  placeholder={t('settings.providers.custom.fields.namePlaceholder')}
+                />
+              )}
+            </FormField>
           </div>
 
           {/* 鉴权形态：API 密钥 / OAuth / 无鉴权。 */}
@@ -2205,6 +2327,7 @@ export function CustomProviderDialog({
               {(['apiKey', 'oauth', 'none'] as const).map((m) => (
                 <button
                   key={m}
+                  aria-pressed={authMode === m}
                   type="button"
                   onClick={() => {
                     changeAuthMode(m);
@@ -2235,6 +2358,7 @@ export function CustomProviderDialog({
                     {(['authorization-code', 'device-code'] as const).map((flow) => (
                       <button
                         key={flow}
+                        aria-pressed={oauthFlow === flow}
                         type="button"
                         onClick={() => setOauthFlow(flow)}
                         className={cn(
@@ -2268,15 +2392,23 @@ export function CustomProviderDialog({
                   ] as const
                 ).map(([field, ph]) => (
                   <div key={field} className="flex flex-col gap-[7px]">
-                    <FieldLabel>
-                      {t(`settings.providers.custom.authMode.fields.${field}`)}
-                    </FieldLabel>
-                    <SettingsTextInput
-                      surface="ivory"
-                      value={oauthFields[field]}
-                      onChange={(v) => setOauthFields((prev) => ({ ...prev, [field]: v }))}
-                      placeholder={ph}
-                    />
+                    <FormField
+                      id={fieldId(`oauth:${field}`)}
+                      label={t(`settings.providers.custom.authMode.fields.${field}`)}
+                      error={errorFor(`oauth:${field}`)}
+                      required
+                      reserveFeedback
+                    >
+                      {(control) => (
+                        <SettingsTextInput
+                          {...control}
+                          surface="ivory"
+                          value={oauthFields[field]}
+                          onChange={(v) => setOauthFields((prev) => ({ ...prev, [field]: v }))}
+                          placeholder={ph}
+                        />
+                      )}
+                    </FormField>
                   </div>
                 ))}
               </>
@@ -2357,6 +2489,7 @@ export function CustomProviderDialog({
                   {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
                     <button
                       key={option.value}
+                      aria-pressed={f.wireProtocol === option.value}
                       type="button"
                       onClick={() => changeWireProtocol(activeTab, option.value)}
                       className={cn(
@@ -2403,78 +2536,102 @@ export function CustomProviderDialog({
 
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
-              <div className="flex items-center justify-between gap-3">
-                <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
-                <button
-                  ref={runtimeFillTriggerRef}
-                  type="button"
-                  onClick={openRuntimeFill}
-                  className="shrink-0 rounded-full px-1 py-0.5 text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  {t('settings.providers.custom.runtimeFill.action')}
-                </button>
-              </div>
-              <SettingsTextInput
-                surface="ivory"
-                value={f.baseUrl}
-                onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
-                placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
-              />
+              <FormField
+                id={fieldId(`${activeTab}:baseUrl`)}
+                label={t('settings.providers.custom.fields.baseUrl')}
+                error={errorFor(`${activeTab}:baseUrl`)}
+                labelAction={
+                  <button
+                    ref={runtimeFillTriggerRef}
+                    type="button"
+                    onClick={openRuntimeFill}
+                    className="shrink-0 rounded-full px-1 py-0.5 text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  >
+                    {t('settings.providers.custom.runtimeFill.action')}
+                  </button>
+                }
+                reserveFeedback
+              >
+                {(control) => (
+                  <SettingsTextInput
+                    {...control}
+                    surface="ivory"
+                    value={f.baseUrl}
+                    onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
+                    placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
+                  />
+                )}
+              </FormField>
             </div>
 
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
             {activeTab !== 'pi' && (
               <div className="flex flex-col gap-[7px]">
-                <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
-                <SettingsTextInput
-                  surface="ivory"
-                  value={f.requestPath}
-                  onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                  placeholder={
-                    activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
-                      ? '/v1/messages'
-                      : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
-                  }
-                />
-                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t('settings.providers.custom.fields.requestPathHelp')}
-                </span>
+                <FormField
+                  id={fieldId(`${activeTab}:requestPath`)}
+                  label={t('settings.providers.custom.fields.requestPath')}
+                  error={errorFor(`${activeTab}:requestPath`)}
+                  hint={t('settings.providers.custom.fields.requestPathHelp')}
+                  reserveFeedback
+                >
+                  {(control) => (
+                    <SettingsTextInput
+                      {...control}
+                      surface="ivory"
+                      value={f.requestPath}
+                      onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
+                      placeholder={
+                        activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
+                          ? '/v1/messages'
+                          : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
+                      }
+                    />
+                  )}
+                </FormField>
               </div>
             )}
 
             {/* API 密钥（OAuth 形态隐藏——鉴权走 Runner 的 Bearer，不收集 key） */}
             {authMode === 'apiKey' && (
               <div className="flex flex-col gap-[7px]">
-                <div className="flex items-center gap-2">
-                  <FieldLabel>{t('settings.providers.custom.fields.apiKey')}</FieldLabel>
-                  {/* 已存密钥时给明确徽标 —— 编辑态字段是遮罩空白(留空=不改),无徽标会让人误以为没存上。 */}
-                  {activeKeyCanRemainSaved && f.apiKey.trim() && (
-                    <span
-                      className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
-                      style={{
-                        backgroundColor: 'var(--settings-btn-secondary-bg)',
-                        color: 'var(--settings-section-desc)',
+                <FormField
+                  id={fieldId(`${activeTab}:apiKey`)}
+                  label={t('settings.providers.custom.fields.apiKey')}
+                  error={errorFor(`${activeTab}:apiKey`)}
+                  hint={t('settings.providers.custom.fields.apiKeyHelp')}
+                  labelAction={
+                    activeKeyCanRemainSaved &&
+                    f.apiKey.trim() && (
+                      <span
+                        className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
+                        style={{
+                          backgroundColor: 'var(--settings-btn-secondary-bg)',
+                          color: 'var(--settings-section-desc)',
+                        }}
+                      >
+                        <Check size={11} strokeWidth={2.5} />
+                        {t('settings.providers.custom.fields.apiKeySaved')}
+                      </span>
+                    )
+                  }
+                >
+                  {(control) => (
+                    <SettingsTextInput
+                      {...control}
+                      key={activeTab}
+                      surface="ivory"
+                      value={f.apiKey}
+                      onChange={(v) => {
+                        keyEditRevisionRef.current[activeTab] += 1;
+                        patch(activeTab, (x) => ({ ...x, apiKey: v }));
                       }}
-                    >
-                      <Check size={11} strokeWidth={2.5} />
-                      {t('settings.providers.custom.fields.apiKeySaved')}
-                    </span>
+                      placeholder={keyPlaceholder}
+                      mono
+                      secret
+                      secretTipContentClassName="z-[10001]"
+                    />
                   )}
-                </div>
-                <SettingsTextInput
-                  surface="ivory"
-                  value={f.apiKey}
-                  onChange={(v) => {
-                    keyEditRevisionRef.current[activeTab] += 1;
-                    patch(activeTab, (x) => ({ ...x, apiKey: v }));
-                  }}
-                  placeholder={keyPlaceholder}
-                  mono
-                  secret
-                />
-                <span className="text-12 text-[var(--text-tertiary)]">
-                  {t('settings.providers.custom.fields.apiKeyHelp')}
-                </span>
+                </FormField>
               </div>
             )}
 
@@ -2505,46 +2662,65 @@ export function CustomProviderDialog({
                 <div className="flex flex-col gap-2">
                   <FieldLabel>{t('settings.providers.custom.fields.models')}</FieldLabel>
                   {f.models.map((m, i) => (
-                    <div key={i} className="flex flex-wrap items-center gap-2">
-                      <div className="flex-1">
-                        <SettingsTextInput
-                          inputRef={
-                            focusedAgent === activeTab && focusModelId === m.id
-                              ? focusedContextWindowRef
-                              : undefined
-                          }
-                          ariaLabel={
-                            focusedAgent === activeTab && focusModelId === m.id
-                              ? t('settings.providers.custom.fields.modelContextWindowTitle')
-                              : undefined
-                          }
-                          surface="ivory"
-                          value={m.id}
-                          onChange={(v) =>
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              models: x.models.map((y, j) =>
-                                j === i ? replaceCustomProviderModelId(y, v) : y,
-                              ),
-                            }))
-                          }
-                          placeholder={t('settings.providers.custom.fields.modelIdPlaceholder')}
-                        />
+                    <div
+                      key={`${activeTab}:${rowId(m)}`}
+                      className="flex flex-wrap items-start gap-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <FormField
+                          id={fieldId(`${activeTab}:model:${rowId(m)}:id`)}
+                          label={`${t('settings.providers.custom.fields.modelIdPlaceholder')} ${i + 1}`}
+                          error={errorFor(`${activeTab}:model:${rowId(m)}:id`)}
+                          hideLabel
+                          reserveFeedback
+                        >
+                          {(control) => (
+                            <SettingsTextInput
+                              {...control}
+                              surface="ivory"
+                              value={m.id}
+                              onChange={(v) =>
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  models: x.models.map((y, j) =>
+                                    j === i ? replaceCustomProviderModelId(y, v) : y,
+                                  ),
+                                }))
+                              }
+                              placeholder={t('settings.providers.custom.fields.modelIdPlaceholder')}
+                            />
+                          )}
+                        </FormField>
                       </div>
-                      <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={m.name}
-                          onChange={(v) =>
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              models: x.models.map((y, j) =>
-                                j === i ? { ...y, name: v, nameExplicit: true } : y,
-                              ),
-                            }))
-                          }
-                          placeholder={t('settings.providers.custom.fields.modelNamePlaceholder')}
-                        />
+                      <div className="min-w-0 flex-1">
+                        <FormField
+                          id={fieldId(`${activeTab}:model:${rowId(m)}:name`)}
+                          label={`${t('settings.providers.custom.fields.modelNamePlaceholder')} ${i + 1}`}
+                          error={errorFor(`${activeTab}:model:${rowId(m)}:name`)}
+                          reserveFeedback
+                          hideLabel
+                        >
+                          {(control) => (
+                            <SettingsTextInput
+                              {...control}
+                              surface="ivory"
+                              value={m.name}
+                              // nameExplicit: main #4108 的模型资料优先级语义——用户显式
+                              // 改名后不被动态发现覆盖;与 DS-6 的 FormField 结构合并保留。
+                              onChange={(v) =>
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  models: x.models.map((y, j) =>
+                                    j === i ? { ...y, name: v, nameExplicit: true } : y,
+                                  ),
+                                }))
+                              }
+                              placeholder={t(
+                                'settings.providers.custom.fields.modelNamePlaceholder',
+                              )}
+                            />
+                          )}
+                        </FormField>
                       </div>
                       <div
                         className="w-28 shrink-0"
@@ -2554,108 +2730,144 @@ export function CustomProviderDialog({
                             只接受正整数(允许逗号/下划线/空格做分隔),其它字符直接
                             拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
                             262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={
-                            windowDrafts[`${activeTab}:${i}`] ??
-                            (m.contextWindow != null ? String(m.contextWindow) : '')
-                          }
-                          onBlur={() =>
-                            setWindowDrafts((drafts) => {
-                              const draftText = drafts[`${activeTab}:${i}`];
-                              // 只清可提交草稿(显示回落到已提交规范值);不可提交
-                              // 草稿必须保留——输入框失焦先于保存按钮 click,清掉
-                              // 会让保存守卫看不到非法文本、静默存旧值(review P1)。
-                              if (draftText === undefined || !isCommittableWindowText(draftText)) {
-                                return drafts;
+                        <FormField
+                          id={fieldId(`${activeTab}:model:${rowId(m)}:context`)}
+                          label={t('settings.providers.custom.fields.modelContextWindowTitle')}
+                          error={errorFor(`${activeTab}:model:${rowId(m)}:context`)}
+                          hideLabel
+                          reserveFeedback
+                        >
+                          {(control) => (
+                            <SettingsTextInput
+                              {...control}
+                              inputRef={
+                                focusedAgent === activeTab && focusModelId === m.id
+                                  ? focusedContextWindowRef
+                                  : undefined
                               }
-                              const rest = { ...drafts };
-                              delete rest[`${activeTab}:${i}`];
-                              return rest;
-                            })
-                          }
-                          onChange={(v) => {
-                            setWindowDrafts((drafts) => ({ ...drafts, [`${activeTab}:${i}`]: v }));
+                              surface="ivory"
+                              value={
+                                windowDrafts[`${activeTab}:${i}`] ??
+                                (m.contextWindow != null ? String(m.contextWindow) : '')
+                              }
+                              onBlur={() =>
+                                setWindowDrafts((drafts) => {
+                                  const draftText = drafts[`${activeTab}:${i}`];
+                                  // 只清可提交草稿(显示回落到已提交规范值);不可提交
+                                  // 草稿必须保留——输入框失焦先于保存按钮 click,清掉
+                                  // 会让保存守卫看不到非法文本、静默存旧值(review P1)。
+                                  if (
+                                    draftText === undefined ||
+                                    !isCommittableWindowText(draftText)
+                                  ) {
+                                    return drafts;
+                                  }
+                                  const rest = { ...drafts };
+                                  delete rest[`${activeTab}:${i}`];
+                                  return rest;
+                                })
+                              }
+                              onChange={(v) => {
+                                setWindowDrafts((drafts) => ({
+                                  ...drafts,
+                                  [`${activeTab}:${i}`]: v,
+                                }));
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  models: x.models.map((y, j) => {
+                                    if (j !== i) return y;
+                                    const trimmed = v.trim();
+                                    if (trimmed === '') {
+                                      const next = { ...y };
+                                      delete next.contextWindow;
+                                      return next;
+                                    }
+                                    // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
+                                    // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
+                                    // 留在草稿,不提交、不剥字符拼数字(review P1 ×2)。
+                                    if (!isCommittableWindowText(trimmed)) return y;
+                                    return {
+                                      ...y,
+                                      contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
+                                    };
+                                  }),
+                                }));
+                              }}
+                              placeholder={t(
+                                'settings.providers.custom.fields.modelContextWindowPlaceholder',
+                              )}
+                              trailing={(() => {
+                                const label = compactContextWindowLabel(
+                                  windowDrafts[`${activeTab}:${i}`],
+                                  m.contextWindow,
+                                );
+                                return label ? (
+                                  <span
+                                    aria-hidden="true"
+                                    className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-11 font-medium tabular-nums text-[var(--text-tertiary)]"
+                                  >
+                                    {label}
+                                  </span>
+                                ) : null;
+                              })()}
+                            />
+                          )}
+                        </FormField>
+                      </div>
+                      <Tip
+                        text={t('settings.providers.custom.fields.removeRow')}
+                        contentClassName="z-[10001]"
+                      >
+                        <Button
+                          variant="secondary"
+                          size="lg"
+                          type="button"
+                          onClick={() => {
+                            setChildLayer((layer) => {
+                              if (layer?.kind !== 'model-protocol' || layer.agent !== activeTab) {
+                                return layer;
+                              }
+                              if (layer.index === i) return null;
+                              return layer.index > i ? { ...layer, index: layer.index - 1 } : layer;
+                            });
+                            // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
+                            // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
+                            // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
+                            // (review P1)。
+                            setWindowDrafts((drafts) => {
+                              const next: Record<string, string> = {};
+                              for (const [key, text] of Object.entries(drafts)) {
+                                const sep = key.lastIndexOf(':');
+                                const agent = key.slice(0, sep);
+                                const idx = Number(key.slice(sep + 1));
+                                if (agent !== activeTab) {
+                                  next[key] = text;
+                                } else if (idx < i) {
+                                  next[key] = text;
+                                } else if (idx > i) {
+                                  next[`${agent}:${idx - 1}`] = text;
+                                }
+                              }
+                              return next;
+                            });
+                            const next = f.models[i + 1] ?? f.models[i - 1];
+                            const nextId = fieldId(
+                              next
+                                ? `${activeTab}:model:${rowId(next)}:id`
+                                : `${activeTab}:add-model`,
+                            );
                             patch(activeTab, (x) => ({
                               ...x,
-                              models: x.models.map((y, j) => {
-                                if (j !== i) return y;
-                                const trimmed = v.trim();
-                                if (trimmed === '') {
-                                  const next = { ...y };
-                                  delete next.contextWindow;
-                                  return next;
-                                }
-                                // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
-                                // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
-                                // 留在草稿,不提交、不剥字符拼数字(review P1 ×2)。
-                                if (!isCommittableWindowText(trimmed)) return y;
-                                return {
-                                  ...y,
-                                  contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
-                                };
-                              }),
+                              models: x.models.filter((_, j) => j !== i),
                             }));
+                            requestAnimationFrame(() => document.getElementById(nextId)?.focus());
                           }}
-                          placeholder={t(
-                            'settings.providers.custom.fields.modelContextWindowPlaceholder',
-                          )}
-                          trailing={(() => {
-                            const label = compactContextWindowLabel(
-                              windowDrafts[`${activeTab}:${i}`],
-                              m.contextWindow,
-                            );
-                            return label ? (
-                              <span
-                                aria-hidden="true"
-                                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-11 font-medium tabular-nums text-[var(--text-tertiary)]"
-                              >
-                                {label}
-                              </span>
-                            ) : null;
-                          })()}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setChildLayer((layer) => {
-                            if (layer?.kind !== 'model-protocol' || layer.agent !== activeTab) {
-                              return layer;
-                            }
-                            if (layer.index === i) return null;
-                            return layer.index > i ? { ...layer, index: layer.index - 1 } : layer;
-                          });
-                          // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
-                          // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
-                          // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
-                          // (review P1)。
-                          setWindowDrafts((drafts) => {
-                            const next: Record<string, string> = {};
-                            for (const [key, text] of Object.entries(drafts)) {
-                              const sep = key.lastIndexOf(':');
-                              const agent = key.slice(0, sep);
-                              const idx = Number(key.slice(sep + 1));
-                              if (agent !== activeTab) {
-                                next[key] = text;
-                              } else if (idx < i) {
-                                next[key] = text;
-                              } else if (idx > i) {
-                                next[`${agent}:${idx - 1}`] = text;
-                              }
-                            }
-                            return next;
-                          });
-                          patch(activeTab, (x) => ({
-                            ...x,
-                            models: x.models.filter((_, j) => j !== i),
-                          }));
-                        }}
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-                        aria-label={t('settings.providers.custom.fields.removeRow')}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                          className="w-9 px-0"
+                          aria-label={t('settings.providers.custom.fields.removeRow')}
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </Tip>
                       {activeTab === 'pi' && (
                         <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2787,19 +2999,32 @@ export function CustomProviderDialog({
                     </div>
                   ))}
                   <button
-                    type="button"
-                    onClick={() =>
-                      // 追加在末尾不移动既有行号,别行草稿无需动(review P1)。
-                      patch(activeTab, (x) => ({
-                        ...x,
-                        models: [...x.models, { id: '', name: '' }],
-                      }))
+                    id={fieldId(`${activeTab}:add-model`)}
+                    aria-describedby={
+                      errorFor(`${activeTab}:add-model`)
+                        ? fieldId(`${activeTab}:add-model-error`)
+                        : undefined
                     }
+                    type="button"
+                    onClick={() => {
+                      // Appending preserves all existing business draft indices.
+                      const row = { id: '', name: '' };
+                      const nextId = fieldId(`${activeTab}:model:${rowId(row)}:id`);
+                      patch(activeTab, (x) => ({ ...x, models: [...x.models, row] }));
+                      requestAnimationFrame(() => document.getElementById(nextId)?.focus());
+                    }}
                     className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
                   >
                     <Plus size={14} className="text-[var(--settings-section-desc)]" />
                     {t('settings.providers.custom.fields.addModel')}
                   </button>
+                  <p
+                    id={fieldId(`${activeTab}:add-model-error`)}
+                    aria-live="polite"
+                    className="text-12 text-[var(--error-fg)]"
+                  >
+                    {errorFor(`${activeTab}:add-model`)}
+                  </p>
                 </div>
 
                 {/* 请求头（可选） */}
@@ -2821,58 +3046,100 @@ export function CustomProviderDialog({
                     )}
                   </div>
                   {f.headers.map((h, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={h.name}
-                          onChange={(v) =>
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              headers: x.headers.map((y, j) =>
-                                j === i ? { ...y, name: v, nameExplicit: true } : y,
-                              ),
-                            }))
-                          }
-                          placeholder={t('settings.providers.custom.fields.headerNamePlaceholder')}
-                        />
+                    <div key={`${activeTab}:${rowId(h)}`} className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <FormField
+                          id={fieldId(`${activeTab}:header:${rowId(h)}:name`)}
+                          label={`${t('settings.providers.custom.fields.headerNamePlaceholder')} ${i + 1}`}
+                          error={errorFor(`${activeTab}:header:${rowId(h)}:name`)}
+                          hideLabel
+                        >
+                          {(control) => (
+                            <SettingsTextInput
+                              {...control}
+                              surface="ivory"
+                              value={h.name}
+                              // nameExplicit 同上:与 main #4108 的显式命名语义合并保留。
+                              onChange={(v) =>
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  headers: x.headers.map((y, j) =>
+                                    j === i ? { ...y, name: v, nameExplicit: true } : y,
+                                  ),
+                                }))
+                              }
+                              placeholder={t(
+                                'settings.providers.custom.fields.headerNamePlaceholder',
+                              )}
+                            />
+                          )}
+                        </FormField>
                       </div>
-                      <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={h.value}
-                          onChange={(v) =>
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              headers: x.headers.map((y, j) => (j === i ? { ...y, value: v } : y)),
-                            }))
-                          }
-                          placeholder={t('settings.providers.custom.fields.headerValuePlaceholder')}
-                        />
+                      <div className="min-w-0 flex-1">
+                        <FormField
+                          id={fieldId(`${activeTab}:header:${rowId(h)}:value`)}
+                          label={`${t('settings.providers.custom.fields.headerValuePlaceholder')} ${i + 1}`}
+                          error={errorFor(`${activeTab}:header:${rowId(h)}:value`)}
+                          hideLabel
+                        >
+                          {(control) => (
+                            <SettingsTextInput
+                              {...control}
+                              surface="ivory"
+                              value={h.value}
+                              onChange={(v) =>
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  headers: x.headers.map((y, j) =>
+                                    j === i ? { ...y, value: v } : y,
+                                  ),
+                                }))
+                              }
+                              placeholder={t(
+                                'settings.providers.custom.fields.headerValuePlaceholder',
+                              )}
+                            />
+                          )}
+                        </FormField>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          patch(activeTab, (x) => ({
-                            ...x,
-                            headers: x.headers.filter((_, j) => j !== i),
-                          }))
-                        }
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-                        aria-label={t('settings.providers.custom.fields.removeRow')}
+                      <Tip
+                        text={t('settings.providers.custom.fields.removeRow')}
+                        contentClassName="z-[10001]"
                       >
-                        <Trash2 size={16} />
-                      </button>
+                        <Button
+                          variant="secondary"
+                          size="lg"
+                          type="button"
+                          onClick={() => {
+                            const next = f.headers[i + 1] ?? f.headers[i - 1];
+                            const nextId = fieldId(
+                              next
+                                ? `${activeTab}:header:${rowId(next)}:name`
+                                : `${activeTab}:add-header`,
+                            );
+                            patch(activeTab, (x) => ({
+                              ...x,
+                              headers: x.headers.filter((_, j) => j !== i),
+                            }));
+                            requestAnimationFrame(() => document.getElementById(nextId)?.focus());
+                          }}
+                          className="w-9 px-0"
+                          aria-label={t('settings.providers.custom.fields.removeRow')}
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </Tip>
                     </div>
                   ))}
                   <button
                     type="button"
-                    onClick={() =>
-                      patch(activeTab, (x) => ({
-                        ...x,
-                        headers: [...x.headers, { name: '', value: '' }],
-                      }))
-                    }
+                    id={fieldId(`${activeTab}:add-header`)}
+                    onClick={() => {
+                      const row = { name: '', value: '' };
+                      const nextId = fieldId(`${activeTab}:header:${rowId(row)}:name`);
+                      patch(activeTab, (x) => ({ ...x, headers: [...x.headers, row] }));
+                      requestAnimationFrame(() => document.getElementById(nextId)?.focus());
+                    }}
                     className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
                   >
                     <Plus size={14} className="text-[var(--settings-section-desc)]" />
@@ -3080,35 +3347,29 @@ export function CustomProviderDialog({
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2.5 px-6 py-4">
-          <button
-            ref={saveButtonRef}
-            type="button"
-            onClick={onClose}
-            className={cn(
-              'inline-flex items-center justify-center rounded-full border bg-transparent px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
-              'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            )}
+        {/* Footer: only the save request owns this busy state. */}
+        <div className="flex shrink-0 flex-wrap justify-end gap-2.5 p-4">
+          <Button
+            variant="secondary"
+            size="lg"
+            disabled={saving}
+            onClick={() => {
+              if (!savingRef.current) onClose();
+            }}
+            className="bg-transparent border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
           >
             {t('settings.providers.custom.cancel')}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            ref={saveButtonRef}
+            variant="primary"
+            size="lg"
+            loading={saving}
             onClick={() => void handleSave()}
-            disabled={saving}
-            className={cn(
-              // min-w + 绝对定位 spinner：saving 切换时按钮宽度恒定,不再撑大挤动取消按钮(规则 7)。
-              'relative inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
-              'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              saving && 'cursor-not-allowed opacity-50',
-            )}
+            className="min-w-[96px] border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]"
           >
-            {saving && <Spinner size={14} className="absolute left-[18px]" />}
             {t('settings.providers.custom.save')}
-          </button>
+          </Button>
         </div>
       </div>
 

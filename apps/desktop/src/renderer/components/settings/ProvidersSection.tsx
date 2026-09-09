@@ -2446,6 +2446,7 @@ export function ProvidersSection() {
   const handleDelete = useCallback(
     async (p: ProviderView) => {
       const ok = await confirm({
+        presentation: 'standard',
         title: t('settings.providers.custom.deleteConfirm.title'),
         description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
         confirmText: t('settings.providers.custom.deleteConfirm.confirm'),

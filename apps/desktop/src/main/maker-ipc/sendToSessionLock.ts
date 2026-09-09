@@ -154,3 +154,13 @@ export function trackSendToSessionLockRun<T>(
   installSendToSessionLockEntry(sessionId, run as Promise<unknown>, getStage);
   return run;
 }
+
+// A request may start before rewind and acquire the write lock only afterwards.
+// Capture this generation before async preparation and validate inside the lock.
+const rewindGenerations = new Map<string, number>();
+export function getSessionRewindGeneration(sessionId: string): number {
+  return rewindGenerations.get(sessionId) ?? 0;
+}
+export function advanceSessionRewindGeneration(sessionId: string): void {
+  rewindGenerations.set(sessionId, getSessionRewindGeneration(sessionId) + 1);
+}

@@ -33,8 +33,13 @@ const runtime = vi.hoisted(() => ({
   userData: '',
   listOutput: '',
   listOutcomes: [] as Array<{ stdout?: string; stderr?: string; exitCode: number }>,
+  version: '0.83.0',
+  fallbackCalls: [] as boolean[],
+  fallbackError: undefined as Error | undefined,
   stderr: '',
-  exitCode: 0,
+  stdout: '',
+  exitCode: 0 as number | null,
+  spawnError: null as Error | null,
   spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined>; detached?: boolean }>,
   holdMutationCommand: false,
   pendingClose: null as null | ((code: number) => void),
@@ -62,6 +67,14 @@ vi.mock('electron', () => ({
 
 vi.mock('../../agent-binaries/index.js', () => ({
   getReadyBinaryPath: () => '/mock/0.83.0/pi',
+  updateReadyPiBinary: async (force: boolean) => {
+    runtime.fallbackCalls.push(force);
+    if (runtime.fallbackError) throw runtime.fallbackError;
+    runtime.version = '0.85.1';
+    runtime.exitCode = 0;
+    runtime.stderr = '';
+    return '0.85.1';
+  },
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -129,6 +142,10 @@ vi.mock('node:child_process', () => ({
       for (const handler of closeHandlers) handler(code);
     };
     queueMicrotask(() => {
+      if (runtime.spawnError) {
+        for (const handler of errorHandlers) handler(runtime.spawnError);
+        return;
+      }
       if (runtime.holdMutationCommand && !args.includes('list')) return;
       runtime.spawnHook?.(args);
       const outcome = args.includes('list') ? runtime.listOutcomes.shift() : undefined;
@@ -137,11 +154,15 @@ vi.mock('node:child_process', () => ({
           handler(Buffer.from(outcome?.stdout ?? runtime.listOutput));
         }
       }
+      if (args.includes('--version')) for (const handler of stdoutHandlers) handler(Buffer.from(runtime.version));
+      if (!args.includes('list') && !args.includes('--version') && runtime.stdout) {
+        for (const handler of stdoutHandlers) handler(Buffer.from(runtime.stdout));
+      }
       const stderr = outcome?.stderr ?? runtime.stderr;
       if (stderr) {
         for (const handler of stderrHandlers) handler(Buffer.from(stderr));
       }
-      for (const handler of closeHandlers) handler(outcome?.exitCode ?? runtime.exitCode);
+      for (const handler of closeHandlers) handler((outcome?.exitCode ?? runtime.exitCode) as number);
     });
     return child;
   },
@@ -207,7 +228,12 @@ beforeEach(async () => {
   runtime.listOutput = '';
   runtime.listOutcomes = [];
   runtime.stderr = '';
+  runtime.stdout = '';
+  runtime.spawnError = null;
   runtime.exitCode = 0;
+  runtime.fallbackCalls = [];
+  runtime.fallbackError = undefined;
+  runtime.version = '0.83.0';
   runtime.spawns = [];
   runtime.holdMutationCommand = false;
   runtime.pendingClose = null;
@@ -389,6 +415,10 @@ describe('Pi package executable-code boundary', () => {
         expect(settled).toBe(false);
         processRuntime.pendingTreeSettled?.();
         await expect(pending).rejects.toThrow(/timed out/);
+        const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+        await pending.catch((error) => {
+          expect(piPackageCommandDiagnostic(error)).toMatchObject({ outcome: 'timed-out', exitCode: 1 });
+        });
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
       }
@@ -418,6 +448,8 @@ describe('Pi package executable-code boundary', () => {
         await pending;
         expect(failure).toBeInstanceOf(Error);
         expect((failure as Error).message).toMatch(/timed out/);
+        const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+        expect(piPackageCommandDiagnostic(failure)).toMatchObject({ outcome: 'timed-out', exitCode: null });
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
       }
@@ -805,6 +837,30 @@ describe('Pi package executable-code boundary', () => {
     expect(generationDuringBuild).toBe(1);
     expect(runtimeFence).toHaveBeenNthCalledWith(1, 'commit');
     expect(runtimeFence).toHaveBeenNthCalledWith(2, 'post-build');
+  });
+
+  it.each(['install', 'update'] as const)('keeps native %s successful if post-build reinspection throws', async (action) => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'generated-extension', version: '1.0.0',
+      pi: { extensions: ['./build/extension.js'] },
+      scripts: { build: 'node build.mjs' },
+    }));
+    runtime.spawnHook = (args) => {
+      if (args.at(-2) !== 'run' || args.at(-1) !== 'build') return;
+      const entry = path.join(root, 'build', 'extension.js');
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, 'export default function setup() {}');
+      runtime.listOutcomes.push({ stderr: 'post-build analysis token=fake-analysis-secret', exitCode: 1 });
+    };
+    const store = await import('../pi-package-store.js');
+    await expect(mutateAuthorized(store, { action, source })).resolves.toMatchObject({
+      changed: true, projectionUnavailable: true,
+      diagnostics: [{ phase: 'cindy-analysis', outcome: 'failed', exitCode: 1 }],
+    });
+    expect(runtime.spawns.some(({ args }) => args.at(-1) === 'build')).toBe(true);
+    expect(await store.resolveManagedPiNativePackagePaths()).toContain(root);
+    expect(JSON.stringify(loggerRuntime.warn.mock.calls)).not.toContain('fake-analysis-secret');
   });
 
   it.each([
@@ -4348,6 +4404,33 @@ describe('Pi package executable-code boundary', () => {
     expect(warnings).not.toContain('token=private');
   });
 
+  it.each([
+    [1, 'failed'], [null, 'unknown'],
+  ] as const)('retains native exit %s without treating missing status as success', async (exitCode, outcome) => {
+    const store = await import('../pi-package-store.js');
+    const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+    runtime.exitCode = exitCode;
+    runtime.stderr = 'npm warning token=fake-stderr-secret';
+    runtime.stdout = 'npm ERR! E401 Authorization: Bearer fake-stdout-secret';
+    const failure = await store.runPiPackageCommand(['install', 'npm:sample']).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(piPackageCommandDiagnostic(failure)).toEqual({
+      command: 'install', phase: 'native-command', outcome, exitCode, nativeCode: 'E401',
+      reason: 'authentication', recovery: outcome === 'failed' ? 'check-credentials' : 'inspect-state-before-retry',
+    });
+    expect(JSON.stringify(piPackageCommandDiagnostic(failure))).not.toContain('secret');
+  });
+
+  it('distinguishes failure to spawn from a failed native command', async () => {
+    const store = await import('../pi-package-store.js');
+    const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+    runtime.spawnError = new Error('spawn /private/runtime/pi ENOENT');
+    const failure = await store.runPiPackageCommand(['install', 'npm:sample']).catch((error: unknown) => error);
+    expect(piPackageCommandDiagnostic(failure)).toEqual({
+      command: 'install', phase: 'prepare', outcome: 'failed', reason: 'missing-executable', recovery: 'check-runtime', nativeCode: 'ENOENT',
+    });
+  });
+
   it('redacts unsafe saved URLs from Pi package command failures', async () => {
     runtime.stderr = "Failed to load GIT:https://user:sec'ret@example.com/acme/package.git?token=private#fragment";
     runtime.exitCode = 1;
@@ -4411,5 +4494,100 @@ describe('Pi package executable-code boundary', () => {
       warning: 'inspection-limit',
     });
     expect(result.packages[129]?.warning).toBe('inspection-limit');
+  });
+});
+
+
+describe('native Pi core management', () => {
+  it('streams the full list before projecting a receipt beyond the diagnostic stdout limit', async () => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    const sources = Array.from({ length: 160 }, (_, index) => `npm:package-${index}`);
+    runtime.listOutput = 'User packages:\n' + sources.map(source =>
+      `  ${source}\n    /private/installation/${'x'.repeat(1000)}\n`).join('');
+    expect(Buffer.byteLength(runtime.listOutput)).toBeGreaterThan(128 * 1024);
+    const result = await executePiNativeManagementCommand({ kind: 'list' });
+    expect(JSON.parse(String(result.output))).toEqual(sources.map(source => ({ source, filtered: false })));
+    expect(String(result.output)).not.toContain('/private/installation');
+    expect(runtime.spawns.map(call => call.args)).toEqual([['list', '--no-approve']]);
+  });
+
+  it.each([
+    ['file:/home/alice/private-extension', 'private-extension'],
+    ['file:///Users/alice/private-extension', 'private-extension'],
+    ['FILE://localhost/Users/alice/private-extension', 'private-extension'],
+    ['file://private-host/share/private-extension', 'private-extension'],
+    ['file:///Users/alice%2Fprivate-extension', 'private-extension'],
+    ['file:///C:/Users/alice/private-extension', 'private-extension'],
+    ['file:///%ZZ/alice/private-extension', '[local-package]'],
+    ['file://private-host/', '[local-package]'],
+    ['/home/alice/private-extension', 'private-extension'],
+    [String.raw`C:\Users\alice\private-extension`, 'private-extension'],
+    ['npm:public-extension', 'npm:public-extension'],
+    ['https://user:secret@example.test/package?token=secret', 'https://example.test/package'],
+  ])('redacts local locations in list receipts: %s', async (source, expected) => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    runtime.listOutput = `User packages:\n  ${source}\n    /Users/alice/install-location\n`;
+    const result = await executePiNativeManagementCommand({ kind: 'list' });
+    expect(JSON.parse(String(result.output))).toEqual([{ source: expected, filtered: false }]);
+    expect(JSON.stringify(result)).not.toMatch(/alice|private-host|install-location|secret/);
+  });
+
+  it.each(['native-core', 'host-binary-update'] as const)('preserves completed packages when %s fails', async phase => {
+    const { executePiNativeManagementCommand, piNativeManagementFailure, piPackageMutationMayHaveChangedState } = await import('../pi-package-store.js');
+    if (phase === 'host-binary-update') runtime.fallbackError = new Error('network failure with private data');
+    runtime.spawnHook = args => {
+      if (args.includes('--self')) {
+        runtime.exitCode = 1;
+        runtime.stderr = phase === 'native-core' ? 'network timeout' : 'pi cannot self-update this installation';
+      }
+    };
+    const error = await executePiNativeManagementCommand({ kind: 'all', force: false }).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(piPackageMutationMayHaveChangedState(error)).toBe(true);
+    expect(piNativeManagementFailure(error)).toMatchObject({ phase, packagesUpdated: true,
+      recovery: phase === 'native-core' ? 'retry-core-only' : 'check-host-update-and-retry-core' });
+    expect(runtime.spawns.filter(call => call.args.includes('--extensions'))).toHaveLength(1);
+    expect(JSON.stringify(piNativeManagementFailure(error))).not.toContain('private data');
+  });
+
+  it('uses the standalone updater only after the precise native unsupported result', async () => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    runtime.spawnHook = args => {
+      if (args.includes('--self')) {
+        runtime.exitCode = 1;
+        runtime.stderr = 'error: pi cannot self-update this installation.';
+      }
+    };
+    const result = await executePiNativeManagementCommand({ kind: 'self', force: true });
+    expect(result).toMatchObject({ execution: 'host-binary-update', nativeSucceeded: false, afterVersion: '0.85.1', activation: 'new-root-tasks' });
+    expect(runtime.fallbackCalls).toEqual([true]);
+  });
+
+  it('does not disguise a failed package phase of --all as a core fallback', async () => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    runtime.spawnHook = args => {
+      if (args.includes('--extensions')) { runtime.exitCode = 1; runtime.stderr = 'pi cannot self-update this installation'; }
+    };
+    await expect(executePiNativeManagementCommand({ kind: 'all', force: false })).rejects.toThrow();
+    expect(runtime.fallbackCalls).toEqual([]);
+    expect(runtime.spawns.some(call => call.args.includes('--self'))).toBe(false);
+  });
+
+  it('preserves native network failures instead of treating every failed update as a fallback request', async () => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    runtime.spawnHook = args => { if (args.includes('--self')) { runtime.exitCode = 1; runtime.stderr = 'network timeout'; } };
+    await expect(executePiNativeManagementCommand({ kind: 'self', force: false })).rejects.toThrow('network timeout');
+    expect(runtime.fallbackCalls).toEqual([]);
+  });
+
+  it('reads the executable after an in-place update, not the old directory name or cached version', async () => {
+    const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
+    runtime.version = '0.84.4';
+    runtime.spawnHook = args => { if (args.includes('--self')) runtime.version = '0.85.1'; };
+    const result = await executePiNativeManagementCommand({ kind: 'self', force: false });
+    expect(result).toMatchObject({ beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true, activation: 'new-root-tasks' });
+    expect(runtime.spawns.map(call => call.args)).toEqual([['--version'], ['update', '--self', '--no-approve'], ['--version']]);
+    expect(await executePiNativeManagementCommand({ kind: 'version' })).toMatchObject({ version: '0.85.1' });
+    expect((await fs.readdir(runtime.userData)).some(name => name.includes('runtime-change'))).toBe(false);
   });
 });

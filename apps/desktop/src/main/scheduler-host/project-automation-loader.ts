@@ -47,7 +47,9 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
-  agentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind?: 'claude-code' | 'codex' | 'pi' | 'grok-build';
+  /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
@@ -453,6 +455,8 @@ function scheduleConfigToCreateInput(
     manual: config.manual ?? false,
     intervalMs: config.intervalMs,
     agentKind: config.agentKind ?? 'claude-code',
+    // 恒带 key：配置删除显式选择后，reconcile 清除已保存的标记。
+    modelAgentKind: config.modelAgentKind,
     model: config.model,
     providerId: config.providerId,
     effort: config.effort,
@@ -493,6 +497,7 @@ export function schedulesDiffer(
     schedule.manual !== expected.manual ||
     schedule.intervalMs !== expected.intervalMs ||
     schedule.agentKind !== expected.agentKind ||
+    schedule.modelAgentKind !== expected.modelAgentKind ||
     schedule.model !== expected.model ||
     (schedule.providerId ?? undefined) !== (expected.providerId ?? undefined) ||
     schedule.effort !== expected.effort ||
@@ -561,6 +566,8 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.manual) &&
     optionalNumber(config.intervalMs) &&
     optionalAgentKind(config.agentKind) &&
+    optionalAgentKind(config.modelAgentKind) &&
+    (config.modelAgentKind === undefined || (typeof config.model === 'string' && config.model.trim() !== '')) &&
     optionalString(config.model) &&
     optionalString(config.providerId) &&
     optionalString(config.effort) &&
@@ -597,7 +604,7 @@ function optionalNumber(value: unknown): boolean {
 }
 
 function optionalAgentKind(value: unknown): boolean {
-  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'grok-build';
 }
 
 function optionalNotify(value: unknown): boolean {

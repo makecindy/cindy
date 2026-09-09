@@ -33,7 +33,7 @@ export function persistSessionStreamEvent(
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
   if (event.type === 'text') {
-    const td = event.data as { text?: unknown; isFinal?: unknown } | null;
+    const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
     if (typeof td?.text === 'string') {
       deps.orcaTeamServiceForEvents?.captureWorkerText(session.id, td.text, {
         isFinal: td.isFinal === true,
@@ -49,6 +49,13 @@ export function persistSessionStreamEvent(
       },
       eventAgentMeta,
     );
+    // Pi message_end carries the authoritative whole assistant message. Commit
+    // its calibrated block now: agent_settled may arrive much later (or never),
+    // and a subsequent assistant message must not overwrite this one in memory.
+    // This closes only the text block; turn completion/usage still waits for done.
+    if (event.source === 'pi' && td?.isFinal === true && td.isFullText === true) {
+      flushAssistantBlock(session.id, eventAgentMeta);
+    }
   } else if (event.type === 'tool_use') {
     // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
     // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。

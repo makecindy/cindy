@@ -24,6 +24,7 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
@@ -851,5 +852,30 @@ describe('deriveGrokBuildAvailableModels', () => {
     expect(models.some((entry) => entry.id === 'grok-build')).toBe(false);
     expect(models.some((entry) => entry.id === 'claude-opus-5')).toBe(false);
     expect(models.map((entry) => entry.id)).toEqual(expect.arrayContaining(['xai/grok-4.6', 'grok-4.5']));
+  });
+});
+
+describe('context settings for provider-less routes', () => {
+  it('keeps Pi default gateway budgets isolated from same-name subscription models', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    for (const provider of catalog.providers) {
+      for (const agent of ['claude-code', 'pi'] as const) {
+        provider.models[agent] = ['xd', 'anthropic'].includes(provider.id)
+          ? [model('shared-model', { contextWindow: provider.id === 'xd' ? 100_000 : 200_000 })] : [];
+      }
+    }
+    for (const id of [null, undefined, 'cindy']) {
+      const source = resolveModelContextProviderId(catalog, 'pi', id, 'shared-model');
+      expect(source).toBe('xd');
+      expect(resolveModelDefaultContextWindow(catalog, 'pi', source, 'shared-model')).toBe(100_000);
+    }
+    expect(resolveModelContextProviderId(catalog, 'pi', 'anthropic', 'shared-model')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBeNull();
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'xd')).toBe('xd');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'anthropic')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'anthropic', 'shared-model', 'xd')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'xd', 'shared-model')).toBe('xd');
+    catalog.providers.find((provider) => provider.id === 'anthropic')!.models['claude-code'] = [];
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBe('xd');
   });
 });

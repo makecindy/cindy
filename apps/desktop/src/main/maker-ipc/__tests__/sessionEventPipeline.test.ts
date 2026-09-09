@@ -619,6 +619,36 @@ describe('production Session event pipeline', () => {
     },
   );
 
+  it.each([
+    ['pi', true, true, true],
+    ['pi', false, true, false],
+    ['pi', true, false, false],
+    ['claude-code', true, true, false],
+    ['codex', true, true, false],
+  ] as const)('commits only Pi authoritative final text (%s, final=%s, full=%s)', async (source, isFinal, isFullText, flush) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { source }));
+    effects.calls.length = 0;
+    h.emit(event('text', { text: 'complete reply', isFinal, isFullText }, { source }));
+    expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledTimes(flush ? 1 : 0);
+    if (flush) {
+      expect(effects.fn('onAssistantTextEvent').mock.invocationCallOrder[0])
+        .toBeLessThan(effects.fn('flushAssistantBlock').mock.invocationCallOrder[0]);
+      ordered('flushAssistantBlock', 'broadcast');
+    }
+    expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+    expect(effects.fn('resetTurnPersistState')).not.toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    if (flush) {
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('assistant-row');
+      h.emit(event('done', { status: 'completed', result: 'complete reply' }, { source }));
+      expect(h.activity.isSessionInTurn('task')).toBe(false);
+      expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'assistant-row', undefined);
+      expect(effects.fn('resetTurnPersistState')).toHaveBeenCalledOnce();
+    }
+    await h.dispose();
+  });
+
   it('flushes assistant before foreground tool use, without flushing the current turn for background tools', async () => {
     const h = harness();
     effects.fn('onToolUseEvent').mockImplementation(() => {
