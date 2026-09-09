@@ -112,3 +112,12 @@ RPC 帧和 Session 终态的同轮时间线；本单不能据此宣称 #3916 整
 code/signal 断言后，在审查所指提交 d8bd012f1 上两种顺序均通过：Promise executor 中
 `return` 只退出 executor，不会 resolve 外层 Promise；仍由 250ms 排空通知调用 finish。
 因此保留现有排空行为，不将该报告称作已复现缺陷。新增断言持续保护真实退出信息。
+
+## Windows CI fixture 修正
+
+旧提交 d8bd012f1 的 Windows shard 2 在后代存活断言处失败（kill ESRCH，127ms），
+不是等待终态超时。Node 22.23.2 的 [libuv Windows 实现](https://github.com/nodejs/node/blob/v22.23.2/deps/uv/src/win/process.c#L69)
+将非 detached 子进程加入父进程持有的 kill-on-close Job，因此原 fixture 在 Windows
+没有建立“父退出、后代继续持有管道”的前提。仅对测试后代设置 Windows detached，
+继续继承输出句柄；保留 PID 存活、明确失败、2 秒终态期限及 afterEach 清理断言。
+生产 Pi 的 spawn/进程树策略不变；Windows 修正效果以新提交的 CI 为准。

@@ -40,6 +40,10 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'fixture_exit_with_descendant') {
             const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
+              // libuv's Windows job kills non-detached children on parent exit.
+              // This fixture specifically needs a surviving pipe owner; production
+              // spawn options remain unchanged, and afterEach owns its cleanup.
+              detached: process.platform === 'win32',
               stdio: ['ignore', process.stdout, process.stderr], env: process.env
             });
             child.once('spawn', () => {
