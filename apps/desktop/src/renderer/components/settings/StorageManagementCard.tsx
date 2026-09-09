@@ -787,64 +787,6 @@ function DatabaseSlimmingSection({
 
   return (
     <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
-      <div className="order-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-        <label htmlFor="db-size-warning-threshold" className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-12 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSizeWarningThresholdLabel')}
-          </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.dbSizeWarningThresholdDescription')}
-          </span>
-        </label>
-        <div className="flex items-center gap-1.5">
-          <input
-            id="db-size-warning-threshold"
-            type="number"
-            min={1}
-            max={1024}
-            step={1}
-            value={warningThresholdGiB}
-            disabled={warningSaving}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (Number.isFinite(value)) onWarningThresholdChange(value);
-            }}
-            onBlur={() => void saveWarningThreshold()}
-            className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-            aria-label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
-          />
-          <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
-        </div>
-
-        <label
-          htmlFor="db-size-warning-disabled"
-          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
-        >
-          <span className="text-12 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSizeWarningDisableLabel')}
-          </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.dbSizeWarningDisableDescription')}
-          </span>
-        </label>
-        <Switch
-          id="db-size-warning-disabled"
-          checked={warningDisabled}
-          disabled={warningSaving}
-          onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
-          aria-label={t('settings.about.storage.dbSizeWarningDisableLabel')}
-        />
-        <div className="col-span-2 flex justify-end">
-          <DefaultOverrideControls
-            isCustomized={warningCustomized}
-            alwaysVisible
-            showCustomizedBadge={false}
-            disabled={warningSaving}
-            onReset={() => void persistWarningSettings()}
-          />
-        </div>
-      </div>
-
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-13 text-[var(--settings-section-sublabel)]">
@@ -1037,6 +979,64 @@ function DatabaseSlimmingSection({
         onReportOpenChange={handleReportOpenChange}
         onConfirm={handleSchedule}
       />
+
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+        <label htmlFor="db-size-warning-threshold" className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSizeWarningThresholdLabel')}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.dbSizeWarningThresholdDescription')}
+          </span>
+        </label>
+        <div className="flex items-center gap-1.5">
+          <input
+            id="db-size-warning-threshold"
+            type="number"
+            min={1}
+            max={1024}
+            step={1}
+            value={warningThresholdGiB}
+            disabled={warningSaving}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isFinite(value)) onWarningThresholdChange(value);
+            }}
+            onBlur={() => void saveWarningThreshold()}
+            className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            aria-label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
+          />
+          <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
+        </div>
+
+        <label
+          htmlFor="db-size-warning-disabled"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSizeWarningDisableLabel')}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.dbSizeWarningDisableDescription')}
+          </span>
+        </label>
+        <Switch
+          id="db-size-warning-disabled"
+          checked={warningDisabled}
+          disabled={warningSaving}
+          onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
+          aria-label={t('settings.about.storage.dbSizeWarningDisableLabel')}
+        />
+        <div className="col-span-2 flex justify-end">
+          <DefaultOverrideControls
+            isCustomized={warningCustomized}
+            alwaysVisible
+            showCustomizedBadge={false}
+            disabled={warningSaving}
+            onReset={() => void persistWarningSettings()}
+          />
+        </div>
+      </div>
     </div>
   );
 }

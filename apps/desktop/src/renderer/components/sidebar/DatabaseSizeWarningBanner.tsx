@@ -3,6 +3,7 @@ import { Database, Settings2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
@@ -97,21 +98,21 @@ export function DatabaseSizeWarningBanner({
         </div>
       </div>
       <div className="flex items-center justify-end gap-1.5">
-        <button
-          type="button"
-          className="rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)]"
+        <Button
+          variant="secondary"
+          size="md"
           onClick={() => void handleDisable()}
         >
           {t('sidebar.databaseSizeWarning.disable')}
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 rounded-full bg-[var(--button-primary-bg)] px-2.5 py-1 text-12 font-medium text-[var(--button-primary-fg)] transition-opacity hover:opacity-90"
+        </Button>
+        <Button
+          variant="cta"
+          size="md"
           onClick={() => onOpenStorage?.()}
         >
           <Settings2 className="h-3 w-3" aria-hidden />
           {t('sidebar.databaseSizeWarning.openSettings')}
-        </button>
+        </Button>
       </div>
     </div>
   );
