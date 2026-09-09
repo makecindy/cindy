@@ -7,8 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { installPiBinaryUpdate, parsePiRelease, piBinaryUpdateFailureStage, type PiBinaryUpdateDeps } from '../pi-self-update.js';
 
+const electronFetch = vi.hoisted(() => vi.fn());
+vi.mock('electron', () => ({ net: { fetch: electronFetch } }));
+
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.unstubAllGlobals(); electronFetch.mockReset(); await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
 function release(platform = 'darwin') {
   const name = `pi-${platform}-arm64.${platform === 'win32' ? 'zip' : 'tar.gz'}`;
   return { tag_name: 'v0.85.1', assets: [{ name, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: `https://github.com/earendil-works/pi/releases/download/v0.85.1/${name}` }] };
@@ -31,6 +34,25 @@ async function fixture(platform: 'darwin' | 'win32' = 'darwin') {
   return { root, current, deps };
 }
 describe('Pi standalone core update', () => {
+  it.each([200, 503])('uses Electron release lookup with the existing timeout and status handling (%s)', async status => {
+    const { root, current } = await fixture();
+    const nodeFetch = vi.fn(() => { throw new Error('Node direct fetch must not be used'); });
+    vi.stubGlobal('fetch', nodeFetch);
+    const json = vi.fn(async () => ({ tag_name: 'v0.85.1', assets: [] }));
+    electronFetch.mockResolvedValue({ ok: status === 200, status, json });
+    // Exercise the production defaults, stopping before download/version probes.
+    const error = await installPiBinaryUpdate(root, current, false, undefined, 'darwin', 'arm64').catch(error => error);
+    expect(electronFetch).toHaveBeenCalledWith('https://api.github.com/repos/earendil-works/pi/releases/latest', {
+      signal: expect.any(AbortSignal), headers: { Accept: 'application/vnd.github+json' },
+    });
+    expect(nodeFetch).not.toHaveBeenCalled();
+    expect(piBinaryUpdateFailureStage(error)).toBe(status === 200 ? 'asset-validation' : 'release-lookup');
+    expect(error.message).toContain(status === 200 ? 'verified asset' : '(503)');
+    expect(json).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+    expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
+    expect(await fs.readdir(root)).toEqual(['0.84.4']);
+  });
+
   it.each(['release-lookup', 'asset-validation', 'download', 'extract', 'version-verification'] as const)('records the %s failure phase without changing the old installation', async stage => {
     const { root, current, deps } = await fixture();
     const fail = async () => { throw new Error('sensitive raw failure'); };

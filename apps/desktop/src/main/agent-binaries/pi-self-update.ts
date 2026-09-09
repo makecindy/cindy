@@ -1,3 +1,4 @@
+import { net } from 'electron';
 import type { PiBinaryUpdateFailureStage } from '@cindy/maker-core';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -19,7 +20,8 @@ export interface PiBinaryUpdateDeps {
 }
 const defaults: PiBinaryUpdateDeps = {
   fetchRelease: async signal => {
-    const response = await fetch('https://api.github.com/repos/earendil-works/pi/releases/latest', {
+    // Match the Electron downloader's system-proxy/PAC-aware network stack.
+    const response = await net.fetch('https://api.github.com/repos/earendil-works/pi/releases/latest', {
       signal, headers: { Accept: 'application/vnd.github+json' },
     });
     if (!response.ok) throw new Error(`Pi release lookup failed (${response.status})`);
