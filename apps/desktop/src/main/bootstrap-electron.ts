@@ -7708,10 +7708,11 @@ const registerIpcHandlers = () => {
     };
     const withActiveChatAttachmentRoot = async <T>(
       action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+      options: { allowOwnerChangeAfterAction?: boolean } = {},
     ): Promise<T> => {
       const { rootDir, isCurrentOwner } = captureActiveChatAttachmentRoot();
       const result = await action(rootDir, isCurrentOwner);
-      if (!isCurrentOwner()) {
+      if (!options.allowOwnerChangeAfterAction && !isCurrentOwner()) {
         throwIpcError('PRECONDITION_FAILED', 'chat attachment directory owner changed');
       }
       return result;
@@ -7735,8 +7736,9 @@ const registerIpcHandlers = () => {
           openFixedDirectory(rootDir, isCurrentOwner),
         ),
       clearChatAttachmentsDir: () =>
-        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
-          clearFixedDirectory(rootDir, isCurrentOwner),
+        withActiveChatAttachmentRoot(
+          (rootDir, isCurrentOwner) => clearFixedDirectory(rootDir, isCurrentOwner),
+          { allowOwnerChangeAfterAction: true },
         ),
       getChatAttachmentsDirStats: () =>
         !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
