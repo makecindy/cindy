@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installPiBinaryUpdate, parsePiRelease, type PiBinaryUpdateDeps } from '../pi-self-update.js';
+import { installPiBinaryUpdate, parsePiRelease, piBinaryUpdateFailureStage, type PiBinaryUpdateDeps } from '../pi-self-update.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
@@ -31,6 +31,21 @@ async function fixture(platform: 'darwin' | 'win32' = 'darwin') {
   return { root, current, deps };
 }
 describe('Pi standalone core update', () => {
+  it.each(['release-lookup', 'asset-validation', 'download', 'extract', 'version-verification'] as const)('records the %s failure phase without changing the old installation', async stage => {
+    const { root, current, deps } = await fixture();
+    const fail = async () => { throw new Error('sensitive raw failure'); };
+    if (stage === 'release-lookup') deps.fetchRelease = fail;
+    if (stage === 'asset-validation') deps.fetchRelease = async () => ({ tag_name: 'v0.85.1', assets: [] });
+    if (stage === 'download') deps.download = fail;
+    if (stage === 'extract') deps.extract = fail;
+    if (stage === 'version-verification') deps.probe = async binary => binary === current ? '0.84.4' : fail();
+    const error = await installPiBinaryUpdate(root, current, false, deps, 'darwin', 'arm64').catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(piBinaryUpdateFailureStage(error)).toBe(stage);
+    expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
+    expect(await fs.readdir(root)).toEqual(['0.84.4']);
+  });
+
   it.each(['darwin', 'win32'] as const)('publishes a fully probed %s distribution without touching the running one', async platform => {
     const { root, current, deps } = await fixture(platform);
     const result = await installPiBinaryUpdate(root, current, false, deps, platform, 'arm64');

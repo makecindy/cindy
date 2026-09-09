@@ -1,3 +1,4 @@
+import { piBinaryUpdateFailureStage } from '../agent-binaries/pi-self-update.js';
 /**
  * Cindy-owned Pi package store.
  *
@@ -17,6 +18,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type {
   PiManagedPackageMutationFailureCode,
   PiNativeManagementCommand,
+  PiManagedCommandFailure,
   PiNativePackageEntry,
 } from '@cindy/maker-core';
 import { app } from 'electron';
@@ -991,6 +993,11 @@ function piNativeManagementArgs(command: PiNativeManagementCommand): string[] {
   }
 }
 
+const commandFailures = new WeakMap<object, PiManagedCommandFailure>();
+export function piNativeManagementFailure(error: unknown): PiManagedCommandFailure | undefined {
+  return error !== null && typeof error === 'object' ? commandFailures.get(error) : undefined;
+}
+
 /** Same process/lock as package mutations; core updates never retire live callers. */
 export async function executePiNativeManagementCommand(
   command: PiNativeManagementCommand,
@@ -1005,20 +1012,40 @@ export async function executePiNativeManagementCommand(
     const packages = command.kind === 'extensions' || command.kind === 'all';
     const beforeVersion = core ? await getCurrentPiVersion(true) : undefined;
     let execution: 'native' | 'host-binary-update' = 'native';
+    const progress: { phase: PiManagedCommandFailure['phase'] } = {
+      phase: packages ? 'native-packages' : core ? 'native-core' : 'native-query',
+    };
+    let packagesUpdated = false;
     let output = { stdout: '', stderr: '' };
     try {
       // Pi --all updates packages first. Keep that phase outside core fallback:
       // a package's stderr must never be mistaken for an unsupported updater.
-      if (command.kind === 'all') await runPiPackageCommand(['update', '--extensions', '--no-approve']);
+      if (command.kind === 'all') {
+        await runPiPackageCommand(['update', '--extensions', '--no-approve']);
+        packagesUpdated = true;
+        progress.phase = 'native-core';
+      }
       try {
         output = await runPiPackageCommand(piNativeManagementArgs(command.kind === 'all'
           ? { kind: 'self', force: command.force } : command));
       } catch (error) {
         const message = error instanceof Error ? error.message : '';
         if (!core || !/cannot self-update this installation|self-update on Windows is only supported/.test(message)) throw error;
+        progress.phase = 'host-binary-update';
         await updateReadyPiBinary(command.force);
         execution = 'host-binary-update';
       }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error('Pi management command failed');
+      const { phase } = progress;
+      if (packages || (core && phase === 'native-core')) packageMutationMayHaveChangedErrors.add(failure);
+      commandFailures.set(failure, {
+        phase, packagesUpdated,
+        ...(phase === 'host-binary-update' ? { hostStage: piBinaryUpdateFailureStage(error) } : {}),
+        recovery: phase === 'host-binary-update' ? 'check-host-update-and-retry-core'
+          : packagesUpdated ? 'retry-core-only' : 'inspect-state-before-retry',
+      });
+      throw failure;
     } finally {
       if (core || packages) {
         // --all can update packages before core fails. Drop stale advisory

@@ -54,6 +54,13 @@ GitHub release 对应平台资产，要求官方 SHA-256 digest，复用现有�
 原生成功与 Host 分发成功分别记录 execution，不能把后者伪称原生命令成功。
 版本真值始终来自可执行文件，移除按目录名读取及永久 promise 缓存。
 
+失败继续复用 `PiManagedPackageMutationFailedError`，附加可选的 `commandFailure`：
+记录失败在原生包/内核/查询还是 Host 安装阶段、包阶段是否已经成功，以及恢复建议。
+Host 阶段进一步区分发行信息、资产校验、目录准备、下载、解包、版本验证与发布。
+`--all` 包阶段已执行后保留 `mayHaveChangedState`；包阶段成功而内核失败时明确要求
+仅重试 `pi update --self`，不把整个命令包装成“什么都没发生”。诊断不包含原始 stderr、
+凭证或本机路径；缺少可选诊断的旧错误继续按原合同处理，内核失败仍不触发任务退休。
+
 ## 验证与边界
 
 定向测试覆盖：语法/别名/冲突、直接命令与工具调用共享服务、Full Access 初始及热切换、

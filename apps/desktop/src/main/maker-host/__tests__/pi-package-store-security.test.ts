@@ -35,6 +35,7 @@ const runtime = vi.hoisted(() => ({
   listOutcomes: [] as Array<{ stdout?: string; stderr?: string; exitCode: number }>,
   version: '0.83.0',
   fallbackCalls: [] as boolean[],
+  fallbackError: undefined as Error | undefined,
   stderr: '',
   exitCode: 0,
   spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined>; detached?: boolean }>,
@@ -66,6 +67,7 @@ vi.mock('../../agent-binaries/index.js', () => ({
   getReadyBinaryPath: () => '/mock/0.83.0/pi',
   updateReadyPiBinary: async (force: boolean) => {
     runtime.fallbackCalls.push(force);
+    if (runtime.fallbackError) throw runtime.fallbackError;
     runtime.version = '0.85.1';
     runtime.exitCode = 0;
     runtime.stderr = '';
@@ -219,6 +221,7 @@ beforeEach(async () => {
   runtime.stderr = '';
   runtime.exitCode = 0;
   runtime.fallbackCalls = [];
+  runtime.fallbackError = undefined;
   runtime.version = '0.83.0';
   runtime.spawns = [];
   runtime.holdMutationCommand = false;
@@ -4428,6 +4431,24 @@ describe('Pi package executable-code boundary', () => {
 
 
 describe('native Pi core management', () => {
+  it.each(['native-core', 'host-binary-update'] as const)('preserves completed packages when %s fails', async phase => {
+    const { executePiNativeManagementCommand, piNativeManagementFailure, piPackageMutationMayHaveChangedState } = await import('../pi-package-store.js');
+    if (phase === 'host-binary-update') runtime.fallbackError = new Error('network failure with private data');
+    runtime.spawnHook = args => {
+      if (args.includes('--self')) {
+        runtime.exitCode = 1;
+        runtime.stderr = phase === 'native-core' ? 'network timeout' : 'pi cannot self-update this installation';
+      }
+    };
+    const error = await executePiNativeManagementCommand({ kind: 'all', force: false }).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(piPackageMutationMayHaveChangedState(error)).toBe(true);
+    expect(piNativeManagementFailure(error)).toMatchObject({ phase, packagesUpdated: true,
+      recovery: phase === 'native-core' ? 'retry-core-only' : 'check-host-update-and-retry-core' });
+    expect(runtime.spawns.filter(call => call.args.includes('--extensions'))).toHaveLength(1);
+    expect(JSON.stringify(piNativeManagementFailure(error))).not.toContain('private data');
+  });
+
   it('uses the standalone updater only after the precise native unsupported result', async () => {
     const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
     runtime.spawnHook = args => {

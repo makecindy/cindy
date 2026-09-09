@@ -714,6 +714,28 @@ function piManagedPackageFailureMessage(
     : strings.mutationFailed;
 }
 
+function piManagedCommandFailureReceipt(strings: PiExtensionUiStrings, error: unknown): Record<string, unknown> {
+  if (!(error instanceof PiManagedPackageMutationFailedError) || !error.commandFailure) {
+    return { ok: false, error: piManagedPackageFailureMessage(strings, error) };
+  }
+  const details = error.commandFailure;
+  const hostRecovery = details.hostStage === 'release-lookup' || details.hostStage === 'download'
+    ? 'Check network access to GitHub, then retry pi update --self.'
+    : details.hostStage === 'asset-validation'
+      ? 'Retry pi update --self after valid official release metadata and a verified asset are available.'
+      : details.hostStage === 'prepare' || details.hostStage === 'publish'
+        ? 'Check free disk space and write access to Cindy storage, then retry pi update --self.'
+        : 'Keep the current runtime. Check the official asset and retry pi update --self after the unpacking or verification problem is resolved.';
+  const message = (details.packagesUpdated ? 'Pi packages updated successfully. ' : '')
+    + (details.phase === 'host-binary-update'
+      ? `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
+      : details.packagesUpdated
+        ? 'Pi core update failed. Retry pi update --self; do not repeat the completed package phase.'
+        : 'Pi native command failed. Inspect the current state before retrying.');
+  return { ok: false, error: message, failureCode: error.failureCode,
+    mayHaveChangedState: error.mayHaveChangedState, commandFailure: details };
+}
+
 interface ParsedPiManagedPackageCommand {
   action: 'install' | 'update' | 'remove';
   source: string;
@@ -5006,7 +5028,7 @@ export class PiAgent extends BaseAgent {
             }), ''),
           };
         } catch (error) {
-          receipt = { ok: false, error: piManagedPackageFailureMessage(resolvePiExtensionUiStrings(this.deps), error) };
+          receipt = piManagedCommandFailureReceipt(resolvePiExtensionUiStrings(this.deps), error);
         }
         const receiptText = JSON.stringify(receipt);
         queue.push({ type: 'text', data: { text: receiptText, isFinal: false }, source: 'pi' });
@@ -7329,7 +7351,7 @@ export class PiAgent extends BaseAgent {
             proc.send({
               type: 'extension_ui_response',
               id,
-              value: JSON.stringify({
+              value: JSON.stringify(nativeCommand ? piManagedCommandFailureReceipt(uiStrings, error) : {
                 ok: false,
                 error: piManagedPackageFailureMessage(uiStrings, error),
               }),

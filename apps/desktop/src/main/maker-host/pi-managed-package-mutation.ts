@@ -16,6 +16,7 @@ import {
 import {
   mutatePiPackage,
   executePiNativeManagementCommand,
+  piNativeManagementFailure,
   piPackageMutationMayHaveChangedState,
   type PiPackageMutationHooks,
 } from './pi-package-store.js';
@@ -74,18 +75,21 @@ export async function mutateAuthorizedPiManagedPackage(
       ? deps.mutate(storeRequest, grant, hooks)
       : deps.mutate(storeRequest, grant));
   } catch (error) {
+    const commandFailure = request.action === 'command' ? piNativeManagementFailure(error) : undefined;
     const failureCode = classifyMutationFailure(error);
     const mayHaveChangedState = piPackageMutationMayHaveChangedState(error);
     // This wrapper can receive raw Pi/npm/Git stderr containing source
     // credentials. Persist only stable recovery metadata, never Error.message.
-    log.warn('Pi managed package native mutation failed', {
+    log.warn(commandFailure ? 'Pi management command failed' : 'Pi managed package native mutation failed', {
       action: request.action,
       failureCode,
       mayHaveChangedState,
+      ...(commandFailure ? { commandFailure } : {}),
     });
     throw new PiManagedPackageMutationFailedError(
       mayHaveChangedState,
       failureCode,
+      commandFailure,
     );
   }
 }

@@ -534,6 +534,7 @@ export class PiManagedPackageMutationFailedError extends Error {
   constructor(
     readonly mayHaveChangedState: boolean,
     readonly failureCode: PiManagedPackageMutationFailureCode,
+    readonly commandFailure?: import('./pi/managed-command.js').PiManagedCommandFailure,
   ) {
     super('Pi extension mutation failed');
     this.name = 'PiManagedPackageMutationFailedError';

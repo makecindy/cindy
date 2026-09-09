@@ -3798,7 +3798,7 @@ export default async function cindyBridge(pi: any) {
         if (typeof response !== 'string' || response.length === 0) {
           throw new Error('Cindy could not complete the Pi extension operation.');
         }
-        let parsed: { ok?: unknown; error?: unknown; result?: unknown };
+        let parsed: { ok?: unknown; error?: unknown; result?: unknown; commandFailure?: unknown; mayHaveChangedState?: unknown; failureCode?: unknown };
         try {
           parsed = JSON.parse(response);
         } catch {
@@ -3807,7 +3807,7 @@ export default async function cindyBridge(pi: any) {
         if (parsed.ok !== true) {
           throw new Error(
             typeof parsed.error === 'string' && parsed.error.length > 0
-              ? parsed.error
+              ? parsed.error + (parsed.commandFailure ? '\n' + JSON.stringify({ commandFailure: parsed.commandFailure, mayHaveChangedState: parsed.mayHaveChangedState, failureCode: parsed.failureCode }) : '')
               : 'Cindy could not complete the Pi extension operation.',
           );
         }

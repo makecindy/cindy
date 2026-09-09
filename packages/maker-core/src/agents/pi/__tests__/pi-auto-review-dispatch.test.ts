@@ -721,6 +721,31 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     } finally { await handle.close(); }
   });
 
+  it.each(['desktop', 'tool'] as const)('delivers partial Host-update failure to the %s caller without retiring it', async origin => {
+    const deps = buildDeps();
+    const details = { phase: 'host-binary-update', hostStage: 'download', packagesUpdated: true,
+      recovery: 'check-host-update-and-retry-core' } as const;
+    deps.mutatePiManagedPackage = vi.fn(async () => { throw new PiManagedPackageMutationFailedError(true, 'source-unavailable', details); });
+    deps.onPiManagedPackageMutationSettled = vi.fn();
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'partial-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    try {
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi update --all' }, desktopCommandOptions('pi update --all'));
+        const receipt = captured.requests.find(request => request.type === 'prompt')?.message;
+        expect(receipt).toContain('Pi packages updated successfully');
+        expect(receipt).toContain('host-binary-update');
+        expect(receipt).toContain('pi update --self');
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'partial-tool', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update', '--all'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        expect(JSON.parse(String((await waitForResponse('partial-tool')).value))).toMatchObject({ ok: false,
+          mayHaveChangedState: true, commandFailure: details });
+      }
+      expect(deps.onPiManagedPackageMutationSettled).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(false);
+    } finally { await handle.close(); }
+  });
+
   it('retains channel-required confirmation for a core command even when Auto allows it', async () => {
     const deps = buildDeps(vi.fn(async () => ({ verdict: 'allow' as const })));
     deps.mutatePiManagedPackage = vi.fn();

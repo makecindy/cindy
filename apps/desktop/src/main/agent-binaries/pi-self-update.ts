@@ -1,9 +1,15 @@
+import type { PiBinaryUpdateFailureStage } from '@cindy/maker-core';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { download } from '../downloader/index.js';
 import { extractMakeToolArchive } from '../cindy-make/toolArchive.js';
 import { isBinaryVersionNotOlder, probeBinaryVersion } from './binary-version-probe.js';
+
+const failureStages = new WeakMap<object, PiBinaryUpdateFailureStage>();
+export function piBinaryUpdateFailureStage(error: unknown): PiBinaryUpdateFailureStage | undefined {
+  return error !== null && typeof error === 'object' ? failureStages.get(error) : undefined;
+}
 
 export interface PiBinaryUpdateDeps {
   fetchRelease(signal: AbortSignal): Promise<unknown>;
@@ -43,34 +49,51 @@ export async function installPiBinaryUpdate(
   deps: PiBinaryUpdateDeps = defaults,
   platform = process.platform, arch = process.arch,
 ): Promise<{ binaryPath: string; version: string }> {
-  const signal = AbortSignal.timeout(180_000);
-  const release = parsePiRelease(await deps.fetchRelease(signal), platform, arch);
-  const current = await deps.probe(currentBinary, signal);
-  if (!force && current && isBinaryVersionNotOlder(current, release.version)) return { binaryPath: currentBinary, version: current };
-  await fs.mkdir(root, { recursive: true });
-  const stage = await fs.mkdtemp(path.join(path.dirname(root), '.pi-update-'));
-  const destination = path.join(root, `${release.version}-${randomUUID()}`);
-  let published = false;
+  let failureStage: PiBinaryUpdateFailureStage = 'release-lookup';
   try {
-    const archive = path.join(stage, `release.${release.format}`);
-    const unpacked = path.join(stage, 'unpacked');
-    await fs.mkdir(unpacked);
-    await deps.download({ url: release.url, sha256: release.sha256, targetPath: archive, signal });
-    await deps.extract(archive, unpacked, release, signal);
-    const nested = path.join(unpacked, 'pi', release.executable);
-    const distribution = await fs.stat(nested).then(s => s.isFile()).catch(() => false)
-      ? path.join(unpacked, 'pi') : unpacked;
-    const binary = path.join(distribution, release.executable);
-    if (platform !== 'win32') await fs.chmod(binary, 0o755);
-    if (await deps.probe(binary, signal) !== release.version) throw new Error('Downloaded Pi version verification failed');
-    await fs.rename(distribution, destination);
-    const finalBinary = path.join(destination, release.executable);
-    if (await deps.probe(finalBinary, signal) !== release.version) throw new Error('Installed Pi version verification failed');
-    await fs.writeFile(path.join(destination, '.verified'), release.sha256, { mode: 0o600 });
-    published = true;
-    return { binaryPath: finalBinary, version: release.version };
-  } finally {
-    await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
-    if (!published) await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+    const signal = AbortSignal.timeout(180_000);
+    const metadata = await deps.fetchRelease(signal);
+    failureStage = 'asset-validation';
+    const release = parsePiRelease(metadata, platform, arch);
+    failureStage = 'version-verification';
+    const current = await deps.probe(currentBinary, signal);
+    if (!force && current && isBinaryVersionNotOlder(current, release.version)) return { binaryPath: currentBinary, version: current };
+    failureStage = 'prepare';
+    await fs.mkdir(root, { recursive: true });
+    const stage = await fs.mkdtemp(path.join(path.dirname(root), '.pi-update-'));
+    const destination = path.join(root, `${release.version}-${randomUUID()}`);
+    let published = false;
+    try {
+      const archive = path.join(stage, `release.${release.format}`);
+      const unpacked = path.join(stage, 'unpacked');
+      await fs.mkdir(unpacked);
+      failureStage = 'download';
+      await deps.download({ url: release.url, sha256: release.sha256, targetPath: archive, signal });
+      failureStage = 'extract';
+      await deps.extract(archive, unpacked, release, signal);
+      const nested = path.join(unpacked, 'pi', release.executable);
+      const distribution = await fs.stat(nested).then(s => s.isFile()).catch(() => false)
+        ? path.join(unpacked, 'pi') : unpacked;
+      const binary = path.join(distribution, release.executable);
+      if (platform !== 'win32') await fs.chmod(binary, 0o755);
+      failureStage = 'version-verification';
+      if (await deps.probe(binary, signal) !== release.version) throw new Error('Downloaded Pi version verification failed');
+      failureStage = 'publish';
+      await fs.rename(distribution, destination);
+      const finalBinary = path.join(destination, release.executable);
+      failureStage = 'version-verification';
+      if (await deps.probe(finalBinary, signal) !== release.version) throw new Error('Installed Pi version verification failed');
+      failureStage = 'publish';
+      await fs.writeFile(path.join(destination, '.verified'), release.sha256, { mode: 0o600 });
+      published = true;
+      return { binaryPath: finalBinary, version: release.version };
+    } finally {
+      await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
+      if (!published) await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+    }
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error('Pi Host update failed');
+    failureStages.set(failure, failureStage);
+    throw failure;
   }
 }

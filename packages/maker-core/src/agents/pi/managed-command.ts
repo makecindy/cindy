@@ -63,3 +63,12 @@ export function parsePiManagementText(text: string): PiManagementParseResult | u
   if (started) words.push(word);
   return parsePiManagementArgs(words);
 }
+
+/** Stable Host-only diagnostics; never contains stderr, paths or credentials. */
+export type PiBinaryUpdateFailureStage = 'release-lookup' | 'asset-validation' | 'prepare' | 'download' | 'extract' | 'version-verification' | 'publish';
+export interface PiManagedCommandFailure {
+  phase: 'native-packages' | 'native-core' | 'native-query' | 'host-binary-update';
+  hostStage?: PiBinaryUpdateFailureStage;
+  packagesUpdated: boolean;
+  recovery: 'retry-core-only' | 'check-host-update-and-retry-core' | 'inspect-state-before-retry';
+}
