@@ -1049,7 +1049,10 @@ async function copyDatabaseAtomically(
     if (!linked) return false;
     published = true;
     flushPublishedDatabase(targetDb);
-    recordModelVisibilityAdoption(targetDb);
+    // Both publication paths already have a durable receipt: hard links retain
+    // the snapshot identity; exclusive copy records its own before publication.
+    // Do not rewrite it here: a Windows backup exchange interrupted after
+    // publication could leave only a .bak and block catalog initialization.
     if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }

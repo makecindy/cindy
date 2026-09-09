@@ -42,7 +42,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
         readDir: (directory) => fs.readdir(directory),
         backupDatabase: (source, target) => fs.copyFile(source, target),
         link: (source, target) => fs.link(source, target),
-        copyNoReplace: (source, target) => fs.copyFile(source, target),
+        copyNoReplace: createProductionLocalProfileDataMigrationDeps(root, 'cindy').fs.copyNoReplace,
         removeIfExists: (file) => fs.rm(file, { force: true }),
       },
     },
@@ -84,6 +84,43 @@ describe('adoptLocalProfileDatabase', () => {
     const target = path.join(root, 'cindy-owner-a.db');
     expect(readModelVisibilityAdoption(target)).toBe('adopted');
     await expect(fs.access(`${target}.local-profile-copy-pending`)).rejects.toThrow();
+  });
+
+  it.each(['link', 'copy'] as const)('keeps the published receipt unchanged through restart (%s)', async (mode) => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    const receipt = `${target}.model-visibility-adoption.v1.json`;
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    let receiptWritesAfterPublication = 0;
+    let published = false;
+    const writeFile = originalFs.writeFileSync;
+    vi.spyOn(originalFs, 'writeFileSync').mockImplementation((...args) => {
+      if (published && String(args[0]).includes('.model-visibility-adoption.v1.json')) {
+        receiptWritesAfterPublication += 1;
+      }
+      return writeFile.apply(originalFs, args);
+    });
+    const publish = mode === 'link' ? deps.fs.link : deps.fs.copyNoReplace;
+    const capturePublication = async (source: string, destination: string) => {
+      await publish(source, destination);
+      expect(readModelVisibilityAdoption(target)).toBe('adopted');
+      published = true;
+    };
+    if (mode === 'link') {
+      deps.fs.link = capturePublication;
+    } else {
+      deps.fs.link = async () => { throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' }); };
+      deps.fs.copyNoReplace = capturePublication;
+    }
+
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('adopted');
+    expect(receiptWritesAfterPublication).toBe(0);
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('target-exists');
+    expect(readModelVisibilityAdoption(target)).toBe('adopted');
+    expect(receiptWritesAfterPublication).toBe(0);
+    await expect(fs.access(`${receipt}.bak`)).rejects.toThrow();
+    expect(await fs.readFile(target, 'utf8')).toBe('local-db');
   });
 
   it('hands local preferences only to the adopted database, retaining proof on restart', async () => {
@@ -283,7 +320,7 @@ describe('adoptLocalProfileDatabase', () => {
             await fs.writeFile(destination, 'partial');
             throw Object.assign(new Error('copy interrupted'), { code: 'EIO' });
           }
-          await fs.copyFile(source, destination);
+          await deps.fs.copyNoReplace(source, destination);
         },
       },
     };
