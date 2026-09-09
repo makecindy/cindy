@@ -431,6 +431,52 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  it('applies configured windows on creation and same-history resume, then restores the default',
+    { timeout: 60_000 }, async () => {
+      let limit: number | null = 80_000;
+      const deps = buildDeps();
+      deps.resolveModelContextLimit = (provider, model) =>
+        provider === 'xd' && model === 'pi-test-model' ? limit : null;
+      deps.runtimeConfig.piAutoCompactThresholdPct = 90;
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-context-resume-'));
+      let handle: AgentSessionHandle | undefined;
+      let nativeId: string | undefined;
+      try {
+        for (const next of [80_000, 140_000, 60_000, null]) {
+          limit = next;
+          handle = await agent.startSession({
+            sessionId: 'context-window-resume', workingDir, model: 'pi-test-model',
+            providerId: 'xd', ...(nativeId ? { resumeSessionId: nativeId } : {}),
+          });
+          expect(handle.getUsageSnapshot().contextWindow).toBe(next ?? 200_000);
+          if (nativeId) expect(handle.id).toBe(nativeId);
+          nativeId = handle.id;
+          const before = seenRequests.length;
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'remember CONTEXT_HISTORY_CANARY' });
+          await done;
+          expect(events.some((event) => event.type === 'text')).toBe(true);
+          expect(seenRequests.slice(before).some((request) => request.body.includes('CONTEXT_HISTORY_CANARY'))).toBe(true);
+          if (next !== 80_000) {
+            const body = JSON.parse(seenRequests[before]!.body);
+            expect(body.messages.filter((message: { role: string }) => message.role === 'user').length).toBeGreaterThan(1);
+          }
+          await handle.close();
+          handle = undefined;
+        }
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    });
+
   it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
     'loads global %s with native precedence and keeps the prompt stable across turns',
     { timeout: 60_000 },
@@ -818,7 +864,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
             'x-cindy-pi-provider-id': 'anthropic',
           },
-          models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
+          models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5', contextWindow: 80_000 }],
         }],
         env: { CINDY_PI_ANTHROPIC_PROXY_KEY: 'sk-ant-oat01' },
       });
@@ -834,6 +880,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           providerId: 'anthropic',
           effort: 'high',
         });
+        expect(handle.getUsageSnapshot().contextWindow).toBe(80_000);
         const collected = (async () => {
           for await (const event of handle!.events()) {
             if (event.type === 'done') break;

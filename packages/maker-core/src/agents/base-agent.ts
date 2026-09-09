@@ -829,7 +829,8 @@ export interface AgentDeps {
     ensureCodexBrowserUseReady: () => Promise<boolean>;
   }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
-  /** Explicit user context budget for this route. Missing means native/catalog defaults. */
+  /** Host working budget for this route (user override, optionally catalog default).
+   * Missing means the adapter uses its route/native defaults. */
   resolveModelContextLimit?: (
     providerId: string | null | undefined,
     modelId: string,

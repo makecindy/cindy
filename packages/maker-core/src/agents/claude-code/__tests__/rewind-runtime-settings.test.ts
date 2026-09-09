@@ -206,6 +206,7 @@ async function startRewindableSession(
     remoteHostId?: string;
     model?: string;
     availableModels?: ModelDescriptor[];
+    resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -237,6 +238,7 @@ async function startRewindableSession(
       },
     ),
     capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
+    resolveModelContextLimit: options.resolveModelContextLimit,
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
@@ -269,6 +271,19 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('requires a history-preserving rebuild when the active route budget changes', async () => {
+    let budget: number | null = 80_000;
+    const { handle } = await startRewindableSession({ autoCompactThresholdPct: 90, resolveModelContextLimit: () => budget });
+    try {
+      expect(sdkMock.query.mock.calls[0]?.[0]?.options?.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('80000');
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      budget = 140_000;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+      budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
   it('passes the selected custom-provider window and compact threshold to spawned Claude Code', async () => {
     const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
     const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;

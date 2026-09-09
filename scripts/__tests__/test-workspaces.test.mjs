@@ -239,6 +239,7 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	assert.equal(makerCore.tiers.integration.coverage, "allowlist");
 	assert.deepEqual(makerCore.tiers.integration.include, [
 		"src/agents/codex/*.integration.test.ts",
+		"src/agents/claude-code/__tests__/*.integration.test.ts",
 		"src/agents/pi/__tests__/*.integration.test.ts",
 	]);
 	assert.deepEqual(piManager.tiers.unit.exclude, [

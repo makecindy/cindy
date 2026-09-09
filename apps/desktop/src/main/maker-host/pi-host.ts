@@ -107,7 +107,7 @@ import {
   resolveBundledPiGatewayModelProfile,
 } from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
-import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
+import { resolvePiRuntimeModelDescriptor, resolveModelDefaultContextWindow } from './catalog-to-descriptors.js';
 import {
   resolveManagedPiNativePackagePaths,
   resolveManagedPiPackageResources,
@@ -756,9 +756,7 @@ export function buildPiSubscriptionNativeProviders(
                 ? { api: capabilityCorrection.api }
                 : {}),
           name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
-          contextWindow: isContextProfileAddition
-            ? model.contextWindow
-            : (preserved?.contextWindow ?? model.contextWindow),
+          contextWindow: model.contextWindow,
           ...(preserved?.maxTokens
             ? { maxTokens: preserved.maxTokens }
             : model.maxOutput
@@ -1827,7 +1825,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
     resolveModelContextLimit: (providerId, modelId) => providerId
-      ? readModelContextLimit('pi', providerId, modelId) : null,
+      ? readModelContextLimit('pi', providerId, modelId)
+        ?? resolveModelDefaultContextWindow(getActiveCatalog(), 'pi', providerId, modelId) : null,
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     binaryPath,

@@ -346,6 +346,12 @@ let _registerPiAgent: (() => boolean) | null = null;
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
+let modelContextRuntimeRefreshListener: (() => void) | null = null;
+
+/** Reconcile active tasks after a catalog working-default update. */
+export function setModelContextRuntimeRefreshListener(listener: (() => void) | null): void {
+  modelContextRuntimeRefreshListener = listener;
+}
 
 /** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
 export function setProviderAccessRuntimeRefreshListener(listener: (() => void) | null): void {
@@ -398,6 +404,7 @@ function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): 
 setActiveCatalogChangedListener((revision) => {
   try {
     refreshSelectableModelsAndBroadcast({ revision });
+    modelContextRuntimeRefreshListener?.();
   } catch (error) {
     desktopMakerLogger.warn('active catalog capabilities refresh failed', {
       revision,
@@ -1059,7 +1066,9 @@ export function getMaker(): Maker {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
       resolveModelContextLimit: (providerId, modelId) =>
-        providerId ? readModelContextLimit('claude-code', providerId, modelId) : null,
+        providerId ? readModelContextLimit('claude-code', providerId, modelId)
+          ?? resolveModelDefaultContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId)
+          : null,
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook

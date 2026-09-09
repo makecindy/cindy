@@ -1863,7 +1863,7 @@ export class PiAgent extends BaseAgent {
         continue;
       }
       const nativeModels = (
-        np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true || this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id) != null) : np.models
+        np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
       ).map((m) => {
         const contextWindow = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id)
           ?? (m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000);
@@ -1892,6 +1892,16 @@ export class PiAgent extends BaseAgent {
         ...(np.api ? { api: np.api } : {}),
         // keyless(本机 Ollama 等)也要给 dummy key,否则 pi /model 不显示该模型。
         apiKey: np.apiKeyEnvVar ? `$${np.apiKeyEnvVar}` : 'pi-native-keyless',
+        // Preserve native protocol/compatibility metadata while applying Cindy's
+        // route default or explicit working window to inherited models as well.
+        ...(np.inheritModels ? {
+          modelOverrides: Object.fromEntries(np.models.flatMap((model) => {
+            const window = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id)
+              ?? model.contextWindow;
+            return typeof window === 'number' && Number.isSafeInteger(window) && window > 0
+              ? [[model.wireId ?? model.id, { contextWindow: window }]] : [];
+          })),
+        } : {}),
         ...(np.headers && Object.keys(np.headers).length > 0 ? { headers: np.headers } : {}),
         ...(nativeModels.length > 0 ? { models: nativeModels } : {}),
       };
@@ -6327,6 +6337,15 @@ export class PiAgent extends BaseAgent {
         // was there becomes offerable again on the next durable poll.
         interactionResolverGeneration++;
         piSubagentApprovalDeferred.clear();
+      },
+
+      requiresModelSwitchRebuild(model, target) {
+        // Same-route configuration changes need models.json to be reloaded too.
+        // Ordinary route changes continue through Pi's existing switch_model path.
+        const provider = target?.providerId !== undefined ? target.providerId : mutableProviderId;
+        if (model !== mutableModel || provider !== mutableProviderId) return false;
+        const window = deps.resolveModelContextLimit?.(provider, model);
+        return typeof window === 'number' && window > 0 && window !== ctx.contextWindow;
       },
 
       async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {

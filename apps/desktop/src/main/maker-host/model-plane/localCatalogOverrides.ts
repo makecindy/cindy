@@ -263,7 +263,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
 /** 合成某 agent 的有效字段:base + perAgent[agent] 逐字段覆盖。 */
 function effectiveFields(
   entry: ModelCatalogOverrideEntry,
-  agent: RootAgentKind,
+  agent: AgentKind,
 ): ModelCatalogOverrideFields {
   return { ...entry.base, ...entry.perAgent?.[agent] };
 }
@@ -560,13 +560,15 @@ export function hasLocalContextWindowOverride(
   overrides: ModelCatalogOverrides,
   providerId: string,
   modelId: string,
-  agent: RootAgentKind,
+  agent: AgentKind,
 ): boolean {
   return (['additions', 'patches'] as const).some((section) => {
     const entry = overrides[section][`${encodeURIComponent(providerId)}:${modelId}`];
     return (
       entry &&
-      entryMembershipAgents(entry, providerId).includes(agent) &&
+      (agent === 'pi'
+        ? !entry.agents || entry.agents.includes('pi')
+        : entryMembershipAgents(entry, providerId).includes(agent)) &&
       effectiveFields(entry, agent).contextWindow !== undefined
     );
   });

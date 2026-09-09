@@ -11,6 +11,7 @@ import {
 } from '../../maker-host/codex-custom-provider-route.js';
 import {
   applyRuntimeSetModelChange,
+  refreshActiveModelContextSettings,
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
   type RuntimeSetModelMaker,
@@ -1322,6 +1323,30 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('reloads %s context settings only after the current turn', async (agentKind) => {
+    const sessionId = rememberSession(`context-reload-${agentKind}`);
+    setSessionProvider(sessionId, 'xd');
+    let busy = true;
+    const closeSession = vi.fn(async () => {});
+    const setModel = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind, model: 'same-model', setModel }),
+      listActiveSessions: () => [{ id: sessionId, agentKind, isTurnRunning: () => busy }],
+      closeSession,
+    };
+    const input = { maker, sessionId, model: 'same-model', providerId: 'xd',
+      forceSessionRebuild: true, registerPendingCredentialSwitch };
+    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'deferred' });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { model: 'same-model', providerId: 'xd', forceSessionRebuild: true });
+    busy = false;
+    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied' });
+    expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
   it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {
     const sessionId = rememberSession('runtime-set-model-orca-worker-rebuild');
     setSessionProvider(sessionId, 'xd');
@@ -1455,6 +1480,7 @@ describe('applyRuntimeSetModelChange', () => {
     })).resolves.toEqual({ status: 'deferred' });
 
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      forceSessionRebuild: true,
       model: 'gpt-5.6-sol',
       providerId: 'mygpt',
     });
@@ -1489,6 +1515,7 @@ describe('applyRuntimeSetModelChange', () => {
     })).resolves.toEqual({ status: 'deferred' });
 
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      forceSessionRebuild: true,
       model: 'gpt-5.4',
       providerId: 'xd',
     });
@@ -1521,5 +1548,40 @@ describe('applyRuntimeSetModelChange', () => {
       }),
     ).rejects.toThrow(/busy/);
     expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+});
+
+describe('context configuration refresh across live routes', () => {
+  it.each(['explicit', 'default'] as const)('refreshes all three engines for a %s edit while preserving other routes and pending choices', async (kind) => {
+    const ids = ['claude-code', 'codex', 'pi', 'other-route', 'pending'] as const;
+    const sessions = ids.map((id) => {
+      rememberSession(id);
+      setSessionProvider(id, id === 'other-route' ? 'other' : 'xd');
+      return { id, agentKind: id === 'other-route' || id === 'pending' ? 'pi' as const : id,
+        model: 'shared-model', setModel: vi.fn(async () => {}),
+        requiresModelSwitchRebuild: vi.fn(() => id !== 'other-route'), isTurnRunning: () => false };
+    });
+    const closeSession = vi.fn(async (_sessionId: string) => {});
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: (id) => sessions.find((s) => s.id === id), listActiveSessions: () => sessions, closeSession },
+        getPendingCredentialSwitch: (id) => id === 'pending' ? { model: 'next-model', providerId: 'xd' } : undefined },
+      ...(kind === 'explicit' ? { targets: sessions.slice(0, 3).map((s) => ({ agent: s.agentKind, providerId: 'xd', modelId: s.model })) } : {}),
+      inferProviderId: () => null, assertCurrent: () => {},
+    });
+    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['claude-code', 'codex', 'pi']);
+    expect(sessions[4]!.requiresModelSwitchRebuild).not.toHaveBeenCalled();
+  });
+
+  it('stops a default refresh if the account changes during native preflight', async () => {
+    const sessionId = rememberSession('owner-context-refresh');
+    let current = true;
+    const closeSession = vi.fn(async (_sessionId: string) => {});
+    const session = { id: sessionId, agentKind: 'claude-code' as const, model: 'model', setModel: vi.fn(async () => {}),
+      requiresModelSwitchRebuild: async () => { current = false; return true; } };
+    await expect(refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession } },
+      inferProviderId: () => 'xd', assertCurrent: () => { if (!current) throw new Error('owner changed'); },
+    })).rejects.toThrow('owner changed');
+    expect(closeSession).not.toHaveBeenCalled();
   });
 });

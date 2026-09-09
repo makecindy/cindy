@@ -1017,3 +1017,23 @@ it('preserves the upstream maximum separately from per-harness recommended windo
     contextWindowMax: 1_050_000,
   });
 });
+
+it('honors local working defaults and separate maximums in all three GPT harnesses', () => {
+  setActiveCatalog(BUNDLED_CATALOG);
+  for (const maximum of [900_000, 1_000_000]) {
+    setXdGatewayModels([{ id: 'gpt-context-default-test', name: 'Context test',
+      agents: ['claude-code', 'codex', 'pi'], contextWindow: maximum }]);
+    setLocalCatalogOverrides(overridesOf({ patches: { 'xd:gpt-context-default-test': {
+      perAgent: {
+        'claude-code': { contextWindow: 350_000 }, codex: { contextWindow: 450_000 }, pi: { contextWindow: 550_000 },
+      },
+    } } }));
+    for (const [agent, window] of [['claude-code', 350_000], ['codex', 450_000], ['pi', 550_000]] as const) {
+      expect(models('xd', agent)[0]).toMatchObject({ contextWindow: window, contextWindowMax: maximum });
+    }
+  }
+  setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(models('xd', agent)[0]).toMatchObject({ contextWindow: 272_000, contextWindowMax: 1_000_000 });
+  }
+});
