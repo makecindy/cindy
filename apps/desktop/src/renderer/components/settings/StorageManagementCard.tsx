@@ -30,6 +30,7 @@ import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
@@ -80,7 +81,8 @@ export function StorageManagementCard() {
         databaseApi?.measure?.() ?? databaseApi?.getStatus?.() ?? Promise.resolve({ databaseBytes: null }),
       ]);
       const mediaSucceeded = mediaResult.status === 'fulfilled' && mediaResult.value.success;
-      const databaseSucceeded = databaseResult.status === 'fulfilled';
+      const databaseSucceeded =
+        databaseResult.status === 'fulfilled' && databaseResult.value.databaseBytes !== null;
       setStats(mediaSucceeded ? mediaResult.value : null);
       setDatabaseBytes(databaseSucceeded ? databaseResult.value.databaseBytes : null);
       setStatsFailed(!mediaSucceeded || !databaseSucceeded);
@@ -294,16 +296,16 @@ export function StorageManagementCard() {
               </span>
             )}
           </div>
-          <CardButton
+          <Button
+            variant="secondary"
+            size="md"
             onClick={() => void refreshStats()}
             disabled={statsRefreshing}
-            busy={statsRefreshing}
+            loading={statsRefreshing}
           >
-            <span className={cn('inline-flex', statsRefreshing && 'motion-safe:animate-spin motion-reduce:animate-none')}>
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-            </span>
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden />
             {t('settings.about.storage.refreshStatsButton')}
-          </CardButton>
+          </Button>
         </div>
       </div>
 
@@ -1003,7 +1005,7 @@ function DatabaseSlimmingSection({
               if (Number.isFinite(value)) onWarningThresholdChange(value);
             }}
             onBlur={() => void saveWarningThreshold()}
-            className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            className="h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
           />
           <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>

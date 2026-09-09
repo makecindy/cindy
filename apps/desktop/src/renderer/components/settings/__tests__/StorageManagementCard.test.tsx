@@ -208,6 +208,18 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
   });
 
+  it('treats a null database measurement as a failed statistic', async () => {
+    vi.mocked(window.electronAPI.localDb.databaseSizeWarning.measure).mockResolvedValue({
+      databaseBytes: null,
+    });
+    render(<StorageManagementCard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('settings.about.storage.statsFailed')).toBeTruthy();
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
+    });
+  });
+
   it('restores the persisted threshold when saving a new threshold fails', async () => {
     const warningApi = databaseSizeWarningApi();
     vi.mocked(warningApi.setSettings).mockRejectedValueOnce(new Error('write failed'));
