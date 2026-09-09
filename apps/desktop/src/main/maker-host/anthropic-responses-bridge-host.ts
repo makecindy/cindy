@@ -312,6 +312,27 @@ export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ acc
   return _authCache;
 }
 
+/** A deferred child request must revalidate both credential and authorization at dispatch/retry. */
+export async function getChatgptBridgeAuthForDispatch(): Promise<{
+  accessToken: string; accountId: string | null; canDispatch(): boolean;
+}> {
+  const ownerScope = activeOwnerScopeKey();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const auth = await getChatgptBridgeAuth();
+    throwIfOwnerBoundDispatchUnsafe(ownerScope);
+    const proof = desktopCodexAuthAdapter.captureOAuthDispatchProof(auth.accessToken, auth.accountId);
+    if (proof) return {
+      ...auth,
+      canDispatch: () => ownerScope === activeOwnerScopeKey()
+        && !isAppSessionBoundaryPending() && proof(),
+    };
+    // The existing cache can straddle native account replacement. Only a fresh,
+    // proven credential may produce a new decision; the old decision stays invalid.
+    clearChatgptBridgeCredentialCache();
+  }
+  throw new Error('OpenAI authorization changed while preparing the child request');
+}
+
 /** codex(ChatGPT 订阅)provider 配置:chatgpt/ 前缀 → codex 后端,注入订阅 OAuth + codex 专属头。 */
 function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
   return {

@@ -60,6 +60,7 @@ let customProviderHeaderReader: CustomProviderHeaderReader = () => null;
 const providerRouteMutationCounts = new Map<string, number>();
 const providerRouteCredentialRevisions = new Map<string, number>();
 let nextProviderRouteCredentialRevision = 1;
+const providerRouteMutationWaiters = new Map<string, Set<() => void>>();
 
 export type ProviderRouteMutationRelease = (() => void) & {
   /** Publish the new non-sensitive route/capability/credential dispatch generation. */
@@ -96,7 +97,12 @@ export function beginProviderRouteMutation(providerId: string): ProviderRouteMut
     if (finished) return;
     finished = true;
     const remaining = (providerRouteMutationCounts.get(providerId) ?? 1) - 1;
-    if (remaining <= 0) providerRouteMutationCounts.delete(providerId);
+    if (remaining <= 0) {
+      providerRouteMutationCounts.delete(providerId);
+      const waiters = providerRouteMutationWaiters.get(providerId);
+      providerRouteMutationWaiters.delete(providerId);
+      for (const resolve of waiters ?? []) resolve();
+    }
     else providerRouteMutationCounts.set(providerId, remaining);
   }) as ProviderRouteMutationRelease;
   finish.commit = () => {
@@ -626,10 +632,23 @@ export function getProviderRoutingDescriptor(
 }
 
 /** Choose process isolation from routing metadata without loading any credentials. */
-export function resolveCodexLocalAuthPolicy(
+export async function resolveCodexLocalAuthPolicy(
   providerId: string | null | undefined,
   modelId: string,
-): 'isolated' | 'legacy-shared' {
+): Promise<'isolated' | 'legacy-shared'> {
+  // With an inferred source the transaction may temporarily remove the model
+  // from the catalog. Wait before inference, rather than freezing an unknown route.
+  while (true) {
+    const pending = providerId
+      ? [runtimeCustomProviderId(providerId)].filter(isProviderRouteMutationInProgress)
+      : [...providerRouteMutationCounts.keys()];
+    if (pending.length === 0) break;
+    await Promise.all(pending.map((id) => new Promise<void>((resolve) => {
+      const waiters = providerRouteMutationWaiters.get(id) ?? new Set<() => void>();
+      waiters.add(resolve);
+      providerRouteMutationWaiters.set(id, waiters);
+    })));
+  }
   const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
   const routing = getProviderRoutingDescriptor(source, 'codex', modelId);
   // Keep legacy reuse for gateway, third-party OAuth and unknown routes. This

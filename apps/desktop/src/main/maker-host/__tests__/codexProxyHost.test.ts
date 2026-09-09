@@ -8170,6 +8170,26 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
 });
 
 describe('official Subagents on external credential Hosts', () => {
+  it('invalidates a captured official child decision when its scoped proxy retires', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexCustomContextProxyReady('external-scope', 'provider-oauth', []);
+    host.setCodexSubagentOAuthReader(async () => ({ accessToken: 'synthetic-child', accountId: 'fixture', canDispatch: () => true }));
+    host.registerComposed('scoped-parent', 'scoped-parent-thread', 'fixture', {
+      subagentRoute: { providerId: 'openai', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },
+    });
+    try {
+      const route = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.routingTransform;
+      if (!route) throw new Error('missing scoped routing transform');
+      const decision = await route({ model: 'gpt-5.4' }, { reqId: 1, method: 'POST', url: '/responses', headers: {
+        'thread-id': 'scoped-child', 'x-openai-subagent': 'collab_spawn', 'x-codex-parent-thread-id': 'scoped-parent-thread',
+      } });
+      expect(decision?.dispatchGenerationValid?.()).toBe(true);
+      await host.releaseCodexCustomContextProxy('external-scope');
+      expect(decision?.dispatchGenerationValid?.()).toBe(false);
+    } finally { await host.disposeCodexProxy(); }
+  });
+
   it.each([false, true])('reads host OAuth only for an explicit official child (revoked=%s)', async (revoked) => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -8210,9 +8230,10 @@ describe('official Subagents on external credential Hosts', () => {
           upstreamOverride: 'https://chatgpt.com/backend-api/codex',
           pathOverride: '/responses',
           headerOverride: { authorization: 'Bearer synthetic-child-token', 'chatgpt-account-id': 'fixture-account' },
-          dispatchGenerationValid: canDispatch,
+          dispatchGenerationValid: expect.any(Function),
         });
-        canDispatch.mockReturnValue(false);
+        expect(decision?.dispatchGenerationValid?.()).toBe(true);
+        host.unregister('external-parent-session');
         expect(decision?.dispatchGenerationValid?.()).toBe(false);
       }
     } finally {

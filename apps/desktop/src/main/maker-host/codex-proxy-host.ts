@@ -2759,6 +2759,7 @@ function resolveCodexCustomProviderRoutingDecision(
 export function createModelRoutingTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
   frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
+  sourceHostAlive: () => boolean = () => true,
 ): RoutingTransform {
   return (body, ctx) => {
     const inheritedPath = parseCodexCustomProviderPath(ctx.url);
@@ -2771,7 +2772,7 @@ export function createModelRoutingTransform(
         ? findCodexAppliedCustomProviderRoute(inheritedPath.routeId)
         : frozenCustomProviderRoutes.find((route) => route.routeId === inheritedPath.routeId);
       if (childRoute && parentRoute && childRoute.providerId !== parentRoute.providerId) {
-        return Promise.resolve(createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes)(
+        return Promise.resolve(createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, sourceHostAlive)(
           body, { ...ctx, url: '/responses' },
         )).then((decision) => decision
           ? { pathOverride: '/responses', ...decision }
@@ -2858,7 +2859,10 @@ export function createModelRoutingTransform(
             ...(auth.accountId ? { 'chatgpt-account-id': auth.accountId } : {}),
           },
           ...(!auth.accountId ? { headerDelete: ['chatgpt-account-id'] } : {}),
-          dispatchGenerationValid: auth.canDispatch,
+          dispatchGenerationValid: () => sourceHostAlive()
+            && threadToSession.get(threadId) === sessionId
+            && subagentRouteByThread.get(threadId) === subagentRoute
+            && auth.canDispatch(),
         })).catch(() => unresolvedCollabSpawnRouteDecision());
       }
       if (selectedUsesLocalBridge) {
@@ -3180,13 +3184,14 @@ export function withCodexUpstreamRecording(
   };
 }
 
-function createCodexProxyHandle(
+async function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
   frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): Promise<ProxyHandle> {
   const execAdapter = createCodexResponsesCompatibilityAdapter();
+  let alive = true;
   const pricing: XaiRequestPricing = new Map();
-  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes);
+  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive);
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
@@ -3198,7 +3203,7 @@ function createCodexProxyHandle(
     const decision = route(body, ctx);
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
-  return createAnthropicCompatProxy({
+  const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing).map(
@@ -3321,6 +3326,12 @@ function createCodexProxyHandle(
       return CODEX_OAUTH_UPSTREAM;
     },
   });
+  const dispose = handle.dispose.bind(handle);
+  handle.dispose = async () => {
+    alive = false;
+    await dispose();
+  };
+  return handle;
 }
 
 /**

@@ -95,24 +95,43 @@ afterEach(() => {
 });
 
 describe('Codex local auth policy', () => {
-  it('uses the actual custom route even without image generation capabilities', () => {
+  it('uses the actual custom route even without image generation capabilities', async () => {
     setCustomProviders([buildUserProvider({
       id: 'plain-key', name: 'Plain API',
       runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'plain-model', name: 'Plain' }] } },
     })]);
     try {
-      expect(resolveCodexLocalAuthPolicy('plain-key', 'plain-model')).toBe('isolated');
-      expect(resolveCodexLocalAuthPolicy(undefined, 'plain-model')).toBe('isolated');
-      expect(resolveCodexLocalAuthPolicy('missing-provider', 'plain-model')).toBe('legacy-shared');
+      expect(await resolveCodexLocalAuthPolicy('plain-key', 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy(undefined, 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy('missing-provider', 'plain-model')).toBe('legacy-shared');
     } finally {
       setCustomProviders([]);
     }
   });
 
-  it('keeps official subscriptions and gateway compatibility distinct from provider OAuth', () => {
-    expect(resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
-    expect(resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('legacy-shared');
-    expect(resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
+  it('waits through nested route mutations before selecting an API key policy', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'pending-key', name: 'Pending API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'pending-model', name: 'Pending' }] } },
+    })]);
+    const finish = beginProviderRouteMutation('pending-key');
+    const nested = beginProviderRouteMutation('pending-key');
+    let settled = false;
+    const policy = resolveCodexLocalAuthPolicy('pending-key', 'pending-model').then((value) => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.commit();
+    finish();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    nested();
+    await expect(policy).resolves.toBe('isolated');
+  });
+
+  it('keeps official subscriptions and gateway compatibility distinct from provider OAuth', async () => {
+    expect(await resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
+    expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('legacy-shared');
+    expect(await resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
   });
 });
 

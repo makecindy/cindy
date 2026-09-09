@@ -47,6 +47,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
 
   class MockCodexTransport {
     static threadSeq = 1;
+    static userAgent = 'mock-codex';
     static failThreadStart = false;
     static dropThreadUnsubscribe = false;
     static dropModelList = false;
@@ -88,7 +89,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
         this.emitLine({
           id: req.id,
           result: {
-            userAgent: 'mock-codex',
+            userAgent: MockCodexTransport.userAgent,
             codexHome: '/tmp/mock-codex-home',
             platformOs: 'macos',
             defaultModel: 'gpt-5.4',
@@ -286,6 +287,7 @@ vi.mock('./app-server/stdioTransport.js', () => ({
 }));
 
 beforeEach(() => {
+  MockCodexTransport.userAgent = 'mock-codex';
   createdTransports.length = 0;
   createdStdioOptions.length = 0;
   MockCodexTransport.threadSeq = 1;
@@ -397,6 +399,30 @@ describe('Codex official OAuth host isolation', () => {
     } finally {
       await agent.dispose();
     }
+  });
+
+  it.each(['openai', 'cprov-test'])('rebuilds a changed routing signature without retiring the sibling of %s', async (providerId) => {
+    let signature = 'initial';
+    const deps = isolatedDeps();
+    deps.prepareCodexExtraSpawnConfig = async () => ({ extraArgs: [], extraEnv: {}, codexProxyActive: true, codexSubagentRoutingSignature: signature });
+    deps.resolveCodexSubagentRoutingSignature = async () => signature;
+    const coordinate = vi.fn(async () => {});
+    deps.prepareCodexLocalCredentialModeSwitch = coordinate;
+    const agent = new CodexAgent(deps);
+    try {
+      const target = await agent.startSession({ sessionId: 'target-signature', providerId, model: 'gpt-5.4', workingDir: '/repo' });
+      const sibling = await agent.startSession({ sessionId: 'sibling-signature', providerId: providerId === 'openai' ? 'cprov-test' : 'openai', model: 'gpt-5.4', workingDir: '/repo' });
+      const siblingTransport = createdTransports[1];
+      await target.close();
+      signature = 'changed';
+      const replacement = await agent.startSession({ sessionId: 'replacement-signature', providerId, model: 'gpt-5.4', workingDir: '/repo' });
+      expect(createdTransports[0].closed).toBe(true);
+      expect(siblingTransport.closed).toBe(false);
+      expect(createdTransports).toHaveLength(3);
+      if (coordinate.mock.calls.length) expect(coordinate).toHaveBeenCalledWith(expect.objectContaining({ hostKey: target.codexHostKey }));
+      await sibling.close();
+      await replacement.close();
+    } finally { await agent.dispose(); }
   });
 
   it('re-evaluates provider switches and resumes on the isolated host', async () => {
@@ -536,17 +562,20 @@ describe('Codex official OAuth host isolation', () => {
     }
   });
 
-  it('retires custom-context snapshots and blocks newly named hosts until configuration persistence completes', async () => {
+  it.each([false, true])('retires scoped snapshots and blocks new hosts during configuration persistence (review=%s)', async (reviewMode) => {
+    if (reviewMode) MockCodexTransport.userAgent = 'mock-codex/0.145.0';
+    if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-change-'));
     const deps = isolatedDeps();
     deps.resolveCodexThreadContextWindow = () => 700_000;
     const agent = new CodexAgent(deps);
     try {
-      await agent.startSession({ sessionId: 'old-config', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      await agent.startSession({ sessionId: 'old-config', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
       const guard = await agent.beginLocalHostCredentialChange();
       try {
         await guard.retireActiveHost();
         expect(createdTransports[0].closed).toBe(true);
-        const pending = agent.startSession({ sessionId: 'new-config', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+        const pending = agent.startSession({ sessionId: 'new-config', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
         let completed = false;
         void pending.then(() => { completed = true; });
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -555,13 +584,50 @@ describe('Codex official OAuth host isolation', () => {
         await guard.finalize();
         const handle = await pending;
         expect(createdTransports).toHaveLength(2);
-        expect(handle.codexHostKey).toBe('local-custom-context:new-config:external-auth');
+        expect(handle.codexHostKey).toBe(reviewMode ? 'local-review:new-config:external-auth' : 'local-custom-context:new-config:external-auth');
         await handle.close();
       } finally {
         guard.release();
       }
     } finally {
       await agent.dispose();
+      await fs.rm(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])('supersedes an in-flight scoped creation at the configuration boundary (review=%s)', async (reviewMode) => {
+    MockCodexTransport.userAgent = 'mock-codex/0.145.0';
+    if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-inflight-'));
+    const deps = isolatedDeps();
+    deps.resolveCodexThreadContextWindow = () => 700_000;
+    const agent = new CodexAgent(deps);
+    let entered!: () => void;
+    let resume!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const paused = new Promise<void>((resolve) => { resume = resolve; });
+    MockCodexTransport.beforeInitializeResponse = async () => { entered(); await paused; };
+    try {
+      const pending = agent.startSession({ sessionId: 'creating-scope', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
+      const rejected = expect(pending).rejects.toThrow();
+      await started;
+      const guard = await agent.beginLocalHostCredentialChange();
+      try {
+        const retired = guard.retireActiveHost();
+        resume();
+        await retired;
+        await rejected;
+        await guard.finalize();
+      } finally { guard.release(); }
+      MockCodexTransport.beforeInitializeResponse = null;
+      const replacement = await agent.startSession({ sessionId: 'creating-scope', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
+      expect(createdTransports[0].closed).toBe(true);
+      expect(createdTransports.at(-1)?.closed).toBe(false);
+      await replacement.close();
+    } finally {
+      resume();
+      await agent.dispose();
+      await fs.rm(workingDir, { recursive: true, force: true });
     }
   });
 

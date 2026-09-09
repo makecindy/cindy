@@ -107,8 +107,6 @@ import { remoteInvoke } from '../device-link/index.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
-  activeOwnerScopeKey,
-  isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
@@ -183,7 +181,7 @@ import {
   settleLocalPiPackageRuntimeSnapshot,
   type PiPackageRuntimeInvalidationSnapshot,
 } from './pi-package-runtime-invalidation.js';
-import { clearChatgptBridgeCredentialCache, getChatgptBridgeAuth } from './anthropic-responses-bridge-host.js';
+import { clearChatgptBridgeCredentialCache, getChatgptBridgeAuthForDispatch } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
   getDesktopProviderService,
@@ -1711,14 +1709,7 @@ export function getMaker(): Maker {
           await broadcastCodexRuntimeRoute();
         }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
-        setCodexSubagentOAuthReader(async () => {
-          const ownerScope = activeOwnerScopeKey();
-          const auth = await getChatgptBridgeAuth();
-          return {
-            ...auth,
-            canDispatch: () => ownerScope === activeOwnerScopeKey() && !isAppSessionBoundaryPending(),
-          };
-        });
+        setCodexSubagentOAuthReader(getChatgptBridgeAuthForDispatch);
 
         const customContextProviderRoutes = usesScopedProxy
           ? deriveCodexCustomProviderRoutes(getActiveCatalog())

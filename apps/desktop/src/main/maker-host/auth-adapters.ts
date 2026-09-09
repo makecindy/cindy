@@ -105,6 +105,7 @@ import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
+  captureNativeProviderAuthorizationGeneration,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
   isNativeProviderAuthSharedSystemCredential,
@@ -1708,6 +1709,26 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   captureCredentialGeneration(): string | null {
     const fingerprint = currentCodexCredentialGeneration(path.join(this.codexHome, 'auth.json'));
     return fingerprint ? JSON.stringify(fingerprint) : null;
+  }
+
+  /** Bind a host-owned request to the same credential and durable authorization as native Codex. */
+  captureOAuthDispatchProof(accessToken: string, accountId: string | null): (() => boolean) | null {
+    if (!this.hasCodexOAuthLoginReadOnly()) return null;
+    const credentialGeneration = this.captureCredentialGeneration();
+    const authorizationGeneration = captureNativeProviderAuthorizationGeneration('openai');
+    if (!credentialGeneration || !authorizationGeneration) return null;
+    const authPath = path.join(this.codexHome, 'auth.json');
+    try {
+      const raw = fs.readFileSync(authPath, 'utf8');
+      const auth = JSON.parse(raw) as { tokens?: { access_token?: string } };
+      if (auth.tokens?.access_token !== accessToken || codexAccountIdFromAuthJson(raw) !== accountId) return null;
+    } catch {
+      return null;
+    }
+    const isCurrent = () => this.hasCodexOAuthLoginReadOnly()
+      && this.captureCredentialGeneration() === credentialGeneration
+      && captureNativeProviderAuthorizationGeneration('openai') === authorizationGeneration;
+    return isCurrent() ? isCurrent : null;
   }
 
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */
