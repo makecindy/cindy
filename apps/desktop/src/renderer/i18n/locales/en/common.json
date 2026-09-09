@@ -10729,6 +10729,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "View skill details",
     "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
   },
   "skillhub": {
@@ -10887,11 +10888,11 @@
         "market": "Back to Market",
         "skillhub": "Back to SkillHub"
       },
-      "uninstall": "Uninstall",
+      "uninstall": "Uninstall Skill",
       "uninstallDialog": {
-        "title": "Uninstall {{name}}?",
-        "description": "Will remove the local folder\n{{path}}\nThis cannot be undone.",
-        "confirm": "Confirm uninstall",
+        "title": "Uninstall “{{name}}”?",
+        "description": "Local files and edits will move to the trash and can be restored.\n\nOther Agents sharing this skill will also be affected. Published versions and installations elsewhere are unaffected.",
+        "confirm": "Uninstall",
         "cancel": "Cancel"
       },
       "uninstalledToast": "{{name}} uninstalled",
@@ -11289,6 +11290,27 @@
     "marketEdit": {
       "saved": "Market info saved",
       "displayNameRequired": "Display name is required"
+    },
+    "management": {
+      "disabled": "Disabled",
+      "enabledLabel": "Enable Skill “{{name}}”",
+      "moreLabel": "Manage Skill “{{name}}”",
+      "activationHint": "Controls Skill loading in Cindy only. Takes effect when starting or restarting an Agent.",
+      "enabledToast": "Skill “{{name}}” enabled. Start or restart the Agent to apply.",
+      "disabledToast": "Skill “{{name}}” disabled. Start or restart the Agent to apply.",
+      "toggleFailed": "Could not save the Skill setting. Try again.",
+      "uninstallFailed": "Could not move the Skill to the trash. Check file permissions and try again.",
+      "refreshRequired": "The Skill is being changed or its source has changed. Refresh the list and try again.",
+      "globalScope": "Installation: global Skill",
+      "projectScope": "Project: {{project}}",
+      "trashDescription": "Local files and edits will move to the trash and can be restored.",
+      "unlinkDescription": "Only the local skill entry will be removed. Original files and edits will be kept.",
+      "sharedImpact": "Other Agents sharing this skill will also be affected. Published versions and installations elsewhere are unaffected.",
+      "managedElsewhere": "This Skill belongs to another package or shared directory. Remove it at its source.",
+      "managedByPlugin": "This skill is provided by a plugin. Manage it on that plugin’s page.",
+      "cleanupIncomplete": "Uninstall cleanup for “{{name}}” is unfinished. Retry now or reopen Skills later to continue. Reinstallation is paused until cleanup completes.",
+      "retryCleanup": "Retry cleanup",
+      "cleanupComplete": "Cleanup completed"
     }
   },
   "makerExperimental": {

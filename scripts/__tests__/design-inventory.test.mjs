@@ -125,6 +125,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/skillhub/local SkillhubHomeView',
     '/skillhub/local/:kind/global/:name SkillhubDetailView',
     '/skillhub/local/:kind/project/:projectHash/:name SkillhubDetailView',
+    '/skillhub/local/by-path SkillhubDetailView',
     '/skillhub/market SkillhubMarketListView',
   ]);
 

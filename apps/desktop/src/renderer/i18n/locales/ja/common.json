@@ -10713,6 +10713,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
@@ -10871,10 +10872,10 @@
         "market": "Market に戻る",
         "skillhub": "SkillHub に戻る"
       },
-      "uninstall": "アンインストール",
+      "uninstall": "スキルをアンインストール",
       "uninstallDialog": {
-        "title": "{{name}} をアンインストールしますか?",
-        "description": "ローカルフォルダを削除します\n{{path}}\nこの操作は取り消せません。",
+        "title": "「{{name}}」をアンインストールしますか？",
+        "description": "ローカルファイルと編集内容をゴミ箱に移動します。復元できます。\n\nこのスキルを共有する他の Agent にも影響します。公開済みバージョンや別の場所のインストールには影響しません。",
         "confirm": "アンインストール",
         "cancel": "キャンセル"
       },
@@ -11273,6 +11274,27 @@
     "marketEdit": {
       "saved": "マーケット表示情報を保存しました",
       "displayNameRequired": "表示名を入力してください"
+    },
+    "management": {
+      "disabled": "無効",
+      "enabledLabel": "スキル「{{name}}」を有効にする",
+      "moreLabel": "スキル「{{name}}」を管理",
+      "activationHint": "Cindy 内のスキルの読み込みにのみ適用されます。Agent の起動または再起動後に反映されます。",
+      "enabledToast": "スキル「{{name}}」を有効にしました。Agent の起動または再起動後に反映されます",
+      "disabledToast": "スキル「{{name}}」を無効にしました。Agent の起動または再起動後に反映されます",
+      "toggleFailed": "スキルの設定を保存できませんでした。もう一度お試しください",
+      "uninstallFailed": "スキルをゴミ箱に移動できませんでした。ファイルのアクセス権を確認して再試行してください",
+      "refreshRequired": "スキルの変更中、または読み込み元が変更されています。一覧を更新して再試行してください",
+      "globalScope": "インストール先: グローバルスキル",
+      "projectScope": "プロジェクト: {{project}}",
+      "trashDescription": "ローカルファイルと編集内容をゴミ箱に移動します。復元できます。",
+      "unlinkDescription": "ローカルのスキル登録のみを削除します。元のファイルと編集内容は保持されます。",
+      "sharedImpact": "このスキルを共有する他の Agent にも影響します。公開済みバージョンや別の場所のインストールには影響しません。",
+      "managedElsewhere": "このスキルは別のパッケージまたは共有ディレクトリで管理されています。提供元で削除してください",
+      "managedByPlugin": "このスキルはプラグインが提供しています。提供元のプラグインページで管理してください。",
+      "cleanupIncomplete": "「{{name}}」のアンインストール後のクリーンアップが未完了です。再試行するか、後でスキルを開き直して続行してください。完了するまで再インストールはできません。",
+      "retryCleanup": "整理を再試行",
+      "cleanupComplete": "整理が完了しました"
     }
   },
   "makerExperimental": {

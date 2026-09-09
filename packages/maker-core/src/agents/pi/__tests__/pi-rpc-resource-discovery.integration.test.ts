@@ -14,6 +14,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { applyPiDisabledSkillSettings, piDisabledDiscoveryPaths } from '../skill-activation.js';
 import { scanPiCustomizations } from '../customization-scanner.js';
 import { capturePiRuntimeCapabilityManifest } from '../runtime-capabilities.js';
 import { runGetCommands, type PiCommand } from './pi-rpc-test-harness.js';
@@ -180,6 +182,36 @@ function normalizeSkills(commands: PiCommand[], fixture: Fixture): NormalizedSki
 }
 
 describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts', () => {
+  it('applies session-local Skill exclusions without removing native package resources', async () => {
+    const fixture = await createFixture('pi-rpc-skill-exclusions-');
+    const hiddenGlobal = path.join(fixture.configHome, 'skills', 'global-skill', 'SKILL.md');
+    const packageRoot = path.join(fixture.root, 'native-package');
+    writeSkill(path.join(packageRoot, 'skills', 'package-on'), 'package-on');
+    writeSkill(path.join(packageRoot, 'skills', 'package-off'), 'package-off');
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'fixture-native', pi: { skills: ['./skills'] } }));
+    const external = path.join(fixture.root, 'external', 'alias-source');
+    writeSkill(external, 'alias-source');
+    symlinkSync(external, path.join(fixture.configHome, 'skills', 'alias-link'), process.platform === 'win32' ? 'junction' : 'dir');
+    const settingsPath = path.join(fixture.configHome, 'settings.json');
+    writeFileSync(settingsPath, JSON.stringify(applyPiDisabledSkillSettings({ packages: [packageRoot] }, piDisabledDiscoveryPaths([
+      hiddenGlobal, external, path.join(packageRoot, 'skills', 'package-off', 'SKILL.md'),
+    ], [path.join(fixture.configHome, 'skills')]))));
+    const options = { binaryPath: PI_BINARY, cwd: fixture.workingDir,
+      configHome: fixture.configHome, sessionDir: fixture.sessionDir, approve: false };
+    const disabled = await runGetCommands(options);
+    const names = disabled.commands.map((command) => command.name);
+    expect(names).not.toContain('skill:global-skill');
+    expect(names).not.toContain('skill:package-off');
+    expect(names).not.toContain('skill:alias-source');
+    expect(names).toContain('skill:package-on');
+    expect(existsSync(hiddenGlobal)).toBe(true);
+    writeFileSync(settingsPath, JSON.stringify({ packages: [packageRoot] }));
+    const enabled = await runGetCommands(options);
+    expect(enabled.commands.map((command) => command.name)).toEqual(expect.arrayContaining([
+      'skill:global-skill', 'skill:package-off', 'skill:package-on',
+    ]));
+  });
+
   it('records isolated global skills and omits unapproved project resources', async () => {
     const fixture = await createFixture('pi-rpc-no-trust-');
     const result = await runGetCommands({

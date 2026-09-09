@@ -617,8 +617,9 @@ export function catalogSurfaces() {
         '/skillhub/local',
         '/skillhub/local/:kind/global/:name',
         '/skillhub/local/:kind/project/:projectHash/:name',
+        '/skillhub/local/by-path',
       ],
-      routeEntryComponents: { '/skillhub/local': 'SkillhubHomeView', '/skillhub/local/:kind/global/:name': 'SkillhubDetailView', '/skillhub/local/:kind/project/:projectHash/:name': 'SkillhubDetailView' },
+      routeEntryComponents: { '/skillhub/local': 'SkillhubHomeView', '/skillhub/local/:kind/global/:name': 'SkillhubDetailView', '/skillhub/local/:kind/project/:projectHash/:name': 'SkillhubDetailView', '/skillhub/local/by-path': 'SkillhubDetailView' },
     },
     {
       id: 'desktop.skillhub.market',

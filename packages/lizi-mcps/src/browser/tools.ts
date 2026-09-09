@@ -1,5 +1,6 @@
 import {
   isPublicHttpResourceUrl,
+  parseBrowserProxyServer,
   type BrowserControlRequest,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
@@ -238,6 +239,12 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         .enum(['external', 'rsb-webview'])
         .optional()
         .describe('仅 action=setBackend: 切换全局自动化目标并保存设置; 会影响其他任务,两种模式的登录态与标签页不互通'),
+      proxyServer: z.string().optional().describe(
+        'action=start 时使用的代理 URL（如 http://host:port）。**不支持带用户名/密码的认证代理**，带 userinfo 会被直接拒绝',
+      ),
+      proxyAllowedHostnames: z.array(z.string()).min(1).max(32).optional().describe(
+        'action=start 且启用代理时允许导航的公网 DNS 名称或 *.example.com 模式；代理模式默认禁止导航',
+      ),
       profile: z.string().optional().describe('浏览器 profile 名;省略则使用默认隔离 profile'),
       target: z.enum(['sandbox', 'host', 'node']).optional(),
       node: z.string().optional(),
@@ -354,6 +361,22 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         }
         if (args.backend !== undefined) {
           return errorResult(args.action, 'backend 仅用于 setBackend; 请先切换模式,再操作页面');
+        }
+        if (args.proxyServer !== undefined || args.proxyAllowedHostnames !== undefined) {
+          if (args.action !== 'start') {
+            return errorResult(
+              args.action,
+              'proxyServer 与 proxyAllowedHostnames 仅可用于 action=start；其他操作请省略这些字段',
+            );
+          }
+          try {
+            parseBrowserProxyServer(args.proxyServer, args.proxyAllowedHostnames);
+          } catch (err) {
+            return errorResult(
+              args.action,
+              err instanceof Error ? err.message : 'proxyServer 不合法',
+            );
+          }
         }
         const runtime = getRuntime(deps);
         // Block non-web schemes at the boundary: navigate/open to file:// /

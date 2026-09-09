@@ -1,3 +1,4 @@
+import { LocalSkillControls } from './components/LocalSkillControls';
 /**
  * SkillhubDetailView — route for /skillhub/{kind}/{global|project}/[hash]/:name.
  *
@@ -16,7 +17,7 @@
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertCircle, AlertTriangle, ArrowLeft, ArrowUp, Bot, CheckCircle, ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, Globe, type LucideIcon, Package, Pencil, Save, Search, SquareTerminal, Trash2, Upload, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, ArrowLeft, ArrowUp, Bot, CheckCircle, ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, Globe, type LucideIcon, Package, Pencil, Save, Search, SquareTerminal, Upload, X } from 'lucide-react';
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -974,7 +975,12 @@ export function SkillhubDetailView() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const { skills, bootstrapped } = useSkillhub();
+  const { skills, bootstrapped, loading: skillsLoading } = useSkillhub();
+  const commandPath = searchParams.get('path');
+  useEffect(() => {
+    // The palette can discover a newly added Skill before the SkillHub cache does.
+    if (commandPath) void refreshSkillhub();
+  }, [commandPath]);
   const { createSession } = useCCSessions();
   // 入口来源：market 卡片会带 state.from。详情页返回不走浏览器式历史，
   // 而是退出到 SkillHub 一级页：market 来源回 market，其它入口回 local 欢迎页。
@@ -1301,7 +1307,6 @@ export function SkillhubDetailView() {
   const detailAction = detailActionState?.status ?? null;
   const isOutdated = detailActionState?.isOutdated ?? false;
   const isMineDirty = detailActionState?.isMineDirty ?? false;
-  const showUninstall = detailActionState?.showUninstall ?? false;
   const showForeignDirtyBanner = detailActionState?.showForeignDirtyBanner ?? false;
 
   const [scanResult, setScanResult] = useState<ScanResultPayload | null>(null);
@@ -1353,36 +1358,6 @@ export function SkillhubDetailView() {
   // installed-from-market 视图的卸载/更新动作。
   // 跟 SkillhubMarketListView 走同一条 IPC，保持后端逻辑唯一。
   const [marketActionRunning, setMarketActionRunning] = useState(false);
-
-  const handleUninstallInstalled = useCallback(async () => {
-    if (!entry?.absolutePath) return;
-    const ok = await confirm({
-      title: t('skillhub.detail.uninstallDialog.title', { name: entry.name }),
-      description: t('skillhub.detail.uninstallDialog.description', { path: entry.absolutePath }),
-      confirmText: t('skillhub.detail.uninstallDialog.confirm'),
-      cancelText: t('skillhub.detail.uninstallDialog.cancel'),
-    });
-    if (!ok) return;
-    setMarketActionRunning(true);
-    try {
-      const res = await window.electronAPI.skillhub.uninstall(entry.absolutePath);
-      if (res.success) {
-        toast.success(t('skillhub.detail.uninstalledToast', { name: entry.name }));
-        // 卸载后当前 entry 已经不存在,detail view 渲染会失败 → 跳到 local
-        // 欢迎页(它会自己 pick 上一次选中的本地技能;若该技能就是刚卸载的,
-        // welcome 会清掉 lastEntryId 然后展示空态)。原来跳到 market 不合理 ——
-        // 用户从 local 树点进 detail 时不应该被甩到 market。
-        clearLastEntryId();
-        clearHistory();
-        void refreshSkillhub();
-        navigate('/skillhub/local');
-      } else {
-        toast.error(t('skillhub.detail.uninstallFailed', { message: res.message }));
-      }
-    } finally {
-      setMarketActionRunning(false);
-    }
-  }, [entry, confirm, navigate, t]);
 
   const handleUpdateInstalled = useCallback(async (
     latestVersion: string,
@@ -1806,7 +1781,7 @@ export function SkillhubDetailView() {
   if (!entry) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-sm text-[var(--cmd-palette-item-meta)]">
-        {bootstrapped ? (
+        {bootstrapped && !skillsLoading ? (
           <>
             <p>{t('skillhub.detail.notFound')}</p>
             <button
@@ -2037,25 +2012,12 @@ export function SkillhubDetailView() {
             {/* skill 按钮组 — detailAction.status 保证市场状态/动作互斥 */}
             {isSkill && detailState && (
               <>
-            {/* D1: 卸载 — origin=installed（市场）或 imported（本地导入） */}
-            {showUninstall && (
-              <button
-                type="button"
-                onClick={() => { void handleUninstallInstalled(); }}
-                disabled={marketActionRunning}
-                className={cn(
-                  'flex h-9 shrink-0 items-center gap-2 rounded-full border px-[18px]',
-                  'text-sm font-medium',
-                  'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--settings-btn-secondary-text)]',
-                  'hover:bg-[var(--surface-hover)]',
-                  'disabled:opacity-50 disabled:cursor-not-allowed',
-                  'transition-colors',
-                )}
-              >
-                <Trash2 size={14} className="shrink-0" />
-                <span>{t('skillhub.detail.uninstall')}</span>
-              </button>
-            )}
+            {entry && <LocalSkillControls skill={entry} disabled={marketActionRunning || editMode}
+              onUninstalled={() => {
+                clearLastEntryId();
+                clearHistory();
+                navigate('/skillhub/local');
+              }} />}
             {/* 编辑入口 */}
             {!editButtonState.hidden && (
               <Tip text={editButtonState.tip}>

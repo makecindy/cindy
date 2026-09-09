@@ -189,7 +189,7 @@ export interface LocalSkillEntry {
   version: string | null;
   absolutePath: string;
   /** 该本地 skill 是否有 registry 记录（registryEntry !== null）。
-      false = 用户手写的本地 skill，从未与市场交互，不允许卸载。 */
+      false = 用户手写的本地 skill，从未与市场交互。卸载能力由本地扫描决定。 */
   hasRegistryEntry: boolean;
 }
 

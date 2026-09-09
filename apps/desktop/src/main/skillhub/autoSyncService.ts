@@ -16,6 +16,7 @@ import * as installService from './installService';
 import { SkillhubMarketService } from './marketService';
 import { listIgnoredAutoSyncSkills, recordAutoSyncCandidateSkills } from './autoSyncPreferences';
 import { registryService } from './registry';
+import { withSkillMutation } from './sharedMutationLease';
 import type { StoredInstall } from './registry/types';
 import { skillhubCatalogKey, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
@@ -785,7 +786,19 @@ function normalizeForCompare(value: string): string {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
-async function cleanupAutoSyncedGlobalInstall({
+async function cleanupAutoSyncedGlobalInstall(params: CancelledInstallCleanup): Promise<void> {
+  const names = [params.slug, path.basename(params.absolutePath)];
+  if (params.previousInstall) names.push(params.previousInstall.skillName, path.basename(params.previousInstall.installPath));
+  const completed = await withSkillMutation(names, async () => {
+    await cleanupAutoSyncedGlobalInstallUnderLease(params);
+    return true;
+  });
+  // The existing cancellation journal retries this cleanup; a busy lease must
+  // not be reported as success and silently discard that pending work.
+  if (!completed) throw new Error('another client is changing this skill');
+}
+
+async function cleanupAutoSyncedGlobalInstallUnderLease({
   slug,
   absolutePath,
   previousInstall,
