@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   keyboardListeners: {} as Record<string, (event: unknown) => void>,
   views: {} as Record<string, any>,
   invoke: vi.fn(),
+  apiFetch: vi.fn(),
   openLink: vi.fn(),
   post: vi.fn(),
   reload: vi.fn(),
@@ -150,6 +151,8 @@ vi.mock("@/device-link/DeviceLinkContext", () => ({
     openLink: fixture.openLink,
   }),
 }));
+vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ apiFetch: fixture.apiFetch }) }));
+vi.mock("@/config/env", () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test' }));
 vi.mock("../PermissionGuide", () => ({
   PermissionGuide: (p: any) => {
     fixture.retryPermissions = p.reconnect;
@@ -191,6 +194,7 @@ beforeEach(() => {
   fixture.trickleIce = false;
   fixture.size = { width: 390, height: 844 };
   fixture.openLink.mockResolvedValue({});
+  fixture.apiFetch.mockReset().mockResolvedValue({ iceServers: [], expiresAt: null });
   fixture.systemAudio = false;
   fixture.playback.mockReset().mockResolvedValue(undefined);
   fixture.invoke.mockImplementation(async (_device, _channel, [request]) => {
@@ -241,6 +245,70 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  it("fetches ICE configuration only through native auth and sends sanitized short-term credentials", async () => {
+    await connect();
+    const iceServers = [
+      {
+        urls: ["turn:relay.example.test:3478"],
+        username: "temporary",
+        credential: "test-only",
+      },
+    ];
+    fixture.apiFetch.mockResolvedValue({
+      iceServers,
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      secret: "must-not-cross-bridge",
+    });
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "iceConfig",
+            epoch: "lease",
+            attemptId: "1",
+            url: "https://untrusted.example.test",
+          }),
+        },
+      });
+    });
+    expect(fixture.apiFetch).toHaveBeenCalledWith(
+      "/api/device-link/ice-servers",
+      { baseUrl: "https://relay.example.test", timeoutMs: 3000 },
+    );
+    expect(sent().find((m) => m.type === "iceConfig")).toEqual({
+      type: "iceConfig",
+      epoch: "lease",
+      attemptId: "1",
+      iceServers,
+    });
+    expect(JSON.stringify(sent())).not.toContain("must-not-cross-bridge");
+  });
+
+  it("drops a late ICE config response after the screen exits", async () => {
+    await connect();
+    let finish!: (value: unknown) => void;
+    fixture.apiFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "iceConfig",
+            epoch: "lease",
+            attemptId: "1",
+          }),
+        },
+      });
+    });
+    act(() => root.unmount());
+    mounted = false;
+    await act(async () => finish({ iceServers: [], expiresAt: null }));
+    expect(sent().filter((m) => m.type === "iceConfig")).toHaveLength(0);
+  });
   it("keeps video and control when playback fails without changing the sound preference", async () => {
     fixture.systemAudio = true;
     fixture.playback.mockImplementation(async (enabled) => { if (enabled) throw new Error("audio interrupted"); });

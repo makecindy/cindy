@@ -6,6 +6,7 @@ import type {
   RemoteDesktopPermissions,
   RemoteDesktopIceCandidate,
   RemoteDesktopIceReply,
+  DesktopIceServer,
 } from '@cindy/device-link';
 export const DESKTOP_LOCAL = {
   STATE: 'remote-desktop:state',
@@ -24,6 +25,7 @@ export const DESKTOP_LOCAL = {
   DISMISS_GUIDE: 'remote-desktop:dismiss-permission-guide',
 } as const;
 export interface DesktopHostCommand {
+  iceServers?: DesktopIceServer[];
   id: string;
   op: 'offer' | 'stop' | 'capture-reset' | 'ice';
   attemptId?: string;

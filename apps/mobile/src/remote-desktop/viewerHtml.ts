@@ -325,6 +325,7 @@ const VIEWER_SCRIPT = String.raw`
       case 'init':followRest=null;cursorNeedsEntry=true;stopPanAnimation();resetCursor();control=false;release();pending=[];sending=false;seq=0;epoch=message.epoch;dw=message.width;dh=message.height;fillHeight=message.fillHeight===true;video.muted=!message.audio;trickleIce=message.trickleIce===true;retries=0;render();connect();break;
       case 'viewport':fillHeight=message.fillHeight===true;release();render();break;
       case 'answer':if(message.epoch===epoch)void receiveAnswer(message);break;
+      case 'iceConfig':if(message.epoch===epoch)void receiveIceConfig(message);break;
       case 'ice':if(message.epoch===epoch)void receiveIce(message);break;
       case 'fallback':if(message.epoch===epoch&&message.attemptId===attemptId)failRtc('host',message.retry!==false);break;
       case 'frame':{if('cursor' in message)receiveCursor(message.cursor);else resetCursor();const frameEpoch=epoch;image.onload=()=>{if(epoch===frameEpoch)post({type:'framePresented'});};image.src='data:image/jpeg;base64,'+message.jpeg;break;}

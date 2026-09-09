@@ -16,7 +16,11 @@ const h = vi.hoisted(() => ({
   nativeFrame: vi.fn(async () => 'frame'),
   input: vi.fn(),
   viewHeartbeat: vi.fn(),
+  iceConfig: vi.fn(async (): Promise<any[]> => [
+    { urls: ['turn:relay.example.test:3478'], username: 'temporary', credential: 'test-only' },
+  ]),
 }));
+vi.mock('../iceConfig', () => ({ loadDesktopIceServers: h.iceConfig }));
 vi.mock('electron', () => ({
   app: { on: vi.fn() },
   powerMonitor: { on: vi.fn() },
@@ -158,6 +162,7 @@ beforeEach(() => {
   h.nativeFrame.mockClear();
   h.input.mockReset();
   h.viewHeartbeat.mockClear();
+  h.iceConfig.mockClear();
   registerRemoteDesktopIpc();
 });
 afterEach(() => {
@@ -317,4 +322,33 @@ it('retains the capture owner on ICE timeout and rejects old-owner replies after
   expect(h.owner.dead).toBe(false);
   h.deps.stopVideo();
   await nextRejected;
+});
+
+it('passes freshly fetched ICE credentials only to the active capture owner', async () => {
+  const pending = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  const command = h.owner.send.mock.calls[0][1];
+  expect(command.iceServers).toEqual(await h.iceConfig());
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), command.id, 'answer');
+  await pending;
+});
+
+it('revocation while fetching ICE config prevents a late credential from starting capture', async () => {
+  let finish!: (servers: any[]) => void;
+  h.iceConfig.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const pending = offer();
+  const rejected = expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+  const old = h.owner;
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.deps.stopVideo();
+  finish([]);
+  await rejected;
+  expect(old.send).not.toHaveBeenCalled();
 });
