@@ -9338,7 +9338,7 @@
       "filterTaskSortHeading": "セッション順",
       "filterProjectOrderHeading": "プロジェクト順",
       "filterProjectOrder": {
-        "activity": "最近のアクティビティ順",
+        "activity": "セッションの並び順に従う",
         "custom": "手動"
       },
       "filterProjectOrderTip": {

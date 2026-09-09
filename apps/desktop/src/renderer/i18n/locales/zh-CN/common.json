@@ -9338,7 +9338,7 @@
       "filterTaskSortHeading": "任务排序",
       "filterProjectOrderHeading": "项目顺序",
       "filterProjectOrder": {
-        "activity": "按最近活动",
+        "activity": "跟随任务排序",
         "custom": "手动"
       },
       "filterProjectOrderTip": {

@@ -9338,7 +9338,7 @@
       "filterTaskSortHeading": "세션 정렬",
       "filterProjectOrderHeading": "프로젝트 순서",
       "filterProjectOrder": {
-        "activity": "최근 활동순",
+        "activity": "세션 정렬 따르기",
         "custom": "수동"
       },
       "filterProjectOrderTip": {
