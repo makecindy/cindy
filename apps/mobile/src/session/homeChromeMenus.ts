@@ -7,7 +7,7 @@ import type {
   HomeStatusFilter,
 } from "@/session/homeListPriority";
 import type { HomeProjectOrder } from "@/session/homeProjectOrder";
-import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
+import { canBrowseMobileHomeDevice, type MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
 export type { HomeListSortBy, HomeProjectOrder, HomeStatusFilter };
 
@@ -32,7 +32,7 @@ export function buildHomeScopeMenuItems(
 ): ChromeActionMenuItem[] {
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   const deviceFilters = filters.filter(
-    (item) => item.deviceId !== null && item.available,
+    (item) => item.deviceId !== null && canBrowseMobileHomeDevice(item),
   );
   const items: ChromeActionMenuItem[] = [];
   if (allFilter) {
@@ -210,7 +210,7 @@ export function buildHomeScopePullDownActions(
 ): NativePullDownAction[] {
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   const deviceFilters = filters.filter(
-    (item) => item.deviceId !== null && item.available,
+    (item) => item.deviceId !== null && canBrowseMobileHomeDevice(item),
   );
   const items: NativePullDownAction[] = [];
   if (allFilter) {

@@ -1,3 +1,4 @@
+import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import {
   type GhostRecommendation,
   GHOST_LOCALES,
@@ -1455,6 +1456,8 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
+  /** Autonomous publishing of declared events into user-configured routines. */
+  routineEvents?: GhostRoutineEvents;
   /**
    * 网络能力与范围。
    * 域名白名单 + 凭证声明,插件详情逐项展示,运行期主机代发并守门。
@@ -2178,6 +2181,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detailKey: 'mainViewDetail',
     });
   }
+  if (manifest.routineEvents) {
+    items.push({ key: 'routine-events', kind: 'subscribe', labelKey: 'routineEvents', detail: manifest.routineEvents.events.map((event) => `${event.name} (${event.type}: ${event.fields.join(", ")})`).join(', ') });
+  }
   if (manifest.subscribe) {
       // 订阅两档分列:旁听(元数据)常规位;拦截是全部槽里权限最重的一档,
       // unshift 排到清单最顶(敏感项排最上)。
@@ -2882,6 +2888,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'routineEvents',
   'schemaVersion',
   'id',
   'name',
@@ -4813,6 +4820,11 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   // 订阅槽详单(卡槽①):与 slots 含 'subscribe' 成对(有详单必有槽;有槽
   // 无详单允许装入但零事件,同 cindy 语义)。硬规则:声明了 hooks(拦截)
   // 必须 launch:'resident'——要挡路就得常驻在场,每条消息等冷启动不可接受。
+  if (raw.routineEvents !== undefined && prepared.schemaVersion !== 3) {
+    return { ok: false, reason: 'routineEvents requires schemaVersion 3' };
+  }
+  const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
+  if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -5992,6 +6004,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(node !== undefined ? { node } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
+      ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(skill !== undefined ? { skill } : {}),
@@ -8609,3 +8622,8 @@ export const GHOST_CALL_TOOL_NAMES: readonly string[] = [
 export function isGhostCallToolName(name: string | undefined | null): boolean {
   return typeof name === 'string' && GHOST_CALL_TOOL_NAMES.includes(name);
 }
+
+/** Plugin-to-host routine protocol; source identity always comes from the authenticated pipe. */
+export type GhostPipeRoutineRequest =
+  | { type: 'routine-request'; action: 'status'; status: 'listening' | 'disconnected' | 'error' }
+  | { type: 'routine-request'; action: 'publish'; event: import('@cindy/maker-scheduler').RoutineEvent };

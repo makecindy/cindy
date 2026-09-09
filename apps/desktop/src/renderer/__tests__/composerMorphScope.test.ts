@@ -62,7 +62,8 @@ describe('composer morph scope', () => {
 describe('设置字段里的 AgentSelect 宽度契约', () => {
   it('两处设置场景都用 field 形态,不得把工具条形态塞进字段', () => {
     for (const src of [settingsModel, workspacePrefs]) {
-      expect(src).toContain('<AgentSelect');
+      expect(src).toContain('<ModelSelector');
+      expect(src).not.toContain('<AgentSelect');
       expect(src).toContain('triggerVariant="field"');
     }
   });

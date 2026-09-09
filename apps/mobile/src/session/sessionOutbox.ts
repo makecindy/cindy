@@ -152,6 +152,8 @@ export interface MobileOutboxThumb {
   uri: string | null;
   /** 已落定槽位的 OSS 引用(sentAttachmentThumbStore 兜底查询键);未落定为 null。 */
   ossRef: string | null;
+  /** Original upload ref, retained when the host materializes ossRef. */
+  previewRef?: string;
   /** 对应上传任务尚未落定(渲染转圈遮罩)。 */
   uploading: boolean;
 }

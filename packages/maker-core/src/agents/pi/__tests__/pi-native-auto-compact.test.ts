@@ -3,7 +3,7 @@
  * events and only latches deterministic failures for the next-send rollover.
  */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, renameSync, symlinkSync, unlinkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -181,6 +181,26 @@ describe("PiAgent native auto-compaction ownership", () => {
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {
+    let window = 200_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => window;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'context-alias', workingDir: cwd, model: 'm', providerId });
+    try {
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(false);
+      }
+      window = 100_000;
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(true);
+      }
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'other-source' })).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('n', { providerId: 'xd' })).toBe(false);
+    } finally {
+      await handle.close();
+    }
   });
 
   function buildDeps(): AgentDeps {
@@ -394,7 +414,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     },
   );
 
-  function readLatestPiSettings(): { compaction?: { reserveTokens?: number } } {
+  function readLatestPiSettings(): { compaction?: { reserveTokens?: number }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -583,6 +603,51 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(rewritten.shellPath).toBe("C:/cygwin64/bin/bash.exe");
     expect(rewritten.compaction?.reserveTokens).toBe(25_000);
     await handle.close();
+  });
+
+  it.each(["unchanged", "alias", "physical", "startup"])("keeps frozen Skill exclusions across both settings rewrites (%s)", async (change) => {
+    const a = path.join(cwd, "a");
+    const b = path.join(cwd, "b");
+    const alias = path.join(cwd, "alias");
+    mkdirSync(a);
+    mkdirSync(b);
+    writeFileSync(path.join(a, "SKILL.md"), "fixture a");
+    writeFileSync(path.join(b, "SKILL.md"), "fixture b");
+    symlinkSync(a, alias, process.platform === "win32" ? "junction" : "dir");
+    const deps = buildDeps();
+    deps.getDisabledSkillPaths = () => [a];
+    deps.resolvePiNativePackagePaths = async () => [{ source: cwd, skills: ["**/*"] }];
+    deps.resolvePiManagedPackageResources = async () => {
+      if (change === "startup") {
+        renameSync(a, `${a}-moved`);
+        symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
+      }
+      return { extensions: [], skills: [{ name: "alias", path: alias }], promptTemplates: [], packageRoots: [cwd] };
+    };
+    const handle = await new PiAgent(deps).startSession({ sessionId: "frozen-skills", workingDir: cwd, model: "m" });
+    try {
+      if (change === "startup") expect(readLatestPiSettings().skills ?? []).not.toContain(`-${a}`);
+      else expect(readLatestPiSettings().skills).toContain(`-${alias}`);
+      if (change === "alias") {
+        unlinkSync(alias);
+        symlinkSync(b, alias, process.platform === "win32" ? "junction" : "dir");
+      } else if (change === "physical") {
+        renameSync(a, `${a}-moved`);
+        symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
+      }
+      knobs.targetRuntimeContextWindow = 1_000_000;
+      knobs.setModelReportsContextWindow = false;
+      knobs.rpcCalls = [];
+      await handle.setModel!("n");
+      const rewritten = readLatestPiSettings();
+      expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+      expect(rewritten.packages?.[0]?.source).toBe(cwd);
+      expect(rewritten.skills ?? []).not.toContain(`-${b}`);
+      expect(rewritten.packages?.[0]?.skills ?? []).not.toContain("-b");
+      if (change === "unchanged") expect(rewritten.skills).toContain(`-${alias}`);
+      else expect(rewritten.skills ?? []).not.toContain(`-${alias}`);
+      if (change === "physical" || change === "startup") expect(rewritten.skills ?? []).not.toContain(`-${a}`);
+    } finally { await handle.close(); }
   });
 
   it("terminates the session when compaction settings reload fails after a window change", async () => {

@@ -17,7 +17,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('@/lib/makerTransport', () => ({ isSessionTurnRunningFor: async () => true }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { getDeviceIds: () => ['host'] },
+  remoteProjectsStore: { getDeviceIds: () => ['host', 'neighbor'], subscribe: () => () => {} },
 }));
 vi.mock('@/features/device-link/refreshRemoteSessions', () => ({
   refreshRemoteDeviceSessions: vi.fn(),
@@ -52,6 +52,7 @@ it('requires a fresh ACK and snapshot after peer-only resets without invalidatin
     await vi.advanceTimersByTimeAsync(0);
   });
   expect(affected.result.current.contentState).toBe('ready');
+  expect(mocks.reconcile).toHaveBeenCalledWith('session', { freshHistory: true });
   expect(neighbor.result.current.contentState).toBe('ready');
 
   let ack!: () => void;
@@ -155,4 +156,31 @@ it('does not reset a recovered mounted task on its first busy presence update', 
   });
   expect(hook.result.current.contentState).toBe('syncing');
   hook.unmount();
+});
+
+it.each(['relay', 'peer', 'disabled', 'unresponsive'])('releases the local topic on offline unmount (%s)', async (reason) => {
+  vi.useFakeTimers();
+  const unsubscribe = vi.fn(async () => {});
+  let status!: (value: { status: string }) => void;
+  let presence!: (value: { deviceId: string; online: boolean; remoteControlEnabled: boolean }) => void;
+  let responsiveness!: (value: { deviceId: string; unresponsive: boolean }) => void;
+  vi.stubGlobal('electronAPI', {
+    deviceLink: {
+      subscribe: vi.fn(async () => {}), unsubscribe,
+      onStatusChanged: (cb: typeof status) => { status = cb; return () => {}; },
+      onPresenceChanged: (cb: typeof presence) => { presence = cb; return () => {}; },
+      onResponsivenessChanged: (cb: typeof responsiveness) => { responsiveness = cb; return () => {}; },
+    },
+  });
+  mocks.running = false;
+  mocks.reconcile.mockResolvedValue(true);
+  const hook = renderHook(() => useRemoteSessionSync('session', 'host'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  act(() => {
+    if (reason === 'relay') status({ status: 'offline' });
+    else if (reason === 'unresponsive') responsiveness({ deviceId: 'host', unresponsive: true });
+    else presence({ deviceId: 'host', online: reason !== 'peer', remoteControlEnabled: reason !== 'disabled' });
+  });
+  hook.unmount();
+  expect(unsubscribe).toHaveBeenCalledExactlyOnceWith('host', ['session:session']);
 });

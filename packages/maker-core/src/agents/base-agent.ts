@@ -7,6 +7,8 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
+
 import type {
   AgentEvent,
   InteractionDecision,
@@ -575,6 +577,8 @@ export interface PiSubagentRunnerLaunchRequest {
 }
 
 export interface AgentDeps {
+  /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
+  getDisabledSkillPaths?: () => readonly string[];
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
@@ -829,7 +833,8 @@ export interface AgentDeps {
     ensureCodexBrowserUseReady: () => Promise<boolean>;
   }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
-  /** Explicit user context budget for this route. Missing means native/catalog defaults. */
+  /** Host working budget for this route (user override, optionally catalog default).
+   * Missing means the adapter uses its route/native defaults. */
   resolveModelContextLimit?: (
     providerId: string | null | undefined,
     modelId: string,
@@ -1777,6 +1782,9 @@ export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
 /** Call-local user content before Session replaces images with generated descriptions. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
 
+/** Host-restored user authorization for this send; never accepted from wire options. */
+export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1789,6 +1797,7 @@ export interface MainOwnedSendContext {
  */
 export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
@@ -1974,6 +1983,8 @@ export interface CodexContextWindowInfo {
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
 export interface AgentSessionHandle {
+  /** Canonical physical Skill identities frozen at native runtime startup. */
+  readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
   /** SDK 内部 sessionId，session.started 后会回填 */
   readonly id: string;
@@ -2348,6 +2359,15 @@ export abstract class BaseAgent {
     return [];
   }
 
+  /** Filter only the palette projection; management discovery retains disabled sources. */
+  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[]): ListAgentSkillsResult {
+    const disabled = remoteHostId ? [] : snapshot ?? this.deps.getDisabledSkillPaths?.() ?? [];
+    if (disabled.length === 0) return result;
+    return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
+      ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
+  }
+
+
   /**
    * Agent 用户/项目目录扫描出的 skill 列表 —— ChatInput `/` palette 的
    * 'agent-skill' 类目。
@@ -2356,6 +2376,7 @@ export abstract class BaseAgent {
    * app-server skills/list。子类自己负责缓存策略与未授权静默处理。
    * 默认无实现, 不暴露任何 skill。
    */
+
   async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     void opts;
     return { skills: [] };

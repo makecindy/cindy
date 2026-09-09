@@ -155,6 +155,7 @@ export function McpServersSection() {
   const handleDelete = useCallback(
     async (config: CustomMcpConfig) => {
       const ok = await confirm({
+        presentation: 'standard',
         title: t('settings.mcp.deleteConfirm.title', { name: config.name }),
         description: t('settings.mcp.deleteConfirm.message'),
         confirmText: t('settings.mcp.deleteConfirm.confirm'),

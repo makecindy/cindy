@@ -1,3 +1,4 @@
+import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
  * PiAgent —— pi coding agent(earendil-works/pi)接入。
  *
@@ -128,10 +129,12 @@ import {
   appendAutoReviewUserIntent,
   composeAutoReviewIntentWithClarification,
   isSystemPermissionDenialReason,
+  formatPermissionDenial,
   resolveAutoReviewDecision,
   toolAutoReviewAction,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
+import { applyPiDisabledSkillSettings, filterPiDisabledProjectSkills, piDisabledDiscoveryPaths } from './skill-activation.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
@@ -237,7 +240,7 @@ function isPiApprovalSurfaceAbsentReason(reason: unknown): boolean {
  * `deferWhenSurfaceLost` (durable Subagent approvals). Root-turn cards have no
  * durable mailbox to fall back to, so they map it to a system denial.
  */
-type PiPendingPromptSettle = (resolveAs: 'allow' | 'deny' | 'unanswered') => void;
+type PiPendingPromptSettle = (resolveAs: 'allow' | 'deny' | 'unanswered', reason?: string) => void;
 
 const PI_PROVIDER_ID = 'cindy';
 // 既非 Cindy 网关(cindy/xd)也非经 compat proxy 的订阅直连(openai/anthropic)的 providerId = 显式 BYOM
@@ -280,7 +283,15 @@ type PiPermissionResolution =
   | 'allow'
   | 'user-deny'
   | 'auto-review-deny'
+  | `auto-review-deny:${string}`
+  | `user-deny:${string}`
+  | `system-deny:${string}`
   | 'system-deny';
+
+/** The existing private input envelope can carry a reason without changing old confirm clients. */
+function piPermissionDenial(source: 'auto-review-deny' | 'user-deny' | 'system-deny', reason?: string): PiPermissionResolution {
+  return reason?.trim() ? `${source}:${reason.trim().slice(0, 240)}` : source;
+}
 
 /** Remote paths belong to the execution host, never the controller filesystem. */
 export function constrainPiDestructivePathResolution(
@@ -1658,6 +1669,7 @@ export class PiAgent extends BaseAgent {
       contextWindow?: number;
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
+      disabledSkills?: DisabledSkillLaunchSnapshot;
     },
   ): Promise<string> {
     const built = this.buildCurrentPiSettingsJson(
@@ -1680,7 +1692,14 @@ export class PiAgent extends BaseAgent {
         ? Promise.resolve(null)
         : readOrNull(stableUserSettingsPath),
     ]);
-    return mergePiUserSettingsPassthrough(built, sessionContent, stableContent);
+    const merged = mergePiUserSettingsPassthrough(built, sessionContent, stableContent);
+    // Runtime rewrites use the startup bindings, never paths reconstructed from
+    // settings.json: those paths can now point to a different physical Skill.
+    if (opts.disabledSkills) {
+      return JSON.stringify(applyPiDisabledSkillSettings(JSON.parse(merged),
+        currentDisabledSkillLaunchPaths(opts.disabledSkills)), null, 2) + '\n';
+    }
+    return merged;
   }
 
   private async writePiRuntimeSettings(
@@ -1690,6 +1709,7 @@ export class PiAgent extends BaseAgent {
       contextWindow?: number;
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
+      disabledSkills?: DisabledSkillLaunchSnapshot;
     } = {},
   ): Promise<void> {
     const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
@@ -1727,6 +1747,7 @@ export class PiAgent extends BaseAgent {
       piCompactionPct?: number;
       /** Host-installed roots/specs for Pi's own package discovery. */
       packages?: readonly PiNativePackageEntry[];
+      disabledSkills?: DisabledSkillLaunchSnapshot;
     } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
@@ -1863,7 +1884,7 @@ export class PiAgent extends BaseAgent {
         continue;
       }
       const nativeModels = (
-        np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true || this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id) != null) : np.models
+        np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
       ).map((m) => {
         const contextWindow = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id)
           ?? (m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000);
@@ -1892,6 +1913,16 @@ export class PiAgent extends BaseAgent {
         ...(np.api ? { api: np.api } : {}),
         // keyless(本机 Ollama 等)也要给 dummy key,否则 pi /model 不显示该模型。
         apiKey: np.apiKeyEnvVar ? `$${np.apiKeyEnvVar}` : 'pi-native-keyless',
+        // Preserve native protocol/compatibility metadata while applying Cindy's
+        // route default or explicit working window to inherited models as well.
+        ...(np.inheritModels ? {
+          modelOverrides: Object.fromEntries(np.models.flatMap((model) => {
+            const window = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id)
+              ?? model.contextWindow;
+            return typeof window === 'number' && Number.isSafeInteger(window) && window > 0
+              ? [[model.wireId ?? model.id, { contextWindow: window }]] : [];
+          })),
+        } : {}),
         ...(np.headers && Object.keys(np.headers).length > 0 ? { headers: np.headers } : {}),
         ...(nativeModels.length > 0 ? { models: nativeModels } : {}),
       };
@@ -3053,6 +3084,10 @@ export class PiAgent extends BaseAgent {
     // snapshot. Freeze it once per new runtime, then assemble only its eligible
     // skills. Missing/throwing authorities and paths fail closed; never infer
     // approval from permission mode, MCP/plugin state, or caller vendor options.
+    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode
+      ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
+    let disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
+    const disabledSkillSnapshot = disabledSkillLaunch.identities;
     let projectResourceAssembly = unavailablePiProjectResourceAssembly(
       reviewMode ? 'review-mode-project-resources-disabled' : 'approval-resolver-unavailable',
     );
@@ -3064,6 +3099,7 @@ export class PiAgent extends BaseAgent {
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
         });
         projectResourceAssembly = await assembleApprovedPiProjectResources(trustInput, opts.workingDir);
+        projectResourceAssembly = filterPiDisabledProjectSkills(projectResourceAssembly, currentDisabledSkillLaunchPaths(disabledSkillLaunch));
         projectResourceAssembly = await stageApprovedPiProjectResources(projectResourceAssembly, configHome);
       } catch {
         projectResourceAssembly = unavailablePiProjectResourceAssembly('approval-resolver-failed');
@@ -3140,6 +3176,18 @@ export class PiAgent extends BaseAgent {
           });
         }
       }
+    }
+
+    if (disabledSkillPaths.length > 0) {
+      const settingsPath = path.join(configHome, 'settings.json');
+      const settings = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
+      disabledSkillLaunch = extendDisabledSkillLaunchPaths(disabledSkillLaunch,
+        piDisabledDiscoveryPaths(currentDisabledSkillLaunchPaths(disabledSkillLaunch), [
+          path.join(configHome, 'skills'), path.join(os.homedir(), '.agents', 'skills'),
+          ...managedPackageResources.skills.map((skill) => skill.path),
+        ]));
+      await fs.writeFile(settingsPath, JSON.stringify(applyPiDisabledSkillSettings(settings,
+        currentDisabledSkillLaunchPaths(disabledSkillLaunch)), null, 2) + '\n', { mode: 0o600 });
     }
 
     const nativePackageRoots = nativePackagePaths.map((entry) => (
@@ -3266,7 +3314,7 @@ export class PiAgent extends BaseAgent {
         // can re-offer it. The card is still dismissed so no stale UI remains.
         if (dismissOpts?.surfaceLost && entry.deferWhenSurfaceLost) {
           pendingPrompts.delete(requestId);
-          entry.settle('unanswered');
+          entry.settle('unanswered', reason);
           queue.push({
             type: 'interaction_dismissed',
             data: { requestId, reason, resolvedAs: 'deny', deferred: true },
@@ -3281,7 +3329,7 @@ export class PiAgent extends BaseAgent {
           autoReviewConfirmUndeliveredNotice.notify();
         }
         pendingPrompts.delete(requestId);
-        entry.settle(effectiveResolveAs);
+        entry.settle(effectiveResolveAs, reason);
         queue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason, resolvedAs: effectiveResolveAs },
@@ -3782,8 +3830,8 @@ export class PiAgent extends BaseAgent {
             ...(options.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // Durable child: losing the surface parks the question.
             deferWhenSurfaceLost: true,
-            settle: (resolveAs) => finalize(
-              resolveAs === 'allow' ? 'allow' : resolveAs === 'unanswered' ? null : 'system-deny',
+            settle: (resolveAs, reason) => finalize(
+              resolveAs === 'allow' ? 'allow' : resolveAs === 'unanswered' ? null : piPermissionDenial('system-deny', reason),
             ),
           });
           const permissionRequest = {
@@ -3831,9 +3879,7 @@ export class PiAgent extends BaseAgent {
             finalize(
               decision.behavior === 'allow'
                 ? 'allow'
-                : isSystemPermissionDenialReason(decision.reason)
-                  ? 'system-deny'
-                  : 'user-deny',
+                : piPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system-deny' : 'user-deny', decision.reason),
             );
           }).catch((error) => {
             this.deps.logger.warn('PI Subagent approval forwarding failed closed', {
@@ -3912,7 +3958,7 @@ export class PiAgent extends BaseAgent {
             return requestUserDecision({ forcePrompt: true });
           }
           if (decision.verdict === 'allow') return 'allow';
-          if (decision.verdict === 'block') return 'auto-review-deny';
+          if (decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
           if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return requestUserDecision({
             forcePrompt: true,
@@ -5284,6 +5330,7 @@ export class PiAgent extends BaseAgent {
           contextWindow: ctx.contextWindow || startupContextWindow,
           piCompactionPct: sessionPiAutoCompactPct,
           packages: nativePackagePaths,
+          disabledSkills: disabledSkillLaunch,
         },
       );
       nativeProviders = previousProviders;
@@ -5362,6 +5409,7 @@ export class PiAgent extends BaseAgent {
             contextWindow: ctx.contextWindow || startupContextWindow,
             piCompactionPct: sessionPiAutoCompactPct,
             packages: nativePackagePaths,
+            disabledSkills: disabledSkillLaunch,
           },
         );
         gatewayApiByModel.clear();
@@ -5692,6 +5740,7 @@ export class PiAgent extends BaseAgent {
             contextWindow: nextWindow,
             piCompactionPct: sessionPiAutoCompactPct,
             packages: nativePackagePaths,
+            disabledSkills: disabledSkillLaunch,
           });
           if (!sdkSessionId) {
             throw new Error('pi: missing session path after model switch; cannot reload compaction settings');
@@ -5746,6 +5795,8 @@ export class PiAgent extends BaseAgent {
               fileOps,
               contextWindow: verifiedWindow,
               piCompactionPct: sessionPiAutoCompactPct,
+              packages: nativePackagePaths,
+              disabledSkills: disabledSkillLaunch,
             });
             const recalibrated = await proc.request({ type: 'switch_session', sessionPath: sdkSessionId });
             if (!recalibrated.success) {
@@ -5820,6 +5871,7 @@ export class PiAgent extends BaseAgent {
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
       },
+      disabledSkillPaths: disabledSkillSnapshot,
       onRuntimeCapabilitiesChange(listener) {
         if (closed) {
           notifyRuntimeCapabilityListener(listener, undefined);
@@ -6327,6 +6379,18 @@ export class PiAgent extends BaseAgent {
         // was there becomes offerable again on the next durable poll.
         interactionResolverGeneration++;
         piSubagentApprovalDeferred.clear();
+      },
+
+      requiresModelSwitchRebuild(model, target) {
+        // Same-route configuration changes need models.json to be reloaded too.
+        // Ordinary route changes continue through Pi's existing switch_model path.
+        const provider = target?.providerId !== undefined ? target.providerId : mutableProviderId;
+        // The host stores XD (or null), while Pi runs the same gateway as cindy.
+        const contextSource = (id: string | null | undefined) =>
+          id == null || id === 'xd' || id === PI_PROVIDER_ID ? PI_PROVIDER_ID : id;
+        if (model !== mutableModel || contextSource(provider) !== contextSource(mutableProviderId)) return false;
+        const window = deps.resolveModelContextLimit?.(provider, model);
+        return typeof window === 'number' && window > 0 && window !== ctx.contextWindow;
       },
 
       async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
@@ -6919,6 +6983,7 @@ export class PiAgent extends BaseAgent {
           description: skill.description,
           source: 'skill' as const,
           path: skill.path,
+          origin: 'package' as const,
           scope: 'user' as const,
           enabled: true,
           runtimeStatus: 'approved' as const,
@@ -7091,12 +7156,15 @@ export class PiAgent extends BaseAgent {
     if (method === 'input' && event.title === PI_PACKAGE_MANAGEMENT_TITLE) {
       const context = getPermissionCtx();
       const mutate = this.deps.mutatePiManagedPackage;
+      let denialReason = formatPermissionDenial('system', 'Approval was cancelled or could not be completed.');
+      const deny = () => proc.send({ type: 'extension_ui_response', id,
+        value: JSON.stringify({ ok: false, error: denialReason }) });
       if (!context.allowPiPackageManagement || !mutate) {
         this.deps.logger.warn('pi managed package request rejected outside a local ordinary task', {
           sessionId: context.sessionId,
           remote: context.remote,
         });
-        proc.send({ type: 'extension_ui_response', id, cancelled: true });
+        deny();
         return;
       }
       void (async () => {
@@ -7120,12 +7188,16 @@ export class PiAgent extends BaseAgent {
           }
           if (context.isPermissionContextClosed()) return;
           let autoDecision: AutoReviewDecision | undefined;
+          let reviewCancelled = false;
           if (context.permissionMode === 'auto') {
             let unregister = () => {};
             const cancelled = new Promise<AutoReviewDecision>((resolve) => {
               unregister = context.registerPendingPrompt(`${id}:pi-extension-review`, {
                 forcePrompt: true,
-                settle: () => resolve({ verdict: 'block', reason: 'The pending operation was cancelled.' }),
+                settle: () => {
+                  reviewCancelled = true;
+                  resolve({ verdict: 'block', reason: 'The pending operation was cancelled.' });
+                },
               });
             });
             try {
@@ -7138,7 +7210,10 @@ export class PiAgent extends BaseAgent {
             }
           }
           if (autoDecision?.verdict === 'block' || context.isPermissionContextClosed()) {
-            proc.send({ type: 'extension_ui_response', id, cancelled: true });
+            denialReason = context.isPermissionContextClosed() || reviewCancelled
+              ? formatPermissionDenial('system', 'The pending operation was cancelled.')
+              : formatPermissionDenial('auto', autoDecision?.reason);
+            deny();
             return;
           }
           if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable();
@@ -7164,7 +7239,11 @@ export class PiAgent extends BaseAgent {
             unregister = context.registerPendingPrompt(`${id}:pi-extension-mutation`, {
               forcePrompt: true,
               unavailableHandoff: autoDecision?.unavailable,
-              settle: (resolveAs) => finish(resolveAs === 'allow'),
+              settle: (resolveAs, reason) => {
+                if (settled) return;
+                denialReason = formatPermissionDenial('system', reason ?? 'Approval was cancelled or could not be completed.');
+                finish(resolveAs === 'allow');
+              },
             });
             Promise.resolve()
               .then(() =>
@@ -7177,6 +7256,10 @@ export class PiAgent extends BaseAgent {
                     toolName: 'cindy_pi_extension', input: { action, source } }),
               )
               .then((decision) => {
+                if (settled) return;
+                if (decision.kind === 'permission' && decision.behavior === 'deny') {
+                  denialReason = formatPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason);
+                }
                 finish(decision.kind === 'permission' && decision.behavior === 'allow');
               })
               .catch((error) => {
@@ -7188,7 +7271,7 @@ export class PiAgent extends BaseAgent {
               });
           });
           if (!approved || context.isPermissionContextClosed()) {
-            proc.send({ type: 'extension_ui_response', id, cancelled: true });
+            deny();
             return;
           }
           let result: Record<string, unknown>;
@@ -7483,9 +7566,9 @@ export class PiAgent extends BaseAgent {
             forcePrompt: opts.forcePrompt,
             ...(opts.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
-            settle: (resolveAs) => finalize({
+            settle: (resolveAs, reason) => finalize({
               decided: true,
-              resolution: resolveAs === 'allow' ? 'allow' : 'system-deny',
+              resolution: resolveAs === 'allow' ? 'allow' : piPermissionDenial('system-deny', reason),
             }),
           });
           // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
@@ -7515,7 +7598,7 @@ export class PiAgent extends BaseAgent {
                 decisionKind: decision.kind,
               });
               if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
-              finalize({ decided: false, resolution: 'system-deny' });
+              finalize({ decided: false, resolution: piPermissionDenial('system-deny', 'Approval could not be delivered or completed.') });
               return;
             }
             if (
@@ -7529,9 +7612,7 @@ export class PiAgent extends BaseAgent {
               decided: true,
               resolution: decision.behavior === 'allow'
                 ? 'allow'
-                : isSystemPermissionDenialReason(decision.reason)
-                  ? 'system-deny'
-                  : 'user-deny',
+                : piPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system-deny' : 'user-deny', decision.reason),
             });
           }).catch((err) => {
             this.deps.logger.warn('pi permission resolver failed', {
@@ -7539,7 +7620,7 @@ export class PiAgent extends BaseAgent {
               message: err instanceof Error ? err.message : String(err),
             });
             if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
-            finalize({ decided: false, resolution: 'system-deny' });
+            finalize({ decided: false, resolution: piPermissionDenial('system-deny', 'Approval could not be delivered or completed.') });
           });
         });
       };
@@ -7580,7 +7661,7 @@ export class PiAgent extends BaseAgent {
         return opts?.forcePrompt === true
           || opts?.requireExplicitDecision === true
           || !isFullAccessNow()
-          ? 'system-deny'
+          ? outcome.resolution
           : 'allow';
       };
       void (async () => {
@@ -7712,7 +7793,7 @@ export class PiAgent extends BaseAgent {
             decision.verdict === 'allow'
               ? 'allow'
               : decision.verdict === 'block'
-                ? 'auto-review-deny'
+                ? piPermissionDenial('auto-review-deny', decision.reason)
                 : 'system-deny',
           );
         } catch (err) {

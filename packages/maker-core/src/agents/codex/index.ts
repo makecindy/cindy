@@ -10,7 +10,7 @@
  *  - ✅ Approval:  setRequestHandler 接 commandExecution / fileChange RequestApproval
  *                  → dispatchInteraction (复用 Claude 那条 PermissionPrompt 通道)
  *  - ✅ 运行时切:  setModel / setEffort / setPermissionMode 都生效, 下一 turn 自动透传
- *  - ✅ Fork:      thread/fork(lastTurnId)；旧历史回退 fork + rollback → 新 thread_id
+ *  - ✅ Fork:      thread/fork(lastTurnId)；分页历史查询原生边界，旧 daemon 回退 rollback
  *  - ✅ oneShot:   走 host 临时 thread (起标题), Phase 4 删 SDK dep 后唯一通路
  *
  * 输出契约:
@@ -42,6 +42,7 @@ import {
   type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
+import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import type {
   Capabilities,
@@ -96,6 +97,7 @@ import {
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
   isSystemPermissionDenialReason,
+  formatPermissionDenial,
   resolveAutoReviewDecision,
   toolAutoReviewAction,
   type AutoReviewDecision,
@@ -181,6 +183,7 @@ import {
 } from './rollout-sanitize.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
+import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -4423,7 +4426,7 @@ export class CodexAgent extends BaseAgent {
           model: opts.model,
         });
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
-    const initialCustomContextWindow = !reviewMode && !opts.remoteHostId
+    const initialCustomContextWindow = !reviewMode
       ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const customContextCatalogIdentity = (
@@ -4437,7 +4440,9 @@ export class CodexAgent extends BaseAgent {
       opts.model,
       initialCustomContextWindow,
     );
-    const usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
+    // SSH shares a daemon across tasks; its context settings belong to each
+    // thread/start or thread/resume config, never a local single-session host.
+    const usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
     const resolveModelSwitchCatalogIdentity = async (
       newModel: string,
       setOpts?: { providerId?: string | null },
@@ -4445,7 +4450,7 @@ export class CodexAgent extends BaseAgent {
       const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : mutableProviderId;
-      const contextWindow = reviewMode || opts.remoteHostId
+      const contextWindow = reviewMode
         ? null
         : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
       return customContextCatalogIdentity(newModel, contextWindow);
@@ -4840,6 +4845,30 @@ export class CodexAgent extends BaseAgent {
         reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
       ),
     );
+    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode
+      ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
+    const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
+    const disabledSkillSnapshot = disabledSkillLaunch.identities;
+    if (disabledSkillPaths.length > 0) {
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { cwd: opts.workingDir, includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        assertCurrentHost('Local Skill configuration');
+        const nativeSkills = asRecord(response.config?.skills).config;
+        capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
+          mergeCodexSkillConfigOverrides(
+            Array.isArray(nativeSkills) ? { 'skills.config': nativeSkills } : {},
+            capabilityRoutingConfig,
+          ),
+          { 'skills.config': currentDisabledSkillLaunchPaths(disabledSkillLaunch).map((source) => ({ path: skillEntryPath(source), enabled: false })) },
+        );
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(`Cannot prepare local Skill configuration: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     capabilityRoutingConfig = {
       ...capabilityRoutingConfig,
       ...botMcpConfig,
@@ -6548,7 +6577,7 @@ export class CodexAgent extends BaseAgent {
     // 自动 resolve (allow/deny), 同时 emit interaction_dismissed 让 dialog 自动关。
     // 不维护 pending Map 的话, 切 mode 不影响挂起 dialog → UX bug。
     interface PendingEntry {
-      resolve: (decision: ApprovalDecision) => void;
+      resolve: (decision: ApprovalDecision, reason?: string) => void;
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation';
       settled: boolean;
       /** AI wait is cancellable, but mode changes are handled after review. */
@@ -6803,9 +6832,12 @@ export class CodexAgent extends BaseAgent {
         autoReviewAction?: ReviewableAction;
         itemId?: string;
       },
-    ): Promise<ApprovalDecision> {
+    ): Promise<{ decision: ApprovalDecision; reason?: string }> {
+      // Reasons stay inside Cindy for Host-owned dynamic tool results. Stock Codex
+      // approval responses cannot carry them into native exec/patch tool output.
       const timingPauseId = `approval:${kind}:${requestId}`;
-      return withCodexGenerationPaused(requestThreadId, turnId, timingPauseId, async () => {
+      let denialReason = formatPermissionDenial('system', 'Approval was cancelled or became stale.');
+      const decision = await withCodexGenerationPaused<ApprovalDecision>(requestThreadId, turnId, timingPauseId, async () => {
         // Native Codex currently flattens MCP declines to "user rejected" and
         // discards response content/_meta on that path. Preserve the cause in
         // Cindy's diagnostic/UI channel; this notice is NOT model context.
@@ -6858,7 +6890,10 @@ export class CodexAgent extends BaseAgent {
           const descendant = Boolean(requestThreadId && requestThreadId !== threadId);
           const reviewEntry: PendingEntry = {
             kind, turnId, settled: false, reviewing: true,
-            resolve: () => { reviewEntry.settled = true; },
+            resolve: (_decision, reason) => {
+              if (reason) denialReason = formatPermissionDenial('system', reason);
+              reviewEntry.settled = true;
+            },
             ...(opts?.itemId ? { itemId: opts.itemId } : {}),
           };
           pendingApprovals.set(requestId, reviewEntry);
@@ -6898,6 +6933,7 @@ export class CodexAgent extends BaseAgent {
           } else if (decision.verdict === 'allow') {
             return 'accept';
           } else if (decision.verdict === 'block') {
+            denialReason = formatPermissionDenial('auto', decision.reason);
             // Keep the denial, but distinguish it from a user decision in Cindy.
             reportMcpDenial('auto-review');
             return 'decline';
@@ -6921,7 +6957,10 @@ export class CodexAgent extends BaseAgent {
             : approvalRequest;
         return await new Promise<ApprovalDecision>((resolve) => {
           const entry: PendingEntry = {
-            resolve,
+            resolve: (decision, reason) => {
+              if (reason) denialReason = formatPermissionDenial('system', reason);
+              resolve(decision);
+            },
             kind,
             settled: false,
             turnId,
@@ -6946,6 +6985,7 @@ export class CodexAgent extends BaseAgent {
                 log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
                 reportMcpDenial('system');
                 if (unavailableHandoff && kind !== 'mcpServerElicitation') autoReviewConfirmUndeliveredNotice.notify();
+                denialReason = formatPermissionDenial('system', 'Approval returned an unexpected response.');
                 finalize('decline');
                 return;
               }
@@ -6960,6 +7000,9 @@ export class CodexAgent extends BaseAgent {
               ) {
                 autoReviewConfirmUndeliveredNotice.notify();
               }
+              if (decision.behavior === 'deny') {
+                denialReason = formatPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason);
+              }
               finalize(mapPermissionDecisionToApproval(decision));
             })
             .catch((e) => {
@@ -6967,10 +7010,12 @@ export class CodexAgent extends BaseAgent {
               log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
               reportMcpDenial('system');
               if (unavailableHandoff && kind !== 'mcpServerElicitation') autoReviewConfirmUndeliveredNotice.notify();
+              denialReason = formatPermissionDenial('system', 'Approval could not be completed.');
               finalize('decline');
             });
         });
       });
+      return { decision, ...(decision === 'decline' ? { reason: denialReason } : {}) };
     }
 
     /**
@@ -6995,7 +7040,7 @@ export class CodexAgent extends BaseAgent {
         if (effectiveResolveAs === 'deny' && entry.unavailableHandoff && entry.kind !== 'mcpServerElicitation') {
           autoReviewConfirmUndeliveredNotice.notify();
         }
-        entry.resolve(effectiveResolveAs === 'allow' ? 'accept' : 'decline');
+        entry.resolve(effectiveResolveAs === 'allow' ? 'accept' : 'decline', reason);
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason, resolvedAs: effectiveResolveAs },
@@ -7937,7 +7982,7 @@ export class CodexAgent extends BaseAgent {
         },
         itemId: params.itemId,
       });
-      return { decision };
+      return { decision: decision.decision };
     };
 
     const fileChangeApproval = async (
@@ -7983,7 +8028,7 @@ export class CodexAgent extends BaseAgent {
           : { kind: 'file-write', path: params.grantRoot ?? undefined },
         itemId: params.itemId,
       });
-      return { decision };
+      return { decision: decision.decision };
     };
 
     function recordFromUnknown(value: unknown): Record<string, unknown> | null {
@@ -8282,15 +8327,15 @@ export class CodexAgent extends BaseAgent {
         },
       );
 
-      if (decision === 'accept') {
+      if (decision.decision === 'accept') {
         return { action: 'accept', content: null, _meta: null };
       }
-      if (decision === 'acceptForSession') {
+      if (decision.decision === 'acceptForSession') {
         return approvalPolicy === 'prompt-each-time'
           ? { action: 'accept', content: null, _meta: null }
           : { action: 'accept', content: null, _meta: { persist: 'session' } };
       }
-      if (decision === 'cancel') {
+      if (decision.decision === 'cancel') {
         return { action: 'cancel', content: null, _meta: null };
       }
       return { action: 'decline', content: null, _meta: null };
@@ -8319,10 +8364,10 @@ export class CodexAgent extends BaseAgent {
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, { itemId: params.itemId ?? undefined });
-      if (decision === 'accept') {
+      if (decision.decision === 'accept') {
         return { permissions: params.permissions as Record<string, unknown>, scope: 'turn' };
       }
-      if (decision === 'acceptForSession') {
+      if (decision.decision === 'acceptForSession') {
         return { permissions: params.permissions as Record<string, unknown>, scope: 'session' };
       }
       return { permissions: {}, scope: 'turn' };
@@ -8864,9 +8909,9 @@ export class CodexAgent extends BaseAgent {
             ...(toolUseId ? { itemId: toolUseId } : {}),
           },
         );
-        if (decision !== 'accept' && decision !== 'acceptForSession') {
+        if (decision.decision !== 'accept' && decision.decision !== 'acceptForSession') {
           return {
-            contentItems: [{ type: 'inputText', text: 'The user declined this tool call.' }],
+            contentItems: [{ type: 'inputText', text: decision.reason ?? formatPermissionDenial('system') }],
             success: false,
           };
         }
@@ -11989,6 +12034,7 @@ export class CodexAgent extends BaseAgent {
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
+      disabledSkillPaths: disabledSkillSnapshot,
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
         if (decision.unavailable) autoReviewUnavailableNotice.notify();
@@ -13494,7 +13540,7 @@ export class CodexAgent extends BaseAgent {
    * 与 Claude 不同:
    *  - Claude fork 可 truncate 到指定 message uuid (sdkForkSession upToMessageId)
    *  - Codex 新消息保存原生 turn id,直接用 lastTurnId 精确 fork
-   *  - 老消息没有原生锚点时,仍先 fork latest 再 rollback 尾部 turn
+   *  - 老消息没有原生锚点时,分页 daemon 查 turn 元数据；旧 daemon 才用 rollback
    *
    * opts.upToMessageId 在 Codex 这里被忽略。uuidMap 返回空 — Codex 不使用
    * Claude message uuid；原生 turn 锚点由 usedNativeForkAnchor 单独声明可复用。
@@ -13560,7 +13606,7 @@ export class CodexAgent extends BaseAgent {
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
-    const lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
+    let lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
     const forkCredentialMode = resolveAgentCredentialMode({
       agentKind: 'codex',
       providerId: opts.providerId,
@@ -13663,6 +13709,19 @@ export class CodexAgent extends BaseAgent {
         // Check before allocating a child: indexed native history must go through
         // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
         await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+      }
+      if (
+        !lastTurnId && (tailTurnsToDrop > 0 || opts.forkAtTimestampMs !== undefined) && !opts.stripEncryptedReasoning
+        && codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])
+      ) {
+        // Older/failed messages have no persisted UI anchor. Paginated threads
+        // reject rollback, so resolve the requested boundary with metadata only
+        // before allocating a child. Never rewrite indexed rollout files.
+        lastTurnId = await resolveForkTurnAnchor(
+          (method, params) => host.request(method, params),
+          opts.sourceSdkSessionId,
+          opts.forkAtTimestampMs,
+        );
       }
       const usedNativeForkAnchor = Boolean(
         lastTurnId && !opts.stripEncryptedReasoning && supportsCodexNativeTurnFork(initResp.userAgent),

@@ -226,13 +226,15 @@ export async function getPiExtraSpawnConfig(
       return true;
     });
 
+  // The legacy flag enables companion facades; the bridge separately checks
+  // whether memory is mounted. Helper capabilities must survive memory being off.
   const withBotMemoryFacade = (
     servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'],
   ): NonNullable<PiExtraSpawnConfig['mcpBridge']> => ({
     token: bridge?.token ?? '',
     servers,
-    ...(sessionCtx?.memoryScopeKey?.startsWith('bot:')
-      && servers.some((server) => server.name === 'cindy_memory')
+    ...((sessionCtx?.botMcpPolicy || sessionCtx?.memoryScopeKey?.startsWith('bot:'))
+      && servers.some((server) => server.name === 'cindy_memory' || server.name === 'cindy_helper')
       ? { botMemoryFacade: true }
       : {}),
   });

@@ -1,0 +1,331 @@
+import { ClipboardTransfer } from './clipboardTransfer';
+import { randomUUID } from 'node:crypto';
+import {
+  parseRemoteDesktopRequest,
+  REMOTE_DESKTOP_LEASE_MS,
+  REMOTE_DESKTOP_MAX_FRAME_BYTES,
+  type DesktopInput,
+  type RemoteDesktopCursorFrame,
+  type RemoteClipboardContent,
+  type RemoteDesktopVideoSettings,
+  type RemoteDesktopDisplayMode,
+  type RemoteDesktopCapabilities,
+  type RemoteDesktopLease,
+  type RemoteDesktopPermissions,
+  type RemoteDesktopIceRequest,
+  type RemoteDesktopIceReply,
+  desktopPermissionReady,
+} from '@cindy/device-link';
+
+export interface DesktopControllerDeps {
+  authorized(peer: string): boolean;
+  capabilities(): Promise<RemoteDesktopCapabilities>;
+  permissions?(action: 'check' | 'guide'): Promise<RemoteDesktopPermissions>;
+  frame(displayId: string, cursorOverlay?: boolean): Promise<string | RemoteDesktopCursorFrame | null>;
+  startInput(displayId: string): Promise<void>;
+  input(events: DesktopInput[]): void;
+  stopInput(): void;
+  stopVideo(): void;
+  offer(
+    lease: RemoteDesktopLease,
+    sdp: string,
+    settings?: RemoteDesktopVideoSettings,
+    cursorOverlay?: boolean,
+    attemptId?: string,
+  ): Promise<string>;
+  ice?(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceReply>;
+  displayModes?(displayId: string): Promise<RemoteDesktopDisplayMode[]>;
+  resolution?(displayId: string, modeId: string, beforeChange: () => void): Promise<void>;
+  clipboard?(
+    action: 'copy' | 'paste',
+    text: string | undefined,
+    isCurrent: () => boolean,
+  ): Promise<string | void>;
+  clipboardContent?(action: 'copy' | 'paste', content: RemoteClipboardContent | undefined, isCurrent: () => boolean): Promise<RemoteClipboardContent | void>;
+  changed(): void;
+  now?: () => number;
+}
+
+/** One human lease, peer-bound, with finite lifetime even if the relay disappears. */
+export class RemoteDesktopController {
+  private active:
+    | (RemoteDesktopLease & {
+        peer: string;
+        expires: number;
+        sequence: number;
+        backgroundViewing?: boolean;
+      })
+    | null = null;
+  private starting = false;
+  private startingPeer: string | null = null;
+  private framePending = false;
+  private clipboardPending = false;
+  private clipboardTransfer = new ClipboardTransfer();
+  private lastFrame = -Infinity;
+  private controlGeneration = 0;
+  private inputStarting = false;
+  private userStopped = new Map<string, string>();
+  private lastEnded: { peer: string; lease: string } | null = null;
+  constructor(private readonly deps: DesktopControllerDeps) {}
+  get state(): { peer: string; controlling: boolean } | null {
+    return this.active ? { peer: this.active.peer, controlling: this.active.controlling } : null;
+  }
+  get displayId(): string | null {
+    return this.active?.display.id ?? null;
+  }
+  hasLease(lease: string): boolean {
+    this.tick();
+    return this.active?.lease === lease;
+  }
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+  tick(): void {
+    if (
+      this.active &&
+      (this.active.expires <= this.now() || !this.deps.authorized(this.active.peer))
+    )
+      this.stop();
+  }
+  stop(peer?: string): void {
+    if (peer && this.active?.peer !== peer) {
+      // Cancelling a takeover candidate must not revoke the current owner's work.
+      if (this.startingPeer === peer) this.startingPeer = null;
+      return;
+    }
+    if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
+    this.clipboardTransfer.reset();
+    this.controlGeneration++;
+    this.active = null;
+    this.deps.stopInput();
+    this.deps.stopVideo();
+    this.deps.changed();
+  }
+  /** Explicit local disconnect must not be undone by the phone's recovery. */
+  stopByUser(): void {
+    const target = this.active ?? this.lastEnded;
+    if (target) this.userStopped.set(target.peer, target.lease);
+    this.stop();
+  }
+  private require(peer: string, lease: string) {
+    this.tick();
+    if (this.userStopped.get(peer) === lease) throw new Error('DESKTOP_STOPPED');
+    const active = this.active;
+    if (!active || active.peer !== peer || active.lease !== lease)
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    return active;
+  }
+  /** Only the trusted capture renderer may forward live DataChannel pongs. */
+  viewHeartbeat(lease: string): void {
+    this.tick();
+    if (this.active?.lease === lease && this.active.backgroundViewing && !this.active.controlling)
+      this.active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
+  }
+  /** Also used by the exact capture renderer's DataChannel bridge. */
+  input(lease: string, sequence: number, events: unknown): void {
+    const active = this.active;
+    if (!active)
+      throw new Error(
+        [...this.userStopped.values()].includes(lease)
+          ? 'DESKTOP_STOPPED'
+          : 'DESKTOP_LEASE_EXPIRED',
+      );
+    const request = parseRemoteDesktopRequest({ op: 'input', lease, sequence, events });
+    if (request.op !== 'input') return;
+    this.require(active.peer, lease);
+    if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+    if (sequence <= active.sequence) return; // never replay a click after retries/reconnect
+    active.sequence = sequence;
+    this.deps.input(request.events);
+  }
+  async request(peer: string, raw: unknown): Promise<unknown> {
+    const request = parseRemoteDesktopRequest(raw);
+    this.tick();
+    if (request.op === 'capabilities')
+      return { ...(await this.deps.capabilities()), automaticReconnect: true, connectionTakeover: true };
+    if (!this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+    if (request.op === 'permissions') {
+      if (!this.deps.permissions) throw new Error('DESKTOP_PERMISSIONS_UNAVAILABLE');
+      return this.deps.permissions(request.action);
+    }
+    if (request.op === 'start') {
+      if (request.resume && this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
+      const resumesActive = request.resume && this.active?.peer === peer &&
+        this.active.display.id === request.displayId;
+      if (this.starting || (this.active && !request.takeover && !resumesActive))
+        throw new Error('DESKTOP_BUSY');
+      this.starting = true;
+      this.startingPeer = peer;
+      const generation = this.controlGeneration;
+      try {
+        const caps = await this.deps.capabilities();
+        const display = caps.displays.find((d) => d.id === request.displayId);
+        if (!display) throw new Error('DESKTOP_DISPLAY_MISSING');
+        if (this.startingPeer !== peer || generation !== this.controlGeneration || !this.deps.authorized(peer))
+          throw new Error('DESKTOP_DISABLED');
+        if (caps.permissions && !desktopPermissionReady(caps.permissions.screenRecording))
+          throw new Error('DESKTOP_SCREEN_PERMISSION_REQUIRED');
+        if (request.resume && this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
+        if (request.takeover && this.active) this.stopByUser();
+        // A lost start reply can leave our own lease alive. Rotate it using the
+        // existing cleanup so the new viewer can restart its input sequence at 0.
+        else if (resumesActive) this.stop(peer);
+        if (!request.resume) this.userStopped.delete(peer);
+        const lease: RemoteDesktopLease = { lease: randomUUID(), display, controlling: false };
+        this.active = {
+          ...lease,
+          peer,
+          expires: this.now() + REMOTE_DESKTOP_LEASE_MS,
+          sequence: -1,
+        };
+        this.deps.changed();
+        return lease;
+      } finally {
+        this.starting = false;
+        this.startingPeer = null;
+      }
+    }
+    const active = this.require(peer, request.lease);
+    switch (request.op) {
+      case 'stop':
+        this.stop(peer);
+        return { ok: true };
+      case 'heartbeat':
+        active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
+        return { controlling: active.controlling };
+      case 'presentation': {
+        active.backgroundViewing = request.enabled;
+        if (request.enabled) {
+          active.controlling = false;
+          this.clipboardTransfer.reset();
+          this.controlGeneration++;
+          this.deps.stopInput();
+        }
+        this.deps.changed();
+        return { controlling: active.controlling };
+      }
+      case 'control': {
+        if (request.enabled) active.backgroundViewing = false;
+        if (request.enabled && this.inputStarting) throw new Error('DESKTOP_INPUT_BUSY');
+        this.clipboardTransfer.reset();
+        const generation = ++this.controlGeneration;
+        if (!request.enabled) {
+          active.controlling = false;
+          this.deps.stopInput();
+        } else if (!active.controlling) {
+          this.inputStarting = true;
+          try {
+            await this.deps.startInput(active.display.id);
+            if (
+              generation !== this.controlGeneration ||
+              this.active !== active ||
+              !this.deps.authorized(peer)
+            ) {
+              this.deps.stopInput();
+              throw new Error(
+                this.userStopped.get(peer) === request.lease
+                  ? 'DESKTOP_STOPPED'
+                  : 'DESKTOP_LEASE_EXPIRED',
+              );
+            }
+            this.require(peer, request.lease);
+            active.controlling = true;
+          } finally {
+            this.inputStarting = false;
+          }
+        }
+        this.deps.changed();
+        return { controlling: active.controlling };
+      }
+      case 'clipboardContent':
+      case 'clipboard': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (request.op === 'clipboard' ? !this.deps.clipboard : !this.deps.clipboardContent) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        if (this.clipboardPending) throw new Error('DESKTOP_CLIPBOARD_BUSY');
+        const generation = this.controlGeneration;
+        const isCurrent = () => {
+          this.tick();
+          return (
+            this.active === active && active.controlling && generation === this.controlGeneration
+          );
+        };
+        this.clipboardPending = true;
+        try {
+          if (request.op === 'clipboardContent') {
+            const result = await this.clipboardTransfer.handle(request, isCurrent, this.deps.clipboardContent!);
+            if (!isCurrent()) { this.clipboardTransfer.reset(); throw new Error('DESKTOP_LEASE_EXPIRED'); }
+            return result;
+          }
+          const text = await this.deps.clipboard!(
+            request.action,
+            request.action === 'paste' ? request.text : undefined,
+            isCurrent,
+          );
+          this.require(peer, request.lease);
+          if (!isCurrent()) throw new Error('DESKTOP_VIEW_ONLY');
+          return request.action === 'copy' ? { text } : { ok: true };
+        } finally {
+          this.clipboardPending = false;
+        }
+      }
+      case 'input':
+        this.input(request.lease, request.sequence, request.events);
+        return { ok: true };
+      case 'frame': {
+        // Compatibility transport: one small frame in flight, no replaying frame queue.
+        if (this.framePending || this.now() - this.lastFrame < 250) return { jpeg: null };
+        this.framePending = true;
+        this.lastFrame = this.now();
+        try {
+          const jpeg = await this.deps.frame(active.display.id, request.cursorOverlay);
+          this.require(peer, request.lease); // revoke during capture must not leak the result
+          const frame = typeof jpeg === 'object' && jpeg !== null ? jpeg : { jpeg };
+          // Cursor metadata does not turn a relay frame into a local media frame.
+          if (frame.jpeg && frame.jpeg.length > Math.ceil(REMOTE_DESKTOP_MAX_FRAME_BYTES / 3) * 4)
+            return { jpeg: null };
+          return frame;
+        } finally {
+          this.framePending = false;
+        }
+      }
+      case 'displayModes': {
+        if (!this.deps.displayModes) throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+        const modes = await this.deps.displayModes(active.display.id);
+        this.require(peer, request.lease);
+        return modes;
+      }
+      case 'resolution': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.resolution) throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+        const generation = this.controlGeneration;
+        const beforeChange = () => {
+          this.tick();
+          if (this.active !== active || !active.controlling || generation !== this.controlGeneration)
+            throw new Error('DESKTOP_LEASE_EXPIRED');
+          // Release old geometry before the native write can emit display events.
+          // Completion must not inspect or stop a replacement lease.
+          this.stop(peer);
+        };
+        await this.deps.resolution(active.display.id, request.modeId, beforeChange);
+        return { ok: true };
+      }
+      case 'offer': {
+        const sdp = await this.deps.offer(
+          active,
+          request.sdp,
+          request.settings,
+          request.cursorOverlay,
+          request.attemptId,
+        );
+        this.require(peer, request.lease);
+        return { sdp };
+      }
+      case 'ice': {
+        if (!this.deps.ice) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+        const result = await this.deps.ice(request);
+        this.require(peer, request.lease);
+        return result;
+      }
+    }
+  }
+}

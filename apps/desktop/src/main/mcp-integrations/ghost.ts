@@ -1,3 +1,5 @@
+import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
+import { isBotAuthorizationSession } from '../maker-ipc/botAuthorizationHost.js';
 /**
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
@@ -450,7 +452,9 @@ async function requestGrantConfirm(params: {
     message:
       decision.reason === 'timeout'
         ? '过户确认超时:用户未在时限内响应,本次调用已取消;如仍需要,请提醒用户后重试'
-        : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
+        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+          ? `Cindy 已取消本次过户请求（${decision.reason}），并非用户手动拒绝。`
+          : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
   };
 }
 
@@ -528,7 +532,9 @@ async function requestMediaPathRevealConfirm(params: {
     message:
       decision.reason === 'timeout'
         ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
-        : '用户未允许把本机路径返回给 Agent，不要重试',
+        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+          ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
+          : '用户未允许把本机路径返回给 Agent，不要重试',
   };
 }
 
@@ -1356,6 +1362,16 @@ export function getCindyGhostsMcpDeps(
     message: '当前伙伴配置未启用该插件；不要重试，改用已授权能力，或让用户更新伙伴配置后再试。',
   });
   return {
+    connectAccount: async (target) => {
+      if (target.kind === 'plugin' && !isGhostAllowedByFrozenProfile(target.id))
+        return frozenProfileDenied();
+      const context = resolveSessionContext();
+      const sessionId = ghostSetupInteractionSessionId(context);
+      if (!sessionId) return { ok: false, errorCode: 'NO_SESSION_CONTEXT' };
+      const service = getBotAuthorizationService();
+      if (!service) return { ok: false, errorCode: 'HOST_NOT_READY' };
+      return service.request(sessionId, target);
+    },
     callMedia: async (request) => {
       const sessionContext = resolveSessionContext();
       const sessionId = sessionContext?.sessionId;
@@ -1542,6 +1558,13 @@ export function getCindyGhostsMcpDeps(
           errorCode: 'INTERNAL',
           message: '插件设置通道尚未就绪，本次调用未执行。',
         };
+      }
+      const authorizationSessionId = ghostSetupInteractionSessionId(sessionContext);
+      const authorizationService = getBotAuthorizationService();
+      if (authorizationService && authorizationSessionId && await isBotAuthorizationSession(authorizationSessionId)) {
+        const service = authorizationService;
+        const card = await service.request(authorizationSessionId, { kind: 'plugin', id: ghostId, ...(setupPlan && getGhostSetupAssessment(ghostId).reauthSuggest ? { reauthorize: true } : {}) }, setupPlan);
+        if (!card.ok) return card;
       }
       const setup = await setupCoordinator.ensureReady({
         sessionId: ghostSetupInteractionSessionId(sessionContext),

@@ -189,6 +189,7 @@ export async function writeModelContextLimitsWithRefresh(
   targets: readonly { agent: AgentKind; providerId: string; modelId: string }[],
   limit: number | null,
   refresh: () => Promise<void>,
+  refreshAfterRollback?: () => Promise<void>,
 ): Promise<void> {
   // Capture the original owner's file; an account switch must never restore into
   // the new owner's preferences. Preserve mixed aliases and absent overrides.
@@ -211,6 +212,17 @@ export async function writeModelContextLimitsWithRefresh(
       originalStore.writePatch({ limits });
     } finally {
       store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
+    }
+    // Earlier queue wakes may already have resumed handles with the rejected
+    // budget. Reconcile them only after restoring this owner's preferences.
+    if (refreshAfterRollback && ownerScopedUserDataPath('model-context-limit-prefs.json') === filePath) {
+      try {
+        await refreshAfterRollback();
+      } catch (refreshError) {
+        log.warn('context limit rollback refresh failed', {
+          error: refreshError instanceof Error ? refreshError.message : String(refreshError),
+        });
+      }
     }
     throw error;
   }

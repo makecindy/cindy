@@ -180,7 +180,7 @@ import {
   type AutomationScheduleSessionInfo,
   type AutomationSessionGroup,
 } from './lib/automationSidebarGrouping';
-import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { getSessionDeviceId, remoteProjectsStore, useRemoteScheduleIndex } from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
   useRemoteSessionActivity,
@@ -464,6 +464,7 @@ export function CCAgentSidebarUpper() {
   const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
   const filesSessionId = filesMatch?.params.sessionId;
   const scheduleSessionIndex = usePublishedAutomationScheduleSessionIndex();
+  const remoteScheduleIndex = useRemoteScheduleIndex();
   // 侧栏右侧 urgent 红点的"额外"来源:定时任务未读且失败(status != 'success')。
   // sessionAttentionStore 只跟踪 chat 内 attention;schedule 未读通过 sidebarNotifications
   // 合并进 hasAttentionNotification,但 attentionKind 缺失导致默认走绿(见 SessionItem
@@ -471,11 +472,11 @@ export function CCAgentSidebarUpper() {
   // 把它们提到 urgent 红档,避免"失败的 automation 被涂成 Completed"的误导。
   const unreadFailedScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadFailedRun) next.add(sessionId);
     }
     return next;
-  }, [scheduleSessionIndex]);
+  }, [scheduleSessionIndex, remoteScheduleIndex]);
   const navigate = useNavigate();
 
   // Workdir-browse mode (skillhub Market sidebar pattern). When the user
@@ -630,12 +631,12 @@ export function CCAgentSidebarUpper() {
   // 完成未读(如重启后 attention store 还没填充)会丢绿点(codex review)。
   const railNotifications = useMemo(() => {
     const unread = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadRun) unread.add(sessionId);
     }
     if (unread.size === 0) return attentionNotifications;
     return new Set([...attentionNotifications, ...unread]);
-  }, [attentionNotifications, scheduleSessionIndex]);
+  }, [attentionNotifications, scheduleSessionIndex, remoteScheduleIndex]);
 
   useOrcaWorkerAttentionWatcher(sessionsHook.sessions, activeSessionId);
 
@@ -1074,15 +1075,16 @@ function ExpandedView({
       onSessionNeedsReply: handleSessionNeedsReply,
     },
   );
+  const remoteScheduleIndex = useRemoteScheduleIndex();
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   const unreadScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadRun) next.add(sessionId);
     }
     return next;
-  }, [scheduleSessionIndex]);
+  }, [scheduleSessionIndex, remoteScheduleIndex]);
   const sidebarNotifications = useMemo(() => {
     if (unreadScheduleSessionIds.size === 0) return notifications;
     return new Set([...notifications, ...unreadScheduleSessionIds]);
@@ -1091,16 +1093,16 @@ function ExpandedView({
 
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
-      const info = scheduleSessionIndex.get(sessionId);
+      const info = remoteProjectsStore.getSessionScheduleInfo(sessionId) ?? scheduleSessionIndex.get(sessionId);
       // 成功进入即已读；历史失败在任务内容实际展示时确认，保留横幅、只清红点。
       const successUnreadRunIds = info ? unreadSuccessScheduleRunIds(info) : [];
       if (successUnreadRunIds.length === 0) return;
       // …AndSync:settle 后无条件触发 renderer 本地刷新。跨实例场景下这些 runId
       // 可能在 DB 里早已被另一实例标为已读(main no-op 且不广播),没有本地刷新
       // 通道的话,这里的过期未读快照永远等不到事件、红点无法自愈。
-      void markScheduleRunsReadAndSync(successUnreadRunIds);
+      void markScheduleRunsReadAndSync(successUnreadRunIds, getSessionDeviceId(sessionId));
     },
-    [scheduleSessionIndex],
+    [scheduleSessionIndex, remoteScheduleIndex],
   );
   const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
   const effectiveRunningSessionIds = useMemo(() => {
@@ -3739,6 +3741,7 @@ function CollapsedView({
   const startingSessionIds = useStartingSessionIds(runningSessionIds);
   // 瓷砖未读点颜色按 attention kind(done 绿 / awaiting TapTap 蓝 / error 红);组件层
   // 取一次,renderItem 里查表(renderItem 非组件,不能 per-item 用 hook)。
+
   const attentionKinds = useSessionAttentionKinds();
   // 失败 automation urgency 集合 —— rail 瓷砖也要按此把 failed schedule 涂红,不能
   // 让"失败的定时任务"落到默认绿色 done tone(否则和 SessionItem 不一致,
@@ -4022,6 +4025,7 @@ function RailPanels({
   // onOpenChange —— openSection 离开 projects 就同步清掉菜单状态,否则组件常驻
   // (只是 return null),下次打开面板旧菜单会按旧坐标复现并引用旧项目(review)。
   // 与下方 showAllProjects 的复位同构。
+
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   // 项目列表「显示全部」:面板关闭后复位(与 ProjectsSection 的段收起复位同语义)。

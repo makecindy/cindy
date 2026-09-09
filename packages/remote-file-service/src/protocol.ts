@@ -36,7 +36,7 @@ import type {
 export const FILE_SERVICE_SCHEMA_VERSION = 2;
 
 /** 人读 bundle 版本(probe / 日志用),行为变化时手动 bump。 */
-export const FILE_SERVICE_BUNDLE_VERSION = '0.2.3';
+export const FILE_SERVICE_BUNDLE_VERSION = '0.2.4';
 
 /* ============================== 帧 ============================== */
 

@@ -23,7 +23,6 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 
 import {
-  getScheduleAgentPrefs,
   getScheduleDefaultModel,
   rememberScheduleFormPrefs,
   useScheduleForm,
@@ -50,7 +49,6 @@ import {
   generateProjectScheduleId,
 } from '../lib/projectAutomationConfig';
 import {
-  AgentTabs,
   ModelEffortChip,
   ProjectChip,
   ScheduleChip,
@@ -131,7 +129,7 @@ export function ScheduleFormDialog({
 }: Props) {
   const { t } = useTranslation();
   const formApi = useScheduleForm(initial);
-  const { form, setField, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
+  const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   const caps = useAgentCapabilities(form.agentKind);
   const { providers } = useProviders();
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
@@ -454,10 +452,10 @@ export function ScheduleFormDialog({
   }, [form.model, form.agentKind, form.targetSessionId, setField]);
 
   useEffect(() => {
-    if (!currentModelEfforts || !form.effort) return;
+    if (form.modelAgentKind || !currentModelEfforts || !form.effort) return;
     const allowed = currentModelEfforts as readonly string[];
     if (!allowed.includes(form.effort)) setField('effort', '');
-  }, [currentModelEfforts, form.effort, setField]);
+  }, [form.modelAgentKind, currentModelEfforts, form.effort, setField]);
 
   // Fast 模式门控：agent 级 hasFastMode × 该 (生效来源, 模型) 的 supportsFastMode（per-provider，
   // 唯一真相）。生效来源按 form.providerId 解析（空则该模型的默认来源）。Claude 当前 hasFastMode
@@ -471,8 +469,10 @@ export function ScheduleFormDialog({
   // 切到 Claude / 不支持 fast 的模型时，清掉表单里残留的 fast 态，
   // 杜绝脏值经 toInput 流向 createSession（与上面 effort 失配自动清除同思路）。
   useEffect(() => {
-    if (form.fastMode && !showFastModeToggle) setField('fastMode', false);
-  }, [form.fastMode, showFastModeToggle, setField]);
+    if (!form.modelAgentKind && !caps.loading && providers.length > 0 && form.fastMode && !showFastModeToggle) {
+      setField('fastMode', false);
+    }
+  }, [form.modelAgentKind, caps.loading, providers.length, form.fastMode, showFastModeToggle, setField]);
 
   const handleSubmit = async () => {
     const err = validate();
@@ -1404,23 +1404,14 @@ export function ScheduleFormDialog({
                       </>
                     )}
                     <div className="min-w-0 flex-1" />
-                    {/* 有真实绑定时 agentKind 跟随绑定会话,切换只会造成 resume 错配 → 禁用 */}
-                    <AgentTabs
-                      value={form.agentKind}
-                      disabled={isBound}
-                      onChange={(v) => {
-                        const prefs = getScheduleAgentPrefs(v);
-                        setField('agentKind', v);
-                        // model 走三级回退（含 prefs.model）,保证切 agent 后也是显式值
-                        setField('model', getScheduleDefaultModel(v));
-                        // providerId 沿用该 agent 的任务记忆;新 agent 未连同一来源时
-                        // ModelSelectorContent 会回落到其原生默认(activeSourceId),不会错路由。
-                        setField('providerId', prefs.providerId);
-                        setField('effort', prefs.effort);
-                        setField('fastMode', prefs.fastMode);
-                      }}
-                    />
                     <ModelEffortChip
+                      onSelect={({ engine, modelId, providerId, effort, fast }) => selectModelConfiguration({
+                        agentKind: engine === 'cc' ? 'claude-code' : engine,
+                        model: modelId, providerId, effort: (effort ?? '') as typeof form.effort,
+                        fastMode: fast,
+                      })}
+                      onFollowSession={() => selectModelConfiguration(null,
+                        boundSessionReference?.agentKind === 'cc' ? 'claude-code' : boundSessionReference?.agentKind)}
                       agentKind={form.agentKind}
                       modelValue={form.model}
                       onChangeModel={(v) => setField('model', v)}
@@ -1431,7 +1422,11 @@ export function ScheduleFormDialog({
                       onChangeProviderId={(v) => setField('providerId', v)}
                       onNavigateToProviders={() => navigate('/settings?tab=providers')}
                       fastMode={form.fastMode}
-                      onChangeFast={hideWorkspaceFields ? undefined : (v) => setField('fastMode', v)}
+                      onChangeFast={(v) => {
+                        setField('fastMode', v);
+                        // Fast-only edits also make legacy model selections explicit.
+                        if (form.model.trim()) setField('modelAgentKind', form.agentKind);
+                      }}
                     />
                   </div>
                   <button

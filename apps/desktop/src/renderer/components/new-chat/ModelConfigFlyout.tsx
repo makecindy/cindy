@@ -1,4 +1,4 @@
-import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
+import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -79,11 +79,14 @@ export function ModelConfigFlyout({
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
   const showSlider = config.efforts.length > 1;
-  const contextWindow = config.capability?.contextWindow ?? 0;
-  const codexDefaultContext = config.engine === 'codex';
-  const codexContext = useCodexContextWindow({
-    enabled: codexDefaultContext, providerId: entry.providerId, modelId: config.wireModelId ?? entry.modelId,
+  const contextLimit = useModelContextLimit({
+    providerId: entry.providerId,
+    agent: config.engine === 'cc' ? 'claude-code' : config.engine,
+    modelId: config.wireModelId ?? entry.modelId,
   });
+  const contextWindow = contextLimit.limit ?? config.capability?.contextWindow ?? 0;
+  const codexDefaultContext = config.engine === 'codex';
+  const codexContext = codexDefaultContext ? contextLimit.codexContext ?? null : null;
   const starred = state === 'favorite' || justFavorited;
 
   const discount = price?.kind === 'priced' ? price.discount : undefined;

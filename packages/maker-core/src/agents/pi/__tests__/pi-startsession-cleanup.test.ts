@@ -1630,7 +1630,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }, {}, 'input');
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
-    const review = vi.fn(async () => ({ verdict: 'block' as const }));
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'This task is read-only.' }));
     const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
       ...opts(),
       permissionMode: 'auto',
@@ -1642,7 +1642,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect.any(String),
       run.taskId,
       'approval',
-      expect.objectContaining({ value: 'auto-review-deny' }),
+      expect.objectContaining({ value: 'auto-review-deny:This task is read-only.' }),
     ));
     expect(review).toHaveBeenCalledOnce();
     expect(resolver).not.toHaveBeenCalled();

@@ -3,10 +3,117 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
+import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
+import { describeRemoteError } from '@/device-link/remoteStatus';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
+
+describe('mobile Home connection feedback', () => {
+  it('does not offer manual sync for the device-prefixed unresponsive error shown on Home', () => {
+    expect(resolveConnectionBannerSyncActionVisibility({
+      online: true,
+      hasActiveIssue: false,
+      deviceUnresponsive: true,
+      hasRequestError: true,
+      requestErrorAutoRecovering: false,
+    })).toBe(false);
+  });
+
+  it('wires Home itself to the shared recovery indicator instead of an unconditional retry button', () => {
+    const source = readSource('app/devices/index.tsx');
+    expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
+    expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
+    expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
+    expect(source).toContain('const showConnectionRow = homeRecoveringDeviceIds.size > 0 ||');
+    expect(source).toContain("homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')");
+    expect(source).toContain("recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'");
+    const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
+    expect(hydrate.indexOf("updateDeviceConnectionState(device.deviceId, 'syncing')")).toBeLessThan(hydrate.indexOf('const promise = hydrateDeviceSessionsOnce('));
+    expect(source).toContain('useDelayedConnectionNotice(showConnectionRow)');
+    const row = source.slice(source.indexOf('{showConnectionNotice ? ('), source.indexOf('<SectionList'));
+    expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
+    const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
+    expect(progress).toContain('<ConnectionRecoveryProgress');
+    expect(progress).not.toContain('onPress');
+    expect(progress).not.toContain('<Pressable');
+  });
+});
+
+describe('Home recovery completion', () => {
+  const stale = { deviceId: 'a', deviceName: 'MacBook', error: '[DEVICE_UNRESPONSIVE] circuit open' };
+  const recovering = new Set(['a']);
+  const recovered = new Set<string>();
+  it('tracks ordinary failures through same-device and other-device circuit transitions', () => {
+    const failure = { deviceId: 'a', deviceName: 'Same name', error: '[IPC_ERROR] failed' };
+    const other = { deviceId: 'b', deviceName: 'Same name', error: '[REQUEST_TIMEOUT] failed' };
+    for (const [ids, failures, expectedRecovery, expectedError] of [
+      [[], [failure], false, 'Same name: [IPC_ERROR] failed'],
+      [['a'], [failure], true, 'Same name: [IPC_ERROR] failed'],
+      [['a'], [failure, other], false, 'Same name: [REQUEST_TIMEOUT] failed'],
+      [['a', 'b'], [failure, other], true, 'Same name: [IPC_ERROR] failed；Same name: [REQUEST_TIMEOUT] failed'],
+      [['b'], [failure, other], false, 'Same name: [IPC_ERROR] failed'],
+      [[], [failure], false, 'Same name: [IPC_ERROR] failed'],
+    ] as const) {
+      const feedback = resolveHomeConnectionFeedback([...failures], new Set(ids));
+      expect(feedback).toEqual({ error: expectedError, deviceRecovery: expectedRecovery });
+      expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+        deviceUnresponsive: feedback.deviceRecovery, hasRequestError: feedback.error !== null,
+        requestErrorAutoRecovering: false,
+      })).toBe(!expectedRecovery);
+    }
+  });
+  it('expires a recovered device marker while another device is still probing', () => {
+    expect(resolveHomeConnectionFeedback(stale, new Set(['b']))).toEqual({ error: null, deviceRecovery: true });
+  });
+  it('keeps page-level errors independent of a device circuit', () => {
+    expect(resolveHomeConnectionFeedback('[NETWORK_UNAVAILABLE] failed', recovering))
+      .toEqual({ error: '[NETWORK_UNAVAILABLE] failed', deviceRecovery: false });
+  });
+  it.each([
+    [true, true, true],
+    [false, true, true],
+    [true, false, false],
+    [false, false, false],
+  ])('keeps mixed-device recovery independent (circuit=%s, manual=%s)', (circuit, manual, canSync) => {
+    const ordinary = { deviceId: 'b', deviceName: 'Other', error: '[REQUEST_TIMEOUT] failed' };
+    const feedback = resolveHomeConnectionFeedback(manual ? [stale, ordinary] : stale, circuit ? recovering : recovered);
+    expect(feedback.error).toBe(manual ? 'Other: [REQUEST_TIMEOUT] failed' : circuit ? 'MacBook: [DEVICE_UNRESPONSIVE] circuit open' : null);
+    expect(feedback.deviceRecovery).toBe(circuit && !manual);
+    expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+      deviceUnresponsive: feedback.deviceRecovery, hasRequestError: feedback.error !== null,
+      requestErrorAutoRecovering: false,
+    })).toBe(canSync);
+  });
+  it('shows background recovery even without a stored request error', () => {
+    expect(resolveHomeConnectionFeedback(null, recovering)).toEqual({ error: null, deviceRecovery: true });
+  });
+  it('clears the stale circuit error once probing succeeds', () => {
+    expect(resolveHomeConnectionFeedback(stale, recovering).error).toBe('MacBook: [DEVICE_UNRESPONSIVE] circuit open');
+    expect(resolveHomeConnectionFeedback(stale, recovered).error).toBeNull();
+  });
+  it('preserves a different device failure in the joined error', () => {
+    expect(resolveHomeConnectionFeedback([stale, { deviceId: 'b', deviceName: 'Other', error: 'denied' }], recovered).error).toBe('Other: denied');
+  });
+  it.each(['REQUEST_TIMEOUT', 'NETWORK_UNAVAILABLE'])('keeps manual retry after %s exhausts bounded retries', (code) => {
+    const error = resolveHomeConnectionFeedback(`[${code}] failed`, recovered).error;
+    expect(resolveConnectionBannerSyncActionVisibility({ online: true, hasActiveIssue: false,
+      deviceUnresponsive: false, hasRequestError: error !== null, requestErrorAutoRecovering: false,
+    })).toBe(true);
+  });
+  it.each(['DEVICE_UNRESPONSIVE', '[DEVICE_UNRESPONSIVE]', 'Mac: [DEVICE_UNRESPONSIVE]；Other'])('never classifies the device name %s as an error code', (deviceName) => {
+    const ordinary = { deviceId: 'b', deviceName, error: '[REQUEST_TIMEOUT] failed' };
+    for (const ids of [recovered, recovering]) {
+      const feedback = resolveHomeConnectionFeedback([stale, ordinary], ids, describeRemoteError);
+      expect(feedback.error).toBe(`${deviceName}: ${describeRemoteError(ordinary.error)}`);
+      expect(feedback.deviceRecovery).toBe(false);
+    }
+  });
+  it('classifies all failures before limiting display to two entries', () => {
+    expect(resolveHomeConnectionFeedback([stale, stale, { deviceId: 'c', deviceName: 'Third', error: 'denied' }], recovering).error).toBe('Third: denied');
+  });
+});
 
 describe('mobile Home startup reads', () => {
   it('returns the local value when the read settles in time', async () => {
@@ -282,7 +389,7 @@ describe('mobile home desktop-first surface', () => {
     expect(vendorIconSource).not.toContain('transform="translate(');
     expect(vendorIconSource).toContain('Easing.inOut(Easing.ease)');
     // 行运行态经订阅获取(memo 化后命令式读取会 stale,2026-07-18 重渲染风暴修复)
-    expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(item.session.id);');
+    expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(latestItem.session.id);');
     // 保鲜契约:项目/自动化折叠只订阅低频首页状态；消息预览下沉到 session 行。
     // 普通流式 token 不得再通过全局 storeVersion 唤醒整棵首页列表。
     expect(homeSource).not.toContain('useRemoteSessionStoreVersion();');
@@ -339,7 +446,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('|| item.liveActivity?.attention === true;');
     // 提醒点已从行首 icon 角标移到行右侧状态槽(替代时间位),五档判定与桌面
     // sidebarRightStatus 对齐:error 红 > awaiting TapTap 蓝 > running spinner > 完成绿 > 时间。
-    expect(source).toContain('resolveMobileSessionRightStatus({');
+    expect(source).toContain('resolveMobileSessionRowStatus(item, sessionIsRunning, groupExpanded)');
     expect(source).toContain('styles.sessionRightDot');
     expect(source).toContain('<SessionRightSpinner');
     expect(source).not.toContain('sessionAttentionDot');
@@ -354,7 +461,7 @@ describe('mobile home desktop-first surface', () => {
     const localSmokeSource = readSource('scripts/local-device-link-smoke.mjs');
     const deviceDetailFlow = readSource('e2e/maestro/session_list_controls.yaml');
 
-    expect(source).toContain('item.deviceId !== null && item.available');
+    expect(source).toContain('item.deviceId !== null && canBrowseMobileHomeDevice(item)');
     expect(source).toContain('`home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}`');
     expect(source).toContain('function sanitizeDeviceChipTestId');
     expect(source).toContain("return value.replace(/[^A-Za-z0-9_-]/g, '_');");
@@ -390,8 +497,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
     expect(source).toContain(
-      "const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+      "const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
     );
+    expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
@@ -561,7 +669,8 @@ describe('mobile home desktop-first surface', () => {
 
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
-    expect(source).toContain('const { accountGeneration, apiFetch, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('const { accountGeneration, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('return readDeviceList();');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');
     expect(source).toContain('syncInFlightRef.current = null;');

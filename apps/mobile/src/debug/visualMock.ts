@@ -151,6 +151,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
     ?? (MOBILE_VISUAL_MOCK_REALDATA_URL ? VISUAL_MOCK_REALDATA_DEVICE_NAME : VISUAL_MOCK_DEVICE_NAME);
   return {
     status: 'online',
+    recoveringDeviceIds: new Set(),
+    readDeviceList: async () => ({ devices: visualMockDevices() }),
     connectionIssue: null,
     presenceVersion: 1,
     connectionEpoch: 1,

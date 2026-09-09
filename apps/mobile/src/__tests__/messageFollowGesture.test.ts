@@ -16,7 +16,7 @@ const renderer = source.statements.find((node): node is ts.FunctionDeclaration =
 ));
 const callbackNames = [
   'markProgrammaticScroll', 'clearProgrammaticScroll', 'markMobileMvcpSettle',
-  'isUserControllingScroll', 'getTailFollower', 'scrollToEndProgrammatically', 'runStickToLatestVerify',
+  'isUserControllingScroll', 'revealPositionedHistory', 'getTailFollower', 'scrollToEndProgrammatically', 'runStickToLatestVerify',
   'scrollToOffsetProgrammatically', 'scrollToIndexProgrammatically',
   'scrollToBottom', 'handleScroll', 'handleHistoryTouchStart', 'maybeTriggerHistoryTouch',
   'handleHistoryTouchMove', 'handleHistoryTouchEnd', 'handleHistoryTouchCancel',
@@ -40,6 +40,12 @@ const compiled = ts.transpileModule([
   `return { ${callbackNames.join(', ')} };`,
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
+const opacityDeclaration = renderer!.body!.statements.flatMap(node => (
+  ts.isVariableStatement(node) ? [...node.declarationList.declarations] : []
+)).find(node => ts.isIdentifier(node.name) && node.name.text === 'initialRevealOpacity')!;
+const renderOpacity = new Function('listRevealed', 'initialRevealProgress',
+  `return ${opacityDeclaration.initializer!.getText(source)};`) as (revealed: boolean, progress: object) => unknown;
+
 function harness() {
   const ref = <T>(current: T) => ({ current });
   const state = {
@@ -52,6 +58,8 @@ function harness() {
     programmaticScrollInFlightRef: ref(false), programmaticAnimatedScrollInFlightRef: ref(false),
     programmaticScrollSettleAtRef: ref(0), mvcpSettleAtRef: ref(0),
     tailFollowerRef: ref(null),
+    initialAnchorDoneRef: ref(true),
+    initialRevealAnimationRef: ref<{ stop: () => void } | null>({ stop: vi.fn() }),
     historyPrependTransactionRef: ref(null), nativeScrollEventSequenceRef: ref(0),
     shareSelectionActiveRef: ref(false),
     scrollMetricsRef: ref({ contentHeight: 2000, offsetY: 1200, viewportHeight: 800 }),
@@ -62,6 +70,7 @@ function harness() {
   });
   const environment = {
     ...scrollModel, ...state, createMobileTailFollower, mobileDebugEnabled, mobileDebugLog,
+    initialRevealProgress: { setValue: vi.fn() }, setListRevealed: vi.fn(),
     listRef: ref({
       scrollToEnd: tailScroll,
       scrollToIndex: vi.fn(),
@@ -87,6 +96,8 @@ function harness() {
   } });
   return {
     ...callbacks, state, tailScroll, scrollEvent,
+    initialRevealProgress: environment.initialRevealProgress,
+    setListRevealed: environment.setListRevealed,
     handleScrollEndDrag: (event = scrollEvent(state.scrollMetricsRef.current.offsetY)) => (
       callbacks.handleScrollEndDrag(event)
     ),
@@ -103,6 +114,30 @@ beforeEach(() => {
 afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  it('keeps revealed history opaque after a delayed native stop value and keyboard rerenders', () => {
+    const h = harness();
+    const progress = { value: 0 };
+    let revealed = false;
+    h.initialRevealProgress.setValue.mockImplementation((value: number) => { progress.value = value; });
+    h.setListRevealed.mockImplementation((value: boolean) => { revealed = value; });
+    h.state.initialRevealAnimationRef.current!.stop = () => {
+      setTimeout(() => { progress.value = 0; }, 1);
+    };
+    expect(renderOpacity(revealed, progress)).toBe(progress);
+    h.revealPositionedHistory();
+    expect(progress.value).toBe(1);
+    expect(renderOpacity(revealed, progress)).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(progress.value).toBe(0); // Native completion delivers its old hidden value.
+    for (const viewportHeight of [500, 912]) {
+      h.state.scrollMetricsRef.current.viewportHeight = viewportHeight;
+      h.handleContentSize(400, 2000);
+      expect(renderOpacity(revealed, progress)).toBe(1);
+    }
+    // A task switch resets revealed state and uses a fresh animation value.
+    const nextProgress = { value: 0 };
+    expect(renderOpacity(false, nextProgress)).toBe(nextProgress);
+  });
   it.each(['off', 'on', 'failed'])('preserves reader ownership with Debug recording %s', (recording) => {
     const sink = vi.fn(() => { if (recording === 'failed') throw new Error('storage unavailable'); });
     setMobileDebugSink(recording === 'off' ? undefined : sink);
@@ -117,6 +152,27 @@ describe('streaming follow yields to the reader', () => {
     expect(sink.mock.calls.length > 0).toBe(recording !== 'off');
   });
 
+  it('reveals positioned history immediately once, cancelling the fallback before opacity changes', () => {
+    const h = harness();
+    const stop = h.state.initialRevealAnimationRef.current!.stop;
+    h.scrollToEndProgrammatically(false);
+    vi.advanceTimersByTime(64);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(h.initialRevealProgress.setValue).toHaveBeenCalledExactlyOnceWith(1);
+    expect(h.setListRevealed).toHaveBeenCalledExactlyOnceWith(true);
+    expect(vi.mocked(stop).mock.invocationCallOrder[0]).toBeLessThan(h.initialRevealProgress.setValue.mock.invocationCallOrder[0]);
+    h.handleContentSize(400, 2500);
+    vi.advanceTimersByTime(300);
+    expect(h.setListRevealed).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reveal a not-yet-started initial history from unrelated layout callbacks', () => {
+    const h = harness();
+    h.state.initialAnchorDoneRef.current = false;
+    h.runStickToLatestVerify();
+    vi.advanceTimersByTime(300);
+    expect(h.initialRevealProgress.setValue).not.toHaveBeenCalled();
+  });
   it.each([1196, 1180].flatMap((offset) => ['missing', 'before-verify', 'after-verify'].map((end) => ({ offset, end }))))(
     'releases a cancelled drag at $offset with end event $end', ({ offset, end }) => {
       const h = harness();

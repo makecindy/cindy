@@ -1,4 +1,67 @@
 {
+  "remoteDesktop": {
+    "windowsTitle": "锁屏控制",
+    "windowsready": "已为本次运行的 Cindy 开启。重新启动 Cindy 后需要再次由管理员授权。",
+    "windowsmissing": "允许操作锁屏界面和管理员提示，需要管理员授权。",
+    "windowsinstallRequired": "请将 Cindy 安装到 Program Files 并选择为所有用户安装，再启用此功能。",
+    "windowsunavailable": "系统服务不可用，请重新安装 Cindy 后重试。",
+    "windowsEnable": "授权开启",
+    "windowsDisable": "移除服务",
+    "windowsError": "未完成授权，请在这台电脑上重试。",
+    "permissionsTitle": "远程桌面权限",
+    "permissionsIntro": "查看桌面需要屏幕录制权限；操作桌面还需要辅助功能权限。请在电脑上完成授权，结果会自动更新。",
+    "permissionsReady": "系统权限已就绪，可以重新连接。",
+    "screenRecording": "屏幕录制",
+    "accessibility": "辅助功能",
+    "screenRecordingHelp": "打开系统设置，为当前 Cindy 开启屏幕录制。若系统要求重新启动，请重新打开 Cindy 后连接。",
+    "accessibilityHelp": "点击打开设置后，为系统授权提示中的应用开启辅助功能。返回后会自动检测实际输入权限。",
+    "permissionChecking": "检测中…",
+    "permissionGranted": "已授权",
+    "permissionUnknown": "未确认",
+    "permissionMissing": "未授权",
+    "openPermissionSettings": "去授权",
+    "recheckPermissions": "重新检测",
+    "permissionActionFailed": "未能打开授权引导。请在电脑端的远程控制设置中重试。",
+    "permissionCheckFailed": "暂时无法检测权限，请确认电脑在线后重试。",
+    "openGuideOnComputer": "在电脑上打开授权引导",
+    "permissionGuideOpened": "已在电脑上显示授权引导，请在电脑上继续。",
+    "reconnectAfterPermissions": "重新检测并连接",
+    "closePermissionGuide": "关闭",
+    "title": "远程桌面",
+    "allow": "允许远程桌面",
+    "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
+    "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
+    "beingControlled": "手机正在控制桌面",
+    "beingViewed": "手机正在查看桌面",
+    "disconnect": "断开连接",
+    "back": "返回",
+    "connect": "连接",
+    "connecting": "连接中…",
+    "disconnected": "已断开",
+    "compatibility": "兼容模式 · 帧率较低",
+    "live": "实时画面",
+    "controlling": "正在控制",
+    "viewOnly": "仅查看",
+    "upgrade": "请升级电脑端 Cindy 后使用远程桌面。",
+    "disabled": "请在电脑端的设置 → 远程控制中开启远程桌面。",
+    "busy": "桌面输入正在使用中。请让其他设备释放控制，或等待 Agent 操作结束。",
+    "connectionError": "连接已结束。请检查电脑是否在线，然后重新连接。",
+    "releaseControl": "释放控制",
+    "takeControl": "接管操作",
+    "pointer": "触控板",
+    "touch": "触屏",
+    "pan": "移动画面",
+    "keyboard": "键盘",
+    "rightClick": "右键",
+    "fit": "适应屏幕",
+    "display": "显示器",
+    "gestureHint": "双指缩放；双指移动可滚动，移动画面模式下可平移。长按后移动可拖拽。",
+    "textPlaceholder": "在电脑上输入文字",
+    "sendText": "发送文字",
+    "keys": "按键",
+    "showDesktop": "桌面",
+    "allWindows": "所有窗口"
+  },
   "ipcError": {
     "INVALID_PARAMS": "参数无效，请检查后重试。",
     "PRECONDITION_FAILED": "当前状态下无法执行此操作，请稍后重试。",
@@ -4953,7 +5016,8 @@
         "nodeChildSpawn": "Node 程序可请宿主再启动包内申报过的子进程",
         "nodeChildSpawnDetail": "只能启动它自己包里申报过的 JS 文件(与主程序同样的本机权限)，不能执行任意命令；插件停用或退出时子进程一并关闭。",
         "skill": "为 AI 助手添加技能「{{name}}」",
-        "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。"
+        "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
+        "routineEvents": "例行任务事件"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -7425,6 +7489,7 @@
       "stop": "停止生成"
     },
     "pluginSetup": {
+      "reopen": "重新打开",
       "title": "{{name}} 设置",
       "assessmentReadFailed": "无法读取插件配置状态。",
       "setupIncomplete": "插件尚未完成配置。",
@@ -10649,6 +10714,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "查看技能详情",
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
@@ -10807,11 +10873,11 @@
         "market": "返回 Market",
         "skillhub": "返回 SkillHub"
       },
-      "uninstall": "卸载",
+      "uninstall": "卸载技能",
       "uninstallDialog": {
-        "title": "卸载 {{name}}？",
-        "description": "将删除本地文件夹\n{{path}}\n此操作不可撤销。",
-        "confirm": "确认卸载",
+        "title": "卸载「{{name}}」？",
+        "description": "本地文件及修改将移入回收站，可恢复。\n\n共用此技能的其他 Agent 也会受影响。云端发布和其他安装位置不受影响。",
+        "confirm": "卸载",
         "cancel": "取消"
       },
       "uninstalledToast": "{{name}} 已卸载",
@@ -11209,6 +11275,27 @@
     "marketEdit": {
       "saved": "市场展示信息已保存",
       "displayNameRequired": "显示名不能为空"
+    },
+    "management": {
+      "disabled": "已禁用",
+      "enabledLabel": "启用技能「{{name}}」",
+      "moreLabel": "管理技能「{{name}}」",
+      "activationHint": "仅控制 Cindy 内的技能加载，新开或重启 Agent 后生效",
+      "enabledToast": "已启用技能「{{name}}」，新开或重启 Agent 后生效",
+      "disabledToast": "已禁用技能「{{name}}」，新开或重启 Agent 后生效",
+      "toggleFailed": "无法保存技能开关，请重试",
+      "uninstallFailed": "无法将技能移入回收站，请检查文件权限后重试",
+      "refreshRequired": "技能正在变更或来源已改变，请刷新列表后重试",
+      "globalScope": "安装位置：全局技能",
+      "projectScope": "项目：{{project}}",
+      "trashDescription": "本地文件及修改将移入回收站，可恢复。",
+      "unlinkDescription": "仅移除本地技能入口，原文件及修改会保留。",
+      "sharedImpact": "共用此技能的其他 Agent 也会受影响。云端发布和其他安装位置不受影响。",
+      "managedElsewhere": "此技能由其他包或共享目录管理，需在其来源处移除",
+      "managedByPlugin": "此技能由插件提供，请到所属插件页面管理。",
+      "cleanupIncomplete": "“{{name}}”的卸载清理尚未完成。请重试；重开技能中心后也可继续。清理完成前无法重新安装。",
+      "retryCleanup": "重试清理",
+      "cleanupComplete": "清理完成"
     }
   },
   "makerExperimental": {
@@ -12013,6 +12100,67 @@
     "embedding": "按语义查找相关内容。",
     "compression": "用于精简冗长内容。"
   },
+  "routines": {
+    "title": "例行任务",
+    "add": "添加例行任务",
+    "back": "返回例行任务",
+    "error": "无法更新例行任务，请检查设置后重试",
+    "empty": "添加例行任务，告诉伙伴做什么、何时运行",
+    "enabled": "已启用",
+    "paused": "已暂停",
+    "runNow": "立即运行",
+    "running": "运行中…",
+    "name": "名称",
+    "instructions": "指令",
+    "when": "何时运行",
+    "addTrigger": "再添加一个",
+    "removeTrigger": "移除触发器",
+    "schedule": "定时",
+    "hourly": "每小时",
+    "daily": "每天",
+    "weekdays": "工作日",
+    "weekly": "每周",
+    "monthly": "每月",
+    "interval": "间隔",
+    "advanced": "高级…",
+    "everyMinutes": "每 {{count}} 分钟",
+    "minutes": "分钟",
+    "expression": "Cron 表达式",
+    "timezone": "时区",
+    "delete": "删除例行任务",
+    "save": "保存例行任务",
+    "deleteConfirm": "删除这条例行任务，并取消等待中的运行？",
+    "keep": "保留例行任务",
+    "history": "运行历史",
+    "noRuns": "这条例行任务还未运行",
+    "field": "字段",
+    "operator": "条件",
+    "value": "值",
+    "addFilter": "添加条件",
+    "removeFilter": "移除条件",
+    "pluginCapability": "向例行任务提交已声明的事件，只触发你配置的例行任务",
+    "time": "时间",
+    "day": "日期",
+    "weekday": "星期",
+    "status": {
+      "queued": "等待中",
+      "running": "运行中",
+      "success": "已完成",
+      "failed": "运行失败",
+      "interrupted": "已中断",
+      "cancelled": "已取消"
+    },
+    "sourceStatus": {
+      "listening": "监听中",
+      "disconnected": "未监听",
+      "error": "来源需要检查"
+    },
+    "operators": {
+      "equals": "等于",
+      "contains": "包含",
+      "not-equals": "不等于"
+    }
+  },
   "cindyMakeDoctor": {
     "description": "检查本机构建 Cindy 所需的环境。用法：/cindy-make-doctor",
     "title": "Cindy Make · 环境检查",
@@ -12123,7 +12271,6 @@
       "expand": "展开上游结果",
       "collapse": "收起上游结果",
       "count": "找到 {{count}} 条可能相关的开放 Issue 或 PR",
-
       "kind": {
         "issue": "Issue",
         "pr": "PR"

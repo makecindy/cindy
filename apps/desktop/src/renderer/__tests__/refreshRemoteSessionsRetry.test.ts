@@ -735,3 +735,53 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
   });
 });
+
+describe('remote schedule mirror', () => {
+  const snapshot = (readAt?: number) => ({ runs: [{
+    sessionId: 'schedule-session', runId: 'run', scheduleId: 'auto', scheduleName: 'auto',
+    scheduleStatus: 'active', status: 'failed', firedAt: 1, readAt,
+  }], inflightRunIds: [], inflightPolicies: [] });
+  it('bootstraps remote unread and refreshes only metadata on read', async () => {
+    const device = did();
+    invoke.mockResolvedValueOnce([session('schedule-session')]).mockResolvedValueOnce(snapshot());
+    await refreshRemoteDeviceSessions(device, 'Remote', { scope: 'both' });
+    expect(remoteProjectsStore.getSessionScheduleInfo('schedule-session')).toMatchObject({ hasUnreadFailedRun: true });
+    invoke.mockClear().mockResolvedValue(snapshot(10));
+    await refreshRemoteDeviceSessions(device, undefined, { scope: 'schedule' });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(device, 'maker:schedule:list-sidebar-index-runs', []);
+    expect(remoteProjectsStore.getSessionScheduleInfo('schedule-session')).toMatchObject({ hasUnreadFailedRun: false });
+  });
+  it('discards a late response after disconnect and keeps the existing mirror on failure', async () => {
+    const device = did();
+    invoke.mockResolvedValueOnce([session('schedule-session')]).mockResolvedValueOnce(snapshot());
+    await refreshRemoteDeviceSessions(device, 'Remote', { scope: 'both' });
+    invoke.mockRejectedValueOnce(new Error('channel not allowed'));
+    await refreshRemoteDeviceSessions(device, undefined, { scope: 'schedule', maxAttempts: 1 });
+    expect(remoteProjectsStore.getSessionScheduleInfo('schedule-session')?.hasUnreadFailedRun).toBe(true);
+    const pending = deferred<unknown>();
+    invoke.mockReturnValueOnce(pending.promise);
+    const refresh = refreshRemoteDeviceSessions(device, undefined, { scope: 'schedule' });
+    remoteProjectsStore.clear();
+    pending.resolve(snapshot(10));
+    expect(await refresh).toBe('superseded');
+    expect(remoteProjectsStore.getSessionScheduleInfo('schedule-session')).toBeUndefined();
+  });
+});
+
+it('does not publish unchanged schedule snapshots or swallow revocation', async () => {
+  const device = did();
+  remoteProjectsStore.setDeviceSessions(device, 'Remote', [session('s')]);
+  const data = { runs: [{ sessionId: 's', runId: 'r', scheduleId: 'a', scheduleName: 'a', scheduleStatus: 'active', status: 'success' }] };
+  invoke.mockResolvedValue(data);
+  await refreshRemoteDeviceSessions(device, undefined, { scope: 'schedule' });
+  const info = remoteProjectsStore.getSessionScheduleInfo('s');
+  const listener = vi.fn();
+  const off = remoteProjectsStore.subscribe(listener);
+  await refreshRemoteDeviceSessions(device, undefined, { scope: 'schedule' });
+  expect(remoteProjectsStore.getSessionScheduleInfo('s')).toBe(info);
+  expect(listener).not.toHaveBeenCalled();
+  off();
+  invoke.mockResolvedValueOnce([session('s')]).mockRejectedValueOnce(new Error('DEVICE_LINK_ACCESS_REVOKED'));
+  expect(await refreshRemoteDeviceSessions(device, undefined, { scope: 'both' })).toBe('revoked');
+});

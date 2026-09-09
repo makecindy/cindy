@@ -1,4 +1,67 @@
 {
+  "remoteDesktop": {
+    "windowsTitle": "ロック画面の操作",
+    "windowsready": "現在の Cindy で有効です。Cindy を再起動すると管理者の再承認が必要です。",
+    "windowsmissing": "ロック画面と管理者の確認画面を操作するには管理者の承認が必要です。",
+    "windowsinstallRequired": "Cindy を Program Files に全ユーザー向けにインストールしてください。",
+    "windowsunavailable": "システムサービスを利用できません。Cindy を再インストールしてください。",
+    "windowsEnable": "承認して有効化",
+    "windowsDisable": "サービスを削除",
+    "windowsError": "承認が完了していません。このコンピューターで再試行してください。",
+    "permissionsTitle": "リモートデスクトップの権限",
+    "permissionsIntro": "画面の表示には画面収録、操作にはアクセシビリティの権限も必要です。コンピューターで許可すると、状態が自動更新されます。",
+    "permissionsReady": "システム権限の準備ができました。再接続できます。",
+    "screenRecording": "画面収録",
+    "accessibility": "アクセシビリティ",
+    "screenRecordingHelp": "システム設定を開き、この Cindy の画面収録を許可してください。再起動を求められた場合は、Cindy を開き直してから接続してください。",
+    "accessibilityHelp": "設定を開き、システムの許可ダイアログに表示されたアプリのアクセシビリティを有効にしてください。戻ると実際の入力権限を自動確認します。",
+    "permissionChecking": "確認中…",
+    "permissionGranted": "許可済み",
+    "permissionUnknown": "未確認",
+    "permissionMissing": "未許可",
+    "openPermissionSettings": "権限を許可",
+    "recheckPermissions": "再確認",
+    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターのリモート操作設定で再試行してください。",
+    "permissionCheckFailed": "権限を確認できません。コンピューターがオンラインか確認して再試行してください。",
+    "openGuideOnComputer": "コンピューターでガイドを開く",
+    "permissionGuideOpened": "コンピューターに権限ガイドを表示しました。そちらで続けてください。",
+    "reconnectAfterPermissions": "確認して再接続",
+    "closePermissionGuide": "閉じる",
+    "title": "リモートデスクトップ",
+    "allow": "リモートデスクトップを許可",
+    "allowHint": "同じアカウントのデバイスから、このコンピューターの全アプリの表示と操作を許可します。上のデバイス操作も有効にしてください。",
+    "permissionHint": "コンピューターのシステム設定で画面収録とアクセシビリティを許可し、再接続してください。",
+    "beingControlled": "デスクトップが操作されています",
+    "beingViewed": "デスクトップが表示されています",
+    "disconnect": "切断",
+    "back": "戻る",
+    "connect": "接続",
+    "connecting": "接続中…",
+    "disconnected": "切断済み",
+    "compatibility": "互換モード · 低フレームレート",
+    "live": "ライブ映像",
+    "controlling": "操作中",
+    "viewOnly": "表示のみ",
+    "upgrade": "コンピューター側の Cindy を更新してください。",
+    "disabled": "コンピューターの設定 → リモート操作でリモートデスクトップを有効にしてください。",
+    "busy": "デスクトップ操作中です。他のデバイスの操作を解除するか、Agent の操作終了を待ってください。",
+    "connectionError": "接続が終了しました。コンピューターがオンラインか確認し、再接続してください。",
+    "releaseControl": "操作を解除",
+    "takeControl": "操作を開始",
+    "pointer": "トラックパッド",
+    "touch": "タッチ",
+    "pan": "画面を移動",
+    "keyboard": "キーボード",
+    "rightClick": "右クリック",
+    "fit": "全体表示",
+    "display": "ディスプレイ",
+    "gestureHint": "ピンチで拡大縮小。2本指でスクロール、画面移動モードではパン。長押しして移動するとドラッグします。",
+    "textPlaceholder": "コンピューターに文字を入力",
+    "sendText": "文字を送信",
+    "keys": "キー",
+    "showDesktop": "デスクトップ",
+    "allWindows": "すべてのウィンドウ"
+  },
   "ipcError": {
     "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
     "PRECONDITION_FAILED": "現在の状態ではこの操作を実行できません。しばらくしてから再試行してください。",
@@ -4953,7 +5016,8 @@
         "nodeChildSpawn": "Node プログラムは、パッケージ内で申告済みのサブプロセスの起動をホストに依頼できます",
         "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
         "skill": "AI アシスタントにスキル「{{name}}」を追加します",
-        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。"
+        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
+        "routineEvents": "ルーティンイベント"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -7425,6 +7489,7 @@
       "stop": "生成を停止"
     },
     "pluginSetup": {
+      "reopen": "もう一度開く",
       "title": "{{name}} の設定",
       "assessmentReadFailed": "プラグインの設定状態を読み取れませんでした。",
       "setupIncomplete": "プラグインの設定が完了していません。",
@@ -10649,6 +10714,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
@@ -10807,10 +10873,10 @@
         "market": "Market に戻る",
         "skillhub": "SkillHub に戻る"
       },
-      "uninstall": "アンインストール",
+      "uninstall": "スキルをアンインストール",
       "uninstallDialog": {
-        "title": "{{name}} をアンインストールしますか?",
-        "description": "ローカルフォルダを削除します\n{{path}}\nこの操作は取り消せません。",
+        "title": "「{{name}}」をアンインストールしますか？",
+        "description": "ローカルファイルと編集内容をゴミ箱に移動します。復元できます。\n\nこのスキルを共有する他の Agent にも影響します。公開済みバージョンや別の場所のインストールには影響しません。",
         "confirm": "アンインストール",
         "cancel": "キャンセル"
       },
@@ -11209,6 +11275,27 @@
     "marketEdit": {
       "saved": "マーケット表示情報を保存しました",
       "displayNameRequired": "表示名を入力してください"
+    },
+    "management": {
+      "disabled": "無効",
+      "enabledLabel": "スキル「{{name}}」を有効にする",
+      "moreLabel": "スキル「{{name}}」を管理",
+      "activationHint": "Cindy 内のスキルの読み込みにのみ適用されます。Agent の起動または再起動後に反映されます。",
+      "enabledToast": "スキル「{{name}}」を有効にしました。Agent の起動または再起動後に反映されます",
+      "disabledToast": "スキル「{{name}}」を無効にしました。Agent の起動または再起動後に反映されます",
+      "toggleFailed": "スキルの設定を保存できませんでした。もう一度お試しください",
+      "uninstallFailed": "スキルをゴミ箱に移動できませんでした。ファイルのアクセス権を確認して再試行してください",
+      "refreshRequired": "スキルの変更中、または読み込み元が変更されています。一覧を更新して再試行してください",
+      "globalScope": "インストール先: グローバルスキル",
+      "projectScope": "プロジェクト: {{project}}",
+      "trashDescription": "ローカルファイルと編集内容をゴミ箱に移動します。復元できます。",
+      "unlinkDescription": "ローカルのスキル登録のみを削除します。元のファイルと編集内容は保持されます。",
+      "sharedImpact": "このスキルを共有する他の Agent にも影響します。公開済みバージョンや別の場所のインストールには影響しません。",
+      "managedElsewhere": "このスキルは別のパッケージまたは共有ディレクトリで管理されています。提供元で削除してください",
+      "managedByPlugin": "このスキルはプラグインが提供しています。提供元のプラグインページで管理してください。",
+      "cleanupIncomplete": "「{{name}}」のアンインストール後のクリーンアップが未完了です。再試行するか、後でスキルを開き直して続行してください。完了するまで再インストールはできません。",
+      "retryCleanup": "整理を再試行",
+      "cleanupComplete": "整理が完了しました"
     }
   },
   "makerExperimental": {
@@ -12013,6 +12100,67 @@
     "embedding": "意味の近い内容を探すために。",
     "compression": "長い内容を短くまとめるために。"
   },
+  "routines": {
+    "title": "ルーティン",
+    "add": "ルーティンを追加",
+    "back": "ルーティンに戻る",
+    "error": "ルーティンを更新できませんでした。設定を確認して再試行してください。",
+    "empty": "ルーティンを追加して、実行する内容とタイミングを指定します。",
+    "enabled": "有効",
+    "paused": "一時停止中",
+    "runNow": "今すぐ実行",
+    "running": "実行中…",
+    "name": "名前",
+    "instructions": "指示",
+    "when": "実行タイミング",
+    "addTrigger": "トリガーを追加",
+    "removeTrigger": "トリガーを削除",
+    "schedule": "スケジュール",
+    "hourly": "毎時",
+    "daily": "毎日",
+    "weekdays": "平日",
+    "weekly": "毎週",
+    "monthly": "毎月",
+    "interval": "間隔",
+    "advanced": "詳細設定…",
+    "everyMinutes": "{{count}} 分ごと",
+    "minutes": "分",
+    "expression": "Cron 式",
+    "timezone": "タイムゾーン",
+    "delete": "ルーティンを削除",
+    "save": "ルーティンを保存",
+    "deleteConfirm": "このルーティンを削除し、待機中の実行をキャンセルしますか？",
+    "keep": "ルーティンを残す",
+    "history": "実行履歴",
+    "noRuns": "このルーティンはまだ実行されていません。",
+    "field": "フィールド",
+    "operator": "条件",
+    "value": "値",
+    "addFilter": "条件を追加",
+    "removeFilter": "条件を削除",
+    "pluginCapability": "宣言されたイベントを発行し、設定済みのルーティンのみを実行します。",
+    "time": "時刻",
+    "day": "日",
+    "weekday": "曜日",
+    "status": {
+      "queued": "待機中",
+      "running": "実行中",
+      "success": "完了",
+      "failed": "失敗",
+      "interrupted": "中断",
+      "cancelled": "キャンセル済み"
+    },
+    "sourceStatus": {
+      "listening": "受信中",
+      "disconnected": "未接続",
+      "error": "接続元を確認してください"
+    },
+    "operators": {
+      "equals": "一致",
+      "contains": "含む",
+      "not-equals": "一致しない"
+    }
+  },
   "cindyMakeDoctor": {
     "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",
     "title": "Cindy Make · 環境チェック",
@@ -12123,7 +12271,6 @@
       "expand": "上流の結果を表示",
       "collapse": "上流の結果を隠す",
       "count": "関連する可能性のあるオープン Issue／PR が {{count}} 件見つかりました",
-
       "kind": {
         "issue": "Issue",
         "pr": "PR"

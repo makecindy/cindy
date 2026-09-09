@@ -1698,7 +1698,14 @@ export function AddProviderWizard({
                 <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
-                <SettingsTextInput value={apiKey} onChange={setApiKey} size="md" mono secret />
+                <SettingsTextInput
+                  value={apiKey}
+                  onChange={setApiKey}
+                  size="md"
+                  mono
+                  secret
+                  secretTipContentClassName="z-[10001]"
+                />
               </div>
             </div>
           )}
@@ -1733,6 +1740,7 @@ export function AddProviderWizard({
                     size="md"
                     mono
                     secret
+                    secretTipContentClassName="z-[10001]"
                   />
                 </div>
               ) : (

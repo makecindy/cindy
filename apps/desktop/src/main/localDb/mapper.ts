@@ -8,6 +8,9 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
+import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 
@@ -274,6 +277,19 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
             ),
     summary: row.summary ?? null,
   };
+  // Only the owning host can distinguish a pre-boot interruption from a live
+  // turn. Keep the generation so existing ended/clear patches revoke it without
+  // another query; a normal read acknowledgement must not revoke this evidence.
+  const candidate = { ...base, interruptedTurnStartedAt: base.activeTurnStartedAt };
+  base.interruptedTurnStartedAt =
+    row.source != null &&
+    DESKTOP_VISIBLE_SESSION_SOURCES.includes(
+      row.source as (typeof DESKTOP_VISIBLE_SESSION_SOURCES)[number],
+    ) &&
+    (base.activeTurnStartedAt ?? Infinity) < getSessionInterruptionBootAt() &&
+    hasPendingSessionInterruption(candidate)
+      ? base.activeTurnStartedAt
+      : null;
   return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
 }
 
@@ -650,6 +666,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     manual: !!row.manual,
     intervalMs: row.intervalMs ?? undefined,
     agentKind: row.agentKind as SchedulerAgentKind,
+    modelAgentKind: row.modelAgentKind ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
     effort: row.effort ?? undefined,
@@ -701,6 +718,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     manual: s.manual,
     intervalMs: s.intervalMs ?? null,
     agentKind: s.agentKind,
+    modelAgentKind: s.modelAgentKind ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
@@ -755,6 +773,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   // intervalMs：undefined → null（清空，回退到 cron 槽位语义）；数字原样写
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
   if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
+  if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;

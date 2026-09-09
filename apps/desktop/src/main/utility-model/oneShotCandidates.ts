@@ -430,6 +430,11 @@ export async function requestDedicatedAutoReviewCandidateText(
   candidate: DedicatedAutoReviewCandidate,
   opts: { timeoutMs: number; signal?: AbortSignal },
 ): Promise<UtilityTextResult> {
+  // The reviewer escapes delimiters inside evidence. Keep Host rules on the native
+  // system channel, and action/user strings on the user channel for every candidate.
+  const evidenceBoundary = prompt.indexOf('\n<review_input>\n');
+  const systemPrompt = evidenceBoundary >= 0 ? prompt.slice(0, evidenceBoundary) : undefined;
+  const evidence = evidenceBoundary >= 0 ? prompt.slice(evidenceBoundary + 1) : prompt;
   const profile: UtilityModelProfile = {
     id: candidate.providerId,
     model: candidate.model,
@@ -467,11 +472,12 @@ export async function requestDedicatedAutoReviewCandidateText(
         headers: { Authorization: `Bearer ${apiKey}` },
         model: candidate.model,
         prompt: text,
+        systemPrompt,
         maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
         timeoutMs: requestOpts?.timeoutMs ?? opts.timeoutMs,
         signal: requestOpts?.signal ?? opts.signal,
       }),
-    }], prompt, [], {
+    }], evidence, [], {
       maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
@@ -494,7 +500,8 @@ export async function requestDedicatedAutoReviewCandidateText(
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
 
-  return requestBuiltinProviderText(prompt, {
+  return requestBuiltinProviderText(evidence, {
+    systemPrompt,
     provider,
     agentKind: candidate.agentKind,
     model: candidate.model,

@@ -983,8 +983,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const deny = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
       handle.setInteractionResolver?.(deny as never);
       fireManagedPackageRequest('pkg-denied', 'install', 'npm:denied');
-      expect(await waitForResponse('pkg-denied')).toMatchObject({
-        cancelled: true,
+      expect(JSON.parse(String((await waitForResponse('pkg-denied')).value))).toEqual({
+        ok: false, error: 'User denied this tool call via Cindy.',
       });
 
       const fail = vi.fn(async () => {
@@ -992,8 +992,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       });
       handle.setInteractionResolver?.(fail as never);
       fireManagedPackageRequest('pkg-failed', 'update', 'npm:failed');
-      expect(await waitForResponse('pkg-failed')).toMatchObject({
-        cancelled: true,
+      expect(JSON.parse(String((await waitForResponse('pkg-failed')).value))).toEqual({
+        ok: false, error: 'Cindy could not approve this tool call: Approval was cancelled or could not be completed.',
       });
 
       expect(deny).toHaveBeenCalledOnce();
@@ -1015,20 +1015,22 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       let resolverStarted!: () => void;
+      let releaseDenial!: (value: { kind: 'permission'; behavior: 'deny'; reason: string }) => void;
       const started = new Promise<void>((resolve) => {
         resolverStarted = resolve;
       });
       handle.setInteractionResolver?.(
         vi.fn(async () => {
           resolverStarted();
-          return new Promise<never>(() => undefined);
+          return new Promise<{ kind: 'permission'; behavior: 'deny'; reason: string }>((resolve) => { releaseDenial = resolve; });
         }) as never,
       );
       fireManagedPackageRequest('pkg-switch', 'install', 'npm:switch');
       await started;
       await handle.setPermissionMode?.('bypassPermissions');
-      expect(await waitForResponse('pkg-switch')).toMatchObject({
-        cancelled: true,
+      releaseDenial({ kind: 'permission', behavior: 'deny', reason: 'User denied' });
+      expect(JSON.parse(String((await waitForResponse('pkg-switch')).value))).toEqual({
+        ok: false, error: 'Cindy could not approve this tool call: permission_mode_changed_to_bypassPermissions',
       });
       expect(mutatePiManagedPackage).not.toHaveBeenCalled();
     } finally {
@@ -2600,7 +2602,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(await waitForResponse('review-pkg')).toEqual({
         type: 'extension_ui_response',
         id: 'review-pkg',
-        cancelled: true,
+        value: JSON.stringify({ ok: false, error: 'Cindy could not approve this tool call: Approval was cancelled or could not be completed.' }),
       });
       expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
     } finally {
@@ -3495,13 +3497,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       reason: 'User denied',
     }) as never);
     firePermissionInputRequest('deny-user', 'write', { path: '/tmp/user-denied.txt' });
-    expect(await waitForResponse('deny-user')).toMatchObject({ value: 'user-deny' });
+    expect(await waitForResponse('deny-user')).toMatchObject({ value: 'user-deny:User denied' });
     await userHandle.close();
 
     const systemHandle = await start('ask');
     firePermissionInputRequest('deny-system', 'write', { path: '/tmp/no-resolver.txt' });
     expect(await waitForResponse('deny-system')).toMatchObject({ value: 'system-deny' });
     await systemHandle.close();
+  });
+
+  it('passes the actual Auto-review reason back to the Pi tool hook', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'block' as const, reason: 'User requested read-only analysis.' }));
+    firePermissionInputRequest('deny-auto-reason', 'write', { path: '/tmp/blocked.txt' });
+    expect(await waitForResponse('deny-auto-reason')).toMatchObject({ value: 'auto-review-deny:User requested read-only analysis.' });
+    await handle.close();
   });
 
   it.each(['read', 'bash', 'powershell'].flatMap((toolName) =>
@@ -3579,7 +3588,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
     expect(mutate).toHaveBeenCalledTimes(verdict === 'allow' ? 1 : 0);
-    if (verdict !== 'allow') expect(response.cancelled).toBe(true);
+    if (verdict !== 'allow') expect(JSON.parse(String(response.value))).toEqual({
+      ok: false, error: verdict === 'block' ? 'Cindy Auto-review denied this tool call.' : 'User denied this tool call via Cindy.',
+    });
     await handle.close();
   });
 

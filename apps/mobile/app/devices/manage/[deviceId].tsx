@@ -1,7 +1,9 @@
 import { Host, List, ListItem, Text as NativeText } from '@expo/ui';
+import { List as SwiftUIList } from '@expo/ui/swift-ui';
+import { scrollContentBackground } from '@expo/ui/swift-ui/modifiers';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback } from 'react';
-import { ActivityIndicator, Button, View } from 'react-native';
+import { ActivityIndicator, Button, Platform, Pressable, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
@@ -17,8 +19,11 @@ import {
 } from '@/platform/chrome';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useGuardedPush } from '@/utils/useGuardedPush';
-import { useTheme } from '@/theme';
+import { useTheme, iconSize, iconStroke } from '@/theme';
+import { Monitor } from 'lucide-react-native';
 import { spacing } from '@/theme/tokens';
+
+const DeviceInformationList = Platform.OS === 'ios' ? SwiftUIList : List;
 
 export default function DeviceInformationScreen() {
   const { accountGeneration } = useAuth();
@@ -83,6 +88,17 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
       testID="deviceInformation.screen"
     >
       <SimpleStackHeader
+        right={device && presentation?.canOpen ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('remoteDesktop.title')}
+            onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName: device.name } })}
+            testID="deviceInformation.remoteDesktop"
+            style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.72 : 1 })}
+          >
+            <Monitor color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+          </Pressable>
+        ) : undefined}
         title={device?.name ?? t('devices.management.details')}
         backTestID="deviceInformation.back"
         onBack={back}
@@ -107,8 +123,12 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
         </Text>
       ) : null}
       {device ? (
-        <Host style={{ flex: 1 }} colorScheme={mode}>
-          <List>
+        <Host style={{ flex: 1, backgroundColor: colors.surface }} colorScheme={mode}>
+          <DeviceInformationList
+            {...(Platform.OS === 'ios'
+              ? { modifiers: [scrollContentBackground('hidden')] }
+              : {})}
+          >
             <DeviceInformationFields fields={fields} />
             <ListItem
               onPress={() => {
@@ -141,7 +161,15 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
                 {t('devices.list.menu.showDeviceTasks')}
               </ListItem>
             ) : null}
-          </List>
+            {presentation?.canOpen ? (
+              <ListItem
+                onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName: device.name } })}
+                testID="deviceInformation.remoteDesktopRow"
+              >
+                {t('remoteDesktop.title')}
+              </ListItem>
+            ) : null}
+          </DeviceInformationList>
         </Host>
       ) : null}
       <DeviceManagementDialogs manager={manager} onDeleted={back} />

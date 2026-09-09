@@ -1,4 +1,5 @@
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
+import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
 import { useFocusEffect, useIsFocused } from 'expo-router';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -33,6 +34,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Menu,
+  Monitor,
   MessagesSquare,
   Lock,
   Pencil,
@@ -51,7 +53,6 @@ import type { TFunction } from 'i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import { useGuardedPush } from '@/utils/useGuardedPush';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import {
   MainWindowActionGroup,
@@ -112,6 +113,9 @@ import {
   formatRemoteError,
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
+import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
+import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
+import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -229,7 +233,7 @@ import {
   replaceSessionScheduleIndexEntries,
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
-import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
+import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
@@ -242,7 +246,6 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 const LIST_LIMIT = 200;
-const DEVICE_LIST_TIMEOUT_MS = 12_000;
 const HOME_LIST_SUBSCRIPTION_OWNER = 'device-list';
 // Keep the device-link channel responsive while All Sessions hydrates several
 // computers. This does not change the 200-row server limit; it only bounds the
@@ -316,7 +319,7 @@ type ProjectDragSession = {
   x: number;
 };
 type HydrateDeviceSessionsResult = {
-  failure: string | null;
+  failure: HomeDeviceFailure | null;
   needsRerun?: boolean;
   offline: boolean;
   superseded: boolean;
@@ -361,7 +364,7 @@ function HomeScreenContent() {
   const guardedPush = useGuardedPush();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const auth = useAuth();
-  const { accountGeneration, apiFetch, deviceId: selfDeviceId, user } = auth;
+  const { accountGeneration, deviceId: selfDeviceId, user } = auth;
   // 首页列表持久缓存按账号键控(401 掉线换号不串数据);首页仅登录后可达,user 理应非空。
   const homeCacheUserId = user?.id ?? '';
   const {
@@ -369,6 +372,8 @@ function HomeScreenContent() {
     connectionIssue,
     invoke,
     lastPresenceSnapshot,
+    recoveringDeviceIds,
+    readDeviceList,
     status,
     subscribe,
     unsubscribe,
@@ -429,7 +434,7 @@ function HomeScreenContent() {
   // 首次网络同步必须等设备筛选偏好恢复，否则单机用户会先按默认“全部”拉一轮所有电脑。
   const [homeViewPreferencesHydrated, setHomeViewPreferencesHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
@@ -805,7 +810,7 @@ function HomeScreenContent() {
       if (offline) markDeviceOffline(device.deviceId);
       updateDeviceConnectionState(device.deviceId, 'failed');
       return {
-        failure: `${device.name}: ${formatRemoteError(err)}`,
+        failure: { deviceId: device.deviceId, deviceName: device.name, error: formatRemoteError(err) },
         offline,
         superseded: false,
       };
@@ -837,6 +842,8 @@ function HomeScreenContent() {
       return existing.promise;
     }
 
+    // Mark the hand-off before entering the limiter: reseed can queue behind another peer.
+    updateDeviceConnectionState(device.deviceId, 'syncing');
     const promise = hydrateDeviceSessionsOnce(
       device,
       expectedAccountGeneration,
@@ -868,7 +875,7 @@ function HomeScreenContent() {
       () => settle(false),
     );
     return promise;
-  }, [accountGeneration, hydrateDeviceSessionsOnce, isCurrentHomeSyncTarget]);
+  }, [accountGeneration, hydrateDeviceSessionsOnce, isCurrentHomeSyncTarget, updateDeviceConnectionState]);
   hydrateDeviceSessionsRef.current = hydrateDeviceSessions;
 
   const probeRevokedDeviceAccess = useCallback(async (
@@ -927,10 +934,7 @@ function HomeScreenContent() {
           if (homeAccountGenerationRef.current !== accountGenerationAtStart) {
             throw new Error('Home account generation superseded');
           }
-          return apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
-            baseUrl: DEVICE_LINK_API_BASE_URL,
-            timeoutMs: DEVICE_LIST_TIMEOUT_MS,
-          });
+          return readDeviceList();
         },
         { maxAttempts: 3 },
       );
@@ -983,7 +987,7 @@ function HomeScreenContent() {
         remoteSessionStore.removeDevice(deviceId);
       }
 
-      const failures: string[] = [];
+      const failures: HomeDeviceFailure[] = [];
       const offlineDeviceIds = new Set<string>();
       const hydrateResults = await runHomeDeviceSyncBatch(syncRows, async (item) => {
         const result = await hydrateDeviceSessions(item.device, accountGenerationAtStart);
@@ -1013,7 +1017,7 @@ function HomeScreenContent() {
       lastSyncedAtRef.current = now;
       setLastSyncedAt(now);
       if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
-        setError(failures.length > 0 ? failures.slice(0, 2).join('；') : null);
+        setError(failures.length > 0 ? failures : null);
       }
       // loadHome 整轮成功后也回写一次:覆盖「设备全部下线 / 会话清空」的收敛场景——
       // 此时没有任何 hydrate 成功,只有这里能把缓存里的陈旧设备清掉。
@@ -1039,7 +1043,7 @@ function HomeScreenContent() {
     return task.finally(() => {
       if (visible && homeAccountGenerationRef.current === accountGenerationAtStart) setRefreshing(false);
     });
-  }, [accountGeneration, apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope, revokedDevices, softInvalidateDeviceMirror]);
+  }, [accountGeneration, readDeviceList, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope, revokedDevices, softInvalidateDeviceMirror]);
   loadHomeRef.current = loadHome;
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
@@ -1067,7 +1071,6 @@ function HomeScreenContent() {
       ) return;
       for (const device of snapshot) {
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
-        updateDeviceConnectionState(device.deviceId, 'syncing');
       }
     };
     void read.initial
@@ -1427,8 +1430,8 @@ function HomeScreenContent() {
       ) return;
       const failures = results
         .filter((result) => !result.superseded && result.failure)
-        .map((result) => result.failure as string);
-      if (failures.length > 0) setError(failures.slice(0, 2).join('；'));
+        .map((result) => result.failure as HomeDeviceFailure);
+      if (failures.length > 0) setError(failures);
       else if (results.some((result) => !result.superseded)) setError(null);
     });
   }, [accountGeneration, homeSyncDeviceIds, homeSyncRows, hydrateDeviceSessions, reconcileHomeDeviceSyncScope, selectedDeviceId]);
@@ -1811,7 +1814,10 @@ function HomeScreenContent() {
     metricCount: 3,
     screenWidth,
   });
-  const connectionError = describeRemoteError(error);
+  const homeRecoveringDeviceIds = new Set(homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)
+    || recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'));
+  const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
+  const { error: connectionError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;
@@ -1828,7 +1834,7 @@ function HomeScreenContent() {
     let restoredUnavailable = false;
     if (!missing && restoredSelectionUnvalidatedRef.current) {
       const filter = home.deviceFilters.find((item) => item.deviceId === selectedDeviceId);
-      restoredUnavailable = !!filter && !filter.available;
+      restoredUnavailable = !!filter && !canBrowseMobileHomeDevice(filter);
       restoredSelectionUnvalidatedRef.current = false;
     }
     if (!missing && !restoredUnavailable) return;
@@ -1838,16 +1844,33 @@ function HomeScreenContent() {
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const selectedDeviceDisconnected = home.deviceFilters.some((item) => item.deviceId !== null
+    && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.sessionCount > 0)
+    && !home.deviceFilters.some((item) => item.deviceId !== null
+      && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.available);
+  const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const showConnectionNotice = useDelayedConnectionNotice(showConnectionRow);
+  const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
+    online: status === 'online',
+    hasActiveIssue: activeConnectionIssue !== null,
+    deviceUnresponsive: homeDeviceRecovery,
+    hasRequestError: connectionError !== null,
+    // loadHome has no outer retry after its bounded REST retries are exhausted.
+    requestErrorAutoRecovering: false,
+  });
+  const showHomeRecoveryProgress = (!activeConnectionIssue
+    || activeConnectionIssue.kind === 'unstable' || activeConnectionIssue.kind === 'replaced')
+    && (status === 'connecting' || homeDeviceRecovery);
   const connectionTone = activeConnectionIssue
     ? 'off'
-    : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+    : homeDeviceRecovery ? 'busy' : selectedDeviceDisconnected ? 'off' : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const connectionTitle = activeConnectionIssue
     ? connectionIssueTitle(activeConnectionIssue.kind)
-    : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
+    : homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')
+      : selectedDeviceDisconnected ? t('deviceLink.cachedHistory.title') : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
   const connectionCopy = activeConnectionIssue
     ? connectionIssueHint(activeConnectionIssue.kind)
-    : connectionError;
+    : homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveHint' : 'deviceLink.recovery.syncingHint') : selectedDeviceDisconnected ? t('deviceLink.cachedHistory.hint') : connectionError;
   const emptyStateTitle = initialHomeError ? t('devices.list.syncFailed') : home.emptyTitle;
   const emptyStateCopy = initialHomeError ? (connectionError ?? t('devices.list.requestFailed')) : home.emptyCopy;
   // 无可控制电脑的引导态(landing)可见性,与 ListEmptyComponent 的分支同口径。
@@ -2414,6 +2437,14 @@ function HomeScreenContent() {
     }),
     [displayedProjectOrder, groupByProject, groupDialogue, sortBy, statusFilter, t],
   );
+  const openSelectedRemoteDesktop = useCallback(() => {
+    if (!selectedDeviceId) return;
+    const device = home.deviceFilters.find((item) => item.deviceId === selectedDeviceId);
+    guardedPush({
+      pathname: '/devices/desktop/[deviceId]',
+      params: { deviceId: selectedDeviceId, deviceName: device?.label ?? selectedDeviceLabel },
+    });
+  }, [guardedPush, home.deviceFilters, selectedDeviceId, selectedDeviceLabel]);
 
   const nativeHomeHeader = usesNativeStackHeader();
   const chromeHeight = nativeHomeHeader
@@ -2439,6 +2470,8 @@ function HomeScreenContent() {
           onOpenDeviceMenu={openDeviceMenu}
           onOpenDisplaySettings={openDisplaySettings}
           onOpenMenu={openChromeMenu}
+          onOpenRemoteDesktop={selectedDeviceId ? openSelectedRemoteDesktop : undefined}
+          remoteDesktopA11y={t('remoteDesktop.title')}
           onSelectScope={handleHomeScopeAction}
           scopeActions={homeScopePullDownActions}
           showRemoteGuide={showRemoteGuide}
@@ -2489,23 +2522,21 @@ function HomeScreenContent() {
         {showRemoteGuide ? (
           <View style={styles.headerIconButton} />
         ) : (
-          <NativePullDownMenu
-            actions={homeDisplayPullDownActions}
-            onAction={(id) => {
-              applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, {
-                groupByProject,
-                groupDialogue,
-              }));
-            }}
-          >
-            <HomeHeaderGlassButton
-              accessibilityLabel={t('devices.list.a11y.openDisplaySettings')}
-              onPress={nativeHomeMenus ? () => undefined : openDisplaySettings}
-              testID="home.displaySettingsButton"
+          <View style={styles.headerActions}>
+            {selectedDeviceId ? (
+              <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
+                <Monitor color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            ) : null}
+            <NativePullDownMenu
+              actions={homeDisplayPullDownActions}
+              onAction={(id) => applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, { groupByProject, groupDialogue }))}
             >
-              <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-            </HomeHeaderGlassButton>
-          </NativePullDownMenu>
+              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.openDisplaySettings')} onPress={nativeHomeMenus ? () => undefined : openDisplaySettings} testID="home.displaySettingsButton">
+                <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            </NativePullDownMenu>
+          </View>
         )}
         </View>
         )}
@@ -2523,7 +2554,10 @@ function HomeScreenContent() {
           />
         ) : null}
 
-        {showConnectionRow ? (
+        </View>
+        </HomeChromeFrost>
+        {showConnectionNotice ? (
+        <ConnectionNoticeOverlay>
         <View
           style={[styles.connectionRow, (connectionError || activeConnectionIssue) && styles.connectionRowError]}
           testID="connection.banner"
@@ -2532,7 +2566,7 @@ function HomeScreenContent() {
           <Text ellipsizeMode="tail" numberOfLines={1} style={styles.connectionText} testID="connection.title">
             {connectionCopy ? `${connectionTitle} · ${connectionCopy}` : connectionTitle}
           </Text>
-          <Pressable
+          {showHomeSyncAction ? <Pressable
             accessibilityLabel={refreshing ? t('devices.list.a11y.syncing') : t('devices.list.a11y.sync')}
             accessibilityRole="button"
             accessibilityState={{ busy: refreshing || undefined, disabled: refreshing }}
@@ -2546,11 +2580,12 @@ function HomeScreenContent() {
             testID="connection.syncButton"
           >
             <RefreshCw color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-          </Pressable>
+          </Pressable> : showHomeRecoveryProgress ? (
+            <ConnectionRecoveryProgress />
+          ) : null}
         </View>
+        </ConnectionNoticeOverlay>
         ) : null}
-        </View>
-        </HomeChromeFrost>
       </View>
 
       <SectionList
@@ -2895,9 +2930,8 @@ function DeviceMenuModal({
     onClosed,
   });
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
-  // 范围菜单只列当前能打开的电脑,对齐桌面机器切换器:离线 / 关远控 / 撤权的设备
-  // 不占菜单(灰行点不进去只会吵);空态引导另走 RemoteAccessGuide。
-  const deviceFilters = filters.filter((item) => item.deviceId !== null && item.available);
+  // 离线电脑保留缓存入口；关远控和撤权不由缓存恢复访问权限。
+  const deviceFilters = filters.filter((item) => item.deviceId !== null && canBrowseMobileHomeDevice(item));
   return (
     <HomeMenuScrim
       backdropTestID="home.deviceMenu.backdrop"
@@ -2935,7 +2969,7 @@ function DeviceMenuModal({
             {deviceFilters.map((item) => (
               <DeviceMenuItem
                 connectionState={item.deviceId ? connectionStates[item.deviceId] ?? 'idle' : 'idle'}
-                dimmed={!item.available && item.state !== 'access_revoked'}
+                dimmed={!canBrowseMobileHomeDevice(item)}
                 key={item.id}
                 label={item.label}
                 onPress={() => onSelect(item)}
@@ -3795,24 +3829,21 @@ function HomeSessionRowInner({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 运行态走订阅而非命令式读取:行已 memo 化,父层不再逐 emit 重渲染,命令式读取会 stale。
-  const sessionIsRunning = useSessionRunning(item.session.id);
+  const latestItem = latestMobileSessionRow(item);
+  const sessionIsRunning = useSessionRunning(latestItem.session.id);
   // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
   // sections 和其它任务行都保持原引用。
   const loadedMessagePreview = useRemoteSessionMessagePreview(item.session.id);
-  const running = sessionIsRunning || !!item.scheduleInfo?.running;
+  const running = sessionIsRunning || !!latestItem.scheduleInfo?.running;
   // attention 合并 main 的 #368:liveActivity.attention 也点亮关注态(组行直开 primary 的判定沿用)。
   const attention = item.pendingInteractionCount > 0
     || (item.scheduleInfo?.unreadCount ?? 0) > 0
     || item.liveActivity?.attention === true;
   // 右侧状态槽(替代时间位):与桌面侧栏同一套五档优先级与色表
   // (error 红 > awaiting TapTap 蓝 > running spinner > 完成未读绿 > 时间)。
-  const rightStatus = resolveMobileSessionRightStatus({
-    liveAttention: item.liveActivity?.attention === true,
-    livePhase: item.liveActivity?.phase,
-    pendingInteractionCount: item.pendingInteractionCount,
-    running,
-    scheduleUnreadCount: item.scheduleInfo?.unreadCount ?? 0,
-  });
+  const group = onToggleAutomationGroup ? item.automationGroup : undefined;
+  const groupExpanded = !!group && !!expandedAutomationGroups?.includes(group.key);
+  const { status: rightStatus, target: statusTarget } = resolveMobileSessionRowStatus(item, sessionIsRunning, groupExpanded);
   const showDraftIndicator = readBooleanField(item.session, 'hasDraft')
     || readBooleanField(item.session, 'hasPausedQueue')
     || readBooleanField(item.session, 'composerDraft');
@@ -3823,8 +3854,6 @@ function HomeSessionRowInner({
   const showPinned = !!item.session.pinnedAt;
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。
   // 没接展开回调的调用点退化为普通行为(点击打开 primary 会话)。
-  const group = onToggleAutomationGroup ? item.automationGroup : undefined;
-  const groupExpanded = !!group && !!expandedAutomationGroups?.includes(group.key);
   // 块模式:组行 + 展开的子行整体包在一个上下全宽线的块里;组行自身不再画缩进分割线
   // (收起时块底线紧贴行底,展开时组头与子行之间保持连续无线,均与项目组语义一致)。
   const blockMode = asBlock && !!group;
@@ -3846,10 +3875,10 @@ function HomeSessionRowInner({
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
   const openGroupPrimary = () => {
     if (!group) return;
-    const primary = group.items.find((child) => child.session.id === group.primarySessionId) ?? group.items[0];
+    const primary = statusTarget;
     if (primary) onOpenSession(primary);
   };
-  const groupRowOpensPrimary = !!group && attention && !groupExpanded;
+  const groupRowOpensPrimary = !!group && (attention || rightStatus === 'error') && !groupExpanded;
   const handlePress = selectionMode && onPressSelection
     ? onPressSelection
     : group
@@ -4382,6 +4411,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
+  headerActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
   headerTitleWrap: {
     alignItems: 'center',
     flex: 1,
@@ -4412,6 +4446,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignSelf: 'flex-end',
   },
   connectionRow: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.container,
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,

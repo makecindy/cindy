@@ -87,6 +87,10 @@ contextBridge.exposeInMainWorld('cindy', {
     requestSchedule: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'schedule-request' }),
   },
+  routines: {
+    request: (req: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'routine-request' }),
+  },
   node: {
     request: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'node-request' }),

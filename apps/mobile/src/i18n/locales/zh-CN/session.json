@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "此前有定时任务未完成，可查看运行记录。",
+    "dismissTitle": "关闭历史失败提示"
+  },
   "common": {
     "cancel": "取消",
     "delete": "删除",

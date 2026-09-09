@@ -1,3 +1,7 @@
+import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
+import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
+import { handleRoutineRequest } from './routineSlot.js';
+import { getRoutineEngine, disconnectRoutineSource } from '../routines/service.js';
 import {
   app,
   BrowserWindow,
@@ -777,7 +781,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
       spawnIfResident(ghost);
       if (
         stopped.browserRuntimeRunning &&
-        ghost.manifest.launch !== 'resident' &&
+        !isResidentBrowserGhost(ghost.manifest) &&
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.enabled
       ) {
@@ -1008,6 +1012,7 @@ export function suspendCindyAccountGhosts(): void {
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   cancelActiveGhostOauthFlow();
+  await getBotAuthorizationService()?.dispose();
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
@@ -1462,7 +1467,7 @@ async function reconcileBuiltinGhostsLocked(
       getGhostAgentSlot().clearGhost(manifest.id);
       getGhostErrandSlot().clearGhost(manifest.id);
       // 常驻声明的实例被本次撤销熄掉:记下 id,批准自愈那一轮补点火(见 set 头注释)。
-      if (manifest.launch === 'resident' || manifest.node?.lifecycle === 'resident') {
+      if (isResidentBrowserGhost(manifest) || manifest.node?.lifecycle === 'resident') {
         quenchedResidentBuiltinIds.add(manifest.id);
       }
       approvalChanged = true;
@@ -1602,6 +1607,7 @@ export function getGhostRuntime(): GhostRuntime {
       onFused: (id) => log.warn('ghost fused after repeated crashes', { id }),
       onStateChanged: (id, state) => {
         log.info('ghost runtime state', { id, state });
+        if (state !== 'running') disconnectRoutineSource(id);
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(id, state);
         broadcastGhostRuntimeStates();
@@ -4970,6 +4976,9 @@ export async function executeGhostSetupAction(args: {
   ghostId: string;
   action: GhostSetupAllowedAction;
   responseTarget?: GhostSetupInteractionResponseTarget;
+  onAuthorizationUrl?: (url: string) => void;
+  assertCurrent?: () => void;
+  beforeCommit?: () => Promise<void>;
 }): Promise<GhostSetupActionResult> {
   const ghost = findAvailableGhost(args.ghostId);
   if (!ghost) {
@@ -5006,9 +5015,7 @@ export async function executeGhostSetupAction(args: {
       args.ghostId,
       secretKey,
       decl,
-      runtimeManifest.network?.hosts?.length
-        ? { deliveryHosts: runtimeManifest.network.hosts }
-        : undefined,
+      { deliveryHosts: runtimeManifest.network?.hosts, onAuthorizationUrl: args.onAuthorizationUrl, assertCurrent: args.assertCurrent, beforeCommit: args.beforeCommit },
     );
     return connected.ok
       ? { ok: true }
@@ -6314,40 +6321,17 @@ export function isBuiltinGhostRemovedByUser(id: string): boolean {
 }
 
 /**
- * launch: 'resident' 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
+ * launch: 'resident' 或声明 routineEvents 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
  * "该在场了"时机的统一入口(应用启动扫描 / 装入即开 / 唤醒 / 更新换代后)。
  * spawn 幂等,重复调用零成本;失败走熔断记账,不抛出(fire-and-forget)。
  */
 function spawnIfResident(ghost: InstalledGhost): void {
-  if (!isGhostAvailableForActiveSession(ghost.manifest.id)) return;
-  if (!ghost.enabled) return;
-  // Node 常驻档与浏览器电子脑的 launch:resident 是两份独立声明、两项独立
-  // 权限。Node 默认按需；只有明确声明 resident 才在这里提前点火。
-  if (ghost.manifest.node?.lifecycle === 'resident') {
-    void getGhostNodeRuntimeBroker()
-      .startResident(ghost)
-      .catch((err) => {
-        log.warn('resident ghost node spawn error', {
-          id: ghost.manifest.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-  }
-  if (ghost.manifest.launch !== 'resident') return;
-  void getGhostRuntime()
-    .spawn(ghost)
-    .then((r) => {
-      if (!r.ok)
-        log.warn('resident ghost spawn failed', { id: ghost.manifest.id, reason: r.reason });
-    })
-    .catch((err) => {
-      // spawn 已把可预期失败折叠成返回值;这里兜住意外异常,常驻点火绝不
-      // 变成 main 进程 unhandledRejection(review P1)。
-      log.warn('resident ghost spawn error', {
-        id: ghost.manifest.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+  spawnResidentGhost(ghost, {
+    isAvailable: isGhostAvailableForActiveSession,
+    startNode: (installed) => getGhostNodeRuntimeBroker().startResident(installed),
+    spawnBrowser: (installed) => getGhostRuntime().spawn(installed),
+    warn: (message, fields) => log.warn(message, fields),
+  });
 }
 
 function readLegacyJson<T>(
@@ -6940,6 +6924,12 @@ export function registerGhostIpc(): void {
     // schedule-request = 打开自动化创建面板并预填(agent 槽的 schedule 加档):
     // 只开面板,任务由用户选模型后亲手保存才落库——本槽全程不碰 schedule storage。
     // 资格审/净化/频率钳制/限速在 scheduleSlot,落地在 renderer。
+    if (type === 'routine-request') {
+      const owner = activeOwnerScopeKey();
+      const ghost = getGhostManager().list().find((item) => item.manifest.id === id);
+      return handleRoutineRequest(ghost, payload, getRoutineEngine, () =>
+        activeOwnerScopeKey() === owner && getGhostManager().list().some((item) => item.manifest.id === id && item.enabled && ghostInstallApprovalToken(item.approval) === ghostInstallApprovalToken(ghost?.approval)));
+    }
     if (type === 'schedule-request') {
       return getGhostScheduleSlot().handleRequest(id, payload);
     }

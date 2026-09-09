@@ -222,6 +222,23 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
   但按 2026-09-07 用户更正，界面恢复「兼容模式」、默认关闭，允许用户手动开启。
   不新增「支持」协议分类；用户显式开关保持优先。GPT 窗口默认与自动压缩修复不回退。
 
+### 三引擎上下文预算（2026-09-09）
+
+- `contextWindow` 是该路由的工作默认值，`contextWindowMax` 保留上游最大支持值。
+  单模型上下文设置另存用户预算；恢复默认删除预算，重新读取当前工作默认值。
+  Claude Code、Codex、Pi 的创建、恢复、切换和历史整理都必须使用同一路由预算。
+- 修改预算或目录工作默认值后，空闲任务释放运行句柄、下次发送恢复原历史；正在回复的
+  任务等当前轮结束再应用。不得覆盖已排队的模型／来源选择，也不得因刷新失败报告已生效。
+- Claude Code 2.1.259 的已知模型不会靠 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 改变压缩窗口，
+  必须同时配置 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。该原生窗口最低 100K；更小的预算通过
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 等比例降低触发阈值。`/context` 的原生窗口／阈值展示
+  不包含这项百分比调整，不能据此断言小预算无效，需验证真实 `compact_boundary`。
+- 预算控制自动整理的触发时机，不代表每个请求（系统提示、工具定义、最新消息和输出）
+  都能严格压到该 token 数以内。原生引擎的最少历史组数和保留空间仍适用。
+- Pi 继承原生目录时通过 `modelOverrides.contextWindow` 应用工作窗口，保留原生协议、
+  OAuth 和兼容参数；生成的压缩预留空间必须使用同一工作窗口。
+- 原生回归进入显式 integration tier，使用隔离目录与本地假上游，不能依赖开发者凭证。
+
 ### 本地模型目录
 
 本地模型筛选与更新遵循 [`local-model-selection.md`](../product-rules/local-model-selection.md)。

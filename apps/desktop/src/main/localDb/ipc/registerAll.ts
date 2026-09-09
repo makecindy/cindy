@@ -1,3 +1,5 @@
+import { registerRoutineRemoteResources } from '../../routines/remote.js';
+import { registerRoutinesIpc } from '../../routines/service.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -75,6 +77,8 @@ function startMediaRefCompensationReconcile(
 }
 
 export interface RegisterLocalDbIpcOpts {
+  isSessionTurnPendingCompletion?: (sessionId: string) => boolean;
+  readHistoryLiveMessages?: (sessionId: string) => import('../../../renderer/lib/ccAgent.types').Message[];
   resolveContextWindow?: RegisterSessionIpcOpts['resolveContextWindow'];
   /** Current stable app-session owner. False makes queued/in-flight work stale. */
   isOwnerCurrent?: (userId: string) => boolean;
@@ -252,9 +256,11 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
   });
-  registerMessageIpc();
+  registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerBotIpc();
+  registerRoutinesIpc();
+  registerRoutineRemoteResources();
   registerBotRemoteResourceProvider();
   registerSessionImportIpc();
   registerSessionShareIpc();

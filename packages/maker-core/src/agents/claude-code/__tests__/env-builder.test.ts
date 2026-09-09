@@ -38,6 +38,7 @@ describe('buildClaudeEnv', () => {
   const originalPsOutputRendering = process.env.PSStyle__OutputRendering;
   const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL;
   const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  const originalCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
   const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
   const originalExploreInheritCap = process.env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
 
@@ -58,6 +59,7 @@ describe('buildClaudeEnv', () => {
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
     restore('CLAUDE_CODE_MAX_CONTEXT_TOKENS', originalMaxContextTokens);
+    restore('CLAUDE_CODE_AUTO_COMPACT_WINDOW', originalCompactWindow);
     restore('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', originalCompactPctOverride);
     restore(EXPLORE_INHERIT_CAP_DISABLE_ENV, originalExploreInheritCap);
   });
@@ -329,7 +331,19 @@ describe('buildClaudeEnv', () => {
     });
 
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('372000');
     expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+  });
+
+  it('sets the native working window for a known Claude model and clears inherited windows on reset', async () => {
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '123000';
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+      activeModel: 'claude-opus-4-6[1m]',
+      modelContextWindows: [{ id: 'claude-opus-4-6[1m]', contextWindow: 500_000 }],
+    });
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('500000');
+    const reset = await buildClaudeEnv(createAuthAdapter(), {}, { activeModel: 'unknown' });
+    expect(reset.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
   it('matches a catalog model when the active SDK wire id carries [1m]', async () => {

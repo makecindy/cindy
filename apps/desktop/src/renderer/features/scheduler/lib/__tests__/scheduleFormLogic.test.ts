@@ -17,11 +17,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ScheduleTemplate } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
   PENDING_SESSION_ID,
+  scheduleToUserCreateInput,
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
@@ -865,5 +866,21 @@ describe('formToProjectConfig — preRunHook 序列化(项目自动化)', () => 
     } as never;
     const config = scheduleToProjectConfig(schedule, 'auto-x');
     expect(config.preRunHook).toEqual({ command: 'node scripts/check.mjs', timeoutMs: 30_000 });
+  });
+});
+
+
+describe('scheduleToUserCreateInput', () => {
+  it.each([undefined, 'pi'] as const)('copies the full model choice into an unbound task (override: %s)', (modelAgentKind) => {
+    const original = { id: 'project-job', name: 'Job', source: 'project', projectConfigId: 'project',
+      agentKind: 'codex', modelAgentKind, model: 'shared-model', providerId: 'selected', effort: 'high',
+      fastMode: true, targetSessionId: 'old-target', persistentSession: true,
+    } as Schedule;
+    const input = scheduleToUserCreateInput(original, { name: 'Copy' });
+    expect(input).toMatchObject({ name: 'Copy', agentKind: modelAgentKind ?? 'codex', modelAgentKind,
+      model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: true, persistentSession: true });
+    expect(input).not.toHaveProperty('targetSessionId');
+    expect(input).not.toHaveProperty('projectConfigId');
+    expect(original.agentKind).toBe('codex');
   });
 });

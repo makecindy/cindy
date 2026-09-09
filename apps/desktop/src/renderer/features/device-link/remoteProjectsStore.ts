@@ -38,6 +38,7 @@ import { useSyncExternalStore } from 'react';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
+import type { AutomationScheduleSessionInfo } from '../cc-agent/lib/automationSidebarGrouping';
 import { clearCachedMessages } from './mirrorCacheClient';
 
 export type RemoteSessionStatus = Exclude<ListStatusFilter, 'all'>;
@@ -51,9 +52,16 @@ interface DeviceShard {
   sessions: Session[];
   /** 已拿到过权威列表的状态桶；空数组同样需要被记住，避免每次渲染都重复拉取。 */
   loadedStatuses: Set<RemoteSessionStatus>;
+  scheduleIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
 }
 
 const shards = new Map<string, DeviceShard>();
+let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
+function recomputeScheduleIndex(): void {
+  const next = new Map([...shards.values()].flatMap((shard) => [...(shard.scheduleIndex ?? [])]));
+  if (JSON.stringify([...next]) !== JSON.stringify([...mergedScheduleIndex]))
+    mergedScheduleIndex = next;
+}
 const subs = new Set<() => void>();
 /**
  * 正在读取任务快照的设备。它与 shard 是否存在独立：重连或手动重试时可以
@@ -294,6 +302,7 @@ function withPendingTitle(session: Session): Session {
 
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
+  recomputeScheduleIndex();
   sessionDeviceIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
   // 分片派生值随后覆盖同 id 的条目。
@@ -394,6 +403,21 @@ function stamp(
 }
 
 const actions = {
+  setDeviceScheduleIndex(
+    deviceId: string,
+    index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
+  ): void {
+    const shard = shards.get(deviceId);
+    if (!shard || JSON.stringify([...(shard.scheduleIndex ?? [])]) === JSON.stringify([...index]))
+      return;
+    shard.scheduleIndex = index;
+    recomputeScheduleIndex();
+    subs.forEach((fn) => fn());
+  },
+  getSessionScheduleInfo(sessionId: string): AutomationScheduleSessionInfo | undefined {
+    const deviceId = sessionDeviceIndex.get(sessionId);
+    return deviceId ? shards.get(deviceId)?.scheduleIndex?.get(sessionId) : undefined;
+  },
   /**
    * 写入 / 覆盖某台设备的整份会话列表(bootstrap 订阅后拉一次 / reconnect 重拉 / reseed)。
    * rawSessions 是被控端 local-db:sessions:list 原样返回的 Session[],本函数负责打标记。
@@ -464,6 +488,7 @@ const actions = {
       deviceName,
       connectionStatus,
       sessions: nextSessions,
+      scheduleIndex: existing?.scheduleIndex,
       loadedStatuses,
     });
     recompute();
@@ -1069,4 +1094,22 @@ export function getSessionDeviceId(sessionId: string): string | undefined {
  */
 export function isRemoteDeviceMarkedDisconnected(deviceId: string): boolean {
   return shards.get(deviceId)?.connectionStatus === 'disconnected';
+}
+
+export function useRemoteSessionScheduleInfo(
+  sessionId: string,
+): AutomationScheduleSessionInfo | undefined {
+  return useSyncExternalStore(
+    subscribe,
+    () => actions.getSessionScheduleInfo(sessionId),
+    () => undefined,
+  );
+}
+
+export function useRemoteScheduleIndex(): ReadonlyMap<string, AutomationScheduleSessionInfo> {
+  return useSyncExternalStore(
+    subscribe,
+    () => mergedScheduleIndex,
+    () => mergedScheduleIndex,
+  );
 }

@@ -4,6 +4,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/hooks/useProviderOnboarding', () => ({
+  useProviderOnboarding: () => ({ visible: false }),
+}));
+vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
+  ConnectProviderCard: () => null,
+}));
+
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
 vi.mock('react-i18next', () => ({

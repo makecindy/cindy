@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: {
-    child: () => ({ info: vi.fn(), warn: vi.fn() }),
+    child: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
   },
 }));
 
@@ -33,6 +33,8 @@ import {
   writeModelContextLimits,
   writeModelContextLimitsWithRefresh,
 } from '../model-context-limit-store';
+
+import { clearSessionProvider } from '../session-provider-store.js';
 
 const PREFS = path.join(tempRoot, 'test-owner', 'model-context-limit-prefs.json');
 
@@ -68,14 +70,43 @@ describe('model context limit store', () => {
     expect(readModelContextLimit('codex', 'xd', 'unrelated')).toBe(128_000);
   });
 
+  it('reconciles a task resumed with a rejected budget after another task fails to close', async () => {
+    const { refreshActiveModelContextSettings } = await import('../../maker-ipc/runtimeSetModel.js');
+    const target = { agent: 'codex' as const, providerId: 'xd', modelId: 'gpt' };
+    writeModelContextLimit('codex', 'xd', 'gpt', 272_000);
+    const budget = () => readModelContextLimit('codex', 'xd', 'gpt')!;
+    const windows = new Map([['rollback-first', 272_000], ['rollback-second', 272_000]]);
+    const sessions = [...windows.keys()].map(id => ({ id, agentKind: 'codex' as const, remoteHostId: 'ssh',
+      model: 'gpt', setModel: vi.fn(), requiresModelSwitchRebuild: () => windows.get(id) !== budget() }));
+    let fail = true;
+    const observed: number[] = [];
+    const refresh = (explicit: boolean) => refreshActiveModelContextSettings({
+      ...(explicit ? { targets: [target] } : {}),
+      runtime: { maker: { listActiveSessions: () => sessions, getSession: id => sessions.find(s => s.id === id),
+        closeSession: async id => { if (id === 'rollback-second' && fail) { fail = false; throw new Error('close failed'); } } },
+        wakeSessionInputQueue: id => { windows.set(id, budget()); observed.push(budget()); } },
+      inferProviderId: () => 'xd', hasPendingSelection: () => false, assertCurrent: () => {},
+      withSessionLock: async (_id, run) => run(),
+    });
+    try {
+      await expect(writeModelContextLimitsWithRefresh([target], 100_000,
+        () => refresh(true), () => refresh(false))).rejects.toThrow('close failed');
+      expect(observed).toEqual([100_000, 272_000]);
+      expect([...windows.values()]).toEqual([272_000, 272_000]);
+      expect(budget()).toBe(272_000);
+    } finally { for (const session of sessions) clearSessionProvider(session.id); }
+  });
+
   it('rolls back the original owner after an account switch without changing the new owner', async () => {
     const target = { agent: 'codex' as const, providerId: 'xd', modelId: 'gpt' };
     writeModelContextLimit('codex', 'xd', 'gpt', 272_000);
+    const refreshAfterRollback = vi.fn(async () => {});
     await expect(writeModelContextLimitsWithRefresh([target], 1_000_000, async () => {
       ownerId = 'other-owner';
       writeModelContextLimit('codex', 'xd', 'gpt', 500_000);
       throw new Error('account changed');
-    })).rejects.toThrow('account changed');
+    }, refreshAfterRollback)).rejects.toThrow('account changed');
+    expect(refreshAfterRollback).not.toHaveBeenCalled();
     expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(500_000);
     ownerId = 'test-owner';
     expect(readModelContextLimit('codex', 'xd', 'gpt')).toBe(272_000);

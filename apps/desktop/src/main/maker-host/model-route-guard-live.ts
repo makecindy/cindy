@@ -26,6 +26,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
+import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
 import {
   getActiveCatalog,
@@ -275,6 +276,16 @@ export async function resolveLenientSessionRoute(
     }
   }
   return route;
+}
+
+/** Resolve one provider-specific snapshot after route admission for fresh and bound sends. */
+export async function resolveScheduledModelSelectionLive(
+  selection: ScheduledModelSelection,
+): Promise<ScheduledModelSelection> {
+  const providers = await getDesktopProviderService().listProviders({
+    allowSideEffects: false, catalog: getActiveCatalog(),
+  });
+  return resolveScheduledModelSelection(selection, providers);
 }
 
 /**

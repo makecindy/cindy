@@ -555,6 +555,21 @@ function resolveCodexTurnAnchor(
   return undefined;
 }
 
+function resolveCodexForkEventTimestamp(rows: ForkTimelineMessage[]): number | undefined {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!;
+    // A new native segment has no event to anchor yet. Never borrow time from
+    // an earlier engine or the host's handoff marker.
+    if (row.role === 'agent_switch' || row.role === 'context_rebuild' || row.role === 'user') return undefined;
+    // Error rows can be backdated to user.createdAt + 1; user persistence may
+    // precede turn/start. Only actual model/tool output proves the turn began.
+    if (['assistant', 'tool_use', 'tool_result', 'thinking'].includes(row.role)) {
+      return row.createdAt;
+    }
+  }
+  return undefined;
+}
+
 async function countCodexTailTurns(
   sourceSessionId: string,
   sourceCurrentSdkSessionId: string | null,
@@ -833,6 +848,7 @@ export async function forkSessionAtMessage(
   const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
   let assistantUuid: string | undefined;
   let lastTurnId: string | undefined;
+  let forkAtTimestampMs: number | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
   const resetHandoffBoundaryClientId = findFirstUserAfterSwitchBoundary(
@@ -858,6 +874,7 @@ export async function forkSessionAtMessage(
   } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
     if (isCodex) {
       lastTurnId = resolveCodexTurnAnchor(sourceMessages, forkSource.sdkSessionId);
+      if (!lastTurnId) forkAtTimestampMs = resolveCodexForkEventTimestamp(sourceMessages);
     }
     tailTurnsToDrop = await countCodexTailTurns(
       sourceSessionId,
@@ -890,6 +907,7 @@ export async function forkSessionAtMessage(
         ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
         upToMessageId: assistantUuid,
         ...(lastTurnId ? { lastTurnId } : {}),
+        ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),
         ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
         title: newTitle,
         workingDir: source.workingDir ?? undefined,

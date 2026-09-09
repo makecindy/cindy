@@ -18,6 +18,11 @@ const EXCLUDED_BASENAMES = new Set([
 const EXCLUDED_RELATIVE_PATH_RE =
   /(^|\/)\.m2\/settings(?:-security)?\.xml$/;
 
+// Reserved by scanner's atomic writes/renames. A locked backup can outlive a
+// successful transaction, but must never enter browsing, hashing or publishing.
+const RENAME_BACKUP_BASENAME_RE =
+  /^skill\.md\.xdt-rename-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+
 function normalizePackagePath(relativePath: string): string {
   return relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
 }
@@ -41,6 +46,7 @@ export function isIgnoredSkillPackagePath(relativePath: string): boolean {
   if (lowerParts.some((part) => EXCLUDED_DIR_SEGMENTS.has(part))) return true;
 
   const basename = lowerParts[lowerParts.length - 1] ?? '';
+  if (basename.endsWith('.xdt-tmp') || RENAME_BACKUP_BASENAME_RE.test(basename)) return true;
   if (EXCLUDED_BASENAMES.has(basename)) return true;
   if (basename === '.ds_store') return true;
   if (basename.startsWith('._')) return true;
