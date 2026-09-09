@@ -622,12 +622,21 @@ export function updateDraftSessionMode(
 export function updateDraftBoundSessionId(
   draft: MobileScheduleDraft,
   targetSessionId: string,
+  targetAgentKind?: RemoteScheduleAgentKind | 'cc',
 ): MobileScheduleDraft {
   const nextTargetSessionId = targetSessionId.trim() || MOBILE_SCHEDULE_PENDING_SESSION_ID;
+  const boundAgent = targetAgentKind && nextTargetSessionId !== MOBILE_SCHEDULE_PENDING_SESSION_ID
+    ? { sessionId: nextTargetSessionId, agentKind: targetAgentKind === 'cc' ? 'claude-code' as const : targetAgentKind }
+    : draft.boundAgent?.sessionId === nextTargetSessionId ? draft.boundAgent : undefined;
+  const agentKind = !draft.modelAgentKind && !draft.model.trim() && boundAgent
+    ? boundAgent.agentKind : draft.agentKind;
   if (
     !draft.persistentSession &&
     draft.targetSessionId === nextTargetSessionId &&
-    !draft.useWorktree
+    !draft.useWorktree &&
+    draft.boundAgent?.sessionId === boundAgent?.sessionId &&
+    draft.boundAgent?.agentKind === boundAgent?.agentKind &&
+    draft.agentKind === agentKind
   ) {
     return draft;
   }
@@ -635,7 +644,24 @@ export function updateDraftBoundSessionId(
     ...draft,
     persistentSession: false,
     targetSessionId: nextTargetSessionId,
+    boundAgent,
+    agentKind,
     useWorktree: false,
+  };
+}
+
+/** Resolve manually entered ids before saving; never infer a new target's Harness from its model override. */
+export async function resolveMobileScheduleBinding(
+  draft: MobileScheduleDraft,
+  getSession: (id: string) => Promise<{ id: string; agentKind: RemoteScheduleAgentKind | 'cc' }>,
+): Promise<MobileScheduleDraft> {
+  if (draft.executionMode === 'script' || !hasMobileScheduleRealBinding(draft)) return draft;
+  const targetSessionId = draft.targetSessionId.trim();
+  if (draft.boundAgent?.sessionId === targetSessionId) return draft;
+  const target = await getSession(targetSessionId);
+  return {
+    ...updateDraftBoundSessionId(draft, targetSessionId, target.agentKind),
+    persistentSession: draft.persistentSession,
   };
 }
 

@@ -14,7 +14,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Schedule, CreateScheduleInput, UpdateScheduleInput } from '@cindy/maker-scheduler';
 import { BUILTIN_TEMPLATES, Scheduler } from '@cindy/maker-scheduler';
-import { applyTemplateToMobileScheduleDraft, buildMobileScheduleInput, createMobileScheduleDraft } from '@cindy/maker-shared/schedule-form';
+import { applyTemplateToMobileScheduleDraft, buildMobileScheduleInput, createMobileScheduleDraft, updateDraftBoundSessionId } from '@cindy/maker-shared/schedule-form';
 
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => Promise<unknown>>());
 
@@ -162,7 +162,9 @@ describe('scheduled model selection IPC compatibility', () => {
     });
   });
 
-  it.each(['', '   '])('saves and reopens a Mobile bound form after clearing its model to %j', async (model) => {
+  it.each([
+    { model: '', rebind: false }, { model: '   ', rebind: false }, { model: '', rebind: true },
+  ])('saves and reopens a Mobile bound form after clearing its model: %j', async ({ model, rebind }) => {
     let saved = { ...existing, ...fullForm, name: 'Bound', prompt: 'Run',
       recurring: true, timezone: 'UTC', status: 'active', workspaceKind: 'dialogue' } as Schedule;
     const storage = {
@@ -175,11 +177,15 @@ describe('scheduled model selection IPC compatibility', () => {
     const scheduler = new Scheduler({ storage: storage as never, runner: { fire: vi.fn() } });
     setSchedulerReady(scheduler, storage as never);
     registerScheduleHandlers();
-    const draft = createMobileScheduleDraft({ ...saved, source: 'user' });
+    const originalDraft = createMobileScheduleDraft({ ...saved, source: 'user' });
+    const draft = rebind
+      ? { ...updateDraftBoundSessionId(originalDraft, 'new-codex', 'codex'), persistentSession: true }
+      : originalDraft;
+    const targetSessionId = rebind ? 'new-codex' : 'bound';
     const wire = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...draft, model })));
     expect(wire).not.toHaveProperty('modelAgentKind');
     const result = await handlers.get('maker:schedule:update')!(null, existing.id, wire);
-    expect(result).toMatchObject({ agentKind: 'codex', targetSessionId: 'bound',
+    expect(result).toMatchObject({ agentKind: 'codex', targetSessionId, persistentSession: rebind,
       modelAgentKind: undefined, model: undefined, providerId: undefined, effort: 'high', fastMode: false });
     expect(storage.update).toHaveBeenCalledTimes(1);
     const reopened = createMobileScheduleDraft({ ...saved, source: 'user' });

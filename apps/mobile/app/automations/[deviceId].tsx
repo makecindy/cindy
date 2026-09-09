@@ -74,6 +74,7 @@ import {
   localizeScheduleDraftValidation,
   localizeTemplateParamValidation,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
+  resolveMobileScheduleBinding,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
   updateDraftCronExpr,
@@ -433,7 +434,6 @@ export default function AutomationsScreen() {
         return;
       }
     }
-    const input = buildMobileScheduleInput(formDraft);
     const actionKey = formMode === 'edit' ? `edit:${formScheduleId}` : 'create';
     setBusyAction(actionKey);
     setError(null);
@@ -446,9 +446,12 @@ export default function AutomationsScreen() {
         await openLink(deviceId);
         await subscribe(`automations:${deviceId}`, deviceId, ['sessions']);
       });
+      const resolvedDraft = await resolveMobileScheduleBinding(formDraft, async (id) =>
+        await maker.getSession(id) as RemoteSession);
+      const input = buildMobileScheduleInput(resolvedDraft);
       // Negotiate on every save, including numeric intervals and template creation.
       // Unknown/old hosts must not silently accept an unsupported bound selection.
-      const caps = await maker.getCapabilities(formDraft.agentKind).catch(() => null) as {
+      const caps = await maker.getCapabilities(resolvedDraft.agentKind).catch(() => null) as {
         supportsScheduleIntervalNullClear?: boolean;
         supportsScheduleModelSelection?: boolean;
       } | null;
@@ -1226,7 +1229,7 @@ function ScheduleFormCard({
                   accessibilityState={{ checked: session.id === boundSessionInputValue.trim() }}
                   disabled={busy}
                   key={session.id}
-                  onPress={() => onChange(updateDraftBoundSessionId(draft, session.id))}
+                  onPress={() => onChange(updateDraftBoundSessionId(draft, session.id, session.agentKind))}
                   selected={session.id === boundSessionInputValue.trim()}
                   style={styles.boundSessionOption}
                   testID="automations.form.boundSessionOption"
@@ -1251,7 +1254,8 @@ function ScheduleFormCard({
           <TextInput
             autoCapitalize="none"
             editable={!busy}
-            onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value))}
+            onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value,
+              sessions.find((session) => session.id === value.trim())?.agentKind))}
             placeholder="session id"
             placeholderTextColor={colors.textTertiary}
             style={styles.input}

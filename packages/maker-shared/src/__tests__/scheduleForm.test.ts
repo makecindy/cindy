@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
@@ -9,6 +9,7 @@ import {
   createTemplateParamDefaults,
   deriveMobileScheduleSessionMode,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
+  resolveMobileScheduleBinding,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
   updateDraftCronExpr,
@@ -462,6 +463,38 @@ function hasOwn(value: object, key: string): boolean {
 
 
 describe('mobile explicit Harness round-trip', () => {
+  it.each(['cc', 'codex', 'pi'] as const)('records the selected target Harness (%s) while preserving its model override', (targetAgentKind) => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
+      model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true, targetSessionId: 'old' }));
+    const selected = updateDraftBoundSessionId(draft, 'new', targetAgentKind);
+    const expectedAgentKind = targetAgentKind === 'cc' ? 'claude-code' : targetAgentKind;
+    expect(selected.boundAgent).toEqual({ sessionId: 'new', agentKind: expectedAgentKind });
+    expect(buildMobileScheduleInput(selected)).toMatchObject({ agentKind: expectedAgentKind,
+      modelAgentKind: 'pi', model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true });
+    expect(buildMobileScheduleInput({ ...selected, model: '', persistentSession: true })).toMatchObject({
+      agentKind: expectedAgentKind, targetSessionId: 'new', persistentSession: true,
+    });
+    expect(updateDraftBoundSessionId(selected, 'new', targetAgentKind)).toBe(selected);
+  });
+
+  it('resolves a manually entered target before serializing a persistent binding', async () => {
+    const draft = createMobileScheduleDraft(schedule({ agentKind: 'pi', modelAgentKind: 'pi',
+      model: 'pi-model', targetSessionId: 'old' }));
+    const changed = updateDraftSessionMode(updateDraftBoundSessionId(draft, 'new'), 'persistent');
+    expect(changed.boundAgent).toBeUndefined();
+    const getSession = vi.fn(async (id: string) => ({ id, agentKind: 'codex' as const }));
+    const resolved = await resolveMobileScheduleBinding(changed, getSession);
+    expect(getSession).toHaveBeenCalledExactlyOnceWith('new');
+    expect(buildMobileScheduleInput(resolved)).toMatchObject({ agentKind: 'codex', modelAgentKind: 'pi',
+      targetSessionId: 'new', persistentSession: true });
+    await expect(resolveMobileScheduleBinding(resolved, getSession)).resolves.toBe(resolved);
+    await expect(resolveMobileScheduleBinding(updateDraftSessionMode(changed, 'fresh'), getSession))
+      .resolves.toMatchObject({ targetSessionId: '' });
+    expect(getSession).toHaveBeenCalledTimes(1);
+    await expect(resolveMobileScheduleBinding(changed, async () => { throw new Error('offline'); }))
+      .rejects.toThrow('offline');
+  });
+
   it.each(['bound', MOBILE_SCHEDULE_PENDING_SESSION_ID])('creates a Harness override when a legacy binding (%s) is explicitly switched', (targetSessionId) => {
     const draft = createMobileScheduleDraft(schedule({ agentKind: 'claude-code', model: 'claude-sonnet-4-6',
       targetSessionId, providerId: 'old-source', effort: 'high', fastMode: true }));
