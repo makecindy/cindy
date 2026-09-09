@@ -497,12 +497,15 @@ type MarkdownSelectableTextProps = Omit<ComponentProps<typeof Text>, 'selectionC
    * UITextView 在折叠→展开时骤增为超高复用视图会偶发只留下巨高空白容器。
    */
   allowIosUITextView?: boolean;
+  /** Decorated table cells must stay on the row grid, including their borders. */
+  adjustVerticalAlignment?: boolean;
   /** Include larger inline headings when aligning a combined text run. */
   alignmentTextStyles?: readonly StyleProp<TextStyle>[];
 };
 
 function MarkdownSelectableText({
   allowIosUITextView = true,
+  adjustVerticalAlignment = true,
   alignmentTextStyles,
   selectable,
   ...rest
@@ -520,7 +523,7 @@ function MarkdownSelectableText({
     const top = selectableTextVerticalOffset(typography, rest.allowFontScaling === false ? 1 : fontScale);
     // Position only the selectable root. RN Text already centers its leading;
     // shifting the bubble itself would also shift pending/Android text and chips.
-    const alignedStyle: StyleProp<TextStyle> = [rest.style, { top }];
+    const alignedStyle: StyleProp<TextStyle> = adjustVerticalAlignment ? [rest.style, { top }] : rest.style;
     if (!quoteCtx) {
       return (
         <UITextView
@@ -5252,6 +5255,7 @@ function MarkdownBody({
                 const cell = block.header[index] ?? [];
                 return (
                   <MarkdownSelectableText
+                    adjustVerticalAlignment={false}
                     allowIosUITextView={allowIosUITextView}
                     key={`${block.key}:th:${index}`}
                     selectable={inlinesSelectable(cell)}
@@ -5272,6 +5276,7 @@ function MarkdownBody({
                   const cell = row.cells[index] ?? [];
                   return (
                     <MarkdownSelectableText
+                      adjustVerticalAlignment={false}
                       allowIosUITextView={allowIosUITextView}
                       key={`${row.key}:td:${index}`}
                       selectable={inlinesSelectable(cell)}
