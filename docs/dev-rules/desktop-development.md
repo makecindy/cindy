@@ -56,6 +56,9 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 
 - `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
   必须显式传 `--region=cn`，读取 `config/endpoint.json`。
+  remote 开发启动忽略环境里的 `XDT_ENDPOINT_MANIFEST_FILE`，始终按所选区域重设
+  端点文件，避免继承宿主的其它区域或自定义服务器。`--endpoints-cdn` 仍走所选区域的
+  线上 CDN；本地服务调试（local）仍保留本地端点文件配置。
 - `--shared`：显式选择共享 userData（旧默认行为）：dev 与正式版共用当前区域的正式
   profile，数据库、登录态、会话完全共享。仅当用户明确要求「共享登录 / 复用现有数据」
   时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。

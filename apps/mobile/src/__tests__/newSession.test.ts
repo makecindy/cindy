@@ -1545,6 +1545,30 @@ describe('new session model', () => {
 });
 
 describe('new session composer surface', () => {
+  it('keeps the controlled caret at the end after palette insertion and draft restore', () => {
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const slashStart = newSource.indexOf('const selectSlashCommand = useCallback');
+    const slashEnd = newSource.indexOf('const selectAtResource = useCallback', slashStart);
+    const slashSource = newSource.slice(slashStart, slashEnd);
+    const atStart = slashEnd;
+    const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
+    const atSource = newSource.slice(atStart, atEnd);
+    const restoreStart = newSource.indexOf('firstMessageRef.current = stashed.draft.firstMessage;');
+    const restoreEnd = newSource.indexOf('setDraft(stashed.draft);', restoreStart);
+    const restoreSource = newSource.slice(restoreStart, restoreEnd);
+
+    for (const source of [slashSource, atSource]) {
+      expect(source).toContain('const current = firstMessageRef.current;');
+      expect(source).toContain('const selection = { start: next.length, end: next.length };');
+      expect(source.indexOf('setFirstMessageDraft(next)')).toBeLessThan(
+        source.indexOf('setFirstMessageSelection(selection)'),
+      );
+    }
+    expect(restoreSource).toContain('firstMessageRef.current = stashed.draft.firstMessage;');
+    expect(restoreSource).toContain('firstMessageSelectionRef.current = restoredSelection;');
+    expect(restoreSource).toContain('setFirstMessageSelection(restoredSelection);');
+  });
+
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
     const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
 
@@ -1640,7 +1664,7 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
     expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
     expect(newComposerSource).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
-    expect(newComposerSource).toContain('onChangeText={setFirstMessageDraft}');
+    expect(newComposerSource).toContain('setFirstMessageDraft(text);');
     expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
     expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
@@ -1742,6 +1766,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('const voiceStartupInFlightRef = useRef(false);');
     expect(newSource).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStopInFlightRef = useRef(false);');
+    expect(newSource).toContain('if (!voiceRecordingActiveRef.current) {');
+    expect(newSource).not.toContain('if (!voiceRecordingActiveRef.current && !voiceStopInFlightRef.current) {');
     expect(newSource).toContain('const voiceStartupSeqRef = useRef(0);');
     expect(newSource).toContain('|| voiceStopInFlightRef.current');
     expect(newSource).toContain('resolveMobileVoiceRecordingPermission({');
@@ -1803,6 +1829,7 @@ describe('new session composer surface', () => {
     expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
     expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });');
+    expect(newSource).toContain('voiceSelectionUserOwnedRef.current = false;\n      voicePendingSelectionEchoesRef.current = [];\n      const controller = createMobileVoiceControllerSession({');
     expect(newSource).toContain('voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });');
     expect(newSource).toContain('draft.firstMessage.slice(0, firstMessageSelectionRef.current.end)');
     expect(newSource).toContain('draft.firstMessage.slice(firstMessageSelectionRef.current.end)');

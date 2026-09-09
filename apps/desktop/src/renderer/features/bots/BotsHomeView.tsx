@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Bot, Check, FolderOpen } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useBotTranslation } from './botPronounContext';
 
 import { Spinner } from '@/components/ui/spinner';
-import * as sessionService from '@/lib/sessionService';
+import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
-import type { MakerVendor } from '@/lib/ccAgent.types';
+import * as sessionService from '@/lib/sessionService';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import { useRegisterContentHeader } from '../feature-context';
 import {
@@ -17,6 +19,7 @@ import {
   updateBotProfile,
   useBotProfiles,
   getEffectiveBotModelChain,
+  subscribeBotGlobalModel,
   type BotCapabilities,
   type BotProfile,
 } from './botStore';
@@ -77,14 +80,17 @@ export function BotSettings({
   const [avatarColor, setAvatarColor] = useState(bot.avatarColor);
   const [selectedSkills, setSelectedSkills] = useState<string[]>(bot.skills);
   const [capabilities, setCapabilities] = useState<BotCapabilities>(bot.capabilities);
+  // Live defaults are display state, not form edits: refreshing them must not
+  // dirty autosave or overwrite a local model override / pending text edits.
+  useProviders();
+  useAvailableAgents();
+  useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
+  const displayedModelChain = capabilities.modelChainOverride === null
+    ? getEffectiveBotModelChain()
+    : capabilities.modelChain;
   const [folderError, setFolderError] = useState<string | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
-  const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
-  const hiddenVendors = useMemo<MakerVendor[]>(() => {
-    if (!availableAgentsLoaded) return [];
-    return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
-  }, [availableAgentsLoaded, availableVendors]);
   // 只在切到另一个 Bot 时重灌表单。自动保存下 `bot` 每次落库(以及失败回滚)都会
   // 换一个新对象,若仍按对象身份重灌,用户在提交在途期间敲的字会被服务端快照盖掉,
   // 失败回滚时更会把刚改的内容整批还原 —— 那是比「忘记点保存」更严重的丢字。
@@ -284,18 +290,16 @@ export function BotSettings({
               onRestoreDefault={() => {
                 const modelChain = getEffectiveBotModelChain();
                 const primary = modelChain[0];
-                if (!primary) return;
                 setCapabilities((current) => ({
                   ...current,
-                  ...primary,
+                  ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
                   modelOverride: null,
                   modelChain,
                   modelChainOverride: null,
                 }));
                 autosave.onEdit('instant');
               }}
-              value={capabilities.modelChain}
-              hiddenVendors={hiddenVendors}
+              value={displayedModelChain}
               onChange={(modelChain) => {
                 const primary = modelChain[0];
                 if (!primary) return;
@@ -381,10 +385,27 @@ export function BotsHomeView() {
   const { botId, sessionId } = useParams();
   const [searchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const providerOnboarding = useProviderOnboarding({ dismissible: false });
+  useProviders();
+  useAvailableAgents();
+  const hasDefaultModel = useSyncExternalStore(
+    subscribeBotGlobalModel,
+    () => getEffectiveBotModelChain().length > 0,
+  );
   const creatingBotRef = useRef<{ botId: string; token: symbol } | null>(null);
+  const [unavailableCanonicalId, setUnavailableCanonicalId] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [createSessionError, setCreateSessionError] = useState<unknown>(null);
   const selectedBot = useMemo(() => bots.find((bot) => bot.id === botId) ?? null, [botId, bots]);
+  // An empty profile projection can predate the newly connected source/runtime.
+  // Only followers may resume from live defaults; Main resolves the actual route
+  // when opening the canonical task without writing a per-Bot override.
+  const modelUnavailable = selectedBot?.capabilities.modelChain.length === 0
+    && !(selectedBot.capabilities.modelChainOverride === null && hasDefaultModel);
+  const currentCanonicalId = selectedBot ? canonicalBotSessionId(selectedBot) : undefined;
+  const needsCanonicalCreation = !currentCanonicalId || unavailableCanonicalId === currentCanonicalId;
+  const needsModelSelection = needsCanonicalCreation && modelUnavailable;
+  const needsProviderConnection = needsCanonicalCreation && providerOnboarding.visible;
   // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
   // 老书签、老深链通过 /bots/roster 复用同一个创建弹窗。
   const addRequested = searchParams.get('add') === '1';
@@ -490,6 +511,7 @@ export function BotsHomeView() {
   useRegisterContentHeader(headerContent);
 
   useEffect(() => {
+    if (needsProviderConnection || needsModelSelection) return;
     if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready') return;
     if (!selectedBot || shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested }))
       return;
@@ -500,12 +522,19 @@ export function BotsHomeView() {
 
     const canonicalSessionId = canonicalBotSessionId(selectedBot);
     let cancelled = false;
+    // Read existing history even without a route; only reconstruction needs one.
+    const deferReconstruction = () => {
+      if (!providerOnboarding.visible && !modelUnavailable) return false;
+      setUnavailableCanonicalId(canonicalSessionId ?? null);
+      return true;
+    };
     if (canonicalSessionId) {
       setIsCreatingSession(false);
       void withBotCanonicalSessionReadTimeout(() => sessionService.get(canonicalSessionId))
         .then(async (session) => {
           if (cancelled) return;
           if (session.status !== 'active') {
+            if (deferReconstruction()) return;
             setIsCreatingSession(true);
             const next = await createCanonicalSession(selectedBot);
             if (!cancelled) {
@@ -515,6 +544,7 @@ export function BotsHomeView() {
             return;
           }
           if (session.source !== 'bot') {
+            if (deferReconstruction()) return;
             // A renderer-held canonicalSessionId is not authority to reclassify an
             // arbitrary existing Session. Preserve the existing task and create a
             // fresh Bot-owned Session instead.
@@ -536,7 +566,7 @@ export function BotsHomeView() {
           }
         })
         .catch(async () => {
-          if (cancelled) return;
+          if (cancelled || deferReconstruction()) return;
           setIsCreatingSession(true);
           // The profile pointer is still the CAS authority even when its Session
           // row disappeared. Passing null can never repair that state because
@@ -581,7 +611,11 @@ export function BotsHomeView() {
         creatingBotRef.current = null;
       }
     };
-  }, [addRequested, createCanonicalSession, selectedBot, sessionId, settingsOpen, navigate]);
+  }, [addRequested, createCanonicalSession, selectedBot, sessionId, settingsOpen, navigate, providerOnboarding.visible, needsModelSelection, needsProviderConnection, modelUnavailable]);
+
+  if (needsProviderConnection && !settingsOpen) {
+    return <main className="flex h-full items-center justify-center px-6" role="main"><ConnectProviderCard dismissible={false} /></main>;
+  }
 
   if (!selectedBot) {
     if (bots.length === 0)
@@ -598,6 +632,27 @@ export function BotsHomeView() {
           role="status"
           aria-label={t('ccAgent.common.loading')}
         />
+      </main>
+    );
+  }
+
+  if (needsModelSelection) {
+    return (
+      <main className="flex h-full flex-col items-center justify-center gap-3 px-6" role="main">
+        <BotModelChainEditor
+          label={t('bots.settingsTabs.model')}
+          value={[]}
+          onNavigateToProviders={() => navigate('/settings?tab=providers')}
+          onChange={(modelChain) => {
+            if (!modelChain[0]?.model) return;
+            setCreateSessionError(null);
+            void updateBotProfile(selectedBot.id, {
+              capabilities: { ...selectedBot.capabilities, ...modelChain[0], modelChain,
+                modelChainOverride: modelChain },
+            }).catch(setCreateSessionError);
+          }}
+        />
+        {createSessionError ? <p role="alert" className="text-12 text-[var(--text-danger)]">{t('bots.createWizard.createFailed')}</p> : null}
       </main>
     );
   }

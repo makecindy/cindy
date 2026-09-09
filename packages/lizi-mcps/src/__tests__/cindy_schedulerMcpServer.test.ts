@@ -261,6 +261,16 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('rejects arbitrary-bot routine management on the general scheduler surface', async () => {
+    for (const name of ['routine_list', 'routine_sources', 'routine_save', 'routine_history', 'routine_delete', 'routine_run_now']) {
+      const result = await h.client.callTool({
+        name: 'call_tool', arguments: { name, args: { botId: 'another-bot', id: 'routine' } },
+      });
+      expect(result.isError).toBe(true);
+    }
+    await h.cleanup();
+  });
+
   it('call_tool(schedule_create) creates a schedule and call_tool(schedule_list) returns it (same payload as scheduler.list)', async () => {
     // schedule_create
     const created = await h.client.callTool({

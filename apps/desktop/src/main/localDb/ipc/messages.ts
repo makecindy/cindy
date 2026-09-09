@@ -591,12 +591,14 @@ export function registerMessageIpc(): void {
       createdAt = parsed;
     }
 
+    const ipcMeta = b.agentMeta ? { ...(b.agentMeta as Record<string, unknown>) } : null;
+    if (ipcMeta) delete ipcMeta.autoReviewUserText;
     return createMessage(sid, {
       clientId: cid,
       role: b.role as MessageRole,
       content: b.content,
       toolUseId: typeof b.toolUseId === 'string' ? b.toolUseId : undefined,
-      agentMeta: (b.agentMeta as AgentMeta | null | undefined) ?? null,
+      agentMeta: ipcMeta as AgentMeta | null,
       createdAt,
     });
   });
@@ -611,7 +613,14 @@ export function registerMessageIpc(): void {
       if (agentMeta !== null && (typeof agentMeta !== 'object' || Array.isArray(agentMeta))) {
         throwIpcError('INVALID_PARAMS', 'agentMeta 必须是对象或 null');
       }
-      await updateAgentMeta(sid, cid, agentMeta === null ? null : JSON.stringify(agentMeta));
+      const ipcMeta = agentMeta ? { ...(agentMeta as Record<string, unknown>) } : null;
+      if (ipcMeta) delete ipcMeta.autoReviewUserText;
+      const serialized = ipcMeta ? JSON.stringify(ipcMeta) : null;
+      // Preserve Host-authored evidence atomically; the renderer may neither mint nor replace it.
+      await getDbClient().drizzle.update(messages).set({ agentMeta: sql`CASE
+        WHEN json_valid(${messages.agentMeta}) AND json_type(${messages.agentMeta}, '$.autoReviewUserText') IN ('text', 'object')
+        THEN json_set(${serialized ?? '{}'}, '$.autoReviewUserText', json_extract(${messages.agentMeta}, '$.autoReviewUserText'))
+        ELSE ${serialized} END` }).where(and(eq(messages.sessionId, sid), eq(messages.clientId, cid)));
     },
   );
 
@@ -620,6 +629,12 @@ export function registerMessageIpc(): void {
     async (_e, sessionId: unknown, clientId: unknown, content: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      // User edits invalidate authored text. Card display PATCHes cannot alter the
+      // independent Host-accepted answer (older renderers still send those PATCHes).
+      await getDbClient().drizzle.update(messages).set({
+        agentMeta: sql`CASE WHEN json_valid(${messages.agentMeta})
+          THEN json_remove(${messages.agentMeta}, '$.autoReviewUserText') ELSE ${messages.agentMeta} END`,
+      }).where(and(eq(messages.sessionId, sid), eq(messages.clientId, cid), eq(messages.role, 'user')));
       const msg = await updateMessageContent(sid, cid, content);
       if (!msg) throwIpcError('NOT_FOUND', 'Message 不存在');
       return msg;
@@ -1316,12 +1331,21 @@ export async function updateMessageContent(
   sessionId: string,
   clientId: string,
   content: unknown,
+  autoReviewAnswer?: { text: string; acceptedAt: number },
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const serialized = safeStringify(content);
-  await dbClient.tx('message.updateContent', {
+  if (autoReviewAnswer !== undefined) {
+    // Host-only interaction result: keep content and its authorization evidence atomic.
+    await db.update(messages).set({
+      content: serialized,
+      agentMeta: sql`json_set(CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END,
+        '$.autoReviewUserText', json(${JSON.stringify(autoReviewAnswer)}))`,
+    }).where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      inArray(messages.role, ['ask_user', 'plan_review'])));
+  } else await dbClient.tx('message.updateContent', {
     sessionId,
     clientId,
     content: serialized,
@@ -2355,6 +2379,7 @@ export async function listMessagesForAgentHandoff(
   sessionId: string,
   limit = 400,
   after?: { createdAt: number; rowid: number },
+  role?: 'user' | 'authorization',
 ): Promise<
   Array<{
     clientId: string;
@@ -2380,6 +2405,13 @@ export async function listMessagesForAgentHandoff(
           gt(messages.createdAt, after.createdAt),
           and(eq(messages.createdAt, after.createdAt), gt(messageRowid, after.rowid)),
         );
+  // Bound authorization history by answer acceptance, not the earlier question time.
+  const authorityTime = sql<number>`CASE WHEN ${messages.role} IN ('ask_user', 'plan_review')
+    AND json_valid(${messages.agentMeta}) THEN CASE
+      WHEN json_type(${messages.agentMeta}, '$.autoReviewUserText.acceptedAt') IN ('integer', 'real')
+      AND json_type(${messages.agentMeta}, '$.autoReviewUserText.text') = 'text'
+      THEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.acceptedAt')
+      ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
   const rows = await db
     .select({
       rowid: messageRowid,
@@ -2392,9 +2424,11 @@ export async function listMessagesForAgentHandoff(
     })
     .from(messages)
     .where(
-      and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark),
+      and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
+        role === 'authorization' ? inArray(messages.role, ['user', 'ask_user', 'plan_review'])
+          : role ? eq(messages.role, role) : undefined),
     )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid))
     .limit(limit);
   rows.reverse();
   return rows

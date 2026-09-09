@@ -93,9 +93,11 @@ describe('Bot conversation read position', () => {
 
     const view = render(<BotSessionView />);
 
-    await waitFor(() => expect(view.getByTestId('chat').dataset.unreadBoundary).toBe('5000'));
-    // markBotRead runs after the ready gate paints; wait so Windows CI cannot lose the race.
-    await waitFor(() => expect(getBotLastReadAt('bot-1')).toBe(10_000));
+    // Rendering the divider can precede the passive effect that advances the read position.
+    await waitFor(() => {
+      expect(view.getByTestId('chat').dataset.unreadBoundary).toBe('5000');
+      expect(getBotLastReadAt('bot-1')).toBe(10_000);
+    });
   });
 
   it('keeps advancing the read position while the user is watching the chat', async () => {

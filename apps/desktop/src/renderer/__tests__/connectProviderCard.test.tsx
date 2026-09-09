@@ -88,7 +88,7 @@ function LocationProbe() {
   return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
-function renderCard() {
+function renderCard(dismissible = true) {
   return render(
     <MemoryRouter initialEntries={['/cc-agent/new']}>
       <Routes>
@@ -96,7 +96,7 @@ function renderCard() {
           path="*"
           element={
             <>
-              <ConnectProviderCard />
+              <ConnectProviderCard dismissible={dismissible} />
               <LocationProbe />
             </>
           }
@@ -259,6 +259,25 @@ describe('ConnectProviderCard', () => {
     expect(screen.getByTestId('location').textContent).toBe(
       '/settings?tab=providers&connect=deepseek',
     );
+  });
+
+  it('required recovery ignores dismissal, loads connection choices, and preserves the ordinary preference', async () => {
+    const dismissedAt = new Date().toISOString();
+    localStorage.setItem('providerOnboarding.dismissedAt', dismissedAt);
+    renderCard(false);
+    await screen.findByText('onboarding.connectProvider.othersToggle');
+    expect(screen.getByTestId('connect-provider-card')).not.toBeNull();
+    expect(screen.queryByText('onboarding.connectProvider.dismiss')).toBeNull();
+    expect(localStorage.getItem('providerOnboarding.dismissedAt')).toBe(dismissedAt);
+    fireEvent.click(screen.getByText('onboarding.connectProvider.haveApiKey'));
+    expect(screen.getByTestId('location').textContent).toBe('/settings?tab=providers&wizard=1');
+    cleanup();
+    renderCard();
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
+    cleanup();
+    providersState.providers = [makeProvider('openai', { connected: true })];
+    renderCard(false);
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
   });
 
   it('dismiss → 卡片消失且共享 key 写入', async () => {

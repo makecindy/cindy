@@ -3091,6 +3091,31 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 });
 
 describe('ask_user persist first-write-wins', () => {
+  it.each([
+    [{ behavior: 'allow', editedPlan: 'Only change build.' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'deny', reason: 'Never change src.' }, 'Never change src.'],
+    [{ behavior: 'deny', dismissed: true, reason: 'session_closed' }, ''],
+  ])('records only the accepted plan or user feedback: %j', async (decision, text) => {
+    const request = { kind: 'plan_review', requestId: 'plan-receipt', plan: 'Delete src.' };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'plan_review', request, decision);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text, acceptedAt: expect.any(Number),
+    });
+  });
+
+  it('retains a complete long clarification until the authorization budget is applied', async () => {
+    const text = 'x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000);
+    const request = { kind: 'ask_user_question', requestId: 'long-answer', questions: [] };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request, { answers: { Scope: text } });
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text: `Clarifications:\n- Scope → ${text}`, acceptedAt: expect.any(Number),
+    });
+  });
+
   it('ignores a later cancelled write after the winner already answered', async () => {
     const persistId = onInteractionMessage(SESSION, {
       kind: 'ask_user_question',
@@ -3120,6 +3145,7 @@ describe('ask_user persist first-write-wins', () => {
         status: 'answered',
         answers: { 'Pick one': 'Keep going' },
       }),
+      { text: 'Clarifications:\n- Pick one → Keep going', acceptedAt: expect.any(Number) },
     );
   });
 });

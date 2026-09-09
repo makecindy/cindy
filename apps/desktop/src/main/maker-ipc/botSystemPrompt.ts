@@ -30,6 +30,7 @@ export interface BotPromptCapabilitySignals {
   partnerActionsEnabled: boolean;
   /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
+  routinesEnabled?: boolean;
   /** 伙伴自有技能是否可写入(save_bot_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
@@ -224,6 +225,14 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
+  if (botModeEnabled && input.capabilities.routinesEnabled) {
+    capabilityParts.push([
+      '## 例行任务',
+      '用户要求定时、重复提醒或事件触发时，直接调用已提供的 routine_list / routine_save / routine_sources / routine_history / routine_delete / routine_run_now 管理自己的例行任务，不需要先发现工具。仅在当前运行环境未提供这些直接入口时，使用 cindy_helper 的 bots 类目。归属由宿主识别，不传 botId。',
+      '先读取 routine_list，避免重复创建；用 routine_save 保存后再读回，核实名称、enabled 和 triggers，成功才说已安排。工具报错或未保存就如实说明。',
+      '例行任务由 Cindy 持久调度，不要改用 start_session_task、sleep 循环或系统定时器。按用户要求设置频率，不擅自增加一小时等结束限制。实际执行沿用当前伙伴权限，触发后的普通消息会回到这里。',
+    ].join('\n'));
+  }
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
   const botCreationEnabled =
     input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;

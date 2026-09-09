@@ -4,11 +4,16 @@ import { ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { BotModelChainEditor } from './BotModelChainEditor';
+import type { BotModelRoute } from '../../../shared/botModelChain';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
+import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { Spinner } from '@/components/ui/spinner';
 import { BOT_AVATAR_MAX_BYTES } from '../../../shared/botAvatarValue';
 import {
   addBotProfileAndWait,
+  BotModelSelectionRequiredError,
   refreshBotProfiles,
   useBotProfiles,
   type BotProfile,
@@ -37,6 +42,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
   const { t } = useTranslation();
   const navigate = useNavigate();
   const bots = useBotProfiles();
+  const providerOnboarding = useProviderOnboarding({ dismissible: false });
   const [invited, setInvited] = useState<BotProfile | null>(null);
   useEffect(() => {
     if (!invited) return;
@@ -94,6 +100,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
     };
     pending.readAsDataURL(file);
   };
+  const [modelChain, setModelChain] = useState<BotModelRoute[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,10 +151,10 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
         ...(profile.avatarData ? { avatarImageBase64: profile.avatarData.split(',')[1] } : {}),
         avatarColor: profile.avatarColor,
         skills: [],
-        capabilities:
-          template.toolsets.length > 0
-            ? { toolsetMode: 'allowlist', toolsets: [...template.toolsets] }
-            : undefined,
+        capabilities: {
+          ...(template.toolsets.length > 0 ? { toolsetMode: 'allowlist' as const, toolsets: [...template.toolsets] } : {}),
+          ...(modelChain?.length ? { modelChainOverride: modelChain } : {}),
+        },
         ...(template.id !== CUSTOM_BOT_TEMPLATE_ID &&
         profile.description.trim() ===
           t(`bots.createWizard.templates.${template.translationKey}.defaultDescription`).trim()
@@ -157,6 +164,10 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
       if (bot.invitation && bot.invitation.stage !== 'ready') setInvited(bot);
       else handleCreated(bot);
     } catch (cause) {
+      if (cause instanceof BotModelSelectionRequiredError) {
+        setModelChain([]);
+        return;
+      }
       setError(cause instanceof Error ? cause.message : t('bots.createWizard.createFailed'));
     } finally {
       setCreating(false);
@@ -187,7 +198,12 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
           }}
           className="fixed left-1/2 top-1/2 z-50 max-h-[85vh] w-[calc(100vw-32px)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-5 outline-none"
         >
-          {invitedBot ? (
+          {providerOnboarding.visible ? (
+            <>
+              <Dialog.Title className="sr-only">{t('onboarding.connectProvider.title')}</Dialog.Title>
+              <ConnectProviderCard dismissible={false} />
+            </>
+          ) : invitedBot ? (
             <>
               <Dialog.Title className="sr-only">{t('bots.invitation.title')}</Dialog.Title>
               <BotInvitationWelcome bot={invitedBot} />
@@ -248,6 +264,9 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
                   onChange={chooseAvatar}
                 />
               </fieldset>
+              {modelChain !== null ? (
+                <BotModelChainEditor label={t('bots.settingsTabs.model')} value={modelChain} onChange={setModelChain} onNavigateToProviders={() => navigate('/settings?tab=providers')} disabled={creating || avatarBusy} />
+              ) : null}
               {avatarError ? (
                 <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
                   {t('bots.profile.avatarSelectionFailed')}
@@ -271,7 +290,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus }: BotRosterVie
                 </button>
                 <button
                   type="submit"
-                  disabled={creating || avatarBusy || profile.name.trim().length === 0}
+                  disabled={creating || avatarBusy || profile.name.trim().length === 0 || modelChain?.length === 0}
                   className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
                 >
                   {creating ? <Spinner size={14} /> : null}

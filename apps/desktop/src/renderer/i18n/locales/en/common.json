@@ -4959,7 +4959,8 @@
         "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
         "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
         "skill": "Adds the skill \"{{name}}\" to your AI assistants",
-        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust."
+        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
+        "routineEvents": "Routine Events"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -12059,6 +12060,67 @@
     "embedding": "For finding related content by meaning.",
     "compression": "For condensing lengthy content."
   },
+  "routines": {
+    "title": "Routines",
+    "add": "Add Routine",
+    "back": "Back to Routines",
+    "error": "Could not update routines. Check the settings and try again.",
+    "empty": "Add a routine to tell this teammate what to do and when.",
+    "enabled": "Enabled",
+    "paused": "Paused",
+    "runNow": "Run Now",
+    "running": "Running…",
+    "name": "Name",
+    "instructions": "Instructions",
+    "when": "When to Run",
+    "addTrigger": "Add Trigger",
+    "removeTrigger": "Remove Trigger",
+    "schedule": "Schedule",
+    "hourly": "Hourly",
+    "daily": "Daily",
+    "weekdays": "Weekdays",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
+    "interval": "Interval",
+    "advanced": "Advanced…",
+    "everyMinutes": "Every {{count}} Minutes",
+    "minutes": "Minutes",
+    "expression": "Cron Expression",
+    "timezone": "Time Zone",
+    "delete": "Delete Routine",
+    "save": "Save Routine",
+    "deleteConfirm": "Delete this routine and cancel its pending runs?",
+    "keep": "Keep Routine",
+    "history": "Run History",
+    "noRuns": "This routine has not run yet.",
+    "field": "Field",
+    "operator": "Condition",
+    "value": "Value",
+    "addFilter": "Add Condition",
+    "removeFilter": "Remove Condition",
+    "pluginCapability": "Publishes declared events to your routines. Only routines you configure can run.",
+    "time": "Time",
+    "day": "Day",
+    "weekday": "Weekday",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "success": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "cancelled": "Cancelled"
+    },
+    "sourceStatus": {
+      "listening": "Listening",
+      "disconnected": "Not Listening",
+      "error": "Source Needs Attention"
+    },
+    "operators": {
+      "equals": "Equals",
+      "contains": "Contains",
+      "not-equals": "Does Not Equal"
+    }
+  },
   "cindyMakeDoctor": {
     "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",
     "title": "Cindy Make · Environment",
@@ -12169,7 +12231,6 @@
       "expand": "Show upstream results",
       "collapse": "Hide upstream results",
       "count": "Found {{count}} potentially related open Issues or PRs",
-
       "kind": {
         "issue": "Issue",
         "pr": "PR"

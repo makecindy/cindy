@@ -30,7 +30,8 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
-import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { restoreAutoReviewSteerIntent } from './autoReviewUserIntent.js';
 import type {
   AgentEvent,
   AgentKind,
@@ -390,6 +391,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
+import { updateBotRoutineLifecycle } from '../routines/service.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
   replaceBotRuntimeAfterPreflight,
@@ -3445,13 +3447,15 @@ export function getPendingCredentialSwitchTarget(
 
 export interface SchedulerQueuedPromptRequest {
   sessionId: string;
+  /** Routine dispatch preserves the teammate's current planning preference. */
+  inheritTargetPlanMode?: boolean;
   /** 发给 agent 的正文(可含静默运行隐藏协议后缀)。 */
   text: string;
   /** 落库与队列气泡展示的用户原始 prompt(不含隐藏协议)。 */
   persistedContent: string;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
   /** 排队项被 drain 派发、turn 已被会话接受时回调(等价直发路径的 send onAccepted)。 */
-  onAccepted: () => void | Promise<void>;
+  onAccepted: (queuedPermissions?: { permissionMode?: string; planMode?: boolean }) => void | Promise<void>;
   /** 派发已 accept 但最终未成为运行 turn(取消/回滚)时回调。 */
   onAcceptedRollback?: () => void | Promise<void>;
   /** 排队项未派发即被丢弃(用户删除队列行 / stop 清队列 / 会话清理)时回调。 */
@@ -9081,6 +9085,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerBotLifecycleHandlers({
     maker,
     getDelegationService: () => botDelegationServiceHolder,
+    onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
+    onResumed: (botId) => updateBotRoutineLifecycle(botId, 'resume'),
+    onBeforeDelete: (botId) => updateBotRoutineLifecycle(botId, 'delete'),
   });
   const delegationForRestore = botDelegationServiceHolder;
   void restoreBotRuntimeForCurrentOwner();
@@ -9376,6 +9383,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   async function buildCreateOptsForQueuedSession(
     sessionId: string,
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>,
+    inheritTargetPlanMode = false,
   ): Promise<AgentInputCreateOpts> {
     const db = getDbClient().drizzle;
     const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
@@ -9392,7 +9400,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       effort: (row.effort ?? undefined) as CreateOpts['effort'],
       fastMode: !!row.fastMode,
       permissionMode: permissionModeOrAsk(row.permissionMode),
-      planMode: false,
+      planMode: inheritTargetPlanMode ? !!row.planModeEnabled : false,
       title: row.title ?? undefined,
       remoteHostId: row.remoteHostId ?? undefined,
       orcaRole: row.orcaRole as CreateOpts['orcaRole'],
@@ -9432,12 +9440,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   async function enqueueSendToSessionMessage(params: {
     targetSessionId: string;
+    inheritTargetPlanMode?: boolean;
     message: string;
     persistedContent: string;
     clientId: string;
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     dbRow: NonNullable<Awaited<ReturnType<typeof getSessionRowSnapshot>>>;
-    onAccepted?: () => void | Promise<void>;
+    onAccepted?: SchedulerQueuedPromptRequest['onAccepted'];
     onAcceptedRollback?: () => void | Promise<void>;
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
@@ -9446,7 +9455,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (params.onAccepted) {
       orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
         params.clientId,
-        params.onAccepted,
+        () => params.onAccepted?.({
+          permissionMode: queued.createOpts.permissionMode,
+          planMode: queued.createOpts.planMode,
+        }),
         params.onAcceptedRollback,
         params.onAcceptedCommit,
       );
@@ -9463,6 +9475,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   async function buildSessionControlInputItem(params: {
     targetSessionId: string;
+    inheritTargetPlanMode?: boolean;
     message: string;
     persistedContent: string;
     clientId: string;
@@ -9470,7 +9483,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     files?: AgentInputQueuedMessage['files'];
     origin?: AgentInputQueuedMessage['origin'];
   }): Promise<AgentInputQueuedMessage> {
-    const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
+    const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta, params.inheritTargetPlanMode);
     const imageAttachments: NonNullable<AgentInputQueuedMessage['chatMessage']['images']> = [];
     for (const file of params.files ?? []) {
       if (file.category !== 'image') continue;
@@ -10633,7 +10646,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(sessions.status, 'active'),
         )).limit(1);
       if (!row) return null;
-      const chain = readEffectiveBotModelChain(JSON.parse(row.capabilitiesJson));
+      const chain = await readEffectiveBotModelChain(JSON.parse(row.capabilitiesJson));
       const control = getSessionRuntimeControlSnapshot(sessionId);
       const live = maker.getSession(sessionId);
       return {
@@ -10708,7 +10721,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     } catch {
       return { isBot: true, candidate: null };
     }
-    const chain = readEffectiveBotModelChain(config);
+    const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
     const currentHarness = current.agentKind === 'codex'
@@ -11520,7 +11533,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
+  const readAutoReviewHistory = async (sessionId: string) => {
+    await drainPersistQueue();
+    return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
+  };
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
+    readAutoReviewHistory,
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
@@ -12016,6 +12034,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       expectedTurnSession?: object;
       expectedTurnGeneration?: number;
       readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
+      readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
+      readonly [AUTO_REVIEW_USER_INTENT]?: string;
     };
     const readCurrentSteerSession = () => {
       const current = maker.getSession(sessionId);
@@ -12075,6 +12095,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     const meta = await maker.getSessionMeta(sessionId).catch(() => null);
     sess = readCurrentSteerSession();
+    const authorizationSession = sess;
+    const authorizationTurn = sess.getTurnGeneration();
+    const restoredSteerIntent = await restoreAutoReviewSteerIntent(
+      typeof normalized === 'string' ? normalized : normalized.content,
+      so,
+      () => readAutoReviewHistory(sessionId),
+    );
+    sess = readCurrentSteerSession();
+    if (sess !== authorizationSession || sess.getTurnGeneration() !== authorizationTurn) {
+      throw new Error(`[STALE_TURN] Session ${sessionId} changed turns while restoring authorization`);
+    }
     // 手机说明同样只进 wire payload(steer 路径不落库用户消息,天然不污染原话)。
     // 两个来源都要认:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
     const steerNote =
@@ -12100,6 +12131,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         userName: so.userName,
         signal: so.signal,
         [MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT],
+        [AUTO_REVIEW_SOURCE_CONTENT]: so[AUTO_REVIEW_SOURCE_CONTENT],
+        [AUTO_REVIEW_USER_INTENT]: restoredSteerIntent,
       });
       log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
     } catch (err) {
@@ -13299,6 +13332,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetSessionId: req.sessionId,
           message: req.text,
           persistedContent: req.persistedContent,
+          inheritTargetPlanMode: req.inheritTargetPlanMode,
           clientId,
           meta,
           dbRow,
@@ -13625,6 +13659,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ): AgentInputQueuedMessage => {
     const msg = requireQueuedMessageShape(value);
     const normalized: AgentInputQueuedMessage = { ...msg };
+    delete normalized.autoReviewUserText;
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。

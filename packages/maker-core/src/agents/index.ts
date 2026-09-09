@@ -99,6 +99,7 @@ export {
   autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   extractAutoReviewUserIntent,
+  appendAutoReviewUserIntent,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
