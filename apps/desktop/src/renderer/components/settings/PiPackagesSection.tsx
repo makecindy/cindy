@@ -270,14 +270,13 @@ export function PiPackagesSection() {
       }
       if (result.projectionUnavailable) {
         toast.error(t('settings.piPackages.failure.stateUnavailable'));
-      } else {
-        const diagnostic = result.diagnostics?.find((entry) => entry.phase === 'cindy-analysis');
-        if (diagnostic) {
-          // Use the host's recovery decision: timeout/unknown outcomes may require
-          // checking state first even when the output mentions a specific cause.
-          const recoveryKey = packageRecoveryKey(diagnostic.recovery);
-          toast.error(`${t('settings.piPackages.warning.analysisIncomplete')} ${t(recoveryKey)}`);
-        }
+      }
+      const diagnostic = result.diagnostics?.find((entry) => entry.phase === 'cindy-analysis');
+      if (diagnostic) {
+        // Projection failure must not hide the host's recovery decision.
+        // Timeout/unknown outcomes may require checking state before retrying.
+        const recoveryKey = packageRecoveryKey(diagnostic.recovery);
+        toast.error(`${t('settings.piPackages.warning.analysisIncomplete')} ${t(recoveryKey)}`);
       }
       return true;
     } catch (error) {
