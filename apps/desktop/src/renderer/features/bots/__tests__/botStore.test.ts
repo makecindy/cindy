@@ -486,6 +486,24 @@ describe('保存失败只回滚自己那一行', () => {
       };
   }
 
+  it('forwards the editing baseline to Main without adding it to optimistic profile state', async () => {
+    const bot = addBotProfile({ name: 'Settings merge', description: '' });
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async () => ({ ...bot, skills: ['external', 'local'], currentVersion: 3 }));
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = update;
+    const pending = updateBotProfile(bot.id, {
+      skills: ['local'], capabilityBaseline: { skills: [] },
+    });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      id: bot.id, skills: ['local'], capabilityBaseline: { skills: [] },
+    }));
+    expect(getBotProfiles().find((item) => item.id === bot.id)).not.toHaveProperty('capabilityBaseline');
+    await expect(pending).resolves.toMatchObject({ skills: ['external', 'local'] });
+    expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({ skills: ['external', 'local'] });
+  });
+
   it('另一个伙伴在同期保存的修改不被撤销', async () => {
     const failing = addBotProfile({ name: 'Failing', description: '' });
     const other = addBotProfile({ name: 'Other', description: '' });

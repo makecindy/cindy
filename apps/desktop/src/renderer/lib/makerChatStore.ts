@@ -24,6 +24,8 @@ import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 
 import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
+import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   getDataOwnerGeneration,
@@ -226,6 +228,7 @@ const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE',
 ] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
+  SESSION_SYNC_CHANNEL,
   'maker:event',
   'maker:status-changed',
   'maker:input:projection',
@@ -3918,9 +3921,11 @@ function enterView(sessionId: string): () => void {
   _lastViewedAt.delete(sessionId);
   _ensureDemoteTimer();
   if (resumingHistory) {
-    void view.refresh().then(() => {
+    // A repair push may have arrived after leaveView, when refresh is inactive.
+    // Reuse the normal resume read to hand off unchanged streaming rows too.
+    void reconcileRemoteMessages(sessionId, { force: true, repair: true, freshHistory: false }).then(() => {
       if (!view.getSnapshot().error) scheduleIdlePlanDiscoveryIfNeeded(sessionId);
-    });
+    }).catch(() => undefined);
   } else scheduleIdlePlanDiscoveryIfNeeded(sessionId);
   return () => leaveView(sessionId);
 }
@@ -5289,6 +5294,12 @@ export function handleStreamEvent(
         isFinal: boolean;
         isFullText?: boolean;
       };
+      const snapshot = readRemoteTextSnapshot(event);
+      if (snapshot?.truncated) return state;
+      // Persistence can finish the row before the turn clears streamingClientId.
+      // The row, rather than that assembly pointer, owns durable precedence.
+      if (snapshot && event.persistId && state.messages.some((message) =>
+        message.clientId === event.persistId && message.role === 'assistant' && !message.isStreaming)) return state;
 
       // A full-text snapshot can be non-final while the item is still streaming.
       // It is authoritative for the current block and must replace the delta
@@ -5308,7 +5319,8 @@ export function handleStreamEvent(
           messages: replaceMessage(
             state.messages,
             (message) => message.clientId === id,
-            (message) => ({ ...message, content: text, ...assistantMetaFields }),
+            (message) => ({ ...message, content: text, ...assistantMetaFields,
+              ...(snapshot?.createdAt ? { createdAt: snapshot.createdAt } : {}) }),
           ),
         };
       }
@@ -5466,14 +5478,18 @@ export function handleStreamEvent(
               role: 'assistant',
               content: text,
               isStreaming: true,
-              createdAt: new Date().toISOString(),
+              createdAt: snapshot?.createdAt ?? new Date().toISOString(),
               ...assistantMetaFields,
             },
           ],
         };
       }
 
-      const nextText = textState.streamingText + text;
+      const nextText = reconcileRemoteText(textState.streamingText, text, {
+        snapshot: snapshot !== undefined, durable: false,
+        truncated: (event as unknown as Record<string, unknown>).__deviceLinkTruncated === true
+          || (event.data as Record<string, unknown>).__deviceLinkTruncated === true,
+      });
       const id = textState.streamingClientId;
       return {
         ...textState,
@@ -5481,7 +5497,7 @@ export function handleStreamEvent(
         messages: replaceMessage(
           textState.messages,
           (m) => m.clientId === id,
-          (m) => ({ ...m, content: nextText }),
+          (m) => ({ ...m, content: nextText, ...(snapshot?.createdAt ? { createdAt: snapshot.createdAt } : {}) }),
         ),
       };
     }
@@ -6998,7 +7014,6 @@ const backgroundTaskReconcileEpoch = new Map<string, number>();
 // stream into a polling loop.
 const REMOTE_MESSAGE_REPAIR_DELAY_MS = 1_500;
 const remoteMessageRepairTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const REMOTE_SESSION_SYNC_CHANNEL = 'maker:session-sync';
 
 function scheduleRemoteMessageRepair(sessionId: string): void {
   if (!sessionId || remoteMessageRepairTimers.has(sessionId)) return;
@@ -7134,14 +7149,7 @@ function bindIpc(
 }
 
 function isTextDeltaEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
-  if (event?.type !== 'text') return false;
-  const data = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
-  // Full-text snapshots are authoritative recovery/calibration events.  The
-  // main-side batching path deliberately keeps them out of coalescing, so the
-  // renderer must apply them immediately as well; otherwise a session-sync
-  // snapshot can sit behind the 32 ms delta timer and be overwritten by a
-  // concurrent history reconcile.
-  return data?.isFinal === false && data.isFullText !== true && typeof data.text === 'string';
+  return isRemoteTextDelta(event);
 }
 
 function isHighFrequencyStreamEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
@@ -7545,6 +7553,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const current = getOrCreateState(sessionId);
       if (current.sdkSessionId === sdkSessionId) return;
       setState(sessionId, (s) => ({ ...s, sdkSessionId }));
+      // The sidebar observes the same event through a read-only preload. The
+      // primary window owns persistence; the observer only updates its mirror.
+      if (isSidebarWindow()) return;
       if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
       sessionService
         .update(sessionId, { sdkSessionId })
@@ -8519,6 +8530,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       }
       // stall 看门狗信号:只用重会话流刷新 lastInboundEventAt。列表级轻量 activity/patch
       // 可能仍在持续抵达,但 maker:event 重 topic 已经断流;若这里也刷新会掩盖卡死。
+      if (push.channel === SESSION_SYNC_CHANNEL
+        && (!inboundSid || remoteProjectsStore.getSessionDeviceId(inboundSid) !== push.deviceId)) return;
       const inboundHasPersistId =
         typeof (push.payload as { persistId?: unknown } | null)?.persistId === 'string';
       const isDurableMessagePush =
@@ -8542,41 +8555,30 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         if (view && ['maker:history-view-changed', 'local-db:messages:created', 'maker:status-changed'].includes(push.channel)) view.invalidate();
       }
       switch (push.channel) {
-        case REMOTE_SESSION_SYNC_CHANNEL: {
-          // The controlled host emits this channel when maker:event frames were
-          // dropped by backpressure.  It is an authoritative recovery signal:
-          // apply an in-flight full-text snapshot through the normal event
-          // reducer.  Only a payload marked resyncRequired also asks for a
-          // history read; text-only loss must not cause a needless page reload
-          // while a turn is still streaming.
-          const sync = push.payload as {
-            sessionId?: unknown;
-            persistId?: unknown;
-            event?: unknown;
-            resyncRequired?: unknown;
-          } | null;
-          if (typeof sync?.sessionId !== 'string' || sync.sessionId !== inboundSid) break;
-          const hasSyncEvent = Boolean(sync.event && typeof sync.persistId === 'string');
-          if (hasSyncEvent) {
-            handleMakerEventRaw(
-              {
-                sessionId: sync.sessionId,
-                persistId: sync.persistId,
-                event: sync.event,
-              },
-              remoteIngress,
-            );
-          }
-          if (sync.resyncRequired === true) {
-            void reconcileRemoteMessages(sync.sessionId, {
-              force: !hasSyncEvent,
-              // A full snapshot has already repaired the live bubble; keep it
-              // ahead of an older DB row. With only resyncRequired, the host
-              // has no snapshot left and the DB window is authoritative even
-              // while the controller still shows a stale streaming flag.
-              repair: hasSyncEvent,
-            }).catch(() => undefined);
-          }
+        case SESSION_SYNC_CHANNEL: {
+          let appliedSnapshot = false;
+          consumeRemoteSessionSync(push.payload, {
+            applyEvent: (event) => {
+              handleMakerEventRaw(event, remoteIngress);
+              appliedSnapshot = true;
+            },
+            invalidateHistory: (sessionId) => {
+              const state = sessions.get(sessionId);
+              if (!state) return;
+              if (getRemoteHistoryView(sessionId)) {
+                void reconcileRemoteMessages(sessionId, { force: !appliedSnapshot, repair: true, freshHistory: true });
+                return;
+              }
+              if (!state.historyLoaded) {
+                // A first page captured before the repair must not clear its
+                // meaning. Existing invalidated-load settlement starts one new read.
+                bumpMessagesEpoch(sessionId);
+                ensureInitialMessages(sessionId);
+                return;
+              }
+              void reconcileRemoteMessages(sessionId, { force: !appliedSnapshot, repair: true });
+            },
+          });
           break;
         }
         case 'maker:event':
@@ -11666,6 +11668,7 @@ function reconcileOpenSessionOrigins(): void {
  *  - isStreaming=true → 跳过(不打断在串的 turn;turn 结束会再触发一次)。
  *    例外:`opts.force`(仅 stall 看门狗在**被控端权威报 not-running 之后**才传)放行 ——
  *    此时 isStreaming 是「卡死残留」而非真在串,必须能补回丢失的终态/消息。
+ *    repair 为已授权的补流信号:允许在途对账,保留历史未覆盖或拉取期间更新的 live 行。
  *  - 无新 clientId → no-op(不产生新数组引用,避免无谓重渲染)。
  */
 /**
@@ -11697,13 +11700,13 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return Promise.resolve(false);
   const view = getRemoteHistoryView(sessionId);
-  if (view && (view.getSnapshot().ready || opts?.freshHistory)) {
+  if (view && (view.getSnapshot().ready || opts?.freshHistory || opts?.repair)) {
     const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
     const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
     // Force needs a post-signal page, even when a normal repair is in flight.
     // Keep this view and its expansion state instead of falling back to raw history.
     return Promise.all([
-      view.refresh(false, opts?.force || opts?.freshHistory),
+      view.refresh(false, opts?.freshHistory ?? opts?.force),
       reconcilePendingInteractions(sessionId),
     ]).then(() => {
       if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
@@ -11780,7 +11783,7 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
   const interactionsSync = reconcilePendingInteractions(sessionId);
   const state = sessions.get(sessionId);
-  // A repair started while streaming is deliberately additive: it may insert
+  // A repair without force started while streaming is deliberately additive: it may insert
   // durable rows whose push was lost, but it must never hydrate or replace the
   // live row that the stream is still producing.
   if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force && !opts?.repair)) {
@@ -11896,16 +11899,10 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
         // 丢弃合并 = 拉回的窗口没进 UI:置 windowApplied=false,本次不得上报同步完成
         // (否则挂起的远程已读回执会在缺帧内容尚未展示时被放行),等 turn 结束的下一轮。
-        // A stall force signal means the controlled host has authoritatively
-        // reported not-running. It must win over an earlier repair trigger
-        // coalesced by the single-flight wrapper, otherwise addOnly would keep
-        // the stale streaming row and lose the sealed terminal message.
-        if (s.isStreaming && opts?.force) {
-          const messages = mergeMessages(mapped, s.messages, {}, 'newest-first');
-          if (messages === s.messages) return s;
-          return { ...s, messages };
-        }
-        if (s.isStreaming && opts?.repair) {
+        // Snapshot repairs are additive; force recovery instead uses the
+        // reference-guarded authoritative merge below, including when a
+        // force signal was coalesced with an earlier repair.
+        if (s.isStreaming && opts?.repair && !opts.force) {
           const repaired = mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first');
           if (repaired === s.messages) return s;
           return { ...s, messages: repaired };
@@ -11918,11 +11915,15 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean; repair?
         // 并发跳转刚 merge 进来的孤岛)。
         const lateArrivals = isContiguous
           ? []
-          : s.messages.filter((message) => !existingIds.has(message.clientId));
+          : s.messages.filter((message) => !existingIds.has(message.clientId)
+            || (opts?.repair && message.isStreaming === true));
         // 只给"启动到现在没被动过"的行开 hydrate 口子:其余只补不改。单飞之后,期间唯一可能动过
         // 这些行的就是 live push(messages:created),它比本次快照更新,不该被旧快照盖回去。
         const untouchedSinceStart = new Set<string>();
         for (const message of s.messages) {
+          // A missing terminal push can leave isStreaming stuck. The existing
+          // reference guard protects concurrent deltas; an unchanged row must
+          // still accept its durable counterpart, including the terminal state.
           if (rowsAtStart.get(message.clientId) === message) {
             untouchedSinceStart.add(message.clientId);
           }

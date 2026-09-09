@@ -1,6 +1,5 @@
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
-import { loadLightweightSessionScheduleIndex, loadSessionScheduleIndex } from '@/session/scheduleIndex';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -80,6 +79,8 @@ import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
+import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndicator';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -1024,6 +1025,9 @@ export default function SessionScreen() {
   const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
   const remoteHistoryAvailable = status === 'online' && getPresenceAvailability(deviceId) === true;
+  // Unknown presence while connecting is loading, not evidence of a lost computer.
+  const showCachedHistoryNotice = status !== 'connecting'
+    && (status !== 'online' || getPresenceAvailability(deviceId) === false);
   const historyView = useRemoteHistoryView(deviceId, sessionId, maker,
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   useEffect(() => {
@@ -2070,7 +2074,6 @@ export default function SessionScreen() {
     bannerError,
     connectionIssue,
     isDeviceUnresponsive,
-    contentRecoveryState,
   );
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
@@ -2131,18 +2134,7 @@ export default function SessionScreen() {
     let active = true;
     const isActive = () => active && messageScreenFocusedRef.current && messageAppActiveRef.current;
     const cancel = deferScheduleIndexHydration(() => {
-      void withTransientRemoteRetry(() => markSessionScheduleRunsRead(maker, sessionId, {
-        isActive,
-        // The same read supplies the notice and existing read receipts. Old
-        // Hosts retain their original query; no second schedule scan is added.
-        loadIndex: async () => {
-          try { return await loadLightweightSessionScheduleIndex(deviceId, invoke); }
-          catch (error) {
-            if (!isHistoryViewUnavailable(error)) throw error;
-            if (!isActive()) return new Map();
-            return loadSessionScheduleIndex(maker, { throwOnTransientRunListError: true });
-          }
-        },
+      void withTransientRemoteRetry(() => markSessionScheduleRunsRead(maker, sessionId, deviceId, isActive, {
         onIndex: (index) => setScheduleFailure({ source: scheduleNoticeSource, run: index.get(sessionId)?.latestFailedRun }),
       })).catch(() => undefined);
     });
@@ -4263,9 +4255,16 @@ export default function SessionScreen() {
       prefix: renderWindow.prefix,
     };
   }, [renderItems, renderWindow.prefix, sessionId]);
-  // 后台静默刷新:仅在首次加载、还没有任何内容(messages 为空)时显示"正在同步";已有内容
-  // (重开已看过的会话,messages 还在内存)时后台对账一律静默,不再弹同步提示打扰用户。
-  const showSyncingIndicator = loading && !hasRenderedMessages;
+  // Known stale entry content bypasses the quiet delay; routine sync stays subtle.
+  const showSyncingIndicator = !showConnectionBanner && !showCachedHistoryNotice
+    && (loading || historyView.snapshot.loading || status === 'connecting' || contentRecoveryState === 'syncing');
+  const showSyncingImmediately = showSyncingIndicator && hasSessionEntryPreviewMismatch(
+    sessionId,
+    remoteSessionStore.getSessionMessagePreview(sessionId),
+    currentSession?.preview,
+    messages,
+    historyView.snapshot,
+  );
   const diffCount = renderWindow.diffCount;
   const searchHits = useMemo(
     () => searchOpen && searchQuery.trim()
@@ -8805,6 +8804,7 @@ export default function SessionScreen() {
                 <ShareSelectAllButton busy={conversationShareBusy} shareableIds={allShareableIds} />
               ) : undefined}
               syncing={showSyncingIndicator}
+              syncingImmediately={showSyncingImmediately}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               messageOnly={sessionManagedByHost}
               onBack={goBackToHome}
@@ -8845,10 +8845,10 @@ export default function SessionScreen() {
                   || (connectionError ? t('session.screen.sessionNotSynced') : (deviceName || t('session.screen.conversationFallback')))}
             />
 
-            {showConnectionBanner || !remoteHistoryAvailable ? (
+            {showConnectionBanner || showCachedHistoryNotice ? (
               <ConnectionBanner
                 density="compact"
-                cachedOnly={!remoteHistoryAvailable}
+                cachedOnly={showCachedHistoryNotice}
                 deviceUnresponsive={isDeviceUnresponsive}
                 error={bannerError}
                 requestErrorAutoRecovering={bannerRetriesHistory ? false : undefined}
@@ -9600,6 +9600,7 @@ function SessionHeaderBar({
   shareSelectionLeadingInset,
   shareSelectAllNode,
   syncing,
+  syncingImmediately,
   messageCount,
   messageOnly,
   onBack,
@@ -9626,6 +9627,7 @@ function SessionHeaderBar({
   /** 分享选择模式下替换头部动作区。 */
   shareSelectAllNode?: ReactNode;
   syncing: boolean;
+  syncingImmediately: boolean;
   messageCount: number;
   /** Host-managed canonical Sessions expose conversation controls only. */
   messageOnly: boolean;
@@ -9678,7 +9680,6 @@ function SessionHeaderBar({
   } satisfies Record<SessionActionStripActionId, () => void>;
   const notice = compactSessionHeaderNotice({
     isDeviceAccessRevoked,
-    syncing,
     pendingCount,
     queuePaused,
     readOnlyReason,
@@ -9734,6 +9735,7 @@ function SessionHeaderBar({
           <Text numberOfLines={1} style={styles.sessionHeaderTitle} testID="session.title">
             {title}
           </Text>
+          <QuietSyncIndicator active={syncing} immediate={syncingImmediately} />
         </View>
         {notice ? (
           <Text numberOfLines={1} style={styles.sessionHeaderNotice} testID="session.headerNotice">
@@ -9838,22 +9840,19 @@ function sessionHeaderActionIcon(actionId: SessionActionStripActionId): SessionH
 
 function compactSessionHeaderNotice({
   isDeviceAccessRevoked,
-  syncing,
   pendingCount,
   queuePaused,
   readOnlyReason,
   session,
 }: {
   isDeviceAccessRevoked: boolean;
-  syncing: boolean;
   pendingCount: number;
   queuePaused: boolean;
   readOnlyReason?: string | null;
   session: RemoteSession | null;
 }): string | null {
   if (isDeviceAccessRevoked) return i18n.t('session.screen.accessRevoked');
-  if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;
-  if (syncing) return i18n.t('session.screen.syncing');
+  if (!session) return null;
   if (pendingCount > 0) return i18n.t('session.screen.pendingCount', { num: pendingCount });
   // readOnlyReason 现在传入的是 composer 只读 reason:worker(只读)→「只读模式」;Lead(可聊天)→ 不显示。
   if (readOnlyReason) return i18n.t('session.screen.readOnlyMode');
@@ -11355,6 +11354,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
   },
   sessionHeaderTitle: {
+    flexShrink: 1,
     color: colors.textPrimary,
     fontSize: typeScale.body,
     fontWeight: fontWeight.semibold,

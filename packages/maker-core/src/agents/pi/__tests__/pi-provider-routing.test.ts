@@ -3956,6 +3956,64 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it.each([
+    { input: ["text", "image"] as Array<"text" | "image">, supported: true },
+    { input: ["text"] as Array<"text" | "image">, supported: false },
+    { input: undefined, supported: false },
+  ])("uses the native ChatGPT image snapshot for models.json, send and steer: $input", async ({ input, supported }) => {
+    const modelId = "chatgpt/gpt-5.6-sol";
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: "openai-codex", sourceProviderId: "openai", name: "ChatGPT",
+        baseUrl: "http://127.0.0.1:9", inheritModels: true,
+        models: [{
+          id: modelId, wireId: "gpt-5.6-sol", api: "openai-codex-responses", input,
+        }],
+      }],
+      env: {},
+    }), [{
+      id: modelId, displayName: "Same-id gateway model", contextWindow: 272_000,
+      efforts: [], defaultEffort: null, supportsImageInput: !supported,
+    }]));
+    const handle = await agent.startSession({
+      sessionId: "chatgpt-images", workingDir: cwd, model: modelId, providerId: "openai",
+    });
+    try {
+      const config = JSON.parse(readFileSync(
+        path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"), "utf8",
+      ));
+      expect(config.providers["openai-codex"].models).toEqual([
+        expect.objectContaining({
+          id: "gpt-5.6-sol", api: "openai-codex-responses", input: input ?? ["text"],
+        }),
+      ]);
+      const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+      const imagePath = path.join(cwd, "image.png");
+      writeFileSync(imagePath, Buffer.from(data, "base64"));
+      const image = { type: "image" as const, path: imagePath };
+      for (const content of [[image], [{ type: "text" as const, text: "describe" }, image], [image, image]]) {
+        for (const method of ["send", "steer"] as const) {
+          captured.requests.length = 0;
+          const sent = handle[method]!({ type: "user", content });
+          if (supported) {
+            await sent;
+            expect(captured.requests).toContainEqual(expect.objectContaining({
+              type: method === "send" ? "prompt" : "steer",
+              images: content.filter((part) => part.type === "image").map(() => ({
+                type: "image", mimeType: "image/png", data,
+              })),
+            }));
+          } else {
+            await expect(sent).rejects.toMatchObject({ code: "PI_IMAGE_INPUT_UNSUPPORTED" });
+            expect(captured.requests).toHaveLength(0);
+          }
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
   it("guards image prompts by the startup provider-model capability and follows model switches", async () => {
     const gatewayModels: ModelDescriptor[] = [
       {

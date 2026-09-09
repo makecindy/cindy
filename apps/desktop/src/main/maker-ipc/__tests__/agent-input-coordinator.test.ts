@@ -3005,6 +3005,25 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
+  it('lets already queued input take over when oversized recovery clears the old error', async () => {
+    const h = createHarness();
+    const sid = 'oversized-recovery-queued-takeover';
+    h.coordinator.enqueue(sid, makeItem('q-old', 'old task'));
+    await flush();
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-new', 'do not deploy; inspect only'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'oversized history', { reason: 'codex_history_oversized' });
+    expect(h.coordinator.hasPendingQueuedWork(sid)).toBe(true);
+    h.coordinator.clearError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'do not deploy; inspect only' });
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
   it('active-turn retry falls back to resending the original text when the turn produced nothing', async () => {
     const h = createHarness();
     const sid = 'retry-continue-no-progress';

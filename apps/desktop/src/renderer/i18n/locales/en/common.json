@@ -3144,12 +3144,29 @@
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
+        "analysisIncomplete": "Pi completed the operation, but Cindy could not finish its follow-up analysis or optional build.",
         "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
         "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
         "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
         "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
       },
+      "recovery": {
+        "check-credentials": "Check the source credentials.",
+        "check-permissions": "Check file and directory permissions.",
+        "check-network": "Check the network connection.",
+        "check-source": "Check the package name or repository address.",
+        "check-version": "Check the requested package version.",
+        "check-runtime": "Check that the Pi runtime is available.",
+        "free-disk-space": "Free up disk space.",
+        "check-build-dependencies": "Check the extension’s build dependencies.",
+        "refresh-package-state": "Refresh the extension list to check its current state.",
+        "inspect-state-before-retry": "Check the current extension state before retrying unfinished steps."
+      },
       "failure": {
+        "commandFailed": "The native Pi package command failed.",
+        "commandNotStarted": "The native Pi package command could not start.",
+        "commandTimedOut": "The native Pi package command timed out.",
+        "commandUnknown": "The result of the native Pi package command could not be confirmed.",
         "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
         "packageNotFound": "The package was not found. Check the package name or repository URL.",
         "versionNotFound": "That version was not found. Choose an available version and try again.",
@@ -7309,6 +7326,16 @@
       "thisDevice": "This computer",
       "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
       "preparing": "Waiting for this teammate to get ready…"
+    },
+    "capabilities": {
+      "title": "Capabilities",
+      "search": "Search capabilities",
+      "loading": "Loading…",
+      "skill": "Skills",
+      "mcp": "MCP",
+      "toolset": "Built-in tools",
+      "unavailable": "Unavailable",
+      "empty": "No matching capabilities"
     }
   },
   "common": {
@@ -7783,7 +7810,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
+            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -8768,7 +8795,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
-        "labelStrip": "Oversized images removed, continuing",
+        "labelStrip": "Historical images reorganized",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -9336,6 +9363,8 @@
         "all": "All"
       },
       "filterSortBy": {
+        "created": "Created Time",
+        "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
         "priority": "Priority"
@@ -9351,7 +9380,7 @@
       "filterTaskSortHeading": "Session sort",
       "filterProjectOrderHeading": "Project order",
       "filterProjectOrder": {
-        "activity": "By recent activity",
+        "activity": "Follow Session Sorting",
         "custom": "Manual"
       },
       "filterProjectOrderTip": {
@@ -11410,7 +11439,7 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
-      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversized": "Automatic image history recovery and continuation could not finish. Send “Continue” to resume this task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",

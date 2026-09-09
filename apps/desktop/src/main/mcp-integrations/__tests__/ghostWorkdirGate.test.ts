@@ -785,24 +785,15 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
 
-  it('Bot 冻结 Toolset 从花名册、info 与 manual 同时隐藏未授权插件', async () => {
+  it('Bot discovers installed plugins on demand without inheriting the full roster', async () => {
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
-      __cindyDisabledBuiltinPluginIds: ['art'],
+      __cindyAllowedBuiltinPluginIds: ['memory', 'xdt_helper'],
     });
-
-    expect((deps.getRosterItems?.() ?? []).map((item) => item.id)).toEqual(['other']);
-    await expect(deps.listAwakeGhosts()).resolves.toMatchObject([{ id: 'other' }]);
-    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-      message: expect.stringContaining('伙伴配置'),
-    });
-    await expect(deps.readGhostManual({ ghostId: 'art' })).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-      manual: [],
-      content: '',
-    });
+    expect(deps.getRosterItems?.()).toEqual([]);
+    await expect(deps.listAwakeGhosts()).resolves.toMatchObject([{ id: 'art' }, { id: 'other' }]);
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({ ok: true, ghost: { id: 'art' } });
+    setGhostDisabledForWorkdir(WORKDIR, 'art', true);
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
   });
 
   it('缺 workingDir 时 system 花名册 fail closed，不回退全量', () => {
@@ -1078,20 +1069,15 @@ describe('ghost_call 兜底拒绝', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it('Bot 冻结 Toolset 在 ghost_call 主机边界拒绝猜 ID 绕过', async () => {
+  it('Bot uses an installed plugin through the existing call and workdir authorization', async () => {
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
-      __cindyDisabledBuiltinPluginIds: ['art'],
+      __cindyAllowedBuiltinPluginIds: ['memory', 'xdt_helper'],
     });
-
-    const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
-
-    expect(result).toMatchObject({
-      ok: false,
-      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-      message: expect.stringContaining('伙伴配置'),
-    });
-    expect(ensureReadyMock).not.toHaveBeenCalled();
-    expect(dispatchMock).not.toHaveBeenCalled();
+    await expect(deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).resolves.toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    setGhostDisabledForWorkdir(WORKDIR, 'art', true);
+    await expect(deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 
   it('未禁用的意识照常派发;别的目录的禁用不误伤', async () => {

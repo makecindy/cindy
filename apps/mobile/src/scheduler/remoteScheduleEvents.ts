@@ -3,6 +3,7 @@ import {
   projectScheduleEvent,
   type ScheduleEventProjection,
 } from '@cindy/maker-shared/schedule-events';
+import { invalidateScheduleIndexForDevice } from '@/session/scheduleIndex';
 
 export interface RemoteScheduleEventSnapshot {
   lastProjection: ScheduleEventProjection | null;
@@ -11,7 +12,7 @@ export interface RemoteScheduleEventSnapshot {
   sessionIndexVersion: number;
   /**
    * 未读清除类事件(unreadImpact = may-clear-schedule / clear-all,即 read / all-read)
-   * 的专用计数:消费方据此对 schedule-index 节流做 force 穿透(见 scheduleIndex 节流注释)。
+   * 的专用计数:事件先使共享索引失效,消费方据此读取同一轮新索引。
    * 单列一个 version 而不让消费方依赖 lastProjection 引用——后者每个事件都换新,
    * 进 effect deps 会让 fired / deferred 等无关事件也触发昂贵的全量拉取。
    */
@@ -49,6 +50,11 @@ export const remoteScheduleEventStore = {
     const prev = snapshots.get(deviceId) ?? emptySnapshot;
     const clearsUnread = projection.unreadImpact === 'may-clear-schedule'
       || projection.unreadImpact === 'clear-all';
+    // Invalidate once before notifying all screens. Consumer-local force loads
+    // otherwise launch competing scans for the same authoritative event.
+    if (projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread) {
+      invalidateScheduleIndexForDevice(deviceId);
+    }
     snapshots.set(deviceId, {
       lastProjection: projection,
       runsVersion: prev.runsVersion + (projection.refresh.runRefresh.mode === 'none' ? 0 : 1),

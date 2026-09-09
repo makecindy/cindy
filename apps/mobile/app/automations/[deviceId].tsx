@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
-import { ConnectionBanner } from '@/components/ConnectionBanner';
+import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
@@ -802,9 +802,11 @@ export default function AutomationsScreen() {
     }
   }, [busyAction, deviceId, maker, openLink, subscribe, syncRuns]);
 
+  const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   return (
     <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="automations.screen">
       <SimpleStackHeader
+        syncing={!showConnectionBanner && (loading || runsLoading || status === 'connecting')}
         action={{
           label: t('devices.common.create'),
           onPress: busyAction ? undefined : startCreateSchedule,

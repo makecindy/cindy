@@ -57,6 +57,7 @@ import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plug
 // 直接取 plugins 模块的 registry 单例,不经 maker-host/index.ts —— 后者 import pi-host,
 // 从 mcp-integrations 反向 import 会成环。
 import { createPluginRegistry } from '../maker-host/plugins/index.js';
+import { isAllowedRemoteMcpUrl, isDesktopLoopbackMcpUrl } from './piMcpTransport.js';
 
 interface StartedPiBridge {
   bridge: CodexHttpBridge | null;
@@ -110,22 +111,6 @@ function selectMcpEnvForServers(
   return Object.fromEntries(
     Object.entries(source).filter(([name]) => referenced.has(name)),
   );
-}
-
-function isLoopbackMcpHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    normalized === 'localhost' ||
-    normalized === '127.0.0.1' ||
-    normalized === '::1' ||
-    normalized === '[::1]'
-  );
-}
-
-function isAllowedRemoteMcpUrl(url: URL): boolean {
-  if (url.username || url.password) return false;
-  if (url.protocol === 'https:') return true;
-  return url.protocol === 'http:' && isLoopbackMcpHostname(url.hostname);
 }
 
 function shutdownGeneration(started: StartedPiBridge): Promise<void> {
@@ -206,11 +191,24 @@ export async function getPiExtraSpawnConfig(
       if (server.name === 'cindy_memory' && sessionCtx?.memoryEnabled !== true) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
+      // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop
+      // loopback would hit the remote machine itself, not the desktop service.
+      if (sessionCtx?.remoteHostId && server.remote) {
+        try {
+          if (isDesktopLoopbackMcpUrl(new URL(server.url))) return false;
+        } catch {
+          return false;
+        }
+      }
       const pluginId = pluginIdForKnownProviderName(server.name);
       if (pluginId) {
         return !disabledPluginIds.includes(pluginId)
           && (!allowedPluginIds || allowedPluginIds.includes(pluginId));
       }
+      // cindy is the always-on plugin gateway (ghost_list / ghost_info / ghost_call).
+      // It has no plugin id on purpose — empty ghost_list, not a missing server.
+      // Frozen Bot allowlists therefore must not treat it as an unknown host provider.
+      if (server.name === 'cindy') return true;
       // A frozen Bot runtime may use explicitly configured custom MCPs, but it
       // must not inherit miscellaneous host providers merely because the shared
       // Pi bridge knows about them. Unknown providers absent from the Bot's

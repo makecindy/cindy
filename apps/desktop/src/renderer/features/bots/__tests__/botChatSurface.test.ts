@@ -81,10 +81,10 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 });
 
-describe('伙伴设置收口为基本资料与高级文件入口', () => {
-  it('不再挂载旧成长列表或全局能力目录', () => {
-    expect(botSettings).not.toContain('import { BotCapabilitySettings }');
-    expect(botSettings).not.toContain('<BotCapabilitySettings');
+describe('伙伴设置包含独立能力选择入口', () => {
+  it('保留基本资料、按需能力选择与高级文件入口', () => {
+    expect(botSettings).toContain('import { BotCapabilitySettings }');
+    expect(botSettings).toContain('<BotCapabilitySettings');
     expect(botSettings).not.toContain('<BotGrowthLists');
     expect(botSettings).toContain('<BotBasicProfileFields');
     expect(botSettings).toContain("t('bots.homeFolder.title')");

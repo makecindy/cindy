@@ -573,6 +573,7 @@ export interface MobileMakerTransport {
     ): Promise<void>;
   };
   schedule: {
+    listSidebarIndexRuns?(): Promise<{ runs?: unknown[] }>;
     list(filter?: ScheduleListFilter): Promise<RemoteSchedule[]>;
     get(id: string): Promise<RemoteSchedule>;
     listTemplates(): Promise<RemoteScheduleTemplate[]>;
@@ -808,6 +809,7 @@ export function createMobileMakerTransport({
       update: (sessionId, patch) => call('maker:goal:update', [{ sessionId, patch }]),
     },
     schedule: {
+      listSidebarIndexRuns: () => call('maker:schedule:list-sidebar-index-runs'),
       list: (filter) => call('maker:schedule:list', filter ? [filter] : []),
       get: (id) => call('maker:schedule:get', [id]),
       listTemplates: () => call('maker:schedule:list-templates'),

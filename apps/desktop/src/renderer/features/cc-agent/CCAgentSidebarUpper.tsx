@@ -142,6 +142,7 @@ import {
 } from './lib/projectBulkArchiveAction';
 import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
+import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import {
@@ -562,6 +563,7 @@ export function CCAgentSidebarUpper() {
    * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
    * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
   const publishedTaskKeyRef = useRef<string>('');
+  const sidebarRootRef = useRef<HTMLDivElement>(null);
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
     const renderedIds = getVisibleSidebarSessionIds();
@@ -570,8 +572,9 @@ export function CCAgentSidebarUpper() {
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
     const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
+    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
     const visibleProjection = visibleSessionsWithRemote
-      .filter((session) => !catalogSessions.some((active) => active.id === session.id))
+      .filter((session) => !catalogSessionIds.has(session.id))
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
     const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
@@ -604,26 +607,9 @@ export function CCAgentSidebarUpper() {
     // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
     // 但会改渲染顺序 —— 跟序号徽标同样的做法,靠 DOM 变化跟住。
     if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
-    // 观察面是整个 document(展开态与 rail 是两个组件),流式输出时 mutation 会非常
-    // 密集 —— 每帧最多重算一次,别让它变成热路径。
-    let frame: number | null = null;
-    const observer = new MutationObserver(() => {
-      if (frame !== null) return;
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        publishSidebarTasks();
-      });
-    });
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'hidden', 'aria-hidden'],
-    });
-    return () => {
-      observer.disconnect();
-      if (frame !== null) cancelAnimationFrame(frame);
-    };
+    const sidebarRoot = sidebarRootRef.current;
+    if (!sidebarRoot) return;
+    return observeSidebarTaskChanges(sidebarRoot, publishSidebarTasks);
   }, [publishSidebarTasks]);
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
@@ -670,7 +656,7 @@ export function CCAgentSidebarUpper() {
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
     <Tooltip.Provider skipDelayDuration={1500}>
       <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
-        <div className="relative flex flex-1 flex-col overflow-hidden">
+        <div ref={sidebarRootRef} className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
           min-w-0 让内层跟着外层 aside 的实际宽度走，配合 SessionItem 里的
           `min-w-0 flex-1 truncate` 才能正确截断。原来写死 min-w-[260px] 是

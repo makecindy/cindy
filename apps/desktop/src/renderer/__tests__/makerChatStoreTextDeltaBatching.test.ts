@@ -511,6 +511,34 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  it('repairs remote text before new deltas and ignores a repair after durable takeover', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (channel: string, payload: unknown, deviceId = 'device-1') => onRemotePush?.({ deviceId, channel, payload });
+    const text = (value: string) => ({ sessionId: SESSION_ID, persistId: 'assistant-1',
+      event: { type: 'text', data: { text: value, isFinal: false } } });
+    const repair = { ...text('prefix suffix'), event: { type: 'text', data: {
+      text: 'prefix suffix', isFinal: false, isFullText: true, createdAt: '2026-09-08T00:00:01Z',
+    } } };
+    send('maker:event', text(' suffix'));
+    send('maker:session-sync', repair);
+    send('maker:session-sync', repair);
+    send('maker:event', text(' tail'));
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'prefix suffix tail',
+        createdAt: '2026-09-08T00:00:01.000Z', isStreaming: true }),
+    ]);
+    send('maker:session-sync', { ...repair, event: { type: 'text', data: { text: 'wrong owner', isFullText: true, isFinal: false } } }, 'device-2');
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('prefix suffix tail');
+    send('local-db:messages:created', { sessionId: SESSION_ID, message: {
+      id: 'db-id', clientId: 'assistant-1', role: 'assistant', content: 'durable answer', createdAt: '2026-09-08T00:00:01Z',
+    } });
+    send('maker:session-sync', repair);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'durable answer', isStreaming: false }),
+    ]);
+  });
+
   const MULTI_SESSION_IDS = Array.from({ length: 10 }, (_, i) => `${SESSION_ID}-multi-${i}`);
   const LRU_SESSION_IDS = Array.from({ length: 21 }, (_, i) => `${SESSION_ID}-lru-${i}`);
 
@@ -542,6 +570,21 @@ describe('makerChatStore text delta batching', () => {
     for (const sessionId of MULTI_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     for (const sessionId of LRU_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     vi.useRealTimers();
+  });
+
+  it.each([false, true])('updates the SDK id mirror but persists only in the primary window (sidebar=%s)', async (sidebar) => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { search: sidebar ? '?sidebarWindow=1' : '' },
+    });
+    const event = { sessionId: SESSION_ID, event: { type: 'session_id', source: 'claude-code', data: 'sdk-live-1' } };
+    onEvent?.(event);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).sdkSessionId).toBe('sdk-live-1');
+    onEvent?.(event);
+    await flushPromises();
+    expect(sessionService.update).toHaveBeenCalledTimes(sidebar ? 0 : 1);
+    if (!sidebar) expect(sessionService.update).toHaveBeenCalledWith(SESSION_ID, { sdkSessionId: 'sdk-live-1' });
   });
 
   it.each([true, false])('keeps the Pi reply through early persistence and history reload (DB first=%s)', async (dbFirst) => {
@@ -1725,7 +1768,7 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
-  it('replaces an in-flight or persisted item with a non-final authoritative full-text snapshot', () => {
+  it('replaces an in-flight prefix but preserves a durable item against a non-final snapshot', () => {
     emitTextDelta('prefix', SESSION_ID, 'assistant-1');
     vi.advanceTimersByTime(32);
     onEvent?.({
@@ -1742,18 +1785,18 @@ describe('makerChatStore text delta batching', () => {
 
     onDbMessageCreated?.({
       sessionId: SESSION_ID,
-      message: { clientId: 'assistant-2', role: 'assistant', content: 'stale persisted text', createdAt: new Date().toISOString() },
+      message: { clientId: 'assistant-2', role: 'assistant', content: 'durable text', createdAt: new Date().toISOString() },
     });
     onEvent?.({
       sessionId: SESSION_ID,
       event: {
         type: 'text', source: 'codex',
-        data: { text: 'repaired persisted text', isFinal: false, isFullText: true },
+        data: { text: 'late streaming snapshot', isFinal: false, isFullText: true },
       },
       persistId: 'assistant-2',
     });
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ clientId: 'assistant-2', content: 'repaired persisted text', isStreaming: false }),
+      expect.objectContaining({ clientId: 'assistant-2', content: 'durable text', isStreaming: false }),
     ]));
   });
 
@@ -1801,7 +1844,7 @@ describe('makerChatStore text delta batching', () => {
     });
   });
 
-  it('keeps a newer stream metadata intact when a remote snapshot repairs an older item', () => {
+  it('preserves durable text and newer stream metadata when an older snapshot arrives', () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const pushText = (persistId: string, text: string, agentMeta: Record<string, unknown>, isFinal: boolean) => {
       onRemotePush?.({
@@ -1827,8 +1870,8 @@ describe('makerChatStore text delta batching', () => {
       streamingClientId: 'assistant-2', streamingText: 'new answer complete', lastAgentMeta: currentMeta,
       messages: [
         expect.objectContaining({
-          clientId: 'assistant-1', content: 'repaired old answer', isStreaming: false,
-          model: 'repaired-model', parentToolUseId: 'old-parent', turnCompleted: true, botPrivateReply: true,
+          clientId: 'assistant-1', content: 'old answer', isStreaming: false,
+          model: 'old-model',
         }),
         expect.objectContaining({
           clientId: 'assistant-2', content: 'new answer complete', isStreaming: true,

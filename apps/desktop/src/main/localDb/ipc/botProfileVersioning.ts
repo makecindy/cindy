@@ -1,3 +1,7 @@
+import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
+import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection.js';
+import { throwIpcError } from '../../utils/ipcValidate.js';
+
 export function botProfileContentChanged(input: {
   previousCapabilities: Record<string, unknown>;
   nextCapabilities: Record<string, unknown>;
@@ -15,6 +19,7 @@ export function mergeBotProfileCapabilities(input: {
   capabilities?: Record<string, unknown>;
   skills?: unknown;
   hasSkills: boolean;
+  capabilityBaseline?: unknown;
 }): Record<string, unknown> {
   const next = input.capabilities
     ? { ...input.previous, ...input.capabilities }
@@ -27,6 +32,26 @@ export function mergeBotProfileCapabilities(input: {
           .filter(Boolean)
           .slice(0, 100)
       : [];
+  }
+  if (input.capabilityBaseline !== undefined) {
+    const baseline = input.capabilityBaseline;
+    if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) {
+      throwIpcError('INVALID_PARAMS', 'capabilityBaseline must be an object');
+    }
+    for (const key of ['skills', 'mcpServers', 'toolsets'] as const) {
+      const before = (baseline as Record<string, unknown>)[key];
+      if (before === undefined) continue;
+      const local = next[key];
+      const hasSelection = key === 'skills' ? input.hasSkills
+        : Object.prototype.hasOwnProperty.call(input.capabilities ?? {}, key);
+      if (!hasSelection || !Array.isArray(before) || !before.every((id) => typeof id === 'string')
+        || !Array.isArray(local) || !local.every((id) => typeof id === 'string')) {
+        throwIpcError('INVALID_PARAMS', 'capabilityBaseline requires matching string lists');
+      }
+      const current = input.previous[key];
+      next[key] = reconcileBotCapabilityList(before, local,
+        Array.isArray(current) ? current.filter((id): id is string => typeof id === 'string') : []);
+    }
   }
   return next;
 }
@@ -62,4 +87,3 @@ export function normalizeBotProfileModelChain(
   }
   return next;
 }
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';

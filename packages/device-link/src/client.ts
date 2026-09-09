@@ -854,6 +854,7 @@ export class DeviceLinkClient {
    * Repeated hints coalesce and cannot extend an already running probe. */
   notifyNetworkChanged(): void {
     if (this.stopped || this.networkProbeTimer) return;
+    const hintedAt = this.monotonicNow();
     if (this.networkChangeTimer) clearTimeout(this.networkChangeTimer);
     this.networkChangeTimer = setTimeout(() => {
       this.networkChangeTimer = null;
@@ -863,6 +864,9 @@ export class DeviceLinkClient {
         if (this.reconnectTimer) this.connectNow('network-change');
         return;
       }
+      // Activity after the latest hint already proves this relay is reachable.
+      // Do not compare Wi-Fi labels: switching access points can keep them equal.
+      if (this.lastInboundAt > hintedAt) return;
       const epoch = this.connEpoch;
       const socket = this.ws;
       const startedAt = this.monotonicNow();
@@ -1463,7 +1467,7 @@ export class DeviceLinkClient {
     const id = createRequestId();
     const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
     const startedAt = Date.now();
-    const requestDescription = this.describeRequest(env, expectKind);
+    const requestDescription = `${this.describeRequest(env, expectKind)} request=${id.slice(0, 8)}`;
 
     const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError): void => {
       const elapsedMs = Date.now() - startedAt;
@@ -2499,6 +2503,12 @@ export class DeviceLinkClient {
       meta.streamId,
       Math.max(peer.remoteBaseSeq, meta.baseSeq ?? 1),
     );
+    // Only emitted on an existing rejection path; never log payload contents.
+    const describeRejectedFrame = (): string =>
+      `src=${env.src?.slice(0, 8)} stream=${meta.streamId.slice(0, 8)} seq=${meta.seq}`
+      + ` request=${typeof env.id === 'string' ? env.id.slice(0, 8) : 'none'} kind=${env.kind}`
+      + ` next=${stream.lastDeliveredSeq + 1} delivering=${stream.deliveringSeq ?? 'none'}`
+      + ` ready=${stream.ready.size} assemblies=${stream.assemblies.size} bufferedBytes=${stream.bufferedBytes}`;
     const isSkip = !meta.segment && (() => {
       try {
         return isTransportSkipPayload(decodeTransportJson(parsed.data));
@@ -2512,7 +2522,7 @@ export class DeviceLinkClient {
       return { handled: true };
     }
     if (meta.seq > stream.lastDeliveredSeq + MAX_TRANSPORT_SEQUENCE_WINDOW) {
-      this.log.warn(`dropping reliable payload beyond receive window seq=${meta.seq}`);
+      this.log.warn(`dropping reliable payload reason=receive_window ${describeRejectedFrame()}`);
       this.sendTransportAck(env.src, meta.streamId, stream.lastDeliveredSeq);
       return { handled: true };
     }
@@ -2534,11 +2544,10 @@ export class DeviceLinkClient {
         this.sendTransportAck(env.src, meta.streamId, stream.lastDeliveredSeq);
         return { handled: true };
       }
-      if (
-        bytes > MAX_TRANSPORT_CHUNK_BYTES
-        || !this.ensureReceiveCapacity(stream, meta.seq, bytes)
-      ) {
-        this.log.warn(`dropping reliable payload because receive buffer is full seq=${meta.seq}`);
+      const rejection = bytes > MAX_TRANSPORT_CHUNK_BYTES ? 'chunk_too_large'
+        : !this.ensureReceiveCapacity(stream, meta.seq, bytes) ? 'receive_capacity_exceeded' : null;
+      if (rejection) {
+        this.log.warn(`dropping reliable payload reason=${rejection} ${describeRejectedFrame()} incomingBytes=${bytes}`);
         this.sendTransportAck(env.src, meta.streamId, stream.lastDeliveredSeq);
         return { handled: true };
       }
@@ -2582,13 +2591,14 @@ export class DeviceLinkClient {
       }
       if (!assembly.chunks.has(segment.index)) {
         const bytes = byteLength(parsed.data);
-        if (
-          bytes > MAX_TRANSPORT_CHUNK_BYTES ||
-          assembly.bytes + bytes > assembly.totalBytes
-          || !this.ensureReceiveCapacity(stream, meta.seq, bytes, true)
-        ) {
+        const rejection = bytes > MAX_TRANSPORT_CHUNK_BYTES ? 'chunk_too_large'
+          : assembly.bytes + bytes > assembly.totalBytes ? 'declared_size_exceeded'
+            : !this.ensureReceiveCapacity(stream, meta.seq, bytes, true) ? 'receive_capacity_exceeded' : null;
+        if (rejection) {
+          this.log.warn(`dropping reliable payload reason=${rejection} ${describeRejectedFrame()}`
+            + ` incomingBytes=${bytes} assembledBytes=${assembly.bytes} declaredBytes=${assembly.totalBytes}`
+            + ` segment=${segment.index}/${segment.total}`);
           this.removeReceiveEntry(stream, meta.seq);
-          this.log.warn(`dropping reliable payload beyond declared size seq=${meta.seq}`);
           return { handled: true };
         }
         assembly.chunks.set(segment.index, parsed.data);
@@ -4328,6 +4338,7 @@ export class DeviceLinkClient {
       : -1;
     return `dst=${dst.slice(0, 8)} seq=${seq}`
       + ` kind=${pending?.envelope.kind ?? 'missing'}`
+      + ` request=${pending?.envelope.id?.slice(0, 8) ?? 'none'}`
       + ` attempts=${pending?.attempts ?? -1} sent=${pending?.sent ?? false} ageMs=${ageMs}`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` ack=${peer.highestAckSeq} next=${peer.nextSeq}`

@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { ChevronDown, Ellipsis, Menu, Monitor } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
@@ -36,6 +37,7 @@ export function HomeNativeStackHeader({
   onSelectScope,
   scopeActions,
   showRemoteGuide,
+  syncing = false,
   title,
   titleA11y,
 }: {
@@ -51,6 +53,7 @@ export function HomeNativeStackHeader({
   onSelectScope(id: string): void;
   scopeActions: readonly NativePullDownAction[];
   showRemoteGuide: boolean;
+  syncing?: boolean;
   title: string;
   titleA11y: string;
 }) {
@@ -85,6 +88,7 @@ export function HomeNativeStackHeader({
             size={iconSize.xs}
             strokeWidth={iconStroke.medium}
           />
+          <QuietSyncIndicator active={syncing} />
         </View>
       </Pressable>
     </NativePullDownMenu>
