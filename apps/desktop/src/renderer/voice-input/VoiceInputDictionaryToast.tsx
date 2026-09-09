@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Sparkles, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import { deleteVoiceInputDictionaryEntries } from '@/hooks/useVoiceInputSettings';
 
 type DictionaryToastEntry = {
@@ -50,9 +51,7 @@ export function VoiceInputDictionaryToast() {
       count: terms.length,
     });
   }, [t, terms]);
-  const title = entries.length > 1
-    ? t('settings.voiceInput.refinement.dictionary.toast.titleMultiple', { count: entries.length })
-    : t('settings.voiceInput.refinement.dictionary.toast.title');
+  const title = t('settings.voiceInput.refinement.dictionary.toast.title');
 
   const close = useCallback(() => {
     void window.electronAPI.voiceInput.closeDictionaryToast();
@@ -67,32 +66,38 @@ export function VoiceInputDictionaryToast() {
     <div className="flex h-screen w-screen select-none items-center justify-center bg-transparent p-[34px] text-[var(--cmd-palette-item-text)]">
       <div
         className={cn(
-          'flex h-[68px] w-[360px] items-center gap-3 rounded-[22px] border px-4',
+          'flex h-11 w-max max-w-full shrink-0 items-center gap-2 rounded-xl border px-2.5',
           'border-[var(--cmd-palette-border)] shadow-[var(--shadow-menu)] backdrop-blur-xl',
         )}
         style={{ backgroundColor: 'color-mix(in srgb, var(--cmd-palette-bg) 95%, transparent)' }}
       >
-        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]">
+        <div className="grid h-6 w-5 shrink-0 place-items-center text-[var(--cmd-palette-item-meta)]">
           <Sparkles aria-hidden className="h-4 w-4" strokeWidth={2.2} />
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-13 font-medium leading-4 text-[var(--cmd-palette-item-meta)]">
+        <div className="flex min-w-0 shrink items-center gap-2">
+          <div className="shrink-0 whitespace-nowrap text-12 font-medium leading-5 text-[var(--cmd-palette-item-meta)]">
             {title}
           </div>
-          <div className="truncate text-15 font-semibold leading-5 text-[var(--cmd-palette-item-text)]">
+          <div
+            className="min-w-0 truncate text-14 font-semibold leading-5 text-[var(--cmd-palette-item-text)]"
+            title={termText}
+          >
             {termText}
           </div>
         </div>
-        <button
-          type="button"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--cmd-palette-item-meta)] transition hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--cmd-palette-item-text)] active:scale-95"
-          aria-label={t('settings.voiceInput.refinement.dictionary.toast.deleteAriaLabel', { term: termText })}
-          title={t('settings.voiceInput.refinement.dictionary.toast.delete')}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={deleteEntry}
-        >
-          <Trash2 aria-hidden className="h-4 w-4" strokeWidth={2} />
-        </button>
+        <Tip text={t('settings.voiceInput.refinement.dictionary.toast.delete')}>
+          <button
+            type="button"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--cmd-palette-item-meta)] transition hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--cmd-palette-item-text)] active:scale-95"
+            aria-label={t('settings.voiceInput.refinement.dictionary.toast.deleteAriaLabel', {
+              term: termText,
+            })}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={deleteEntry}
+          >
+            <Trash2 aria-hidden className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </Tip>
       </div>
     </div>
   );

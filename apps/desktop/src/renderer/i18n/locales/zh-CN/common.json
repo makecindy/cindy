@@ -1293,8 +1293,7 @@
             "manual": "手动"
           },
           "toast": {
-            "title": "已自动加入词典",
-            "titleMultiple": "已自动加入 {{count}} 个词",
+            "title": "已加入词典",
             "termsSummary": "{{terms}} 等 {{count}} 个词",
             "automaticAdded": "已自动加入词典：{{term}}",
             "automaticAddedMultiple": "已自动加入词典：{{term}} 等 {{count}} 个词",

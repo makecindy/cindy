@@ -1293,8 +1293,7 @@
             "manual": "수동"
           },
           "toast": {
-            "title": "사전에 자동 추가됨",
-            "titleMultiple": "{{count}}개 단어가 사전에 자동 추가됨",
+            "title": "사전에 추가됨",
             "termsSummary": "{{terms}} 외 총 {{count}}개",
             "automaticAdded": "사전에 자동 추가됨: {{term}}",
             "automaticAddedMultiple": "사전에 자동 추가됨: {{term}} 외 {{count}}개",
