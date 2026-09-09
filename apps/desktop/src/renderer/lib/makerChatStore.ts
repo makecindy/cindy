@@ -11718,7 +11718,12 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       if (snapshot.error) throw snapshot.error;
       if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
       if (opts?.force && snapshot.ready) {
-        const available = historyViewLeaves(snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : []);
+        // Host thinking snapshots use synthetic IDs and carry no terminal
+        // marker. Only durable rows may seal an existing live row; provisional
+        // rows already participate in the ordinary add-only subscription.
+        const available = historyViewLeaves(snapshot.items)
+          .flatMap((item) => item.type === 'messages' ? item.messages : [])
+          .filter((row) => !row.id.startsWith('history-live:'));
         setState(sessionId, (state) => {
           // The ordinary view subscriber is add-only. Explicit recovery must
           // hydrate stale live shells, or their handoff keeps masking sealed rows.

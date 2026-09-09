@@ -86,6 +86,7 @@ function makeFakeHost(deviceId: string, deviceName: string) {
   const messages = new Map<string, Message[]>();
   let pushCb: ((p: RemotePush) => void) | null = null;
   let historyViewEnabled = false;
+  let historyViewStreaming = false;
 
   function meta(sid: string): Record<string, unknown> {
     return {
@@ -101,7 +102,7 @@ function makeFakeHost(deviceId: string, deviceName: string) {
         if (!historyViewEnabled) return null;
         const rows = messages.get(args[0] as string) ?? [];
         const before = (args[1] as { before?: string })?.before;
-        const projected = projectHistoryView(before ? rows.slice(0, rows.findIndex((row) => row.id === before)) : rows, false);
+        const projected = projectHistoryView(before ? rows.slice(0, rows.findIndex((row) => row.id === before)) : rows, !before && historyViewStreaming);
         const items = projected.slice(-20);
         const first = items[0];
         const hasMore = projected.length > items.length;
@@ -140,7 +141,7 @@ function makeFakeHost(deviceId: string, deviceName: string) {
   return {
     deviceId,
     deviceName,
-    enableHistoryView: () => { historyViewEnabled = true; },
+    enableHistoryView: (streaming = false) => { historyViewEnabled = true; historyViewStreaming = streaming; },
     disableHistoryView: () => { historyViewEnabled = false; },
     invoke,
     /** 注册控制端 onRemotePush 回调(被控端经此向控制端转发广播)。 */
@@ -317,6 +318,50 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       const rendered = handoff.reconcile(view.getSnapshot(), raw);
       expect(rendered.messages.find((message) => message?.clientId === 'live')?.content).toBe(concurrent ? 'prefix newer' : 'prefix complete');
     }
+  });
+
+  it.each(['resume', 'force', 'resync'] as const)('keeps live thinking receptive to deltas after HistoryView recovery (%s)', async (recovery) => {
+    const s = sid();
+    const startedAt = Date.parse('2026-09-08T00:00:01Z');
+    const user = dbMessage(s, 'question', 'question', '2026-09-08T00:00:00Z', 'user');
+    host.enableHistoryView(true);
+    host.seedSession(s, {}, [user]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    const leave = makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const thinking = (data: Record<string, unknown>) => host.push('maker:event', {
+      sessionId: s, event: { type: 'thinking', source: 'claude-code', agentMeta: { parentUuid: 'toolu_worker' }, data: { blockId: 'live-thought', ...data } },
+    });
+    host.push('maker:event', { sessionId: s, event: { type: 'status', data: { status: 'Running', isRunning: true } } });
+    thinking({ stage: 'start', startedAt });
+    thinking({ stage: 'delta', text: 'current thought' });
+    const current = () => makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live-thought');
+    expect(current()).toMatchObject({ content: 'current thought', isStreaming: true, thinkingStartedAt: startedAt });
+    // Child-agent thinking stays inline in the real Host projection. Its
+    // getSessionThinkingSnapshots() row is synthetic, with no terminal marker.
+    const liveSnapshot: Message = {
+      ...dbMessage(s, 'history-live:live-thought', '', new Date(startedAt).toISOString(), 'thinking'),
+      clientId: 'live-thought', agentMeta: { parentUuid: 'toolu_worker' },
+      content: { kind: 'thinking', text: 'current thought', durationMs: 0 },
+    };
+    host.seedSession(s, {}, [user, liveSnapshot]);
+    if (recovery === 'resume') { leave(); makerChatStore.enterView(s); }
+    else if (recovery === 'force') await makerChatStore.reconcileRemoteMessages(s, { force: true });
+    else host.push('maker:session-sync', { sessionId: s, resyncRequired: true });
+    await flush(); await flush();
+    expect(JSON.stringify(getRemoteHistoryView(s)!.getSnapshot().items)).toContain('history-live:live-thought');
+    expect(current()).toMatchObject({ content: 'current thought', isStreaming: true, thinkingStartedAt: startedAt });
+    thinking({ stage: 'delta', text: ' continues' });
+    expect(current()).toMatchObject({ content: 'current thought continues', isStreaming: true });
+    expect(makerChatStore.getSnapshot(s).messages.filter(row => row.clientId === 'live-thought')).toHaveLength(1);
+
+    // A lost final event is still healed once the Host returns a durable row.
+    host.seedSession(s, {}, [user, { ...liveSnapshot, id: 'stored-thought',
+      content: { kind: 'thinking', text: 'completed thought', durationMs: 2000, finishedAt: startedAt + 2000 } }]);
+    await makerChatStore.reconcileRemoteMessages(s, { force: true });
+    expect(current()).toMatchObject({ content: 'completed thought', isStreaming: false, thinkingDurationMs: 2000 });
+    makerChatStore.purgeSession(s);
   });
 
   it('resumes terminal handoff when the first projected page was not ready before leaving', async () => {
