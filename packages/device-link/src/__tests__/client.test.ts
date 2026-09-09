@@ -84,6 +84,7 @@ function makeHarness(opts?: {
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'];
   logger?: ConstructorParameters<typeof DeviceLinkClient>[0]['logger'];
   peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
+  peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -103,6 +104,7 @@ function makeHarness(opts?: {
       return ws;
     },
     peerFailurePolicy: opts?.peerFailurePolicy,
+    peerResetReadRetry: opts?.peerResetReadRetry,
     timing: {
       reconnectBaseMs: 5,
       reconnectMaxMs: 40,
@@ -2187,6 +2189,60 @@ describe('DeviceLinkClient', () => {
       payload: { ok: true, result: [] },
     });
     await expect(invokeResult).resolves.toMatchObject({ ok: true });
+    h.client.stop();
+  });
+
+  it('peer reset 后幂等读请求立即返回 PEER_RESET，交给 host 做一次重开重试', async () => {
+    const logs: unknown[][] = [];
+    const h = makeHarness({
+      peerResetReadRetry: true,
+      logger: {
+        debug: (...args) => logs.push(args),
+        info: (...args) => logs.push(args),
+        warn: (...args) => logs.push(args),
+        error: (...args) => logs.push(args),
+      },
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'read-reset-stream',
+      },
+    });
+    await open;
+
+    const invoke = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const sent = h.current().sent.find((env) => env.kind === 'invoke')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+
+    await expect(invoke).rejects.toMatchObject({ code: 'PEER_RESET', inFlight: true });
+    expect(h.current().sent.filter((env) => env.kind === 'invoke')).toHaveLength(1);
+    expect(logs.flat().some((value) => (
+      typeof value === 'string' && value.includes('peer-reset fast-fail read request')
+    ))).toBe(true);
+    expect(sent.id).toBeTruthy();
     h.client.stop();
   });
 

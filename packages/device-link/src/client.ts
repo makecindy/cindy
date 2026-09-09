@@ -221,6 +221,11 @@ export interface DeviceLinkClientOptions {
    * 这是 additive、host opt-in 的本地策略；Desktop 不传时行为完全不变。
    */
   peerFailurePolicy?: DeviceLinkPeerFailurePolicy;
+  /**
+   * Peer 可靠传输复位时，是否让幂等的本地数据库读请求快速失败给 host，
+   * 由 host 重开 link 后最多重试一次。写请求和长执行请求不走这条路径。
+   */
+  peerResetReadRetry?: boolean;
   /** 测试注入:覆盖重连/心跳的时间参数 */
   timing?: Partial<DeviceLinkTiming>;
 }
@@ -476,6 +481,36 @@ interface PendingRequest {
   reliableDst?: string;
   /** 请求真正发出时所属的 peer link 代次，供迟到 relay-error 归属。 */
   linkGeneration?: number;
+  /** peer reset 时让 host 快速结束本次等待，由 host 重开后决定是否重试。 */
+  retryAfterPeerReset?: () => void;
+}
+
+const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
+  'local-db:sessions:list',
+  'local-db:sessions:get',
+  'local-db:conversations:search',
+  'local-db:history:messages',
+  'local-db:messages:list',
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:around',
+  'local-db:messages:around-client-id',
+  'local-db:messages:estimatedSessionValue',
+  'local-db:recent-workdirs:list',
+  'local-db:subagent-runs:list',
+  'local-db:subagent-runs:detail',
+  'local-db:subagent-runs:transcript',
+  'local-db:bots:list',
+  'local-db:bots:get',
+  'local-db:orca-workflows:get-by-lead',
+  'local-db:orca-workflows:get-by-worker-session',
+  'local-db:orca-workflows:list-workers-by-lead',
+]);
+
+function isPeerResetRetryableRead(env: Omit<Envelope, 'id'>): boolean {
+  if (env.kind !== 'invoke') return false;
+  const channel = (env.payload as InvokePayload | undefined)?.channel;
+  return typeof channel === 'string' && PEER_RESET_RETRYABLE_READ_CHANNELS.has(channel);
 }
 
 interface PendingReliableMessage {
@@ -1420,6 +1455,7 @@ export class DeviceLinkClient {
     env: Omit<Envelope, 'id'>,
     expectKind: 'invoke-result' | 'link-accept',
     timeoutMs?: number,
+    allowPeerResetRetry = true,
   ): Promise<Envelope> {
     if (this.status !== 'online') {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'not connected to relay'));
@@ -1457,7 +1493,7 @@ export class DeviceLinkClient {
         reject(new DeviceLinkError('INVOKE_TIMEOUT', `no ${expectKind} within ${timeout}ms`));
       }, timeout);
 
-      this.pending.set(id, {
+      const pendingRequest: PendingRequest = {
         resolve: (frame) => {
           clearTimeout(timer);
           logFinished('ok');
@@ -1472,7 +1508,32 @@ export class DeviceLinkClient {
         expectKind,
         dst: env.dst,
         linkGeneration: env.dst ? this.getPeerLinkGeneration(env.dst) : undefined,
-      });
+      };
+      this.pending.set(id, pendingRequest);
+      if (
+        allowPeerResetRetry
+        && this.opts.peerResetReadRetry === true
+        && env.dst
+        && isPeerResetRetryableRead(env)
+      ) {
+        pendingRequest.retryAfterPeerReset = () => {
+          if (this.pending.get(id) !== pendingRequest) return;
+          this.pending.delete(id);
+          clearTimeout(timer);
+          this.settleOutboundRouteAttemptsForId(env.dst!, id);
+          this.dropReliablePendingForRequest(env.dst!, id);
+          this.log.info(
+            `device-link request peer-reset fast-fail ${requestDescription}`
+            + ` action=host-retry-once previousRequest=${id.slice(0, 8)}`,
+          );
+          const err = new DeviceLinkError(
+            'PEER_RESET',
+            `peer link reset before ${expectKind}; host may retry this read once`,
+          );
+          err.inFlight = true;
+          pendingRequest.reject(err);
+        };
+      }
 
       try {
         const outbound = { ...env, id };
@@ -1521,6 +1582,32 @@ export class DeviceLinkClient {
       if (pending.reliableDst) continue;
       this.pending.delete(id);
       pending.reject(err);
+    }
+  }
+
+  /**
+   * ACK 耗尽 / transport-timeout 只说明当前 peer link 不再可用；对幂等读请求，
+   * 继续等原 requestTimeoutMs 会把恢复阶段前的 12 秒完整暴露给用户。先结束旧
+   * request，再由 Desktop 的既有 link recovery 重开并最多提交一次新 request id。
+   */
+  private retryReadRequestsAfterPeerReset(dst: string, seq: number): void {
+    const candidates = [...this.pending.values()].filter((pending) => (
+      pending.dst === dst
+      && pending.expectKind === 'invoke-result'
+      && pending.retryAfterPeerReset
+    ));
+    if (candidates.length === 0) {
+      this.log.debug(
+        `device-link peer-reset no retryable read request dst=${dst.slice(0, 8)} seq=${seq}`,
+      );
+      return;
+    }
+    for (const pending of candidates) {
+      this.log.info(
+        `device-link peer-reset fast-fail read request dst=${dst.slice(0, 8)}`
+        + ` seq=${seq} action=retry-once`,
+      );
+      pending.retryAfterPeerReset?.();
     }
   }
 
@@ -2322,6 +2409,7 @@ export class DeviceLinkClient {
             // desktop 控制端据此立即重新 openLink(见各自 link-close 处理)。
             const peer = this.getPeerTransport(env.src);
             this.markPeerLinkDown(peer);
+            this.retryReadRequestsAfterPeerReset(env.src, 0);
             if (peer.retryTimer) {
               clearInterval(peer.retryTimer);
               peer.retryTimer = null;
@@ -4108,6 +4196,7 @@ export class DeviceLinkClient {
       + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
     );
     this.markPeerLinkDown(peer);
+    this.retryReadRequestsAfterPeerReset(dst, seq);
     if (peer.retryTimer) {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
