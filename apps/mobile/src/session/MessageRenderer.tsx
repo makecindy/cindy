@@ -96,6 +96,7 @@ import {
   useCancelShareSelectionRowTap,
 } from '@/session/ShareMessageCheckbox';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
+import { selectableTextVerticalOffset } from '@/session/selectableTextAlignment';
 import {
   composerDocumentFromSerializedMessage,
   type ComposerDocument,
@@ -496,10 +497,13 @@ type MarkdownSelectableTextProps = Omit<ComponentProps<typeof Text>, 'selectionC
    * UITextView 在折叠→展开时骤增为超高复用视图会偶发只留下巨高空白容器。
    */
   allowIosUITextView?: boolean;
+  /** Include larger inline headings when aligning a combined text run. */
+  alignmentTextStyles?: readonly StyleProp<TextStyle>[];
 };
 
 function MarkdownSelectableText({
   allowIosUITextView = true,
+  alignmentTextStyles,
   selectable,
   ...rest
 }: MarkdownSelectableTextProps) {
@@ -509,7 +513,14 @@ function MarkdownSelectableText({
   // 文本提交)。context 为 null(宿主未启用 / 非会话场景)时零开销走原路径。
   const quoteCtx = useContext(SelectionQuoteContext);
   const renderedLinesRef = useRef<readonly string[]>([]);
+  const { fontScale } = useWindowDimensions();
   if (selectable && allowIosUITextView && Platform.OS === 'ios') {
+    const typography = [rest.style, ...(alignmentTextStyles ?? [])]
+      .map((style) => StyleSheet.flatten(style) ?? {});
+    const top = selectableTextVerticalOffset(typography, rest.allowFontScaling === false ? 1 : fontScale);
+    // Position only the selectable root. RN Text already centers its leading;
+    // shifting the bubble itself would also shift pending/Android text and chips.
+    const alignedStyle: StyleProp<TextStyle> = [rest.style, { top }];
     if (!quoteCtx) {
       return (
         <UITextView
@@ -517,6 +528,7 @@ function MarkdownSelectableText({
           selectable
           uiTextView
           {...rest}
+          style={alignedStyle}
         />
       );
     }
@@ -526,6 +538,7 @@ function MarkdownSelectableText({
         selectable
         uiTextView
         {...rest}
+        style={alignedStyle}
         onTextLayout={(e) => {
           // uitextview 自定义 spec 的 lines 是 string[](RN 核心 Text 是对象数组),
           // 双形态防御:确保缓存的是纯字符串行。
@@ -5087,6 +5100,9 @@ function MarkdownBody({
     return (
       <MarkdownSelectableText
         allowIosUITextView={allowIosUITextView}
+        alignmentTextStyles={group.blocks.map((block) => block.type === 'heading'
+          ? headingSizeStyle(styles, block.level)
+          : styles.messageText)}
         key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
         selectable={runSelectable}
         style={settledTextStyle}
