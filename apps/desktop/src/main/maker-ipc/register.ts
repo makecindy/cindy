@@ -4558,9 +4558,9 @@ export function registerModelVisibilitySyncIpc(): void {
 
 /** User budgets must also govern existing-history protection, not only engine startup. */
 function resolveConfiguredContextWindow(...args: Parameters<typeof resolveVerifiedContextWindow>): number | null {
-  const [, agent, providerId, modelId] = args;
-  return (providerId ? readModelContextLimit(agent, providerId, modelId) : null)
-    ?? resolveVerifiedContextWindow(...args);
+  const [catalog, agent, providerId, modelId] = args;
+  return resolveVerifiedContextWindow(catalog, agent, providerId, modelId,
+    providerId ? readModelContextLimit(agent, providerId, modelId) : null);
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
@@ -15700,14 +15700,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'Pi target runtime could not be verified; runtime selection was not accepted',
             );
           }
-          const finalPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
-          if (typeof finalPiWindow !== 'number' || finalPiWindow <= 0) {
+          const reportedPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
+          if (typeof reportedPiWindow !== 'number' || !Number.isFinite(reportedPiWindow) || reportedPiWindow <= 0) {
             await closeRejectedPiRuntime('final context window was not verified');
             throwIpcError(
               localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
               'Pi did not expose its verified final context window; runtime selection was not accepted',
             );
           }
+          // Pi reports the configured native budget, which may exceed the route
+          // ceiling. Final verification must not undo the history safety cap.
+          const verifiedPiWindow = resolveConfiguredContextWindow(
+            getActiveCatalog(), 'pi', targetRouteProviderId, model,
+          );
+          const finalPiWindow = verifiedPiWindow === null
+            ? reportedPiWindow : Math.min(reportedPiWindow, verifiedPiWindow);
           targetContextWindow = finalPiWindow;
           if (
             modelWindowContextNeedsProtection &&

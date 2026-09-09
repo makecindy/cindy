@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Catalog, CatalogModel, Provider } from '@cindy/model-providers';
-import { projectSessionContextWindow, resolveSessionContextWindow } from '../sessionContextWindow';
+import { projectSessionContextWindow, resolveSessionContextWindow, resolveVerifiedContextWindow } from '../sessionContextWindow';
+import { shouldRebuildForModelWindowSwitch } from '../../main/maker-ipc/contextOverflowRollover';
 
 const model: CatalogModel = {
   id: 'gpt-6-astra',
@@ -31,6 +32,21 @@ const session = {
 const catalog: Pick<Catalog, 'providers'> = { providers: [provider('openai')] };
 
 describe('session context read projection', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s history protection bounded when the budget exceeds capacity', (agent) => {
+    const routes = { providers: [provider('local', { ...model, contextWindow: 128_000 })] };
+    const target = resolveVerifiedContextWindow(routes, agent, 'local', model.id, 1_000_000);
+    expect(target).toBe(128_000);
+    expect(shouldRebuildForModelWindowSwitch({
+      contextTokens: 200_000, currentContextWindow: 272_000, targetContextWindow: target!,
+    })).toBe(true);
+    expect(resolveVerifiedContextWindow(routes, agent, 'local', model.id, 100_000)).toBe(100_000);
+    expect(resolveVerifiedContextWindow(routes, agent, 'local', model.id)).toBe(128_000);
+    expect(routes.providers[0].models[agent]?.[0].contextWindow).toBe(128_000);
+    expect(resolveVerifiedContextWindow(routes, agent, 'missing', model.id, 1_000_000)).toBeNull();
+    const unverified = { providers: [provider('local', { ...model, contextWindowVerified: false })] };
+    expect(resolveVerifiedContextWindow(unverified, agent, 'local', model.id, 1_000_000)).toBeNull();
+  });
+
   it.each(['cc', 'claude-code'])(
     'corrects %s history without mutating its stored snapshot',
     (agentKind) => {

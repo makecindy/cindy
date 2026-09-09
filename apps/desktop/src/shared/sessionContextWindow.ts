@@ -18,6 +18,7 @@ export function resolveVerifiedContextWindow(
   agent: AgentKind,
   providerId: string | null | undefined,
   modelId: string,
+  workingBudget?: number | null,
 ): number | null {
   const candidates: CatalogModel[] = [];
   for (const provider of catalog.providers) {
@@ -30,7 +31,12 @@ export function resolveVerifiedContextWindow(
   if (candidates.length !== 1) return null;
   const only = candidates[0];
   if (only.contextWindowVerified !== true) return null;
-  return Number.isFinite(only.contextWindow) && only.contextWindow > 0 ? only.contextWindow : null;
+  if (!Number.isFinite(only.contextWindow) || only.contextWindow <= 0) return null;
+  // A user budget may tighten history protection, but cannot establish or raise
+  // a verified route ceiling. Native startup/compaction still receives the raw budget.
+  return typeof workingBudget === 'number' && Number.isFinite(workingBudget) && workingBudget > 0
+    ? Math.min(workingBudget, only.contextWindow)
+    : only.contextWindow;
 }
 
 /** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */
