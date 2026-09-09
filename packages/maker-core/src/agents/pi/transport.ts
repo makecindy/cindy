@@ -187,6 +187,10 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
 
   child.on('error', (err) => {
     logger.error('pi process error', { message: err.message });
+    // kill() may synchronously emit error (e.g. EPERM). An error while
+    // terminating is not exit evidence: retain registration and the attempt's
+    // escalation/confirmation timers until exit or close actually arrives.
+    if (closing) return;
     fireClose({ code: null, signal: null, reason: `pi process error: ${err.message}` });
   });
   child.on('close', (code, signal) => {
@@ -231,13 +235,17 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
         if (killTimer) clearTimeout(killTimer);
         if (confirmTimer) clearTimeout(confirmTimer);
         child.removeListener('close', onClose);
-        closeHandlers.delete(onClose);
+        closeHandlers.delete(onConfirmedExit);
         resolve();
       };
       const onClose = (): void => finish();
+      const onConfirmedExit = (): void => { if (exitInfo) finish(); };
       const killTimer = exitInfo ? undefined : setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        if (exitInfo) return; // Confirmed exit is still draining its tail frames.
+        try { child.kill('SIGKILL'); } catch { /* still require exit confirmation */ }
+        if (done) return;
         confirmTimer = setTimeout(() => {
+          if (exitInfo) return;
           survived = true;
           logger.error('pi process did not confirm exit after SIGKILL', {
             pid: child.pid,
@@ -249,13 +257,13 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
       killTimer?.unref?.();
       // The same close notification also completes an explicit Stop/close
       // racing an exit whose inherited pipes have not reached EOF yet.
-      closeHandlers.add(onClose);
+      closeHandlers.add(onConfirmedExit);
       child.once('close', onClose);
       if (exitInfo) return;
       try {
         child.kill('SIGTERM');
       } catch {
-        finish();
+        // A thrown kill failure is not proof of exit either. Keep escalation.
       }
     });
 

@@ -99,3 +99,16 @@ script，规定的 `run --if-present typecheck` 跳过，不把跳过称作类�
 释放本端输出管道可能使继续输出的后代遇到 EPIPE；**通知 Pi 退出不等于证明构建后代已
 安全停止或成功完成**。原用户根因的最小缺口仍是停住时 Pi/构建 PID 与退出码、最后
 RPC 帧和 Session 终态的同轮时间线；本单不能据此宣称 #3916 整体已解决。
+
+## PR 审查补充：关闭失败不能冒充退出
+
+审查指出显式关闭期间 `kill()` 同步触发 `error` 会通过通用关闭通知提前完成 waiter。
+受控测试确认：`error` 事件及抛异常两种路径原来都错误地 resolve；修复后保留资源登记，
+继续 SIGTERM → SIGKILL，未收到退出证据则 reject，后续仍可重试并由真实 exit 收口。
+通用通知中的 waiter 现在显式检查 exitInfo；终止中的 error 只记录错误，不伪造退出。
+另覆盖退出发生在 3 秒升级或 8 秒确认期限前 1ms 的情况：排空期间不再发信号，也不误报超时。
+
+另一条审查认为 exit-first/close-second 会立即 resolve 并丢失退出码。加强时序及
+code/signal 断言后，在审查所指提交 d8bd012f1 上两种顺序均通过：Promise executor 中
+`return` 只退出 executor，不会 resolve 外层 Promise；仍由 250ms 排空通知调用 finish。
+因此保留现有排空行为，不将该报告称作已复现缺陷。新增断言持续保护真实退出信息。
