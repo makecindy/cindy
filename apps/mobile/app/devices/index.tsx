@@ -114,6 +114,7 @@ import {
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
+import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
@@ -1848,6 +1849,7 @@ function HomeScreenContent() {
     && !home.deviceFilters.some((item) => item.deviceId !== null
       && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.available);
   const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const showConnectionNotice = useDelayedConnectionNotice(showConnectionRow);
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
@@ -2552,7 +2554,10 @@ function HomeScreenContent() {
           />
         ) : null}
 
-        {showConnectionRow ? (
+        </View>
+        </HomeChromeFrost>
+        {showConnectionNotice ? (
+        <ConnectionNoticeOverlay>
         <View
           style={[styles.connectionRow, (connectionError || activeConnectionIssue) && styles.connectionRowError]}
           testID="connection.banner"
@@ -2579,9 +2584,8 @@ function HomeScreenContent() {
             <ConnectionRecoveryProgress />
           ) : null}
         </View>
+        </ConnectionNoticeOverlay>
         ) : null}
-        </View>
-        </HomeChromeFrost>
       </View>
 
       <SectionList
@@ -4442,6 +4446,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignSelf: 'flex-end',
   },
   connectionRow: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.container,
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,

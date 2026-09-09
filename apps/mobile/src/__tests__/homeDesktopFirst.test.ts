@@ -31,7 +31,8 @@ describe('mobile Home connection feedback', () => {
     expect(source).toContain("recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'");
     const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
     expect(hydrate.indexOf("updateDeviceConnectionState(device.deviceId, 'syncing')")).toBeLessThan(hydrate.indexOf('const promise = hydrateDeviceSessionsOnce('));
-    const row = source.slice(source.indexOf('{showConnectionRow ? ('), source.indexOf('<SectionList'));
+    expect(source).toContain('useDelayedConnectionNotice(showConnectionRow)');
+    const row = source.slice(source.indexOf('{showConnectionNotice ? ('), source.indexOf('<SectionList'));
     expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
     const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
     expect(progress).toContain('<ConnectionRecoveryProgress');

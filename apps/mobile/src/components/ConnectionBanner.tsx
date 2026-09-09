@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from './ConnectionNoticeOverlay';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { LoaderCircle } from 'lucide-react-native';
@@ -22,18 +22,8 @@ import {
 import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
-/** 普通断线(无分类 issue)转为可见提示前的静默窗口:健康重连通常 <1s 完成,不闪 banner。 */
-const OFFLINE_BANNER_DELAY_MS = 1_200;
-
-/**
- * 条件挂载 ConnectionBanner 的统一可见性判定:
- * - 请求级 error / 可分类连接问题(鉴权失效、被顶号等)→ 立即显示;
- * - 当前关联设备熔断 open(电脑端未响应,relay 可能仍 online)→ 立即显示;
- * - 普通弱网断线(status 非 online 且无分类 issue)→ 持续超过静默窗口才显示,
- *   既让用户看得到「正在重连」(否则消息流静默停更没有任何信号),又不因
- *   一次快速重连闪一下布局(规则 7:杜绝跳变)。
- * 判定核在 resolveConnectionBannerVisibility(纯函数,单测覆盖)。
- */
+/** Eligibility only. ConnectionBanner owns the shared one-second display delay,
+ * including screens that mount the component unconditionally. */
 export function useShowConnectionBanner(
   status: DeviceLinkStatus,
   error: string | null,
@@ -42,20 +32,9 @@ export function useShowConnectionBanner(
   recovery?: 'syncing' | 'recovered',
 ): boolean {
   const offline = status !== 'online' || recovery === 'syncing';
-  const showRecovered = recovery !== undefined;
-  const [offlineLongEnough, setOfflineLongEnough] = useState(false);
-  useEffect(() => {
-    if (!offline) {
-      if (!showRecovered) { setOfflineLongEnough(false); return; }
-      const timer = setTimeout(() => setOfflineLongEnough(false), 2_000);
-      return () => clearTimeout(timer);
-    }
-    const timer = setTimeout(() => setOfflineLongEnough(true), OFFLINE_BANNER_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [offline, showRecovered]);
-  return (recovery === 'recovered' && offlineLongEnough) || resolveConnectionBannerVisibility({
+  return resolveConnectionBannerVisibility({
     offline,
-    offlineLongEnough,
+    offlineLongEnough: true,
     // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
     // 否则恢复后 banner 会带着"自动重试中"文案常驻到用户手动同步。
     hasError: Boolean(resolveEffectiveConnectionError(error, deviceUnresponsive)),
@@ -97,6 +76,8 @@ export function ConnectionBanner({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
+  const active = useShowConnectionBanner(status, error, issue, deviceUnresponsive, recovery);
+  const visible = useDelayedConnectionNotice(cachedOnly || active);
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;
@@ -140,7 +121,9 @@ export function ConnectionBanner({
       ? t('deviceLink.deviceUnresponsiveHint')
       : friendlyError ?? (status === 'online' && recovery === 'syncing'
         ? t('deviceLink.recovery.syncingHint') : relayStatusHint(status, lastSyncedAt));
+  if (!visible) return null;
   return (
+    <ConnectionNoticeOverlay>
     <View
       style={[
         styles.root,
@@ -182,6 +165,7 @@ export function ConnectionBanner({
         <ConnectionRecoveryProgress />
       ) : null}
     </View>
+    </ConnectionNoticeOverlay>
   );
 }
 
@@ -237,6 +221,10 @@ function ConnectionSyncButton({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   root: {
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.container,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -255,8 +243,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.sm,
     minHeight: 42,
     paddingHorizontal: spacing.md,
   },
