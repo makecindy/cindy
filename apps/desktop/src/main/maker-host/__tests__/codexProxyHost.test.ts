@@ -8168,3 +8168,55 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     expect(options.routeOpaqueRequestBody({ url: '/images/edits' })).toBe(false);
   });
 });
+
+describe('official Subagents on external credential Hosts', () => {
+  it.each([false, true])('reads host OAuth only for an explicit official child (revoked=%s)', async (revoked) => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const canDispatch = vi.fn(() => true);
+    const reader = vi.fn(async () => {
+      if (revoked) throw new Error('synthetic revoked OAuth');
+      return { accessToken: 'synthetic-child-token', accountId: 'fixture-account', canDispatch };
+    });
+    host.setCodexSubagentOAuthReader(reader);
+    host.registerComposed('external-parent-session', 'external-parent-thread', 'fixture', {
+      subagentRoute: { providerId: 'openai', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },
+    });
+    try {
+      const parentRoutes = [{
+        providerId: 'external-fixture', routeId: 'aaaaaaaaaaaaaaaaaaaa', modelProviderId: 'fixture',
+        capabilities: {}, responseModels: ['custom-parent-model'], credentialRevision: 0,
+        routing: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' as const }, responseRoutingByModel: {},
+      }];
+      const transform = host.createModelRoutingTransform('provider-oauth', parentRoutes);
+      await transform({ model: 'custom-parent-model' }, {
+        reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'external-parent-thread' },
+      });
+      expect(reader).not.toHaveBeenCalled();
+      const decision = await transform({ model: 'gpt-5.4' }, {
+        reqId: 2, method: 'POST', url: '/_cindy/custom-provider/aaaaaaaaaaaaaaaaaaaa/responses', headers: {
+          'thread-id': 'official-child-thread', 'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'external-parent-thread',
+        },
+      });
+      expect(reader).toHaveBeenCalledOnce();
+      if (revoked) {
+        expect(decision).toHaveProperty('localHandler');
+      } else {
+        expect(decision).toMatchObject({
+          upstreamOverride: 'https://chatgpt.com/backend-api/codex',
+          pathOverride: '/responses',
+          headerOverride: { authorization: 'Bearer synthetic-child-token', 'chatgpt-account-id': 'fixture-account' },
+          dispatchGenerationValid: canDispatch,
+        });
+        canDispatch.mockReturnValue(false);
+        expect(decision?.dispatchGenerationValid?.()).toBe(false);
+      }
+    } finally {
+      await host.disposeCodexProxy();
+    }
+  });
+});

@@ -365,6 +365,18 @@ export function getCodexProxyAuthInjection(): CodexProxyAuthInjection {
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey), 避免 codex-proxy-host 直接 import
 // auth-adapters(重模块, 会拖累单测加载 / 埋循环依赖)。proxy 给折扣 / api 流量换 gateway key 时调它。
+type CodexSubagentOAuth = {
+  accessToken: string;
+  accountId: string | null;
+  canDispatch(): boolean;
+};
+let readSubagentOAuth: (() => Promise<CodexSubagentOAuth>) | undefined;
+
+/** Only an explicitly routed official child may request host-owned OAuth credentials. */
+export function setCodexSubagentOAuthReader(reader: () => Promise<CodexSubagentOAuth>): void {
+  readSubagentOAuth = reader;
+}
+
 let _readGatewayKey: () => string | null = () => null;
 export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
@@ -2749,6 +2761,23 @@ export function createModelRoutingTransform(
   frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): RoutingTransform {
   return (body, ctx) => {
+    const inheritedPath = parseCodexCustomProviderPath(ctx.url);
+    if (inheritedPath.kind === 'route' && inheritedPath.pathKind === 'responses' && ctx.method === 'POST') {
+      // Children inherit the parent's provider URL. An explicitly selected child
+      // route must leave that URL namespace before selecting its own credentials.
+      sessionIdFromHeaders(ctx.headers);
+      const childRoute = subagentRouteFromHeaders(ctx.headers);
+      const parentRoute = frozenCustomProviderRoutes === undefined
+        ? findCodexAppliedCustomProviderRoute(inheritedPath.routeId)
+        : frozenCustomProviderRoutes.find((route) => route.routeId === inheritedPath.routeId);
+      if (childRoute && parentRoute && childRoute.providerId !== parentRoute.providerId) {
+        return Promise.resolve(createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes)(
+          body, { ...ctx, url: '/responses' },
+        )).then((decision) => decision
+          ? { pathOverride: '/responses', ...decision }
+          : unresolvedCollabSpawnRouteDecision());
+      }
+    }
     const customProviderRoute = resolveCodexCustomProviderRoutingDecision(
       body,
       ctx,
@@ -2817,7 +2846,20 @@ export function createModelRoutingTransform(
         selectedRouting?.authStrategy === 'oauth-passthrough'
         && authInjection !== 'oauth-bearer'
       ) {
-        return unresolvedCollabSpawnRouteDecision();
+        if (authInjection !== 'provider-oauth' || subagentRoute.providerId !== 'openai' || !readSubagentOAuth) {
+          return unresolvedCollabSpawnRouteDecision();
+        }
+        // The parent stays ephemeral. Fetch subscription credentials only when
+        // an explicit child route actually dispatches to the official backend.
+        return readSubagentOAuth().then((auth) => ({
+          upstreamOverride: CODEX_OAUTH_UPSTREAM,
+          headerOverride: {
+            authorization: `Bearer ${auth.accessToken}`,
+            ...(auth.accountId ? { 'chatgpt-account-id': auth.accountId } : {}),
+          },
+          ...(!auth.accountId ? { headerDelete: ['chatgpt-account-id'] } : {}),
+          dispatchGenerationValid: auth.canDispatch,
+        })).catch(() => unresolvedCollabSpawnRouteDecision());
       }
       if (selectedUsesLocalBridge) {
         return resolveProviderRouteById(

@@ -969,6 +969,12 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
+  /** false isolates disk OAuth reads without changing the Provider credential mode. */
+  resolveCodexOfficialOAuthDependency?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => boolean | undefined | Promise<boolean | undefined>;
+
   /**
    * Per-model requested context window (user override first, explicit provider default second).
    * A one-session native catalog permits this window without changing sibling routes.
@@ -1010,6 +1016,9 @@ export interface AgentDeps {
       accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Frozen disk OAuth policy; independent of the actual Provider credential. */
+      officialOAuthDependency?: boolean;
+      hostScopeKey?: string;
       /** Original session request when the shared host was upgraded to a credential superset. */
       requestedCredentialMode?: AgentCredentialMode;
       /** Marks app-server work that must not share the normal local task host. */

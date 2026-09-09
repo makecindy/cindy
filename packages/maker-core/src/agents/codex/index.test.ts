@@ -366,6 +366,180 @@ function createDeps(
   };
 }
 
+describe('Codex official OAuth host isolation', () => {
+  function isolatedDeps() {
+    return createDeps({}, {
+      resolveCodexOfficialOAuthDependency: (providerId) =>
+        providerId === 'cprov-test' ? false : undefined,
+      prepareCodexExtraSpawnConfig: async () => ({
+        extraArgs: [], extraEnv: {}, codexProxyActive: true,
+      }),
+    });
+  }
+
+  it('keeps external credentials and subscription hosts alive concurrently', async () => {
+    const agent = new CodexAgent(isolatedDeps());
+    try {
+      const [official, external] = await Promise.all([
+        agent.startSession({ sessionId: 'official', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo' }),
+        agent.startSession({ sessionId: 'external', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' }),
+      ]);
+      expect(createdTransports).toHaveLength(2);
+      expect(createdTransports.every((transport) => !transport.closed)).toBe(true);
+      expect(createdStdioOptions.filter((options) =>
+        options.extraArgs?.includes('cli_auth_credentials_store="ephemeral"'),
+      )).toHaveLength(1);
+      await agent.startSession({ sessionId: 'external-again', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(createdTransports).toHaveLength(2);
+      await official.close();
+      expect(createdTransports.every((transport) => !transport.closed)).toBe(true);
+      await external.close();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('re-evaluates provider switches and resumes on the isolated host', async () => {
+    const agent = new CodexAgent(isolatedDeps());
+    try {
+      const handle = await agent.startSession({ sessionId: 'switch', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(await handle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'openai' })).toBe(true);
+      expect(await handle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'cprov-test' })).toBe(false);
+      const resumed = await agent.startSession({ sessionId: 'resumed', resumeSessionId: '11111111-1111-4111-8111-111111111111', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(createdTransports).toHaveLength(1);
+      await resumed.send({ type: 'user', content: 'resume' });
+      expect(createdTransports[0].lines.some((line) => JSON.parse(line).method === 'thread/resume')).toBe(true);
+      await resumed.close();
+      await handle.close();
+      await agent.forceDisposeLocalHostForAuthChange();
+      expect(createdTransports[0].closed).toBe(true);
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('retires only the failing external host without invalidating shared OAuth', async () => {
+    const deps = isolatedDeps();
+    const invalidate = vi.fn(async () => undefined);
+    deps.auth.invalidate = invalidate;
+    const agent = new CodexAgent(deps);
+    try {
+      const official = await agent.startSession({ sessionId: 'official-survivor', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo' });
+      const external = await agent.startSession({ sessionId: 'external-failure', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      createdTransports[1].setMockResponse(Method.TurnStart, { error: {
+        code: -32000, message: 'OAuth refresh token was already used',
+        data: { reason: 'cloudRequirements', errorCode: 'Auth' },
+      } });
+      await expect(external.send({ type: 'user', content: 'fail' }, { throwOnStartFailure: true })).rejects.toThrow(/refresh token/);
+      await waitForExpectation(() => expect(createdTransports[1].closed).toBe(true));
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(createdTransports[0].closed).toBe(false);
+      await official.send({ type: 'user', content: 'still available' });
+      await external.close();
+      await official.close();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('uses host-injected credentials for an inferred custom route without gateway or OAuth login', async () => {
+    const deps = isolatedDeps();
+    deps.resolveCodexOfficialOAuthDependency = () => false;
+    const getState = vi.fn<AuthAdapter['getState']>(async (options) => ({ authenticated: options?.credentialMode === 'provider-oauth' }));
+    deps.auth.getState = getState;
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'inferred', model: 'custom-model', workingDir: '/repo' });
+      expect(getState.mock.calls.every(([options]) => options?.credentialMode === 'provider-oauth')).toBe(true);
+      expect(createdStdioOptions[0].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+      await handle.close();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('preserves external hosts on OAuth invalidation and retires both under an explicit credential change', async () => {
+    const agent = new CodexAgent(isolatedDeps());
+    try {
+      await agent.startSession({ sessionId: 'official-boundary', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo' });
+      await agent.startSession({ sessionId: 'external-boundary', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      await agent.forceDisposeLocalHostForAuthChange('revoked OAuth', { preserveExternalAuth: true });
+      expect(createdTransports[0].closed).toBe(true);
+      expect(createdTransports[1].closed).toBe(false);
+      const guard = await agent.beginLocalHostCredentialChange();
+      try {
+        await guard.retireActiveHost();
+        expect(createdTransports[1].closed).toBe(true);
+        await guard.finalize();
+      } finally {
+        guard.release();
+      }
+      await agent.startSession({ sessionId: 'external-new-generation', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(createdTransports).toHaveLength(3);
+      expect(createdStdioOptions[2].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('preserves custom-context ownership and cleanup on external hosts', async () => {
+    const deps = isolatedDeps();
+    deps.resolveCodexThreadContextWindow = () => 700_000;
+    const onHostRetired = vi.fn(async () => undefined);
+    const prepare = vi.fn<NonNullable<typeof deps.prepareCodexExtraSpawnConfig>>(async () => ({
+      extraArgs: [], extraEnv: {}, codexProxyActive: true, onHostRetired,
+    }));
+    deps.prepareCodexExtraSpawnConfig = prepare;
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'external-context', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(prepare).toHaveBeenCalledWith([], expect.objectContaining({
+        hostPurpose: 'custom-context', officialOAuthDependency: false,
+        hostScopeKey: 'local-custom-context:external-context:external-auth:1',
+      }));
+      expect(createdStdioOptions[0].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+      await handle.close();
+      expect(createdTransports[0].closed).toBe(true);
+      expect(onHostRetired).toHaveBeenCalledOnce();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('does not let spawn preparation upgrade an external route back to disk OAuth', async () => {
+    const deps = isolatedDeps();
+    const retired = vi.fn(async () => undefined);
+    const prepare = vi.fn<NonNullable<typeof deps.prepareCodexExtraSpawnConfig>>(async () => ({
+      extraArgs: [], extraEnv: {}, requiredSpawnCredentialMode: 'oauth-bearer', onHostRetired: retired,
+    }));
+    deps.prepareCodexExtraSpawnConfig = prepare;
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.startSession({ sessionId: 'conflicting-spawn', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' })).rejects.toThrow('requires official OAuth');
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(retired).toHaveBeenCalledOnce();
+      expect(createdTransports).toHaveLength(0);
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('does not infer isolated storage from an unrelated custom route catalog', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig: async () => ({
+        extraArgs: [], extraEnv: {}, codexProxyActive: true,
+        codexCustomProviderRoutes: [{ providerId: 'cprov-unrelated', modelProviderId: 'custom', capabilities: {}, responseModels: ['gpt-5.4'] }],
+      }),
+    }));
+    try {
+      await agent.startSession({ sessionId: 'legacy', model: 'gpt-5.4', workingDir: '/repo' });
+      expect(createdStdioOptions[0]?.extraArgs).not.toContain('cli_auth_credentials_store="ephemeral"');
+    } finally {
+      await agent.dispose();
+    }
+  });
+});
+
 describe('CodexAgent spawn configuration', () => {
   it('holds account session recovery until the MCP bridge replacement is ready', async () => {
     let endpoint = 'http://127.0.0.1:51359/mcp/cindy_scheduler';

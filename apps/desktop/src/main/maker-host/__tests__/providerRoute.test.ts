@@ -23,6 +23,7 @@ import {
   getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
+  resolveCodexOfficialOAuthDependency,
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
@@ -91,6 +92,28 @@ afterEach(() => {
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
   setCustomProviderHeaderReader(() => null);
+});
+
+describe('Codex official OAuth dependency', () => {
+  it('uses the actual custom route even without image generation capabilities', () => {
+    setCustomProviders([buildUserProvider({
+      id: 'plain-key', name: 'Plain API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'plain-model', name: 'Plain' }] } },
+    })]);
+    try {
+      expect(resolveCodexOfficialOAuthDependency('plain-key', 'plain-model')).toBe(false);
+      expect(resolveCodexOfficialOAuthDependency(undefined, 'plain-model')).toBe(false);
+      expect(resolveCodexOfficialOAuthDependency('missing-provider', 'plain-model')).toBeUndefined();
+    } finally {
+      setCustomProviders([]);
+    }
+  });
+
+  it('keeps official subscriptions and gateway compatibility distinct from provider OAuth', () => {
+    expect(resolveCodexOfficialOAuthDependency('openai', 'gpt-5.4')).toBe(true);
+    expect(resolveCodexOfficialOAuthDependency('xd', 'gpt-5.4')).toBeUndefined();
+    expect(resolveCodexOfficialOAuthDependency('xai', 'xai/grok-4.3')).toBe(false);
+  });
 });
 
 describe('Pi per-model protocol routing', () => {
