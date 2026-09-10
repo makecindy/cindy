@@ -5015,10 +5015,11 @@ function MarkdownBody({
     markdownImageCacheKey,
     onOpenPayload,
   ]);
-  const openMarkdownMedia = useCallback((url: string, title: string, kind: 'video') => {
-    if (!onOpenPayload) return;
-    onOpenPayload(buildMediaPayload({ kind, url, title, previewable: false }, title));
-  }, [onOpenPayload]);
+  const openMarkdownMedia = useMemo(() => onOpenPayload
+    ? (url: string, title: string, kind: 'video') => {
+      onOpenPayload(buildMediaPayload({ kind, url, title, previewable: false }, title));
+    }
+    : undefined, [onOpenPayload]);
   // Preserve the inline renderer while streaming or unrelated task metadata
   // changes; referenced task title changes still refresh every affected chip.
   const remoteSessions = useRemoteSessions();
