@@ -6,6 +6,8 @@ import {
   commitModelPlaneFromCatalog,
   getActiveCatalog,
   getActiveCatalogRevision,
+  getLocalCatalogOverridesSnapshot,
+  setLocalCatalogOverrides,
   setActiveCatalog,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
@@ -228,4 +230,26 @@ describe('active catalog revision', () => {
       currentOpenAi.models.codex,
     );
   });
+});
+
+
+it('applies a new publication to defaults while preserving personal model overrides and Pi membership', () => {
+  const original = getLocalCatalogOverridesSnapshot();
+  const catalog = structuredClone(BUNDLED_CATALOG);
+  catalog.version = 'catalog-123'; catalog.modelRegistry!.schemaVersion = 5;
+  const entry = catalog.modelRegistry!.models.find((model) => model.id === 'openai/gpt-5.6-sol')!;
+  entry.productDefaults = { contextWindow: 240000, effort: 'low', fast: false, preferredAgent: 'codex' };
+  const piIds = catalog.providers.find((provider) => provider.id === 'openai')?.models.pi?.map((model) => model.id);
+  const read = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.models.codex!.find((model) => model.id === 'gpt-5.6-sol')!;
+  try {
+    setLocalCatalogOverrides({ ...original, patches: {}, additions: {} });
+    setActiveCatalog(catalog);
+    expect(read()).toMatchObject({ contextWindow: 240000, defaultEffort: 'low', defaultFast: false, catalogDefaults: { revision: 'catalog-123' } });
+    expect(read().contextWindowMax).toBeGreaterThan(240000);
+    setLocalCatalogOverrides({ ...original, patches: { 'openai:gpt-5.6-sol': { base: { contextWindow: 500000, defaultEffort: 'high' } } }, additions: {} });
+    entry.productDefaults = { contextWindow: 220000, effort: 'medium' };
+    catalog.version = 'catalog-124'; setActiveCatalog(catalog);
+    expect(read()).toMatchObject({ contextWindow: 500000, defaultEffort: 'high', catalogDefaults: { revision: 'catalog-124' } });
+    expect(getActiveCatalog().providers.find((provider) => provider.id === 'openai')?.models.pi?.map((model) => model.id)).toEqual(piIds);
+  } finally { setLocalCatalogOverrides(original); setActiveCatalog(BUNDLED_CATALOG); }
 });

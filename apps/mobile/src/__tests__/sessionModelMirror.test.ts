@@ -77,3 +77,16 @@ describe('sessionModelMirror', () => {
     expect(acc.getEffort('codex', 'xd', 'm')).toBeUndefined();
   });
 });
+
+
+it('does not report remote reset success until the host acknowledges persistence', async () => {
+  __resetForTest();
+  const old = makeSessionMirrorAccessors('reset', () => undefined);
+  old.setEffort('codex', 'api', 'm', 'high'); old.setFast('codex', 'api', 'm', true);
+  await expect(old.reset!('codex', 'api', 'm')).rejects.toThrow('UNSUPPORTED');
+  expect(old.getEffort('codex', 'api', 'm')).toBe('high');
+  const confirmed = makeSessionMirrorAccessors('reset', async () => ({ resetApplied: true }));
+  await confirmed.reset!('codex', 'api', 'm');
+  expect(confirmed.getEffort('codex', 'api', 'm')).toBeUndefined();
+  expect(confirmed.getFast('codex', 'api', 'm')).toBeUndefined();
+});

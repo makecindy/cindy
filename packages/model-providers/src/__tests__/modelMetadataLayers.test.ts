@@ -420,3 +420,109 @@ it.each([true, false])(
     }
   },
 );
+
+it("records actual field precedence and verified correction evidence without putting traces in legacy metadata", async () => {
+  const { resolveModelMetadata, resolveModelMetadataWithSources } =
+    await import("../modelMetadataLayers.js");
+  const registry = {
+    schemaVersion: 5 as const,
+    updatedAt: "2026-09-10T00:00:00Z",
+    baseModels: [{ id: "base", aliases: [], defaults: { contextWindow: 100 } }],
+    models: [
+      {
+        id: "m",
+        name: "M",
+        modelRef: "base",
+        routes: [
+          {
+            providerId: "openai",
+            modelId: "m",
+            agents: ["codex" as const],
+            forceOverrides: { contextWindow: 300 },
+            overrideReason: "Measured upstream limit",
+            overrideVerifiedAt: "2026-09-10",
+          },
+        ],
+      },
+    ],
+  };
+  const result = resolveModelMetadataWithSources(
+    registry,
+    "openai",
+    "m",
+    { contextWindow: 200 },
+    { contextWindow: 400 },
+    "codex",
+  );
+  expect(result.contextWindow).toBe(400);
+  expect(
+    result.fieldSources.contextWindow.map((record) => record.source),
+  ).toEqual(["public", "discovery", "verified", "user"]);
+  expect(result.fieldSources.contextWindow[2]).toMatchObject({
+    reason: "Measured upstream limit",
+    verifiedAt: "2026-09-10",
+  });
+  expect(
+    resolveModelMetadata(registry, "openai", "m", { contextWindow: 200 }),
+  ).not.toHaveProperty("fieldSources");
+});
+
+it("preserves personal names after a late metadata overlay without losing published descriptions", async () => {
+  const { applyModelMetadata } = await import("../modelMetadataLayers.js");
+  const model = {
+    id: "model",
+    name: "Public",
+    efforts: [],
+    defaultEffort: null,
+    presentation: { en: { name: "Published", description: "Reviewed copy" } },
+  } as unknown as import("../types.js").CatalogModel;
+  const result = applyModelMetadata(model, {
+    name: "Personal",
+    fieldSources: { name: [{ source: "user", value: "Personal" }] },
+  });
+  expect(result.name).toBe("Personal");
+  expect(result.presentation).toEqual({ en: { description: "Reviewed copy" } });
+});
+
+it("does not duplicate or relabel provenance when another engine consumes an assembled snapshot", async () => {
+  const { applyModelMetadata, resolveModelMetadataWithSources } =
+    await import("../modelMetadataLayers.js");
+  let model = {
+    id: "model",
+    name: "Model",
+    contextWindow: 100,
+    efforts: [],
+    defaultEffort: null,
+  } as unknown as import("../types.js").CatalogModel;
+  const initial = resolveModelMetadataWithSources(
+    registry,
+    "supplier",
+    "model",
+    { contextWindow: 300 },
+    undefined,
+    "codex",
+    undefined,
+    "discovery",
+  );
+  model = applyModelMetadata(model, initial);
+  const expected = structuredClone(model.fieldSources);
+  for (let index = 0; index < 5; index++)
+    model = applyModelMetadata(
+      model,
+      resolveModelMetadataWithSources(
+        registry,
+        "supplier",
+        "model",
+        { contextWindow: 300 },
+        undefined,
+        "codex",
+        undefined,
+        "fallback",
+      ),
+    );
+  expect(model.fieldSources).toEqual(expected);
+  expect(model.fieldSources?.contextWindow?.at(-1)).toEqual({
+    source: "discovery",
+    value: 300,
+  });
+});

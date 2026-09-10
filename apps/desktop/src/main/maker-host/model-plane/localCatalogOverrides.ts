@@ -1,3 +1,4 @@
+import { appendModelFieldSources } from "@cindy/model-providers";
 import {
   BUILTIN_PROVIDERS,
   validModelMetadata,
@@ -536,7 +537,7 @@ export function applyLocalConsumerOverrides(
       });
       continue;
     }
-    out = patched;
+    out = { ...patched, fieldSources: appendModelFieldSources(out.fieldSources, effectiveFields(entry, consumer), 'user') };
   }
   return out;
 }
@@ -615,6 +616,8 @@ export function applyExistingModelLocalPatch(
   const patch = overrides.patches[`${encodeURIComponent(providerId)}:${model.id}`];
   if (!patch || (patch.agents && !patch.agents.includes(agent))) return model;
   const result = overlayFields(model, { ...patch.base, ...patch.perAgent?.[agent] });
+  if (typeof result !== 'string' && result.presentation && patch.base?.name !== undefined) result.presentation = Object.fromEntries(Object.entries(result.presentation).map(([locale, copy]) => [locale, { description: copy.description }]));
+  if (typeof result !== 'string') result.fieldSources = appendModelFieldSources(model.fieldSources, { ...patch.base, ...patch.perAgent?.[agent] }, 'user');
   return typeof result === 'string'
     ? model
     : model.status === 'retired'

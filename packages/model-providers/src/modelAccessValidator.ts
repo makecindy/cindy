@@ -1,3 +1,5 @@
+import { validModelPresentation } from "./modelPresentation.js";
+import { validModelProductDefaults } from "./modelCatalogPolicy.js";
 import {
   validModelMetadata,
   expandedRegistryEntries,
@@ -19,6 +21,7 @@ import {
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_V3_SCHEMA_VERSION,
   MODEL_REGISTRY_V4_SCHEMA_VERSION,
+  MODEL_REGISTRY_V5_SCHEMA_VERSION,
   MODEL_NATIVE_APIS,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
@@ -1063,6 +1066,7 @@ function registryEntryError(
       : schemaVersion >= MODEL_REGISTRY_V3_SCHEMA_VERSION
         ? [
             ...MODEL_REGISTRY_ENTRY_V2_FIELDS,
+          ...(schemaVersion >= 5 ? ["productDefaults"] : []),
             "nativeApi",
             ...(schemaVersion >= 4
               ? [
@@ -1234,12 +1238,13 @@ export function parseModelRegistry(
   if (!isPlainObject(value)) return fail("modelRegistry must be an object");
   const unknownField = unknownFieldError(
     value,
-    value.schemaVersion === MODEL_REGISTRY_V4_SCHEMA_VERSION
+    Number(value.schemaVersion) >= MODEL_REGISTRY_V4_SCHEMA_VERSION
       ? [
           ...MODEL_REGISTRY_FIELDS,
           "nativeApiRules",
           "localModels",
           "baseModels",
+          ...(value.schemaVersion === 5 ? ["disabledPresetIds"] : []),
         ]
       : value.schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
         ? [...MODEL_REGISTRY_FIELDS, "nativeApiRules"]
@@ -1251,9 +1256,10 @@ export function parseModelRegistry(
     value.schemaVersion !== MODEL_REGISTRY_LEGACY_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_REGISTRY_V3_SCHEMA_VERSION &&
-    value.schemaVersion !== MODEL_REGISTRY_V4_SCHEMA_VERSION
+    value.schemaVersion !== MODEL_REGISTRY_V4_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_REGISTRY_V5_SCHEMA_VERSION
   ) {
-    return fail("modelRegistry.schemaVersion must be 1, 2, 3 or 4");
+    return fail("modelRegistry.schemaVersion must be 1, 2, 3, 4 or 5");
   }
   if (!isIsoTimestamp(value.updatedAt)) {
     return fail("modelRegistry.updatedAt must be an ISO timestamp");
@@ -1307,7 +1313,8 @@ export function parseModelRegistry(
     for (const base of value.baseModels) {
       if (
         !isPlainObject(base) ||
-        unknownFieldError(base, ["id", "aliases", "defaults"], "baseModel") ||
+        unknownFieldError(base, ["id", "aliases", "defaults", ...(value.schemaVersion === 5 ? ["presentation"] : [])], "baseModel") ||
+        (base.presentation !== undefined && !validModelPresentation(base.presentation)) ||
         typeof base.id !== "string" ||
         !base.id ||
         base.id.length > 256 ||
@@ -1350,8 +1357,10 @@ export function parseModelRegistry(
     )
   )
     return fail("modelRegistry.localModels.modelRef is unresolved");
+  if (value.disabledPresetIds !== undefined && (!Array.isArray(value.disabledPresetIds) || value.disabledPresetIds.length > 2000 || value.disabledPresetIds.some((id) => typeof id !== "string" || !id || id.length > 256) || new Set(value.disabledPresetIds).size !== value.disabledPresetIds.length)) return fail("modelRegistry.disabledPresetIds is invalid");
   const modelIds = new Set<string>();
   for (const [index, model] of value.models.entries()) {
+    if (isPlainObject(model) && model.productDefaults !== undefined && (value.schemaVersion !== 5 || !validModelProductDefaults(model.productDefaults))) return fail(`modelRegistry.models[${index}].productDefaults is invalid`);
     if (isPlainObject(model) && typeof model.id === "string") {
       if (modelIds.has(model.id)) {
         return fail(`modelRegistry.models[${index}].id must be unique`);

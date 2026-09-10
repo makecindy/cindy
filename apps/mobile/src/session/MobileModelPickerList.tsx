@@ -1,3 +1,4 @@
+import { localizedModelPresentation } from '@cindy/model-providers';
 /**
  * MobileModelPickerList —— 模型浮窗一级视图的行列表(新建会话页 + 会话内 composer 共用,
  * 由 ModelPickerSheet 装配)。
@@ -185,7 +186,7 @@ export function MobileModelPickerList({
 }: MobileModelPickerListProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const resolvedEmptyHint = emptyHint ?? t('models.picker.emptyDefault');
   const resolvedLoadingHint = loadingHint ?? t('models.picker.loadingDefault');
   // 非选中行的记忆写入(二级浮窗里改)不经 props 回流 —— 订阅两个记忆 store 的版本号,
@@ -236,10 +237,12 @@ export function MobileModelPickerList({
           const fullEffortLabel = rowEffort
             ? effortLabelFor(row.model, rowEffort, capabilities ?? null)
             : null;
+          const presentation = localizedModelPresentation(row.model.presentation, i18n.resolvedLanguage ?? i18n.language);
+          const displayName = presentation?.name ?? row.model.displayName;
           const rowAccessibilityLabel = modelRowAccessibilityLabel({
             baseLabel: t('models.picker.selectProviderModelAccessibility', {
               provider: row.provider.name,
-              model: row.model.displayName,
+              model: displayName,
             }),
             subscriptionLabel: isSubscription ? t('models.picker.subscriptionBadge') : null,
             effortLabel: fullEffortLabel
@@ -286,8 +289,9 @@ export function MobileModelPickerList({
               />
               <View style={styles.optionMain}>
                 <View style={styles.optionTitleRow}>
-                  <Text numberOfLines={1} style={styles.optionText}>{row.model.displayName}</Text>
+                  <Text numberOfLines={1} style={styles.optionText}>{displayName}</Text>
                 </View>
+                {presentation?.description && <Text numberOfLines={2} style={styles.effortLabel}>{presentation.description}</Text>}
                 {isSubscription || rowEffort || fastOn ? (
                   <View style={styles.optionMetaRow}>
                     {isSubscription ? (
@@ -322,7 +326,7 @@ export function MobileModelPickerList({
               {selected ? <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} /> : null}
               {hasOptions ? (
                 <Pressable
-                  accessibilityLabel={t('models.picker.configureAccessibility', { model: row.model.displayName })}
+                  accessibilityLabel={t('models.picker.configureAccessibility', { model: displayName })}
                   accessibilityRole="button"
                   disabled={disabled}
                   hitSlop={6}

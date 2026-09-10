@@ -2460,7 +2460,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       string,
       { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
     >,
-  ): void => ipcRenderer.send('maker:sync-provider-model-memory', snapshot),
+    resetRequestId?: string,
+  ): void => ipcRenderer.send('maker:sync-provider-model-memory', snapshot, resetRequestId),
 
   /**
    * 被控端 renderer → 自身 main:会话「非选中模型」effort/fast 在本端变化时镜像给 main,

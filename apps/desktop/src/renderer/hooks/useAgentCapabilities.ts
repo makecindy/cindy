@@ -27,6 +27,8 @@ const ALL_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 // renderer 视角: id 全部是不透明 string, 渲染只读 displayName。
 // effort 的合法 id 集合 = capabilities.effortLevels 上每个项的 id。
 export interface ModelDescriptor {
+  presentation?: import("@cindy/model-providers").ModelPresentation;
+  defaultFast?: boolean;
   id: string;
   displayName: string;
   /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版 displayName 同名, 靠它区分。 */

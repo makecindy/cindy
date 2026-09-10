@@ -693,9 +693,9 @@ describe('provider catalog realm reload', () => {
 
   it('invalidates the old realm immediately and ignores a stale cross-realm response', async () => {
     const initial = ensureActiveCatalogLoaded();
+    expect(h.loads[0]?.source).not.toHaveProperty('fallbackBaseUrl');
     expect(h.loads[0]?.source).toMatchObject({
       baseUrl: 'https://model.cn.example',
-      fallbackBaseUrl: 'https://legacy-build-cdn.example',
     });
     h.loads[0]!.resolve(catalogNamed('catalog-cn-initial'), 'current', ['embedding']);
     await initial;

@@ -32,6 +32,9 @@ export function budgetDisabledHint(): string {
 
 /** 行/展开区消费的最小模型形状(SectionModel 与 capabilities MobileModelOption 都满足)。 */
 export interface PickerRowModel {
+  fieldSources?: import("@cindy/model-providers").CatalogModel["fieldSources"];
+  catalogDefaults?: import("@cindy/model-providers").CatalogModel["catalogDefaults"];
+  defaultFast?: boolean;
   id: string;
   efforts: readonly string[];
   defaultEffort: string | null;
@@ -360,7 +363,7 @@ export function rowFastOn(args: {
   if (!args.fastEditable) return false;
   if (args.selected) return args.liveFastMode;
   if (!args.agentKind || !args.providerId) return false;
-  return args.memory?.getFast(args.agentKind, args.providerId, args.model.id) ?? false;
+  return args.memory?.getFast(args.agentKind, args.providerId, args.model.id) ?? args.model.defaultFast ?? false;
 }
 
 /**

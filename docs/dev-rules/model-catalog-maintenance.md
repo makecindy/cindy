@@ -9,6 +9,19 @@
 
 ## 1. 先找数据归属
 
+**数据库发布扩展（2026-09-10）**：完成显式切换后，公共配置在 Cindy Platform 模型管理页面编辑草稿并发布。CN 数据库主写，Global 的 `MODEL_CATALOG_URL` 指向 CN `/api/model-catalog/catalog`，在区域数据库缓存同一发布版本。下面关于 Server 文件维护的操作仅适用于尚未切换的部署，不再用于日常配置更新。
+
+客户端请求 Registry V5；Desktop 失败时使用当前端点缓存和 bundled，不再默认请求旧 OSS。Registry V5 产品默认与用户覆盖的关系见 [模型资料优先级](../product-rules/model-metadata-precedence.md)。显示开关仍遵守首次初始化例外，不随发布扩展已初始化清单。
+
+发布后导出离线构建产物：
+
+```sh
+pnpm exec tsx packages/model-providers/scripts/exportPublishedCatalog.ts \
+  https://model-access.cindy.com.cn/api/model-catalog/catalog /path/to/new-export
+```
+
+脚本校验 V5、限制响应大小并拒绝覆盖输出；审阅后将完整 providers 与 registry 放入 bundled。Pi 原生快照仍跟随 harness，不用订阅目录重建。没有部署及发布的新功能不得伪装成已发布 revision。
+
 | 内容                                                             | 应维护的位置                                                                                                               | 客户端职责                                                                                            |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | 统一模型目录中的名称、窗口、最大输出、推理档位、参考价及默认标记 | `cindy-server` 的 `model-access-server/catalog/providers.json`；若部署配置了 `MODEL_CATALOG_URL`，还需核对那份远程完整快照 | 同步 `packages/model-providers/catalog/model-registry.json` 作为内置兜底，正确消费实际下发值          |
@@ -40,7 +53,7 @@ Provider 的媒体数组是现有消费接口，由 V4 资料投影；用户成�
 客户端入口是 `packages/model-providers/src/source.ts` 的 `loadCatalog`，Desktop 由
 `apps/desktop/src/main/maker-host/createDesktopProviderService.ts` 装载并刷新活动目录。
 公共目录接口为当前配置的 `modelAccessApiBaseUrl` 下的 `/api/model-catalog/catalog`；
-还可能存在本地覆盖、上一份有效缓存及旧 OSS 兼容来源。不要仅凭文件名或注释认定当前来源。
+还可能存在本地覆盖、上一份有效缓存及随包兜底。旧 OSS 仅保留显式工具配置兼容；Desktop 不默认使用。不要仅凭文件名或注释认定当前来源。
 
 - Server 仓库文件是随制品发布的基线。改文件不等于部署完成；配置了远程覆盖源时，
   还必须检查远程源是否会覆盖该基线。Server 的实际行为以其当前代码、部署配置和接口为准。
@@ -293,3 +306,14 @@ GPT `[1m]` 是旧窗口预设，退出 Desktop 管理和新选择清单；完整
 仍需完成，不能声称线上已经更新。后续 Server revision 应携带这些已核实字段，防止回退。
 
 置灰只能证明当前目录未声明可用，不等于已实测后端拒绝。模型管理页未启用分区始终展开，旧折叠偏好不再隐藏这些型号。
+
+
+## 数据库发布目录（Registry V5）
+
+日常公共模型资料、产品默认、已审阅多语言文案和外部供应商模板在 Server 的模型管理页面编辑并发布。CN 主写、Global HTTP 复制到本区域数据库；客户端继续读取自己的区域。Cindy AI 的区域成员、权限和实价不进入共用配置。
+
+模板的显式 `modelRef` 只在原模板端点、协议、路径和路由仍匹配时继承。用户的窗口、推理强度、Fast、命名等覆盖优先，Pi 的成员与原生能力保持独立；可见性仍遵循首次初始化例外。新增协议或引擎能力必须实现并验证适配，不能仅增加配置枚举。
+
+公共配置与账号发现分开刷新：活跃 Desktop 每 5 分钟尝试拉目录，手动刷新先刷新目录；账号发现保留独立冷却。高级详情的字段来源解释配置装配过程，版本回执不代表引擎已经执行新值。随包文件由同一发布 API 导出，仅作断网和旧目录兜底。
+
+修改契约时同步维护两仓 `fixtures/published-catalog` 并各自运行单测；`node scripts/check-model-catalog-contract.mjs /absolute/path/to/peer-worktree` 比较共用 fixture。Server 的 `docs/model-catalog-database.md` 记录增量 migration、首次迁移、启用、区域核验和跨仓验收步骤。

@@ -4,7 +4,10 @@ import {
   applyLocalModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
 import {
-  resolveModelMetadata,
+  appendModelFieldSources,
+  applyModelProductDefaults,
+  resolveModelProductDefaults,
+  resolveModelMetadataWithSources as resolveModelMetadata,
   catalogModelMetadata,
   applyModelMetadata,
   pickModelMetadata,
@@ -13,9 +16,8 @@ import {
 /**
  * active-catalog —— 进程级「当前生效目录」单例(纯状态 holder,零 Electron 依赖)。
  *
- * 设计(用户敲定):OSS 上的 `providers.json` 是运行时真源,启动时(splash 阶段)由
- * `ensureActiveCatalogLoaded`(见 createDesktopProviderService.ts)拉取一次、存进这里、
- * **无 TTL**;内置 `BUNDLED_CATALOG` 仅作「尚未加载完成 / 拉取失败」时的兜底。
+ * 区域 Model Access 发布目录是公共元数据来源，启动与定时刷新安装到此 holder。
+ * 内置目录和上次有效快照只用于离线兜底，个人覆盖始终最后应用。
  *
  * **自定义供应商**:用户在本机配置的 user provider(见 custom-provider-store)经
  * `buildUserProvider` 展开成标准 `Provider` 后由 `setCustomProviders` 注入,**追加在内置之后**。
@@ -357,7 +359,7 @@ function preserveNonGrok46DiscoveryEfforts(
   models: readonly CatalogModel[],
   discovered: readonly XaiDiscoveredModel[],
 ): CatalogModel[] {
-  if ((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion === 4) return [...models];
+  if ([4, 5].includes((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion ?? 0)) return [...models];
   const byId = new Map(discovered.map((entry) => [entry.id, entry]));
   return models.map((model) => {
     const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
@@ -836,7 +838,7 @@ function assembleRoot(
     });
   }
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  if (registry?.schemaVersion === 4) {
+  if ([4, 5].includes(registry?.schemaVersion ?? 0)) {
     const live = new Map(models.map((model) => [model.id, model]));
     out = out.map((model) => {
       const upstream = live.get(model.id);
@@ -846,7 +848,8 @@ function assembleRoot(
         ...applyModelMetadata(
           model,
           resolveModelMetadata(registry, providerId, model.id, metadata,
-            upstream?.userModelConfig ? runtimeUserModelMetadata(upstream.userModelConfig) : undefined, agent),
+            upstream?.userModelConfig ? runtimeUserModelMetadata(upstream.userModelConfig) : undefined,
+            agent, undefined, upstream?.discoveredMetadata ? "discovery" : "fallback"),
         ),
         ...(metadata ? { discoveredMetadata: metadata } : {}),
       };
@@ -874,7 +877,7 @@ function applyLayeredConsumer(
 ): CatalogModel {
   const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  return registry?.schemaVersion === 4
+  return [4, 5].includes(registry?.schemaVersion ?? 0)
     ? applyModelMetadata(
         overlaid,
         resolveModelMetadata(
@@ -884,6 +887,8 @@ function applyLayeredConsumer(
           model.discoveredMetadata,
           model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
           agent,
+          undefined,
+          model.fieldSources ? "fallback" : "discovery",
         ),
       )
     : overlaid;
@@ -1188,7 +1193,7 @@ function computeMerged(): Catalog {
             ...(model.contextWindowMax !== undefined
               ? { contextWindowMax: model.contextWindowMax }
               : {}),
-            ...((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion !== 4 &&
+            ...(![4, 5].includes((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion ?? 0) &&
             model.supportsFastMode === false
               ? { supportsFastMode: false }
               : {}),
@@ -1374,7 +1379,7 @@ function computeMerged(): Catalog {
         ]);
         const registryDefault = registryEntry ? modelDefaultEffort(registryEntry) : undefined;
         const intent =
-          b.modelRegistry?.schemaVersion === 4
+          [4, 5].includes(b.modelRegistry?.schemaVersion ?? 0)
             ? (ov.defaultEffort ?? gm.defaultEffort ?? defaultEffortForCapabilities(efforts))
             : registryDefault !== undefined
               ? registryDefault
@@ -1489,13 +1494,13 @@ function computeMerged(): Catalog {
               ? findModelRegistryRoute(
                   b.modelRegistry,
                   metadataProviderId,
-                  provider.id === 'xai' && !model.id.startsWith('xai/')
+                  metadataProviderId === 'xai' && !model.id.startsWith('xai/')
                     ? `xai/${model.id}`
                     : model.id,
                 )?.entry
               : undefined;
           const intent =
-            b.modelRegistry?.schemaVersion !== 4 && entry ? modelDefaultEffort(entry) : undefined;
+            ![4, 5].includes(b.modelRegistry?.schemaVersion ?? 0) && entry ? modelDefaultEffort(entry) : undefined;
           const defaultEffort =
             intent !== undefined
               ? model.efforts.length === 0
@@ -1510,6 +1515,7 @@ function computeMerged(): Catalog {
             ['openai', 'xd'].includes(metadataProviderId) &&
             /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(model.id) &&
             model.contextWindow > 272_000 &&
+            resolveModelProductDefaults(b.modelRegistry, metadataProviderId, model.id, agent as AgentKind)?.contextWindow === undefined &&
             model.userModelConfig?.contextWindow === undefined &&
             !(
               (agent === 'codex' || agent === 'claude-code' || agent === 'pi') &&
@@ -1582,7 +1588,7 @@ function computeMerged(): Catalog {
           let next = model;
           const metadataProviderId = providerCatalogId(provider);
           if (
-            b.modelRegistry?.schemaVersion === 4 &&
+            [4, 5].includes(b.modelRegistry?.schemaVersion ?? 0) &&
             (provider.source !== 'user' || !!provider.auth.native) &&
             (provider.id === 'xd' || agent === 'pi')
           ) {
@@ -1595,6 +1601,8 @@ function computeMerged(): Catalog {
                 agent === 'pi' ? model.discoveredMetadata : model.discoveredMetadata ?? catalogModelMetadata(model),
                 model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
                 agent,
+                undefined,
+                model.discoveredMetadata ? "discovery" : "fallback",
               ),
             );
           }
@@ -1603,6 +1611,7 @@ function computeMerged(): Catalog {
             ['openai', 'xd'].includes(metadataProviderId) &&
             /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(next.id) &&
             next.contextWindow > 272_000 &&
+            resolveModelProductDefaults(b.modelRegistry, metadataProviderId, next.id, agent as AgentKind)?.contextWindow === undefined &&
             next.userModelConfig?.contextWindow === undefined &&
             !(
               (agent === 'codex' || agent === 'claude-code' || agent === 'pi') &&
@@ -1620,6 +1629,35 @@ function computeMerged(): Catalog {
               contextWindowMax: Math.max(next.contextWindowMax ?? 0, next.contextWindow),
               contextWindow: 272_000,
             };
+          }
+          const productDefaults = resolveModelProductDefaults(b.modelRegistry, metadataProviderId, model.id, agent as AgentKind);
+          if (productDefaults && (provider.source !== 'user' || !!provider.auth.native)) {
+            next = applyModelProductDefaults(next, productDefaults, b.version);
+            // Public defaults follow the brand; personal choices stay on this connection,
+            // including root settings inherited by its subscription bridge.
+            if (model.userModelConfig) {
+              const user = runtimeUserModelMetadata(model.userModelConfig);
+              next = applyModelMetadata(next, resolveModelMetadata(undefined, provider.id, model.id,
+                undefined, pickModelMetadata({ contextWindow: user.contextWindow,
+                  defaultEffort: user.defaultEffort })));
+              if (model.userModelConfig.defaultEnabled !== undefined) {
+                next = { ...next, defaultEnabled: model.userModelConfig.defaultEnabled,
+                  fieldSources: appendModelFieldSources(next.fieldSources,
+                    { defaultEnabled: model.userModelConfig.defaultEnabled }, 'user') };
+              }
+            }
+            if (agent !== 'pi' && ['openai', 'anthropic', 'xai'].includes(metadataProviderId)) {
+              const personal = applyLocalConsumerOverrides(provider.id, agent as RootAgentKind,
+                metadataProviderId === 'openai' ? model.id.replace(/^chatgpt\//, '') : model.id,
+                next, localOverrides, plan.warnings, metadataProviderId);
+              // Restore only fields changed by product defaults. Retired status and bridge
+              // capability constraints have already been enforced and must stay intact.
+              next = { ...next, contextWindow: personal.contextWindow, defaultEffort: personal.defaultEffort,
+                fieldSources: { ...next.fieldSources,
+                  ...(personal.fieldSources?.contextWindow ? { contextWindow: personal.fieldSources.contextWindow } : {}),
+                  ...(personal.fieldSources?.defaultEffort ? { defaultEffort: personal.fieldSources.defaultEffort } : {}),
+                } };
+            }
           }
           const identity =
             findModelRegistryRoute(
@@ -1648,15 +1686,25 @@ function computeMerged(): Catalog {
                 model.userModelConfig
                   ? runtimeUserModelMetadata(model.userModelConfig)
                   : {}),
-              }),
+              }, undefined, undefined, "fallback"),
             );
           }
-          return applyExistingModelLocalPatch(
+          const patched = applyExistingModelLocalPatch(
             provider.id,
             agent as AgentKind,
             next,
             localOverrides,
           );
+          // The Claude subscription bridge has no Codex Fast transport. Keep that
+          // existing runtime constraint after both public defaults and personal patches.
+          if (metadataProviderId === 'anthropic' && agent === 'codex' &&
+              (provider.source !== 'user' || !!provider.auth.native) &&
+              (patched.supportsFastMode === true || patched.defaultFast === true)) {
+            return { ...patched, supportsFastMode: false, defaultFast: false,
+              fieldSources: appendModelFieldSources(patched.fieldSources,
+                { supportsFastMode: false, defaultFast: false }, 'constraint') };
+          }
+          return patched;
         }),
       ]),
     ),
@@ -1778,7 +1826,7 @@ function installActiveCatalog(
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets }),
+      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets, catalogRevision: catalog.version }),
     );
   }
   markChanged();
@@ -1866,6 +1914,7 @@ export function commitModelPlaneFromCatalog(
       buildUserProvider(config, {
         modelRegistry: trustedCustomProviderRegistry,
         presets: (base ?? BUNDLED_CATALOG).presets,
+        catalogRevision: (base ?? BUNDLED_CATALOG).version,
       }),
     );
   }
@@ -1911,6 +1960,7 @@ export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void 
     buildUserProvider(config, {
       modelRegistry: trustedCustomProviderRegistry,
       presets: (base ?? BUNDLED_CATALOG).presets,
+        catalogRevision: (base ?? BUNDLED_CATALOG).version,
     }),
   );
   markChanged();

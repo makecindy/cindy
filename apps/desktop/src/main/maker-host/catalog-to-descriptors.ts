@@ -89,6 +89,8 @@ function toDescriptor(
   // 实际路由解析 —— 见下方 resolveVerifiedContextWindow(provenance 只活在 host 侧,
   // 不进这份跨端 descriptor)。
   if (m.description !== undefined) d.description = m.description;
+  if (m.presentation !== undefined) d.presentation = m.presentation;
+  if (m.defaultFast !== undefined) d.defaultFast = m.defaultFast;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
   if (m.group !== undefined) d.group = m.group;

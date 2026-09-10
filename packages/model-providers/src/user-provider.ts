@@ -1,8 +1,11 @@
+import { mergeModelPresentation } from "./modelPresentation.js";
+import { applyModelProductDefaults, resolveModelProductDefaults } from "./modelCatalogPolicy.js";
 import { BUILTIN_PROVIDERS } from './builtin.js';
 import { providerMediaField } from "./providerMediaModels.js";
 import {
   expandedRegistryEntries,
-  resolveModelMetadata,
+  findBaseModel,
+  resolveModelMetadataWithSources as resolveModelMetadata,
   applyModelMetadata,
   pickModelMetadata,
   runtimeUserModelMetadata,
@@ -286,6 +289,7 @@ function toCatalogModel(
   agent: AgentKind,
   modelRegistry: ModelRegistry | null | undefined,
   providerDefaults?: ModelMetadata,
+  baseModelRef?: string,
   metadataProviderId = providerId,
 ): CatalogModel {
   // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
@@ -299,11 +303,11 @@ function toCatalogModel(
           ? []
           : (CUSTOM_EFFORTS[agent] ?? []);
   const registryEfforts =
-    m.reasoning !== undefined || modelRegistry?.schemaVersion === 4
+    m.reasoning !== undefined || [4, 5].includes(modelRegistry?.schemaVersion ?? 0)
       ? undefined
       : registryEffortMetadata(modelRegistry, m.id, agent);
   const supportsFastMode =
-    modelRegistry?.schemaVersion !== 4 &&
+    ![4, 5].includes(modelRegistry?.schemaVersion ?? 0) &&
     registrySupportsFastMode(modelRegistry, m.id, agent);
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
@@ -342,7 +346,7 @@ function toCatalogModel(
   };
   const user = runtimeUserModelMetadata(m);
   const resolved =
-    modelRegistry?.schemaVersion === 4 ||
+    [4, 5].includes(modelRegistry?.schemaVersion ?? 0) ||
     m.discoveredMetadata ||
     providerDefaults
       ? resolveModelMetadata(
@@ -353,6 +357,8 @@ function toCatalogModel(
           pickModelMetadata(user),
           agent,
           providerDefaults,
+          "discovery",
+          baseModelRef,
         )
       : pickModelMetadata(user);
   return applyModelMetadata(model, resolved);
@@ -421,6 +427,7 @@ function toRouting(
 export interface BuildUserProviderOptions {
   modelRegistry?: ModelRegistry | null;
   presets?: readonly import("./types.js").ProviderPreset[];
+  catalogRevision?: string;
 }
 
 export function buildUserProvider(
@@ -477,24 +484,40 @@ export function buildUserProvider(
         presetModel && sameRoute
           ? pickModelMetadata({
               ...presetModel,
-              efforts:
-                presetModel.reasoning === false
-                  ? []
-                  : presetModel.reasoningEfforts,
-              defaultEffort: presetModel.reasoningDefaultEffort,
+              ...(presetModel.reasoning !== undefined ? {
+                efforts: presetModel.reasoning === false ? [] : presetModel.reasoningEfforts,
+                defaultEffort: presetModel.reasoningDefaultEffort,
+              } : {}),
             })
           : undefined;
-      return {
-        ...toCatalogModel(
+      let model = toCatalogModel(
           m,
           followsPreset && sameRoute ? preset!.id : config.id,
           agent,
           options.modelRegistry,
           defaults,
+          followsPreset && sameRoute ? presetModel?.modelRef : undefined,
           nativeCodex ? 'openai' : undefined,
-        ),
-        ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
-      };
+        );
+      if (followsPreset && sameRoute && presetModel) {
+        const inherited = resolveModelProductDefaults(options.modelRegistry ?? undefined, preset!.id, m.id, agent);
+        const basePresentation = findBaseModel(options.modelRegistry ?? undefined, presetModel.modelRef ?? m.id)?.presentation;
+        const presentation = mergeModelPresentation(basePresentation,inherited?.presentation,presetModel.productDefaults?.presentation);
+        const policy = inherited || presetModel.productDefaults || presentation ? {
+          ...inherited,...presetModel.productDefaults,
+          perAgent:{...inherited?.perAgent,...presetModel.productDefaults?.perAgent},
+          ...(presentation ? {presentation} : {}),
+        } : undefined;
+        if (policy) {
+          const effective = { ...policy, ...policy.perAgent?.[agent] };
+          // Explicit form edits are personal choices, not published defaults.
+          if (m.contextWindow !== undefined) delete effective.contextWindow;
+          if (m.reasoningDefaultEffort !== undefined) delete effective.effort;
+          if (m.defaultEnabled !== undefined) delete effective.visible;
+          model = applyModelProductDefaults(model, effective, options.catalogRevision);
+        }
+      }
+      return { ...model, ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}) };
     });
   }
   if (native === 'claude' || native === 'xai') {

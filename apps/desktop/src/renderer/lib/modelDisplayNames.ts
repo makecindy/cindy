@@ -1,3 +1,5 @@
+import { localizedModelPresentation, type ModelPresentation } from '@cindy/model-providers';
+import i18next from 'i18next';
 import { localizedModelDescription } from './modelDescriptions';
 import type { CatalogModel } from '@cindy/model-providers';
 import type { ProviderLogoKind } from '@cindy/model-providers/branding';
@@ -71,7 +73,9 @@ const familyNames: Array<[RegExp, string, string]> = [
   [/^(?:Hunyuan|Hy)(?=[\d\s-]|$)/i, 'hunyuan', 'Hunyuan'],
 ];
 
-export function localizedModelName(name: string, t: TFunction, locale?: string): string {
+export function localizedModelName(name: string, t: TFunction, locale?: string, presentation?: ModelPresentation): string {
+  const published = localizedModelPresentation(presentation, locale ?? i18next.resolvedLanguage ?? i18next.language ?? 'en');
+  if (published?.name) return published.name;
   for (const [pattern, key, canonical] of familyNames) {
     const prefix = pattern.exec(name)?.[0];
     if (!prefix) continue;
@@ -90,16 +94,17 @@ export function localizedBrandName(brand: ModelBrand, t: TFunction): string {
 
 /** Both localized display labels and original provider names/IDs remain searchable. */
 export function matchesModelName(
-  model: { id: string; name?: string; displayName?: string; description?: string; group?: string; mode?: string },
+  model: { id: string; name?: string; displayName?: string; description?: string; group?: string; mode?: string; presentation?: ModelPresentation },
   query: string,
   t: TFunction,
 ): boolean {
   const name = model.name ?? model.displayName ?? model.id;
   const brand = modelBrand(model);
   const haystack = [model.id, name, model.description, brand?.label,
-    localizedModelName(name, t), localizedModelDescription(model, t),
+    localizedModelName(name, t, undefined, model.presentation), localizedModelDescription(model, t),
+    ...Object.values(model.presentation ?? {}).flatMap(copy => [copy.name, copy.description]),
     ...['zh-CN', 'zh-TW', 'en'].flatMap((lng) => [
-      localizedModelName(name, t, lng),
+      localizedModelName(name, t, lng, model.presentation),
       brand && Object.hasOwn(brands, brand.key)
         ? t(`modelNames.manufacturers.${brand.key}`, { lng, defaultValue: brand.label }) : '',
     ]),

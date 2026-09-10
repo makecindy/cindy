@@ -22,7 +22,7 @@ import type { AgentKind, Catalog, Provider, ProviderPreset } from "./types.js";
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
 export const CATALOG_API_PATH =
-  "/api/model-catalog/catalog?registrySchemaVersion=4";
+  "/api/model-catalog/catalog?registrySchemaVersion=5";
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = "/cfg/providers.json";
 
@@ -124,7 +124,7 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
     try {
       const url = new URL(explicit);
       if (url.pathname.endsWith("/api/model-catalog/catalog")) {
-        url.searchParams.set("registrySchemaVersion", "4");
+        url.searchParams.set("registrySchemaVersion", "5");
         return url.toString();
       }
     } catch {
@@ -501,7 +501,8 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   return {
     version: primary.version,
     providers: merged,
-    ...(presets && presets.length > 0 ? { presets } : {}),
+    // Keep withdrawn templates for existing connections; the add-provider endpoint filters visibility.
+    presets,
     ...(selectedRegistry.modelRegistry
       ? { modelRegistry: selectedRegistry.modelRegistry }
       : {}),

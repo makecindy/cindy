@@ -816,3 +816,13 @@ export function __resetForTest(): void {
 
 export const __STORAGE_KEY = STORAGE_KEY;
 export const __LEGACY_STORAGE_KEY_V1 = LEGACY_STORAGE_KEY_V1;
+
+/** A reset acknowledgement must wait until localStorage has accepted every queued operation. */
+export function hasPendingProviderModelMemoryWrites(): boolean {
+  return pendingOpsByStorageKey.has(storageKey());
+}
+
+/** Reset commands must refer to the same account as this renderer's persisted memory. */
+export function isProviderModelMemoryOwner(ownerId: string | null | undefined): boolean {
+  return ownerId !== undefined && ownerId === activeDataOwnerId;
+}

@@ -1,3 +1,4 @@
+import { reportCatalogConsumption } from './catalog-consumption.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId, getValidClaudeAccountOAuth, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
@@ -6,10 +7,10 @@ import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionPro
  * 两块职责：
  *   1. 目录加载器 `ensureActiveCatalogLoaded`：用 electron net.request 拉公共 Catalog、node fs 读 dev
  *      本地文件，把结果写进 active-catalog 单例（getActiveCatalog 同步读）。
- *        - release / dev：都从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
+ *        - release / dev：都从区域化 Model Access 公共接口加载，失败时使用当前端点缓存及内置兜底。
  *        - dev 可由 XDT_MODELS_PATH 指向本地文件即时生效（本地文件优先于远端）。
  *        - env 兜底：XDT_MODELS_URL（完整覆盖 URL）/ XDT_DISABLE_MODELS_FETCH（强制不联网）。
- *      **每进程拉一次、存内存、无 TTL**：启动总是先拉远端；失败时才读按端点隔离的
+ *      启动加载并由 provider-model-auto-refresh 在前台活动时定期刷新；失败时读按端点隔离的
  *      last-known-good 快照，最后回退 bundled。
  *      启动期（splash）由 bootstrap-electron 在构造 Maker 前 await 一次（见 registerMakerIpcsAfterSplash）。
  *   2. `getDesktopProviderService`：把 active-catalog + 连接状态读取器注入 provider-service。
@@ -47,9 +48,8 @@ import {
   isMediaModelExecutable,
 } from '../model-access/mediaModels.js';
 import { hasCustomProviderCredential } from './provider-connection-state.js';
-import { getBaseUrl } from '../manifestService.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import {
   commitActiveCatalogSnapshot,
   clearDiscoveredProviderModels,
@@ -350,21 +350,16 @@ const io: CatalogIO = {
 };
 
 /**
- * 构建目录源配置。release 与 dev 统一使用区域化 Model Access 公共接口，旧 OSS 保留为迁移期回退。
- *
- * 会话切到另一 auth realm 时，Model Access 公共接口随 active endpoint 改变并触发整份目录
- * 重载。旧 OSS 只属于安装包区域，因此仅同区加载允许使用；跨区主源失败时直接退化 bundled，
- * 绝不把安装区域的 provider/routing 目录冒充成组织区域目录。
+ * 运行期只访问当前区域 Model Access 发布接口；失败沿用本区域 LKG 或随包离线目录。
+ * 显式开发覆盖仍可通过既有 XDT_MODELS_URL / XDT_MODELS_PATH 使用。
  */
 function buildSource(): CatalogSourceConfig {
   const explicitUrl = process.env.XDT_MODELS_URL;
   const baseUrl = getClientEndpoint('modelAccessApiBaseUrl');
-  const usesBuildRealm = baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
   return {
     url: explicitUrl,
     localPath: process.env.XDT_MODELS_PATH,
     baseUrl,
-    fallbackBaseUrl: !usesBuildRealm ? undefined : getBaseUrl(),
     remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
     disableFetch: process.env.XDT_DISABLE_MODELS_FETCH === '1',
   };
@@ -542,6 +537,8 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 无 LKG / 刷新失败时 active-catalog 才继续使用 server Catalog → bundled 救急。
         await loadXaiModelsFromDiskCache();
         void refreshXaiModelsFromHttp();
+        if (!source.url && capabilityEvidence === 'current' && authorityCatalog && getActiveCatalog().version === authorityCatalog.version)
+          reportCatalogConsumption(authorityCatalog);
         activeLoaded = true;
         return catalog;
       })
@@ -670,7 +667,10 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
             capabilityEvidence,
             unverifiedXdMediaKinds,
           });
-          return getActiveCatalog();
+          const assembled = getActiveCatalog();
+          if (!sourceConfig.url && source === 'remote' && capabilityEvidence === 'current' && authorityCatalog && assembled.version === authorityCatalog.version)
+            reportCatalogConsumption(authorityCatalog);
+          return assembled;
         }
         if (relation === 'invalid-incoming') {
           log.warn('model registry updatedAt is invalid; rejecting', {
@@ -699,6 +699,8 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();
+      if (!sourceConfig.url && source === 'remote' && capabilityEvidence === 'current' && authorityCatalog && activeCatalog.version === authorityCatalog.version)
+        reportCatalogConsumption(authorityCatalog);
       logModelPlaneWarnings();
       broadcastReferenceModelPricing();
       return activeCatalog;

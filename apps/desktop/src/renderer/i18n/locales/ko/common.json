@@ -1948,7 +1948,49 @@
           },
           "codexContextUnknown": "CLI 설정을 읽을 수 없음",
           "codexContextValues": "전체 {{total}} · 사용 가능 {{usable}} · 자동 압축 {{compact}} tokens",
-          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다."
+          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다.",
+          "catalogRevision": "게시된 설정: {{revision}}",
+          "personalWindow": "사용자가 설정한 컨텍스트 제한 사용 중",
+          "followCatalog": "게시된 기본값 사용 중",
+          "provenance": {
+            "title": "필드 출처",
+            "hint": "왼쪽에서 오른쪽으로, 뒤의 값이 앞의 값을 덮어씁니다. 모델 기본 설정이며 기존 작업에 저장한 선택은 유지됩니다.",
+            "noTrace": "이 호스트는 필드 출처를 제공하지 않습니다.",
+            "fields": {
+              "name": "이름",
+              "description": "설명",
+              "contextWindow": "컨텍스트 창",
+              "maxOutputTokens": "최대 출력",
+              "efforts": "추론 단계",
+              "defaultEffort": "기본 추론",
+              "supportsFastMode": "Fast 지원",
+              "supportsImageInput": "이미지 입력",
+              "defaultFast": "기본 Fast",
+              "defaultEnabled": "기본 표시",
+              "preferredAgent": "권장 엔진", "mode": "모델 유형", "modalities": "입력 / 출력", "group": "그룹", "officialDocs": "공식 문서", "presentation": "게시된 이름 및 설명"
+            },
+            "sources": {
+              "public": "공통 모델",
+              "provider": "제공자 기본값",
+              "access": "연결 기본값",
+              "engine": "엔진",
+              "discovery": "제공자 응답",
+              "verified": "검증된 수정",
+              "user": "개인 설정",
+              "product": "게시된 기본값",
+              "fallback": "내장 대체값",
+              "constraint": "기능 제한"
+            },
+            "reasons": {
+              "disconnected": "제공자가 연결되어 있지 않습니다.",
+              "suspended": "제공자가 비활성화되어 있습니다.",
+              "disabled": "모델이 비활성화되어 새 요청에 사용할 수 없습니다.",
+              "retired": "제공이 종료되어 새 요청에 사용할 수 없습니다.",
+              "requires_payment": "접근하려면 구독 또는 결제가 필요합니다.",
+              "non_chat": "이 모델은 에이전트 대화를 지원하지 않습니다.",
+              "hidden": "목록에서 숨겨졌습니다. 명시적 호출은 비활성화되지 않습니다."
+            }
+          }
         },
         "kindFilter": {
           "all": "전체",

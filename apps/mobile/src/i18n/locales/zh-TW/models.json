@@ -22,7 +22,46 @@
     "priceAmounts": "輸入 {{input}} · 輸出 {{output}}",
     "discountedVsStandard": "折扣中，較標準價省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
-    "fastTag": "快速"
+    "fastTag": "快速",
+    "provenance": {
+      "title": "欄位來源",
+      "hint": "由左至右，後面的值覆蓋前面的值。這裡顯示此模型的預設設定；現有任務儲存的選擇保持不變。",
+      "noTrace": "目前主機未提供欄位來源明細。",
+      "fields": {
+        "name": "名稱",
+        "description": "簡介",
+        "contextWindow": "使用視窗",
+        "maxOutputTokens": "最大輸出",
+        "efforts": "思考檔位",
+        "defaultEffort": "預設思考檔位",
+        "supportsFastMode": "Fast 能力",
+        "supportsImageInput": "圖片輸入",
+        "defaultFast": "預設 Fast",
+        "defaultEnabled": "預設顯示",
+        "preferredAgent": "預設引擎", "mode": "模型類型", "modalities": "輸入 / 輸出", "group": "分組", "officialDocs": "官方文件", "presentation": "發布的名稱與簡介"
+      },
+      "sources": {
+        "public": "共用型號",
+        "provider": "供應商預設",
+        "access": "接入預設",
+        "engine": "引擎差異",
+        "discovery": "供應商回報",
+        "verified": "已核實修正",
+        "user": "個人設定",
+        "product": "已發布預設",
+        "fallback": "內建備用",
+        "constraint": "能力限制"
+      },
+      "reasons": {
+        "disconnected": "供應商尚未連線。",
+        "suspended": "供應商已停用。",
+        "disabled": "模型已停用，無法用於新請求。",
+        "retired": "模型已停止使用，無法發起新請求。",
+        "requires_payment": "目前帳號尚無存取權限，需要訂閱或付費。",
+        "non_chat": "此模型不支援 Agent 對話。",
+        "hidden": "已從清單隱藏；隱藏不會禁止明確指定呼叫。"
+      }
+    }
   },
   "options": {
     "fastMode": "快速模式",
@@ -37,7 +76,10 @@
       "xhigh": "超高",
       "max": "最高",
       "ultra": "極致"
-    }
+    },
+    "resetDefaults": "下次使用跟隨預設值",
+    "resetDefaultsHint": "清除已儲存的模型偏好，目前任務的執行設定保持不變。",
+    "resetDefaultsError": "未能確認重設。請檢查電腦連線和版本後重試。"
   },
   "contextWindowSwitch": {
     "title": "此模型無法容納目前對話",

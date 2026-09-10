@@ -1,0 +1,103 @@
+{
+  "version": "catalog-1",
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "source": "builtin",
+      "agents": [
+        "codex"
+      ],
+      "auth": {
+        "method": "oauth"
+      },
+      "routing": {
+        "codex": {
+          "upstream": "https://api.example.com",
+          "authStrategy": "oauth-passthrough"
+        }
+      },
+      "models": {
+        "codex": []
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "example",
+      "name": "Example",
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://api.example.com/v1",
+          "models": [
+            {
+              "id": "test-model",
+              "name": "Test Model",
+              "modelRef": "test-family"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "modelRegistry": {
+    "schemaVersion": 5,
+    "updatedAt": "2026-09-10T00:00:00.000Z",
+    "disabledPresetIds": [
+      "withdrawn"
+    ],
+    "baseModels": [
+      {
+        "id": "test-family",
+        "aliases": [],
+        "defaults": {
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000
+        },
+        "presentation": {
+          "en": {
+            "description": "Reviewed shared copy"
+          },
+          "zh-CN": {
+            "description": "已编辑的共用简介"
+          }
+        }
+      }
+    ],
+    "models": [
+      {
+        "id": "test-model",
+        "modelRef": "test-family",
+        "name": "Test Model",
+        "status": "active",
+        "efforts": [
+          "low",
+          "high"
+        ],
+        "defaultEffort": "high",
+        "supportsFastMode": true,
+        "routes": [
+          {
+            "providerId": "openai",
+            "modelId": "test-model",
+            "agents": [
+              "codex"
+            ]
+          }
+        ],
+        "productDefaults": {
+          "visible": false,
+          "contextWindow": 272000,
+          "effort": "low",
+          "fast": "false",
+          "preferredAgent": "codex",
+          "presentation": {
+            "en": {
+              "name": "Published name"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

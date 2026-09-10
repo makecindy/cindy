@@ -467,7 +467,7 @@ export function CreateWorkerPopover({
         const rememberedFast = !deviceId && providerId
           ? getProviderModelFast(agent, providerId, modelId)
           : undefined;
-        setFast((reconciledFast ?? rememberedFast) === true);
+        setFast((reconciledFast ?? rememberedFast ?? sourceEntry?.defaultFast) === true);
       }
     },
     [

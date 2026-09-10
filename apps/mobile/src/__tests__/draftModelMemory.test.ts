@@ -115,3 +115,21 @@ describe('draftModelMemory', () => {
     expect(mem.getEffort('codex', 'openai', 'gpt-5.5')).toBeUndefined();
   });
 });
+
+
+it('reset deletes persisted overrides, retains other devices, and preserves values on a failed write', async () => {
+  store.clear();
+  const mod = await load(); await mod.hydrateDraftModelMemory();
+  const mem = mod.draftModelMemoryFor('a'); const other = mod.draftModelMemoryFor('b');
+  mem.setEffort('codex', 'api', 'm', 'high'); mem.setFast('codex', 'api', 'm', true);
+  other.setEffort('codex', 'api', 'm', 'low');
+  const storage = (await import('@react-native-async-storage/async-storage')).default;
+  vi.mocked(storage.setItem).mockRejectedValueOnce(new Error('disk-full'));
+  await expect(mem.reset!('codex', 'api', 'm')).rejects.toThrow('disk-full');
+  expect(mem.getEffort('codex', 'api', 'm')).toBe('high');
+  await mem.reset!('codex', 'api', 'm');
+  mod.__resetForTest(); await mod.hydrateDraftModelMemory();
+  expect(mem.getEffort('codex', 'api', 'm')).toBeUndefined();
+  expect(mem.getFast('codex', 'api', 'm')).toBeUndefined();
+  expect(other.getEffort('codex', 'api', 'm')).toBe('low');
+});

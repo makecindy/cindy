@@ -340,7 +340,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 回滚本身也可能失败(隧道断了 / 持久化失败):此时两侧都脏,但**存储仍未清**,面板与
    * 记忆里的还是原配置,用户重试整段即可 —— 所以照旧返回 false,绝不把它当成功收尾。
    */
-  const applyDefaultsLive = async (effort: Effort | null): Promise<boolean> => {
+  const applyDefaultsLive = async (effort: Effort | null, fast = false): Promise<boolean> => {
     // 快照必须在第一笔写出去之前取:它就是 onEffortChangeLive 写的那个格子的原值。
     const previousEffort = liveEffort ?? null;
     let effortWritten = false;
@@ -350,7 +350,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       effortWritten = previousEffort !== null && previousEffort !== effort;
     }
     if (onFastModeChangeLive) {
-      if (!(await runLive(() => onFastModeChangeLive(false)))) {
+      if (!(await runLive(() => onFastModeChangeLive(fast)))) {
         if (effortWritten && previousEffort && onEffortChangeLive) {
           await runLive(() => onEffortChangeLive(previousEffort));
         }
@@ -391,7 +391,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
      * 的收藏就走不到「先回落默认配置」那条路。
      */
     favoriteUid: string | null;
-    onApplied: () => void;
+    onApplied: () => void | Promise<void>;
   }): Promise<void> => {
     if (!sessionEngineFilter) return Promise.resolve();
     return runLive(() =>
@@ -408,7 +408,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 只有明确的 false 表示「没切」(见 UnifiedModelPanelProps.onCrossEngineSelect);
         // 返回 void 的调用方视为已切。
         if (applied === false) return;
-        args.onApplied();
+        return runLive(args.onApplied).then(() => undefined);
       },
       // 事务抛错(切换失败)同样按「没应用」处理。
       () => {},
@@ -419,17 +419,18 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 草稿应用:换引擎无损,按**既有选中链路**把整份默认 / 推荐配置写回草稿
    * (与 applyEngine 的草稿分支同形)。`favoriteUid: null` 是这条链路的要点之一 ——
    * 草稿层的收藏锚点由它清掉,否则删完收藏草稿还指着一个不存在的 uid。
-   * `fast` 恒 false:两个入口交出来的都是默认 / 推荐态,那里没有 Fast。
+   * 未显式传入 `fast` 时沿用关闭；默认 / 推荐入口传入当前目录的默认值。
    */
   const applyDefaultsToDraft = (args: {
     anchor: UnifiedAnchor;
     engine: UnifiedEngine;
     wireModelId: string;
     effort: Effort | null;
+    fast?: boolean;
   }): ActionResult => {
     return onSelect(args.anchor.providerId, args.wireModelId, args.effort ?? '', {
       engine: args.engine,
-      fast: false,
+      fast: args.fast ?? false,
       favoriteUid: null,
       rowModelId: args.anchor.modelId,
       resetToRecommended: true,
@@ -720,6 +721,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
     if (interactionDisabled || anchor.kind === 'fav') return;
     const recommendedAgent = entry.recommended;
+    const defaultFast = entry.capabilities[recommendedAgent]?.defaultFast === true && entry.capabilities[recommendedAgent]?.supportsFastMode === true;
     const recommendedEngine = engineOfAgentKind(recommendedAgent);
     // 推荐档一律取 M1 已解析的那一份(`UnifiedAgentCapability.defaultEffort`,缺省回落
     // 已经在那边应用过),不在这里另推一遍 —— 两处各推必然漂移。
@@ -748,8 +750,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     );
 
     /** 「跟随推荐」的持久化部分:删 override + 删掉当前与推荐引擎两格的深度 / Fast 记忆。 */
-    const resetStoredConfig = (): void => {
-      clearModelEngineOverride(anchor.providerId, anchor.modelId);
+    const resetStoredConfig = async (): Promise<void> => {
       // ★ 删,不是写快照(2026-08-17 review H3)。记忆表是 override 表:表里没有该键
       // ⇒ 跟随当前版本的目录默认。此前这里把**这一版**的 defaultEffort 快照写回记忆槽,
       // 于是服务端之后改了推荐档,点过「恢复推荐」的用户被钉死在旧值上 —— 与
@@ -758,7 +759,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 既有的快照写法,行为与改动前一致。
       for (const slot of memorySlots) {
         if (modelMemory?.clearEffort) {
-          modelMemory.clearEffort(slot.agent, anchor.providerId, slot.wireModelId);
+          await modelMemory.clearEffort(slot.agent, anchor.providerId, slot.wireModelId);
         } else if (slot.defaultEffort) {
           modelMemory?.setEffort(
             slot.agent,
@@ -774,17 +775,17 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 记忆表缺省即「关」,所以删除与写 false 的显示等价,但删除不会把「关」固化成用户配置。
       for (const slot of memorySlots) {
         if (modelMemory?.clearFast) {
-          modelMemory.clearFast(slot.agent, anchor.providerId, slot.wireModelId);
+          await modelMemory.clearFast(slot.agent, anchor.providerId, slot.wireModelId);
         } else {
           modelMemory?.setFast(slot.agent, anchor.providerId, slot.wireModelId, false);
         }
       }
+      clearModelEngineOverride(anchor.providerId, anchor.modelId);
     };
 
     // 非 live 行:改的只是「下次选它用什么」,清记忆就够了。
     if (!isLiveRow(entry, config)) {
-      resetStoredConfig();
-      return;
+      return runLive(resetStoredConfig).then(() => undefined);
     }
 
     // 本地/被控端草稿没有会话运行态；即使推荐引擎没变，也必须走草稿整行直通。
@@ -797,9 +798,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           engine: recommendedEngine,
           wireModelId: recommendedWireId,
           effort: defaultEffort,
+          fast: defaultFast,
         }),
       ).then((applied) => {
-        if (applied) resetStoredConfig();
+        if (applied) return runLive(resetStoredConfig).then(() => undefined);
       });
     }
 
@@ -812,13 +814,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 顺序与跨引擎分支一致(2026-08-17 review 第三轮 G2):**两笔实时写入都成功了才**清存储。
       // 反过来先清后写,一旦远程 setEffort / setFastMode 失败,override 与记忆已经没了、
       // 任务还在旧配置上跑 —— 面板显示的推荐态与事实分家,且没有可回滚的原值。
-      return applyDefaultsLive(defaultEffort).then((applied) => {
+      return applyDefaultsLive(defaultEffort, defaultFast).then(async (applied) => {
         if (!applied) return;
-        resetStoredConfig();
+        if (!(await runLive(resetStoredConfig))) return;
         return clearFavoriteAnchorForLiveRow(anchor, {
           ...config,
           effort: defaultEffort,
-          fast: false,
+          fast: defaultFast,
         });
       });
     }
@@ -837,7 +839,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 推荐态没有 Fast:**显式关**(2026-08-17 review)。留给事务重解析会读回目标引擎
         // 记忆里残留的 Fast —— 恢复完的任务还插队加速,与同引擎分支 applyDefaultsLive
         // 的无条件关不一致。
-        fast: false,
+        fast: defaultFast,
         // 恢复推荐 = 回到「这一行的默认配置」,不再跟着任何收藏副本跑 → 清锚点
         // (与草稿分支 applyDefaultsToDraft 里的 `favoriteUid: null` 同一语义)。
         favoriteUid: null,
@@ -899,6 +901,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           engine: fallback.engine,
           wireModelId,
           effort: fallback.effort,
+          fast: fallback.fast,
         }),
       ).then((applied) => {
         if (applied) commit();
@@ -923,7 +926,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     }
     // 会话 + 默认引擎 == 正在跑的引擎,且没有待发送意图:无损,两个 live 回调把深度 / Fast 复位。
     // 与跨引擎分支同一条顺序:**live 真写成了才**删记录。
-    return applyDefaultsLive(fallback.effort).then((applied) => {
+    return applyDefaultsLive(fallback.effort, fallback.fast).then((applied) => {
       if (applied) commit();
     });
   };

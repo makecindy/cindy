@@ -1,3 +1,4 @@
+import type { ModelProductDefaults } from "./modelCatalogPolicy.js";
 import type { BaseModel, ModelMetadata } from "./modelMetadataLayers.js";
 import type { LocalModelCatalog } from "./localModelCatalog.js";
 /**
@@ -56,6 +57,7 @@ export const MODEL_REGISTRY_LEGACY_SCHEMA_VERSION = 1 as const;
 export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 export const MODEL_REGISTRY_V3_SCHEMA_VERSION = 3 as const;
 export const MODEL_REGISTRY_V4_SCHEMA_VERSION = 4 as const;
+export const MODEL_REGISTRY_V5_SCHEMA_VERSION = 5 as const;
 export const MODEL_NATIVE_APIS = [
   "anthropic-messages",
   "openai-responses",
@@ -160,6 +162,7 @@ export interface ModelRegistryEntry
   extends
     Pick<ModelMetadata, "mode" | "modalities" | "officialDocs">,
     Omit<ModelRegistryEntryBase, "defaultEffort" | "perAgent"> {
+  productDefaults?: ModelProductDefaults;
   /** V4 entry-level image capability default. */
   supportsImageInput?: boolean;
   /** V4 only: null explicitly clears an inherited default. */
@@ -185,7 +188,10 @@ export interface ModelRegistry extends ModelRegistryBase {
     | typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_V3_SCHEMA_VERSION
-    | typeof MODEL_REGISTRY_V4_SCHEMA_VERSION;
+    | typeof MODEL_REGISTRY_V4_SCHEMA_VERSION
+    | typeof MODEL_REGISTRY_V5_SCHEMA_VERSION;
+  /** Explicit template withdrawal; omission never withdraws native Pi models. */
+  disabledPresetIds?: string[];
   baseModels?: BaseModel[];
   localModels?: LocalModelCatalog;
   models: ModelRegistryEntry[];

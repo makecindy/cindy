@@ -300,7 +300,12 @@ describe('model advanced editor', () => {
   it('shows facts beside controls without disclosure and keeps related window values together', () => {
     draw();
     const dialog = screen.getByRole('dialog');
-    expect(dialog.querySelector('details')).toBeNull();
+    // Optional source diagnostics may collapse; the facts and editable values remain visible.
+    for (const key of ['imageInput', 'modelId', 'contextWindow']) {
+      expect(screen.getByText(`settings.providers.models.advanced.${key}`).closest('details')).toBeNull();
+    }
+    const sources = dialog.querySelector('details');
+    expect(sources?.querySelector('summary')?.textContent).toBe('settings.providers.models.advanced.provenance.title');
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'GPT-6' }));
     const input = screen.getByRole('textbox');
     const controlsColumn = input.closest('section')!.parentElement!;

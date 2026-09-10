@@ -1,3 +1,5 @@
+import { validPresetModelReferences } from "./modelCatalogPolicy.js";
+import { validModelProductDefaults } from "./modelCatalogPolicy.js";
 /**
  * 目录运行时校验(parseCatalog)+ presets 清洗排序。
  *
@@ -558,6 +560,8 @@ function isValidPreset(v: unknown): v is ProviderPreset {
         return false;
       }
       if (!hasValidPresetReasoningCapability(agent, mm)) return false;
+      if (mm.modelRef !== undefined && (typeof mm.modelRef !== "string" || !mm.modelRef || mm.modelRef.length > 256)) return false;
+      if (mm.productDefaults !== undefined && !validModelProductDefaults(mm.productDefaults)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
@@ -818,15 +822,16 @@ export function parseCatalog(input: string | unknown): Catalog {
     assert(registry.ok, registry.ok ? '' : registry.error);
     catalog.modelRegistry = registry.value;
   }
+  assert(validPresetModelReferences(presets,catalog.modelRegistry), "catalog preset modelRef is unresolved or requires Registry V5");
   // Validate authored lists before projection so malformed input cannot be repaired or crash mapping.
   for (const provider of catalog.providers) {
     for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const)
       validateMediaModels(provider.id, field, provider[field], field === 'audioModels' ? '' : field.replace('Models', 'Defaults'),
-        field === 'imageModels' ? provider.imageDefaults : field === 'videoModels' ? provider.videoDefaults : field === 'embeddingModels' ? provider.embeddingDefaults : undefined, catalog.modelRegistry?.schemaVersion === 4);
+        field === 'imageModels' ? provider.imageDefaults : field === 'videoModels' ? provider.videoDefaults : field === 'embeddingModels' ? provider.embeddingDefaults : undefined, [4, 5].includes(catalog.modelRegistry?.schemaVersion ?? 0));
   }
   const projected = { ...catalog, providers: catalog.providers.map((provider) =>
     projectProviderMediaModels(provider, catalog.modelRegistry, { addDeclared: true })) };
-  for (const provider of projected.providers) validateProvider(provider, catalog.modelRegistry?.schemaVersion === 4);
+  for (const provider of projected.providers) validateProvider(provider, [4, 5].includes(catalog.modelRegistry?.schemaVersion ?? 0));
   validateModelConsistency(projected);
   // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
   // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。

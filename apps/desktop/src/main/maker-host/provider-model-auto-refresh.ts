@@ -19,6 +19,7 @@ import {
 } from '../../shared/providerModelRefresh.js';
 import { createLogger, type Logger } from '../logger.js';
 
+export const PUBLIC_MODEL_CATALOG_REFRESH_MS = 5 * 60_000;
 export const PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS = 30 * 60_000;
 export const PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS = 5 * 60_000;
 export const PROVIDER_MODEL_FOREGROUND_BACKGROUND_THRESHOLD_MS = 15 * 60_000;
@@ -29,6 +30,7 @@ export interface ProviderModelAutoRefreshDeps {
   /** Refresh the shared public Catalog independently of any provider connection state. */
   refreshCatalog?: () => Promise<void>;
   getScopeKey?: () => string | number;
+  isActive?: () => boolean;
   now(): number;
   log: Pick<Logger, 'debug' | 'warn'>;
 }
@@ -40,6 +42,7 @@ export interface ProviderModelRefreshCoordinator {
   ): Promise<void>;
   refreshManually(providerId: BuiltinRefreshableProviderId): Promise<void>;
   resetCooldowns(providerId?: BuiltinRefreshableProviderId): void;
+  refreshPublicCatalog(force?: boolean): Promise<void>;
 }
 
 export function createProviderModelRefreshCoordinator(
@@ -109,6 +112,7 @@ export function createProviderModelRefreshCoordinator(
 
   async function refreshCatalogAutomatically(
     trigger: ProviderModelAutoRefreshTrigger,
+    force = false,
   ): Promise<void> {
     if (!deps.refreshCatalog) return;
     syncScope();
@@ -124,6 +128,7 @@ export function createProviderModelRefreshCoordinator(
       return catalogInflight.promise;
     }
     const now = deps.now();
+    if (force) catalogStartupGraceUntil = undefined;
     if (catalogStartupGraceUntil !== undefined) {
       if (now < catalogStartupGraceUntil) {
         deps.log.debug('model catalog auto-refresh skipped by startup grace', {
@@ -136,9 +141,9 @@ export function createProviderModelRefreshCoordinator(
     }
     const cooldownStartedAt = catalogLastFailureAt ?? catalogLastAttemptAt;
     const cooldownMs = catalogLastFailureAt === undefined
-      ? PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS
+      ? PUBLIC_MODEL_CATALOG_REFRESH_MS
       : PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
-    if (cooldownStartedAt !== undefined && now - cooldownStartedAt < cooldownMs) {
+    if (!force && cooldownStartedAt !== undefined && now - cooldownStartedAt < cooldownMs) {
       deps.log.debug('model catalog auto-refresh skipped by cooldown', {
         trigger,
         cooldown: catalogLastFailureAt === undefined ? 'normal' : 'failure-retry',
@@ -260,6 +265,7 @@ export function createProviderModelRefreshCoordinator(
   }
 
   return {
+    refreshPublicCatalog: (force = false) => refreshCatalogAutomatically("foreground", force),
     async requestAutoRefresh(trigger, providerIds): Promise<void> {
       syncScope();
       const catalogRefresh = refreshCatalogAutomatically(trigger);
@@ -313,9 +319,7 @@ export function createProviderModelRefreshCoordinator(
     },
 
     async refreshManually(providerId): Promise<void> {
-      // xAI 同时有公共静态目录与账号态媒体发现。手动刷新要把两层都刷新；自动路径
-      // 已在上方统一先刷新公共目录，再调用 provider hook，因此不会重复拉 Catalog。
-      if (providerId === 'xai' && deps.refreshCatalog) await deps.refreshCatalog();
+      await refreshCatalogAutomatically("foreground", true);
       await refresh(providerId, true);
     },
     resetCooldowns,
@@ -323,17 +327,24 @@ export function createProviderModelRefreshCoordinator(
 }
 
 let configuredCoordinator: ProviderModelRefreshCoordinator | null = null;
+let publicCatalogTimer: ReturnType<typeof setInterval> | undefined;
 const log = createLogger('provider-model-auto-refresh');
 
 export function configureProviderModelAutoRefresh(
   deps: Omit<ProviderModelAutoRefreshDeps, 'now' | 'log'> &
     Partial<Pick<ProviderModelAutoRefreshDeps, 'now' | 'log'>>,
 ): void {
+  if (publicCatalogTimer) clearInterval(publicCatalogTimer);
   configuredCoordinator = createProviderModelRefreshCoordinator({
     ...deps,
     now: deps.now ?? Date.now,
     log: deps.log ?? log,
   });
+  const coordinator = configuredCoordinator;
+  publicCatalogTimer = setInterval(() => {
+    if (deps.isActive?.() !== false) void coordinator.refreshPublicCatalog(true);
+  }, PUBLIC_MODEL_CATALOG_REFRESH_MS);
+  publicCatalogTimer.unref?.();
 }
 
 export function resetProviderModelAutoRefreshCooldowns(

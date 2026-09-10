@@ -173,9 +173,9 @@ export interface ModelMemoryAccessors {
    * wire protocol 变更,不在本次范围)。没注入时 `resetToRecommended` 退回既有的快照写法,
    * 行为与改动前一致。
    */
-  clearEffort?: (agent: AgentKind, providerId: string, modelId: string) => void;
+  clearEffort?: (agent: AgentKind, providerId: string, modelId: string) => void | Promise<void>;
   /** 同 `clearEffort`,针对 Fast(缺省即关,所以删除与写 false 显示等价,但不钉住默认)。 */
-  clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void;
+  clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void | Promise<void>;
 }
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
@@ -439,6 +439,8 @@ function formatContextWindow(tokens: number): string {
 
 // 单栏列表里每行 / Edit 配置列消费的最小模型形状(SectionModel 与 renderer ModelDescriptor 都满足)。
 interface RowModel {
+  presentation?: import("@cindy/model-providers").ModelPresentation;
+  defaultFast?: boolean;
   id: string;
   displayName: string;
   description?: string;
@@ -1736,7 +1738,7 @@ function ModelSelectorContentView({
     if (!fastEditable(providerId, m)) return false;
     if (isSelectedRow(providerId, m.id)) return fastMode;
     if (!currentAgentKind || !providerId) return false;
-    return modelMemory?.getFast(currentAgentKind, providerId, m.id) ?? false;
+    return modelMemory?.getFast(currentAgentKind, providerId, m.id) ?? m.defaultFast ?? false;
   };
 
   // 某 (供应商, 模型) 行当前要展示的 effort(选中 → 调用方值;否则全局模型预设 → 模型默认)。
@@ -2135,13 +2137,13 @@ function ModelSelectorContentView({
   const configPanel = editingModel ? (
     <div
       role="group"
-      aria-label={`${localizedModelName(editingModel.displayName, t)} ${t('newChat.modelSelector.options')}`}
+      aria-label={`${localizedModelName(editingModel.displayName, t, undefined, editingModel.presentation)} ${t('newChat.modelSelector.options')}`}
       className="flex flex-col gap-0.5"
     >
       {/* 名字 / 简介先帮助确认模型；面板整体居中后，操作区仍贴近当前 hover 行。 */}
       <div className="flex flex-col gap-1 px-2 py-1.5">
         <span className="min-w-0 text-14 font-medium text-[var(--model-item-text)]">
-          {localizedModelName(editingModel.displayName, t)}
+          {localizedModelName(editingModel.displayName, t, undefined, editingModel.presentation)}
         </span>
         {editingDescription && (
           <span className="line-clamp-2 text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
@@ -2465,7 +2467,7 @@ function ModelSelectorContentView({
             aria-disabled={disabled ? true : undefined}
             aria-label={
               paymentRequired
-                ? `${localizedModelName(model.displayName, t)} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
+                ? `${localizedModelName(model.displayName, t, undefined, model.presentation)} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
                 : undefined
             }
             title={disabledReason ?? undefined}
@@ -2535,7 +2537,7 @@ function ModelSelectorContentView({
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
                   <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
-                    {localizedModelName(model.displayName, t)}
+                    {localizedModelName(model.displayName, t, undefined, model.presentation)}
                   </span>
                   {rowEffort && (
                     <span
@@ -3405,7 +3407,7 @@ export function ModelSelector({
   const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
-    : ((currentModel ? localizedModelName(currentModel.displayName, t) : undefined) ??
+    : ((currentModel ? localizedModelName(currentModel.displayName, t, undefined, currentModel.presentation) : undefined) ??
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
@@ -3764,7 +3766,7 @@ export function ModelSelector({
           >
             {/* 断开来源可能是该模型的唯一提供方 → visibleModels 查不到,回落显示原始 id,
                     比 "Select model" 占位更能说明「哪个模型的来源断了」。 */}
-            {currentModel ? localizedModelName(currentModel.displayName, t) : modelId}
+            {currentModel ? localizedModelName(currentModel.displayName, t, undefined, currentModel.presentation) : modelId}
           </span>
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}

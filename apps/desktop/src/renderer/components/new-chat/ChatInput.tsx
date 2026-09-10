@@ -6057,9 +6057,11 @@ export function ChatInput({
       // providerId 只用于来源 capability 与旧 v2 兼容回退;新预设按 (agent, model) 跨来源共享。
       // 无 providerId / device-link(modelMemory 为 undefined)→ false,且不掺控制端本机记忆。
       if (!currentModelAgentKind || !providerId || !modelMemory) return false;
-      return modelMemory.getFast(currentModelAgentKind, providerId, targetModelId) ?? false;
+      return modelMemory.getFast(currentModelAgentKind, providerId, targetModelId)
+        ?? (deviceLinkDeviceId ? remoteProviders.providers : localProviders.providers).find((provider) => provider.id === providerId)?.models[currentModelAgentKind]?.find((model) => model.id === targetModelId)?.defaultFast
+        ?? false;
     },
-    [currentModelAgentKind, modelMemory, modelFastSupported],
+    [currentModelAgentKind, modelMemory, modelFastSupported, deviceLinkDeviceId, remoteProviders.providers, localProviders.providers],
   );
 
   const syncSessionDraftModelPrefs = useCallback(
@@ -6530,7 +6532,7 @@ export function ChatInput({
             : fastCapable &&
               !!providerId &&
               !!modelMemory &&
-              (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? false);
+              (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? (deviceLinkDeviceId ? remoteProviders.providers : localProviders.providers).find((provider) => provider.id === providerId)?.models[targetAgentKind]?.find((model) => model.id === newModelId)?.defaultFast ?? false);
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
         // 交接都在那边),本机会话零变化直连本机 maker。

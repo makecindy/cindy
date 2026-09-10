@@ -200,7 +200,7 @@ export function findModelRegistryRoute(
     modelId,
     agent,
   )[0];
-  if (!matched || registry?.schemaVersion !== 4) return matched;
+  if (!matched || !registry || ![4, 5].includes(registry.schemaVersion)) return matched;
   return {
     route: matched.route,
     entry: {
