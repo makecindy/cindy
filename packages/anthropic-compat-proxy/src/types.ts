@@ -220,24 +220,27 @@ export type ResponseObserver = (
 export type ResponseTransform = (ctx: ResponseObserverCtx) => Transform | null | undefined;
 
 /**
- * 一条 400 透明重试规则。
+ * 一条上游错误透明重试规则。
  *
- * forward() 命中上游 400 时,按顺序找第一条 `enabled() && matches(decodedErrBodyText)
- * && strip(body) !== null` 的规则,用其 strip 结果重发一次(canRetry=false,防循环)。
+ * forward() 命中规则允许的状态码时,按顺序找第一条 `enabled() && matches(decodedErrBodyText)
+ * && strip(body, decodedErrBodyText) !== null` 的规则,用其 strip 结果重发一次(canRetry=false,防循环)。
  * 多条规则并列(例: encrypted_content / empty_thinking),互不耦合;regex 互斥,
  * 命中顺序仅在两条都可能匹配同一错误体时才有意义(实际不会)。
  */
 export interface RecoveryRule {
   /** 诊断用稳定 id,进日志(例 'encrypted_content' / 'empty_thinking')。 */
   id: string;
+  /** 允许恢复的 HTTP 状态码;省略 = [400, 422],保持现有规则行为。其它状态必须显式 opt in。 */
+  statusCodes?: readonly number[];
   /** gate: false 时该规则完全跳过(thinking 永远 true;encrypted 跟 silentEncryptedRetry 设置)。 */
   enabled: () => boolean;
-  /** 对解压后的 400 错误体文本判定是否命中本规则。
+  /** 对解压后的错误体文本判定是否命中本规则。
    * 命名避开 `match`:与 String.prototype.match 同名会让 CodeQL 把动态文本误判为
    * 正则模式(js/regex-injection 误报)。 */
   matches: (decodedErrorBodyText: string) => boolean;
-  /** 改写请求 body;返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
-  strip: (body: Buffer) => Buffer | null;
+  /** 改写请求 body;可选错误文本用于限定已确认的问题项,旧规则可忽略。
+   * 返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
+  strip: (body: Buffer, decodedErrorBodyText?: string) => Buffer | null;
   /** Classify a matched terminal rejection from the actual sent body, after safe retries. */
   unrecoverableCode?: (body: Buffer) => string | null;
   /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
@@ -245,7 +248,7 @@ export interface RecoveryRule {
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
   threadIdHeaders?: readonly string[];
   /**
-   * 别的规则命中 400/422 时,是否把本规则的 strip 顺手叠上去。
+   * 别的规则命中本规则允许的状态码时,是否把本规则的 strip 顺手叠上去。
    * 默认 true(encrypted / empty thinking 这类对任意上游都安全)。
    * 语义绑在特定上游的规则必须显式 false,否则会在 GPT 的
    * invalid_encrypted_content 重试里改写 OpenAI 历史。
@@ -339,8 +342,8 @@ export interface ProxyOptions {
   /** 可选 logger,不传则静默 */
   logger?: ProxyLogger;
   /**
-   * 上游 400 透明重试规则链。forward() 收到 400 时按顺序应用第一条命中的规则
-   * (剥字段重发一次)。不传 / 空数组 = 不做任何透明重试(原样回 400)。
+   * 上游错误透明重试规则链。forward() 在规则允许的状态码(默认 400/422)下应用第一条命中的规则
+   * (剥字段重发一次)。不传 / 空数组 = 不做任何透明重试(原样返回上游错误)。
    * 典型: [createEncryptedContentRecoveryRule(...), createEmptyThinkingRecoveryRule(...)]。
    */
   recoveryRules?: RecoveryRule[];

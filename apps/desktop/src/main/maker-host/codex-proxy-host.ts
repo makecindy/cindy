@@ -19,6 +19,7 @@ import {
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createInstructionsInjectionTransform,
   createInstructionsRegistry,
   createXaiModelInputRecoveryRule,
@@ -188,6 +189,8 @@ const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
   onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
 });
+// 仅恢复本次上游明确拒绝的 id，不缓存跨供应商的历史丢弃策略。
+const missingReasoningItemRecoveryRule = createMissingReasoningItemRecoveryRule();
 const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
   onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
 });
@@ -195,6 +198,7 @@ const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
   imageGenerationIdRecoveryRule,
+  missingReasoningItemRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
 ] as const;

@@ -285,6 +285,38 @@ export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
   }
 }
 
+/**
+ * Missing-item 404 后仅清理 Responses 顶层历史中上游明确指出缺失的 reasoning id。
+ * 跨供应商历史可能只有 rs_ id + summary,没有可重放的 encrypted_content;上游
+ * 明确说该 id 未保存时,保留它会使后续每轮重复失败。有效密文、压缩上下文、可见消息
+ * 和工具调用/结果都不动,也不递归工具的业务数据。store:false 只控制本次响应不保存,
+ * 不能证明历史里其它 rs_ id 无效;因此只处理错误文本确认的一个 id。
+ *
+ * 必须显式 store:false;省略 store 可能使用有状态默认值,不能推断该请求可安全丢引用。
+ * 本函数不改 storage 策略或 previous_response_id,仅用于精确错误命中后的单次恢复。
+ */
+export function stripMissingReasoningItemsFromBody(
+  rawBody: Buffer,
+  decodedErrorBodyText?: string,
+): Buffer | null {
+  const missingId = decodedErrorBodyText?.match(MISSING_REASONING_ITEM_RE)?.[1];
+  if (!missingId) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed) || parsed.store !== false || !Array.isArray(parsed.input)) return null;
+  const kept = parsed.input.filter((item: unknown) => {
+    if (!isPlainObject(item) || item.id !== missingId) return true;
+    if (typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0) return true;
+    return item.type !== 'reasoning' && item.type !== 'item_reference';
+  });
+  if (kept.length === parsed.input.length) return null;
+  return Buffer.from(JSON.stringify({ ...parsed, input: kept }), 'utf8');
+}
+
 function isImageGenerationType(type: unknown): boolean {
   if (typeof type !== 'string') return false;
   return type.startsWith('image_generation') || type.startsWith('imageGeneration');
@@ -1457,7 +1489,7 @@ export function createActiveStripTransform(opts: {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Recovery rules —— 上游 400 透明重试规则(server.ts 的 forward() 按序应用第一条命中的)。
+// Recovery rules —— 上游错误透明重试规则(server.ts 的 forward() 按序应用第一条命中的)。
 // 每条规则把"错误体匹配正则 + 对应 strip 函数"绑在一起,正则与 strip 就近放,单一真相源。
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -1484,6 +1516,11 @@ const EMPTY_ASSISTANT_MESSAGE_RE = /with role 'assistant' must not be empty/i;
 // Azure/LiteLLM 400: "Image generation items without `id` are not supported for this request."
 const IMAGE_GENERATION_WITHOUT_ID_RE =
   /image generation items without [`']?id[`']? are not supported/i;
+
+// OpenAI 404: 非持久化历史里的 rs_ item 无法通过远端 id 找回。两句必须同时命中,
+// 不把普通路由/model 404、其它 item 类型或有状态历史缺失误判为可恢复。
+const MISSING_REASONING_ITEM_RE =
+  /item with id '(rs_[a-z0-9_-]+)' not found\.\s+items are not persisted when `store` is set to false\./i;
 
 const TOOL_USE_PROVIDER_SPECIFIC_FIELDS_RE =
   /\.tool_use\.provider_specific_fields[^"\r\n|]*extra inputs are not permitted|extra inputs are not permitted[^"\r\n|]*\.tool_use\.provider_specific_fields/i;
@@ -1557,6 +1594,26 @@ export function createImageGenerationIdRecoveryRule(opts: {
     enabled: opts.enabled ?? (() => true),
     matches: (text) => IMAGE_GENERATION_WITHOUT_ID_RE.test(text),
     strip: stripImageGenerationItemsWithoutIdFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * 无状态 Responses 缺失 reasoning 引用恢复。仅 opt in 404,因此不会与现有
+ * 400/422 恢复链混用剥离器;正常请求不做主动清理,有效加密推理始终保留。
+ */
+export function createMissingReasoningItemRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'missing_reasoning_item',
+    statusCodes: [404],
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => MISSING_REASONING_ITEM_RE.test(text),
+    strip: stripMissingReasoningItemsFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
   };

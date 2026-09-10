@@ -10,6 +10,7 @@ import {
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   dedupeDuplicateToolUseIds,
@@ -22,6 +23,7 @@ import {
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
+  stripMissingReasoningItemsFromBody,
   stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
@@ -189,6 +191,83 @@ describe('compactOversizedImageHistory', () => {
     const currentContent = messages[2].content as Array<Record<string, unknown>>;
     expect(oldContent[1].type).toBe('text');
     expect(currentContent[1].type).toBe('image_url');
+  });
+});
+
+const MISSING_REASONING_ERROR_TEXT = "Item with id 'rs_missing' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.";
+
+describe('stripMissingReasoningItemsFromBody', () => {
+  it('removes only the confirmed missing rs_ id from top-level stateless input', () => {
+    const kept = [
+      { type: 'reasoning', id: 'rs_valid', encrypted_content: 'ENCRYPTED', summary: [] },
+      { type: 'reasoning', id: 'rs_missing', encrypted_content: 'SELF_CONTAINED', summary: [] },
+      { type: 'item_reference', id: 'rs_missing', encrypted_content: 'PRESERVE_ANY_BLOB' },
+      { type: 'reasoning', id: 'rs_other', summary: [{ text: 'possibly valid remote reasoning' }] },
+      { type: 'item_reference', id: 'rs_saved' },
+      { type: 'reasoning', id: 'provider_reasoning', summary: [{ text: 'keep' }] },
+      { type: 'reasoning', summary: [{ text: 'no remote reference' }] },
+      { type: 'item_reference', id: 'msg_saved' },
+      { type: 'compaction', id: 'cmp_1', encrypted_content: 'BLOB' },
+      { type: 'context_compaction', summary: 'readable history' },
+      { type: 'message', role: 'user', content: 'continue' },
+      { type: 'message', role: 'assistant', content: 'visible answer' },
+      {
+        type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'test',
+        arguments: JSON.stringify({ input: [{ type: 'reasoning', id: 'rs_nested' }] }),
+      },
+      { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+      { type: 'custom_tool_call', id: 'ctc_1', call_id: 'call_2', name: 'test', input: 'hello' },
+      { type: 'custom_tool_call_output', call_id: 'call_2', output: 'world' },
+      { type: 'image_generation_end', call_id: 'ig_1' },
+    ];
+    const body = {
+      model: 'gpt-6-astra', store: false, previous_response_id: 'resp_untouched',
+      input: [
+        { type: 'reasoning', id: 'rs_missing', summary: [{ type: 'summary_text', text: 'prior reasoning' }], content: null },
+        { type: 'reasoning', id: 'rs_missing', encrypted_content: '', summary: [] },
+        { type: 'reasoning', id: 'rs_missing', encrypted_content: null, summary: [] },
+        { type: 'item_reference', id: 'rs_missing' },
+        ...kept,
+      ],
+      metadata: { input: [{ type: 'item_reference', id: 'rs_missing' }] },
+      tools: [{ type: 'function', name: 'test', parameters: { input: [{ type: 'reasoning', id: 'rs_missing' }] } }],
+    };
+    const original = buf(body);
+    const out = stripMissingReasoningItemsFromBody(original, MISSING_REASONING_ERROR_TEXT);
+    expect(out).not.toBeNull();
+    expect(JSON.parse(out!.toString('utf8'))).toEqual({ ...body, input: kept });
+    expect(original).toEqual(buf(body));
+    expect(stripMissingReasoningItemsFromBody(out!, MISSING_REASONING_ERROR_TEXT)).toBeNull();
+  });
+
+  it.each([undefined, '', 'model not found', MISSING_REASONING_ERROR_TEXT.replace('rs_missing', 'rs_elsewhere')])(
+    'does not infer a missing id from store:false when the error provides no matching evidence %#', (error) => {
+      expect(stripMissingReasoningItemsFromBody(buf({
+        store: false, input: [{ type: 'reasoning', id: 'rs_missing' }],
+      }), error)).toBeNull();
+    },
+  );
+
+  it.each([true, undefined, null, 'false'])('does not change input when store is %s', (store) => {
+    expect(stripMissingReasoningItemsFromBody(buf({
+      store, input: [{ type: 'reasoning', id: 'rs_missing', summary: [] }],
+    }), MISSING_REASONING_ERROR_TEXT)).toBeNull();
+  });
+
+  it.each([
+    null,
+    [],
+    { store: false, input: 'continue' },
+    { store: false, messages: [{ type: 'reasoning', id: 'rs_missing' }] },
+    { store: false, metadata: { input: [{ type: 'reasoning', id: 'rs_missing' }] } },
+    { store: false, input: [{ type: 'reasoning', id: 'rs_missing', encrypted_content: 'VALID' }] },
+    { store: false, input: [{ type: 'function_call', id: 'rs_missing', call_id: 'call_1' }] },
+  ])('returns null for non-applicable input %#', (body) => {
+    expect(stripMissingReasoningItemsFromBody(buf(body), MISSING_REASONING_ERROR_TEXT)).toBeNull();
+  });
+
+  it('returns null for invalid JSON', () => {
+    expect(stripMissingReasoningItemsFromBody(Buffer.from('not json'), MISSING_REASONING_ERROR_TEXT)).toBeNull();
   });
 });
 
@@ -978,6 +1057,23 @@ describe('createActiveStripTransform', () => {
 });
 
 describe('recovery rule factories', () => {
+  it('missing-reasoning rule requires the exact rs_ missing-item and non-persistence error', () => {
+    const rule = createMissingReasoningItemRecoveryRule();
+    const message = "Item with id 'rs_123abc' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.";
+    expect(rule.id).toBe('missing_reasoning_item');
+    expect(rule.enabled()).toBe(true);
+    expect(rule.statusCodes).toEqual([404]);
+    expect(rule.matches(message)).toBe(true);
+    expect(rule.matches(JSON.stringify({ error: { message } }))).toBe(true);
+    expect(rule.matches(message.replace('rs_123abc', 'msg_123abc'))).toBe(false);
+    expect(rule.matches(message.replace('set to false', 'set to true'))).toBe(false);
+    expect(rule.matches("Item with id 'rs_123abc' not found.")).toBe(false);
+    expect(rule.matches('Items are not persisted when `store` is set to false.')).toBe(false);
+    expect(rule.matches('model not found')).toBe(false);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
+    expect(createMissingReasoningItemRecoveryRule({ enabled: () => false }).enabled()).toBe(false);
+  });
+
   it('encrypted rule matches only its error text and strips encrypted_content', () => {
     const rule = createEncryptedContentRecoveryRule({ enabled: () => true });
     expect(rule.id).toBe('encrypted_content');
