@@ -3,12 +3,10 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-ios",
-  "documentNamespace": "https://cindy.app/spdx/mobile-ios/22e8580cec32cb0ffd93f0776e3026b788adb70104d5a79b699faf275a748230",
+  "documentNamespace": "https://cindy.app/spdx/mobile-ios/88943e24e7cee9f96720104195d988ca90749b20f22b29825c8c755898d9e593",
   "creationInfo": {
-    "created": "2026-09-02T19:21:04Z",
-    "creators": [
-      "Tool: scripts/generate-third-party-notices.mjs"
-    ]
+    "created": "2026-09-08T11:11:04Z",
+    "creators": ["Tool: scripts/generate-third-party-notices.mjs"]
   },
   "packages": [
     {
@@ -19,6 +17,16 @@
       "filesAnalyzed": false,
       "licenseConcluded": "OFL-1.1",
       "licenseDeclared": "OFL-1.1",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "JOSESwift",
+      "SPDXID": "SPDXRef-Package-252de9e411c654b4",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "https://github.com/airsidemobile/JOSESwift/tree/3.0.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
       "copyrightText": "NOASSERTION"
     },
     {
@@ -5148,6 +5156,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/expo-modules-jsi@57.0.6"
+        }
+      ]
+    },
+    {
+      "name": "expo-network",
+      "SPDXID": "SPDXRef-Package-e4dede772258e5bd",
+      "versionInfo": "57.0.1",
+      "downloadLocation": "https://github.com/expo/expo",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/expo-network@57.0.1"
         }
       ]
     },
@@ -10431,6 +10456,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-252de9e411c654b4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5cfa9bdbf62d839b"
     },
     {
@@ -11942,6 +11972,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-bf533b3e2ed3f7f5"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e4dede772258e5bd"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

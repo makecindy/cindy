@@ -205,10 +205,13 @@ export function selectVisibleSessions(
   remoteSessions: Session[],
   selection: MachineSelection,
 ): Session[] {
-  if (selection === MACHINE_ALL) return [...localSessions, ...remoteSessions];
+  // Companion metadata remains in the mirror for chat, but belongs only to the Bots UI.
+  const visibleLocal = localSessions.filter((session) => session.source !== 'bot');
+  const visibleRemote = remoteSessions.filter((session) => session.source !== 'bot');
+  if (selection === MACHINE_ALL) return [...visibleLocal, ...visibleRemote];
   const set = new Set(selection);
-  const out = set.has(MACHINE_LOCAL) ? [...localSessions] : [];
-  for (const s of remoteSessions) {
+  const out = set.has(MACHINE_LOCAL) ? [...visibleLocal] : [];
+  for (const s of visibleRemote) {
     if (s.deviceLinkDeviceId && set.has(s.deviceLinkDeviceId)) out.push(s);
   }
   return out;

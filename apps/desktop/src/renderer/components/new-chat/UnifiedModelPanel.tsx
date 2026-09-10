@@ -120,6 +120,8 @@ export interface UnifiedModelPanelProps {
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
   interactionDisabled?: boolean;
+  /** Only local directories may read this desktop’s subscription accounts. */
+  localProviderUsage?: boolean;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -273,6 +275,7 @@ export function UnifiedModelPanel({
   effortLabelOf,
   listMaxHeight,
   interactionDisabled = false,
+  localProviderUsage = false,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -948,8 +951,12 @@ export function UnifiedModelPanel({
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
+    <div
+      className="flex min-h-0 min-w-0 shrink"
+      style={{ height: `${listMaxHeight ?? 428}px` }}
+    >
       <UnifiedModelRail
+        localProviderUsage={localProviderUsage}
         items={railItems}
         active={effectiveRail}
         onSelect={setRail}
@@ -974,9 +981,8 @@ export function UnifiedModelPanel({
             // 底部的「连接来源」footer 是同级兄弟,始终留在列表下方、不盖住最后一行。
             'min-h-0',
           )}
-          // 缺省上限只是「内容很少时别把面板撑太高」的软顶,真正的高度由外层面板给;
-          // 二者相加才既不过高、也不会在窄窗口里滚不到底。
-          style={{ maxHeight: `${listMaxHeight ?? 428}px` }}
+          // Body height is independent of filtered results; min-h-0 still permits
+          // the popover's viewport constraint to shrink this scroll area.
           onScroll={() => {
             // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
             // 程序化对齐不取消在途的选中行定位。

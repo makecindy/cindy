@@ -11,6 +11,9 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => tempRoot) },
 }));
 
+// Budget reconciliation does not exercise native account credential IO.
+vi.mock('../subscription-account-auth.js', () => ({ readClaudeAccountOAuth: () => null }));
+
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: {
     child: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }),

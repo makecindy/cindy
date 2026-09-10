@@ -142,14 +142,13 @@ export interface DeviceLinkSubmissionParams {
  * 组件的实现细节**上。ChatInput 今天恰好会重算,不代表它有义务永远重算;而这里离 `maker:create-session`
  * 只有一步,是「提交什么就校准什么」最后也最可靠的位置。重复校准无副作用:仍有效的来源原样返回。
  *
- * 用 effectiveSourceIdForModel 而不是 actualSourceIdForModel —— 后者的注释明确要求「新路由选择
- * (新会话 / 切模型 / worker / schedule)一律用前者」,而建会话与建目标都是新路由选择。失效时落到
- * 被控端对该模型的原生默认来源(也正是 ChatInput 高亮给用户看的那一个),比一律置 null 更贴合所见即所得。
+ * 显式连接原样传给被控端，由被控端校验；控制端快照失效或未加载不能抹掉账号身份。
+ * 只有未指定连接时，才用 effectiveSourceIdForModel 解析默认来源。
  */
 export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): DeviceLinkCreateArgs {
-  const providerId = effectiveSourceIdForModel(
+  const providerId = p.candidate.providerId || effectiveSourceIdForModel(
     p.deviceProviders,
-    p.candidate.providerId ?? null,
+    null,
     p.candidate.model,
     p.capabilityAgentKind,
   );

@@ -424,6 +424,20 @@ function captureSessionOutput(
   ev: AgentEvent,
 ): void {
   entry.lastEventAt = Date.now();
+  if (ev.type === 'status') {
+    const isRunning = (ev.data as { isRunning?: unknown } | null)?.isRunning;
+    // send_to_lead 之外也能从 UI 等入口开启新 turn。仅在上一轮已终止且收到前台
+    // running 状态时清空；后台压缩等状态不属于新的产品 turn。
+    if (
+      ev.turnScope !== 'background'
+      && isRunning === true
+      && entry.status !== 'running'
+    ) {
+      entry.finalText = '';
+      entry.status = 'running';
+    }
+    return;
+  }
   if (ev.type === 'text') {
     const data = ev.data as { text?: unknown; isFinal?: unknown } | null;
     if (typeof data?.text !== 'string') return;
@@ -437,7 +451,9 @@ function captureSessionOutput(
     if (typeof result === 'string' && result.length > 0) {
       entry.finalText = result;
     }
-    if (isProductTurnDoneEvent(ev)) entry.status = 'done';
+    // Agent 为保留最终 result / usage，可能在 terminal error 后继续发 done。
+    // error 是更强的终态，不能被这条尾随 done 覆盖成成功。
+    if (isProductTurnDoneEvent(ev) && entry.status !== 'error') entry.status = 'done';
     return;
   }
   if (isTerminalAgentErrorEvent(ev) && !isTurnContinuationBoundaryEvent(ev)) {

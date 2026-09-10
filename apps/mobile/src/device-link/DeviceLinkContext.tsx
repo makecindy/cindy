@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { createBackgroundConnection } from './backgroundConnection';
+import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
@@ -1315,8 +1316,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       opts?.preSend?.();
     };
     preSend();
-    return sendInvokeWithAccessHandling<T>(requireClient(clientRef.current), deviceId, channel, args, { preSend });
-  }, []);
+    const client = requireClient(clientRef.current);
+    return invokeWithHistoryViewCapability(
+      channel,
+      async () => {
+        // Reuse the existing peer-scoped handshake cache and its invalidation.
+        // A late accept from an obsolete link must not declare a downgrade.
+        const tracked = sendOpenLinkOnce(client, deviceId);
+        const accepted = await tracked.request;
+        if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
+        }
+        preSend();
+        return accepted;
+      },
+      () => sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend }),
+    );
+  }, [sendOpenLinkOnce]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
     // `owner` is the stable id of the mounted consumer (e.g. `session:<id>`). Tracking is

@@ -55,6 +55,7 @@ export type ModelRouteVerdict =
       reason:
         | 'model-disabled'
         | 'explicit-source-disabled'
+        | 'explicit-source-unavailable'
         | 'capability-model'
         | 'model-retired'
         | 'payment-required'
@@ -80,6 +81,8 @@ export function describeModelRouteRejection(
       return `model "${model}" is disabled in settings`;
     case 'explicit-source-disabled':
       return `provider "${providerId ?? ''}" is disabled for model "${model}" in settings`;
+    case 'explicit-source-unavailable':
+      return `provider "${providerId ?? ''}" is unavailable; select an available provider before sending`;
     case 'capability-model':
       return `model "${model}" is not an agent chat model`;
     case 'model-retired':
@@ -279,6 +282,10 @@ function checkDisableAxisRoute(
   ) {
     return { kind: 'reject', reason: 'payment-required' };
   }
+  // An explicit connection owns credential routing. Its removal must never become an implicit default.
+  if (providerId && !views.some((provider) => provider.id === providerId)) {
+    return { kind: 'reject', reason: 'explicit-source-unavailable' };
+  }
   if (offering.length === 0) {
     if (options.isPaymentRequiredTombstone?.(null, modelId, agent)) {
       return { kind: 'reject', reason: 'payment-required' };
@@ -312,7 +319,7 @@ function checkDisableAxisRoute(
       // 显式来源存在且未停用:放行。
       return { kind: 'pass' };
     }
-    // 未知/陈旧的显式来源(不在目录、或不提供该模型):实际路由层(provider-route)
+    // 已知来源但不提供该模型:实际路由层(provider-route)
     // 查不到该 provider 的 routing 描述会回退**原生默认**落点 —— 效果等同隐式路由。
     // 不能 pass-through:原生默认拷贝被停用时,带着陈旧 id 放行 = 照旧经停用拷贝
     // 付费(PR #744 review 第二十三轮)。落到下方隐式口径继续裁决(reroute 会把
@@ -467,6 +474,9 @@ export function resolveLenientRoute(
   let verdict = checkModelRoute(views, agent, model, providerId, opts);
   if (verdict.kind === 'pass') return { model, providerId, degraded: false };
   if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, false);
+  if (verdict.reason === 'explicit-source-unavailable') {
+    return { model: undefined, providerId, degraded: true };
+  }
   if (providerId) {
     verdict = checkModelRoute(views, agent, model, null, opts);
     if (verdict.kind === 'pass') return withEffort(model, null, true);

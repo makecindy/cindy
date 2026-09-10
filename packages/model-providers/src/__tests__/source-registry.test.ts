@@ -1427,7 +1427,7 @@ describe("registry visibility & sources(运行时注入 fixture)", () => {
     ).toBe("openai");
   });
 
-  it("effectiveSourceIdForModel 保留有效显式来源，失效时回落到同模型默认来源", () => {
+  it("effectiveSourceIdForModel 保留有效显式来源，失效时不替换账号", () => {
     const all = buildRegistry(runtimeCatalog(), {
       xd: true,
       anthropic: true,
@@ -1449,7 +1449,7 @@ describe("registry visibility & sources(运行时注入 fixture)", () => {
         "claude-opus-4-8",
         "claude-code",
       ),
-    ).toBe("xd");
+    ).toBeNull();
   });
 
   it("effectiveSourceIdForModel 不把请求路由到非聊天来源(issue #882 第 3 点,2026-07 review):同一 id 在不同来源上 mode 不一致时,只信聊天来源", () => {
@@ -1491,10 +1491,10 @@ describe("registry visibility & sources(运行时注入 fixture)", () => {
       ],
     };
     const views = buildRegistry(mixedModeCatalog, { xd: true, openai: true });
-    // 显式指定的 providerId 恰好是非聊天来源(xd)时,不接受它——落到真正聊天的来源(openai)。
+    // 显式指定的来源不是聊天来源时拒绝，不改用另一个账号。
     expect(
       effectiveSourceIdForModel(views, "xd", "shared-id", "claude-code"),
-    ).toBe("openai");
+    ).toBeNull();
     // 未显式指定 providerId 时,默认来源同样只能是聊天来源。
     expect(
       effectiveSourceIdForModel(views, null, "shared-id", "claude-code"),

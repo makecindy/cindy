@@ -71,6 +71,7 @@ CREATE TABLE sessions (
   total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
   context_tokens INTEGER NOT NULL DEFAULT 0,
   context_window INTEGER NOT NULL DEFAULT 0,
+  context_window_runtime INTEGER,
   fast_mode INTEGER NOT NULL DEFAULT 0,
   cleared_at INTEGER,
   pinned_at INTEGER,
@@ -199,6 +200,7 @@ interface TestSessionRow {
   totalCostUsd: number;
   contextTokens: number;
   contextWindow: number;
+  contextWindowRuntime?: number | null;
   fastMode: boolean;
   clearedAt: number | null;
   pinnedAt: number | null;
@@ -1679,7 +1681,7 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('fork.session inserts the new session and copies/remaps source messages', async () => {
+  it.each([false, true])('fork.session persists runtime provenance and remaps messages (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
       await seedSession(client, 'src');
       await client.exec(
@@ -1717,6 +1719,8 @@ describe('db worker tx handlers', () => {
           parentSessionId: 'src',
           forkedAtMessageId: 'c2',
           providerId: 'xd',
+          contextWindow: 100000,
+          contextWindowRuntime: 100000,
         }),
         uuidMap: [
           ['old', 'new'],
@@ -1729,7 +1733,7 @@ describe('db worker tx handlers', () => {
       expect(result).toEqual({ messageCount: 1 });
       await expect(
         client.queryOne(
-          'SELECT working_dir, parent_session_id, forked_at_message_id, provider_id FROM sessions WHERE id = ?',
+          'SELECT working_dir, parent_session_id, forked_at_message_id, provider_id, context_window, context_window_runtime FROM sessions WHERE id = ?',
           ['forked'],
         ),
       ).resolves.toEqual({
@@ -1737,6 +1741,8 @@ describe('db worker tx handlers', () => {
         parent_session_id: 'src',
         forked_at_message_id: 'c2',
         provider_id: 'xd',
+        context_window: 100000,
+        context_window_runtime: 100000,
       });
       const copied = await client.queryOne<{
         id: string;
@@ -1754,7 +1760,7 @@ describe('db worker tx handlers', () => {
         parentUuid: 'new-parent-tool',
         transcriptParentUuid: 'new-parent',
       });
-    });
+    }, { useInlineWorker });
   });
 
   it.each([false, true])('fork.session recovery marker is atomic with the child (inline=%s)', async (useInlineWorker) => {

@@ -565,6 +565,19 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
+  it('preserves partial output alongside an error in the Telegram turn.end frame', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'telegram', userText: 'hello' } }), c.send);
+    await tick();
+    fr.finish({ status: 'error', finalText: 'partial answer', errorMessage: '回复可能不完整' });
+    await tick();
+    expect(c.last('turn.end')?.payload).toMatchObject({
+      status: 'error', finalText: 'partial answer', errorMessage: '回复可能不完整',
+    });
+  });
+
   it('标题用 source.userText, 不吃 prompt 里 server 挂的 thread 上下文块', async () => {
     // server 会把 thread 上下文拼进 prompt(Slack 的 injectThreadContext 一直
     // 如此, X 也已接上)。按 prompt 前 24 字取标题的话, 整条 thread 派出来的

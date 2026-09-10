@@ -91,6 +91,14 @@ function collectEntries(): { locale: string; key: string; value: string }[] {
     }
   }
 
+  const credentials = JSON.parse(readFileSync(resolve(REPO_ROOT,
+    "packages/remote-credentials-native/Sources/CindyRemoteCredentials/Resources/credentials.json"), "utf8")) as Record<string, Record<string, string>>;
+  for (const [locale, table] of Object.entries(credentials)) {
+    for (const [key, value] of Object.entries(table)) {
+      out.push({ locale, key: `mobile/remoteCredentials:${key}`, value });
+    }
+  }
+
   return out;
 }
 

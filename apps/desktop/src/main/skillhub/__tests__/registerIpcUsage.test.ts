@@ -13,6 +13,15 @@ const showOpenDialog = vi.fn();
 const showMessageBox = vi.fn();
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 const assertTrustedAppRendererEvent = vi.fn();
+const isTrustedAppRendererWindow = vi.fn();
+const publishServiceOptions = vi.hoisted(() => ({ onProgress: null as null | ((event: unknown) => void) }));
+vi.mock('../publishService', () => ({
+  SkillPublishService: class {
+    constructor(options: { onProgress: (event: unknown) => void }) {
+      publishServiceOptions.onProgress = options.onProgress;
+    }
+  },
+}));
 const importLocalSkillMocks = vi.hoisted(() => ({
   inspectLocalSkill: vi.fn(),
   importLocalSkill: vi.fn(),
@@ -47,13 +56,17 @@ vi.mock('electron', () => ({
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
 }));
 
 const getCurrentDataOwnerId = vi.fn((): string | null => 'local-v1');
 vi.mock('../../authManager', () => ({ getCurrentDataOwnerId }));
 
+const ownerState = { generation: 1, pending: false };
 vi.mock('../../appSessionState', () => ({
-  isAppSessionBoundaryPending: vi.fn(() => false),
+  activeOwnerScopeKey: () => `cloud:owner:${ownerState.generation}`,
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: ownerState.generation }),
+  isAppSessionBoundaryPending: vi.fn(() => ownerState.pending),
 }));
 
 const ensureReady = vi.fn();
@@ -122,15 +135,21 @@ const marketService = {
   info: vi.fn(),
   listMarket: vi.fn(),
   listPublishedVersions: vi.fn(),
+  getScanStatus: vi.fn(),
   sync: vi.fn(),
   updatePublished: vi.fn(),
 };
 
 describe('registerSkillhubIpc usage handlers', () => {
   beforeEach(async () => {
+    publishServiceOptions.onProgress = null;
+    isTrustedAppRendererWindow.mockReset();
+    ownerState.generation = 1;
+    ownerState.pending = false;
     installServiceMocks.listPendingUninstallCleanups.mockReturnValue([]);
     handlers.clear();
     vi.clearAllMocks();
+    renameLocalSkill.mockReset();
     getManagedSkillRoots.mockReturnValue([]);
     getCurrentDataOwnerId.mockReturnValue('local-v1');
     getCurrentDbClientSnapshot.mockReset();
@@ -158,6 +177,94 @@ describe('registerSkillhubIpc usage handlers', () => {
       getAllowedProjectRoots,
       marketService: marketService as never,
       publishService: { publish, cancel } as never,
+    });
+  });
+
+  it('delivers private publication feedback only to currently trusted app windows', async () => {
+    const { BrowserWindow } = await import('electron');
+    const { registerSkillhubIpc } = await import('../registerIpc');
+    const trusted = { webContents: { send: vi.fn() } };
+    const utility = { webContents: { send: vi.fn() } };
+    const navigated = { webContents: { send: vi.fn() } };
+    const destroyed = { webContents: { send: vi.fn() } };
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValueOnce([trusted, utility, navigated, destroyed] as never);
+    isTrustedAppRendererWindow.mockImplementation((win) => win === trusted);
+    registerSkillhubIpc({
+      getMaker: () => ({ listAgentSkills }) as never,
+      getManagedSkillRoots, getAllowedProjectRoots, marketService: marketService as never,
+    });
+    const feedback = { phase: 'scan-result', name: 'review-helper', status: 'rejected', rejectionReason: 'Private feedback' };
+    publishServiceOptions.onProgress!(feedback);
+    expect(trusted.webContents.send).toHaveBeenCalledWith('skillhub:publish-progress', {
+      ...feedback, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    });
+    for (const win of [utility, navigated, destroyed]) {
+      expect(isTrustedAppRendererWindow).toHaveBeenCalledWith(win);
+      expect(win.webContents.send).not.toHaveBeenCalled();
+    }
+
+    // A window can navigate away between successive progress frames.
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValueOnce([trusted] as never);
+    isTrustedAppRendererWindow.mockReturnValue(false);
+    publishServiceOptions.onProgress!(feedback);
+    expect(trusted.webContents.send).toHaveBeenCalledTimes(1);
+
+    ownerState.pending = true;
+    isTrustedAppRendererWindow.mockReturnValue(true);
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValueOnce([trusted] as never);
+    publishServiceOptions.onProgress!(feedback);
+    expect(trusted.webContents.send).toHaveBeenCalledTimes(1);
+    vi.mocked(BrowserWindow.getAllWindows).mockReset().mockReturnValue([]);
+  });
+
+  describe.each([
+    { channel: 'skillhub:get-scan-status', field: 'slug', method: 'getScanStatus' },
+    { channel: 'skillhub:list-published-versions', field: 'name', method: 'listPublishedVersions' },
+  ] as const)('$channel private review boundary', ({ channel, field, method }) => {
+    it('rejects an untrusted sender before accessing the service', async () => {
+      assertTrustedAppRendererEvent.mockImplementationOnce(() => { throw new Error('PERMISSION_DENIED'); });
+      await expect(handlers.get(channel)!({}, { [field]: 'review-helper' })).rejects.toThrow('PERMISSION_DENIED');
+      expect(marketService[method]).not.toHaveBeenCalled();
+    });
+
+    it.each([null, [], {}, { value: 3 }, { value: '' }, { value: 'a'.repeat(129) },
+      { value: 'valid', version: 3 }, { value: 'valid', version: 'v'.repeat(129) },
+      { value: 'valid', catalogScope: 'invalid' }, { value: 'bad\0name' },
+    ])('rejects malformed parameters %j without a service request', async (input) => {
+      const params = input && !Array.isArray(input) ? { ...input, [field]: input.value } : input;
+      await expect(handlers.get(channel)!({}, params)).rejects.toThrow('INVALID_PARAMS');
+      expect(marketService[method]).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, 'team', 'market'] as const)('preserves catalog selection %s for trusted reads', async (catalogScope) => {
+      const result = { success: true, rejectionReason: 'Private feedback' };
+      marketService[method].mockResolvedValueOnce(result);
+      const event = { sender: { id: 11 } };
+      expect(await handlers.get(channel)!(event, { [field]: 'review-helper', version: '1.0.1', catalogScope })).toEqual(result);
+      expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
+      if (method === 'getScanStatus') {
+        expect(marketService[method]).toHaveBeenCalledWith({ slug: 'review-helper', version: '1.0.1', ...(catalogScope ? { catalogScope } : {}) });
+      } else {
+        expect(marketService[method]).toHaveBeenCalledWith('review-helper', catalogScope);
+      }
+    });
+
+    it.each(['generation', 'boundary'] as const)('drops a private response across an account %s change', async (transition) => {
+      let resolve!: (value: unknown) => void;
+      marketService[method].mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+      const request = handlers.get(channel)!({}, { [field]: 'review-helper' });
+      if (transition === 'generation') ownerState.generation += 1;
+      else ownerState.pending = true;
+      resolve({ success: true, rejectionReason: 'Private feedback', versions: [{ rejectionReason: 'Private feedback' }] });
+      const result = await request;
+      expect(result).toMatchObject({ success: false });
+      expect(JSON.stringify(result)).not.toContain('Private feedback');
+    });
+
+    it('preserves the empty-version shorthand for the latest release', async () => {
+      marketService[method].mockResolvedValueOnce({ success: true });
+      expect(await handlers.get(channel)!({}, { [field]: 'review-helper', version: '' })).toEqual({ success: true });
+      if (method === 'getScanStatus') expect(marketService[method]).toHaveBeenCalledWith({ slug: 'review-helper' });
     });
   });
 
@@ -236,6 +343,37 @@ describe('registerSkillhubIpc usage handlers', () => {
     );
     expect(afterDestroy).toMatchObject({ success: false });
   });
+
+  it.each(['unchanged', 'grant-wait', 'mutation-wait', 'boundary-pending'] as const)(
+    'guards local rename at its original owner generation: %s', async (transition) => {
+      const sender = { id: 71, on: vi.fn(), once: vi.fn() };
+      scanAllSkills.mockResolvedValueOnce({ skills: [{
+        absolutePath: '/physical/demo', discoveredPath: '/repo/.pi/skills/authorized/demo',
+        scope: 'project', projectRoot: '/repo',
+      }], sources: [] });
+      await handlers.get('skillhub:scan')!({ sender }, { projects: [] });
+      const mutate = vi.fn();
+      renameLocalSkill.mockImplementationOnce(async (_params, canMutate: () => boolean) => {
+        if (transition === 'mutation-wait') ownerState.generation += 1;
+        if (transition === 'boundary-pending') ownerState.pending = true;
+        if (!canMutate()) return { success: false, error: 'Skill mutation context changed' };
+        mutate();
+        return { success: true, newAbsolutePath: '/physical/renamed' };
+      });
+      if (transition === 'grant-wait') getAllowedProjectRoots.mockImplementationOnce(async () => {
+        ownerState.generation += 1;
+        return ['/repo'];
+      });
+      const result = await handlers.get('skillhub:rename-local')!({ sender }, {
+        absolutePath: '/repo/.pi/skills/authorized/demo', newName: 'renamed',
+      });
+      expect(result).toMatchObject({ success: transition === 'unchanged' });
+      expect(mutate).toHaveBeenCalledTimes(transition === 'unchanged' ? 1 : 0);
+      if (transition === 'grant-wait') {
+        expect(renameLocalSkill).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('revokes project scan grants after the last active project session disappears', async () => {
     const sender = { id: 12, on: vi.fn(), once: vi.fn() };

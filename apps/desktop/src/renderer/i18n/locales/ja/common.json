@@ -1293,8 +1293,7 @@
             "manual": "手動"
           },
           "toast": {
-            "title": "辞書に自動追加しました",
-            "titleMultiple": "{{count}} 件を辞書に自動追加しました",
+            "title": "辞書に追加しました",
             "termsSummary": "{{terms}} ほか合計 {{count}} 件",
             "automaticAdded": "辞書に自動追加しました：{{term}}",
             "automaticAddedMultiple": "辞書に自動追加しました：{{term}} ほか {{count}} 件",
@@ -1493,6 +1492,10 @@
       },
       "pill": {
         "connected": "接続済み",
+        "configured": "設定済み",
+        "disconnected": "未接続",
+        "connecting": "接続中…",
+        "rename": "名前を変更",
         "suspended": "無効"
       },
       "button": {
@@ -1517,7 +1520,17 @@
         "reconnectRequired": "再接続が必要",
         "connect": "ChatGPT に接続",
         "reconnect": "ChatGPT に再接続",
-        "cancelConnect": "接続をキャンセル"
+        "cancelConnect": "接続をキャンセル",
+        "accountSource": {
+          "local": "ローカル Codex アカウント",
+          "oauth": "個別にログインしたアカウント",
+          "unknown": "既存の OpenAI 接続"
+        },
+        "useLocalAccount": "ローカル Codex アカウントを使う",
+        "addIndependentAccount": "別のアカウントにログイン",
+        "accountSourcesDescription": "既存のローカル Codex 接続を使うか、別のアカウントにログインします。どちらも同じ機能を利用できます。",
+        "independentAccountDescription": "別途保存する ChatGPT アカウントにログインするか、API キーで接続します。",
+        "localUnavailable": "再利用できるローカル接続がありません。既存の接続のアカウントは変更されません。"
       },
       "xai": {
         "title": "xAI",
@@ -1526,7 +1539,7 @@
         "billingLabel": "SuperGrok サブスク直結",
         "asset": {
           "weeklyTitle": "週間上限",
-          "weeklyUsed": "{{percent}}% 使用済み",
+          "weeklyRemaining": "残り {{percent}}%",
           "resetsAt": "{{at}} にリセット",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Grok の使用量ページを開く"
@@ -1811,7 +1824,7 @@
         "subscription": "サブスク",
         "subscriptionProduct": "{{product}} サブスク",
         "noResults": "一致するモデルがありません",
-        "capabilityNote": "{{agent}} では利用不可",
+        "capabilityNote": "{{agent}} は未設定",
         "refreshAria": "モデル一覧を更新(追加のみ)",
         "refreshBuiltinAria": "モデル一覧を更新",
         "refreshingAria": "モデル一覧を更新中…",
@@ -1824,7 +1837,7 @@
         "paymentRequired": "有料",
         "paymentUnlock": "有料で解放",
         "enableModel": "このモデルを有効にする",
-        "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
+        "capabilityGroupHint": "チャットのモデル選択には表示されません。スイッチで画像・動画機能への掲載を制御します。",
         "accessWriteFailed": "変更を保存できませんでした。もう一度お試しください。",
         "visibilityWriteFailed": "モデルの表示設定を保存できませんでした。もう一度お試しください。問題が解決しない場合は、Cindy を再起動してください。",
         "disabledGroup": "無効",
@@ -1887,6 +1900,7 @@
           "engines": "エンジン対応",
           "enginesHint": "互換モードはリクエストを変換します。初期状態ではオフですが、必要に応じて有効にできます。",
           "engineUnsupported": "非対応",
+          "engineNotConfigured": "未設定",
           "engineNoFast": "Fast なし",
           "vision": {
             "vision": "対応",
@@ -1907,7 +1921,7 @@
           "close": "閉じる",
           "maxOutput": "最大出力",
           "catalogCapabilities": "カタログに記載された機能",
-          "contextInvalid": "1～100,000 K の整数を入力してください。",
+          "contextInvalid": "{{min}}～100,000 K の整数を入力してください。",
           "contextWriteFailed": "保存できませんでした。再試行してください。",
           "contextMixed": "実行環境ごとに設定が異なります。変更やリセットはすべてに適用されます。",
           "inputModalities": "入力形式",
@@ -2222,27 +2236,15 @@
           "cancel": "キャンセル"
         }
       },
-      "imagesKey": {
-        "label": "画像生成 API key",
-        "placeholder": "OpenAI プラットフォーム API key を貼り付け",
-        "save": "保存",
-        "clear": "クリア",
-        "toast": {
-          "saved": "画像生成 API key を保存しました",
-          "saveFailed": "画像生成 API key の保存に失敗しました。もう一度お試しください",
-          "cleared": "画像生成 API key をクリアしました",
-          "clearFailed": "画像生成 API key のクリアに失敗しました"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 使用済み",
+        "percentRemaining": "残り {{percent}}%",
         "resetsAt": "{{at}} にリセット",
         "claudePlanFallback": "Claude サブスクリプション",
-        "claudeWeekly": "7 日ウィンドウ {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7日間の残り {{percent}}%",
+        "scopedModel": "{{model}} 残り {{percent}}%",
         "openClaudeUsage": "使用量ページを開く",
         "codexPlanFallback": "ChatGPT サブスクリプション",
-        "codexSecondary": "副ウィンドウ {{percent}}%",
+        "codexSecondary": "第2ウィンドウの残り {{percent}}%",
         "codexResetCredits": "上限リセット券 {{count}} 枚"
       }
     },
@@ -5558,6 +5560,33 @@
     "cindyMake": {
       "title": "Cindy Make",
       "openToolsDir": "ツールフォルダを開く",
+      "source": {
+        "title": "ソースコードの状態",
+        "openDir": "ソースコードフォルダーを開く",
+        "prepare": "ソースを準備",
+        "reset": "ソースを削除",
+        "update": "ソースを更新",
+        "preparingAction": "ソースを準備中",
+        "path": "パス",
+        "channel": "チャンネル",
+        "version": "バージョン",
+        "ref": "Ref",
+        "commit": "コミット",
+        "status": {
+          "missing": "個人版のソースコードは未準備です",
+          "pending": "ソースを準備中",
+          "preparing": "個人版のソースコードを準備中です",
+          "ready": "個人版のソースコードを準備しました",
+          "failed": "ソースコードの準備に失敗しました",
+          "cancelled": "ソースの準備を停止しました"
+        },
+        "resetConfirm": {
+          "title": "個人用ソースを削除しますか？",
+          "description": "Cindy が管理するソースディレクトリだけを削除します。必要になったら、もう一度ソースを準備できます。",
+          "confirm": "ソースを削除",
+          "cancel": "キャンセル"
+        }
+      },
       "description": "下のカードで本機の環境を確認し、不足するポータブルツールをインストールできます。ネイティブなコンパイラが不足している場合は公式の案内を表示します。",
       "checking": "環境を確認中…",
       "forceManaged": {
@@ -5964,6 +5993,8 @@
     "modelWeeklyLabel": "{{model}} 週間",
     "usedPercent": "使用済み {{percent}}%",
     "remainingPercent": "残り {{percent}}%",
+    "resetIn": "{{duration}}後にリセット",
+    "resetPending": "リセット情報の更新待ち",
     "resetAt": "{{at}} にリセット",
     "noWindows": "クォータ期間のデータはありません",
     "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
@@ -7043,6 +7074,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "セッションに戻る",
     "vendorReadiness": {
       "loading": "利用可否を確認中",
       "ready": "準備完了",
@@ -11245,6 +11277,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "審査で却下されました",
+      "rejectedDesc": "このバージョンは審査に通りませんでした。以下の指摘を修正して、再度公開してください。",
+      "rejectionReasonUnavailable": "このバージョンは審査に通りませんでしたが、具体的な理由は提供されていません。詳細は審査担当者にお問い合わせください。",
+      "rejectionReason": "却下理由",
       "dismiss": "了解",
       "passedTitle": "セキュリティスキャン通過",
       "passedDesc": "このバージョンはすべてのセキュリティチェックに合格し、マーケットに公開されました。",
@@ -11464,6 +11500,7 @@
       "qrExpired": "QR コードが期限切れです。最初からやり直してください",
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
+      "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。次のメッセージを送信して続行できます。",
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy は内蔵 iOS シミュレータを迂回するシェルコマンドをブロックしました。デバイスの操作、アプリの起動、画面操作、スクリーンショット、診断には iOS シミュレータツールを使用してください。",
@@ -12332,7 +12369,7 @@
       }
     },
     "upstream": {
-      "pending": "すべての環境チェックに合格すると、上流の検索を自動で開始します。",
+      "pending": "環境とソースの準備が完了すると、上流の検索を自動で開始します。",
       "needsRequest": "変更内容の入力待ち",
       "needRequest": "変更したい機能名や具体的なエラーを入力して、関連する上流の内容を検索します。",
       "placeholder": "例：メッセージ表示のちらつきを修正",
@@ -12350,8 +12387,6 @@
       "wait": "上流を待つ",
       "personal": "個人版の作成を続ける",
       "retry": "環境を再確認して検索",
-      "expand": "上流の結果を表示",
-      "collapse": "上流の結果を隠す",
       "count": "関連する可能性のあるオープン Issue／PR が {{count}} 件見つかりました",
       "kind": {
         "issue": "Issue",
@@ -12369,7 +12404,7 @@
       },
       "decisionHint": {
         "wait": "このフローは停止しました。通知の購読や自動更新は設定していません。",
-        "personal": "選択をこのカードに記録しました。ソースの準備とビルドはまだ未対応です。ソースの取得や変更は行っていません。"
+        "personal": "選択を記録しました。Cindy がソースディレクトリで実装用のセッションを作成しています。"
       },
       "failure": {
         "network": "GitHub に接続できません。接続を確認して再試行してください。",
@@ -12380,6 +12415,45 @@
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 環境の準備",
-    "stepUpstream": "2 · 上流の検索"
+    "stepUpstream": "3 · 上流の検索",
+    "stepSource": "2 · ソースを準備",
+    "source": {
+      "preparing": "ソースを準備しています",
+      "phase": {
+        "checking": "Git とソースを確認中",
+        "cloning": "ソースをダウンロード中",
+        "fetching": "リポジトリを更新中",
+        "checkingOut": "バージョンを切替中"
+      },
+      "ready": "ソースの準備が完了しました",
+      "failed": "ソースの準備に失敗しました",
+      "cancelled": "ソースの準備を停止しました",
+      "errors": {
+        "unsupportedVersion": "現在のバージョン形式はサポートされていません。",
+        "tagNotFound": "現在のバージョンに必要なタグが見つかりません。",
+        "dirty": "ソースディレクトリに未コミットの変更があります。",
+        "gitFailed": "Git でソースを準備できませんでした。",
+        "cancelled": "ソースの準備を停止しました。",
+        "localCommits": "ソースに上流に含まれないローカルコミットまたはスタッシュがあります。削除する前に保存またはバックアップしてください。",
+        "environmentNotReady": "ビルド環境の準備ができていません。必要なツールを確認してください。",
+        "gitUnavailable": "Git を利用できません。環境カードで Git を確認してインストールし、再試行してください。"
+      },
+      "gitProgress": {
+        "counting": "オブジェクトを集計中",
+        "compressing": "オブジェクトを圧縮中",
+        "receiving": "オブジェクトを受信中",
+        "resolving": "差分を解決中",
+        "checkingOut": "ファイルを更新中"
+      },
+      "missing": "ソースはまだ準備されていません"
+    },
+    "code": {
+      "starting": "個人版タスクを開いています",
+      "started": "個人版タスクを作成しました",
+      "failed": "個人版タスクを作成できませんでした",
+      "start": "個人版を作成",
+      "open": "個人版タスクを開く",
+      "sendFailed": "要求を送信できませんでした。個人版タスクを開いて再試行してください"
+    }
   }
 }

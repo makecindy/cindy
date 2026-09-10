@@ -47,7 +47,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(compact("codexAuthInjection === 'oauth-bearer'"));
     expect(compact(source)).toContain(compact("vendorKey === 'codex' && !isCodexXaiProvider"));
     expect(compact(source)).toContain(compact('isRemoteCodexSession ||'));
-    expect(compact(source)).toContain(compact("(providerId == null || providerId === 'openai')"));
+    expect(compact(source)).toContain(compact("(providerId == null || isOpenAiAccount)"));
     expect(compact(source)).toContain(compact('modelId.startsWith(XAI_MODEL_PREFIX)'));
     expect(compact(source)).toContain(compact("providerId === 'xai'"));
     expect(compact(source)).toContain(
@@ -76,8 +76,9 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     // 订阅形态分类整体排除 device-link(专属分支接管渲染)
     expect(compact(source)).toContain(
-      compact("(vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')"),
+      compact("const isClaudeSubscription = !isDeviceLinkRemote &&"),
     );
+    expect(compact(source)).toContain(compact("((vendorKey === 'pi' || vendorKey === 'codex') && !remoteHostId && isClaudeAccount)"));
     // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
     expect(compact(source)).toContain(compact('if (isDeviceLinkRemote) {'));
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
@@ -195,11 +196,11 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(
       compact(
         'if (isChatgptBridge) {\n' +
-          '      requestCodexAccountRefresh();\n' +
+          '      requestCodexAccountRefresh(providerId ?? undefined);\n' +
           '    } else if (usesXaiQuotaForm) {\n' +
-          '      requestXaiSubscriptionRefresh();\n' +
+          "      requestXaiSubscriptionRefresh(providerId ?? 'xai');\n" +
           '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n' +
-          '      requestClaudeSubscriptionRefresh();\n' +
+          "      requestClaudeSubscriptionRefresh(providerId ?? 'anthropic');\n" +
           '    }',
       ),
     );
@@ -335,7 +336,7 @@ describe('shared usage-card provider projections', () => {
     expect(buildCodexUsageCard(null, null, t, now).emptyText).toBe('quotaCard.waiting');
   });
 
-  it('preserves Grok product, prepaid USD, and instantaneous rate-limit details', () => {
+  it('keeps Grok shared remaining quota, prepaid USD and rate-limit details without presenting product contributions as balances', () => {
     const card = buildXaiUsageCard(
       {
         planLabel: 'SuperGrok',
@@ -360,16 +361,7 @@ describe('shared usage-card provider projections', () => {
       now,
     );
     expect(card.windows.map((window) => window.window.utilization)).toEqual([9]);
-    expect(card.windows[0].breakdown).toEqual([
-      {
-        label: 'quotaCard.includedLabel:{"name":"Grok Build"}',
-        value: 'quotaCard.usedPercent:{"percent":2}',
-      },
-      {
-        label: 'quotaCard.includedLabel:{"name":"Other Product"}',
-        value: 'quotaCard.usedPercent:{"percent":7}',
-      },
-    ]);
+    expect(card.windows[0].breakdown).toBeUndefined();
     expect(card.windows[0].detail).toBe('todaySpend.xai.accountWeeklyHint');
     expect(card.details).toEqual(
       expect.arrayContaining([

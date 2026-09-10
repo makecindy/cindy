@@ -1111,6 +1111,40 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
     ]);
   });
 
+  it.each([false, true])('retains output-limit usage exactly once (continuation=%s)', (continuation) => {
+    const { tr, ends } = makeTranslator({ t: 0 });
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: true } });
+    if (continuation) {
+      tr.handleEvent({ type: 'done', source: 'pi', turnContinuationId: 7,
+        data: { usage: { inputTokens: 2, outputTokens: 3 } } });
+    }
+    const usage = { inputTokens: 10, outputTokens: 16_000, cacheReadTokens: 4, cacheCreationTokens: 6 };
+    tr.handleEvent({ type: 'error', source: 'pi',
+      data: { reason: 'output-limit', isTerminal: true, usage } });
+    expect(ends).toEqual([expect.objectContaining({
+      endReason: 'error', agent: 'pi',
+      usage: { ...usage, inputTokens: continuation ? 12 : 10, outputTokens: continuation ? 16_003 : 16_000 },
+    })]);
+    tr.handleEvent({ type: 'done', source: 'pi', data: { status: 'failed', usage } });
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: false } });
+    vi.advanceTimersByTime(1_000);
+    expect(ends).toHaveLength(1);
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: true } });
+    tr.handleEvent({ type: 'done', source: 'pi', data: { usage: { inputTokens: 1 } } });
+    expect(ends[1]).toMatchObject({ endReason: 'completed', usage: { inputTokens: 1 } });
+    expect((ends[1] as { usage: unknown }).usage).toEqual({ inputTokens: 1 });
+  });
+
+  it('ignores nonterminal error usage and preserves errors without usage', () => {
+    const { tr, ends } = makeTranslator({ t: 0 });
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    tr.handleEvent({ type: 'error', data: { isTerminal: false, usage: { inputTokens: 99 } } });
+    expect(ends).toHaveLength(0);
+    tr.handleEvent({ type: 'error', data: { isTerminal: true } });
+    expect(ends).toEqual([expect.objectContaining({ endReason: 'error' })]);
+    expect(ends[0]).not.toHaveProperty('usage');
+  });
+
   it('status false 后宽限窗内无 done/error = interrupted;terminal error 定性 error', () => {
     const nowRef = { t: 0 };
     const { tr, ends } = makeTranslator(nowRef);

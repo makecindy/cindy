@@ -66,7 +66,9 @@ Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
 下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复
 Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveTokens`
-（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
+（`capacity - budget * pct/100`）；切模只按这份百分比快照重算，不回读最新全局值。
+模型容量用于 Pi 原生请求长度裁剪，不能随小预算缩到 1K；工作预算只调整原生压缩阈值，
+并作为已应用预算进入 Cindy 的用量快照。
 大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
 日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
 `switch_session`，必须重新 `set_model` 并用 `get_state` 校验
@@ -84,7 +86,8 @@ SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新
 放任 pi 默认(未写 settings.json):`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、
 `compaction.keepRecentTokens`、`defaultProjectTrust`。Cindy 会在每次 startSession 覆写
 `transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
-未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
+未配置 Pi 百分比且未缩小工作预算时不写 `reserveTokens`，沿用 Pi 默认 16384；
+显式小预算仍以默认 90% 计算触发阈值。
 
 
 Skill 停用适配同时保存物理身份与管理页已扫描的词法发现入口；启动前只采用仍指向该

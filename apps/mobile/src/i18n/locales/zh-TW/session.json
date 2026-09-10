@@ -469,6 +469,7 @@
     "continueTask": "繼續任務",
     "retry": "重試",
     "ignore": "忽略",
+    "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",
     "toolUseLoopDetected": "模型重複呼叫工具次數過多，Cindy 已停止這一輪以避免無限迴圈。可以傳送新訊息繼續。",
     "toolUseLoopDetectedWithCount": "模型連續觸發無效的工具呼叫，Cindy 已在 {{count}} 次失敗後停止本輪，以避免無限迴圈。可以傳送新訊息繼續。",
     "toolUseLoopDetectedConsecutiveWithCount": "模型重複呼叫同一個工具 {{count}} 次，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",

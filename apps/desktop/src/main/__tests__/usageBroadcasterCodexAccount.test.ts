@@ -89,6 +89,33 @@ describe('codex account usage source slots', () => {
     expect(payload?.webSnapshot?.source).toBe('openai-web');
   });
 
+  it('isolates provider snapshots, persistent keys, and clearing', async () => {
+    const usage = await import('../usageBroadcaster');
+    await usage.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    await usage.recordCodexAccountUsageSnapshot({ ...APP_SERVER_SNAPSHOT,
+      accountId: 'acc-2', primary: { usedPercent: 13 } }, 'openai-second');
+    expect((await usage.readCodexAccountUsageSnapshot())?.primary?.usedPercent).toBe(82);
+    expect((await usage.readCodexAccountUsageSnapshot('openai-second'))?.primary?.usedPercent).toBe(13);
+    expect(mocks.exec.mock.calls.some((call) => (call as unknown[])[1] instanceof Array
+      && ((call as unknown[])[1] as unknown[])[0] === 'codex:openai-second')).toBe(true);
+    expect(mocks.broadcasts.at(-1)).toMatchObject({ providerId: 'openai-second', snapshot: { accountId: 'acc-2' } });
+    await usage.clearCodexAccountUsageSnapshot('openai-second');
+    expect(await usage.readCodexAccountUsageSnapshot('openai-second')).toBeNull();
+    expect((await usage.readCodexAccountUsageSnapshot())?.accountId).toBe('acc-1');
+  });
+
+  it('does not revive a cleared provider with a late hydration', async () => {
+    let resolve!: (value: { snapshot: string }) => void;
+    mocks.queryOne.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const usage = await import('../usageBroadcaster');
+    const pending = usage.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT, 'openai-second');
+    await usage.clearCodexAccountUsageSnapshot('openai-second');
+    resolve({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+    await pending;
+    expect(await usage.readCodexAccountUsageSnapshot('openai-second')).toBeNull();
+    expect(mocks.broadcasts).toEqual([{ providerId: 'openai-second', snapshot: null }]);
+  });
+
   it('keeps the web slot intact when app-server events arrive afterwards', async () => {
     const broadcaster = await import('../usageBroadcaster');
 

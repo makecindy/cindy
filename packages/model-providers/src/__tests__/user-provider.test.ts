@@ -23,6 +23,36 @@ import {
 import type { CustomProviderConfig } from "../types.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
 import { BUNDLED_CATALOG } from "../catalog.js";
+import { providerCatalogId } from "../provider-identity.js";
+
+describe('native subscription instances', () => {
+  it.each(['claude', 'xai'] as const)('%s shares definitions but keeps unique routing identity', native => {
+    const brand = native === 'claude' ? 'anthropic' : 'xai';
+    const make = (id: string) => buildUserProvider({ id, name: brand, auth: { method: 'oauth', native }, runtimes: native === 'claude'
+      ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } }
+      : { codex: { baseUrl: 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: [] } } });
+    const a = make(`${brand}-a`);
+    const b = make(`${brand}-b`);
+    expect(a.id).not.toBe(b.id);
+    expect(providerCatalogId(a)).toBe(brand);
+    expect(a.agents).toEqual(expect.arrayContaining(['claude-code', 'codex', 'pi']));
+    expect(a.models).toEqual(b.models);
+    for (const agent of a.agents) expect(a.routing[agent]?.authStrategy).toBe('provider-oauth-header');
+    const builtin = BUNDLED_CATALOG.providers.find(provider => provider.id === brand)!;
+    for (const agent of a.agents) {
+      expect(a.routing[agent]).toEqual({
+        ...builtin.routing[agent],
+        authStrategy: 'provider-oauth-header',
+        ...(native === 'claude' && agent === 'claude-code' ? { headerDelete: ['x-api-key'] } : {}),
+      });
+    }
+    expect(a.auth.native).toBe(native);
+    expect(a.imageModels).toBeUndefined();
+    expect(a.imageDefaults).toBeUndefined();
+    expect(a.videoModels).toBeUndefined();
+    expect(a.videoDefaults).toBeUndefined();
+  });
+});
 
 // Preserve the pre-V4 contract explicitly; layered V4 behavior has independent cases below.
 const LEGACY_REGISTRY: ModelRegistry = {
@@ -47,6 +77,21 @@ const codexOnly: CustomProviderConfig = {
 };
 
 describe("buildUserProvider (per-runtime)", () => {
+  it("keeps native Codex accounts distinct while preserving bearer passthrough", () => {
+    const account: CustomProviderConfig = { id: 'openai-a', name: 'Personal', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-6-astra', name: 'Astra' }] } } };
+    const a = buildUserProvider(account);
+    const b = buildUserProvider({ ...account, id: 'openai-b', name: 'Work' });
+    expect(a.auth).toEqual({ method: 'oauth', native: 'codex' });
+    expect(a.agents).toEqual(['codex', 'claude-code', 'pi']);
+    expect(a.titleModel).toBeTruthy();
+    expect(a.models.pi?.length).toBeGreaterThan(0);
+    expect(a.imageModels?.every((model) => model.id.startsWith('openai-a/'))).toBe(true);
+    expect(a.routing.codex?.authStrategy).toBe('oauth-passthrough');
+    expect(a.routing.codex?.supportsResponsesCustomTools).not.toBe(false);
+    expect(a.id).not.toBe(b.id);
+    expect(a.models.codex?.[0].id).toBe(b.models.codex?.[0].id);
+  });
   it("projects a legacy custom xai row under a collision-free runtime id", () => {
     const provider = buildUserProvider({
       ...codexOnly,

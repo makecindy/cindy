@@ -463,12 +463,12 @@ export interface MobileMakerTransport {
    * 接口返回为准,shape 见 maker-shared summarizeAccountRateLimits),claude-code →
    * 网关配额。老被控端 CHANNEL_NOT_ALLOWED → 调用方隐藏限额区块。
    */
-  getAccountUsage(agentKind: MobileAgentKind): Promise<unknown>;
+  getAccountUsage(agentKind: MobileAgentKind, providerId?: string): Promise<unknown>;
   getSessionEstimatedValue(sessionId: string): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
-  getCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
+  getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   /** Consume the desktop-issued offer; retries must pass the same idempotency key. */
-  resetCodexRateLimits(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
+  resetCodexRateLimits(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
   /** 网关 API key presence-only 探测(只回 boolean;老被控端 → 调用方按 unknown 处理)。 */
   getApiKeyPresent(): Promise<{ present: boolean }>;
   /** 会话「非选中模型」effort/fast 写穿(老被控端 → 调用方吞掉降级)。 */
@@ -744,12 +744,22 @@ export function createMobileMakerTransport({
     setFastMode: (sessionId, enabled) => call('maker:set-fast-mode', [sessionId, enabled]),
     setExtraDirs: (sessionId, dirs) => call('maker:set-extra-dirs', [sessionId, dirs]),
     getModelPricing: () => call('maker:usage:model-pricing'),
-    getAccountUsage: (agentKind) => call('maker:usage:account', [agentKind]),
+    getAccountUsage: async (agentKind, providerId) => {
+      const result = await call<unknown>('maker:usage:account', providerId ? [agentKind, providerId] : [agentKind]);
+      if (providerId && providerId !== 'openai' && result && (result as { providerId?: string }).providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      return result;
+    },
     getSessionEstimatedValue: (sessionId) => call('local-db:messages:estimatedSessionValue', [sessionId]),
-    getCodexRateLimits: () => call('maker:usage:codex-rate-limits'),
-    resetCodexRateLimits: (idempotencyKey) => (
-      call('maker:usage:codex-rate-limit-reset', [idempotencyKey])
-    ),
+    getCodexRateLimits: async (providerId) => {
+      const result = await call<MobileCodexRateLimitsResult>('maker:usage:codex-rate-limits', providerId ? [providerId] : undefined);
+      if (providerId && providerId !== 'openai' && result.providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      return result;
+    },
+    resetCodexRateLimits: async (idempotencyKey, providerId) => {
+      const result = await call<MobileCodexRateLimitResetResult>('maker:usage:codex-rate-limit-reset', providerId ? [idempotencyKey, providerId] : [idempotencyKey]);
+      if (providerId && providerId !== 'openai' && result.providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      return result;
+    },
     getApiKeyPresent: () => call('maker:api-key:present'),
     setSessionModelPref: (pref) => call('maker:set-session-model-pref', [pref]),
     applyNewMakerDraftPref: (pref) => call('maker:apply-new-maker-draft-pref', [pref]),

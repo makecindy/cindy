@@ -17,8 +17,8 @@ import { modelManagementState } from './modelManagementState';
  *         折叠区(复用分组折叠交互,默认展开),行内「启用此模型」即飞回原分组。
  *         "下沉"是停用在整个设置页的统一隐喻(左栏停用的供应商同样沉底)。
  *   - **能力模型组**(图像/音频/视频/向量/其它端点):不能当 agent 用,永远不进对话模型
- *     选择面板(modelList.ts 硬排除),没有显示轴 ⇒ 行内**没有开关**,只有「⋯」停用;
- *     其启用状态控制媒体生成等专属链路能否使用它。
+ *     选择面板(modelList.ts 硬排除)。图像/视频走同一套显示开关,控制作图/视频功能
+ *     是否列出该型号;音频/向量仍只有「⋯」停用。
  *   - 普通列表只有一个显示开关;开启时只选一个推荐引擎，逐引擎控制进入高级详情。
  *   - 用途筛选与厂商分组独立;同一家族按型号数字倒序,不冒充上线时间。
  *
@@ -227,6 +227,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime';
     mode?: string;
     modalities?: CatalogModel['modalities'];
+    defaultEnabled?: boolean;
   }> = [
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
     ...(provider.videoModels ?? []).map((m) => ({ ...m, group: 'video' as const })),
@@ -261,6 +262,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
       ...(m.modalities ? { modalities: m.modalities } : {}),
       ...(m.disabled === true ? { disabled: true } : {}),
       ...(m.availability !== undefined ? { availability: m.availability } : {}),
+      ...(m.defaultEnabled !== undefined ? { defaultEnabled: m.defaultEnabled } : {}),
     };
     const row: UnionModelRow = {
       id: m.id,
@@ -274,10 +276,34 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
   return rows;
 }
 
+function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
+  if (!isCapabilityRow(row, userProvider)) return true;
+  return managementKindsOfRow(row, userProvider).some((kind) => kind === 'image' || kind === 'video');
+}
+
+/** Image/video switches follow media readiness, not the chat OAuth connection. */
+export function canWriteModelVisibility(options: {
+  connected: boolean;
+  suspended?: boolean;
+  mediaRow: boolean;
+  mediaReady: boolean;
+}): boolean {
+  if (options.suspended) return false;
+  if (options.mediaRow) return options.mediaReady;
+  return options.connected;
+}
+
 /** 该行在指定 agent 下的可见性(不可用 → null)。 */
 function rowEnabled(providerId: string, row: UnionModelRow, agent: AgentKind, userProvider: boolean): boolean | null {
   const m = row.byAgent[agent];
-  return m && isAgentSelectableModel(m, { userProvider }) ? isModelEnabled(agent, providerId, m) : null;
+  if (!m) return null;
+  if (
+    isAgentSelectableModel(m, { userProvider }) ||
+    rowHasVisibilitySwitch(row, userProvider)
+  ) {
+    return isModelEnabled(agent, providerId, m);
+  }
+  return null;
 }
 
 /** 该行是否被停用(准入轴;单一写入口把全部 avail 一起写,任一端带标志即视为停用)。 */
@@ -297,7 +323,7 @@ export function hasPaymentRequiredDisabledRow(
   return rows.some((row) => isDisabled(row) && isRowPaymentRequired(row));
 }
 
-/** 该行是否是「能力模型」(图像/音频/视频/向量等,没有显示轴;见头注)。
+/** 该行是否是「能力模型」(图像/音频/视频/向量等,不进对话选择器;见头注)。
  *  `userProvider` = 行来自用户自定义供应商 —— 自定义对话模型的未知 group 不吃 id
  *  启发式(`gpt-4o-audio-preview` 是合法对话模型,见 isAgentSelectableModel 注释)。 */
 export function isCapabilityRow(row: UnionModelRow, userProvider: boolean): boolean {
@@ -313,10 +339,17 @@ export function modelVisibilityTargets(
   row: UnionModelRow,
   enabled: boolean,
 ) {
+  const userProvider = provider.source === 'user';
+  if (rowHasVisibilitySwitch(row, userProvider) && isCapabilityRow(row, userProvider)) {
+    return row.avail.flatMap((agent) => {
+      const model = row.byAgent[agent];
+      return model ? [{ agent, modelId: model.id }] : [];
+    });
+  }
   if (!enabled)
     return row.avail.flatMap((agent) => {
       const model = row.byAgent[agent];
-      return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
+      return model && isAgentSelectableModel(model, { userProvider }) ? [{ agent, modelId: model.id }] : [];
     });
   // Choosing a model is not consent to enable every harness. Advanced per-engine choices
   // stay where the user made them; an ordinary enable only needs one usable recommended route.
@@ -698,7 +731,7 @@ export function UnifiedModelList({
      * 「再开一个」,前者需要开着的集中在上面。
      *
      * 三种行不沉:
-     *   - **能力模型行**没有显示轴(全页开关语义唯一 = 显示),不参与这个判定;
+     *   - **没有显示开关的能力行**(音频/向量)不参与这个判定;
      *   - **付费锁定行**的开关本就不可动,沉底只会让用户以为是自己关的;
      */
     const sinkHidden = (r: UnionModelRow) => rowState(r).hidden;
@@ -756,12 +789,22 @@ export function UnifiedModelList({
 
   const selectableRows = unionRows.filter(
     (row) =>
-      !isCapabilityRow(row, provider.source === 'user') &&
+      rowHasVisibilitySwitch(row, provider.source === 'user') &&
       !isRowPaymentRequired(row) &&
       !rowDisabledEffective(row),
   );
+  const userProvider = provider.source === 'user';
+  const writableRows = selectableRows.filter((row) =>
+    canWriteModelVisibility({
+      connected: provider.connected,
+      suspended: provider.suspended,
+      mediaRow: isCapabilityRow(row, userProvider) && rowHasVisibilitySwitch(row, userProvider),
+      mediaReady: rowState(row).canSelect,
+    }),
+  );
+  const visibilityWriteAvailable = writableRows.length > 0;
   // Saved preferences survive disconnection; the count and switches show effective selection.
-  const selectedCount = selectableRows.filter((row) => rowState(row).selected).length;
+  const selectedCount = writableRows.filter((row) => rowState(row).selected).length;
   const refreshLabel = refreshing
     ? t('settings.providers.models.refreshingAria')
     : (refreshIdleLabel ?? t('settings.providers.models.refreshAria'));
@@ -772,24 +815,34 @@ export function UnifiedModelList({
   /** 开启只选推荐引擎；关闭清掉该行所有引擎的显示。写入始终使用各引擎真实模型 ID。 */
   const toggleRow = useCallback(
     async (row: UnionModelRow) => {
-      if (!selectionAvailable) return;
-      const next = !rowAnyEnabled(provider.id, row, provider.source === 'user');
+      const userProvider = provider.source === 'user';
+      if (
+        !canWriteModelVisibility({
+          connected: provider.connected,
+          suspended: provider.suspended,
+          mediaRow: isCapabilityRow(row, userProvider) && rowHasVisibilitySwitch(row, userProvider),
+          mediaReady: rowState(row).canSelect,
+        })
+      ) {
+        return;
+      }
+      const next = !rowAnyEnabled(provider.id, row, userProvider);
       const targets = modelVisibilityTargets(provider, row, next);
       if (await setModelVisibilities(provider.id, targets, next) === false) {
         showVisibilityWriteFailure();
       }
     },
-    [provider, selectionAvailable, showVisibilityWriteFailure],
+    [provider, rowState, showVisibilityWriteFailure],
   );
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
   // models skips already selected rows, preserving every explicit advanced harness choice.
   const handleBulk = async (action: 'show' | 'hide' | 'reset') => {
-    if (!selectionAvailable) return;
+    if (!visibilityWriteAvailable) return;
     const next = action === 'show';
     const rows = next
-      ? selectableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
-      : selectableRows;
+      ? writableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
+      : writableRows;
     const targets = rows.flatMap((row) => modelVisibilityTargets(provider, row, next));
     const success =
       action === 'reset'
@@ -948,10 +1001,11 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 能力模型行没有显示轴 ⇒ 没有开关(全页开关语义唯一 = 显示);
-            占同宽空位,保证开关/上下文列跨行对齐。 */}
-        {capability && <span className="w-9 shrink-0" />}
-        {!capability && (
+        {/* 音频/向量能力行没有显示开关,占同宽空位保证列对齐。图像/视频与对话同行。 */}
+        {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
+          <span className="w-9 shrink-0" />
+        )}
+        {rowHasVisibilitySwitch(row, provider.source === 'user') && (
           <Switch
             disabled={!state.canSelect}
             checked={anyOn}
@@ -1042,19 +1096,19 @@ export function UnifiedModelList({
                     {t('settings.providers.models.manage.selection')}
                   </DropdownMenuLabel>
                   <DropdownMenuItem
-                    disabled={!selectionAvailable || selectedCount === selectableRows.length}
+                    disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
                     onSelect={() => handleBulk('show')}
                   >
                     {t('settings.providers.models.manage.showAll')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    disabled={!selectionAvailable || selectedCount === 0}
+                    disabled={!visibilityWriteAvailable || selectedCount === 0}
                     onSelect={() => handleBulk('hide')}
                   >
                     {t('settings.providers.models.manage.hideAll')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    disabled={!selectionAvailable || selectableRows.length === 0}
+                    disabled={!visibilityWriteAvailable}
                     onSelect={() => handleBulk('reset')}
                   >
                     {t('settings.providers.models.manage.reset')}
@@ -1195,8 +1249,7 @@ export function UnifiedModelList({
                       </span>
                     </button>
                   )}
-                  {/* 能力模型组的消歧说明:这组不参与对话模型选择、行内没有显示开关 ——
-                    语义与上面的对话模型组不同,必须就地讲清,不能指望用户猜。 */}
+                  {/* 能力模型组:不进对话选择器;图像/视频开关控制对应功能清单。 */}
                   {wholeGroupCapability && !collapsed && (
                     <span
                       className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[24px]')}

@@ -775,6 +775,8 @@ const fanOutMakerUsageReferenceModelPricing = createIpcFanOut(
   'usage:reference-model-pricing-changed',
 );
 const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-changed'); // Claude 月度配额
+const fanOutMakerUsageCodexProviderAccount = createIpcFanOut('usage:codex-provider-account-changed');
+const fanOutSubscriptionProviderAccount = createIpcFanOut('usage:subscription-provider-account-changed');
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
 const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
@@ -3240,6 +3242,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       success: boolean;
       status: string;
+      rejectionReason?: string;
       gates?: Array<{ name: string; status: string; issues?: unknown[] }>;
       scorecard?: Record<string, unknown>;
       error?: string;
@@ -3800,6 +3803,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Open <userData>/cindy-make/tools in the OS file manager (Settings → Cindy Make).
   openCindyMakeToolsDir: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:open-cindy-make-tools-dir'),
+
+  getCindyMakeSourceStatus: (): Promise<import('../shared/cindyMakeDoctor').MakeSourceStatus> =>
+    ipcRenderer.invoke('app:get-cindy-make-source-status'),
+
+  openCindyMakeSourceDir: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('app:open-cindy-make-source-dir'),
 
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
@@ -7078,16 +7087,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     usage: {
       getToday: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build'): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:today', agentKind),
-      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build'): Promise<unknown> =>
-        ipcRenderer.invoke('maker:usage:account', agentKind),
+      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build', providerId?: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:usage:account', agentKind, providerId),
       /** Codex app-server authoritative windows and banked reset-credit metadata. */
-      getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult> =>
-        ipcRenderer.invoke('maker:usage:codex-rate-limits'),
+      getCodexRateLimits: (providerId?: string): Promise<MobileCodexRateLimitsResult> =>
+        ipcRenderer.invoke('maker:usage:codex-rate-limits', providerId),
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
-      getClaudeSubscription: (): Promise<unknown | null> =>
-        ipcRenderer.invoke('maker:usage:claude-subscription'),
-      getXaiSubscription: (): Promise<unknown | null> =>
-        ipcRenderer.invoke('maker:usage:xai-subscription'),
+      getClaudeSubscription: (providerId?: string): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:claude-subscription', providerId),
+      getXaiSubscription: (providerId?: string): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:xai-subscription', providerId),
       /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:model-pricing-v2'),
@@ -7109,12 +7118,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Claude 月度配额推送 (turn done 后 best-effort fetch, agentKind=claude-code 时订阅)。 */
       onClaudeAccountChanged: fanOutMakerUsageClaudeAccount,
       /** Codex 订阅用量推送 (WHAM 后台刷新成功后 best-effort 推送)。 */
-      onCodexAccountChanged: fanOutMakerUsageCodexAccount,
+      onCodexAccountChanged: (cb: (payload: unknown) => void, providerId = 'openai') =>
+        providerId === 'openai' ? fanOutMakerUsageCodexAccount(cb) : fanOutMakerUsageCodexProviderAccount((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
       /** xAI(SuperGrok bridge)限流快照推送 (bridge 每个成功上游响应解析 x-ratelimit-* 后推送)。 */
       onXaiRateLimitChanged: fanOutMakerUsageXaiRateLimit,
       /** Claude 订阅余量推送 (端点后台刷新 / proxy 旁路 headers 更新时推送)。 */
-      onClaudeSubscriptionChanged: fanOutMakerUsageClaudeSubscription,
-      onXaiSubscriptionChanged: fanOutMakerUsageXaiSubscription,
+      onClaudeSubscriptionChanged: (cb: (payload: unknown) => void, providerId = 'anthropic') =>
+        providerId === 'anthropic' ? fanOutMakerUsageClaudeSubscription(cb) : fanOutSubscriptionProviderAccount((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId = 'xai') =>
+        providerId === 'xai' ? fanOutMakerUsageXaiSubscription(cb) : fanOutSubscriptionProviderAccount((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
     },
 
     // ── Scheduler (Phase 4) ────────────────────────────────────────────────

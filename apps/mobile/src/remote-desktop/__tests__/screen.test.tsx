@@ -3,10 +3,53 @@ import { act, createElement, forwardRef, useImperativeHandle } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RemoteDesktopScreen from "../RemoteDesktopScreen";
+import { RemoteDesktopDisplaySettings } from "../RemoteDesktopDisplaySettings";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 
+vi.mock("../useAutoUnlockSettings", () => ({
+  useAutoUnlockSettings: (
+    _target: string,
+    _active: boolean,
+    getHost: () => string | undefined,
+  ) => {
+    fixture.getHost = getHost;
+    return {
+      autoUnlock: fixture.securityAutoUnlock,
+      biometricVerification: true,
+      available: true,
+      busy: fixture.securityBusy,
+      notice: null,
+      onAutoUnlock: vi.fn(),
+      onBiometricVerification: vi.fn(),
+      maybeUnlock: fixture.maybeUnlock,
+      resetConnectionAttempt: fixture.resetUnlockAttempt,
+    };
+  },
+}));
+vi.mock("../useLockOnExitPreference", () => ({
+  useLockOnExitPreference: () => [
+    fixture.lockOnExit,
+    (value: boolean) => {
+      fixture.lockOnExit = value;
+    },
+    true,
+  ],
+}));
+
 const fixture = vi.hoisted(() => ({
+  nativeMenus: false,
+  securityAutoUnlock: false,
+  securityBusy: false,
+  themeMode: "light",
+  lockOnExit: false,
+  lockSupported: true,
+  alert: vi.fn(),
+  resetUnlockAttempt: vi.fn(),
+  maybeUnlock: vi.fn(async () => {}),
+  hostPlatform: "darwin" as string | undefined,
+  deviceId: "computer",
+  getHost: (() => undefined) as () => string | undefined,
   platform: "ios",
   keyboardListeners: {} as Record<string, (event: unknown) => void>,
   views: {} as Record<string, any>,
@@ -25,6 +68,7 @@ const fixture = vi.hoisted(() => ({
   status: "online",
   appState: null as null | ((state: string) => void),
   crashed: null as null | (() => void),
+  webViewProps: null as null | Record<string, unknown>,
   retryPermissions: null as null | (() => void),
 }));
 vi.mock("react-native", async () => {
@@ -48,8 +92,10 @@ vi.mock("react-native", async () => {
       isReduceMotionEnabled: async () => false,
       addEventListener: () => ({ remove() {} }),
     },
+    Alert: { alert: fixture.alert },
     View: view("div"),
-    Modal: (p: any) => p.visible ? createElement("div", {}, p.children) : null,
+    Modal: (p: any) =>
+      p.visible ? createElement("div", {}, p.children) : null,
     Pressable: view("button"),
     ScrollView: view("div"),
     KeyboardAvoidingView: view("div"),
@@ -76,7 +122,11 @@ vi.mock("react-native", async () => {
     },
     Dimensions: { get: () => fixture.size },
     useWindowDimensions: () => fixture.size,
-    Platform: { get OS() { return fixture.platform; } },
+    Platform: {
+      get OS() {
+        return fixture.platform;
+      },
+    },
   };
 });
 vi.mock("@/components/AppText", () => ({
@@ -87,7 +137,10 @@ vi.mock("expo-router", () => ({
   Stack: { Screen: () => null },
   useIsFocused: () => fixture.focused,
   useRouter: () => ({}),
-  useLocalSearchParams: () => ({ deviceId: "computer", deviceName: "My Mac" }),
+  useLocalSearchParams: () => ({
+    deviceId: fixture.deviceId,
+    deviceName: "My Mac",
+  }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
 vi.mock("react-native-safe-area-context", () => ({
@@ -97,14 +150,61 @@ vi.mock("react-i18next", () => {
   const t = (key: string) => key;
   return { useTranslation: () => ({ t }) };
 });
-vi.mock("expo-modules-core", () => ({ requireOptionalNativeModule: () => null }));
-vi.mock("../../../modules/cindy-remote-presentation/src", () => ({
-  remotePresentation: { playback: fixture.playback, rotate: vi.fn(async () => {}) },
+vi.mock("expo-modules-core", () => ({
+  requireOptionalNativeModule: () => null,
 }));
-vi.mock("expo-clipboard", () => ({ getStringAsync: vi.fn(), setStringAsync: vi.fn() }));
-vi.mock("@expo/ui/community/segmented-control", () => ({ default: () => null }));
+vi.mock("../../../modules/cindy-remote-presentation/src", () => ({
+  remotePresentation: {
+    playback: fixture.playback,
+    rotate: vi.fn(async () => {}),
+  },
+}));
+vi.mock("expo-clipboard", () => ({
+  getStringAsync: vi.fn(),
+  setStringAsync: vi.fn(),
+}));
+vi.mock("@expo/ui/community/segmented-control", () => ({
+  default: (props: any) =>
+    createElement(
+      "div",
+      {},
+      props.values.map((value: string, index: number) =>
+        createElement(
+          "button",
+          {
+            key: value,
+            "aria-label": value,
+            "aria-selected": props.selectedIndex === index,
+            disabled: props.enabled === false,
+            onClick: () =>
+              props.onChange({ nativeEvent: { selectedSegmentIndex: index } }),
+          },
+          value,
+        ),
+      ),
+    ),
+}));
 vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
-  usesNativePullDownMenu: () => false, NativePullDownMenu: (p: any) => p.children,
+  usesNativePullDownMenu: () => fixture.nativeMenus,
+  NativePullDownMenu: (p: any) =>
+    createElement(
+      "div",
+      {},
+      p.children,
+      fixture.nativeMenus &&
+        p.actions.map((action: any) =>
+          createElement(
+            "button",
+            {
+              key: action.id,
+              "data-testid": `native-menu.${action.id}`,
+              disabled: action.disabled,
+              onClick: () => p.onAction(action.id),
+            },
+            action.title,
+          ),
+        ),
+    ),
 }));
 vi.mock("lucide-react-native", () => ({
   createLucideIcon: () => () => null,
@@ -126,6 +226,9 @@ vi.mock("lucide-react-native", () => ({
   ChevronLeft: () => null,
   PanelsTopLeft: () => null,
   Monitor: () => null,
+  Shield: () => null,
+  LockKeyhole: () => null,
+  ScanFace: () => null,
   Keyboard: () => null,
   SlidersHorizontal: () => null,
   X: () => null,
@@ -144,8 +247,15 @@ vi.mock("@/theme", async () => {
   const tokens = await import("@/theme/tokens");
   return {
     ...tokens,
-    useTheme: () => ({ colors: tokens.lightColors }),
-    useThemedStyles: (make: any) => make(tokens.lightColors),
+    useTheme: () => ({
+      colors:
+        fixture.themeMode === "dark" ? tokens.darkColors : tokens.lightColors,
+      mode: fixture.themeMode,
+    }),
+    useThemedStyles: (make: any) =>
+      make(
+        fixture.themeMode === "dark" ? tokens.darkColors : tokens.lightColors,
+      ),
   };
 });
 vi.mock("@/device-link/DeviceLinkContext", () => ({
@@ -155,8 +265,12 @@ vi.mock("@/device-link/DeviceLinkContext", () => ({
     openLink: fixture.openLink,
   }),
 }));
-vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ apiFetch: fixture.apiFetch }) }));
-vi.mock("@/config/env", () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test' }));
+vi.mock("@/auth/AuthContext", () => ({
+  useAuth: () => ({ apiFetch: fixture.apiFetch }),
+}));
+vi.mock("@/config/env", () => ({
+  DEVICE_LINK_API_BASE_URL: "https://relay.example.test",
+}));
 vi.mock("../PermissionGuide", () => ({
   PermissionGuide: (p: any) => {
     fixture.retryPermissions = p.reconnect;
@@ -165,6 +279,7 @@ vi.mock("../PermissionGuide", () => ({
 }));
 vi.mock("react-native-webview", () => ({
   WebView: forwardRef((p: any, ref) => {
+    fixture.webViewProps = p;
     fixture.message = p.onMessage;
     fixture.crashed = p.onContentProcessDidTerminate;
     useImperativeHandle(ref, () => ({
@@ -182,14 +297,25 @@ let mounted: boolean;
 const display = { id: "display", width: 1920, height: 1080 };
 const requests = () => fixture.invoke.mock.calls.map((call) => call[2][0]);
 const sent = () => fixture.post.mock.calls.map(([data]) => JSON.parse(data));
+const visibleInputHint = () =>
+  host.querySelector('[data-testid="remoteDesktop.inputHintSlot"]')
+    ?.lastElementChild?.textContent;
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   fixture.platform = "ios";
+  fixture.hostPlatform = "darwin";
+  fixture.deviceId = "computer";
+  fixture.securityAutoUnlock = false;
+  fixture.securityBusy = false;
+  fixture.themeMode = "light";
+  fixture.lockOnExit = false;
+  fixture.lockSupported = true;
   fixture.views = {};
   fixture.keyboardListeners = {};
+  fixture.webViewProps = null;
   vi.useFakeTimers();
   fixture.focused = true;
   fixture.status = "online";
@@ -198,7 +324,9 @@ beforeEach(() => {
   fixture.trickleIce = false;
   fixture.size = { width: 390, height: 844 };
   fixture.openLink.mockResolvedValue({});
-  fixture.apiFetch.mockReset().mockResolvedValue({ iceServers: [], expiresAt: null });
+  fixture.apiFetch
+    .mockReset()
+    .mockResolvedValue({ iceServers: [], expiresAt: null });
   fixture.systemAudio = false;
   fixture.playback.mockReset().mockResolvedValue(undefined);
   fixture.invoke.mockImplementation(async (_device, _channel, [request]) => {
@@ -206,6 +334,7 @@ beforeEach(() => {
       case "capabilities":
         return {
           version: 1,
+          lockOnExit: fixture.lockSupported,
           trickleIce: fixture.trickleIce,
           automaticReconnect: true,
           backgroundViewing: true,
@@ -213,7 +342,7 @@ beforeEach(() => {
           canControl: fixture.canControl,
           systemAudio: fixture.systemAudio,
           videoSettings: fixture.systemAudio,
-          platform: "darwin",
+          platform: fixture.hostPlatform,
           displays: [display],
         };
       case "start":
@@ -244,11 +373,23 @@ const connect = async () => {
     fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
   });
   act(() => {
-    fixture.message!({ nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' } });
+    fixture.message!({
+      nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+    });
   });
 };
 
 describe("remote desktop controls", () => {
+  it("keeps iOS data detection disabled without passing its prop to Android", async () => {
+    await act(async () => {});
+    expect(fixture.webViewProps).toMatchObject({ dataDetectorTypes: "none" });
+
+    fixture.platform = "android";
+    await act(async () => root.render(<RemoteDesktopScreen />));
+
+    expect(fixture.webViewProps).not.toHaveProperty("dataDetectorTypes");
+  });
+
   it("fetches ICE configuration only through native auth and sends sanitized short-term credentials", async () => {
     await connect();
     const iceServers = [
@@ -277,7 +418,11 @@ describe("remote desktop controls", () => {
     });
     expect(fixture.apiFetch).toHaveBeenCalledWith(
       "/api/device-link/ice-servers",
-      { baseUrl: "https://relay.example.test", timeoutMs: 3000, cache: "no-store" },
+      {
+        baseUrl: "https://relay.example.test",
+        timeoutMs: 3000,
+        cache: "no-store",
+      },
     );
     expect(sent().find((m) => m.type === "iceConfig")).toEqual({
       type: "iceConfig",
@@ -313,15 +458,431 @@ describe("remote desktop controls", () => {
     await act(async () => finish({ iceServers: [], expiresAt: null }));
     expect(sent().filter((m) => m.type === "iceConfig")).toHaveLength(0);
   });
+
+  it("keeps native pickers interactive while settings are applying", () => {
+    const onChange = vi.fn();
+    const renderSettings = (busy: boolean) => {
+      act(() =>
+        root.render(
+          <RemoteDesktopDisplaySettings
+            connected
+            controlling
+            displayControl={null}
+            video={{
+              supported: true,
+              busy,
+              modesSupported: false,
+              settings: { fps: 30, bitrate: 0, audio: false },
+              onChange,
+              readModes: async () => [],
+              onResolution: async () => {},
+            }}
+          />,
+        ),
+      );
+    };
+    renderSettings(true);
+    expect(fixture.views["remoteDesktop.frameRateControl"].pointerEvents).toBe(
+      "auto",
+    );
+    expect(
+      fixture.views["remoteDesktop.qualityControl"].accessibilityState,
+    ).toEqual({ disabled: false });
+    const pickerButton = host.querySelector("button")!;
+    expect(pickerButton.disabled).toBe(false);
+    act(() => pickerButton.click());
+    expect(onChange).toHaveBeenCalledOnce();
+    renderSettings(false);
+    expect(fixture.views["remoteDesktop.frameRateControl"].pointerEvents).toBe(
+      "auto",
+    );
+    act(() => host.querySelector("button")!.click());
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+  it.each(["streaming", "fallback"])(
+    "coalesces continuous quality choices until %s",
+    async (terminal) => {
+      fixture.systemAudio = true;
+      await connect();
+      const message = async (value: object) =>
+        act(async () => {
+          fixture.message!({
+            nativeEvent: { data: JSON.stringify({ epoch: "lease", ...value }) },
+          });
+        });
+      await message({ type: "streaming" });
+      act(() => button("operations").click());
+      act(() => button("displaySettings").click());
+      const select = async (control: string, index: number) =>
+        act(async () => {
+          host
+            .querySelectorAll<HTMLButtonElement>(
+              `[data-testid="remoteDesktop.${control}Control"] button`,
+            )
+            [index].click();
+        });
+      const changes = () => sent().filter((m) => m.type === "videoSettings");
+      fixture.playback.mockClear();
+      await select("frameRate", 1);
+      expect(changes()).toHaveLength(1);
+      await select("quality", 1);
+      await select("quality", 2);
+      await select("quality", 3);
+      expect(button("original").getAttribute("aria-selected")).toBe("true");
+      expect(changes()).toHaveLength(1);
+      expect(fixture.playback).not.toHaveBeenCalled();
+      await message({ type: terminal });
+      expect(changes()).toHaveLength(2);
+      await message({ type: "offer", sdp: "sdp", attemptId: "latest" });
+      expect(
+        requests()
+          .filter((r) => r.op === "offer")
+          .at(-1).settings,
+      ).toMatchObject({ fps: 60, bitrate: 20000000 });
+      await message({ type: "streaming" });
+      expect(changes()).toHaveLength(2);
+      await select("quality", 1);
+      await select("quality", 2);
+      expect(changes()).toHaveLength(3);
+      act(() => root.unmount());
+      mounted = false;
+      await message({ type: "streaming" });
+      expect(changes()).toHaveLength(3);
+    },
+  );
+  it("waits for an outstanding host offer even after the viewer falls back", async () => {
+    fixture.systemAudio = true;
+    await connect();
+    const message = async (value: object) =>
+      act(async () => {
+        fixture.message!({
+          nativeEvent: { data: JSON.stringify({ epoch: "lease", ...value }) },
+        });
+      });
+    let finish!: (value: unknown) => void;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "offer"
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : original(...args),
+    );
+    await message({ type: "offer", sdp: "sdp", attemptId: "pending" });
+    await message({ type: "streaming" });
+    act(() => button("operations").click());
+    act(() => button("displaySettings").click());
+    await act(async () => button("original").click());
+    await message({ type: "fallback" });
+    expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(0);
+    await act(async () => finish({ sdp: "answer" }));
+    expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(1);
+  });
+  it("preserves FPS and quality selected in the same render batch", async () => {
+    fixture.systemAudio = true;
+    await connect();
+    act(() => button("operations").click());
+    act(() => button("displaySettings").click());
+    await act(async () => {
+      host
+        .querySelectorAll<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.frameRateControl"] button',
+        )[1]
+        .click();
+      button("original").click();
+    });
+    expect(
+      host
+        .querySelectorAll<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.frameRateControl"] button',
+        )[1]
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(button("original").getAttribute("aria-selected")).toBe("true");
+  });
+  it("cancels the PiP timeout when queued quality changes exit PiP", async () => {
+    fixture.systemAudio = true;
+    await connect();
+    const message = async (value: object) =>
+      act(async () => {
+        fixture.message!({
+          nativeEvent: { data: JSON.stringify({ epoch: "lease", ...value }) },
+        });
+      });
+    await message({ type: "streaming" });
+    await message({ type: "pipCapability", supported: true });
+    let finish!: (value: unknown) => void;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "presentation" && args[2][0].enabled
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : original(...args),
+    );
+    act(() => button("operations").click());
+    await act(async () => button("smallWindow").click());
+    act(() => button("displaySettings").click());
+    await act(async () => button("original").click());
+    await act(async () => finish({}));
+    expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(1);
+    await message({ type: "streaming" });
+    await act(async () => vi.advanceTimersByTimeAsync(4000));
+    act(() => button("operations").click());
+    expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
+  });
+  it("does not reuse Mac eligibility when the route changes to another host", async () => {
+    await connect();
+    expect(fixture.getHost()).toBe("darwin");
+    act(() => button("operations").click());
+    act(() => button("security").click());
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+    ).not.toBeNull();
+    fixture.deviceId = "other-computer";
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(fixture.getHost()).toBeUndefined();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+    ).toBeNull();
+  });
+  it.each([
+    ["android", "darwin"],
+    ["ios", "win32"],
+    ["ios", "linux"],
+    ["ios", undefined],
+  ])(
+    "hides unsupported unlock settings for %s / %s while retaining exit locking",
+    async (controller, remote) => {
+      fixture.platform = controller!;
+      fixture.hostPlatform = remote;
+      await connect();
+      expect(fixture.maybeUnlock).not.toHaveBeenCalled();
+      act(() => button("operations").click());
+      act(() => button("security").click());
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+      ).toBeNull();
+      expect(
+        host.querySelector(
+          '[data-testid="remoteDesktop.biometricVerification"]',
+        ),
+      ).toBeNull();
+      expect(host.textContent).not.toContain(
+        "remoteDesktop.autoUnlockStorageHint",
+      );
+      expect(host.textContent).not.toContain(
+        "remoteDesktop.autoUnlockUnavailable",
+      );
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.lockOnExit"]'),
+      ).not.toBeNull();
+    },
+  );
+  it.each(["light", "dark"])(
+    "keeps panel geometry and controls stable across pages and loading in %s",
+    async (theme) => {
+      fixture.themeMode = theme;
+      await connect();
+      act(() => button("operations").click());
+      const initial = fixture.views["remoteDesktop.panelSurface"].style;
+      expect(initial.flat(Infinity)).toContainEqual(
+        expect.objectContaining({ height: "50%" }),
+      );
+      expect(fixture.views["remoteDesktop.panelScroll"].style).toMatchObject({
+        flex: 1,
+        minHeight: 0,
+      });
+      const firstScroll = host.querySelector(
+        '[data-testid="remoteDesktop.panelScroll"]',
+      );
+      act(() => button("displaySettings").click());
+      expect(fixture.views["remoteDesktop.panelSurface"].style).toEqual(
+        initial,
+      );
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.panelScroll"]'),
+      ).not.toBe(firstScroll);
+      act(() => button("back").click());
+      act(() => button("security").click());
+      const slot = host.querySelector(
+        '[data-testid="remoteDesktop.securityProgressSlot"]',
+      );
+      const automatic = host.querySelector(
+        '[data-testid="remoteDesktop.autoUnlock"]',
+      );
+      fixture.securityBusy = true;
+      act(() => root.render(<RemoteDesktopScreen />));
+      expect(
+        host.querySelector(
+          '[data-testid="remoteDesktop.securityProgressSlot"]',
+        ),
+      ).toBe(slot);
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+      ).toBe(automatic);
+      expect(fixture.views["remoteDesktop.panelSurface"].style).toEqual(
+        initial,
+      );
+      expect(
+        fixture.views["remoteDesktop.securityProgressSlot"].style,
+      ).toMatchObject({ width: 24, height: 24 });
+      expect(host.textContent).not.toContain("remoteDesktop.loadingSettings");
+    },
+  );
+  it.each([false, true])(
+    "allows keyboard content height within viewport bounds, landscape=%s",
+    async (landscape) => {
+      fixture.size = landscape
+        ? { width: 844, height: 390 }
+        : { width: 390, height: 844 };
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await connect();
+      act(() => button("keyboard").click());
+      act(() => button("computerKeyboard").click());
+      const style = fixture.views["remoteDesktop.keyPageViewport"].style;
+      expect(style).toEqual({ maxHeight: landscape ? 156 : 300 });
+      act(() => button("functionKeys").click());
+      expect(fixture.views["remoteDesktop.keyPageViewport"].style).toEqual(
+        style,
+      );
+      expect(sent()).toContainEqual({
+        type: "events",
+        events: [{ kind: "release" }],
+      });
+    },
+  );
+  it("requests lock once on explicit exit, independent of automatic unlock", async () => {
+    fixture.lockOnExit = true;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    await act(async () => button("back").click());
+    expect(requests().filter((r) => r.op === "stop")).toEqual([
+      { op: "stop", lease: "lease", lockScreen: true },
+    ]);
+    expect(goBackGuarded).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    mounted = false;
+    expect(requests().filter((r) => r.lockScreen)).toHaveLength(1);
+  });
+  it("does not lock for Face ID inactivity or background recovery", async () => {
+    fixture.lockOnExit = true;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    await act(async () => fixture.appState?.("inactive"));
+    expect(requests().some((r) => r.lockScreen)).toBe(false);
+    await act(async () => fixture.appState?.("background"));
+    expect(requests().some((r) => r.lockScreen)).toBe(false);
+  });
+  it.each([true, false])(
+    "handles route unmount with lock support %s",
+    async (supported) => {
+      fixture.lockOnExit = true;
+      fixture.lockSupported = supported;
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await connect();
+      act(() => root.unmount());
+      mounted = false;
+      expect(requests().filter((r) => r.op === "stop")).toEqual([
+        {
+          op: "stop",
+          lease: "lease",
+          ...(supported ? { lockScreen: true } : {}),
+        },
+      ]);
+    },
+  );
+  it("shows a lock failure instead of reporting a successful lock", async () => {
+    fixture.lockOnExit = true;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].lockScreen
+        ? Promise.reject(new Error("DESKTOP_LOCK_FAILED"))
+        : original(...args),
+    );
+    await act(async () => button("back").click());
+    expect(fixture.alert).toHaveBeenCalledWith(
+      "remoteDesktop.lockOnExit",
+      "remoteDesktop.lockOnExitFailed",
+    );
+  });
+  it("locks once when navigation blurs before unmount", async () => {
+    fixture.lockOnExit = true;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    fixture.focused = false;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    act(() => root.unmount());
+    mounted = false;
+    expect(requests().filter((r) => r.op === "stop")).toEqual([
+      { op: "stop", lease: "lease", lockScreen: true },
+    ]);
+  });
+  it("places optional unlock under Operation Security without gating the desktop", async () => {
+    await connect();
+    expect(requests().some((request) => request.op === "start")).toBe(true);
+    act(() => button("operations").click());
+    const security = host.querySelector(
+      '[data-testid="remoteDesktop.security"]',
+    ) as HTMLButtonElement;
+    const displaySettings = [...host.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes("remoteDesktop.displaySettings"),
+    )!;
+    expect(
+      displaySettings.compareDocumentPosition(security) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    act(() => security.click());
+    expect(host.textContent).toContain("remoteDesktop.autoUnlockStorageHint");
+    const automatic = host.querySelector(
+      '[data-testid="remoteDesktop.autoUnlock"]',
+    ) as HTMLButtonElement;
+    const biometric = host.querySelector(
+      '[data-testid="remoteDesktop.biometricVerification"]',
+    ) as HTMLButtonElement;
+    expect(automatic.getAttribute("aria-checked")).toBe("false");
+    expect(automatic.disabled).toBe(false);
+    expect(biometric).toBeNull();
+    fixture.securityAutoUnlock = true;
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(
+      (
+        host.querySelector(
+          '[data-testid="remoteDesktop.biometricVerification"]',
+        ) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    await act(async () => button("back").click());
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.security"]'),
+    ).not.toBeNull();
+  });
   it("keeps video and control when playback fails without changing the sound preference", async () => {
     fixture.systemAudio = true;
-    fixture.playback.mockImplementation(async (enabled) => { if (enabled) throw new Error("audio interrupted"); });
+    fixture.playback.mockImplementation(async (enabled) => {
+      if (enabled) throw new Error("audio interrupted");
+    });
     await connect();
-    expect(sent().find((m) => m.type === "init")).toMatchObject({ audio: false });
-    expect(sent().find((m) => m.type === "control")).toMatchObject({ enabled: true });
+    expect(sent().find((m) => m.type === "init")).toMatchObject({
+      audio: false,
+    });
+    expect(sent().find((m) => m.type === "control")).toMatchObject({
+      enabled: true,
+    });
     expect(fixture.playback).toHaveBeenLastCalledWith(false);
     await act(async () => {
-      fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "offer", epoch: "lease", sdp: "sdp", attemptId: "attempt" }) } });
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "offer",
+            epoch: "lease",
+            sdp: "sdp",
+            attemptId: "attempt",
+          }),
+        },
+      });
     });
     expect(requests().find((r) => r.op === "offer").settings.audio).toBe(false);
     await act(async () => vi.advanceTimersByTimeAsync(15_000));
@@ -331,9 +892,19 @@ describe("remote desktop controls", () => {
     expect(button("sound").getAttribute("aria-selected")).toBe("true");
     fixture.playback.mockResolvedValue(undefined);
     await act(async () => button("sound").click());
-    act(() => fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "streaming", epoch: "lease" }) } }));
+    act(() =>
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "streaming", epoch: "lease" }),
+        },
+      }),
+    );
     await act(async () => button("sound").click());
-    expect(sent().filter((m) => m.type === "videoSettings").at(-1)).toMatchObject({ audio: true });
+    expect(
+      sent()
+        .filter((m) => m.type === "videoSettings")
+        .at(-1),
+    ).toMatchObject({ audio: true });
     expect(host.textContent).not.toContain("remoteDesktop.audioUnavailable");
   });
   it("overlays landscape keyboards and includes their measured occlusion", async () => {
@@ -343,23 +914,46 @@ describe("remote desktop controls", () => {
     act(() => button("keyboard").click());
     expect(fixture.views["remoteDesktop.layout"].enabled).toBe(false);
     const panel = () => fixture.views["remoteDesktop.keyboardPanel"];
-    expect(panel().style.flat(Infinity)).toContainEqual(expect.objectContaining({ position: "absolute" }));
+    expect(panel().style.flat(Infinity)).toContainEqual(
+      expect.objectContaining({ position: "absolute" }),
+    );
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 60 } } }));
-    act(() => fixture.keyboardListeners.keyboardWillChangeFrame({ endCoordinates: { screenY: 180 } }));
+    act(() =>
+      fixture.keyboardListeners.keyboardWillChangeFrame({
+        endCoordinates: { screenY: 180 },
+      }),
+    );
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 210 });
-    expect(sent().filter((m) => m.type === "mouseButtons").at(-1)).toMatchObject({
-      bottomInset: 270, keyboardOpen: true,
+    expect(
+      sent()
+        .filter((m) => m.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({
+      bottomInset: 270,
+      keyboardOpen: true,
     });
-    const computer = [...host.querySelectorAll("button")].find((element) => element.textContent === "remoteDesktop.computerKeyboard")!;
+    const computer = [...host.querySelectorAll("button")].find(
+      (element) => element.textContent === "remoteDesktop.computerKeyboard",
+    )!;
     act(() => computer.click());
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 280 } } }));
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 0 });
-    expect(sent().filter((m) => m.type === "mouseButtons").at(-1)).toMatchObject({
-      bottomInset: 280, keyboardOpen: true,
+    expect(
+      sent()
+        .filter((m) => m.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({
+      bottomInset: 280,
+      keyboardOpen: true,
     });
     act(() => button("close").click());
-    expect(sent().filter((m) => m.type === "mouseButtons").at(-1)).toMatchObject({
-      bottomInset: 0, keyboardOpen: false,
+    expect(
+      sent()
+        .filter((m) => m.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({
+      bottomInset: 0,
+      keyboardOpen: false,
     });
   });
 
@@ -370,15 +964,31 @@ describe("remote desktop controls", () => {
     await connect();
     act(() => button("keyboard").click());
     const panel = () => fixture.views["remoteDesktop.keyboardPanel"];
-    act(() => fixture.keyboardListeners.keyboardDidShow({ endCoordinates: { screenY: 180 } }));
+    act(() =>
+      fixture.keyboardListeners.keyboardDidShow({
+        endCoordinates: { screenY: 180 },
+      }),
+    );
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 60 } } }));
-    expect(panel().style.flat(Infinity)).not.toContainEqual(expect.objectContaining({ position: "absolute" }));
-    expect(sent().filter((m) => m.type === "mouseButtons").at(-1)).toMatchObject({ bottomInset: 0, keyboardOpen: false });
-    const computer = [...host.querySelectorAll("button")].find((element) => element.textContent === "remoteDesktop.computerKeyboard")!;
+    expect(panel().style.flat(Infinity)).not.toContainEqual(
+      expect.objectContaining({ position: "absolute" }),
+    );
+    expect(
+      sent()
+        .filter((m) => m.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({ bottomInset: 0, keyboardOpen: false });
+    const computer = [...host.querySelectorAll("button")].find(
+      (element) => element.textContent === "remoteDesktop.computerKeyboard",
+    )!;
     act(() => computer.click());
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 280 } } }));
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 0 });
-    expect(sent().filter((m) => m.type === "mouseButtons").at(-1)).toMatchObject({ bottomInset: 280, keyboardOpen: true });
+    expect(
+      sent()
+        .filter((m) => m.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({ bottomInset: 280, keyboardOpen: true });
   });
 
   it("keeps a video answer arriving after control initialization and ignores it after exit", async () => {
@@ -397,7 +1007,9 @@ describe("remote desktop controls", () => {
       return original(...args);
     });
     await connect();
-    expect(host.querySelector('[data-testid="remoteDesktop.connectingStatus"]')).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.connectingStatus"]'),
+    ).not.toBeNull();
     expect(host.textContent).not.toContain("remoteDesktop.viewOnly");
     const offer = () =>
       fixture.message!({
@@ -412,7 +1024,9 @@ describe("remote desktop controls", () => {
       });
     act(offer);
     await act(async () => control({ controlling: true }));
-    expect(host.querySelector('[data-testid="remoteDesktop.connectingStatus"]')).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.connectingStatus"]'),
+    ).toBeNull();
     await act(async () => answer({ sdp: "valid-answer" }));
     expect(sent()).toContainEqual({
       type: "answer",
@@ -528,32 +1142,47 @@ describe("remote desktop controls", () => {
     });
     expect(requests().filter((m) => m.op === "ice")).toHaveLength(1);
   });
-  it.each([false, true])("shows media recovery without replacing the lease (landscape=%s)", async (landscape) => {
-    if (landscape) {
-      fixture.size = { width: 844, height: 390 };
-      act(() => root.render(<RemoteDesktopScreen />));
-    }
-    await connect();
-    const message = (type: string) => act(async () => {
-      fixture.message!({ nativeEvent: { data: JSON.stringify({
-        type, epoch: "lease", attemptId: "1", sdp: "offer",
-      }) } });
-    });
-    await message("offer");
-    await message("streaming");
-    const ownership = () => requests().filter((r) => ["start", "control", "stop"].includes(r.op));
-    const previousOwnership = [...ownership()];
-    await message("reconnecting");
-    const badge = () => host.querySelector('[data-testid="remoteDesktop.connectingStatus"]');
-    expect(badge()?.textContent).toBe("remoteDesktop.reconnecting");
-    expect(host.textContent).not.toContain("remoteDesktop.viewOnly");
-    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).not.toBeNull();
-    expect(button("keyboard").disabled).toBe(false);
-    expect(ownership()).toEqual(previousOwnership);
-    await message("streaming");
-    expect(badge()).toBeNull();
-    expect(ownership()).toEqual(previousOwnership);
-  });
+  it.each([false, true])(
+    "shows media recovery without replacing the lease (landscape=%s)",
+    async (landscape) => {
+      if (landscape) {
+        fixture.size = { width: 844, height: 390 };
+        act(() => root.render(<RemoteDesktopScreen />));
+      }
+      await connect();
+      const message = (type: string) =>
+        act(async () => {
+          fixture.message!({
+            nativeEvent: {
+              data: JSON.stringify({
+                type,
+                epoch: "lease",
+                attemptId: "1",
+                sdp: "offer",
+              }),
+            },
+          });
+        });
+      await message("offer");
+      await message("streaming");
+      const ownership = () =>
+        requests().filter((r) => ["start", "control", "stop"].includes(r.op));
+      const previousOwnership = [...ownership()];
+      await message("reconnecting");
+      const badge = () =>
+        host.querySelector('[data-testid="remoteDesktop.connectingStatus"]');
+      expect(badge()?.textContent).toBe("remoteDesktop.reconnecting");
+      expect(host.textContent).not.toContain("remoteDesktop.viewOnly");
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.viewer"]'),
+      ).not.toBeNull();
+      expect(button("keyboard").disabled).toBe(false);
+      expect(ownership()).toEqual(previousOwnership);
+      await message("streaming");
+      expect(badge()).toBeNull();
+      expect(ownership()).toEqual(previousOwnership);
+    },
+  );
   it("shows live receive rate, rejects old lease samples, and expires stale metrics", async () => {
     await connect();
     const message = (data: object) =>
@@ -615,23 +1244,34 @@ describe("remote desktop controls", () => {
     expect(host.textContent).toContain("remoteDesktop.screenshotRelay");
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
   });
-  it.each([false, true])("bounds relay frames regardless of cursor overlay=%s", async (overlay) => {
-    const original = fixture.invoke.getMockImplementation()!;
-    let jpeg = "a".repeat(240_004);
-    fixture.invoke.mockImplementation(async (...args) => {
-      const op = args[2][0].op;
-      if (op === "frame") return { jpeg, cursor: null };
-      const result = await original(...args);
-      return op === "capabilities" ? { ...result, cursorOverlay: overlay } : result;
-    });
-    await connect();
-    await act(async () => vi.advanceTimersByTimeAsync(350));
-    expect(sent().filter((message) => message.type === "frame")).toHaveLength(0);
-    jpeg = "a".repeat(240_000);
-    await act(async () => vi.advanceTimersByTimeAsync(350));
-    expect(sent().filter((message) => message.type === "frame")).toEqual([{ type: "frame", jpeg, cursor: null }]);
-    expect(requests().filter((request) => request.op === "start")).toHaveLength(1);
-  });
+  it.each([false, true])(
+    "bounds relay frames regardless of cursor overlay=%s",
+    async (overlay) => {
+      const original = fixture.invoke.getMockImplementation()!;
+      let jpeg = "a".repeat(240_004);
+      fixture.invoke.mockImplementation(async (...args) => {
+        const op = args[2][0].op;
+        if (op === "frame") return { jpeg, cursor: null };
+        const result = await original(...args);
+        return op === "capabilities"
+          ? { ...result, cursorOverlay: overlay }
+          : result;
+      });
+      await connect();
+      await act(async () => vi.advanceTimersByTimeAsync(350));
+      expect(sent().filter((message) => message.type === "frame")).toHaveLength(
+        0,
+      );
+      jpeg = "a".repeat(240_000);
+      await act(async () => vi.advanceTimersByTimeAsync(350));
+      expect(sent().filter((message) => message.type === "frame")).toEqual([
+        { type: "frame", jpeg, cursor: null },
+      ]);
+      expect(
+        requests().filter((request) => request.op === "start"),
+      ).toHaveLength(1);
+    },
+  );
   it("measures screenshot payloads separately and clears frame time when frames stop", async () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) =>
@@ -678,9 +1318,17 @@ describe("remote desktop controls", () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) =>
       args[2][0].op === "heartbeat"
-        ? new Promise((_resolve, reject) => setTimeout(() => reject(
-            Object.assign(new Error("INVOKE_TIMEOUT"), { code: "INVOKE_TIMEOUT" }),
-          ), 5000))
+        ? new Promise((_resolve, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  Object.assign(new Error("INVOKE_TIMEOUT"), {
+                    code: "INVOKE_TIMEOUT",
+                  }),
+                ),
+              5000,
+            ),
+          )
         : original(...args),
     );
     await act(async () => vi.advanceTimersByTimeAsync(21_000));
@@ -691,33 +1339,38 @@ describe("remote desktop controls", () => {
   it.each([
     ["ACCESS_REVOKED", "accessRevoked"],
     ["REMOTE_DISABLED", "remoteDisabled"],
-  ])("stops automatic recovery for %s while retaining manual retry", async (code, hint) => {
-    const original = fixture.invoke.getMockImplementation()!;
-    for (const structured of [false, true]) {
-      for (const stage of ["openLink", "invoke"] as const) {
-        const failure = structured
-          ? Object.assign(new Error("Rejected by host"), { code })
-          : new Error(`Remote invoke failed: ${code}`);
-        fixture.openLink.mockResolvedValue({});
-        fixture.invoke.mockImplementation(original);
-        if (stage === "openLink") fixture.openLink.mockRejectedValue(failure);
-        else fixture.invoke.mockRejectedValue(failure);
-        await connect();
-        act(() => button("connect").click());
-        await act(async () => {});
-        expect(host.textContent).toContain(`deviceLink.remoteError.${hint}`);
-        const calls = fixture.openLink.mock.calls.length;
-        await act(async () => vi.advanceTimersByTimeAsync(30_000));
-        expect(fixture.openLink).toHaveBeenCalledTimes(calls);
-        fixture.openLink.mockResolvedValue({});
-        fixture.invoke.mockImplementation(original);
-        act(() => button("connect").click());
-        await act(async () => {});
-        expect(fixture.openLink.mock.calls.length).toBeGreaterThan(calls);
-        expect(host.textContent).not.toContain(`deviceLink.remoteError.${hint}`);
+  ])(
+    "stops automatic recovery for %s while retaining manual retry",
+    async (code, hint) => {
+      const original = fixture.invoke.getMockImplementation()!;
+      for (const structured of [false, true]) {
+        for (const stage of ["openLink", "invoke"] as const) {
+          const failure = structured
+            ? Object.assign(new Error("Rejected by host"), { code })
+            : new Error(`Remote invoke failed: ${code}`);
+          fixture.openLink.mockResolvedValue({});
+          fixture.invoke.mockImplementation(original);
+          if (stage === "openLink") fixture.openLink.mockRejectedValue(failure);
+          else fixture.invoke.mockRejectedValue(failure);
+          await connect();
+          act(() => button("connect").click());
+          await act(async () => {});
+          expect(host.textContent).toContain(`deviceLink.remoteError.${hint}`);
+          const calls = fixture.openLink.mock.calls.length;
+          await act(async () => vi.advanceTimersByTimeAsync(30_000));
+          expect(fixture.openLink).toHaveBeenCalledTimes(calls);
+          fixture.openLink.mockResolvedValue({});
+          fixture.invoke.mockImplementation(original);
+          act(() => button("connect").click());
+          await act(async () => {});
+          expect(fixture.openLink.mock.calls.length).toBeGreaterThan(calls);
+          expect(host.textContent).not.toContain(
+            `deviceLink.remoteError.${hint}`,
+          );
+        }
       }
-    }
-  });
+    },
+  );
   it("marks retries as recovery even when the first start reply was lost", async () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) =>
@@ -737,37 +1390,54 @@ describe("remote desktop controls", () => {
     ]);
     expect(button("connect")).not.toBeNull();
   });
-  it("keeps explicit display switching available on older hosts", async () => {
-    const original = fixture.invoke.getMockImplementation()!;
-    fixture.invoke.mockImplementation(async (...args) => {
-      const result = await original(...args);
-      return args[2][0].op === "capabilities"
-        ? {
-            ...result,
-            automaticReconnect: undefined,
-            displays: [display, { ...display, id: "second" }],
-          }
-        : result;
-    });
-    await connect();
-    act(() => button("operations").click());
-    act(() => [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("remoteDesktop.displaySettings"))!.click());
-    await act(async () => button("display").click());
-    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
-    await act(async () =>
-      host
-        .querySelector<HTMLButtonElement>(
-          '[data-testid="remoteDesktop.display.second"]',
-        )!
-        .click(),
-    );
-    expect(
-      requests()
-        .filter((r) => r.op === "start")
-        .at(-1),
-    ).toEqual({ op: "start", displayId: "second" });
-    expect(host.textContent).not.toContain("remoteDesktop.upgrade");
-  });
+  it.each([false, true])(
+    "keeps explicit display switching available on older hosts (native menu: %s)",
+    async (native) => {
+      fixture.nativeMenus = native;
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (...args) => {
+        const result = await original(...args);
+        return args[2][0].op === "capabilities"
+          ? {
+              ...result,
+              automaticReconnect: undefined,
+              displays: [display, { ...display, id: "second" }],
+            }
+          : result;
+      });
+      await connect();
+      act(() => button("operations").click());
+      act(() =>
+        [...host.querySelectorAll("button")]
+          .find((item) =>
+            item.textContent?.includes("remoteDesktop.displaySettings"),
+          )!
+          .click(),
+      );
+      await act(async () => button("display").click());
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      await act(async () =>
+        host
+          .querySelector<HTMLButtonElement>(
+            native
+              ? '[data-testid="native-menu.second"]'
+              : '[data-testid="remoteDesktop.display.second"]',
+          )!
+          .click(),
+      );
+      expect(
+        requests()
+          .filter((r) => r.op === "start")
+          .at(-1),
+      ).toEqual({ op: "start", displayId: "second" });
+      expect(host.textContent).not.toContain("remoteDesktop.upgrade");
+      if (native)
+        expect(
+          host.querySelector('[data-testid="remoteDesktop.display.second"]'),
+        ).toBeNull();
+      fixture.nativeMenus = false;
+    },
+  );
   it("does not automatically resume through an older host that cannot preserve local stops", async () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation(async (...args) => {
@@ -823,7 +1493,9 @@ describe("remote desktop controls", () => {
     });
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
+    expect(fixture.resetUnlockAttempt).not.toHaveBeenCalled();
     await act(async () => button("connect").click());
+    expect(fixture.resetUnlockAttempt).toHaveBeenCalledTimes(1);
     expect(
       requests()
         .filter((r) => r.op === "start")
@@ -849,13 +1521,14 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     act(() => button("pointer").click());
     expect(sent().at(-1)).toEqual({ type: "mode", mode: "pointer" });
+    expect(visibleInputHint()).toBe("remoteDesktop.pointerHint");
     await act(async () => button("viewOnly").click());
     expect(
       sent()
         .filter((m) => m.type === "mode")
         .at(-1),
     ).toEqual({ type: "mode", mode: "pan" });
-    expect(host.textContent).toContain("remoteDesktop.viewOnlyHint");
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
     await act(async () => button("viewOnly").click());
     expect(
       sent()
@@ -891,7 +1564,7 @@ describe("remote desktop controls", () => {
         .filter((m) => m.type === "mouseButtons")
         .at(-1),
     ).toMatchObject({ enabled: false });
-    expect(host.textContent).toContain("remoteDesktop.viewOnlyHint");
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
     expect(button("fit")).toBeNull();
     act(() => button("close").click());
     expect(
@@ -1037,57 +1710,108 @@ describe("remote desktop controls", () => {
       fixture.appState!("active");
     });
     expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
+    expect(fixture.resetUnlockAttempt).not.toHaveBeenCalled();
   });
   it("retires an uncertain PiP transition instead of leaving a controlling UI with disabled input", async () => {
     await connect();
-    act(() => fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "pipCapability", epoch: "lease", supported: true }) } }));
+    act(() =>
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "pipCapability",
+            epoch: "lease",
+            supported: true,
+          }),
+        },
+      }),
+    );
     let reject!: (cause: unknown) => void;
     const invoke = fixture.invoke.getMockImplementation()!;
-    fixture.invoke.mockImplementation((device, channel, args) => args[0].op === "presentation"
-      ? new Promise((_resolve, fail) => { reject = fail; })
-      : invoke(device, channel, args));
+    fixture.invoke.mockImplementation((device, channel, args) =>
+      args[0].op === "presentation"
+        ? new Promise((_resolve, fail) => {
+            reject = fail;
+          })
+        : invoke(device, channel, args),
+    );
     act(() => button("operations").click());
     await act(async () => button("smallWindow").click());
-    expect(sent().filter((m) => m.type === "control").at(-1)).toMatchObject({ enabled: true });
+    expect(
+      sent()
+        .filter((m) => m.type === "control")
+        .at(-1),
+    ).toMatchObject({ enabled: true });
     await act(async () => reject({ code: "INVOKE_TIMEOUT" }));
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
     expect(fixture.playback).toHaveBeenLastCalledWith(false);
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
-    expect(sent().filter((m) => m.type === "control").at(-1)).toMatchObject({ enabled: true });
+    expect(
+      sent()
+        .filter((m) => m.type === "control")
+        .at(-1),
+    ).toMatchObject({ enabled: true });
   });
-  it.each(["active", "background"])("handles failed PiP in %s without keeping a hidden stream alive", async (state) => {
-    fixture.systemAudio = true;
-    await connect();
-    expect(sent().find((m) => m.type === "init")).toMatchObject({ audio: true });
-    act(() => fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "presentation", epoch: "lease", active: true }) } }));
-    act(() => {
-      AppState.currentState = state as typeof AppState.currentState;
-      fixture.appState!(state);
-    });
-    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
-    await act(async () => fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "presentationFailed", epoch: "lease" }) } }));
-    expect(requests().filter((r) => r.op === "stop")).toHaveLength(state === "background" ? 1 : 0);
-    if (state === "background") {
-      expect(fixture.playback).toHaveBeenLastCalledWith(false);
-      const count = requests().length;
-      await act(async () => vi.advanceTimersByTimeAsync(30_000));
-      expect(requests()).toHaveLength(count);
-      await act(async () => {
-        AppState.currentState = "active";
-        fixture.appState!("active");
+  it.each(["active", "background"])(
+    "handles failed PiP in %s without keeping a hidden stream alive",
+    async (state) => {
+      fixture.systemAudio = true;
+      await connect();
+      expect(sent().find((m) => m.type === "init")).toMatchObject({
+        audio: true,
       });
-      expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
-    }
-  });
+      act(() =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: "presentation",
+              epoch: "lease",
+              active: true,
+            }),
+          },
+        }),
+      );
+      act(() => {
+        AppState.currentState = state as typeof AppState.currentState;
+        fixture.appState!(state);
+      });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      await act(async () =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: "presentationFailed",
+              epoch: "lease",
+            }),
+          },
+        }),
+      );
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(
+        state === "background" ? 1 : 0,
+      );
+      if (state === "background") {
+        expect(fixture.playback).toHaveBeenLastCalledWith(false);
+        const count = requests().length;
+        await act(async () => vi.advanceTimersByTimeAsync(30_000));
+        expect(requests()).toHaveLength(count);
+        await act(async () => {
+          AppState.currentState = "active";
+          fixture.appState!("active");
+        });
+        expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
+      }
+    },
+  );
   it("releases in background and reconnects only after foreground and focus return", async () => {
     await connect();
+    expect(fixture.resetUnlockAttempt).not.toHaveBeenCalled();
     act(() => {
       AppState.currentState = "background";
       fixture.appState!("background");
     });
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    expect(fixture.resetUnlockAttempt).toHaveBeenCalledTimes(1);
     fixture.focused = false;
     act(() => root.render(<RemoteDesktopScreen />));
     await act(async () => {

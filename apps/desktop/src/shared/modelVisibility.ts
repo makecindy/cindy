@@ -28,11 +28,12 @@ export function isModelVisibilityLegacyOwnerClaim(
   );
 }
 
-/** Optional append-only IPC policy; omitted by older renderers. */
+/** Optional IPC policy; omitted by older renderers. */
 export interface ModelVisibilityPolicy {
-  fallback: false;
+  /** false = missing routes off (legacy freeze). Omit to follow catalog defaultEnabled. */
+  fallback?: false;
   /** Renderer still needs the catalog/legacy claim; this is not an effective snapshot. */
   pending?: true;
-  /** Only an explicit Restore defaults action may follow future catalog defaults. */
+  /** Restore-default routes; unused when catalog fallback is in effect. */
   followCatalogKeys: string[];
 }

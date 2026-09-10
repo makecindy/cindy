@@ -10,7 +10,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   build(messages: readonly T[], streaming: boolean): TItem[];
   streaming: boolean;
   isLive?(message: T): boolean;
-  /** Already displayed assistant identities awaiting history, not arbitrary cached rows. */
+  /** Already displayed assistant identities in observation order, awaiting history. */
   pendingHandoff?: ReadonlySet<string>;
   isLocalUser?(message: T): boolean;
   structure: {
@@ -69,17 +69,29 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     }
     endMs = Math.max(endMs, summary.endedAtMs);
   }
-  for (const row of options.liveMessages) {
+  // Durable pushes can change a pending row's provisional timestamp before the
+  // history page includes it. Preserve the handoff's observation order for those
+  // rows, without moving other live rows or changing authoritative history order.
+  const pendingTail = [...(options.pendingHandoff ?? [])].flatMap((id) => {
+    const row = live.get(id);
+    return row?.role === 'assistant' && !seen.has(id) ? [row] : [];
+  });
+  let pendingIndex = 0;
+  const orderedLiveMessages = options.liveMessages.map((source) =>
+    isPendingHandoff(source) && !seen.has(source.clientId)
+      ? pendingTail[pendingIndex++] : source);
+  for (const row of orderedLiveMessages) {
     if (isLive(row) && !seen.has(row.clientId) && (row.role === 'assistant' || row.role === 'user')
       && (Date.parse(row.createdAt) >= endMs
         || isPendingHandoff(row))) rows.push(row);
   }
   // Local pending/blocked user bubbles belong to the current UI store, not
-  // persisted history. Keep their store order without trusting device clocks.
+  // persisted history. Anchor them to the same reordered slots used above,
+  // without trusting device clocks or changing their order relative to each other.
   const renderedIds = new Set(rows.map((row) => row.clientId));
   let beforeClientId: string | undefined;
-  for (let index = options.liveMessages.length - 1; index >= 0; index--) {
-    const row = options.liveMessages[index];
+  for (let index = orderedLiveMessages.length - 1; index >= 0; index--) {
+    const row = orderedLiveMessages[index];
     if (renderedIds.has(row.clientId)) {
       beforeClientId = row.clientId;
     } else if (row.role === 'user' && options.isLocalUser?.(row)) {

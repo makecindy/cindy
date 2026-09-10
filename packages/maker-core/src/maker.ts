@@ -1481,16 +1481,17 @@ export class Maker {
   }
 
   /** Read account quota and banked reset credits through the selected agent runtime. */
-  async readAgentAccountRateLimits(agentKind: AgentKind) {
-    return this.requireAgent(agentKind).readAccountRateLimits();
+  async readAgentAccountRateLimits(agentKind: AgentKind, providerId?: string) {
+    return this.requireAgent(agentKind).readAccountRateLimits(providerId);
   }
 
   /** Consume one banked account reset credit through the selected agent runtime. */
   async consumeAgentAccountRateLimitResetCredit(
     agentKind: AgentKind,
     params: ConsumeAccountRateLimitResetCreditParams,
+    providerId?: string,
   ) {
-    return this.requireAgent(agentKind).consumeAccountRateLimitResetCredit(params);
+    return this.requireAgent(agentKind).consumeAccountRateLimitResetCredit(params, providerId);
   }
 
   /** Codex 浏览器登录中途取消; Claude 之类同步弹窗式登录调到底层 no-op。 */

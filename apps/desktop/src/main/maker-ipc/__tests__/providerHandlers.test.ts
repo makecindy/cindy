@@ -965,6 +965,23 @@ describe('provider:models-auto-refresh handler', () => {
   });
 });
 
+describe('provider OAuth sender boundary', () => {
+  it.each([false, true])('rejects all OAuth mutations before side effects (missing guard=%s)', async (missing) => {
+    const harness = new IpcHarness();
+    const guard = vi.fn(() => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); });
+    const deps = makeDeps({ assertTrustedSender: missing ? undefined : guard });
+    registerProviderHandlers(harness, deps);
+    for (const channel of [MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL]) {
+      await expect(harness.invokeFrom(123, channel, 'openai-account')).rejects.toThrow(/PERMISSION_DENIED/);
+    }
+    if (!missing) expect(guard).toHaveBeenCalledTimes(3);
+    expect(deps.oauthLogin).not.toHaveBeenCalled();
+    expect(deps.oauthLogout).not.toHaveBeenCalled();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.beginRouteMutation).not.toHaveBeenCalled();
+  });
+});
+
 describe('provider:custom:* CRUD handlers', () => {
   it('rejects credential-mutating CRUD before parsing or touching secrets for an untrusted sender', async () => {
     const harness = new IpcHarness();
@@ -2398,7 +2415,7 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(second).resolves.toEqual({ ok: true });
     expect(calls).toEqual(['remove-1', 'restore-1', 'remove-2']);
     const savedAuth = (await listCustomProviders())[0]?.auth;
-    expect(savedAuth?.method === 'oauth' ? savedAuth.oauth.clientId : undefined).toBe(
+    expect(savedAuth?.method === 'oauth' ? savedAuth.oauth?.clientId : undefined).toBe(
       'winning-client',
     );
   });

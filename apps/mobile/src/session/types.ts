@@ -1,7 +1,7 @@
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
-import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
+import type { MobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';

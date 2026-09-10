@@ -2468,15 +2468,15 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     });
   });
 
-  it('rejects chat-bridged codex providers for a remote lead (wireProtocol=openai-chat)', async () => {
-    const { service } = createDeps({
+  it.each([['deepseek', 'codex'], ['user-openai-account', 'codex'], ['user-claude-account', 'pi']] as const)('rejects local-only source %s/%s before allocating a remote worker', async (providerId, agent) => {
+    const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getAvailableModels: vi.fn(() => [
         { id: 'deepseek-v4', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true },
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        [agent]: [{ id: providerId, name: providerId, models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2484,16 +2484,17 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       service.createWorker({
         leadSessionId: 'lead-1',
         role: 'reviewer',
-        agent: 'codex',
+        agent,
         label: 'reviewer',
         model: 'deepseek-v4',
-        providerId: 'deepseek',
+        providerId,
       }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'INVALID_PARAMS',
       message: expect.stringContaining('not available for SSH remote workers'),
     });
+    expect(deps.createSessionId).not.toHaveBeenCalled();
   });
 
   it('still allows SSH-compatible models for a remote lead', async () => {
@@ -2562,7 +2563,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2604,7 +2605,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 

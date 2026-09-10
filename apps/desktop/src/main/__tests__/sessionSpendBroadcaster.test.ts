@@ -47,6 +47,11 @@ beforeEach(() => {
 });
 
 describe('recordSessionContextSnapshot', () => {
+  it('does not certify an old catalog window when a status only supplies tokens', async () => {
+    await recordSessionContextSnapshot('s1', 42, 0);
+    expect(setMock).toHaveBeenCalledWith({ contextTokens: 42 });
+  });
+
   it('skips 0/0 placeholder snapshots from interrupted compact turns', async () => {
     await recordSessionContextSnapshot('s1', 0, 0);
 
@@ -58,7 +63,7 @@ describe('recordSessionContextSnapshot', () => {
   it('persists zero context tokens when the context window is authoritative', async () => {
     await recordSessionContextSnapshot('s1', 0, 200000);
 
-    expect(setMock).toHaveBeenCalledWith({ contextTokens: 0, contextWindow: 200000 });
+    expect(setMock).toHaveBeenCalledWith({ contextTokens: 0, contextWindow: 200000, contextWindowRuntime: 200000 });
     expect(runMock).toHaveBeenCalledTimes(1);
     expect(getMock).toHaveBeenCalledTimes(1);
   });

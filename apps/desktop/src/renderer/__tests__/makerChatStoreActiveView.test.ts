@@ -47,6 +47,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import * as sessionService from '@/lib/sessionService';
 import {
   markSessionAutomaticHistoryLoadCompleted,
   restoreSessionAutomaticHistoryLoadAttempts,
@@ -238,6 +239,20 @@ describe('makerChatStore active view tracking', () => {
     // 非空泛验证:回收确实发生了 —— 最早创建的 idle 会话(非 active)已被 purge,
     // 重新 getSnapshot 只会拿到重建的空 slice。
     expect(makerChatStore.getSnapshot(otherIds[0]).messages).toHaveLength(0);
+  });
+
+  it.each([0, 9_000])('keeps read-projected windows replaceable unless history has %s used tokens', async (contextTokens) => {
+    const sessionId = sid('projected-context');
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false,
+      contextTokens, contextWindow: 272_000, totalCostUsd: 0,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(272_000);
+    makerChatStore.setContextWindow(sessionId, 1_000_000);
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow)
+      .toBe(contextTokens > 0 ? 272_000 : 1_000_000);
   });
 
   it('initial history load backfills to the latest plan boundary', async () => {

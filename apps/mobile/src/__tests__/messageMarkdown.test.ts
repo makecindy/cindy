@@ -349,6 +349,44 @@ describe('messageMarkdown', () => {
     ]);
   });
 
+  it('classifies managed video Markdown links for the mobile media viewer', () => {
+    const hash = 'a'.repeat(64);
+    expect(parseMobileMarkdownInlines(
+      `播放 [海洋视频](cindy-media://blobs/${hash}.mp4) 继续`,
+    )).toEqual([
+      { type: 'text', text: '播放 ' },
+      {
+        type: 'link',
+        text: '海洋视频',
+        url: `cindy-media://blobs/${hash}.mp4`,
+        managedMediaKind: 'video',
+      },
+      { type: 'text', text: ' 继续' },
+    ]);
+
+    for (const extension of ['webm', 'mov']) {
+      expect(parseMobileMarkdownInlines(
+        `[video](cindy-media://blobs/${hash}.${extension})`,
+      )).toEqual([{
+        type: 'link',
+        text: 'video',
+        url: `cindy-media://blobs/${hash}.${extension}`,
+        managedMediaKind: 'video',
+      }]);
+    }
+  });
+
+  it('keeps unsupported or malformed cindy-media links as literal text', () => {
+    const hash = 'a'.repeat(64);
+    for (const input of [
+      `[image](cindy-media://blobs/${hash}.png)`,
+      '[video](cindy-media://blobs/not-a-sha.mp4)',
+      `[video](cindy-media://other/${hash}.mp4)`,
+    ]) {
+      expect(parseMobileMarkdownInlines(input)).toEqual([{ type: 'text', text: input }]);
+    }
+  });
+
   it('does not swallow fullwidth parentheses or CJK punctuation after a bare URL', () => {
     expect(parseMobileMarkdownInlines(
       '诊断已写在 https://github.com/example/app/issues/3561#issuecomment-5391602790（无 @）。',

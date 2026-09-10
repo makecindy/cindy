@@ -1,3 +1,4 @@
+import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
   AgentEvent,
@@ -28,7 +29,6 @@ import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedge
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
-import { getSessionFastMode } from '../maker-host/session-effort-store.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
 import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import {
@@ -100,7 +100,7 @@ export interface PrepareSessionEventDeps {
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTurnStarted'> | null;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly readSessionModelForUsage: (sessionId: string) => Promise<string>;
-  readonly turnPiFastModeBySession: Map<string, boolean>;
+  readonly turnUsageContextBySession: Map<string, TurnUsageContext>;
   readonly silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'turnLeaseIdForEvent'>;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
@@ -305,8 +305,9 @@ export function prepareSessionEvent(
       ) {
         deps.turnModelPromiseBySession.set(session.id, deps.readSessionModelForUsage(session.id));
       }
-      if (event.source === 'pi' && !deps.turnPiFastModeBySession.has(session.id)) {
-        deps.turnPiFastModeBySession.set(session.id, getSessionFastMode(session.id));
+      if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
+        && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
+        deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
       }
     } else if (
       data.isRunning === false &&
@@ -420,7 +421,8 @@ export function prepareSessionEvent(
     shouldMarkTurnTerminalIdleAfterBroadcast = true;
     if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
       deps.turnModelPromiseBySession.delete(session.id);
-      if (event.source === 'pi') deps.turnPiFastModeBySession.delete(session.id);
+      // A paired done may still carry usage after this error. Retain its billing
+      // identity until done; a new product turn overwrites it using wasInTurn.
     }
     const errData =
       attributedEvent.type === 'error'

@@ -1,4 +1,9 @@
 {
+  "credentialPasswordRejected": "Mac 로그인 암호를 확인하지 못했습니다. 다시 입력해 주세요.",
+  "credentialCancelled": "암호 확인을 취소했습니다. 준비되면 다시 연결해 주세요.",
+  "credentialIdentityChanged": "컴퓨터의 신원을 확인할 수 없습니다. 확인되지 않은 기기로 암호를 보내지 않습니다.",
+  "credentialExpired": "보안 연결이 만료되었습니다. 다시 연결하여 확인해 주세요.",
+  "credentialRequired": "Mac 암호를 확인한 후 다시 연결하세요. 확인할 수 없으면 두 기기에서 Cindy를 업데이트하세요.",
   "takeoverConnection": "연결 넘겨받기",
   "connectionBusyTakeover": "다른 기기가 연결되어 있습니다. 연결을 넘겨받으면 해당 기기의 연결이 끊어집니다.",
   "clipboard": "클립보드",
@@ -113,5 +118,18 @@
   "pipUnavailable": "화면 속 화면을 시작할 수 없습니다. Cindy를 열어 둔 상태로 시청하세요.",
   "clipboardUnsupported": "아직 지원하지 않는 형식입니다. 이미지 한 장, 텍스트 또는 링크를 복사해 주세요. 파일과 앱 전용 형식은 아직 전송할 수 없습니다.",
   "clipboardTransferring": "클립보드 내용을 전송하는 중…",
-  "nativeResolution": "기본 해상도"
+  "nativeResolution": "기본 해상도",
+  "credentialAccessibilityRequired": "Mac의 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Cindy를 허용한 후 다시 연결하세요.",
+  "credentialUnlockUnavailable": "이 Mac의 잠금을 안전하게 해제하지 못했습니다. 잠금 화면에서 본인 계정을 선택한 후 다시 연결하세요. 계속 실패하면 Mac에서 직접 잠금을 해제하세요.",
+  "security": "보안",
+  "autoUnlock": "컴퓨터 자동 잠금 해제",
+  "autoUnlockHint": "이 Mac의 로그인 암호를 이 기기에 저장하고 연결할 때 잠금을 해제합니다.",
+  "faceIdVerification": "Face ID 인증",
+  "biometricVerification": "생체 인증",
+  "biometricVerificationHint": "저장된 암호를 사용하기 전에 본인 인증을 합니다.",
+  "autoUnlockStorageHint": "암호는 현재 기기에만 암호화되어 저장됩니다. 설정과 암호는 계정에 동기화되지 않습니다.",
+  "autoUnlockUnavailable": "자동 잠금 해제를 사용할 수 없습니다. 연결한 뒤 Mac을 수동으로 잠금 해제할 수 있습니다.",
+  "lockOnExit": "원격 종료 후 컴퓨터 잠금",
+  "lockOnExitHint": "원격 데스크톱을 종료하면 잠급니다. 재연결이나 앱 전환 시에는 잠그지 않습니다.",
+  "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 컴퓨터 상태를 확인해 주세요."
 }

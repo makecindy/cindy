@@ -88,10 +88,25 @@ describe('mobile message media thumbnail wiring', () => {
     expect(pendingImage).not.toContain('Image.getSize');
     expect(pendingBranch).toContain('<FileChip');
     expect(pendingBranch).toContain('<MarkdownBody');
+    expect(pendingBranch).not.toContain('onOpenPayload=');
     expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody ?'));
     expect(pending).toContain('item.fileNames.map(renderFile)');
     expect(pending).not.toContain('height: 72');
     expect(pending).not.toContain('contentFit="cover"');
+  });
+
+  it('does not expose a managed-media press handler without a payload viewer', () => {
+    const markdownBody = rendererSource.slice(
+      rendererSource.indexOf('function MarkdownBody'),
+      rendererSource.indexOf('function renderInline'),
+    );
+    expect(markdownBody).toContain('const openMarkdownMedia = useMemo(() => onOpenPayload');
+    expect(markdownBody).toContain(': undefined, [onOpenPayload]);');
+    const mediaCallback = markdownBody.slice(
+      markdownBody.indexOf('const openMarkdownMedia'),
+      markdownBody.indexOf('// Preserve the inline renderer'),
+    );
+    expect(mediaCallback).not.toContain('if (!onOpenPayload) return;');
   });
 
   it('exempts images from close-time release in the payload viewer', () => {

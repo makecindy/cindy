@@ -38,6 +38,7 @@ export type {
 } from "./types.js";
 
 export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
+export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId } from './provider-identity.js';
 
 export {
   effectivePiWireProtocol,

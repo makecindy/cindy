@@ -1,3 +1,6 @@
+import { codexAccountState } from './maker-host/codex-account-auth.js';
+import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
+import { clearSubscriptionAccountDiscoveredModels, setSubscriptionAccountInvalidatedHandler } from './maker-host/subscription-account-auth.js';
 import { startWorktreeRecycleMaintenance, stopWorktreeRecycleMaintenance, auditRegisteredWorktrees } from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
 import { recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
@@ -305,7 +308,8 @@ import {
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
-import { openMakeToolsDirectory } from './cindy-make/toolsDirectory';
+import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
+import { makeSourceRoot, readCindySourceStatus } from './cindy-make/sourcePreparation.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   collectDatabaseSizeWarningStatus,
@@ -558,6 +562,7 @@ import {
   finalizeCodexAfterAuthModeChange,
   readCodexRuntimeRoute,
   broadcastClaudeAuthStateChanged,
+  refreshSelectableModelsAndBroadcast,
   broadcastXaiAuthStateChanged,
   refreshProviderAccessAfterAuthChange,
   setProviderAccessRuntimeRefreshListener,
@@ -588,6 +593,7 @@ import {
   loadXaiModelsFromDiskCache,
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
+import { notifyOpenAiMediaCredentialChanged } from './maker-host/model-discovery/openai-media.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
 import {
   clearXaiRateLimitSnapshot,
@@ -2413,6 +2419,7 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
+  hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
 });
@@ -4877,7 +4884,21 @@ const registerIpcHandlers = () => {
 
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
-  setXaiAuthInvalidatedHandler(() => {
+  setSubscriptionAccountInvalidatedHandler((providerId) => {
+    const scope = activeOwnerScopeKey();
+    const broadcast = () => {
+      if (scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+        refreshSelectableModelsAndBroadcast({ providerId });
+      }
+    };
+    void syncSubscriptionAccountUsage(providerId).then(broadcast, broadcast);
+  });
+  setXaiAuthInvalidatedHandler((providerId) => {
+    if (providerId !== 'xai') {
+      void clearSubscriptionAccountDiscoveredModels(providerId);
+      void syncSubscriptionAccountUsage(providerId).then(broadcastXaiAuthStateChanged, broadcastXaiAuthStateChanged);
+      return;
+    }
     resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiDiscoveredModels();
     clearXaiMediaModels();
@@ -5344,6 +5365,9 @@ const registerIpcHandlers = () => {
       source: 'host_config',
       ref: `provider:${providerId}`,
     });
+    if (providerId === 'openai-images') {
+      notifyOpenAiMediaCredentialChanged();
+    }
     // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
@@ -7260,6 +7284,21 @@ const registerIpcHandlers = () => {
     async (event): Promise<{ success: boolean }> => {
       assertTrustedAppRendererEvent(event);
       return openMakeToolsDirectory(app.getPath('userData'), {
+        openPath: (directory) => shell.openPath(directory),
+      });
+    },
+  );
+
+  ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readCindySourceStatus(makeSourceRoot(app.getPath('userData')));
+  });
+
+  ipcMain.handle(
+    'app:open-cindy-make-source-dir',
+    async (event): Promise<{ success: boolean }> => {
+      assertTrustedAppRendererEvent(event);
+      return openMakeSourceDirectory(app.getPath('userData'), {
         openPath: (directory) => shell.openPath(directory),
       });
     },

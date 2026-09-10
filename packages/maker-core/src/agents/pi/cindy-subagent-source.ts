@@ -1,5 +1,5 @@
 /**
- * cindy-subagent —— 写进 pi `PI_CODING_AGENT_DIR/extensions/` 的扩展源码(字符串常量)。
+ * cindy-subagent —— 写进 pi `PI_CODING_AGENT_DIR/internal-extensions/` 的扩展源码(字符串常量)。
  *
  * 为什么是 Cindy 自己的实现,而不是装社区包:
  *  - pi 上游刻意不内置子代理,社区(`pi-subagents` 等)一律以「扩展 + 子 pi 进程」补齐。
@@ -14,7 +14,7 @@
  *
  * 安全形态(重要,别当冗余删掉):
  *  - 子进程**继承 `PI_CODING_AGENT_DIR`**,但显式 `--no-extensions` 关闭隐式发现，再只用
- *    `--extension <configHome>/internal-extensions/cindy-bridge.ts` 回装权限门。这样 project extension
+ *    `--extension <runDir>/cindy-bridge.ts` 回装从内部扩展目录复制的权限门。这样 project extension
  *    永远不会执行，bridge 的 tool_call 拦截 + 凭证路径硬拦仍对子代理生效。
  *  - 只读角色固定 read/grep/find/ls；worker/custom-write 才拿 edit/write/bash。Ask/Auto
  *    下 bridge 产生的 `extension_ui_request` 由 durable runner 记录，父 PI adapter 转交

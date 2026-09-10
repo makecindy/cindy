@@ -331,51 +331,6 @@ export interface CodexAccountUsagePayload extends RateLimitSnapshot {
   appServerBuckets?: Record<string, RateLimitSnapshot> | null;
 }
 
-let codexAccountUsageOwner: string | null = null;
-/**
- * 冷缓存 hydration 是否**成功读到过库**(读到空行也算)。
- *
- * 落库守卫的判据 —— merge 的底子可信才允许写回。读库失败 / owner 未初始化被跳过时
- * 内存是空的, 此时任何 merge 结果都不代表账号真实状态, 写回会抹掉库里的有效数据。
- * 不能改用「payload 内容看起来是否有用」判断: 合法的空(限额解除、credits 清零)与
- * 事故的空形状完全一致, 按内容判会把前者一并拦下。
- *
- * 它同时充当「无需再读库」的判据 —— 读失败时保持 false, 下一次 record / read 会重试。
- * 若另设一个「已加载」标志并在失败时也置位, 一次瞬时 db busy 就会让本进程之后
- * 所有落库被永久跳过。
- */
-let codexAccountUsageHydrated = false;
-// 并发 record 必须等同一次 SQLite 读完成后再按到达顺序 merge(与 claude 侧同款) ——
-// 否则第二笔会在 loaded 已被置位、内存却仍为空时 merge 出全 null payload。
-let codexAccountUsageLoadPromise: Promise<void> | null = null;
-/** app-server 桶表: limitId → 该桶最近快照(同桶 merge, 跨桶隔离)。 */
-let codexAppServerBuckets: Record<string, RateLimitSnapshot> = {};
-/** 最近更新的 app-server 桶键 —— 顶层兼容位取它。 */
-let codexAppServerLatestBucketKey: string | null = null;
-let codexWebAccountUsageSnapshot: RateLimitSnapshot | null = null;
-
-/**
- * 剪掉陈旧桶(保留最近更新桶本身, 它是顶层兼容位的来源)。桶表持久化且纯累加,
- * 不剪枝会让促销结束后的旧桶永远留着并被模型匹配选中(review 反馈)。
- */
-function pruneStaleCodexBuckets(nowMs: number): void {
-  const next: Record<string, RateLimitSnapshot> = {};
-  for (const [key, bucket] of Object.entries(codexAppServerBuckets)) {
-    if (key !== codexAppServerLatestBucketKey && isCodexBucketStale(bucket, nowMs)) continue;
-    next[key] = bucket;
-  }
-  codexAppServerBuckets = next;
-}
-
-/** 当前 app-server 展示快照(最近更新桶);无桶 → null。 */
-function currentCodexAppServerSnapshot(): RateLimitSnapshot | null {
-  if (codexAppServerLatestBucketKey) {
-    return codexAppServerBuckets[codexAppServerLatestBucketKey] ?? null;
-  }
-  const keys = Object.keys(codexAppServerBuckets);
-  return keys.length > 0 ? codexAppServerBuckets[keys[keys.length - 1]] ?? null : null;
-}
-
 function currentAccountUsageOwner(): string | null {
   try {
     return getCurrentDbClientUserId();
@@ -384,17 +339,6 @@ function currentAccountUsageOwner(): string | null {
   }
 }
 
-function resetCodexAccountUsageCacheIfOwnerChanged(): void {
-  const owner = currentAccountUsageOwner();
-  if (owner === codexAccountUsageOwner) return;
-  codexAccountUsageOwner = owner;
-  codexAccountUsageHydrated = false;
-  codexAppServerBuckets = {};
-  codexAppServerLatestBucketKey = null;
-  codexWebAccountUsageSnapshot = null;
-}
-
-/** 顶层槽是否有可展示内容(区分「空 app 槽 + 仅 web 槽」的 payload)。 */
 function hasCodexSnapshotContent(snapshot: RateLimitSnapshot | null | undefined): boolean {
   if (!snapshot) return false;
   return Boolean(
@@ -407,33 +351,6 @@ function hasCodexSnapshotContent(snapshot: RateLimitSnapshot | null | undefined)
   );
 }
 
-/** 两槽 → 组合 payload;两槽全空 → null。 */
-function buildCodexAccountUsagePayload(): CodexAccountUsagePayload | null {
-  const app = currentCodexAppServerSnapshot();
-  const web = codexWebAccountUsageSnapshot;
-  const buckets = Object.keys(codexAppServerBuckets).length > 0
-    ? codexAppServerBuckets
-    : null;
-  if (!app && !web) return null;
-  if (!app && web) {
-    // web-only: 顶层无 CLI 数据, 但归属字段必须上浮 —— WHAM reader 用顶层
-    // accountId 判断缓存归属(codexAccountUsageRefresh), 缺失会被当成账号失配,
-    // 每次读都清缓存 + 强刷(bridge-only 用户 warm-start 永远拿 null)。
-    // accountId / updatedAt 不算「内容」(hasCodexSnapshotContent), 归槽水合
-    // 不会据此伪造出 app 槽。
-    return { accountId: web.accountId, updatedAt: web.updatedAt, webSnapshot: web };
-  }
-  return {
-    ...(app as RateLimitSnapshot),
-    webSnapshot: web ?? null,
-    appServerBuckets: buckets,
-  };
-}
-
-/**
- * 持久化行 → 两槽。新格式带 webSnapshot 键;旧格式是单快照 —— 按其 source
- * 归入对应槽(旧行可能是被 WHAM 污染过的单槽杂交体, 归 web 槽即自然隔离)。
- */
 export function splitPersistedCodexAccountUsage(parsed: Record<string, unknown>): {
   appServerBuckets: Record<string, RateLimitSnapshot>;
   /** 落库时的最近更新桶键(顶层兼容位派生);未知 → null。 */
@@ -583,151 +500,281 @@ function isCodexWindowlessFallback(snapshot: RateLimitSnapshot): boolean {
   return !snapshot.primary && !snapshot.secondary;
 }
 
-async function ensureCodexAccountUsageLoaded(): Promise<void> {
-  resetCodexAccountUsageCacheIfOwnerChanged();
-  if (codexAccountUsageHydrated) return;
-  if (!codexAccountUsageLoadPromise) {
-    // 句柄的清理必须放在 await 之后, 不能放进下面 IIFE 的 finally —— owner 缺失时
-    // IIFE 会在首个 await 之前同步走完, 它 finally 里清掉的句柄随即被本行的赋值写回,
-    // 之后 ensure 永远复用这个已 resolve 的 Promise, 再也不查库(hydrated 也就永远
-    // 是 false, 本进程之后所有落库都被守卫跳过)。
-    codexAccountUsageLoadPromise = (async () => {
-      try {
-        if (!codexAccountUsageOwner) return;
-        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
-          'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-          ['codex'],
-        );
-        // 读到库就算 hydrated(无行 = 确认库里本来就没有), 之后允许落库。置位放在
-        // JSON.parse 之前: 损坏行解析失败仍应允许被新快照覆盖, 否则一条坏行会永久
-        // 堵死写入。
-        codexAccountUsageHydrated = true;
-        if (!row?.snapshot) return;
-        const parsed = JSON.parse(row.snapshot);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
-          // hydration 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经装着那段时间
-          // 收到的**更新**观测(它们因守卫未能落库)。库里的行比它们旧, 直接赋值会让 UI
-          // 回退到旧额度, 且那些观测永远等不到落库时机。
-          //
-          // 但也不能按桶键整体覆盖: 那段时间收到的可能是 windowless 稀疏事件, 留下的是
-          // 一个非空、却全 null 的同名桶 —— 整桶覆盖会抹掉持久化桶里的窗口, 正好复现
-          // 本次要防的损坏。逐桶走常规 merge(持久化桶作 previous), 稀疏事件即按既有
-          // 语义保住旧窗口。
-          const persistedBuckets = slots.appServerBuckets;
-          const mergedBuckets: Record<string, RateLimitSnapshot> = { ...persistedBuckets };
-          for (const [key, pending] of Object.entries(codexAppServerBuckets)) {
-            mergedBuckets[key] = mergeCodexAccountUsageSnapshot(persistedBuckets[key] ?? null, pending);
-          }
-          codexAppServerBuckets = mergedBuckets;
-          codexAppServerLatestBucketKey = codexAppServerLatestBucketKey ?? slots.latestBucketKey;
-          codexWebAccountUsageSnapshot = codexWebAccountUsageSnapshot
-            ? mergeCodexAccountUsageSnapshot(slots.web, codexWebAccountUsageSnapshot)
-            : slots.web;
-        }
-      } catch (err) {
-        log.warn(
-          'readCodexAccountUsageSnapshot failed:',
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    })();
+const codexUsageStores = new Map<string, ReturnType<typeof createCodexUsageStore>>();
+let codexUsageStoresOwner: string | null = null;
+function codexUsageStore(providerId = 'openai') {
+  const owner = currentAccountUsageOwner();
+  if (owner !== codexUsageStoresOwner) {
+    codexUsageStores.clear();
+    codexUsageStoresOwner = owner;
   }
-  try {
-    await codexAccountUsageLoadPromise;
-  } finally {
-    // hydrated 仅在读成功时置位 —— 读失败清掉句柄即留下重试机会。
+  let store = codexUsageStores.get(providerId);
+  if (!store) {
+    store = createCodexUsageStore(providerId);
+    codexUsageStores.set(providerId, store);
+  }
+  return store;
+}
+export function recordCodexAccountUsageSnapshot(snapshot: unknown, providerId?: string): Promise<void> {
+  return codexUsageStore(providerId).record(snapshot);
+}
+export function clearCodexAccountUsageSnapshot(providerId?: string): Promise<void> {
+  return codexUsageStore(providerId).clear();
+}
+export function readCodexAccountUsageSnapshot(providerId?: string): Promise<CodexAccountUsagePayload | null> {
+  return codexUsageStore(providerId).read();
+}
+
+function createCodexUsageStore(providerId: string) {
+  const storageKey = providerId === 'openai' ? 'codex' : `codex:${providerId}`;
+  let generation = 0;
+  let codexAccountUsageOwner: string | null = null;
+  /**
+   * 冷缓存 hydration 是否**成功读到过库**(读到空行也算)。
+   *
+   * 落库守卫的判据 —— merge 的底子可信才允许写回。读库失败 / owner 未初始化被跳过时
+   * 内存是空的, 此时任何 merge 结果都不代表账号真实状态, 写回会抹掉库里的有效数据。
+   * 不能改用「payload 内容看起来是否有用」判断: 合法的空(限额解除、credits 清零)与
+   * 事故的空形状完全一致, 按内容判会把前者一并拦下。
+   *
+   * 它同时充当「无需再读库」的判据 —— 读失败时保持 false, 下一次 record / read 会重试。
+   * 若另设一个「已加载」标志并在失败时也置位, 一次瞬时 db busy 就会让本进程之后
+   * 所有落库被永久跳过。
+   */
+  let codexAccountUsageHydrated = false;
+  // 并发 record 必须等同一次 SQLite 读完成后再按到达顺序 merge(与 claude 侧同款) ——
+  // 否则第二笔会在 loaded 已被置位、内存却仍为空时 merge 出全 null payload。
+  let codexAccountUsageLoadPromise: Promise<void> | null = null;
+  /** app-server 桶表: limitId → 该桶最近快照(同桶 merge, 跨桶隔离)。 */
+  let codexAppServerBuckets: Record<string, RateLimitSnapshot> = {};
+  /** 最近更新的 app-server 桶键 —— 顶层兼容位取它。 */
+  let codexAppServerLatestBucketKey: string | null = null;
+  let codexWebAccountUsageSnapshot: RateLimitSnapshot | null = null;
+
+  /**
+   * 剪掉陈旧桶(保留最近更新桶本身, 它是顶层兼容位的来源)。桶表持久化且纯累加,
+   * 不剪枝会让促销结束后的旧桶永远留着并被模型匹配选中(review 反馈)。
+   */
+  function pruneStaleCodexBuckets(nowMs: number): void {
+    const next: Record<string, RateLimitSnapshot> = {};
+    for (const [key, bucket] of Object.entries(codexAppServerBuckets)) {
+      if (key !== codexAppServerLatestBucketKey && isCodexBucketStale(bucket, nowMs)) continue;
+      next[key] = bucket;
+    }
+    codexAppServerBuckets = next;
+  }
+
+  /** 当前 app-server 展示快照(最近更新桶);无桶 → null。 */
+  function currentCodexAppServerSnapshot(): RateLimitSnapshot | null {
+    if (codexAppServerLatestBucketKey) {
+      return codexAppServerBuckets[codexAppServerLatestBucketKey] ?? null;
+    }
+    const keys = Object.keys(codexAppServerBuckets);
+    return keys.length > 0 ? codexAppServerBuckets[keys[keys.length - 1]] ?? null : null;
+  }
+
+  function resetCodexAccountUsageCacheIfOwnerChanged(): void {
+    const owner = currentAccountUsageOwner();
+    if (owner === codexAccountUsageOwner) return;
+    codexAccountUsageOwner = owner;
+    generation += 1;
     codexAccountUsageLoadPromise = null;
+    codexAccountUsageHydrated = false;
+    codexAppServerBuckets = {};
+    codexAppServerLatestBucketKey = null;
+    codexWebAccountUsageSnapshot = null;
   }
-}
 
-export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promise<void> {
-  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
-
-  await ensureCodexAccountUsageLoaded();
-  // 按来源路由到自己的槽 —— 槽内 merge 保留原有的 windowless / 部分字段兜底
-  // 语义, 但两个来源不再互相覆盖窗口(见本节头注释)。
-  const incoming = snapshot as RateLimitSnapshot;
-  if (incoming.source === 'openai-web') {
-    codexWebAccountUsageSnapshot = mergeCodexAccountUsageSnapshot(
-      codexWebAccountUsageSnapshot,
-      incoming,
-    );
-  } else {
-    // 同 limitId 桶内 merge(保留 windowless / 部分字段兜底语义), 跨桶隔离 ——
-    // Spark 类模型专属桶不得覆盖主配额桶(见本节头注释)。
-    //
-    // account/rateLimits/updated 是**稀疏滚动更新**(app-server 0.144 契约原文:
-    // "Clients should merge available values into the most recent
-    // account/rateLimits/read response or refetch that snapshot. Nullable account
-    // metadata may be unavailable in a rolling update and does not clear a
-    // previously observed value.")。因此缺 limitId 时不能当作「缺省桶」新建 ——
-    // 那会把模型专属窗口塞进通用桶、显示给所有会话(review 反馈)。按契约并入
-    // 最近观察到的桶; 尚无任何桶时才落缺省桶(此时无歧义)。
-    const bucketKey = incoming.limitId
-      ? codexLimitBucketKey(incoming)
-      : codexAppServerLatestBucketKey ?? codexLimitBucketKey(incoming);
-    codexAppServerBuckets = {
-      ...codexAppServerBuckets,
-      [bucketKey]: mergeCodexAccountUsageSnapshot(
-        codexAppServerBuckets[bucketKey] ?? null,
-        incoming,
-      ),
+  /** 顶层槽是否有可展示内容(区分「空 app 槽 + 仅 web 槽」的 payload)。 */
+  /** 两槽 → 组合 payload;两槽全空 → null。 */
+  function buildCodexAccountUsagePayload(): CodexAccountUsagePayload | null {
+    const app = currentCodexAppServerSnapshot();
+    const web = codexWebAccountUsageSnapshot;
+    const buckets = Object.keys(codexAppServerBuckets).length > 0
+      ? codexAppServerBuckets
+      : null;
+    if (!app && !web) return null;
+    if (!app && web) {
+      // web-only: 顶层无 CLI 数据, 但归属字段必须上浮 —— WHAM reader 用顶层
+      // accountId 判断缓存归属(codexAccountUsageRefresh), 缺失会被当成账号失配,
+      // 每次读都清缓存 + 强刷(bridge-only 用户 warm-start 永远拿 null)。
+      // accountId / updatedAt 不算「内容」(hasCodexSnapshotContent), 归槽水合
+      // 不会据此伪造出 app 槽。
+      return { accountId: web.accountId, updatedAt: web.updatedAt, webSnapshot: web };
+    }
+    return {
+      ...(app as RateLimitSnapshot),
+      webSnapshot: web ?? null,
+      appServerBuckets: buckets,
     };
-    codexAppServerLatestBucketKey = bucketKey;
-    pruneStaleCodexBuckets(Date.now());
-  }
-  const payload = buildCodexAccountUsagePayload();
-  broadcastCodexAccountUsage(payload);
-
-  // merge 的底子不可信时不写回, 见 codexAccountUsageHydrated。
-  if (!codexAccountUsageHydrated) {
-    log.warn('skip persisting codex account usage snapshot: hydration unavailable');
-    return;
   }
 
-  try {
-    await getDbClient().exec(
-      `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(agent_kind) DO UPDATE SET
-         snapshot = excluded.snapshot,
-         updated_at = excluded.updated_at`,
-      ['codex', JSON.stringify(payload), Date.now()],
-    );
-  } catch (err) {
-    log.warn(
-      'recordCodexAccountUsageSnapshot failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+  /**
+   * 持久化行 → 两槽。新格式带 webSnapshot 键;旧格式是单快照 —— 按其 source
+   * 归入对应槽(旧行可能是被 WHAM 污染过的单槽杂交体, 归 web 槽即自然隔离)。
+   */
+  async function ensureCodexAccountUsageLoaded(): Promise<void> {
+    resetCodexAccountUsageCacheIfOwnerChanged();
+    if (codexAccountUsageHydrated) return;
+    if (!codexAccountUsageLoadPromise) {
+      const startedGeneration = generation;
+      const startedOwner = codexAccountUsageOwner;
+      // 句柄的清理必须放在 await 之后, 不能放进下面 IIFE 的 finally —— owner 缺失时
+      // IIFE 会在首个 await 之前同步走完, 它 finally 里清掉的句柄随即被本行的赋值写回,
+      // 之后 ensure 永远复用这个已 resolve 的 Promise, 再也不查库(hydrated 也就永远
+      // 是 false, 本进程之后所有落库都被守卫跳过)。
+      codexAccountUsageLoadPromise = (async () => {
+        try {
+          if (!codexAccountUsageOwner) return;
+          const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+            'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
+            [storageKey],
+          );
+          if (startedGeneration !== generation || startedOwner !== currentAccountUsageOwner()) return;
+          // 读到库就算 hydrated(无行 = 确认库里本来就没有), 之后允许落库。置位放在
+          // JSON.parse 之前: 损坏行解析失败仍应允许被新快照覆盖, 否则一条坏行会永久
+          // 堵死写入。
+          codexAccountUsageHydrated = true;
+          if (!row?.snapshot) return;
+          const parsed = JSON.parse(row.snapshot);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
+            // hydration 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经装着那段时间
+            // 收到的**更新**观测(它们因守卫未能落库)。库里的行比它们旧, 直接赋值会让 UI
+            // 回退到旧额度, 且那些观测永远等不到落库时机。
+            //
+            // 但也不能按桶键整体覆盖: 那段时间收到的可能是 windowless 稀疏事件, 留下的是
+            // 一个非空、却全 null 的同名桶 —— 整桶覆盖会抹掉持久化桶里的窗口, 正好复现
+            // 本次要防的损坏。逐桶走常规 merge(持久化桶作 previous), 稀疏事件即按既有
+            // 语义保住旧窗口。
+            const persistedBuckets = slots.appServerBuckets;
+            const mergedBuckets: Record<string, RateLimitSnapshot> = { ...persistedBuckets };
+            for (const [key, pending] of Object.entries(codexAppServerBuckets)) {
+              mergedBuckets[key] = mergeCodexAccountUsageSnapshot(persistedBuckets[key] ?? null, pending);
+            }
+            codexAppServerBuckets = mergedBuckets;
+            codexAppServerLatestBucketKey = codexAppServerLatestBucketKey ?? slots.latestBucketKey;
+            codexWebAccountUsageSnapshot = codexWebAccountUsageSnapshot
+              ? mergeCodexAccountUsageSnapshot(slots.web, codexWebAccountUsageSnapshot)
+              : slots.web;
+          }
+        } catch (err) {
+          log.warn(
+            'readCodexAccountUsageSnapshot failed:',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      })();
+    }
+    try {
+      await codexAccountUsageLoadPromise;
+    } finally {
+      // hydrated 仅在读成功时置位 —— 读失败清掉句柄即留下重试机会。
+      codexAccountUsageLoadPromise = null;
+    }
   }
-}
 
-export async function clearCodexAccountUsageSnapshot(): Promise<void> {
-  resetCodexAccountUsageCacheIfOwnerChanged();
-  // clear 后库里的状态是已知的(行被删掉): 既不必再读库, 之后到达的快照也可正常落库。
-  codexAccountUsageHydrated = true;
-  codexAppServerBuckets = {};
-  codexAppServerLatestBucketKey = null;
-  codexWebAccountUsageSnapshot = null;
-  broadcastCodexAccountUsage(null);
+  async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promise<void> {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
 
-  try {
-    await getDbClient().exec(
-      'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
-      ['codex'],
-    );
-  } catch (err) {
-    log.warn(
-      'clearCodexAccountUsageSnapshot failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+    resetCodexAccountUsageCacheIfOwnerChanged();
+    const startedGeneration = generation;
+    const owner = codexAccountUsageOwner;
+    const db = getDbClient();
+    await ensureCodexAccountUsageLoaded();
+    if (startedGeneration !== generation || owner !== currentAccountUsageOwner()) return;
+    // 按来源路由到自己的槽 —— 槽内 merge 保留原有的 windowless / 部分字段兜底
+    // 语义, 但两个来源不再互相覆盖窗口(见本节头注释)。
+    const incoming = snapshot as RateLimitSnapshot;
+    if (incoming.source === 'openai-web') {
+      codexWebAccountUsageSnapshot = mergeCodexAccountUsageSnapshot(
+        codexWebAccountUsageSnapshot,
+        incoming,
+      );
+    } else {
+      // 同 limitId 桶内 merge(保留 windowless / 部分字段兜底语义), 跨桶隔离 ——
+      // Spark 类模型专属桶不得覆盖主配额桶(见本节头注释)。
+      //
+      // account/rateLimits/updated 是**稀疏滚动更新**(app-server 0.144 契约原文:
+      // "Clients should merge available values into the most recent
+      // account/rateLimits/read response or refetch that snapshot. Nullable account
+      // metadata may be unavailable in a rolling update and does not clear a
+      // previously observed value.")。因此缺 limitId 时不能当作「缺省桶」新建 ——
+      // 那会把模型专属窗口塞进通用桶、显示给所有会话(review 反馈)。按契约并入
+      // 最近观察到的桶; 尚无任何桶时才落缺省桶(此时无歧义)。
+      const bucketKey = incoming.limitId
+        ? codexLimitBucketKey(incoming)
+        : codexAppServerLatestBucketKey ?? codexLimitBucketKey(incoming);
+      codexAppServerBuckets = {
+        ...codexAppServerBuckets,
+        [bucketKey]: mergeCodexAccountUsageSnapshot(
+          codexAppServerBuckets[bucketKey] ?? null,
+          incoming,
+        ),
+      };
+      codexAppServerLatestBucketKey = bucketKey;
+      pruneStaleCodexBuckets(Date.now());
+    }
+    const payload = buildCodexAccountUsagePayload();
+    broadcastCodexAccountUsage(payload, providerId);
+
+    // merge 的底子不可信时不写回, 见 codexAccountUsageHydrated。
+    if (!codexAccountUsageHydrated) {
+      log.warn('skip persisting codex account usage snapshot: hydration unavailable');
+      return;
+    }
+
+    try {
+      await db.exec(
+        `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(agent_kind) DO UPDATE SET
+           snapshot = excluded.snapshot,
+           updated_at = excluded.updated_at`,
+        [storageKey, JSON.stringify(payload), Date.now()],
+      );
+    } catch (err) {
+      log.warn(
+        'recordCodexAccountUsageSnapshot failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
-}
 
-export async function readCodexAccountUsageSnapshot(): Promise<CodexAccountUsagePayload | null> {
-  await ensureCodexAccountUsageLoaded();
-  return buildCodexAccountUsagePayload();
+  async function clearCodexAccountUsageSnapshot(): Promise<void> {
+    resetCodexAccountUsageCacheIfOwnerChanged();
+    generation += 1;
+    codexAccountUsageLoadPromise = null;
+    // clear 后库里的状态是已知的(行被删掉): 既不必再读库, 之后到达的快照也可正常落库。
+    codexAccountUsageHydrated = true;
+    codexAppServerBuckets = {};
+    codexAppServerLatestBucketKey = null;
+    codexWebAccountUsageSnapshot = null;
+    broadcastCodexAccountUsage(null, providerId);
+
+    try {
+      await getDbClient().exec(
+        'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
+        [storageKey],
+      );
+    } catch (err) {
+      log.warn(
+        'clearCodexAccountUsageSnapshot failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  async function readCodexAccountUsageSnapshot(): Promise<CodexAccountUsagePayload | null> {
+    resetCodexAccountUsageCacheIfOwnerChanged();
+    const owner = codexAccountUsageOwner;
+    const startedGeneration = generation;
+    await ensureCodexAccountUsageLoaded();
+    if (owner !== currentAccountUsageOwner() || startedGeneration !== generation) return null;
+    return buildCodexAccountUsagePayload();
+  }
+
+  return { record: recordCodexAccountUsageSnapshot, clear: clearCodexAccountUsageSnapshot, read: readCodexAccountUsageSnapshot };
 }
 
 // ── xAI(SuperGrok bridge)限流快照 ─────────────────────────────────────────
@@ -1093,10 +1140,11 @@ function broadcastCodexTokens(payload: CodexTokenSnapshot): void {
   }
 }
 
-function broadcastCodexAccountUsage(payload: RateLimitSnapshot | null): void {
+function broadcastCodexAccountUsage(payload: RateLimitSnapshot | null, providerId = 'openai'): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_CODEX_ACCOUNT_CHANGED, payload);
+      if (providerId === 'openai') win.webContents.send(USAGE_CODEX_ACCOUNT_CHANGED, payload);
+      else win.webContents.send('usage:codex-provider-account-changed', { providerId, snapshot: payload });
     }
   }
 }
@@ -1106,6 +1154,13 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
     }
+  }
+}
+
+export function broadcastSubscriptionAccountUsage(providerId: string, snapshot: ClaudeSubscriptionUsageSnapshot | XaiSubscriptionUsageSnapshot | null): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(win)) continue;
+    win.webContents.send('usage:subscription-provider-account-changed', { providerId, snapshot });
   }
 }
 

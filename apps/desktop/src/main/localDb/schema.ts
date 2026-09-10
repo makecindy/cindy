@@ -79,6 +79,9 @@ export const sessions = sqliteTable(
       .default(false),
     contextTokens: integer('context_tokens').notNull().default(0),
     contextWindow: integer('context_window').notNull().default(0),
+    /** Last window written by the runtime snapshot writer. Equality with contextWindow
+     * proves provenance; a later legacy/import writer changing the value invalidates it. */
+    contextWindowRuntime: integer('context_window_runtime'),
     fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
     /**
      * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经用户

@@ -230,6 +230,7 @@ function createDb(filename = ':memory:'): void {
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
@@ -3727,6 +3728,33 @@ describe('Bot Session task end-to-end runtime', () => {
           .get('session-1', `bot-delegation-completion:${delegated.ok ? delegated.delegationId : ''}`),
       ).toContain('三个版本都兼容。');
       expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('preserves an incomplete result in the failed task card and completion receipt', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    try {
+      const delegated = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: '查一下版本兼容矩阵。',
+      });
+      expect(delegated.ok).toBe(true);
+      if (!delegated.ok) throw new Error('Session task did not start');
+      await runtime.delegation.settleSession({
+        childSessionId: delegated.childSessionId, outcome: 'error',
+        resultText: '已确认前两个版本兼容，第三个版本',
+        error: 'Pi reached the model output limit.',
+      });
+      await expect(runtime.delegation.getSessionTask('session-1', delegated.delegationId)).resolves.toMatchObject({
+        ok: true, task: { status: 'failed', result: '已确认前两个版本兼容，第三个版本' },
+      });
+      const receipt = h.sqlite!.prepare(
+        'SELECT content FROM messages WHERE session_id = ? AND client_id = ?',
+      ).pluck().get('session-1', `bot-delegation-completion:${delegated.delegationId}`);
+      expect(receipt).toContain('已确认前两个版本兼容，第三个版本');
+      expect(receipt).toContain('Pi reached the model output limit.');
     } finally {
       runtime.dispose();
     }

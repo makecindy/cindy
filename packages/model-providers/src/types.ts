@@ -283,7 +283,7 @@ export interface CatalogModel {
   id: string;
   /** Server entitlement state. Paid-locked models remain present for UI but are never routable. */
   availability?: "available" | "requires_payment";
-  /** Sparse PI protocol override; absence means use PI's bundled model catalog. */
+  /** Explicit Pi serializer; missing fields may use the matching native transport fallback. */
   piApi?: PiModelApi;
   /** 同一 provider/runtime 内该模型的上游覆盖；缺省使用 provider 级路由。 */
   route?: ProviderModelRouteConfig;
@@ -470,6 +470,8 @@ export interface ProviderMediaModel extends Pick<
   modalities?: { input: string[]; output: string[] };
   officialDocs?: string;
   disabled?: boolean;
+  /** Follows the chat display axis: omitted/true is shown, false waits for an explicit switch. */
+  defaultEnabled?: boolean;
 }
 
 /** 供应商定义。 */
@@ -487,7 +489,7 @@ export interface Provider {
    * OAuth Runner（generic-oauth）；不带描述符的 oauth 供应商 = host bespoke 鉴权
    * （anthropic / openai / xai 现状）。
    */
-  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor };
+  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: "codex" | "claude" | "xai" };
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
@@ -751,9 +753,10 @@ export interface CustomProviderConfig {
    * Bearer；此形态下不再使用 per-runtime API key。
    */
   auth?:
-    | { method: "apiKey"; oauth?: never }
-    | { method: "oauth"; oauth: OAuthProviderDescriptor }
-    | { method: "none"; oauth?: never };
+    | { method: "apiKey"; oauth?: never; native?: never }
+    | { method: "oauth"; oauth: OAuthProviderDescriptor; native?: never }
+    | { method: "oauth"; native: "codex" | "claude" | "xai"; oauth?: never }
+    | { method: "none"; oauth?: never; native?: never };
   /** per-runtime 独立配置（键为 agent，只含已配置的 runtime；至少一个）。 */
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>;
 }

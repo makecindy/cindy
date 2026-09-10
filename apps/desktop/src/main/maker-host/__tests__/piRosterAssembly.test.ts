@@ -12,6 +12,11 @@ const state = vi.hoisted(() => ({
   userDataPath: '',
 }));
 
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
 vi.mock('electron', () => ({
   app: {
     getPath: () => state.userDataPath,

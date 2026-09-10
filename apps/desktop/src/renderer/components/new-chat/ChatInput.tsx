@@ -20,6 +20,7 @@ import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projec
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
+import { CindyMakeCommandDialog } from '@/components/chat/CindyMakeCommandDialog';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { FullAccessConfirmContent } from './FullAccessConfirmContent';
@@ -1160,6 +1161,7 @@ export function ChatInput({
   const deviceLinkDeviceId = _deviceLinkDeviceId;
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [makeDialogSessionId, setMakeDialogSessionId] = useState<string | null>(null);
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
@@ -1996,19 +1998,11 @@ export function ChatInput({
     return effectiveSourceIdForModel(providers, activeProviderId, activeModel, kind);
   }, [providers, currentModelAgentKind, activeProviderId, activeModel]);
 
-  // 发送(草稿态建会话)时携带的**显式来源**:仅当本地选择仍在已连接来源栏内才带上
-  // (与 effectiveSourceId 的高亮口径一致,即"所见即所得");否则带 null。
+  // 发送保留显式连接，由 main 验证；目录不可用不能将账号身份变为默认账号。
   // 关键:这里**绝不**把"跟随默认"具体化成原生默认 id(如 'xd')——默认 cohort 必须保持
   //   providerId=null,路由才回落 spawn-aware 默认(字节级不变,no-break);写成显式 'xd'
   //   会改走 catalog gateway-key 路由(见 provider-route.ts),破坏默认 cohort 的路由/缓存基线。
-  const sendProviderId = useMemo<string | null>(() => {
-    const kind = currentModelAgentKind;
-    if (!kind || !activeProviderId) return null;
-    return effectiveSourceIdForModel(sendProviders, activeProviderId, activeModel, kind) ===
-      activeProviderId
-      ? activeProviderId
-      : null;
-  }, [sendProviders, currentModelAgentKind, activeProviderId, activeModel]);
+  const sendProviderId = activeProviderId || null;
 
   // 模型预设采用「全局默认 + 已创建会话保护」:
   //   - 本地草稿 / 已创建会话的**非选中行**都读写 providerModelMemory,所以同一
@@ -5227,7 +5221,7 @@ export function ChatInput({
             hydratedHistoryDocumentRef.current = null;
             draftRef.current = null;
             if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
-            if (!sourceSessionId) navigate(`/cc-agent/${makeResult.sessionId}`);
+            setMakeDialogSessionId(makeResult.sessionId);
             return;
           }
         }
@@ -8167,6 +8161,13 @@ export function ChatInput({
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+      <CindyMakeCommandDialog
+        sessionId={makeDialogSessionId}
+        open={makeDialogSessionId !== null}
+        onOpenChange={(open) => {
+          if (!open) setMakeDialogSessionId(null);
+        }}
+      />
       {/* 计划模式激活态 chip(输入框上方,与 GoalIndicator 同形)。-mb-2 抵一部分
           root gap-4,让 chip 与输入框间距接近 GoalIndicator 的节奏。 */}
       {planModeEntry && planModeEnabled && (

@@ -8,7 +8,8 @@
 
 import type { AgentKind, ModelRegistry } from '@cindy/model-providers';
 
-import { modelPricingKey, providerReferencePriceQuote } from '../../shared/modelPriceQuote.js';
+import { modelPricingKey } from '../../shared/modelPriceQuote.js';
+import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
 import type {
   ModelPriceOverrideDesiredQuote,
   ModelPriceOverrideTarget,

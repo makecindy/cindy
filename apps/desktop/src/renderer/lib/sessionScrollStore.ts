@@ -23,6 +23,11 @@ export interface SessionScrollSnapshot {
   viewportTopKey: string;
   /** viewportTopKey 这条 item 的顶端被滚到视口上方的像素数(>=0)。 */
   offset: number;
+  /** Visible message inside a work group; optional for older snapshots. */
+  messageClientId?: string;
+  messageOffset?: number;
+  /** Intrinsic estimates for the last mounted window, valid at this content width. */
+  itemHeights?: { width: number; byKey: Record<string, number> };
   /** 离开时是否贴在底部。true 时不需要还原,重建后正常 pin 到底即可。 */
   isNearBottom: boolean;
   /**

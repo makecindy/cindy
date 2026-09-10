@@ -16,10 +16,8 @@ import { useProviders } from '@/hooks/useProviders';
 import { ModelIconMark, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
-  connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  nativeDefaultSourceId,
 } from '@cindy/model-providers';
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
@@ -1133,18 +1131,7 @@ export function ModelEffortChip({
     : [agentLabel, modelLabel, effectiveEffort ? effortLabel(effectiveEffort as EffortValue) : null,
       fastMode ? '⚡' : null].filter(Boolean).join(' · ');
 
-  // railSources 仅用于 nativeDefault 归一化(下拉宽度由 ModelSelectorContent 内容自适应,见 w-auto)。
   const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
-  const railSources = useMemo(
-    () => connectedProvidersForAgent(providers, agentKind),
-    [providers, agentKind],
-  );
-  // 归一化:选中的来源 == 原生默认 → 存 ''(= 跟随默认,与老数据/未升级字节级一致),
-  // 否则存显式 id。这样只有「钉到非原生来源」才在 schedule 上落非空 providerId。
-  const nativeDefault = useMemo(
-    () => nativeDefaultSourceId(railSources, agentKind),
-    [railSources, agentKind],
-  );
   // 当前生效来源 —— 与聊天 trigger 同口径(effectiveSourceIdForModel):按「已连接且**确实
   // 提供当前模型**」收窄后再应用显式选择 / 原生默认。只查「已连接」会在显式来源不提供
   // effectiveId 时渲染错误来源的标识(如 providerId=openai 而默认模型只有 xd 提供);
@@ -1212,7 +1199,7 @@ export function ModelEffortChip({
           onDismiss={() => setOpenWithoutAutoRefresh(false)}
           currentProviderId={providerId || null}
           onProviderChange={(pid, reconciledModelId, reconciledEffort, reconciledFast) => {
-            onChangeProviderId(pid && pid !== nativeDefault ? pid : '');
+            onChangeProviderId(pid ?? '');
             if (reconciledFast !== undefined) onChangeFast?.(reconciledFast);
             if (reconciledModelId) onChangeModel(reconciledModelId);
             if (reconciledEffort !== undefined) {
@@ -1220,9 +1207,7 @@ export function ModelEffortChip({
             }
           }}
           onNavigateToProviders={onNavigateToProviders}
-          // A stale explicit provider is rendered as the effective fallback row.
-          // Re-selecting that highlighted row must repair the stored provider
-          // before the effort configuration card opens.
+          // An explicit selection always pins the connection, including the native default.
           reselectEmitsChange
           selectedRowClickOpensConfiguration
           overlayContentClassName="z-[10020]"

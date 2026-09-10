@@ -25,7 +25,7 @@ import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
-import { localizeToolLoopError } from '@/session/toolLoopErrorI18n';
+import { localizeAgentError } from '@/session/agentErrorI18n';
 import {
   fontWeight,
   iconSize,
@@ -65,7 +65,7 @@ export function InlineQueueSection({
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
-  const localizedToolLoopError = localizeToolLoopError(
+  const localizedAgentError = localizeAgentError(
     projection.errorReason,
     projection.toolLoop ?? null,
   );
@@ -73,7 +73,7 @@ export function InlineQueueSection({
     ? inputProjectionErrorI18nKey(projection.error)
     : null;
   const projectionError = projection.error
-    ? localizedToolLoopError
+    ? localizedAgentError
       ?? (projectionErrorKey
         ? t(projectionErrorKey)
         : (describeAgentAuthError(projection.error) ?? projection.error))

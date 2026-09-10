@@ -28,7 +28,7 @@ import {
 import { describeErrorChain } from '../utils/errorChain.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
-import { writeClaudeAiOAuth } from './claude-credentials-store.js';
+import { writeClaudeAiOAuth, type ClaudeAiOAuth } from './claude-credentials-store.js';
 import { bindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import { backfillClaudeSubscriptionProfile } from './claude-oauth-refresh.js';
 
@@ -267,6 +267,7 @@ class CallbackListener {
 
 let _currentListener: CallbackListener | null = null;
 let _currentAbort: AbortController | null = null;
+let _currentLoginKey: string | undefined;
 
 export interface ClaudeOAuthLoginResult {
   ok: boolean;
@@ -280,6 +281,10 @@ export interface ClaudeOAuthLoginResult {
  */
 export async function runClaudeOAuthLogin(opts?: {
   onProgress?: (msg: string) => void;
+  isCurrent?: () => boolean;
+  loginKey?: string;
+  persist?: (oauth: ClaudeAiOAuth) => void;
+  backfill?: (token: string) => Promise<void>;
 }): Promise<ClaudeOAuthLoginResult> {
   // 同一时刻只允许一个登录流;新登录前先取消旧的。
   cancelClaudeOAuthLogin();
@@ -291,6 +296,7 @@ export async function runClaudeOAuthLogin(opts?: {
   const abort = new AbortController();
   _currentListener = listener;
   _currentAbort = abort;
+  _currentLoginKey = opts?.loginKey;
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
@@ -299,16 +305,23 @@ export async function runClaudeOAuthLogin(opts?: {
 
     opts?.onProgress?.('opening-browser');
     log.info('opening browser for claude oauth', { port });
-    await shell.openExternal(authUrl);
-
     // 等回调,带 5min 超时 + 取消。
-    const code = await new Promise<string>((resolve, reject) => {
+    const codePromise = new Promise<string>((resolve, reject) => {
+      if (abort.signal.aborted) {
+        reject(new Error('login_cancelled'));
+        return;
+      }
       timer = setTimeout(() => reject(new Error('timeout')), LOGIN_TIMEOUT_MS);
       abort.signal.addEventListener('abort', () => reject(new Error('login_cancelled')), {
         once: true,
       });
       listener.waitForCode(state).then(resolve, reject);
     });
+    // Register the callback before opening a browser with an existing login.
+    // Observe rejection even if opening the browser itself fails.
+    void codePromise.catch(() => {});
+    await shell.openExternal(authUrl);
+    const code = await codePromise;
 
     opts?.onProgress?.('exchanging');
     const tokens = await exchangeCodeForTokens(code, state, verifier, port, abort.signal);
@@ -323,7 +336,7 @@ export async function runClaudeOAuthLogin(opts?: {
     // 取消窗口收口:token 交换是网络往返,期间用户可能已点取消(cancelClaudeOAuthLogin
     // abort 掉 controller)—— 写凭证前显式检查,取消了就不落盘,避免「用户已取消、
     // 账号却连上了」(review 2026-07-04 P2)。
-    if (abort.signal.aborted) {
+    if (abort.signal.aborted || opts?.isCurrent?.() === false) {
       return { ok: false, reason: 'login_cancelled' };
     }
     // 凭证立即落盘 + 立即跳成功页 —— 不 await profile(最长 10s RTT 不能挡在登录
@@ -331,7 +344,7 @@ export async function runClaudeOAuthLogin(opts?: {
     // backfillClaudeSubscriptionProfile 后台补:cc >= 2.1.198 在 MANAGED_BY_HOST 下
     // 不读凭证库,旧的「cc 子进程 refresh 时自行补全」路径已失效,这些字段现由 host
     // 注入 env(auth-adapters);回填失败静默,首次刷新时再补。
-    writeClaudeAiOAuth({
+    (opts?.persist ?? writeClaudeAiOAuth)({
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token ?? null,
       expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
@@ -339,8 +352,8 @@ export async function runClaudeOAuthLogin(opts?: {
       subscriptionType: null,
       rateLimitTier: null,
     });
-    bindNativeProviderAuth('anthropic');
-    void backfillClaudeSubscriptionProfile(tokens.access_token).catch((e) =>
+    if (!opts?.persist) bindNativeProviderAuth('anthropic');
+    void (opts?.backfill ?? backfillClaudeSubscriptionProfile)(tokens.access_token).catch((e) =>
       log.warn('post-login subscription profile backfill failed', {
         error: e instanceof Error ? e.message : String(e),
       }),
@@ -357,12 +370,16 @@ export async function runClaudeOAuthLogin(opts?: {
     if (timer) clearTimeout(timer);
     listener.close();
     if (_currentListener === listener) _currentListener = null;
-    if (_currentAbort === abort) _currentAbort = null;
+    if (_currentAbort === abort) {
+      _currentAbort = null;
+      _currentLoginKey = undefined;
+    }
   }
 }
 
 /** 取消进行中的登录(用户在浏览器授权流半路反悔时调)。 */
-export function cancelClaudeOAuthLogin(): void {
+export function cancelClaudeOAuthLogin(loginKey?: string): void {
+  if (loginKey && _currentLoginKey !== loginKey) return;
   _currentAbort?.abort();
   _currentListener?.close();
 }

@@ -28,7 +28,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { HistoryViewHandoff, renderHistoryView } from '@cindy/maker-shared/message-window';
+import { HistoryViewHandoff, renderHistoryView, historyPrefetchThreshold } from '@cindy/maker-shared/message-window';
 import { getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -75,7 +75,12 @@ import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
-import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
+import { useTurnChangeSets } from './useTurnChangeSets';
+import {
+  canCompensateMessageHeight,
+  rememberedItemIntrinsicSize,
+  viewportAnchorCorrection,
+} from './messageViewportCompensation';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -355,6 +360,7 @@ import {
   shouldUnpinOnScrollbarDrag,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
+  isUpwardWheelIntent,
 } from './autoFollowIntent';
 import { countUnreadAdded } from './unreadCount';
 import {
@@ -1021,6 +1027,17 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  *   `agent_plan` item in the chat timeline. The composer capsule observes the
  *   latest inline card and only takes over after that card leaves the viewport.
  */
+function deferredWorkContainsClientId(
+  item: Extract<RenderItem, { type: 'work_group' }>,
+  clientId: string,
+): boolean {
+  return (
+    item.deferred?.key?.split('|').some(
+      (key) => key === `work-${clientId}` || key === `work-summary-${clientId}`,
+    ) ?? false
+  );
+}
+
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
  * 首段 render item 是 tool_segment,segment 会向前合并吸收这些 toolCall —— 原
@@ -1045,7 +1062,10 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
 function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
   const dashIdx = lostKey.indexOf('-');
   if (dashIdx < 0) return -1;
-  const lostCid = lostKey.slice(dashIdx + 1);
+  // Completed groups have a compound prefix; the message id can itself contain dashes.
+  const lostCid = lostKey.startsWith('work-summary-')
+    ? lostKey.slice('work-summary-'.length)
+    : lostKey.slice(dashIdx + 1);
   if (!lostCid) return -1;
 
   for (let i = 0; i < items.length; i++) {
@@ -1068,8 +1088,16 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
     } else if (it.type === 'work_group') {
       // work_group 可能嵌套完成态时间线 — 老锚点(`seg-${cid}` /
       // `msg-${cid}` / `work-${cid}`)递归落到任一后代即由外组接住。
-      if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
-      if (renderItemContainsClientId(it, lostCid)) return i;
+      // Remote placeholders can merge and disappear from children; their original
+      // summary identities remain in deferred.key even when the visible key changes.
+      if (
+        it.key === lostKey ||
+        it.key === `work-${lostCid}` ||
+        it.key === `work-summary-${lostCid}` ||
+        deferredWorkContainsClientId(it, lostCid)
+      ) return i;
+      // Remote deferred groups retain their key before their children are loaded.
+      if (recoverLostAnchorIdx(it.children, lostKey) >= 0) return i;
     } else if (it.type !== 'fork_origin') {
       // tool_media / ghost_card:其 key 派生自 stable message clientId,精确后缀匹配
       if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
@@ -1440,6 +1468,21 @@ export function selectVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
     : messages;
 }
 
+/**
+ * A Cindy Make card is appended as a local assistant system message, but it
+ * represents a new command turn for the visible timeline. Treating it as a
+ * boundary keeps artifacts from the preceding user turn before the card.
+ */
+function isRenderTurnBoundary(message: ChatMessage): boolean {
+  if (message.role === 'user') {
+    return message.delivery !== 'steer' && !message.isSyntheticTrigger;
+  }
+  return (
+    message.role === 'assistant' &&
+    (message.systemCardType === 'cindy-make' || message.systemCardType === 'cindy-make-doctor')
+  );
+}
+
 export function buildRenderItems(
   allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
@@ -1463,6 +1506,9 @@ export function buildRenderItems(
   items: RenderItem[];
   singleResultMap: Map<string, string>;
 } {
+  // Modal-only Cindy Make cards are transient UI state. They stay in the
+  // shared store for the dialog to observe, but never enter the chat timeline.
+  allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
   // ── Pass -1: 剔除子代理内部消息 ──
   // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
   // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
@@ -1521,8 +1567,7 @@ export function buildRenderItems(
   let inlineTurnStart = 0;
   for (let index = 0; index <= messages.length; index += 1) {
     const message = messages[index];
-    const isBoundary =
-      message?.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger;
+    const isBoundary = message ? isRenderTurnBoundary(message) : false;
     if (isBoundary && index > inlineTurnStart) {
       recordTurnInlineImages(inlineTurnStart, index);
       inlineTurnStart = index;
@@ -1824,8 +1869,10 @@ export function buildRenderItems(
   while (i < messages.length) {
     const msg = messages[i];
 
-    // User turn boundary: attach the sealed patch after the turn it belongs to.
-    if (msg.role === 'user' && msg.delivery !== 'steer' && !msg.isSyntheticTrigger) {
+    // Turn boundary: attach the sealed patch after the turn it belongs to.
+    // Cindy Make cards are local command messages and start their own visible turn,
+    // so the preceding turn's file-change card stays above them.
+    if (isRenderTurnBoundary(msg)) {
       flushSegment();
       flushTurnChanges(turnStartIdx, i);
       turnStartIdx = i;
@@ -2258,7 +2305,7 @@ function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
   return collectDeleteAnchorClientIds(children);
 }
 
-function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
+export function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
   if (item.type === 'fork_origin') return false;
   if (item.type === 'message') return item.message.clientId === clientId;
   if (item.type === 'tool_segment')
@@ -2266,7 +2313,12 @@ function renderItemContainsClientId(item: RenderItem, clientId: string): boolean
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
   if (item.type === 'agent_plan') return item.sourceClientIds.includes(clientId);
   if (item.type === 'work_group') {
-    return item.children.some((child) => renderItemContainsClientId(child, clientId));
+    // Retained remote identities survive unloaded children; a group key alone
+    // does not prove that a previously rendered child still exists.
+    return (
+      deferredWorkContainsClientId(item, clientId) ||
+      item.children.some((child) => renderItemContainsClientId(child, clientId))
+    );
   }
   return item.key.endsWith(`-${clientId}`);
 }
@@ -2680,41 +2732,7 @@ export function MessageStream({
     }
   }, [messages]);
 
-  const [turnChangeSets, setTurnChangeSets] = useState<TurnChangeSetSummary[]>([]);
-  useEffect(() => {
-    if (!sessionId || remoteHostId !== null || isRemoteSessionSticky(sessionId)) {
-      setTurnChangeSets([]);
-      return;
-    }
-    let cancelled = false;
-    setTurnChangeSets([]);
-    const off = subscribeTurnChangeSetUpdated(sessionId, ({ summary }) => {
-      if (cancelled) return;
-      setTurnChangeSets((current) => {
-        const next = current.filter((item) => item.id !== summary.id);
-        next.push(summary);
-        next.sort((a, b) => a.createdAt - b.createdAt);
-        return next;
-      });
-    });
-    void window.electronAPI.maker
-      .listTurnChangeSets(sessionId)
-      .then((next) => {
-        if (cancelled) return;
-        setTurnChangeSets((current) => {
-          const merged = new Map(next.map((item) => [item.id, item]));
-          for (const item of current) merged.set(item.id, item);
-          return Array.from(merged.values()).sort((a, b) => a.createdAt - b.createdAt);
-        });
-      })
-      .catch(() => {
-        // A live push may already have arrived; keep it instead of clearing the card.
-      });
-    return () => {
-      cancelled = true;
-      off();
-    };
-  }, [remoteHostId, sessionId]);
+  const turnChangeSets = useTurnChangeSets(sessionId, remoteHostId);
 
   // 「用户实际看得见的那份序列」。turn 边界与 last-user 这类**可见 UI 派生**统一吃它,
   // 否则被隐藏的子代理行会被当成 turn 边界或「最后一条 user 消息」,让可见气泡丢掉编辑
@@ -3152,15 +3170,25 @@ export function MessageStream({
       const idx = visibleRenderItemsRef.current.findIndex((item) => item.key === key);
       const child =
         idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
-      if (!container || !child) return;
-      const delta =
-        child.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
-      if (Math.abs(delta) < 1) return;
+      if (!container || !child) return false;
+      const delta = viewportAnchorCorrection(
+        container.getBoundingClientRect().top,
+        child.getBoundingClientRect().top,
+        offset,
+      );
+      // 已按真实锚点保位（含零位移）时，不能再叠加同次布局的历史高度补偿。
+      // 仍在请求中的历史尚未进入 DOM，保留它的快照供返回后补偿。
+      if (!isLoadingMore) {
+        prevScrollHeightRef.current = 0;
+        prevScrollTopAtLoadRef.current = 0;
+      }
+      if (delta === 0) return true;
       const generation = beginProgrammaticScroll();
       container.scrollTop += delta;
       requestAnimationFrame(() => finishProgrammaticScroll(generation));
+      return true;
     },
-    [beginProgrammaticScroll, finishProgrammaticScroll],
+    [beginProgrammaticScroll, finishProgrammaticScroll, isLoadingMore],
   );
   const scrollMessageToViewportTop = useCallback(
     (clientId: string, offset: number) => {
@@ -3169,15 +3197,20 @@ export function MessageStream({
       // 会让隐藏 child 继续当活锚点，删除后把组滚到顶。focus 跳转仍走 queryFocusElement。
       const target = container ? queryMessageElement(container, clientId) : null;
       if (!container || !target) return false;
-      const delta =
-        target.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
-      if (Math.abs(delta) < 1) return true;
+      const rect = target.getBoundingClientRect();
+      if (rect.height <= 0) return false;
+      const delta = viewportAnchorCorrection(container.getBoundingClientRect().top, rect.top, offset);
+      if (!isLoadingMore) {
+        prevScrollHeightRef.current = 0;
+        prevScrollTopAtLoadRef.current = 0;
+      }
+      if (delta === 0) return true;
       const generation = beginProgrammaticScroll();
       container.scrollTop += delta;
       requestAnimationFrame(() => finishProgrammaticScroll(generation));
       return true;
     },
-    [beginProgrammaticScroll, finishProgrammaticScroll],
+    [beginProgrammaticScroll, finishProgrammaticScroll, isLoadingMore],
   );
   const restoreViewportSnapshot = useCallback(
     (snapshot: ViewportTopSnapshot, itemOffset = snapshot.offset): boolean => {
@@ -3191,8 +3224,7 @@ export function MessageStream({
       const itemSnapshot = toRenderItemViewportSnapshot(snapshot, itemOffset);
       lastViewportTopRef.current = itemSnapshot;
       if (visibleRenderItemsRef.current.some((item) => item.key === itemSnapshot.viewportTopKey)) {
-        scrollKeyToViewportTop(itemSnapshot.viewportTopKey, itemSnapshot.offset);
-        return true;
+        return scrollKeyToViewportTop(itemSnapshot.viewportTopKey, itemSnapshot.offset);
       }
       return false;
     },
@@ -3592,6 +3624,32 @@ export function MessageStream({
     }
   }, [firstVisibleItemKey, windowCoversEnd]);
 
+  // Seed Chromium's offscreen estimates before positioning the saved anchor.
+  // Remounting otherwise forgets the measured sizes and starts every row at
+  // 240px, which can clamp scrollTop for one paint even with cached cards.
+  useLayoutEffect(() => {
+    // The snapshot survives for this mount; streaming updates must stop seeding
+    // its old estimates once user intent has ended scroll restoration.
+    if (!restoringRef.current) return;
+    const items = itemsRef.current;
+    const sizes = restoreSnapshotRef.current?.itemHeights;
+    if (!items || !sizes) return;
+    // Some cards render null. Without one DOM row per item, index-based
+    // estimates would be applied to a neighbouring message instead.
+    if (items.children.length !== visibleRenderItems.length) {
+      for (const element of Array.from(items.children)) {
+        (element as HTMLElement).style.containIntrinsicBlockSize = '';
+      }
+      return;
+    }
+    const width = items.getBoundingClientRect().width;
+    visibleRenderItems.forEach((item, index) => {
+      const element = items.children[index] as HTMLElement | undefined;
+      const size = rememberedItemIntrinsicSize(sizes.byKey[item.key], sizes.width, width);
+      if (element) element.style.containIntrinsicBlockSize = size ?? '';
+    });
+  }, [visibleRenderItems]);
+
   // 把视口滚回快照记录的「锚点 item + 偏移」。按条目相对定位,所以即使上方图片 /
   // markdown 还没异步渲染完导致高度偏小,也会落在正确的 item 上;settle 期间由
   // ResizeObserver 反复调用本函数纠偏(幂等,不漂移)。stable 引用(无依赖)。
@@ -3604,6 +3662,15 @@ export function MessageStream({
     if (idx < 0) return; // 锚点 item 不在当前窗口(消息被删 / clear)→ 放弃还原,停在默认位置
     const child = items.children[idx] as HTMLElement | undefined;
     if (!child) return;
+    // A work group can remount collapsed or settle internally after its outer
+    // row was positioned. Prefer the same visible child when it still exists.
+    if (
+      snap.messageClientId &&
+      scrollMessageToViewportTop(snap.messageClientId, snap.messageOffset ?? 0)
+    ) {
+      refreshViewportAnchor();
+      return;
+    }
     const cTop = container.getBoundingClientRect().top;
     const rect = child.getBoundingClientRect();
     // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 rect.top 上移 delta。
@@ -3617,7 +3684,12 @@ export function MessageStream({
     requestAnimationFrame(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
-  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+  }, [
+    beginProgrammaticScroll,
+    finishProgrammaticScroll,
+    refreshViewportAnchor,
+    scrollMessageToViewportTop,
+  ]);
   // ResizeObserver 回调用 ref 取最新 applyRestore,避免把它放进 observer 依赖导致
   // 流式每 token(visibleRenderItems 变)都 disconnect/reconnect。
   const applyRestoreRef = useRef(applyRestore);
@@ -3626,13 +3698,40 @@ export function MessageStream({
   // 保存当前浏览位置到 sessionScrollStore,并同步刷新删除前快照(单次量测)。用户
   // 滚动时持续调用(DOM 一定存活),unmount cleanup 兜底最后一帧;量测失败则跳过。
   const saveRafRef = useRef<number | null>(null);
-  const saveScrollSnapshot = useCallback(() => {
+  const saveScrollSnapshot = useCallback((includeHeights = false) => {
     const measured = refreshViewportAnchor();
     if (!sessionId || !measured) return;
+    const items = itemsRef.current;
+    let itemHeights: SessionScrollSnapshot['itemHeights'];
+    const visible = visibleRenderItemsRef.current;
+    // Only capture sizes on leave, and bound them to the last mounted tail.
+    // A missing ghost/generated-files card shifts every following DOM index.
+    // Omit this optional cache rather than persisting heights under wrong keys.
+    if (includeHeights && items && items.children.length === visible.length) {
+      const byKey: Record<string, number> = {};
+      for (
+        let index = Math.max(0, visible.length - RENDER_WINDOW_INITIAL_ITEMS);
+        index < visible.length;
+        index++
+      ) {
+        const element = items.children[index] as HTMLElement | undefined;
+        if (!element) continue;
+        const style = getComputedStyle(element);
+        // contain-intrinsic-size describes the content box, excluding padding/borders.
+        byKey[visible[index].key] =
+          element.getBoundingClientRect().height -
+          (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0) -
+          (parseFloat(style.borderTopWidth) || 0) - (parseFloat(style.borderBottomWidth) || 0);
+      }
+      itemHeights = { width: items.getBoundingClientRect().width, byKey };
+    }
     saveSessionScroll(sessionId, {
       windowAnchorKey: firstVisibleItemKeyRef.current,
       viewportTopKey: measured.viewportTopKey,
       offset: measured.offset,
+      messageClientId: measured.messageClientId,
+      messageOffset: measured.messageOffset,
+      itemHeights,
       isNearBottom: isNearBottomRef.current,
       anchoredForwardCount:
         firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
@@ -3675,7 +3774,7 @@ export function MessageStream({
         cancelAnimationFrame(saveRafRef.current);
         saveRafRef.current = null;
       }
-      saveScrollSnapshot();
+      saveScrollSnapshot(true);
     };
     // sessionId 在本组件生命周期内不变(parent 用 key 重挂载);saveScrollSnapshot
     // 通过 ref 镜像在 cleanup 时读到最新的位置 / 锚点 / nearBottom。
@@ -3825,6 +3924,7 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
+    restoringRef.current = false;
     if (!isNearBottomRef.current) return;
     bumpSendFollowCancelGeneration(sessionId);
     isNearBottomRef.current = false;
@@ -3836,6 +3936,7 @@ export function MessageStream({
   // 那里开始跟随(与 resolveEffectiveNearBottom 同口径)。覆盖末尾的锚定窗也要
   // 一并清掉,否则下一条 token 会 uncover 再 unpin。
   const pinAutoFollowForUserDownIntent = useCallback(() => {
+    restoringRef.current = false;
     if (!windowCoversEndRef.current) return;
     if (isNearBottomRef.current) return;
     isNearBottomRef.current = true;
@@ -3914,6 +4015,11 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
+    // Only input intent ends restoration. Chromium's intrinsic-size correction
+    // also emits scroll events and must not be mistaken for a user scroll.
+    restoringRef.current = false;
+    suppressHeightCompensationUntilRef.current = 0;
+    disclosureAnchorRef.current = null;
     // 只在打断真正的导航跳转(chip / focus / 延期删除补偿)时解除跟随。
     // 流式 pinToBottom 也会打开 programmaticScrollRef,把它算进接管条件会让
     // 生成期间任意滚轮或点滚动条都把跟随掐死;人已经在底部时再也产生不了
@@ -3984,6 +4090,7 @@ export function MessageStream({
   );
   const beginChipJump = useCallback(
     (target: Omit<ChipJumpTarget, 'generation'>) => {
+      restoringRef.current = false;
       if (chipJumpClearTimerRef.current !== null) {
         window.clearTimeout(chipJumpClearTimerRef.current);
       }
@@ -4034,12 +4141,17 @@ export function MessageStream({
 
     const action = decideUserIntentFillAction({
       scrollTop: el.scrollTop,
+      triggerDistancePx: historyPrefetchThreshold(el.clientHeight),
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
       windowAtTop,
       hasMoreMessages: hasMoreMessages ?? false,
       isLoadingMore: (isLoadingMore ?? false) || userIntentLoadInFlightRef.current,
     });
+
+    // Input may arrive before the queued scroll snapshot frame. Capture the
+    // current reading position before expanding or starting a remote read.
+    if (action !== 'none') refreshViewportAnchor();
 
     switch (action) {
       case 'expand-window': {
@@ -4053,7 +4165,8 @@ export function MessageStream({
         userIntentLoadInFlightRef.current = true;
         prevScrollHeightRef.current = el.scrollHeight;
         prevScrollTopAtLoadRef.current = el.scrollTop;
-        onLoadMore();
+        const release = () => { userIntentLoadInFlightRef.current = false; };
+        void onLoadMore().then(release, release);
         return;
       }
       case 'none':
@@ -4066,6 +4179,7 @@ export function MessageStream({
     isLoadingMore,
     onLoadMore,
     expandWindow,
+    refreshViewportAnchor,
   ]);
   useEffect(() => {
     const root = scrollRef.current;
@@ -4073,8 +4187,11 @@ export function MessageStream({
     // wheel/touchstart 挂在 scroll 容器上(与上 chip 抑制对称)。容器不可滚时
     // 不会产生 scroll 事件,所以用户继续向上滚动的意图必须在这里接住。
     const onWheel = (event: WheelEvent) => {
+      // Chromium reports pinch/modified-wheel zoom as wheel events. Filter at
+      // the input boundary before navigation, follow-state or history effects.
+      if (event.ctrlKey || event.metaKey) return;
       clearChipJumpSuppression();
-      if (event.deltaY < 0) {
+      if (isUpwardWheelIntent(event)) {
         if (hasNestedScrollableAncestorThatCanScrollUp(root, event.target)) return;
         if (
           shouldUnpinOnWheel({
@@ -4210,6 +4327,10 @@ export function MessageStream({
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
       if (!ownsHardwareScrollActions) return;
       if (event.defaultPrevented) return;
+      if (event.key === 'Tab') {
+        clearChipJumpSuppression();
+        return;
+      }
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
       if (isEditableKeyboardTarget(event.target)) return;
       clearChipJumpSuppression();
@@ -4282,6 +4403,7 @@ export function MessageStream({
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    restoringRef.current = false;
     // 显式的新导航取代尚未落定的搜索 focus；自身的底部落点会消费此前延期的删除补偿。
     cancelFocusJump({ consumeDeferredDelete: true });
     const chipJumpGeneration = chipJumpGenerationRef.current;
@@ -4501,6 +4623,49 @@ export function MessageStream({
     applyRestore();
   }, [visibleRenderItems, applyRestore]);
 
+  const suppressHeightCompensationUntilRef = useRef(0);
+  const disclosureAnchorRef = useRef<{ element: Element; offset: number } | null>(null);
+  const compensateMessageHeight = useCallback(() => {
+    if (
+      !canCompensateMessageHeight({
+        restoring: restoringRef.current,
+        nearBottom: isNearBottomRef.current,
+        programmatic: programmaticScrollRef.current,
+        loadingMore: isLoadingMore === true,
+        pendingPrepend: prevScrollHeightRef.current > 0,
+        pendingUserScroll: saveRafRef.current !== null,
+        dragging: scrollbarDragStartTopRef.current !== null,
+        expanding: performance.now() < suppressHeightCompensationUntilRef.current,
+      })
+    ) return;
+    const snapshot = lastViewportTopRef.current;
+    if (!snapshot) {
+      refreshViewportAnchor();
+      return;
+    }
+    // Missing rows are handled by the existing delete/window restoration path.
+    if (!visibleRenderItemsRef.current.some((item) => item.key === snapshot.viewportTopKey)) return;
+    // A deleted child can leave its work-group row intact. Preserve its exact
+    // anchor for the deletion effect below; restoring the group here would erase
+    // the child ID before that effect can choose the next surviving message.
+    // Check data, not DOM: collapsing a group only hides its children.
+    const messageClientId = snapshot.messageClientId;
+    if (
+      messageClientId !== undefined &&
+      !allRenderItemsRef.current.some((item) =>
+        renderItemContainsClientId(item, messageClientId),
+      )
+    ) return;
+    restoreViewportSnapshot(snapshot);
+  }, [isLoadingMore, refreshViewportAnchor, restoreViewportSnapshot]);
+
+  // Card insertion changes the row sequence before paint; asynchronous work-group
+  // height changes use the same correction below. Both preserve a measured anchor,
+  // rather than adding scrollHeight deltas that Chromium may have applied already.
+  useLayoutEffect(() => {
+    compensateMessageHeight();
+  }, [visibleRenderItems, bottomPadding, compensateMessageHeight]);
+
   // ── Continuous auto-follow via ResizeObserver. ──
   // Catches every source of content-height growth:
   //   • streaming tokens appending to an assistant message
@@ -4514,15 +4679,38 @@ export function MessageStream({
   // 例外:卡片内用户点击"展开详情"(CARD_EXPAND_TOGGLE_EVENT 冒泡上来)。
   // 这是"就地看内容"的意图,贴底时若照常 pin-to-bottom,展开区的高度会把
   // 卡片头部顶出视口上方,看起来像"往上展开"。收到事件后开一个短抑制窗口,
-  // 窗口内的高度变化不 pin(scrollTop 不动 = 展开区自然向下铺开);窗口一过
+  // 窗口内保持被点击的标题位置(也抵消浏览器自己的 anchoring);窗口一过
   // auto-follow 原样恢复,流式跟随不受影响。
   useEffect(() => {
     const content = contentRef.current;
     if (!content) return;
-    let suppressPinUntil = 0;
-    const onCardExpandToggle = () => {
-      suppressPinUntil = performance.now() + CARD_EXPAND_PIN_SUPPRESS_MS;
+    const onCardExpandToggle = (event: Event, preserveHeader = true) => {
+      suppressHeightCompensationUntilRef.current = performance.now() + CARD_EXPAND_PIN_SUPPRESS_MS;
+      restoringRef.current = false;
+      const header = preserveHeader && event.target instanceof Element
+        ? event.target.closest('button')
+        : null;
+      const container = scrollRef.current;
+      disclosureAnchorRef.current = header && container
+        ? {
+            element: header,
+            offset: container.getBoundingClientRect().top - header.getBoundingClientRect().top,
+          }
+        : null;
+      refreshViewportAnchor();
     };
+    // All disclosures suppress auto-follow, but only opted-in headers stay fixed.
+    // A long-message footer moves down as text appears above it; following that
+    // button would scroll past the text the user just chose to read.
+    const onDisclosureClick = (event: MouseEvent) => {
+      const button = event.target instanceof Element
+        ? event.target.closest('button[aria-expanded]')
+        : null;
+      if (button) {
+        onCardExpandToggle(event, button.hasAttribute('data-scroll-disclosure-header'));
+      }
+    };
+    content.addEventListener('click', onDisclosureClick, true);
     content.addEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
     const ro = new ResizeObserver(() => {
       // 还原中:内容高度因异步渲染 settle 时,持续按锚点纠偏(直到用户手动滚动接管)。
@@ -4530,19 +4718,46 @@ export function MessageStream({
         applyRestoreRef.current();
         return;
       }
-      if (performance.now() < suppressPinUntil) return;
+      if (performance.now() < suppressHeightCompensationUntilRef.current) {
+        const anchor = disclosureAnchorRef.current;
+        const container = scrollRef.current;
+        if (container && anchor?.element.isConnected) {
+          const delta = viewportAnchorCorrection(
+            container.getBoundingClientRect().top,
+            anchor.element.getBoundingClientRect().top,
+            anchor.offset,
+          );
+          if (delta !== 0) {
+            const generation = beginProgrammaticScroll();
+            container.scrollTop += delta;
+            requestAnimationFrame(() => finishProgrammaticScroll(generation));
+          }
+        }
+        refreshViewportAnchor();
+        return;
+      }
+      disclosureAnchorRef.current = null;
       if (isNearBottomRef.current) {
         pinToBottom();
         return;
       }
+      compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
     ro.observe(content);
     return () => {
       content.removeEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
+      content.removeEventListener('click', onDisclosureClick, true);
       ro.disconnect();
     };
-  }, [pinToBottom, refreshHiddenChildViewportAnchor]);
+  }, [
+    pinToBottom,
+    refreshViewportAnchor,
+    refreshHiddenChildViewportAnchor,
+    compensateMessageHeight,
+    beginProgrammaticScroll,
+    finishProgrammaticScroll,
+  ]);
 
   // 折叠动画末帧可能已是 0fr，再卸载时内容高度几乎不变，ResizeObserver 不一定
   // 再触发。精确 child 节点从 items 子树消失时补一次（数据仍在才重测）。
@@ -4550,11 +4765,12 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!items) return;
     const observer = new MutationObserver(() => {
+      compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
     observer.observe(items, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [refreshHiddenChildViewportAnchor]);
+  }, [compensateMessageHeight, refreshHiddenChildViewportAnchor]);
 
   // F-SYNC-2 + render-window: Preserve scroll position after either
   //   (a) DB prepend (messages 数组前端追加,触发 isLoadingMore false → render)
@@ -4587,6 +4803,11 @@ export function MessageStream({
     if (!el || isLoadingMore) return;
 
     if (prevScrollHeightRef.current > 0) {
+      // Remote details can settle while a page is loading, so total height is
+      // not the displacement of the message being read. Prefer its live DOM
+      // anchor; browser anchoring may already have preserved that position.
+      const snapshot = lastViewportTopRef.current;
+      if (!isNearBottomRef.current && snapshot && restoreViewportSnapshot(snapshot)) return;
       const newScrollHeight = el.scrollHeight;
       const delta = newScrollHeight - prevScrollHeightRef.current;
       // [mr-16 review #1] 判定从"scrollTop > snapshot + 8"收紧成"scrollTop 增量
@@ -4610,7 +4831,7 @@ export function MessageStream({
       prevScrollHeightRef.current = 0;
       prevScrollTopAtLoadRef.current = 0;
     }
-  }, [visibleRenderItems, isLoadingMore, beginProgrammaticScroll, finishProgrammaticScroll]);
+  }, [visibleRenderItems, isLoadingMore, beginProgrammaticScroll, finishProgrammaticScroll, restoreViewportSnapshot]);
 
   // ── 删除靠前 message 后的视口保位（#2289）──
   // 快照来自滚动/跳转落定；删除提交后再量会使 delta 恒为 0。贴底交给 pin-to-bottom。
@@ -4879,12 +5100,25 @@ export function MessageStream({
     const threshold = 100;
 
     const draggingScrollbar = scrollbarDragStartTopRef.current != null;
+    if (restoringRef.current && !draggingScrollbar) {
+      applyRestoreRef.current();
+      prevScrollTopRef.current = el.scrollTop;
+      return;
+    }
+    const draggingUp = draggingScrollbar
+      && currentScrollTop < prevScrollTopRef.current - SCROLL_DIRECTION_DEAD_ZONE_PX;
     if (!programmaticScrollRef.current || draggingScrollbar) {
       // 用户手动滚动 = 接管浏览,退出「还原中」,后续恢复正常 auto-follow 判定。
       restoringRef.current = false;
       // 持续保存浏览位置（rAF 节流，DOM 必然存活），内含删除前快照刷新——纯滚动后
       // 快照停在陈旧 key 会让删除补偿失配。
-      if (saveRafRef.current === null) {
+      if (isLoadingMore || prevScrollHeightRef.current > 0) {
+        // A remote response can commit before the next rAF. Keep its restoration
+        // anchor at the user's latest position throughout the request.
+        if (saveRafRef.current !== null) cancelAnimationFrame(saveRafRef.current);
+        saveRafRef.current = null;
+        saveScrollSnapshot();
+      } else if (saveRafRef.current === null) {
         saveRafRef.current = requestAnimationFrame(() => {
           saveRafRef.current = null;
           saveScrollSnapshot();
@@ -5007,6 +5241,11 @@ export function MessageStream({
       });
     }
 
+    // Scrollbar drags share explicit-input prefetch, without also expanding below.
+    if (draggingUp) {
+      triggerUserIntentFill();
+      return;
+    }
     // 滚到顶 50px 内才触发后续加载逻辑(阈值与 decideUserIntentFillAction 的
     // "停在顶部"判定共用 TOP_HISTORY_TRIGGER_PX,两条路径合起来覆盖
     // "穿过顶部区间"与"停在顶部继续上滚"的完整触发面)
@@ -5042,6 +5281,7 @@ export function MessageStream({
     windowAtTop,
     expandWindow,
     saveScrollSnapshot,
+    triggerUserIntentFill,
     refreshViewportAnchor,
     finishProgrammaticScroll,
     windowCoversEnd,

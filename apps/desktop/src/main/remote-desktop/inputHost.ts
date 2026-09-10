@@ -34,6 +34,10 @@ async function resolveBinary(prepare = true): Promise<string> {
       .update(await fs.readFile(source))
       .update(process.arch)
       .update('v1-O');
+    const callerSource = process.platform === 'darwin'
+      ? await fs.readFile(path.resolve(app.getAppPath(), '../../packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift'), 'utf8')
+      : '';
+    digest.update(callerSource);
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
@@ -61,7 +65,7 @@ async function resolveBinary(prepare = true): Promise<string> {
       const buildDirectory = await fs.mkdtemp(path.join(directory, 'compile-'));
       try {
         const main = path.join(buildDirectory, 'main.swift');
-        const program = (await fs.readFile(source, 'utf8')).replace(
+        const program = (callerSource + '\n' + await fs.readFile(source, 'utf8')).replace(
           '"DESKTOP_INPUT_DEVELOPMENT_EXECUTABLE"',
           JSON.stringify(Buffer.from(process.execPath).toString('base64')),
         );
@@ -100,6 +104,15 @@ async function resolveBinary(prepare = true): Promise<string> {
 }
 
 /** Probe the actual input process, never CuaDriver's or Electron's AX grant. */
+export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'unavailable'> {
+  if (process.platform !== 'darwin') return 'unavailable';
+  try {
+    const { stdout } = await exec(await resolveBinary(), ['--lock-state'], { timeout: 5000, maxBuffer: 1024 });
+    const value = stdout.trim();
+    return value === 'locked' || value === 'unlocked' ? value : 'unavailable';
+  } catch { return 'unavailable'; }
+}
+
 export async function readDesktopInputPermission(): Promise<DesktopPermissionStatus> {
   if (process.platform !== 'darwin') return 'notRequired';
   try {
@@ -115,6 +128,16 @@ export async function readDesktopInputPermission(): Promise<DesktopPermissionSta
   } catch {
     return 'unknown';
   }
+}
+
+export async function lockDesktopScreen(isCurrent: () => boolean, signal: AbortSignal): Promise<void> {
+  if (process.platform !== 'darwin') throw new Error('DESKTOP_LOCK_UNAVAILABLE');
+  const binary = await resolveBinary();
+  if (signal.aborted || !isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  try {
+    const { stdout } = await exec(binary, ['--lock-screen'], { timeout: 5000, maxBuffer: 1024, signal });
+    if (stdout.trim() !== 'locked') throw new Error('DESKTOP_LOCK_FAILED');
+  } catch { throw new Error('DESKTOP_LOCK_FAILED'); }
 }
 
 export async function requestDesktopInputPermission(
@@ -265,6 +288,10 @@ export class DesktopInputHost {
       return;
     }
     child.stdin.write(line);
+  }
+  async release(): Promise<void> {
+    this.stop();
+    await this.stopping;
   }
   stop(): void {
     this.generation++;

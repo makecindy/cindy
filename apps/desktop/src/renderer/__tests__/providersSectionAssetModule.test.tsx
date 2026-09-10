@@ -243,7 +243,7 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
-  it('仅免费个人账号在 Cindy AI 模型数量后显示身份标签', async () => {
+  it('仅免费个人账号在 Cindy AI 名称后显示身份标签', async () => {
     modelAccessState.accountTier = 'free';
     renderSection();
 
@@ -251,7 +251,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(badge.textContent).toBe('settings.providers.xd.accountTier.free');
     const assetModule = screen.getByTestId('cindy-ai-asset-module');
     expect(assetModule.contains(badge)).toBe(false);
-    expect(badge.previousElementSibling?.textContent).toBe('settings.providers.models.modelCount');
+    expect(badge.previousElementSibling?.textContent).toBe('Cindy AI');
+    expect(screen.getByTestId('provider-detail-metadata').textContent).not.toContain('settings.providers.models.modelCount');
     expect(screen.getByTestId('provider-detail-metadata').contains(badge)).toBe(true);
 
     cleanup();

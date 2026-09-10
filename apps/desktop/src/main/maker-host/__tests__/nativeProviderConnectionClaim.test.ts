@@ -97,6 +97,7 @@ vi.mock('../auth-adapters.js', () => ({
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: h.codexLoginWithSideEffects,
     hasCodexOAuthLoginReadOnly: h.codexLoginReadOnly,
+    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly() }),
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
