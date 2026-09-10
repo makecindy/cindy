@@ -1095,6 +1095,15 @@ export function registerProviderHandlers(
     },
   );
 
+  async function refreshCatalogAfterCommit(): Promise<void> {
+    try {
+      await deps.refreshCatalog();
+    } catch {
+      // Configuration/credentials have committed; catalog enrichment cannot reverse success.
+      log.warn('provider catalog refresh failed after committed configuration change');
+    }
+  }
+
   // CRUD 成功后统一收尾：发布 dispatch generation、刷新目录，再释放写前已完成硬停的
   // shared Host guard。新 Host 由下一次本地 Codex start 按新快照惰性创建。
   async function afterChange(
@@ -1103,11 +1112,7 @@ export function registerProviderHandlers(
   ): Promise<void> {
     commitRouteMutation?.();
     try {
-      await deps.refreshCatalog();
-    } catch {
-      // The credential/configuration mutation has committed. Catalog refresh is auxiliary:
-      // notify consumers of the real state instead of reporting the mutation as failed.
-      log.warn('provider catalog refresh failed after committed configuration change');
+      await refreshCatalogAfterCommit();
     } finally {
       // 持久化一旦成功，即使 catalog refresh 报错也不能让旧 Host 留在新凭证代次旁继续跑。
       if (codexHostPrepared) {
@@ -1183,7 +1188,7 @@ export function registerProviderHandlers(
           assertOptionalRequestedOwner(value);
           if (!current || !await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
           assertOptionalRequestedOwner(value);
-          await deps.refreshCatalog();
+          await refreshCatalogAfterCommit();
         });
       }
     } else if (value.action === 'remove' && provider.source === 'builtin') {

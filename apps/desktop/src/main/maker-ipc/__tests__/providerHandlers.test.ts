@@ -3845,6 +3845,28 @@ describe('model context limit IPC', () => {
 
 
 describe('provider connection management', () => {
+  it.each(['private-provider', 'cindy-local-ollama'])('broadcasts committed %s rename despite catalog failure without changing credentials or Host', async (id) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = { ...validConfig, id };
+    await createCustomProvider(config);
+    const before = await getCustomProvider(id);
+    const deps = makeDeps({
+      listProviders: async () => [{ id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      refreshCatalog: vi.fn(async () => { throw new Error('catalog unavailable'); }),
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, {
+      providerId: id, action: 'rename', name: 'New name', dataOwnerId: 'owner-a', ownerGeneration: 1,
+    })).resolves.toBeUndefined();
+    expect(await getCustomProvider(id)).toEqual({ ...before, name: 'New name' });
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+  });
   it('stores managed Ollama rename with its configuration and drops it when deleting and readding', async () => {
     mountDb();
     const harness = new IpcHarness();
