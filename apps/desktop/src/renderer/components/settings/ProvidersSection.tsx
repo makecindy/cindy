@@ -788,7 +788,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   }, [confirm, provider, onChanged, t]);
 
   const handleLogin = useCallback(async () => {
-    const outcome = await triggerLogin('local');
+    const outcome = await triggerLogin(reconnectRequired && credentialScope !== 'system-shared' ? 'browser' : 'local');
     if (outcome === 'authenticated') {
       onChanged();
     } else if (outcome === 'unverified') {
@@ -798,7 +798,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     } else if (outcome === 'failed') {
       toast.error(t('settings.connections.codex.toast.loginFailed'));
     }
-  }, [triggerLogin, onChanged, t]);
+  }, [triggerLogin, reconnectRequired, credentialScope, onChanged, t]);
 
   const handleRecovery = useCallback(async () => {
     if (recoveryCheck === 'checking' || loggingIn) return;

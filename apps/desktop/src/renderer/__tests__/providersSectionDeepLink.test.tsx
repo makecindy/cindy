@@ -530,6 +530,22 @@ describe('ProvidersSection — 深链定位', () => {
     expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
   });
 
+  it.each(['instance-isolated', 'unknown', undefined])('ChatGPT 非共享失效凭证通过浏览器重新登录 (%s)', async (credentialScope) => {
+    codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked', credentialScope };
+    providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: false })];
+    renderAt('?tab=providers&connect=openai');
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledWith('browser'));
+    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
+  });
+
+  it('ChatGPT 主动断开后仍使用本机账号连接', async () => {
+    providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: false, removed: false })];
+    renderAt('?tab=providers&connect=openai');
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.openai.connect' }));
+    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledWith('local'));
+  });
+
   it('ChatGPT 系统共享打开 App 后保留恢复入口', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
