@@ -480,7 +480,16 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
   if (!adoptionSourceCorrupt) mapCorrupt = false;
+  retryPendingLocalAdoption();
   return true;
+}
+
+function retryPendingLocalAdoption(): void {
+  if (!activeOwnerId || activeOwnerMode !== 'cloud' || activeOwnerId === LOCAL_OWNER_ID) return;
+  const completed = `${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(activeOwnerId)}`;
+  if (window.localStorage.getItem(completed) === '1') return;
+  adoptLocalModelVisibility(activeOwnerId);
+  if (window.localStorage.getItem(completed) === '1') readOwnerState(activeOwnerId);
 }
 
 function subscribe(cb: () => void): () => void {
@@ -643,6 +652,7 @@ async function setVisibilityTargets(
         changed = true;
       }
     }
+    if (changed && !persist(next, context)) return false;
     const state = initialization ?? emptyInitialization();
     const follows = new Set(state.followCatalogKeys);
     let followChanged = false;
@@ -650,8 +660,7 @@ async function setVisibilityTargets(
       if (follows.delete(key)) followChanged = true;
     }
     if (followChanged && !saveInitialization({ ...state, followCatalogKeys: [...follows] })) return false;
-    if (!changed) return true;
-    return persist(next, context);
+    return true;
   });
 }
 

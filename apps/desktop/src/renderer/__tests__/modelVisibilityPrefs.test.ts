@@ -289,6 +289,20 @@ describe('local profile visibility adoption', () => {
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'on', defaultEnabled: true })).toBe(false);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBe('1');
   });
+
+  it('repairs a corrupt cloud target then retries adopted-local handoff', async () => {
+    seed();
+    memStorage.setItem(mapKey('owner-a'), '{ not valid json');
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'off', defaultEnabled: true })).toBe(false);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBeNull();
+    expect(await prefs.setModelVisibility('pi', 'xd', 'manual', false)).toBe(true);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBe('1');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'off', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'on', defaultEnabled: false })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'manual' })).toBe(false);
+  });
 });
 
 describe('model visibility across renderer windows', () => {
@@ -854,6 +868,19 @@ describe('modelVisibilityPrefs store', () => {
     vi.resetModules();
     const restarted = await loadModuleForOwner();
     expect(restarted.isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8', defaultEnabled: true })).toBe(false);
+  });
+
+  it('override 写入失败时保留 Restore defaults 标记', async () => {
+    const module = await loadModuleForOwner();
+    expect(await module.resetModelVisibilities('xd', [{ agent: 'claude-code', modelId: 'claude-opus-4-8' }])).toBe(true);
+    const write = memStorage.setItem.bind(memStorage);
+    vi.spyOn(memStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === 'xdt:modelVisibilityPrefs:v1.owner.owner-a') throw new Error('disk full');
+      write(key, value);
+    });
+    expect(await module.setModelVisibility('claude-code', 'xd', 'claude-opus-4-8', false)).toBe(false);
+    const init = JSON.parse(memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a')!);
+    expect(init.followCatalogKeys).toContain('claude-code:xd:claude-opus-4-8');
   });
 
   it('owner-scoped 配置损坏时不把目录默认当成开启', async () => {
