@@ -99,7 +99,33 @@ describe('稳定层:能力必须写进提示词', () => {
       }),
     );
     expect(all).toContain('你记得住事');
-    expect(all).toContain('第一次明确说出一条稳定偏好');
+    expect(all).toContain('写长期记忆必须先过门槛');
+    expect(all).toContain('不要在普通一轮里默认记');
+    expect(all).toContain('流程已验证且明显可复用');
+    expect(all).toContain('已验证且明显可复用');
+    expect(all).toContain('用户明确要求记住');
+    expect(all).toContain('同一偏好、纠正或长期背景稳定重复出现');
+    expect(all).toContain('不要把一次性表达当成长期记忆');
+    expect(all).toContain('拿不准是否长期有效时只问一句');
+    expect(all).not.toContain('不要等他重复第二次');
+    expect(all).not.toContain('第一次明确说出');
+    expect(all).not.toContain('就主动记下');
+    expect(all).not.toContain('一次性确认的约定本身不触发写入');
+    expect(all).not.toContain('询问本身不能扩权');
+    expect(all).not.toContain('一条长期有效的约定已经在真实对话里被确认');
+    expect(all).not.toContain('确认即可写');
+    expect(all).toContain('重要的「时刻」也走同一道门槛');
+    expect(all).toContain('只有落入上述三情形的时刻');
+    expect(all).toContain('发布、里程碑、重大纠偏本身不是独立触发');
+    expect(all).toContain('写入前先检索查重');
+    expect(all).toContain('用 memory_search 限定 type moment');
+    expect(all).toContain('已有则 update/append 到原分片');
+    expect(all).not.toContain('一起完成且以后还用得上的重大节点');
+    expect(all).not.toContain('用户明确让你记住的时刻');
+    expect(all).not.toContain('对话里已经确认过要记的重大事件');
+    expect(all).toContain('不能拿来改 SOUL');
+    expect(all).toContain('才用 memory_write 记成 type moment');
+    expect(all).not.toContain('bot_memory');
     expect(all).toContain('save_bot_skill');
     expect(all).toContain('第一次验证完就');
     expect(all).toContain('开后台任务，也可以给伙伴发消息');
@@ -121,6 +147,26 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(none).not.toContain('save_bot_skill');
     expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
+  });
+
+  it('Pi facade 形态用 bot_memory 写时刻,MCP 形态维持 memory_write', () => {
+    const memoryCaps = {
+      toolsets: [] as string[],
+      memoryEnabled: true,
+      partnerActionsEnabled: false,
+      ownSkillsEnabled: false,
+    };
+    const mcp = buildBotStableTier(input({ capabilities: memoryCaps }));
+    expect(mcp).toContain('才用 memory_write 记成 type moment');
+    expect(mcp).toContain('用 memory_search 限定 type moment');
+    expect(mcp).not.toContain('bot_memory');
+    const pi = buildBotStableTier(
+      input({ capabilities: memoryCaps, memoryToolName: 'bot_memory' }),
+    );
+    expect(pi).toContain('才用 bot_memory(action:"write")记成 type "moment"');
+    expect(pi).toContain('用 bot_memory(action:"search")限定 type "moment"');
+    expect(pi).toContain('写入前先检索查重');
+    expect(pi).not.toContain('memory_write');
   });
 
   it('交付纪律恒在:要真做出来,被挡住说实话,不许编', () => {
@@ -233,6 +279,38 @@ describe('伙伴的家', () => {
     expect(buildBotStableTier({ ...base, homeDir: '   ' })).toBe(stable);
   });
 
+  it('沟通风格在稳定层尾部,不进易变层,也不覆盖 SOUL 或 overlay', () => {
+    const prompt = buildBotSystemPrompt({
+      ...base,
+      homeDir: '/data/bots/bot-a',
+      systemPromptOverride: '你只回一个字。',
+      style: {
+        tone: 'professional',
+        addressUserAs: 'Chris',
+        bannedPhrases: '亲爱的',
+      },
+    });
+    expect(prompt.stable).toContain('## 说话习惯');
+    expect(prompt.stable).toContain('称呼用户为「Chris」');
+    expect(prompt.stable).toContain('不覆盖上面的身份(SOUL)');
+    expect(prompt.volatile).not.toContain('说话习惯');
+    expect(prompt.context).toBe('你只回一个字。');
+    expect(prompt.full.indexOf('你是小柴。')).toBeLessThan(prompt.full.indexOf('## 说话习惯'));
+    expect(prompt.full.indexOf('## 说话习惯')).toBeLessThan(prompt.full.indexOf('你只回一个字。'));
+  });
+
+  it('没有风格配置时稳定层一个字都不提', () => {
+    const withEmpty = buildBotStableTier({ ...base, style: { tone: 'custom' } });
+    expect(withEmpty).toBe(buildBotStableTier(base));
+    expect(withEmpty).not.toContain('说话习惯');
+    const followDefault = buildBotStableTier({
+      ...base,
+      style: { tone: undefined, replyLength: undefined, emojiDensity: undefined },
+    });
+    expect(followDefault).toBe(buildBotStableTier(base));
+    expect(followDefault).not.toContain('说话习惯');
+  });
+
   it('overlay 位于上下文层,不会把 Bot Mode 核心协议挤掉', () => {
     const prompt = buildBotSystemPrompt({
       ...base,
@@ -279,6 +357,46 @@ describe('Bot Mode 的角色边界', () => {
     expect(worker).not.toContain('你可以开后台任务，也可以给伙伴发消息');
     expect(worker).not.toContain('send_to_agent');
     expect(worker).not.toContain('start_session_task');
+  });
+
+  it('botModeEnabled:false 时不注入说话习惯，即使传入 style', () => {
+    const style = {
+      tone: 'custom' as const,
+      customTone: '像实验室记录员一样说话',
+      addressUserAs: 'Chris',
+      selfName: '小助',
+    };
+    const worker = buildBotStableTier({
+      ...base,
+      capabilities: {
+        toolsets: [],
+        memoryEnabled: false,
+        partnerActionsEnabled: false,
+        ownSkillsEnabled: false,
+        botModeEnabled: false,
+      },
+      style,
+    });
+    expect(worker).not.toContain('## 说话习惯');
+    expect(worker).not.toContain('说话习惯');
+    expect(worker).not.toContain('Chris');
+    expect(worker).not.toContain('小助');
+    expect(worker).not.toContain('像实验室记录员一样说话');
+
+    const canonical = buildBotStableTier({
+      ...base,
+      capabilities: {
+        toolsets: [],
+        memoryEnabled: false,
+        partnerActionsEnabled: false,
+        ownSkillsEnabled: false,
+        botModeEnabled: true,
+      },
+      style,
+    });
+    expect(canonical).toContain('## 说话习惯');
+    expect(canonical).toContain('称呼用户为「Chris」');
+    expect(canonical).toContain('自称「小助」');
   });
 });
 

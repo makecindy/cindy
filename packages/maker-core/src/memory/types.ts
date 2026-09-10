@@ -26,11 +26,40 @@ export const CURATED_MEMORY_TYPES = ['user', 'feedback', 'project', 'reference']
  *  - **不暴露给 LLM 的 memory_write 工具**(该工具自带 4 类 curated enum,与此处解耦)。
  * 改动前请读 docs/dev-rules/pi-remaining-work.md「压缩即记忆」与 pi-harness.md。
  */
-export const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference', 'digest'] as const;
+export const MEMORY_TYPES = [
+  'user',
+  'feedback',
+  'project',
+  'reference',
+  'moment',
+  'digest',
+] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
 
 export function isMemoryType(v: unknown): v is MemoryType {
   return typeof v === 'string' && (MEMORY_TYPES as readonly string[]).includes(v);
+}
+
+/**
+ * Bot-only 类型集合: 仅当 store 的 scope key 命中 parseBotMemoryScopeKey（bot: 前缀,
+ * 即伙伴 Bot Home 的 memories/）时才允许写入; 全局 Maker Memory（workdir scope）的
+ * memory_write 必须拒绝。这些类型**不进入** CURATED_MEMORY_TYPES —— 全局 MEMORY.md、
+ * 全局 system prompt 与 curated 语义完全不感知（对齐 cindy-bots-runtime.md 的
+ * 「Bot Memory 独立于全局 Maker Memory」红线）。
+ */
+export const BOT_ONLY_MEMORY_TYPES = ['moment'] as const;
+export type BotOnlyMemoryType = (typeof BOT_ONLY_MEMORY_TYPES)[number];
+
+export function isBotOnlyMemoryType(v: unknown): v is BotOnlyMemoryType {
+  return typeof v === 'string' && (BOT_ONLY_MEMORY_TYPES as readonly string[]).includes(v);
+}
+
+/** moment.significance 枚举: normal 默认; high = 用户重大想法 / 里程碑 / 明确强调 */
+export const MEMORY_SIGNIFICANCE_VALUES = ['normal', 'high'] as const;
+export type MemorySignificance = (typeof MEMORY_SIGNIFICANCE_VALUES)[number];
+
+export function isMemorySignificance(v: unknown): v is MemorySignificance {
+  return typeof v === 'string' && (MEMORY_SIGNIFICANCE_VALUES as readonly string[]).includes(v);
 }
 
 /**
@@ -52,6 +81,12 @@ export interface MemoryFrontmatter {
   type: MemoryType;
   /** ISO 8601 string */
   updatedAt: string;
+  /** moment 专用: 事件发生时间 (ISO 8601)。缺省 = 写入时刻; 不能用 updatedAt 语义替代 */
+  occurredAt?: string;
+  /** moment 专用: 重要程度, 缺省 normal */
+  significance?: MemorySignificance;
+  /** moment 专用: 来源 session 引用 (轻量溯源, 由工具层从 session ctx 自动注入) */
+  sourceSession?: string;
 }
 
 /** 解析后的内存记录 (storage.list / read 返回) */
@@ -81,6 +116,12 @@ export interface WriteOptions {
   body: string;
   /** 'create' 撞名拒绝; 'update' 覆盖; 'append' 追加。默认 'create' */
   mode?: WriteMode;
+  /** moment 专用: 事件发生时间 (ISO 8601); create 缺省 = 当前时刻, update 缺省 = 保留原值 */
+  occurredAt?: string;
+  /** moment 专用: 重要程度; 缺省 normal / 保留原值 */
+  significance?: MemorySignificance;
+  /** moment 专用: 来源 session 引用; update 缺省 = 保留原值 */
+  sourceSession?: string;
 }
 
 export type WriteWarning = 'shard-size-exceeded' | 'index-size-exceeded';
@@ -119,6 +160,10 @@ export interface MemoryConfig {
   maxTitleLen: number;
   /** slug 最大长度, 默认 64 */
   maxSlugLen: number;
+  /** bot scope MEMORY.md 的 moment 分区最多展示条数 (更早的走记忆检索), 默认 10 */
+  maxMomentIndexEntries: number;
+  /** sourceSession 长度上限, 默认 120 */
+  maxSourceSessionLen: number;
 }
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
@@ -128,6 +173,8 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   maxDescriptionLen: 200,
   maxTitleLen: 100,
   maxSlugLen: 64,
+  maxMomentIndexEntries: 10,
+  maxSourceSessionLen: 120,
 };
 
 export type MemoryErrorCode =

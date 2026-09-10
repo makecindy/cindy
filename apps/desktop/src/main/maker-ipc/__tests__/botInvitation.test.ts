@@ -29,16 +29,25 @@ vi.mock('../botInvitationAvatar.js', () => ({
   finishBotInvitationAvatar: h.finishAvatar,
 }));
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
-import { queueBotInvitation as enqueueBotInvitation } from '../botInvitation.js';
+import {
+  queueBotInvitation as enqueueBotInvitation,
+  waitForBotInvitationQueueIdle,
+} from '../botInvitation.js';
 import { readBotSkill, seedBotSkillIfMissing } from '../botSkillStore.js';
 import { readBotProfileFolder } from '../botProfileFolder.js';
 import { parseBotInvitationDraft, botInvitationPrompt } from '../botInvitationDraft.js';
+
+const QUEUE_IDLE_MS = process.platform === 'win32' ? 15_000 : 5_000;
 
 function queueBotInvitation(botId: string, retry = false): void {
   enqueueBotInvitation(botId, {
     createCanonicalSession: async () => ({ canonicalSessionId: 'chat-1' }),
     broadcastProfileChanged: h.broadcast,
   }, retry);
+}
+
+async function settleInvitation(): Promise<void> {
+  await waitForBotInvitationQueueIdle(QUEUE_IDLE_MS);
 }
 
 const draft = {
@@ -111,8 +120,11 @@ beforeEach(async () => {
   h.prepareAvatar.mockResolvedValue(null);
 });
 afterEach(async () => {
-  // All tests await a terminal checkpoint before disposing the database and files.
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    await waitForBotInvitationQueueIdle(QUEUE_IDLE_MS);
+  } catch {
+    // 仍关掉库与临时目录,避免悬挂邀请毒化下一例。
+  }
   sqlite.close();
   await fs.rm(h.root, { recursive: true, force: true });
 });
@@ -122,7 +134,8 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed();
     queueBotInvitation('bot-1');
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(h.generate).toHaveBeenCalledTimes(1);
     expect(await readBotSkill(h.root, 'bot-1', 'develop-characters')).toMatchObject(
       draft.skills[0],
@@ -144,7 +157,8 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ stage: 'skills', draft });
     await seedBotSkillIfMissing(h.root, 'bot-1', { ...draft.skills[0]!, body: '用户自己的方法' });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(h.generate).not.toHaveBeenCalled();
     expect((await readBotSkill(h.root, 'bot-1', 'develop-characters'))?.body).toBe(
       '用户自己的方法',
@@ -155,10 +169,12 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed();
     h.generate.mockResolvedValueOnce({ ok: false, reason: 'no_candidate' });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('failed'));
+    await settleInvitation();
+    expect(state().stage).toBe('failed');
     expect(h.welcome).not.toHaveBeenCalled();
     queueBotInvitation('bot-1', true);
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(sqlite.prepare('SELECT count(*) AS n FROM bot_profiles').get()).toEqual({ n: 1 });
   });
 
@@ -167,7 +183,8 @@ describe('companion invitation with SQLite and real skill files', () => {
     async (templateId) => {
       seed({}, { templateId });
       queueBotInvitation('bot-1');
-      await vi.waitFor(() => expect(state().stage).toBe('ready'));
+      await settleInvitation();
+      expect(state().stage).toBe('ready');
       expect(h.generate).not.toHaveBeenCalled();
       const folder = await readBotProfileFolder(h.root, 'bot-1');
       expect(folder.identitySource).toContain('性格与聊天习惯');
@@ -178,7 +195,8 @@ describe('companion invitation with SQLite and real skill files', () => {
   it('does not lose a prepared character when optional image generation is unavailable', async () => {
     seed({ avatarRequested: true });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state()).toMatchObject({ stage: 'ready', avatarSkipped: true }));
+    await settleInvitation();
+    expect(state()).toMatchObject({ stage: 'ready', avatarSkipped: true });
     expect(sqlite.prepare('SELECT avatar FROM bot_profiles').get()).toEqual({ avatar: '✦' });
     expect(h.welcome).toHaveBeenCalledTimes(1);
   });
@@ -186,11 +204,13 @@ describe('companion invitation with SQLite and real skill files', () => {
   it('retries an optional portrait without regenerating the character or greeting again', async () => {
     seed({ avatarRequested: true });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(state().avatarSkipped).toBe(true);
     queueBotInvitation('bot-1', true);
-    await vi.waitFor(() => expect(h.prepareAvatar).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(h.prepareAvatar).toHaveBeenCalledTimes(2);
+    expect(state().stage).toBe('ready');
     expect(h.generate).toHaveBeenCalledTimes(1);
     expect(h.welcome).toHaveBeenCalledTimes(1);
   });
@@ -199,7 +219,8 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ stage: 'avatar', avatarRequested: true, avatarPrompt: draft.avatarPrompt });
     sqlite.prepare("UPDATE bot_profiles SET canonical_session_id = 'chat-1' WHERE id = 'bot-1'").run();
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(h.generate).not.toHaveBeenCalled();
     expect(h.welcome).not.toHaveBeenCalled();
     expect(state().avatarSkipped).toBe(true);
@@ -213,7 +234,8 @@ describe('companion invitation with SQLite and real skill files', () => {
       return { url: 'ai-portrait', hash: 'a'.repeat(64) };
     });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(sqlite.prepare('SELECT avatar FROM bot_profiles').get()).toEqual({
       avatar: 'user-upload',
     });
@@ -228,7 +250,8 @@ describe('companion invitation with SQLite and real skill files', () => {
     });
     h.finishAvatar.mockRejectedValueOnce(new Error('outcome unknown'));
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await settleInvitation();
+    expect(state().stage).toBe('ready');
     expect(h.prepareAvatar).not.toHaveBeenCalled();
     expect(h.finishAvatar).toHaveBeenCalledWith(
       'image-1',
@@ -251,7 +274,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
     h.owner = 'owner-b';
     finish({ ok: true, text: JSON.stringify(draft) });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settleInvitation();
     expect(state().stage).toBe('profile');
     expect(h.welcome).not.toHaveBeenCalled();
     expect(await fs.readdir(h.root)).toEqual([]);

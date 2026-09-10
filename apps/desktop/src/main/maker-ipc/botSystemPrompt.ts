@@ -20,6 +20,8 @@
  * 挂载 ≠ 能力可用;能力必须写进提示词才算数。
  */
 
+import { buildBotStyleGuidance, type BotCommunicationStyle } from '../../shared/botStyle.js';
+
 /** 伙伴运行时已解析的能力信号(plugin id),等价于 Hermes 的 valid_tool_names。 */
 export interface BotPromptCapabilitySignals {
   /** 已生效的 toolset(内置插件 id):'docs' | 'memory' | 'scheduler' | … */
@@ -68,6 +70,13 @@ export interface BotSystemPromptInput {
    * 远端会话没有本机 userData,这时不给,也就一个字都不提。
    */
   homeDir?: string;
+  /** 结构化沟通风格。注入 stable 层尾部,不覆盖 SOUL;空则一个字都不提。 */
+  style?: BotCommunicationStyle;
+  /**
+   * 会话实际暴露给模型的持久记忆写入工具名。Pi facade 是 `bot_memory`,
+   * Claude Code / Codex 走 MCP 仍是 `memory_write`。缺省按 MCP 形态。
+   */
+  memoryToolName?: string;
 }
 
 /**
@@ -108,14 +117,33 @@ const DOCS_GUIDANCE = [
 ].join('\n');
 
 /** 记忆。写法上强调「陈述事实」而不是「给自己下指令」。 */
-const MEMORY_GUIDANCE = [
-  '## 你记得住事',
-  '你有一份跨会话的长期记忆,只属于你自己。值得记的是以后还用得上的东西:用户的偏好与习惯、他纠正过你的做法、长期有效的约定与背景。',
-  '用户第一次明确说出一条稳定偏好、纠正或长期背景时,确认它足够具体且不是临时状态,就主动记下,不要等他重复第二次,也不要让他再去设置页手填。拿不准是否长期有效时才问一句。',
-  '记成陈述句,不要写成给自己的命令 —— 「他喜欢先看几版再定」是好记忆,「以后都先给三版」不是。',
-  '不要记流水账:今天做完的事、临时状态、过几天就过期的进度,都不进记忆。',
-  '记下一件事后,在回复末尾轻描淡写地带一句,让用户知道你记住了什么。',
-].join('\n');
+const DEFAULT_MEMORY_WRITE_TOOL = 'memory_write';
+
+function momentWriteGuidance(memoryToolName: string): string {
+  return memoryToolName === 'bot_memory'
+    ? '用 bot_memory(action:"write")记成 type "moment"'
+    : '用 memory_write 记成 type moment';
+}
+
+function momentSearchGuidance(memoryToolName: string): string {
+  return memoryToolName === 'bot_memory'
+    ? '用 bot_memory(action:"search")限定 type "moment"'
+    : '用 memory_search 限定 type moment';
+}
+
+/** 记忆。写法上强调「陈述事实」而不是「给自己下指令」。 */
+function buildMemoryGuidance(memoryToolName = DEFAULT_MEMORY_WRITE_TOOL): string {
+  return [
+    '## 你记得住事',
+    '你有一份跨会话的长期记忆,只属于你自己。值得记的是以后还用得上的东西:用户的偏好与习惯、他纠正过你的做法、已验证且明显可复用的流程与背景。',
+    '写长期记忆必须先过门槛:用户明确要求记住;同一偏好、纠正或长期背景稳定重复出现;或流程已验证且明显可复用。不要在普通一轮里默认记,也不要把一次性表达当成长期记忆,更不要让他再去设置页手填。拿不准是否长期有效时只问一句。',
+    '记成陈述句,不要写成给自己的命令 —— 「他喜欢先看几版再定」是好记忆,「以后都先给三版」不是。',
+    '不要记流水账:今天做完的事、临时状态、过几天就过期的进度,都不进记忆。',
+    '记下一件事后,在回复末尾轻描淡写地带一句,让用户知道你记住了什么。',
+    `重要的「时刻」也走同一道门槛,不得因为用户随口说了一个想法或当天过了一个节点就记。只有落入上述三情形的时刻才${momentWriteGuidance(memoryToolName)};发布、里程碑、重大纠偏本身不是独立触发,未落入上述情形就不要自行记忆。写入前先检索查重:${momentSearchGuidance(memoryToolName)}查找同一事件;已有则 update/append 到原分片,确认不存在才 create(换 slug 也会变成重复记忆)。写清楚发生了什么、当时怎么说的;可以带 occurredAt (事件发生的日期) 和 significance (重大时刻用 high)。`,
+    '时刻是「当时的事」,偏好是「一直以来」;两类分开记,不互相混写。流水账、临时状态、过几天就过期的进度,照旧不进记忆。记忆只记事实,不能拿来改 SOUL、说话习惯或 system_prompt —— 那些由用户在设置里改,你没有工具可写。',
+  ].join('\n');
+}
 
 /** 自有技能:与记忆的分工是「做法」vs「事实」。 */
 const OWN_SKILLS_GUIDANCE = [
@@ -224,7 +252,7 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   const homeDir = input.homeDir?.trim();
   if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
-  if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
+  if (input.capabilities.memoryEnabled) capabilityParts.push(buildMemoryGuidance(input.memoryToolName ?? DEFAULT_MEMORY_WRITE_TOOL));
   if (botModeEnabled && input.capabilities.routinesEnabled) {
     capabilityParts.push([
       '## 例行任务',
@@ -243,6 +271,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));
   }
+  const styleGuidance = botModeEnabled ? buildBotStyleGuidance(input.style) : '';
+  if (styleGuidance) parts.push(styleGuidance);
   return parts.filter(Boolean).join('\n\n');
 }
 

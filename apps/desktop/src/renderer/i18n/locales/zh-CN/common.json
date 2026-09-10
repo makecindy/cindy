@@ -7184,7 +7184,42 @@
       "summary": "自我介绍",
       "summaryPlaceholder": "例如：一个热爱写网文的小说家，有点幽默，喜欢琢磨人物的小心思。",
       "avatarSelectionFailed": "头像未能读取，请选择 5 MB 以内的 PNG、JPEG 或 WebP 图片",
-      "personality": "性格与说话习惯"
+      "personality": "性格与说话习惯",
+      "style": {
+        "title": "说话习惯",
+        "hint": "只约束怎么说，不覆盖性格与身份。",
+        "tone": "语气",
+        "toneHint": "选一个接近的感觉；需要更具体时用自定义。",
+        "tones": {
+          "followDefault": "跟随默认",
+          "warm": "温暖",
+          "professional": "专业",
+          "playful": "轻松",
+          "concise": "简练",
+          "custom": "自定义"
+        },
+        "customTone": "自定义语气",
+        "addressUserAs": "怎么称呼用户",
+        "selfName": "怎么自称",
+        "replyLength": "回复长短",
+        "replyLengths": {
+          "followDefault": "跟随默认",
+          "short": "短",
+          "medium": "适中",
+          "long": "细"
+        },
+        "emojiDensity": "emoji",
+        "emojiDensities": {
+          "followDefault": "跟随默认",
+          "none": "不用",
+          "sparse": "偶尔",
+          "normal": "自然"
+        },
+        "bannedPhrases": "不要说的话",
+        "bannedPhrasesHint": "每行或用逗号分隔，最多 40 条；超出部分会截断保存。",
+        "languageHabits": "其他语言习惯",
+        "restoreDefault": "恢复默认"
+      }
     },
     "nameLabel": "怎么称呼",
     "close": "关闭",

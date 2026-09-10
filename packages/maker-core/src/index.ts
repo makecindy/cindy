@@ -70,6 +70,9 @@ export {
   parseFilename,
   validateSlug,
   SSH_SCOPE_KEY_PREFIX,
+  MEMORY_INDEX_SEARCH_HINT_MCP,
+  MEMORY_INDEX_SEARCH_HINT_PI,
+  adaptMemoryIndexForHarness,
   type MemoryStorageMeta,
 } from './memory/storage.js';
 export {

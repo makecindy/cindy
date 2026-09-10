@@ -7184,7 +7184,42 @@
       "summary": "자기소개",
       "summaryPlaceholder": "예: 웹소설 쓰기를 사랑하는 소설가. 유머가 있고 등장인물의 속마음을 상상하는 것을 좋아해요.",
       "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요.",
-      "personality": "성격과 대화 방식"
+      "personality": "성격과 대화 방식",
+      "style": {
+        "title": "말하는 방식",
+        "hint": "말투만 정합니다. 성격이나 정체성은 덮어쓰지 않습니다.",
+        "tone": "말투",
+        "toneHint": "가까운 느낌을 고르세요. 더 구체적으로 적을 때는 직접 입력을 쓰세요.",
+        "tones": {
+          "followDefault": "기본값 따르기",
+          "warm": "따뜻하게",
+          "professional": "단정하게",
+          "playful": "가볍게",
+          "concise": "짧게",
+          "custom": "직접 입력"
+        },
+        "customTone": "직접 입력한 말투",
+        "addressUserAs": "사용자를 부르는 말",
+        "selfName": "자신을 부르는 말",
+        "replyLength": "답변 길이",
+        "replyLengths": {
+          "followDefault": "기본값 따르기",
+          "short": "짧게",
+          "medium": "보통",
+          "long": "자세히"
+        },
+        "emojiDensity": "이모지",
+        "emojiDensities": {
+          "followDefault": "기본값 따르기",
+          "none": "사용 안 함",
+          "sparse": "가끔",
+          "normal": "자연스럽게"
+        },
+        "bannedPhrases": "쓰지 않을 말",
+        "bannedPhrasesHint": "줄바꿈 또는 쉼표로 구분. 최대 40개, 초과분은 저장 시 잘립니다.",
+        "languageHabits": "그 밖의 말버릇",
+        "restoreDefault": "기본값 복원"
+      }
     },
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",

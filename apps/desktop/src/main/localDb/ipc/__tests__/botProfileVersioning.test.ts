@@ -103,3 +103,25 @@ describe('角色性别随档案存活', () => {
     expect(next.gender).toBe('male');
   });
 });
+
+describe('沟通风格随档案存活', () => {
+  it('更新能力时保留已有风格', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { style: { tone: 'warm', selfName: '小满' }, skills: ['contract'] },
+      capabilities: { model: 'x', harness: 'claude' },
+      hasSkills: false,
+    });
+    expect(next.style).toEqual({ tone: 'warm', selfName: '小满' });
+  });
+
+  it('style 写进 capabilitiesJson 会升版本', () => {
+    expect(
+      botProfileContentChanged({
+        previousCapabilities: { style: { tone: 'warm' } },
+        nextCapabilities: { style: { tone: 'concise' } },
+        previousIdentitySource: 'A helpful cook',
+        nextIdentitySource: 'A helpful cook',
+      }),
+    ).toBe(true);
+  });
+});

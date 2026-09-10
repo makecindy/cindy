@@ -96,6 +96,17 @@ describe('renderManagedMcpBlock', () => {
     expect(block).toContain('url = "http://127.0.0.1:47921/mcp/orca_worker_bridge"');
     expect(block.match(/bearer_token_env_var = "LIZI_MCP_TOKEN"/g)).toHaveLength(2);
     expect(block).toContain('startup_timeout_sec = 600');
+    expect(block).not.toContain('enabled = false');
+  });
+
+  it('premounts cindy_helper and cindy_memory as disabled shared transports', () => {
+    const block = renderManagedMcpBlock({
+      remotePort: 47921,
+      serverNames: ['cindy_helper', 'cindy_memory'],
+      tokenFingerprint: 'fp-test',
+    });
+    expect(block).toMatch(/\[mcp_servers\.cindy_helper\][\s\S]*?enabled = false/);
+    expect(block).toMatch(/\[mcp_servers\.cindy_memory\][\s\S]*?enabled = false/);
   });
 
   it('is wrapped in managed begin/end markers', () => {
@@ -280,8 +291,9 @@ describe('mergeManagedMcpBlock', () => {
     // 残留形态行, 遇到用户内容即停。
     const existing = [
       '# >>> cindy-remote-mcp (managed, do not edit) >>>',
-      '[mcp_servers.cindy_orca]',
-      'url = "http://127.0.0.1:47921/mcp/cindy_orca"',
+      '[mcp_servers.cindy_memory]',
+      'url = "http://127.0.0.1:47921/mcp/cindy_memory"',
+      'enabled = false',
       '',
       '[history]',
       'persistence = "save-all"',
@@ -528,7 +540,8 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
   it('writes only collab whitelist servers into the remote managed block', async () => {
     // review P1 回归:bridge 上还挂着 cindy_memory / cindy_ssh 等 in-process
     // provider — 全量写进远端 daemon config 会让远端 session 获得本机 MCP
-    // 能力, 越出协同边界。远端只注入 cindy_orca / orca_worker_bridge。
+    // 能力, 越出协同边界。远端注入协同白名单, cindy_memory 预挂为 disabled
+    // transport (供 Bot / session overlay 打开), cindy_ssh 仍不放行。
     const { host, execCmds, inputs } = fakeHost('host-whitelist', '');
     const result = await ensureRemoteCodexMcpBridge(host, {
       ensureBridgeStarted: async () => ({
@@ -543,7 +556,8 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
     expect(written).not.toBeNull();
     expect(written).toContain('[mcp_servers.cindy_orca]');
     expect(written).toContain('[mcp_servers.orca_worker_bridge]');
-    expect(written).not.toContain('cindy_memory');
+    expect(written).toContain('[mcp_servers.cindy_memory]');
+    expect(written).toMatch(/\[mcp_servers\.cindy_memory\][\s\S]*?enabled = false/);
     expect(written).not.toContain('cindy_ssh');
   });
 
@@ -565,6 +579,7 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
     expect(written).not.toBeNull();
     expect(written).toContain('[mcp_servers.cindy_orca]');
     expect(written).toContain('[mcp_servers.cindy_memory]');
+    expect(written).toMatch(/\[mcp_servers\.cindy_memory\][\s\S]*?enabled = false/);
     expect(written).not.toContain('cindy_ssh');
   });
 
@@ -584,16 +599,17 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
     const written = decodeWrittenConfig(inputs);
     expect(written).not.toBeNull();
     expect(written).toContain('[mcp_servers.cindy_memory]');
+    expect(written).toMatch(/\[mcp_servers\.cindy_memory\][\s\S]*?enabled = false/);
     expect(written).not.toContain('[mcp_servers.cindy_orca]');
     expect(written).not.toContain('[mcp_servers.orca_worker_bridge]');
   });
 
   it('is a no-op success when the bridge exposes no whitelist server and nothing was ever injected', async () => {
-    // collab plugin 禁用 → bridge 上没有 cindy_orca;远端 config 本来就没
+    // collab plugin 禁用 → bridge 上没有 cindy_orca / cindy_memory;远端 config 本来就没
     // 注入过 → merge('') 无漂移:不写 config, 不重启 daemon。
     const { host, execCmds } = fakeHost('host-no-whitelist', '');
     const result = await ensureRemoteCodexMcpBridge(host, {
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_memory'], bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_ssh'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => false,
     });
     expect(result.ok).toBe(true);
@@ -610,8 +626,9 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
     const existing = `model = "gpt-5.5"\n\n${stale}\n`;
     const { host, execCmds, inputs } = fakeHost('host-cleanup', existing);
     const result = await ensureRemoteCodexMcpBridge(host, {
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_memory'], bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_ssh'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => false,
+      isCollabEnabled: () => false,
     });
     expect(result.ok).toBe(true);
     const joined = execCmds.join('\n');
@@ -775,8 +792,9 @@ describe('ensureRemoteCodexMcpBridge drift self-heal (appliedFingerprint)', () =
     const stale = renderManagedMcpBlock({ remotePort: 47925, serverNames: SERVERS, tokenFingerprint: 'fp-old' });
     const { host, execCmds } = fakeHost('host-cleanup-quiet', `model = "gpt-5.5"\n\n${stale}\n`);
     const result = await ensureRemoteCodexMcpBridge(host, {
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_memory'], bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_ssh'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => false,
+      isCollabEnabled: () => false,
     });
     expect(result.ok).toBe(true);
     expect(execCmds.join('\n')).toContain('bootstrap');
@@ -796,8 +814,9 @@ describe('ensureRemoteCodexMcpBridge drift self-heal (appliedFingerprint)', () =
       }),
     } as unknown as RemoteHost;
     const second = await ensureRemoteCodexMcpBridge(host2, {
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_memory'], bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_ssh'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => false,
+      isCollabEnabled: () => false,
     });
     expect(second.ok).toBe(true);
     expect(execCmds2.join('\n')).not.toContain('bootstrap');
@@ -993,8 +1012,9 @@ describe('codex-connector R20 regressions', () => {
       },
     } as unknown as RemoteHost;
     const deps = {
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_memory'], bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_ssh'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => false,
+      isCollabEnabled: () => false,
     };
 
     // 先注入成功 (留下 bridgeLocalPort 记录) — 需要一个能 arm 的 fake。
@@ -1109,8 +1129,9 @@ describe('codex-connector R21 regressions', () => {
       },
     } as unknown as RemoteHost;
     const deps = (live: boolean) => ({
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_memory'], bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_ssh'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => live,
+      isCollabEnabled: () => false,
     });
 
     // 先注入 (留下 bridgeLocalPort)。
@@ -1247,21 +1268,21 @@ describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
     expect(hasPendingRemoteMcpDrift('host-drift-collab-off', { ...base, collabEnabled: false })).toBe(false);
   });
 
-  it('treats a Maker Memory toggle as drift (server set is part of the desired state)', async () => {
+  it('does not treat a Maker Memory toggle as daemon server-set drift', async () => {
     const { host } = fakeHost('host-drift-memory', '');
-    // 注入时 memory 关 → applied 只含协同集合。
     await ensureRemoteCodexMcpBridge(host, {
-      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: [...SERVERS, 'cindy_memory'], bridgeInstanceId: 'bridge-1' }),
       hasLiveTurnOnHost: () => false,
     });
     const opts = {
       collabEnabled: true,
+      memoryAvailable: true,
       token: 'test-persistent-token',
       bridgeInstanceId: 'bridge-1',
     };
     expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: false })).toBe(false);
-    // 用户打开 Maker Memory → desired 集合多出 cindy_memory → 判 drift。
-    expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: true })).toBe(true);
+    // cindy_memory is premounted disabled; enabling it is a per-thread overlay, not a daemon rewrite.
+    expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: true })).toBe(false);
   });
 });
 
@@ -1379,6 +1400,44 @@ describe('remote Bot helper transport', () => {
     expect(hasPendingRemoteMcpDrift(host.id, {
       collabEnabled: false, makerMemoryEnabled: false, botHelperAvailable: true,
       token: 'test-persistent-token', bridgeInstanceId: 'helper-bridge',
+    })).toBe(false);
+  });
+
+  it('premounts cindy_memory when global Maker Memory is off so Bot sessions can enable it', async () => {
+    const { host, inputs } = fakeHost('host-memory-premount', '');
+    const bridge = {
+      port: 38991,
+      serverNames: ['cindy_helper', 'cindy_memory'],
+      bridgeInstanceId: 'helper-bridge',
+    };
+    const ensured = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => bridge,
+      isCollabEnabled: () => false,
+      isMakerMemoryEnabled: () => false,
+    });
+    expect(ensured.ok).toBe(true);
+    const written = decodeWrittenConfig(inputs);
+    expect(written).toContain('[mcp_servers.cindy_memory]');
+    expect(written).toMatch(/\[mcp_servers\.cindy_memory\][\s\S]*?enabled = false/);
+    const overlayOpts = {
+      ...bridge,
+      collabEnabled: false,
+      makerMemoryEnabled: true,
+    };
+    expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', overlayOpts)).toMatchObject({
+      'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47921/mcp/cindy_helper?instance=bot-instance',
+      'mcp_servers.cindy_helper.enabled': false,
+      'mcp_servers.cindy_memory.url': 'http://127.0.0.1:47921/mcp/cindy_memory?instance=bot-instance',
+      'mcp_servers.cindy_memory.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+      'mcp_servers.cindy_memory.enabled': false,
+    });
+    expect(hasPendingRemoteMcpDrift(host.id, {
+      collabEnabled: false,
+      makerMemoryEnabled: false,
+      botHelperAvailable: true,
+      memoryAvailable: true,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'helper-bridge',
     })).toBe(false);
   });
 

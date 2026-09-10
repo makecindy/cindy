@@ -291,3 +291,16 @@ function drainInvitations(): void {
       });
   }
 }
+
+/** 等进程内邀请队列排空。测试用：Windows 上真实写盘常超过 waitFor 默认 1s。 */
+export async function waitForBotInvitationQueueIdle(timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (pending.size > 0 || running.size > 0) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `bot invitation queue still busy after ${timeoutMs}ms (pending=${pending.size}, running=${running.size})`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}

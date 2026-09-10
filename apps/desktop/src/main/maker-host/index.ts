@@ -1552,7 +1552,9 @@ export function getMaker(): Maker {
                 bridgeInstanceId: getActiveCodexBridgeInstanceId(),
                 serverNames: getActiveCodexBridgeServerNames() ?? [],
                 collabEnabled: pluginRegistry.isEnabled('collab'),
-                makerMemoryEnabled: _maker?.makerMemory?.isEnabled() ?? false,
+                // Host spawn is shared. Overlay still binds cindy_memory URL;
+                // per-thread  is decided from the Session flag below.
+                makerMemoryEnabled: false,
               }),
           };
         }

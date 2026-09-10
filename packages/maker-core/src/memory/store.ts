@@ -23,6 +23,7 @@ import { MemoryFts } from './fts.js';
 import { MemoryStorage, sanitizeWorkdir, buildFilename, parseFilename } from './storage.js';
 import {
   DEFAULT_MEMORY_CONFIG,
+  isBotOnlyMemoryType,
   MemoryError,
   type MemoryConfig,
   type MemoryRecord,
@@ -52,6 +53,12 @@ export interface MakerMemoryStoreDeps {
    * 则抛 memory:not-ready。缺席 = 静态宿主, 不守卫。
    */
   scopeCheck?: () => void;
+  /**
+   * 该 store 是否为 bot scope (bot: 前缀, 由 manager 按 parseBotMemoryScopeKey 判定)。
+   * true = Bot Memory store: 允许写入 bot-only 类型 (moment), MEMORY.md 渲染 moment 分区。
+   * false / 缺省 = 全局 Maker Memory scope: bot-only 类型写入被确定性拒绝。
+   */
+  botScope?: boolean;
 }
 
 export interface ConsolidateOptions {
@@ -85,11 +92,24 @@ export class MakerMemoryStore {
       deps.storageDir,
       config,
       // 透传 scope 守卫到 storage 写路径 — write 内部 tryReadRaw await 窗口后、
-      // 真正写盘前复核 (review #2388 Codex 8th P1)
+    // 真正写盘前复核 (review #2388 Codex 8th P1)
       deps.scopeCheck ? () => this.assertScopeOk() : undefined,
+      deps.botScope ? { momentMaxEntries: config.maxMomentIndexEntries } : undefined,
     );
     this.fts = new MemoryFts(deps.db);
     this.logger = deps.logger;
+  }
+
+  /**
+   * Bot-only 类型门禁 (#4124): moment 仅允许在 bot scope 写入。store 级强制 ——
+   * 覆盖 manager.write、cindy_memory MCP、consolidate target 等所有写入路径;
+   * 不能只在提示词里约定 (maintainer 要求确定性拒绝)。全局 scope 报 invalid-type,
+   * MCP 层 classifyMemoryError 映射为 INVALID_PARAMS。
+   */
+  private assertTypeScopeAllowed(type: MemoryType): void {
+    if (isBotOnlyMemoryType(type) && !this.deps.botScope) {
+      throw new MemoryError('invalid-type', 'moment 仅伙伴(bot)记忆可用; 全局 workdir 记忆不支持该类型');
+    }
   }
 
   /**
@@ -174,6 +194,7 @@ export class MakerMemoryStore {
   async write(opts: WriteOptions): Promise<WriteResult> {
     this.assertScopeOk();
     await this.init();
+    this.assertTypeScopeAllowed(opts.type);
     const result = await this.storage.write(opts);
     // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1): 边界不得
     // 让 manager.write 直接路径 (Pi compaction) 改旧 owner 的 fts.db。
@@ -244,6 +265,7 @@ export class MakerMemoryStore {
   async consolidate(opts: ConsolidateOptions): Promise<ConsolidateResult> {
     this.assertScopeOk();
     await this.init();
+    this.assertTypeScopeAllowed(opts.target.type);
     // 防呆: 不允许把 target 写到正要被删的 source 里 (否则会自删)
     const targetFilename = buildFilename(opts.target.type, opts.target.name);
     const sourcesToDelete = opts.sources.filter((s) => s !== targetFilename);

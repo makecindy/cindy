@@ -14,6 +14,7 @@ import {
 } from '../../../shared/botDefaults';
 import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
 import type { BotGender } from '../../../shared/botGender';
+import { normalizeBotStyle, type BotCommunicationStyle } from '../../../shared/botStyle';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotTemplatePresetId } from '../../../shared/botTemplatePreset';
 import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
@@ -160,6 +161,8 @@ export interface BotProfile {
    * 老 profile 与用户自建伙伴没有这个字段,归一为 neutral,文案改用伙伴名字。
    */
   gender?: BotGender;
+  /** 结构化沟通风格。老档案没有 → undefined;显式清空 → null。未设置时提示词不注入风格块。 */
+  style?: BotCommunicationStyle | null;
   identitySource?: string;
   userContextSource?: string;
   avatar: string;
@@ -469,6 +472,7 @@ export interface CreateBotProfileInput {
    * 点进去设置页却是「林律是谁」(2026-08-21 实机才发现)。
    */
   gender?: BotGender;
+  style?: BotCommunicationStyle;
   avatar?: string;
   avatarColor?: string;
   skills?: string[];
@@ -572,6 +576,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
     userContextSource: typeof item.userContextSource === 'string' ? item.userContextSource : '',
     // 落库回读的性别。老档案没有 → 留空 → 界面按名字称呼(与升级前一致)。
     ...(item.gender === 'female' || item.gender === 'male' ? { gender: item.gender } : {}),
+    ...(normalizeBotStyle(item.style) ? { style: normalizeBotStyle(item.style) } : {}),
     avatar: typeof item.avatar === 'string' ? item.avatar : '🤖',
     avatarColor: typeof item.avatarColor === 'string' ? item.avatarColor : 'violet',
     enabled: item.enabled !== false,
@@ -860,6 +865,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
     // 角色性别:阵容卡传进来,界面文案据它取「她 / 他」。这里漏掉的话后面每一层
     // 都拿不到 —— 卡上写着「让她加入」,进去就变成按名字称呼(2026-08-21 实机)。
     ...(input.gender ? { gender: input.gender } : {}),
+    ...(normalizeBotStyle(input.style) ? { style: normalizeBotStyle(input.style) } : {}),
     avatar: input.avatar?.trim() || '🤖',
     avatarColor: input.avatarColor?.trim() || 'violet',
     enabled: true,
@@ -920,6 +926,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         // 性别必须一起发过去,否则落库时丢掉,界面只能回落成「用名字称呼」——
         // 阵容卡上明明写着「让她加入」,进去就变成「林律是谁」(2026-08-21 实机)。
         ...(bot.gender ? { gender: bot.gender } : {}),
+        ...(bot.style ? { style: bot.style } : {}),
         ...(input.templateId ? { templateId: input.templateId } : {}),
         ...(input.prepareInvitation ? { prepareInvitation: true } : {}),
         ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
@@ -958,13 +965,25 @@ export type BotProfileUpdatePatch = Partial<
   avatarUploadToken?: string;
   capabilities?: Partial<BotCapabilities>;
   capabilityBaseline?: BotCapabilityBaseline;
+  /** 显式 null 表示清掉沟通风格；undefined 表示本次不改。 */
+  style?: BotCommunicationStyle | null;
+  /** Editing baseline, sent only for style objects changed by the settings form. */
+  styleBaseline?: BotCommunicationStyle | null;
 };
 
 export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Promise<BotProfile> {
   ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
-  const { avatarUploadToken, capabilityBaseline, ...profilePatch } = patch;
+  const { avatarUploadToken, capabilityBaseline, styleBaseline, ...profilePatch } = patch;
+  const { style: patchStyle, capabilities: patchCapabilities, ...restPatch } = profilePatch;
+  // restPatch 不含 style / Partial capabilities, 才能直接当 Partial<BotProfile>。
+  const optimisticPatch: Partial<BotProfile> = { ...restPatch };
+  if (Object.prototype.hasOwnProperty.call(profilePatch, 'style')) {
+    const nextStyle = normalizeBotStyle(patchStyle);
+    if (nextStyle) optimisticPatch.style = nextStyle;
+    else optimisticPatch.style = null;
+  }
   // 这一行的写入代际。回填与回滚都要求「我仍然是这一行最新的那次写」——
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
@@ -972,10 +991,17 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   const owner = getDataOwnerGeneration();
   const isLatestWrite = () => isDataOwnerGenerationCurrent(owner)
     && profileWriteGenerations.get(id) === generation;
-  const applyPatch = (bot: BotProfile): BotProfile => ({
-    ...bot, ...profilePatch,
-    capabilities: { ...bot.capabilities, ...profilePatch.capabilities },
-  });
+  const applyPatch = (bot: BotProfile): BotProfile => {
+    const next = {
+      ...bot,
+      ...optimisticPatch,
+      capabilities: { ...bot.capabilities, ...patchCapabilities },
+    };
+    if (Object.prototype.hasOwnProperty.call(profilePatch, 'style') && !optimisticPatch.style) {
+      delete next.style;
+    }
+    return next;
+  };
   profiles = profiles.map((bot) => (bot.id === id ? applyPatch(bot) : bot));
   emit();
   const optimistic = profiles.find((bot) => bot.id === id) ?? applyPatch(before);
@@ -986,6 +1012,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
       id,
       ...profilePatch,
       ...(capabilityBaseline ? { capabilityBaseline } : {}),
+      ...(styleBaseline !== undefined ? { styleBaseline } : {}),
       ...(avatarUploadToken ? { avatarUploadToken } : {}),
       ...(profilePatch.avatar !== undefined || avatarUploadToken
         ? { expectedAvatar: before.avatar }
@@ -1073,6 +1100,7 @@ export async function duplicateBotProfile(id: string): Promise<BotProfile> {
     identitySource: source.identitySource,
     userContextSource: source.userContextSource,
     ...(source.gender ? { gender: source.gender } : {}),
+    ...(source.style ? { style: source.style } : {}),
     avatar: source.avatar,
     avatarColor: source.avatarColor,
     skills: [...source.skills],

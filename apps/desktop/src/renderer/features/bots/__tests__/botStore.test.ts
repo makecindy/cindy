@@ -247,6 +247,7 @@ describe('bot profile store', () => {
       description: 'Find evidence',
       identitySource: '# SOUL\nResearch carefully.',
       userContextSource: '# USER\nChris',
+      style: { tone: 'concise', selfName: 'Researcher' },
       avatar: '🔎',
       avatarColor: 'blue',
       skills: ['web-research'],
@@ -285,6 +286,7 @@ describe('bot profile store', () => {
         description: 'Find evidence',
         identitySource: '# SOUL\nResearch carefully.',
         userContextSource: '# USER\nChris',
+        style: { tone: 'concise', selfName: 'Researcher' },
         avatar: '🔎',
         avatarColor: 'blue',
         skills: ['web-research'],
@@ -502,6 +504,32 @@ describe('保存失败只回滚自己那一行', () => {
     expect(getBotProfiles().find((item) => item.id === bot.id)).not.toHaveProperty('capabilityBaseline');
     await expect(pending).resolves.toMatchObject({ skills: ['external', 'local'] });
     expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({ skills: ['external', 'local'] });
+  });
+
+  it('forwards the style editing baseline to Main without adding it to optimistic profile state', async () => {
+    const bot = addBotProfile({ name: 'Style merge', description: '' });
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async () => ({
+      ...bot,
+      style: { tone: 'concise', addressUserAs: 'Pat' },
+      currentVersion: 3,
+    }));
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = update;
+    const pending = updateBotProfile(bot.id, {
+      style: { tone: 'warm', addressUserAs: 'Pat' },
+      styleBaseline: { tone: 'warm', addressUserAs: 'Chris' },
+    });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      id: bot.id,
+      style: { tone: 'warm', addressUserAs: 'Pat' },
+      styleBaseline: { tone: 'warm', addressUserAs: 'Chris' },
+    }));
+    expect(getBotProfiles().find((item) => item.id === bot.id)).not.toHaveProperty('styleBaseline');
+    await expect(pending).resolves.toMatchObject({
+      style: { tone: 'concise', addressUserAs: 'Pat' },
+    });
   });
 
   it('另一个伙伴在同期保存的修改不被撤销', async () => {

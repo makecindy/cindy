@@ -8575,6 +8575,52 @@ describe('CodexAgent MCP thread context hooks', () => {
   );
 
   it.each([
+    { remote: false, memory: false, expected: false },
+    { remote: false, memory: true, expected: undefined },
+    { remote: true, memory: false, expected: false },
+    { remote: true, memory: true, expected: true },
+  ])('disables premounted cindy_memory for ordinary Codex when Maker Memory is off (remote=$remote, memory=$memory)', async ({
+    remote, memory, expected,
+  }) => {
+    const agent = new CodexAgent(createDeps(
+      {},
+      memory
+        ? {
+            makerMemory: {
+              async getStore() {
+                return { async getIndex() { return ''; } };
+              },
+            } as never,
+          }
+        : {},
+    ));
+    const host = installFakeHost(agent, undefined, {
+      buildSessionMcpConfig: (instance) => ({
+        'mcp_servers.cindy_memory.url': `http://127.0.0.1:47921/mcp/cindy_memory?instance=${instance}`,
+        'mcp_servers.cindy_memory.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'ordinary-codex',
+      sessionInstanceId: 'ordinary-instance',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      makerMemoryEnabled: memory,
+      ...(remote ? { remoteHostId: 'ssh-host' } : {}),
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as { config: Record<string, unknown> };
+    if (expected === undefined) {
+      expect(params.config).not.toHaveProperty('mcp_servers.cindy_memory.enabled');
+    } else {
+      expect(params.config['mcp_servers.cindy_memory.enabled']).toBe(expected);
+    }
+    expect(params.config['mcp_servers.cindy_memory.url']).toBe(
+      'http://127.0.0.1:47921/mcp/cindy_memory?instance=ordinary-instance',
+    );
+    await handle.close();
+  });
+
+  it.each([
     { resume: false, driftAfterRead: false }, { resume: true, driftAfterRead: false },
     { resume: false, driftAfterRead: true }, { resume: true, driftAfterRead: true },
   ])('does not start a remote Bot with unapplied helper config (resume=$resume, late=$driftAfterRead)', async ({ resume, driftAfterRead }) => {

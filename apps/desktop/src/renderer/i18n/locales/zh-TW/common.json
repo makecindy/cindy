@@ -7184,7 +7184,42 @@
       "summary": "自我介紹",
       "summaryPlaceholder": "例如：一位熱愛寫小說的作家，有點幽默，喜歡琢磨人物的小心思。",
       "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片",
-      "personality": "個性與說話習慣"
+      "personality": "個性與說話習慣",
+      "style": {
+        "title": "說話習慣",
+        "hint": "只約束怎麼說，不覆蓋個性與身份。",
+        "tone": "語氣",
+        "toneHint": "選一個接近的感覺；需要更具體時用自訂。",
+        "tones": {
+          "followDefault": "跟隨預設",
+          "warm": "溫暖",
+          "professional": "專業",
+          "playful": "輕鬆",
+          "concise": "簡練",
+          "custom": "自訂"
+        },
+        "customTone": "自訂語氣",
+        "addressUserAs": "怎麼稱呼使用者",
+        "selfName": "怎麼自稱",
+        "replyLength": "回覆長短",
+        "replyLengths": {
+          "followDefault": "跟隨預設",
+          "short": "短",
+          "medium": "適中",
+          "long": "細"
+        },
+        "emojiDensity": "emoji",
+        "emojiDensities": {
+          "followDefault": "跟隨預設",
+          "none": "不用",
+          "sparse": "偶爾",
+          "normal": "自然"
+        },
+        "bannedPhrases": "不要說的話",
+        "bannedPhrasesHint": "每行或用逗號分隔，最多 40 條；超出部分會截斷儲存。",
+        "languageHabits": "其他語言習慣",
+        "restoreDefault": "恢復預設"
+      }
     },
     "nameLabel": "怎麼稱呼",
     "close": "關閉",

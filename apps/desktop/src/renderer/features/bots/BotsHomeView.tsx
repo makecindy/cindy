@@ -27,6 +27,8 @@ import {
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
+import { BotCommunicationStyleFields } from './BotCommunicationStyleFields';
+import type { BotCommunicationStyle } from '../../../shared/botStyle';
 import {
   createBotCanonicalSessionWithRetry,
   shouldDeferCanonicalBotSessionNavigation,
@@ -78,6 +80,7 @@ export function BotSettings({
   const [portraitRetryFailed, setPortraitRetryFailed] = useState(false);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
   const [userContextSource, setUserContextSource] = useState(bot.userContextSource ?? '');
+  const [style, setStyle] = useState<BotCommunicationStyle | null | undefined>(bot.style);
   const [avatar, setAvatar] = useState(bot.avatar);
   const [avatarColor, setAvatarColor] = useState(bot.avatarColor);
   const [selectedSkills, setSelectedSkills] = useState<string[]>(bot.skills);
@@ -105,7 +108,7 @@ export function BotSettings({
   const botIdentityRef = useRef(bot.id);
   const reconciledBotRef = useRef(bot);
   const savingProfileRef = useRef(false);
-  const savedSettingsRef = useRef(normalizeBotSettingsPayload({ name, description, identitySource, userContextSource, avatar, avatarColor, capabilities, skills: selectedSkills }, bot.name));
+  const savedSettingsRef = useRef(normalizeBotSettingsPayload({ name, description, identitySource, userContextSource, style, avatar, avatarColor, capabilities, skills: selectedSkills }, bot.name));
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload) => {
       savingProfileRef.current = true;
@@ -125,6 +128,7 @@ export function BotSettings({
       description,
       identitySource,
       userContextSource,
+      style,
       avatar,
       avatarColor,
       capabilities,
@@ -144,7 +148,7 @@ export function BotSettings({
     const incoming = normalizeBotSettingsPayload({ ...bot, identitySource: bot.identitySource ?? '', userContextSource: bot.userContextSource ?? '' }, bot.name);
     const next = botIdentityRef.current === bot.id
       ? reconcileBotSettingsDraft(savedSettingsRef.current, {
-        name, description, identitySource, userContextSource, avatar, avatarColor,
+        name, description, identitySource, userContextSource, style, avatar, avatarColor,
         capabilities, skills: selectedSkills,
       }, incoming)
       : incoming;
@@ -155,6 +159,8 @@ export function BotSettings({
     setDescription(next.description);
     setIdentitySource(next.identitySource);
     setUserContextSource(next.userContextSource);
+    // Self-save echo: next.style keeps the in-progress draft (trailing space/newline). Trim is IPC/blur only.
+    setStyle(next.style);
     setAvatar(next.avatar);
     setAvatarColor(next.avatarColor);
     setSelectedSkills(next.skills);
@@ -306,6 +312,14 @@ export function BotSettings({
             className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-3 text-13 leading-6 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           />
         </details>
+
+        <BotCommunicationStyleFields
+          value={style ?? undefined}
+          onChange={(next, kind) => {
+            setStyle(next);
+            autosave.onEdit(kind);
+          }}
+        />
 
         <section
           aria-label={t('bots.settingsTabs.model')}

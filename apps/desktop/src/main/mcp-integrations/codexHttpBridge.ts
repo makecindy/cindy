@@ -51,6 +51,15 @@ export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
 /** Remote helper is enabled only for Bot Sessions and rechecks their live surface. */
 export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
 /**
+ * Shared remote Codex daemon transports that stay in the per-host table even
+ * when the matching capability is off. Ordinary threads keep them disabled;
+ * Bot / session overlays bind the URL and flip `enabled` per thread.
+ */
+export const REMOTE_CODEX_PREMOUNTED_SERVER_NAMES: ReadonlySet<string> = new Set([
+  REMOTE_BOT_HELPER_SERVER_NAME,
+  REMOTE_MEMORY_SERVER_NAME,
+]);
+/**
  * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
  * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
  * 放行协同、按 Session 限定的伙伴 helper 与 Maker Memory (cindy_memory,
@@ -66,7 +75,8 @@ export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
- * (collab 开时);memory 段 = cindy_memory (memory 开且 available 含它时)。
+ * (collab 开时);memory 段 = cindy_memory (memory 开且 available 含它时,
+ * 或者远端 Codex daemon 预挂 disabled transport)。
  * cc 注入 (cc-remote-mcp) / codex ensure (codex-remote-mcp) / codex drift 的
  * desired 集合 (available 传白名单全集, 保留「provider 恒注册」假设) 三处
  * 必须同走本函数 — drift 与 ensure 的集合靠构造同源, 不靠注释人肉维持
@@ -74,16 +84,23 @@ export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
  */
 export function selectRemoteInjectableServerNames(
   available: readonly string[],
-  gates: { collabEnabled: boolean; memoryEnabled: boolean; botHelperEnabled?: boolean },
+  gates: {
+    collabEnabled: boolean;
+    memoryEnabled: boolean;
+    botHelperEnabled?: boolean;
+    /** Premount cindy_memory disabled on the shared remote Codex daemon. */
+    memoryPremounted?: boolean;
+  },
 ): string[] {
+  const includeMemory =
+    (gates.memoryEnabled || gates.memoryPremounted === true)
+    && available.includes(REMOTE_MEMORY_SERVER_NAME);
   return [
     ...(gates.collabEnabled ? available.filter((n) => REMOTE_COLLAB_SERVER_NAMES.has(n)) : []),
     ...(gates.botHelperEnabled && available.includes(REMOTE_BOT_HELPER_SERVER_NAME)
       ? [REMOTE_BOT_HELPER_SERVER_NAME]
       : []),
-    ...(gates.memoryEnabled && available.includes(REMOTE_MEMORY_SERVER_NAME)
-      ? [REMOTE_MEMORY_SERVER_NAME]
-      : []),
+    ...(includeMemory ? [REMOTE_MEMORY_SERVER_NAME] : []),
   ];
 }
 

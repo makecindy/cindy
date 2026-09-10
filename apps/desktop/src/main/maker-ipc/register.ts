@@ -6931,11 +6931,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   /**
    * stale-bridge 谓词 (review R2 P2):bridge 的 provider 集合在启动时冻结;
    * Maker Memory 开关翻转而 codex busy 时, bridge 重建被
-   * DeferredCodexRestartService 推迟, 窗口内活跃 bridge 缺 cindy_memory。
-   * 远端链路 (per-session flag 钳制 / drift 判定) 必须以它为准 — 否则
-   * prompt 注入与工具面失配、drift 追一个注不进去的 server 永不收敛。
-   * 无活跃 bridge 时返回 false (接下来的 lazy 重建会产出与 manager 现值
-   * 一致的新 bridge, 不构成缺失)。
+   * DeferredCodexRestartService 推迟, 窗口内活跃 bridge 可能缺 cindy_memory。
+   * 远端 Codex daemon 现在预挂 cindy_memory, 所以该钳制只在 factory 真正
+   * 缺席时生效; Bot Memory 不得因全局 Maker Memory 关闭而被关掉。
    */
   function activeBridgeMissingMemory(): boolean {
     const bridgeServers = getActiveCodexBridgeServerNames();
@@ -6952,13 +6950,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 第二次判定发生在 ensure 之后, bridge 可能已 lazy 重建, 四个成分都要现读。
    */
   function codexRemoteDriftOpts() {
+    const bridgeServers = getActiveCodexBridgeServerNames();
     return {
       collabEnabled: getPluginRegistry().isEnabled('collab'),
       // desired 集合要跟 ensure 实际能注入的集合同源 (stale-bridge 钳制),
       // 不能只看 manager 现值 — 否则旧 bridge 缺 cindy_memory 时 drift 永不
       // 收敛, 每次 live send 白跑完整 ensure。
       makerMemoryEnabled: remoteMakerMemoryEnabledForBridge(),
-      botHelperAvailable: getActiveCodexBridgeServerNames()?.includes(REMOTE_BOT_HELPER_SERVER_NAME) ?? false,
+      botHelperAvailable: bridgeServers?.includes(REMOTE_BOT_HELPER_SERVER_NAME) ?? false,
+      memoryAvailable: bridgeServers?.includes(REMOTE_MEMORY_SERVER_NAME) ?? false,
       token: getRemoteMcpBridgeToken(),
       bridgeInstanceId: getActiveCodexBridgeInstanceId(),
     };

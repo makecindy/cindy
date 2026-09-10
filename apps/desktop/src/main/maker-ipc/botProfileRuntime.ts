@@ -1,10 +1,11 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { buildBotMemoryScopeKey } from '@cindy/maker-core';
+import { adaptMemoryIndexForHarness, buildBotMemoryScopeKey } from '@cindy/maker-core';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { buildDefaultBotIdentity } from '../../shared/botProfileDefaults.js';
+import { normalizeBotStyle } from '../../shared/botStyle.js';
 import {
   buildBotContextTier,
   buildBotStableTier,
@@ -589,7 +590,7 @@ export async function hydrateBotProfileRuntime(
     botMemoryIndex = botMemory.status === 'fulfilled' ? botMemory.value : null;
     opts.makerMemoryIndexSnapshot = formatMemorySnapshot(
       'Bot Memory',
-      botMemoryIndex ?? '',
+      adaptMemoryIndexForHarness(botMemoryIndex ?? '', opts.agentKind),
       opts.agentKind === 'pi'
         ? 'This is the only durable memory for this Bot. Use the direct `bot_memory` tool.'
         : 'This is the only durable memory for this Bot. Memory tools operate only on this Bot Home.',
@@ -864,10 +865,13 @@ export async function hydrateBotProfileRuntime(
       && promptCapabilities.partnerActionsEnabled && deps.listTeammates
       ? await deps.listTeammates({ excludeBotId: row.botId }).catch(() => [])
       : [];
+  const style = row.role === 'canonical' ? normalizeBotStyle(config.style) : undefined;
   const promptInput: BotSystemPromptInput = {
     displayName: profile.displayName,
     identity,
     capabilities: promptCapabilities,
+    ...(style ? { style } : {}),
+    ...(opts.agentKind === 'pi' ? { memoryToolName: 'bot_memory' } : {}),
     skillIndex: ownSkills.map((item) => ({
       name: item.name,
       ...(item.description ? { description: item.description } : {}),

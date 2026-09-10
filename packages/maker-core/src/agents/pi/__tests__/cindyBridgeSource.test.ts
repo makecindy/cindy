@@ -1496,6 +1496,12 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("name = 'memory_review'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("name = 'memory_consolidate'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "enum: ['user', 'feedback', 'project', 'reference', 'moment']",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
+      "enum: ['user', 'feedback', 'project', 'reference']",
+    );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("name: qualifiedName,\n        label: server.name + ': ' + tool.name");
   });
 
@@ -2199,4 +2205,95 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     await tool.execute('call-1', args, controller.signal);
     expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
+});
+
+it('lets Bot Memory write and consolidate moment through the Pi facade and keeps it off ordinary tasks', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const client = { request: async () => ({ content: [{ type: 'text', text: 'ok' }] }) };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { type: 'object' } },
+  ]);
+
+  const ordinary: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
+  expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
+  expect(gateway.resolveBotMemory({
+    action: 'write',
+    type: 'moment',
+    name: 'first-hello',
+    title: 'First hello',
+    description: 'User said hello for the first time',
+    body: 'The first time we talked.',
+  })).toBeNull();
+
+  const bot: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
+  const memoryTool = bot.find((item) => item.name === 'bot_memory');
+  expect(memoryTool?.parameters.properties.type.enum).toEqual([
+    'user', 'feedback', 'project', 'reference', 'moment',
+  ]);
+
+  const write = gateway.resolveBotMemory({
+    action: 'write',
+    type: 'moment',
+    name: 'first-hello',
+    title: 'First hello',
+    description: 'User said hello for the first time',
+    body: 'The first time we talked.',
+    occurredAt: '2026-09-08',
+    significance: 'high',
+    sourceSession: 'forged-session',
+  });
+  expect(write.qualifiedName).toBe('mcp__cindy_memory__call_tool');
+  expect(write.args).toEqual({
+    name: 'memory_write',
+    args: {
+      type: 'moment',
+      name: 'first-hello',
+      title: 'First hello',
+      description: 'User said hello for the first time',
+      body: 'The first time we talked.',
+      occurredAt: '2026-09-08',
+      significance: 'high',
+    },
+  });
+
+  const consolidate = gateway.resolveBotMemory({
+    action: 'consolidate',
+    sources: ['moment_old.md'],
+    type: 'moment',
+    name: 'merged',
+    title: 'Merged moment',
+    description: 'Combined first hello',
+    body: 'The first time we talked.',
+    occurredAt: '2026-09-08',
+    significance: 'normal',
+    sourceSession: 'forged-session',
+  });
+  expect(consolidate.args).toEqual({
+    name: 'memory_consolidate',
+    args: {
+      sources: ['moment_old.md'],
+      target: {
+        type: 'moment',
+        name: 'merged',
+        title: 'Merged moment',
+        description: 'Combined first hello',
+        body: 'The first time we talked.',
+        occurredAt: '2026-09-08',
+        significance: 'normal',
+      },
+    },
+  });
 });

@@ -27,7 +27,7 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
     inputShape: {
       query: z.string().min(1).describe('搜索关键词 (短语精确匹配)'),
       type: z
-        .enum(['user', 'feedback', 'project', 'reference'])
+        .enum(['user', 'feedback', 'project', 'reference', 'moment'])
         .optional()
         .describe('限定类目'),
       limit: z.number().int().min(1).max(50).optional().describe('默认 10'),

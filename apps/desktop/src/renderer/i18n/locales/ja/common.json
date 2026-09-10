@@ -7184,7 +7184,42 @@
       "summary": "自己紹介",
       "summaryPlaceholder": "例：連載小説を書くのが大好きな小説家。少しユーモアがあり、登場人物の心の動きを考えるのが好き。",
       "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。",
-      "personality": "性格と話し方"
+      "personality": "性格と話し方",
+      "style": {
+        "title": "話し方",
+        "hint": "言い方だけを決めます。性格や身分は上書きしません。",
+        "tone": "トーン",
+        "toneHint": "近い雰囲気を選んでください。細かく指定したいときはカスタムを使います。",
+        "tones": {
+          "followDefault": "既定に従う",
+          "warm": "やさしい",
+          "professional": "ていねい",
+          "playful": "くだけた",
+          "concise": "簡潔",
+          "custom": "カスタム"
+        },
+        "customTone": "カスタムのトーン",
+        "addressUserAs": "ユーザーの呼び方",
+        "selfName": "自分の呼び方",
+        "replyLength": "返信の長さ",
+        "replyLengths": {
+          "followDefault": "既定に従う",
+          "short": "短め",
+          "medium": "ふつう",
+          "long": "長め"
+        },
+        "emojiDensity": "絵文字",
+        "emojiDensities": {
+          "followDefault": "既定に従う",
+          "none": "使わない",
+          "sparse": "ときどき",
+          "normal": "自然に"
+        },
+        "bannedPhrases": "使わない言い回し",
+        "bannedPhrasesHint": "改行またはカンマ区切り。最大 40 件。超えた分は保存時に切り詰めます。",
+        "languageHabits": "その他の話し方",
+        "restoreDefault": "既定に戻す"
+      }
     },
     "nameLabel": "呼び名",
     "close": "閉じる",

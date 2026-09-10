@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
@@ -424,6 +424,27 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('button', { name: 'bots.actions.message' })).toBeNull();
   });
 
+  it('shows structured communication-style controls on the same page', () => {
+    renderSettings();
+    expect(screen.getByTestId('bot-communication-style')).toBeTruthy();
+    expect(screen.getByLabelText('bots.profile.style.tone')).toBeTruthy();
+    expect(screen.getByLabelText('bots.profile.style.replyLength')).toBeTruthy();
+  });
+
+  it('associates communication-style hints with their controls', () => {
+    renderSettings();
+    const banned = screen.getByLabelText('bots.profile.style.bannedPhrases');
+    const bannedHintId = banned.getAttribute('aria-describedby');
+    expect(bannedHintId).toBeTruthy();
+    expect(document.getElementById(bannedHintId!)?.textContent).toBe(
+      'bots.profile.style.bannedPhrasesHint',
+    );
+    const tone = screen.getByLabelText('bots.profile.style.tone');
+    const toneHintId = tone.getAttribute('aria-describedby');
+    expect(toneHintId).toBeTruthy();
+    expect(document.getElementById(toneHintId!)?.textContent).toBe('bots.profile.style.toneHint');
+  });
+
   it('keeps archived teammates read-only', () => {
     renderSettings({ status: 'archived' });
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
@@ -525,6 +546,131 @@ describe('Bot settings unified autosave', () => {
       name: 'Release buddy',
       description: 'Own releases',
     });
+  });
+
+  it('autosaves a discrete tone selection with the rest of the profile', async () => {
+    vi.useFakeTimers();
+    renderSettings();
+    fireEvent.click(screen.getByRole('radio', { name: 'bots.profile.style.tones.warm' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      style: { tone: 'warm' },
+    });
+  });
+
+  it('keeps trailing spaces while typing style text and trims on blur', async () => {
+    vi.useFakeTimers();
+    const view = renderSettings();
+    const address = screen.getByLabelText('bots.profile.style.addressUserAs') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'Chris ' } });
+    expect(address.value).toBe('Chris ');
+    expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      style: { addressUserAs: 'Chris' },
+    });
+    expect(address.value).toBe('Chris ');
+    // Production updateBotProfile publishes the normalized bot; the echo must
+    // not trim the still-focused draft before blur.
+    await act(async () => {
+      view.rerender(
+        <BotSettings
+          bot={bot({ style: { addressUserAs: 'Chris' } })}
+          onBack={view.onBack}
+          onOpenSession={view.onOpenSession}
+        />,
+      );
+    });
+    expect(address.value).toBe('Chris ');
+    fireEvent.blur(address);
+    expect(address.value).toBe('Chris');
+
+    const habits = screen.getByLabelText('bots.profile.style.languageHabits') as HTMLTextAreaElement;
+    fireEvent.change(habits, { target: { value: '先结论\n后解释\n' } });
+    expect(habits.value).toBe('先结论\n后解释\n');
+  });
+
+  it('clears discrete style fields when the user picks follow-default', async () => {
+    vi.useFakeTimers();
+    renderSettings({
+      style: { tone: 'warm', replyLength: 'short', emojiDensity: 'sparse' },
+    });
+    fireEvent.click(
+      within(screen.getByRole('radiogroup', { name: 'bots.profile.style.tone' })).getByRole('radio', {
+        name: 'bots.profile.style.tones.followDefault',
+      }),
+    );
+    fireEvent.click(
+      within(screen.getByRole('radiogroup', { name: 'bots.profile.style.replyLength' })).getByRole('radio', {
+        name: 'bots.profile.style.replyLengths.followDefault',
+      }),
+    );
+    fireEvent.click(
+      within(screen.getByRole('radiogroup', { name: 'bots.profile.style.emojiDensity' })).getByRole('radio', {
+        name: 'bots.profile.style.emojiDensities.followDefault',
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const lastPatch = mocks.updateBotProfile.mock.calls.at(-1)?.[1] as {
+      style?: unknown;
+      styleBaseline?: unknown;
+    };
+    expect(lastPatch.style).toBeNull();
+    expect(lastPatch).not.toHaveProperty('styleBaseline');
+  });
+
+  it('clears every style field with the group restore-default action', async () => {
+    vi.useFakeTimers();
+    renderSettings({
+      style: {
+        tone: 'custom',
+        customTone: '像老朋友',
+        addressUserAs: 'Chris',
+        selfName: '小满',
+        replyLength: 'short',
+        emojiDensity: 'sparse',
+        bannedPhrases: '亲爱的',
+        languageHabits: '先结论',
+      },
+    });
+    expect(screen.getByLabelText('bots.profile.style.customTone')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.style.restoreDefault' }));
+    expect(screen.queryByLabelText('bots.profile.style.customTone')).toBeNull();
+    expect((screen.getByLabelText('bots.profile.style.addressUserAs') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('bots.profile.style.selfName') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('bots.profile.style.bannedPhrases') as HTMLTextAreaElement).value).toBe('');
+    expect((screen.getByLabelText('bots.profile.style.languageHabits') as HTMLTextAreaElement).value).toBe('');
+    expect(
+      within(screen.getByRole('radiogroup', { name: 'bots.profile.style.tone' }))
+        .getByRole('radio', { name: 'bots.profile.style.tones.followDefault' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      within(screen.getByRole('radiogroup', { name: 'bots.profile.style.replyLength' }))
+        .getByRole('radio', { name: 'bots.profile.style.replyLengths.followDefault' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      within(screen.getByRole('radiogroup', { name: 'bots.profile.style.emojiDensity' }))
+        .getByRole('radio', { name: 'bots.profile.style.emojiDensities.followDefault' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const lastPatch = mocks.updateBotProfile.mock.calls.at(-1)?.[1] as {
+      style?: unknown;
+      styleBaseline?: unknown;
+    };
+    expect(lastPatch.style).toBeNull();
+    expect(lastPatch).not.toHaveProperty('styleBaseline');
   });
 
   it('changes the avatar through the host-owned image picker', async () => {
