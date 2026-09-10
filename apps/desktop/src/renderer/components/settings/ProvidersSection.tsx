@@ -59,6 +59,7 @@ import {
   readCustomProviderKey,
   updateCustomProvider,
 } from '@/lib/customProviders';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
 import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 
@@ -239,6 +240,104 @@ function BetaTag({ label }: { label: string }) {
 // (重构前的 ProviderCell 去掉展开逻辑;模型列表由详情容器统一渲染。)
 // ---------------------------------------------------------------------------
 
+type ProviderOwnerScope = { dataOwnerId: string | null; ownerGeneration: number };
+async function disconnectProvider(
+  provider: ProviderView,
+  scope: ProviderOwnerScope,
+): Promise<void> {
+  if (provider.source === 'builtin') {
+    // Keep the entry available for reconnect, even when the original source was auto-detected.
+    await window.electronAPI.maker.setProviderPresentation({
+      providerId: provider.id,
+      action: 'restore',
+      ...scope,
+    });
+    if (provider.id === 'openai') await window.electronAPI.maker.auth.logout('codex', scope);
+    else if (provider.id === 'anthropic') await window.electronAPI.maker.claudeOAuthLogout(scope);
+    else if (provider.id === 'xai') await window.electronAPI.maker.xaiOAuthLogout(scope);
+    else await window.electronAPI.builtinApiKeyRemove(provider.id, scope);
+  } else if (provider.auth.method === 'oauth') {
+    await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
+  } else {
+    await window.electronAPI.maker.disconnectCustomProvider(provider.id, scope);
+  }
+}
+
+function useProviderManagement(provider?: ProviderView) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const { refetch } = useProviders();
+  const [busy, setBusy] = useState(false);
+  const rename = async () => {
+    if (!provider || busy) return;
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      let name = provider.name;
+      if (
+        !(await confirm({
+          title: t('settings.providers.pill.rename'),
+          content: (
+            <LocalProviderNameInput
+              initialName={name}
+              onChange={(next) => {
+                name = next;
+              }}
+            />
+          ),
+          confirmText: t('settings.providers.custom.save'),
+          cancelText: t('settings.providers.custom.cancel'),
+        }))
+      )
+        return;
+      setBusy(true);
+      await window.electronAPI.maker.setProviderPresentation({
+        providerId: provider.id,
+        action: 'rename',
+        name,
+        dataOwnerId: scope.dataOwnerId,
+        ownerGeneration: scope.ownerGeneration,
+      });
+      refetch();
+    } catch {
+      toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeBuiltin = async () => {
+    if (!provider || busy) return;
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      if (
+        !(await confirm({
+          title: t('settings.providers.custom.deleteConfirm.title'),
+          description: t('settings.providers.custom.deleteConfirm.description', {
+            name: provider.name,
+          }),
+          confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
+          cancelText: t('settings.providers.custom.cancel'),
+        }))
+      )
+        return;
+      setBusy(true);
+      await disconnectProvider(provider, scope);
+      await window.electronAPI.maker.setProviderPresentation({
+        providerId: provider.id,
+        action: 'remove',
+        dataOwnerId: scope.dataOwnerId,
+        ownerGeneration: scope.ownerGeneration,
+      });
+      toast.success(t('settings.providers.custom.toast.deleted'));
+    } catch {
+      toast.error(t('settings.providers.custom.toast.deleteFailed'));
+    } finally {
+      setBusy(false);
+      refetch();
+    }
+  };
+  return { busy, rename, removeBuiltin };
+}
+
 function DetailHeader({
   icon,
   title,
@@ -278,6 +377,16 @@ function DetailHeader({
   assetModule?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const management = useProviderManagement(provider);
+  const canRename = !!provider && provider.id !== 'xd';
+  const resolvedDelete =
+    deleteAction ??
+    (provider?.source === 'builtin' && provider.id !== 'xd'
+      ? {
+          label: t('settings.providers.custom.deleteAria'),
+          onClick: () => void management.removeBuiltin(),
+        }
+      : undefined);
   const subscription = useProviderSubscriptionCard(provider);
   const subscriptionProduct =
     provider?.access?.kind === 'subscription' ? provider.access.product : null;
@@ -324,16 +433,22 @@ function DetailHeader({
                   className="min-w-0 truncate text-14 font-medium leading-tight"
                   style={{ color: 'var(--settings-section-title)' }}
                 >
-                  {provider?.name ?? title}
+                  {provider ? providerDisplayName(provider, t) : title}
                 </span>
                 {identityBadge}
                 {subscriptionProduct && (
                   <CustomTag
-                    label={subscription?.planLabel
-                      ? subscription.planLabel.toLowerCase().startsWith(subscriptionProduct.toLowerCase())
+                    label={
+                      subscription?.planLabel
                         ? subscription.planLabel
-                        : `${subscriptionProduct} ${subscription.planLabel}`
-                      : t('settings.providers.models.subscriptionProduct', { product: subscriptionProduct })}
+                            .toLowerCase()
+                            .startsWith(subscriptionProduct.toLowerCase())
+                          ? subscription.planLabel
+                          : `${subscriptionProduct} ${subscription.planLabel}`
+                        : t('settings.providers.models.subscriptionProduct', {
+                            product: subscriptionProduct,
+                          })
+                    }
                   />
                 )}
                 {provider?.suspended && (
@@ -384,7 +499,16 @@ function DetailHeader({
                   </Tip>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {editAction && (
+                  {canRename && (
+                    <DropdownMenuItem
+                      onClick={() => void management.rename()}
+                      disabled={management.busy}
+                    >
+                      <Pencil size={18} className="mr-2.5" />
+                      {t('settings.providers.pill.rename')}
+                    </DropdownMenuItem>
+                  )}
+                  {editAction && !provider?.auth.native && (
                     <DropdownMenuItem onClick={editAction.onClick} disabled={editAction.disabled}>
                       <Pencil size={18} className="mr-2.5" />
                       {editAction.label}
@@ -407,12 +531,12 @@ function DetailHeader({
                     )}
                   </DropdownMenuItem>
                   {menuFooter}
-                  {deleteAction && (
+                  {resolvedDelete && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={deleteAction.onClick}>
+                      <DropdownMenuItem onClick={resolvedDelete.onClick} disabled={management.busy}>
                         <Trash2 size={18} className="mr-2.5" />
-                        {deleteAction.label}
+                        {resolvedDelete.label}
                       </DropdownMenuItem>
                     </>
                   )}
@@ -424,16 +548,33 @@ function DetailHeader({
 
         {detail}
       </div>
-      {assetModule ?? (subscription && (
-        <div data-testid="provider-usage-module" className="border-t px-1 py-2" style={{ borderColor: 'var(--settings-theme-card-border)' }}>
-          <QuotaHoverCard
-            variant="embedded"
-            account={subscription}
-            dashboardLabel={provider?.id === 'anthropic' ? t('settings.providers.usage.openClaudeUsage') : provider?.id === 'xai' ? t('settings.providers.xai.asset.openUsage') : undefined}
-            onOpenDashboard={provider?.id === 'anthropic' ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage') : provider?.id === 'xai' ? () => void window.electronAPI.openExternal('https://grok.com') : undefined}
-          />
-        </div>
-      ))}
+      {assetModule ??
+        (subscription && (
+          <div
+            data-testid="provider-usage-module"
+            className="border-t px-1 py-2"
+            style={{ borderColor: 'var(--settings-theme-card-border)' }}
+          >
+            <QuotaHoverCard
+              variant="embedded"
+              account={subscription}
+              dashboardLabel={
+                provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+                  ? t('settings.providers.usage.openClaudeUsage')
+                  : provider?.id === 'xai' || provider?.auth.native === 'xai'
+                    ? t('settings.providers.xai.asset.openUsage')
+                    : undefined
+              }
+              onOpenDashboard={
+                provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+                  ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
+                  : provider?.id === 'xai' || provider?.auth.native === 'xai'
+                    ? () => void window.electronAPI.openExternal('https://grok.com')
+                    : undefined
+              }
+            />
+          </div>
+        ))}
     </div>
   );
 }
@@ -464,6 +605,8 @@ function AnthropicHeader({
         onChanged();
       } else if (r.reason === 'login_cancelled') {
         /* 用户取消,不弹错 */
+      } else if (r.reason === 'local_unavailable') {
+        toast.error(t('settings.providers.localAccount.unavailable'));
       } else if (r.reason === 'not_a_subscription') {
         toast.error(t('settings.connections.claude.toast.notSubscription'));
       } else {
@@ -477,16 +620,17 @@ function AnthropicHeader({
   }, [onChanged, t]);
 
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.connections.claude.logoutConfirm.title'),
-      description: t('settings.connections.claude.logoutConfirm.description'),
-      confirmText: t('settings.connections.claude.logoutConfirm.confirm'),
-      cancelText: t('settings.connections.claude.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.maker.claudeOAuthLogout();
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.connections.claude.logoutConfirm.title'),
+        description: t('settings.connections.claude.logoutConfirm.description'),
+        confirmText: t('settings.connections.claude.logoutConfirm.confirm'),
+        cancelText: t('settings.connections.claude.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(t('settings.connections.claude.toast.loggedOut'));
       onChanged();
     } catch {
@@ -494,7 +638,7 @@ function AnthropicHeader({
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
   const status = {
     kind: connected ? 'connected' : 'neutral',
@@ -510,7 +654,9 @@ function AnthropicHeader({
       }
     : {
         label: t(
-          loggingIn ? 'settings.providers.button.cancel' : 'settings.providers.button.authorize',
+          loggingIn
+            ? 'settings.providers.button.cancel'
+            : 'settings.providers.localAccount.useClaude',
         ),
         onClick: () => {
           if (loggingIn) {
@@ -540,6 +686,29 @@ function AnthropicHeader({
 // OpenAI —— OAuth(ChatGPT 订阅 / Codex),复用 useCodexAuth()。
 // ---------------------------------------------------------------------------
 
+function LocalProviderNameInput({
+  initialName,
+  onChange,
+}: {
+  initialName: string;
+  onChange: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState(initialName);
+  return (
+    <SettingsTextInput
+      aria-label={t('settings.providers.pill.rename')}
+      value={name}
+      maxLength={128}
+      autoFocus
+      onChange={(value) => {
+        setName(value);
+        onChange(value);
+      }}
+    />
+  );
+}
+
 function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -560,25 +729,26 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     : (reconnectCredentialScope ?? 'unknown');
   const oauthWritesBlocked = state.oauthWritesBlocked === true;
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.connections.codex.logoutConfirm.title'),
-      description: t('settings.connections.codex.logoutConfirm.description'),
-      confirmText: t('settings.connections.codex.logoutConfirm.confirm'),
-      cancelText: t('settings.connections.codex.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
     try {
-      await logout();
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.connections.codex.logoutConfirm.title'),
+        description: t('settings.connections.codex.logoutConfirm.description'),
+        confirmText: t('settings.connections.codex.logoutConfirm.confirm'),
+        cancelText: t('settings.connections.codex.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(t('settings.connections.codex.toast.loggedOut'));
     } catch {
       toast.error(t('settings.connections.codex.toast.logoutFailed'));
     } finally {
       onChanged();
     }
-  }, [confirm, logout, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
   const handleLogin = useCallback(async () => {
-    const outcome = await triggerLogin();
+    const outcome = await triggerLogin('local');
     if (outcome === 'authenticated') {
       onChanged();
     } else if (outcome === 'unverified') {
@@ -624,7 +794,6 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     ? {
         label: t('settings.providers.button.disconnect'),
         onClick: () => void handleLogout(),
-        disabled: oauthWritesBlocked,
       }
     : reconnectRequired
       ? {
@@ -636,12 +805,9 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
             (oauthWritesBlocked && credentialScope !== 'system-shared'),
         }
       : {
-          label: oauthWritesBlocked
-            ? t('chatgptAuthRecovery.devReadOnly')
-            : loggingIn
-              ? t('settings.providers.openai.cancelConnect')
-              : t('settings.providers.openai.connect'),
-          disabled: oauthWritesBlocked,
+          label: loggingIn
+            ? t('settings.providers.openai.cancelConnect')
+            : t('settings.providers.openai.connect'),
           onClick: () => {
             if (loggingIn) void cancelLogin();
             else void handleLogin();
@@ -651,7 +817,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   return (
     <DetailHeader
       icon={<OpenAIMark size={18} />}
-      title={t('settings.providers.openai.title')}
+      title={provider?.name ?? t('settings.providers.openai.title')}
       subtitle={
         provider?.openAiAccount
           ? [
@@ -697,16 +863,17 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
   }, [onChanged, t]);
 
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.connections.xai.logoutConfirm.title'),
-      description: t('settings.connections.xai.logoutConfirm.description'),
-      confirmText: t('settings.connections.xai.logoutConfirm.confirm'),
-      cancelText: t('settings.connections.xai.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.maker.xaiOAuthLogout();
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.connections.xai.logoutConfirm.title'),
+        description: t('settings.connections.xai.logoutConfirm.description'),
+        confirmText: t('settings.connections.xai.logoutConfirm.confirm'),
+        cancelText: t('settings.connections.xai.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(t('settings.connections.xai.toast.loggedOut'));
       onChanged();
     } catch {
@@ -714,7 +881,7 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
   const status = {
     kind: connected ? 'connected' : 'neutral',
@@ -819,18 +986,19 @@ function GenericOAuthHeader({
   }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t]);
 
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
-      description: t('settings.providers.genericOAuth.logoutConfirm.description', {
-        name: provider.name,
-      }),
-      confirmText: t('settings.providers.genericOAuth.logoutConfirm.confirm'),
-      cancelText: t('settings.providers.genericOAuth.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.maker.providerOAuthLogout(provider.id);
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
+        description: t('settings.providers.genericOAuth.logoutConfirm.description', {
+          name: provider.name,
+        }),
+        confirmText: t('settings.providers.genericOAuth.logoutConfirm.confirm'),
+        cancelText: t('settings.providers.genericOAuth.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
       toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
       onChanged();
     } catch {
@@ -892,7 +1060,12 @@ function GenericOAuthHeader({
               .filter(Boolean)
               .join(' · ')
           : provider.subscriptionAccount
-            ? [t('settings.providers.openai.accountSource.oauth'), provider.subscriptionAccount.identity].filter(Boolean).join(' · ')
+            ? [
+                t('settings.providers.openai.accountSource.oauth'),
+                provider.subscriptionAccount.identity,
+              ]
+                .filter(Boolean)
+                .join(' · ')
             : t('settings.providers.genericOAuth.subtitle')
       }
       status={status}
@@ -961,18 +1134,21 @@ function BuiltinApiKeyHeader({
   }, [draftKey, onChanged, provider.id, provider.name, t]);
 
   const handleDisconnect = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
-      description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
-        name: provider.name,
-      }),
-      confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
-      cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.builtinApiKeyRemove(provider.id);
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.providers.builtinApiKey.disconnectConfirm.title', {
+          name: provider.name,
+        }),
+        description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
+          name: provider.name,
+        }),
+        confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
+        cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );
@@ -1039,7 +1215,7 @@ function BuiltinApiKeyHeader({
         label: t(
           provider.connected
             ? 'settings.providers.pill.configured'
-            : 'settings.providers.pill.disconnected',
+            : 'settings.providers.pill.unconfigured',
         ),
       }}
       primaryAction={primaryAction}
@@ -1156,7 +1332,7 @@ function XdGatewayHeader({
     } finally {
       setRotating(false);
     }
-  }, [confirm, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
   const maskedKey = useMemo(() => maskKey(hasSavedKey ? key : ''), [hasSavedKey, key]);
 
@@ -1428,6 +1604,31 @@ function CustomProviderHeader({
   onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [disconnecting, setDisconnecting] = useState(false);
+  const disconnect = async () => {
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      if (
+        !(await confirm({
+          title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
+          description: t('settings.providers.genericOAuth.logoutConfirm.description', {
+            name: provider.name,
+          }),
+          confirmText: t('settings.providers.button.disconnect'),
+          cancelText: t('settings.providers.custom.cancel'),
+        }))
+      )
+        return;
+      setDisconnecting(true);
+      await disconnectProvider(provider, scope);
+    } catch {
+      toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }));
+    } finally {
+      setDisconnecting(false);
+      onChanged();
+    }
+  };
   const isOAuth =
     provider.auth.method === 'oauth' && (!!provider.auth.oauth || !!provider.auth.native);
   if (isOAuth)
@@ -1451,13 +1652,19 @@ function CustomProviderHeader({
         label: t(
           provider.connected
             ? 'settings.providers.pill.configured'
-            : 'settings.providers.pill.disconnected',
+            : 'settings.providers.pill.unconfigured',
         ),
       }}
       primaryAction={
         !provider.connected
           ? { label: t('settings.providers.custom.editAria'), onClick: onEdit }
-          : undefined
+          : provider.auth.method === 'apiKey'
+            ? {
+                label: t('settings.providers.button.disconnect'),
+                onClick: () => void disconnect(),
+                disabled: disconnecting,
+              }
+            : undefined
       }
       editAction={{ label: t('settings.providers.custom.editAria'), onClick: onEdit }}
       deleteAction={{ label: t('settings.providers.custom.deleteAria'), onClick: onDelete }}
@@ -1821,6 +2028,7 @@ export function ProvidersSection() {
   const visibleProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     for (const p of providers) {
+      if (p.removed) continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
@@ -1829,6 +2037,7 @@ export function ProvidersSection() {
         if (
           p.id === 'xd' ||
           p.connected ||
+          p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
           openaiHasImageCap
         ) {
@@ -1986,7 +2195,7 @@ export function ProvidersSection() {
       .map((d) => ({ detection: d, provider: byId.get(d.providerId) }))
       .filter(
         (s): s is { detection: LocalCliDetection; provider: ProviderView } =>
-          !!s.provider && !s.provider.connected,
+          !!s.provider && !s.provider.connected && !s.provider.removed,
       );
   }, [detections, byId, listProviders]);
 
@@ -2070,16 +2279,17 @@ export function ProvidersSection() {
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
-      const ok = await confirm({
-        presentation: 'standard',
-        title: t('settings.providers.custom.deleteConfirm.title'),
-        description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
-        confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
-        cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
-      });
-      if (!ok) return;
       try {
-        await deleteCustomProvider(p.id);
+        const scope = await window.electronAPI.maker.listProviders();
+        const ok = await confirm({
+          presentation: 'standard',
+          title: t('settings.providers.custom.deleteConfirm.title'),
+          description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
+          confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
+          cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
+        });
+        if (!ok) return;
+        await deleteCustomProvider(p.id, scope);
         toast.success(t('settings.providers.custom.toast.deleted'));
       } catch {
         toast.error(t('settings.providers.custom.toast.deleteFailed'));
@@ -2089,15 +2299,16 @@ export function ProvidersSection() {
   );
 
   const handleDeleteOllama = useCallback(async () => {
-    const ok = await confirm({
-      title: t('settings.providers.local.deleteConfirmTitle'),
-      description: t('settings.providers.local.deleteConfirmBody'),
-      confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
-      cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
-    });
-    if (!ok) return;
     try {
-      await deleteCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
+      const scope = await window.electronAPI.maker.listProviders();
+      const ok = await confirm({
+        title: t('settings.providers.local.deleteConfirmTitle'),
+        description: t('settings.providers.local.deleteConfirmBody'),
+        confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
+        cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
+      });
+      if (!ok) return;
+      await deleteCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, scope);
       toast.success(t('settings.providers.custom.toast.deleted'));
     } catch {
       toast.error(t('settings.providers.custom.toast.deleteFailed'));

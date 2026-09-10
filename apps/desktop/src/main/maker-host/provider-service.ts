@@ -72,6 +72,7 @@ export interface ProviderConnectionReaders {
 }
 
 export interface ProviderServiceDeps {
+  getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean };
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** 连接状态判定器。 */
@@ -205,7 +206,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
-      ...provider, ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...provider, ...(deps.getProviderPresentation?.(provider.id) ?? {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
     })).map(
       (provider) =>
         media === undefined

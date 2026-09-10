@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   oauth: null as Record<string, unknown> | null,
   gatewayKey: 'sk-xd-gateway' as string | null,
   cleared: 0,
+  revoked: false,
   refresherInvalidated: 0,
   invalidGrantHandler: null as (() => void) | null,
   /** getValidClaudeAiOAuth 的可注入延迟(测回调超时用)。 */
@@ -43,6 +44,14 @@ vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: h.canUseGateway }),
 }));
 
+vi.mock('../nativeProviderAuthBinding.js', async (original) => ({
+  ...(await original<typeof import('../nativeProviderAuthBinding.js')>()),
+  isNativeProviderAuthRevoked: () => h.revoked,
+  unbindNativeProviderAuth: () => {
+    h.revoked = true;
+  },
+}));
+
 vi.mock('../claude-credentials-store.js', () => ({
   hasClaudeAiOAuth: () => h.hasOAuth,
   clearClaudeAiOAuth: () => {
@@ -63,7 +72,7 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   // disconnect = invalidate → clear(唯一断开入口,logout/IPC 都必须走它)
   disconnectClaudeAiOAuth: () => {
     h.refresherInvalidated += 1;
-    h.cleared += 1;
+    h.revoked = true;
   },
   setClaudeOAuthInvalidGrantHandler: (handler: (() => void) | null) => {
     h.invalidGrantHandler = handler;
@@ -107,6 +116,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     };
     h.gatewayKey = 'sk-xd-gateway';
     h.cleared = 0;
+    h.revoked = false;
     h.refresherInvalidated = 0;
     h.refreshDelayMs = 0;
     h.encryptionAvailable = true;
@@ -265,7 +275,8 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     const broadcasts: string[] = [];
     adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
     await adapter.invalidate('claude_oauth_refresh_invalid_grant');
-    expect(h.cleared).toBe(1);
+    expect(h.cleared).toBe(0);
+    expect(h.revoked).toBe(true);
     expect(h.refresherInvalidated).toBe(1);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
@@ -275,10 +286,11 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(typeof h.invalidGrantHandler).toBe('function');
   });
 
-  it('logout(订阅在连):清凭证同时失效刷新器,防在途刷新复活凭证', async () => {
+  it('logout preserves native credentials and revokes Cindy access', async () => {
     const adapter = await makeAdapter();
     await adapter.logout();
-    expect(h.cleared).toBe(1);
+    expect(h.cleared).toBe(0);
+    expect(h.revoked).toBe(true);
     expect(h.refresherInvalidated).toBe(1);
   });
 });

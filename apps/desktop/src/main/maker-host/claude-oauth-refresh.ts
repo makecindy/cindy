@@ -47,11 +47,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  clearClaudeAiOAuth,
+  hasClaudeAiOAuthUnbound,
   readClaudeAiOAuth,
   writeClaudeAiOAuth,
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
+import { bindNativeProviderAuth, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
+import { setProviderPresentation } from './provider-presentation-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 
@@ -737,18 +739,21 @@ export function backfillClaudeSubscriptionProfile(accessToken: string): Promise<
   return getDefaultRefresher().backfillSubscriptionProfile(accessToken);
 }
 
-/**
- * 断开 Claude.ai 订阅的唯一正确入口:先失效刷新器(generation++,在途刷新不写回、
- * 预续期 timer 撤销),再清系统凭证。**所有**清除订阅凭证的调用点(adapter.logout、
- * 设置页 CLAUDE_OAUTH_LOGOUT IPC、未来新增入口)必须走本函数而不是直接
- * clearClaudeAiOAuth —— 否则「已断开」状态下在途刷新回写会让凭证复活
- * (review 2026-07-04 P2:IPC 路径曾绕过失效联动)。
- * 顺序约束:invalidate 必须先于 clear,防 clear 与在途写回的窗口竞态;clear 抛错
- * (写后校验失败)原样上抛由调用方决定 UI 反馈,多 bump 的 generation 幂等无害。
- */
+/** Stop Cindy refreshes and revoke only Cindy's use of the native subscription. */
 export function disconnectClaudeAiOAuth(): void {
   invalidateClaudeOAuthRefresh();
-  clearClaudeAiOAuth();
+  unbindNativeProviderAuth('anthropic', { revoked: true });
+  setProviderPresentation('anthropic', { removed: false });
+}
+
+/** Reattach the existing native login; never write or remove system credentials. */
+export function reconnectClaudeAiOAuth(): boolean {
+  if (!hasClaudeAiOAuthUnbound()) return false;
+  invalidateClaudeOAuthRefresh();
+  bindNativeProviderAuth('anthropic', { sharedSystem: true });
+  try { setProviderPresentation('anthropic', { removed: false }); }
+  catch (error) { unbindNativeProviderAuth('anthropic', { revoked: true }); throw error; }
+  return true;
 }
 
 /** refresh token 被服务端作废时的通知接线(auth-adapters 装配,内存操作零副作用)。 */

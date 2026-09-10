@@ -72,6 +72,8 @@ vi.mock('../../logger.js', () => ({
   getLogDir: () => mockState.logDir,
 }));
 
+vi.mock('../grok-oauth-login.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../grok-oauth-login.js')>(), peekGrokAccessToken: () => 'fixture-xai-token' }));
+
 vi.mock('../../usageBroadcaster.js', () => ({
   recordXaiRateLimitSnapshot: mockState.recordXaiRateLimitSnapshot,
 }));
@@ -6336,6 +6338,9 @@ describe('codex proxy host', () => {
 
   it('records xAI rate-limit headers from Codex proxy upstream responses', async () => {
     const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    host.registerComposed('session-rate-xai', 'thread-xai', 'PRODUCT_PROMPT');
+    setSessionProvider('session-rate-xai', 'xai');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
@@ -6351,6 +6356,7 @@ describe('codex proxy host', () => {
       upstreamBase: 'https://api.x.ai/v1',
       status: 200,
       requestHeaders: { 'thread-id': 'thread-xai' },
+      outboundHeaders: { authorization: 'Bearer fixture-xai-token' },
       responseHeaders: {
         'content-type': 'application/json',
         'x-ratelimit-limit-requests': '100',
@@ -6366,7 +6372,8 @@ describe('codex proxy host', () => {
       remainingRequests: 88,
       limitTokens: 1000000,
       remainingTokens: 900000,
-    });
+    }, 'xai');
+    clearSessionProvider('session-rate-xai');
   });
 
   it('observes streaming provider service_tier from response.completed SSE', async () => {

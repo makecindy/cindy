@@ -335,7 +335,7 @@ export function AddProviderWizard({
   // connection. Keep the slot occupied when suspended or awaiting reconnection.
   const localOpenAiAlreadyAdded = providers.some(
     provider => provider.id === 'openai' &&
-      (provider.connected || provider.openAiAccount?.reconnectRequired === true),
+      !provider.removed && (provider.connected || provider.removed === false || provider.openAiAccount?.reconnectRequired === true),
   );
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -680,7 +680,7 @@ export function AddProviderWizard({
   const useLocalOpenAiAccount = useCallback(async () => {
     setLoggingIn(true);
     try {
-      const state = await window.electronAPI.maker.auth.getState('codex');
+      const state = await window.electronAPI.maker.auth.triggerLogin('codex', { mode: 'local' });
       const detected = await window.electronAPI.maker.scanLocalCli();
       setCliDetections(detected.detections);
       if (state.authenticated && state.authSource === 'oauth' && state.credentialScope === 'system-shared') {
@@ -691,6 +691,16 @@ export function AddProviderWizard({
     } catch {
       toast.error(t('settings.providers.openai.localUnavailable'));
     } finally { setLoggingIn(false); }
+  }, [onDone, t]);
+
+  const useLocalClaudeAccount = useCallback(async () => {
+    setLoggingIn(true);
+    try {
+      const result = await window.electronAPI.maker.claudeOAuthLogin();
+      if (result.ok) onDone('anthropic');
+      else toast.error(t('settings.providers.localAccount.unavailable'));
+    } catch { toast.error(t('settings.providers.localAccount.unavailable')); }
+    finally { setLoggingIn(false); }
   }, [onDone, t]);
 
   // ── OAuth 授权(复用既有鉴权流;成功即完成,无第 3 步)────────────────────
@@ -1615,6 +1625,13 @@ export function AddProviderWizard({
                         {t('settings.providers.openai.useLocalAccount')}
                       </button>
                     )}
+                    {sel.provider.id === 'anthropic' && !providers.some(p => p.id === 'anthropic' && !p.removed && (p.connected || p.removed === false)) && (
+                      <button type="button" onClick={() => void useLocalClaudeAccount()}
+                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium hover:bg-[var(--surface-hover)]"
+                        style={{ backgroundColor: 'var(--settings-btn-secondary-bg)', borderColor: 'var(--settings-btn-secondary-border)', color: 'var(--settings-btn-secondary-text)' }}>
+                        {t('settings.providers.localAccount.useClaude')}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => void handleAuthorize()}
@@ -1626,7 +1643,7 @@ export function AddProviderWizard({
                       }}
                     >
                       {t(
-                        sel.provider.id === 'openai'
+                        ['openai', 'anthropic', 'xai'].includes(sel.provider.id)
                             ? 'settings.providers.openai.addIndependentAccount'
                             : sel.provider.auth.oauth?.flow === 'device-code'
                               ? 'settings.providers.wizard.authorizeWithDeviceCode'

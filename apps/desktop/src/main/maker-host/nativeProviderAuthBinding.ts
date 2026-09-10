@@ -472,7 +472,7 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 /** Bind newly completed native OAuth to the current data owner. */
 export function bindNativeProviderAuth(
   provider: NativeProviderId,
-  opts?: { instanceIsolated?: boolean },
+  opts?: { instanceIsolated?: boolean; sharedSystem?: boolean },
 ): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
@@ -481,7 +481,8 @@ export function bindNativeProviderAuth(
     if (read.ok) {
       const bindings = read.bindings;
       const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
-      delete sharedSystemCredential[provider];
+      if (opts?.sharedSystem) sharedSystemCredential[provider] = owner;
+      else delete sharedSystemCredential[provider];
       const instanceIsolatedCredential = instanceIsolatedCredentialOwners(bindings);
       if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
       else delete instanceIsolatedCredential[provider];
@@ -494,10 +495,10 @@ export function bindNativeProviderAuth(
       // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
       writeBindings({
         ...bindings,
-        selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+        selfAuthorized: { ...bindings.selfAuthorized, [provider]: opts?.sharedSystem ? undefined : owner },
         sources: {
           ...bindings.sources,
-          [provider]: 'explicit-provider-oauth',
+          [provider]: opts?.sharedSystem ? 'native-harness-inherited' : 'explicit-provider-oauth',
         },
         sharedSystemCredential,
         instanceIsolatedCredential,
@@ -519,7 +520,8 @@ export function bindNativeProviderAuth(
     // 授权即可恢复。
     const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
     const sharedSystemCredential = sharedSystemCredentialOwners(salvaged);
-    delete sharedSystemCredential[provider];
+    if (opts?.sharedSystem) sharedSystemCredential[provider] = owner;
+      else delete sharedSystemCredential[provider];
     const instanceIsolatedCredential = instanceIsolatedCredentialOwners(salvaged);
     if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
     else delete instanceIsolatedCredential[provider];
@@ -530,10 +532,10 @@ export function bindNativeProviderAuth(
     writeBindings({
       ...salvaged,
       revoked: suppressed,
-      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
+      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: opts?.sharedSystem ? undefined : owner },
       sources: {
         ...salvaged.sources,
-        [provider]: 'explicit-provider-oauth',
+        [provider]: opts?.sharedSystem ? 'native-harness-inherited' : 'explicit-provider-oauth',
       },
       sharedSystemCredential,
       instanceIsolatedCredential,

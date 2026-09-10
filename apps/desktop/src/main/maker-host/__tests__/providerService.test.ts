@@ -9,6 +9,18 @@ import { createProviderService } from '../provider-service.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('applies local presentation without changing provider identity or catalog', async () => {
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: (id) => id === 'openai' ? { name: 'Personal OpenAI', removed: true } : {},
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find((p) => p.id === 'openai')).toMatchObject({ id: 'openai', name: 'Personal OpenAI', removed: true });
+    expect(providers.find((p) => p.id === 'anthropic')?.removed).toBeUndefined();
+    expect(providers.map((p) => p.id)).toEqual(BUNDLED_CATALOG.providers.map((p) => p.id));
+  });
+
   it('keeps media readiness separate from subscription authorization and scopes it by provider', async () => {
     let media = [{ providerId: 'openai', id: 'gpt-image-2' }];
     const svc = createProviderService({

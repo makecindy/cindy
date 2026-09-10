@@ -23,6 +23,7 @@ const dirs: string[] = [];
 const h = vi.hoisted(() => ({
   userDataDir: '',
   appDataDir: '',
+  isPackaged: false,
   dataOwnerId: null as string | null,
 }));
 
@@ -30,7 +31,7 @@ vi.mock('electron', () => ({
   app: {
     getPath: (name: string) => (name === 'appData' ? h.appDataDir : h.userDataDir),
     getAppPath: () => h.userDataDir,
-    isPackaged: false,
+    get isPackaged() { return h.isPackaged; },
   },
   safeStorage: { isEncryptionAvailable: () => false },
 }));
@@ -122,6 +123,7 @@ function trustIsolatedAuthSandbox(): void {
 }
 
 afterEach(() => {
+  h.isPackaged = false;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   h.dataOwnerId = null;
@@ -279,13 +281,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     });
     await adapter.logout();
     await expect(adapter.getState()).resolves.toMatchObject({
-      authenticated: true,
+      authenticated: false,
       oauthWritesBlocked: true,
     });
     expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
     expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
     expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
-    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
   });
 
   it('共享 Dev 直接使用 Release 登录态，不重链接或改 binding', async () => {
@@ -411,7 +413,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(localAuth)).not.toEqual(releaseBytes);
   });
 
-  it('dev 默认只读共享:登录和登出不可改，失效只阻断当前进程', async () => {
+  it('dev 默认只读共享:断开只停用 Cindy，重启不复活，显式本机连接可恢复', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
@@ -440,26 +442,21 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       oauthWritesBlocked: true,
     });
     await adapter.logout();
-    await expect(adapter.getState()).resolves.toMatchObject({
-      authenticated: true,
-      oauthWritesBlocked: true,
-    });
-    await expect(adapter.getAccessToken()).resolves.toBe('system-token');
-    await expect(adapter.getAccountId()).resolves.toBe('acct-1');
-    await expect(adapter.hasCodexOAuthLogin()).resolves.toBe(true);
-    await expect(adapter.getAuthEnv({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
-      CODEX_HOME: codexHome,
-    });
-    expect(readCodexOneShotCreds(adapter)).toEqual({
-      accessToken: 'system-token',
-      accountId: 'acct-1',
-    });
-    expect(onLogout).not.toHaveBeenCalled();
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: false });
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+    await expect(adapter.getAccountId()).resolves.toBeNull();
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
+    expect(onLogout).toHaveBeenCalledTimes(1);
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(beforeSystem);
     expect(fs.readFileSync(localAuth, 'utf8')).toBe(beforeLocal);
     expect(fs.statSync(systemAuth).ino).toBe(beforeSystemStat.ino);
     expect(fs.statSync(localAuth).ino).toBe(beforeLocalStat.ino);
-    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
+    const restarted = new DesktopCodexAuthAdapter();
+    await expect(restarted.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: false });
+    await expect(restarted.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true, credentialScope: 'system-shared' });
+    await expect(restarted.getAccessToken()).resolves.toBe('system-token');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(beforeSystem);
 
     const invalidatedAdapter = new DesktopCodexAuthAdapter();
     invalidatedAdapter.setOnInvalidatedBroadcast(onInvalidated);
@@ -472,6 +469,87 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(beforeSystem);
     expect(fs.readFileSync(localAuth, 'utf8')).toBe(beforeLocal);
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+  });
+
+  it.each([false, true])('preserves native credentials across disconnect and reconnect (packaged=%s)', async (packaged) => {
+    const { codexHome, systemAuth, localAuth } = fixture();
+    h.isPackaged = packaged;
+    h.dataOwnerId = 'owner-a';
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.linkSync(systemAuth, localAuth);
+    const before = fs.readFileSync(systemAuth);
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
+    await adapter.logout();
+    const restarted = new DesktopCodexAuthAdapter();
+    await expect(restarted.getAccessToken()).resolves.toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(before);
+    expect(fs.readFileSync(localAuth)).toEqual(before);
+    await expect(restarted.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
+    await expect(restarted.getAccessToken()).resolves.toBe('system-token');
+    expect(fs.readFileSync(systemAuth)).toEqual(before);
+    const bindings = JSON.parse(fs.readFileSync(path.join(h.userDataDir, 'native-provider-auth.json'), 'utf8'));
+    expect(bindings.sources.openai).toBe('native-harness-inherited');
+    expect(bindings.selfAuthorized?.openai).toBeUndefined();
+  });
+
+  it('disconnects shared Dev when its credential path is also the Release path', async () => {
+    const { releaseAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    h.userDataDir = path.dirname(path.dirname(releaseAuth));
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(releaseAuth, JSON.stringify({ tokens: { access_token: 'release-token', account_id: 'release-account' } }));
+    bindReleaseOpenAi(releaseAuth);
+    const before = fs.readFileSync(releaseAuth);
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.logout();
+    expect(fs.readFileSync(releaseAuth)).toEqual(before);
+    const restarted = new DesktopCodexAuthAdapter();
+    await expect(restarted.getAccessToken()).resolves.toBeNull();
+    await expect(restarted.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
+    expect(fs.readFileSync(releaseAuth)).toEqual(before);
+  });
+
+  it('keeps a user disconnect durable when read-only invalidation cleanup is already running', async () => {
+    const { systemAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState();
+    const before = fs.readFileSync(systemAuth);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const cleanup = vi.fn(() => gate);
+    adapter.setOnLogoutSuccess(cleanup);
+    const invalidation = adapter.logout({ preserveInvalidatedReason: true });
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalled());
+    const disconnect = adapter.logout();
+    release();
+    await Promise.all([invalidation, disconnect]);
+    await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(before);
+  });
+
+  it('cancel before local reconnect leaves the durable disconnect intact', async () => {
+    const { systemAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const before = fs.readFileSync(systemAuth);
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    adapter.setOnLogoutSuccess(() => gate);
+    const disconnect = adapter.logout();
+    const reconnect = adapter.triggerLogin({ mode: 'local' });
+    adapter.cancelLogin();
+    release();
+    await disconnect;
+    await expect(reconnect).resolves.toMatchObject({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(before);
   });
 
   it('dev 默认只读的 unproven 失效只保留内存边界', async () => {

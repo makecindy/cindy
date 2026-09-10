@@ -13,6 +13,19 @@ function createMakerStub(methods: Partial<Maker>): Maker {
 }
 
 describe('maker auth IPC handlers', () => {
+  it('rejects a stale owner before disconnecting any account', async () => {
+    const harness = new IpcHarness();
+    const logoutAgent = vi.fn();
+    registerMakerAuthHandlers(harness, createMakerStub({ logoutAgent }), vi.fn(), () => null);
+    await expect(
+      harness.invoke(MAKER_INVOKE.AUTH_LOGOUT, 'codex', {
+        dataOwnerId: 'stale-owner',
+        ownerGeneration: -1,
+      }),
+    ).rejects.toThrow();
+    expect(logoutAgent).not.toHaveBeenCalled();
+  });
+
   it('delegates auth state lookup to Maker', async () => {
     const harness = new IpcHarness();
     const getAgentAuthState = vi.fn().mockResolvedValue({ authenticated: true });

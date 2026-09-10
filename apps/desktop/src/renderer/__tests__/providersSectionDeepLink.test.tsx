@@ -78,7 +78,7 @@ vi.mock('@/hooks/useModelAccessStatus', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn() }),
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -126,6 +126,8 @@ vi.mock('@/components/settings/AddProviderWizard', () => ({
     return React.createElement('div', { 'data-testid': 'wizard-stub' });
   },
 }));
+
+import { updateCustomProvider } from '@/lib/customProviders';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
@@ -182,6 +184,9 @@ beforeEach(() => {
   ];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
+      setProviderPresentation: vi.fn(async () => ({ ok: true })),
+      auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
       setProviderOrder: vi.fn(async () => ({ ok: true })),
@@ -196,6 +201,18 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  it('does not rediscover a deleted local Codex provider into the settings list', async () => {
+    providersState.providers.push(makeProvider('openai', {
+      name: 'Deleted local account', removed: true, imageModels: [{ id: 'image', name: 'Image' }],
+    }));
+    vi.mocked(window.electronAPI.maker.scanLocalCli).mockResolvedValue({ detections: [{
+      cli: 'codex-cli', providerId: 'openai', installed: true, loggedIn: true, sharedWithCindy: false,
+    }] });
+    renderAt('?tab=providers');
+    await waitFor(() => expect(window.electronAPI.maker.scanLocalCli).toHaveBeenCalled());
+    expect(screen.queryByText('Deleted local account')).toBeNull();
+  });
+
   it.each([true, false])(
     'keeps a native Codex account without models visible (connected=%s)',
     async (connected) => {
@@ -256,10 +273,11 @@ describe('ProvidersSection — 深链定位', () => {
       'settings.providers.custom.deleteAria',
     ]);
     fireEvent.click(within(menu).getByText('settings.providers.pill.rename'));
-    expect(await screen.findByTestId('custom-provider-dialog-stub')).toBeTruthy();
-    expect(customDialogSpy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ initial: expect.objectContaining({ id: 'openai-work' }) }),
-    );
+    await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
+      { providerId: 'openai-work', action: 'rename', name: 'Work account', dataOwnerId: 'owner', ownerGeneration: 1 },
+    ));
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(customDialogSpy).not.toHaveBeenCalled();
   });
 
   it('API key presence is configured rather than authenticated', async () => {
@@ -285,7 +303,7 @@ describe('ProvidersSection — 深链定位', () => {
     const actions = await screen.findByTestId('provider-detail-actions');
     expect(within(actions).getByText('settings.providers.pill.configured')).toBeTruthy();
     expect(within(actions).queryByText('settings.providers.pill.connected')).toBeNull();
-    expect(within(actions).queryByRole('button')).toBeNull();
+    expect(within(actions).getByRole('button', { name: 'settings.providers.button.disconnect' })).toBeTruthy();
   });
 
   it('added OpenAI recovery overrides a stale connected snapshot', async () => {
@@ -344,7 +362,7 @@ describe('ProvidersSection — 深链定位', () => {
     ).toBeTruthy();
   });
 
-  it('Dev 只读复用 OpenAI 登录态时保持已连接且不能断开', async () => {
+  it('Dev 只读复用 OpenAI 登录态允许只断开 Cindy', async () => {
     codexAuthState.state = {
       kind: 'authenticated',
       authSource: 'oauth',
@@ -364,9 +382,9 @@ describe('ProvidersSection — 深链定位', () => {
     const disconnect = await screen.findByRole('button', {
       name: 'settings.providers.button.disconnect',
     });
-    expect((disconnect as HTMLButtonElement).disabled).toBe(true);
+    expect((disconnect as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(disconnect);
-    expect(codexAuthActions.logout).not.toHaveBeenCalled();
+    await waitFor(() => expect(codexAuthActions.logout).toHaveBeenCalled());
   });
 
   it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
@@ -651,7 +669,10 @@ describe('ProvidersSection — 深链定位', () => {
     ];
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       maker: {
-        scanLocalCli: vi.fn(async () => ({ detections: [] })),
+        listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
+      setProviderPresentation: vi.fn(async () => ({ ok: true })),
+      auth: { logout: codexAuthActions.logout },
+      scanLocalCli: vi.fn(async () => ({ detections: [] })),
         requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
         providerOAuthLogin,
         providerOAuthCancel,

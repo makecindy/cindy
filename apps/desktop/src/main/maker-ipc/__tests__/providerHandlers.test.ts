@@ -3811,3 +3811,51 @@ describe('model context limit IPC', () => {
     expect(deps.writeModelContextLimit).not.toHaveBeenCalled();
   });
 });
+
+
+describe('provider connection management', () => {
+  it('renames only the stored name and preserves runtimes, models and credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config: CustomProviderConfig = { ...validConfig };
+    const deps = makeDeps({ listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }) });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    const before = await getCustomProvider(config.id);
+    vi.mocked(deps.oauthCancel).mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, { providerId: config.id, action: 'rename', name: 'Work account', dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect(await getCustomProvider(config.id)).toEqual({ ...before, name: 'Work account' });
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+  });
+
+  it('disconnects all API runtime credentials while retaining connection configuration', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig, { codex: 'fixture-key' });
+    const before = await getCustomProvider(validConfig.id);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, validConfig.id);
+    expect(await getCustomProvider(validConfig.id)).toEqual(before);
+    for (const agent of ['claude-code', 'codex', 'pi']) {
+      expect(deps.removeCustomProviderKey).toHaveBeenCalledWith(validConfig.id, agent);
+      expect(deps.removeCustomProviderHeaders).toHaveBeenCalledWith(validConfig.id, agent);
+    }
+    expect(deps.oauthLogout).not.toHaveBeenCalled();
+  });
+
+  it.each([MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT])('rejects stale confirmation owner before %s mutates anything', async (channel) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({ currentOwnerSession: () => ({ dataOwnerId: 'owner-b', generation: 2 }) });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    const before = await getCustomProvider(validConfig.id);
+    await expect(harness.invoke(channel, validConfig.id, { dataOwnerId: 'owner-a', ownerGeneration: 1 })).rejects.toThrow('active account changed');
+    expect(await getCustomProvider(validConfig.id)).toEqual(before);
+    expect(deps.oauthLogout).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+  });
+});

@@ -189,9 +189,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     const onDone = vi.fn();
     const { unmount } = render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id }]}
       entry={{ kind: 'builtin', providerId: id }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
-    fireEvent.click(screen.getByText(id === 'openai'
-      ? 'settings.providers.openai.addIndependentAccount'
-      : 'settings.providers.button.authorize'));
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
     await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
     const [accountId, options] = providerOAuthLogin.mock.calls[0];
     if (exit === 'unmount') unmount();
@@ -226,7 +224,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     const onDone = vi.fn();
     render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id, connected: true }]}
       entry={{ kind: 'builtin', providerId: id }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
-    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
     await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
     const [accountId, options] = providerOAuthLogin.mock.calls[0];
     fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
@@ -240,7 +238,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id, connected: true }]}
       onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
     fireEvent.click(await screen.findByText(id));
-    fireEvent.click(await screen.findByText('settings.providers.button.authorize'));
+    fireEvent.click(await screen.findByText('settings.providers.openai.addIndependentAccount'));
     await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
     const accountId = providerOAuthLogin.mock.calls[0][0];
     expect(accountId).toMatch(new RegExp(`^${id}-`));

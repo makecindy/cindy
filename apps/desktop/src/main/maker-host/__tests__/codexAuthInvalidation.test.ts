@@ -297,7 +297,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('cleans a matching local credential left by a crash after the disconnect marker committed', () => {
+  it('preserves a matching credential while restoring a committed disconnect', () => {
     const { codexHome, systemAuth, localAuth } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'old-local-token' } }));
@@ -315,7 +315,7 @@ describe('Codex system credential suppression marker', () => {
       suppressReconcile: true,
       invalidatedReason: null,
     });
-    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(fs.existsSync(localAuth)).toBe(true);
   });
 
   it('suppresses a matching local credential after server-side token invalidation', () => {
@@ -992,9 +992,7 @@ describe('Codex system credential suppression marker', () => {
     const adapter = new DesktopCodexAuthAdapter();
     const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
     adapter.setOnLogoutSuccess(onLogoutSuccess);
-    const rmSpy = vi
-      .spyOn(fs.promises, 'rm')
-      .mockRejectedValueOnce(new Error('EPERM: file is locked'));
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
 
     await expect(adapter.logout()).resolves.toBeUndefined();
     expect(onLogoutSuccess).toHaveBeenCalledTimes(1);
@@ -1582,11 +1580,13 @@ describe('Codex system credential suppression marker', () => {
     const adapter = new DesktopCodexAuthAdapter();
     const cleanupGate = deferred();
     const broadcast = vi.fn().mockResolvedValue(undefined);
-    adapter.setOnLogoutSuccess(() => cleanupGate.promise);
+    const cleanup = vi.fn(() => cleanupGate.promise);
+    adapter.setOnLogoutSuccess(cleanup);
     adapter.setOnInvalidatedBroadcast(broadcast);
 
     const explicitLogout = adapter.logout();
-    await vi.waitFor(() => expect(fs.existsSync(localAuth)).toBe(false));
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalled());
+    expect(fs.existsSync(localAuth)).toBe(true);
     const invalidation = adapter.invalidate('token_invalidated');
     cleanupGate.resolve();
 

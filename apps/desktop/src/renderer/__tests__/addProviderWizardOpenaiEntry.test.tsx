@@ -96,6 +96,7 @@ beforeEach(() => {
   delete codexState.authSource;
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      auth: { triggerLogin: vi.fn(async () => ({ authenticated: true, authSource: 'oauth', credentialScope: 'system-shared' })) },
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -125,6 +126,15 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
     expect(screen.getByText('settings.providers.openai.useLocalAccount')).not.toBeNull();
+  });
+
+  it('explicitly reconnects the existing local account without browser authorization', async () => {
+    const onDone = vi.fn();
+    renderWizard('openai', onDone);
+    fireEvent.click(screen.getByText('settings.providers.openai.useLocalAccount'));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
+    expect(window.electronAPI.maker.auth.triggerLogin).toHaveBeenCalledWith('codex', { mode: 'local' });
+    expect(window.electronAPI.maker.providerOAuthLogin).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -160,7 +170,8 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     renderWizard('anthropic', onDone);
 
     expect(screen.getByText('settings.providers.wizard.titleWith')).not.toBeNull();
-    expect(screen.getByText('settings.providers.button.authorize')).not.toBeNull();
+    expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
+    expect(screen.getByText('settings.providers.localAccount.useClaude')).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
   });
 });
