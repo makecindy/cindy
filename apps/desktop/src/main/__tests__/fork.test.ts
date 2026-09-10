@@ -1194,7 +1194,13 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
-  it('forks a historical Claude node from the parked native session instead of the current Codex thread', async () => {
+  it.each([
+    { route: 'current Codex thread', agentKind: 'codex', model: 'gpt-5.4', providerId: 'xd', expectedMarker: null },
+    { route: 'different engine', agentKind: 'pi', model: 'claude-sonnet-4-6', providerId: null, expectedMarker: null },
+    { route: 'different model', agentKind: 'cc', model: 'claude-opus-4-6', providerId: null, expectedMarker: null },
+    { route: 'different provider', agentKind: 'cc', model: 'claude-sonnet-4-6', providerId: 'xd', expectedMarker: null },
+    { route: 'same route', agentKind: 'cc', model: 'claude-sonnet-4-6', providerId: null, expectedMarker: 1000000 },
+  ])('forks historical Claude history with $route window provenance', async ({ agentKind, model, providerId, expectedMarker }) => {
     const target = makeMessageRow({
       id: 'historical-assistant',
       clientId: 'historical-assistant-cid',
@@ -1213,8 +1219,11 @@ describe('forkSessionAtMessage', () => {
     });
     selectQueue.push([
       makeSourceRow({
-        agentKind: 'codex',
-        model: 'gpt-5.4',
+        agentKind,
+        model,
+        providerId,
+        contextWindow: 1000000,
+        contextWindowRuntime: 1000000,
         sdkSessionId: 'current-codex-thread',
       }),
     ]);
@@ -1236,6 +1245,7 @@ describe('forkSessionAtMessage', () => {
           fromAgentKind: 'cc',
           toAgentKind: 'codex',
           fromModel: 'claude-sonnet-4-6',
+          fromProviderId: null,
           fromSdkSessionId: 'parked-claude-session',
           handoff: 'handoff',
         }),
@@ -1269,6 +1279,12 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.agentKind).toBe('cc');
     expect(txArgs.newSession.model).toBe('claude-sonnet-4-6');
     expect(txArgs.newSession.providerId).toBeNull();
+    expect(txArgs.newSession.contextWindowRuntime).toBe(expectedMarker);
+    const projected = projectSessionContextWindow({
+      contextWindow: txArgs.newSession.contextWindow as number,
+      contextWindowRuntime: txArgs.newSession.contextWindowRuntime as number | null,
+    }, () => 200000);
+    expect(projected.contextWindow).toBe(expectedMarker ?? 200000);
   });
 
   it.each([false, true])('restores the provider snapshot from a new historical switch boundary (recovery=%s)', async (recovery) => {
