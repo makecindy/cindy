@@ -735,7 +735,14 @@ describe('modelVisibilityPrefs store', () => {
   it('旧配置损坏时不把未知模型自动开启', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', '{ not valid json');
     const { isModelEnabled } = await loadModuleForOwner();
-    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(true);
+    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(false);
+  });
+
+  it('owner-scoped 配置损坏时不把目录默认当成开启', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', '{ not valid json');
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    const { isModelEnabled } = await loadModuleForOwner();
+    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8', defaultEnabled: true })).toBe(false);
   });
 
   it('脏数据条目(value 非 boolean)被过滤', async () => {
