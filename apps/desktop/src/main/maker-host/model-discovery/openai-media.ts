@@ -75,14 +75,34 @@ function displayName(id: string): string {
     .join(' ');
 }
 
+function architectureModalities(
+  item: Record<string, unknown>,
+  side: 'input' | 'output',
+): Set<string> | null {
+  const architecture = item.architecture as Record<string, unknown> | undefined;
+  const key = `${side}_modalities`;
+  const camel = `${side}Modalities`;
+  return asModalities(item[key] ?? item[camel] ?? architecture?.[key]);
+}
+
 function isImageModel(id: string, item: Record<string, unknown>): boolean {
-  const architecture = item.architecture as { output_modalities?: unknown } | undefined;
-  const outputs = asModalities(
-    item.output_modalities ?? item.outputModalities ?? architecture?.output_modalities,
-  );
+  const outputs = architectureModalities(item, 'output');
   if (outputs?.has('video') && !outputs.has('image')) return false;
   if (outputs?.has('image')) return true;
   return categorize(id) === 'image';
+}
+
+/** Official /v1/models rarely lists inputs. Unknown and DALL·E stay generate-only. */
+function imageInputModalities(id: string, item: Record<string, unknown>): string[] {
+  const inputs = architectureModalities(item, 'input');
+  if (inputs) {
+    const out: string[] = [];
+    if (inputs.has('text')) out.push('text');
+    if (inputs.has('image')) out.push('image');
+    return out.length > 0 ? out : ['text'];
+  }
+  const bare = id.replace(/^openai\//, '');
+  return /^gpt-image-/i.test(bare) ? ['text', 'image'] : ['text'];
 }
 
 function itemId(item: unknown): string | null {
@@ -126,7 +146,11 @@ export function mapOpenAiMediaModels(raw: unknown): MediaModel[] | null {
     const id = rawId.startsWith('openai/') ? rawId : `openai/${rawId}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, name: itemName(entry, rawId) });
+    out.push({
+      id,
+      name: itemName(entry, rawId),
+      modalities: { input: imageInputModalities(rawId, rec), output: ['image'] },
+    });
   }
   const undated = new Set(
     out

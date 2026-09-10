@@ -33,6 +33,9 @@ function modelsList(ids: string[]): string {
   });
 }
 
+const editModalities = { input: ['text', 'image'], output: ['image'] };
+const generateModalities = { input: ['text'], output: ['image'] };
+
 describe('mapOpenAiMediaModels', () => {
   it('keeps image models from a mixed /v1/models list and prefixes openai/', () => {
     expect(
@@ -46,9 +49,21 @@ describe('mapOpenAiMediaModels', () => {
         ],
       }),
     ).toEqual([
-      { id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' },
-      { id: 'openai/gpt-image-2.5-flare', name: 'GPT Image 2.5 Flare' },
-      { id: 'openai/dall-e-3', name: 'DALL·E 3' },
+      {
+        id: 'openai/gpt-image-2.5-sunburst',
+        name: 'GPT Image 2.5 Sunburst',
+        modalities: editModalities,
+      },
+      {
+        id: 'openai/gpt-image-2.5-flare',
+        name: 'GPT Image 2.5 Flare',
+        modalities: editModalities,
+      },
+      {
+        id: 'openai/dall-e-3',
+        name: 'DALL·E 3',
+        modalities: generateModalities,
+      },
     ]);
   });
 
@@ -62,7 +77,25 @@ describe('mapOpenAiMediaModels', () => {
           },
         ],
       }),
-    ).toEqual([{ id: 'openai/future-canvas', name: 'Future Canvas' }]);
+    ).toEqual([{
+      id: 'openai/future-canvas',
+      name: 'Future Canvas',
+      modalities: generateModalities,
+    }]);
+  });
+
+  it('keeps reported input_modalities so generate-only models are not offered for edit', () => {
+    expect(
+      mapOpenAiMediaModels({
+        data: [
+          { id: 'dall-e-3', input_modalities: ['text'], output_modalities: ['image'] },
+          { id: 'gpt-image-2', input_modalities: ['text', 'image'], output_modalities: ['image'] },
+        ],
+      }),
+    ).toEqual([
+      { id: 'openai/dall-e-3', name: 'DALL·E 3', modalities: generateModalities },
+      { id: 'openai/gpt-image-2', name: 'GPT Image 2', modalities: editModalities },
+    ]);
   });
 
   it('drops dated snapshots when the undated alias is present', () => {
@@ -129,8 +162,16 @@ describe('OpenAI media discovery lifecycle', () => {
     expect(h.applied).toEqual([
       {
         imageModels: [
-          { id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' },
-          { id: 'openai/gpt-image-2.5-flare', name: 'GPT Image 2.5 Flare' },
+          {
+            id: 'openai/gpt-image-2.5-sunburst',
+            name: 'GPT Image 2.5 Sunburst',
+            modalities: editModalities,
+          },
+          {
+            id: 'openai/gpt-image-2.5-flare',
+            name: 'GPT Image 2.5 Flare',
+            modalities: editModalities,
+          },
         ],
       },
     ]);
@@ -202,7 +243,11 @@ describe('OpenAI media discovery lifecycle', () => {
     await expect(h.discovery.refresh()).resolves.toBe(true);
     expect(h.applied).toEqual([
       {
-        imageModels: [{ id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' }],
+        imageModels: [{
+          id: 'openai/gpt-image-2.5-sunburst',
+          name: 'GPT Image 2.5 Sunburst',
+          modalities: editModalities,
+        }],
       },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -223,7 +268,11 @@ describe('OpenAI media discovery lifecycle', () => {
     await expect(h.discovery.refresh()).resolves.toBe(true);
     expect(h.applied).toEqual([
       {
-        imageModels: [{ id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' }],
+        imageModels: [{
+          id: 'openai/gpt-image-2.5-sunburst',
+          name: 'GPT Image 2.5 Sunburst',
+          modalities: editModalities,
+        }],
       },
     ]);
   });
