@@ -17,7 +17,9 @@ export function buildMobileHistoryRenderItems(options: {
     isLive: (row) => row.agentMeta?.isStreaming === true,
     pendingHandoff: options.pendingHandoff,
     streaming: options.streaming,
-    build: (rows, streaming) => buildMobileMessageRenderItems(rows, { isSessionStreaming: streaming, sessionId: options.sessionId }, options.taskUpdates),
+    build: (rows, streaming) => buildMobileMessageRenderItems(rows, {
+      isSessionStreaming: streaming, sessionId: options.sessionId, preserveSourceOrder: true,
+    }, options.taskUpdates),
     structure: {
       placeholder: (summary) => ({ id: summary.firstMessageId,
         clientId: summary.anchorClientId ?? summary.key.slice('work-'.length), sessionId: options.sessionId,

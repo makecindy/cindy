@@ -1,4 +1,5 @@
 import { CongestionSendBudget } from './congestionSendBudget.js';
+import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import {
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
@@ -4336,8 +4337,13 @@ export class DeviceLinkClient {
     const ageMs = pending
       ? Math.max(0, Math.round(this.monotonicNow() - pending.enqueuedAt))
       : -1;
+    const rawChannel = (pending?.envelope.payload as { channel?: unknown } | undefined)?.channel;
+    const channel = typeof rawChannel === 'string'
+      && (PUSH_FORWARD_ALLOWLIST.has(rawChannel) || REMOTE_INVOKE_ALLOWLIST.has(rawChannel))
+      ? rawChannel : 'unknown';
     return `dst=${dst.slice(0, 8)} seq=${seq}`
       + ` kind=${pending?.envelope.kind ?? 'missing'}`
+      + ` channel=${channel}`
       + ` request=${pending?.envelope.id?.slice(0, 8) ?? 'none'}`
       + ` attempts=${pending?.attempts ?? -1} sent=${pending?.sent ?? false} ageMs=${ageMs}`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`

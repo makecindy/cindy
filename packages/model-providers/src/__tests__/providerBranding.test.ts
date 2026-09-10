@@ -25,6 +25,21 @@ describe('provider branding', () => {
     }
   });
 
+  it.each(['https://chatgpt.com/backend-api/codex', 'https://api.openai.com/v1'])(
+    'uses the same OpenAI mark for independent account/API connections: %s', upstream => {
+      expect(resolveProviderLogoKind('openai-independent', {
+        codex: { upstream }, 'claude-code': { upstream }, pi: { upstream },
+      })).toBe(resolveProviderLogoKind('openai'));
+      expect(resolveProviderLogoKind('renamed-work-account', { codex: { upstream } })).toBe('openai');
+    },
+  );
+
+  it('does not brand lookalike ChatGPT endpoints as OpenAI', () => {
+    expect(resolveProviderLogoKind('custom', {
+      codex: { upstream: 'https://chatgpt.com.example.org/v1' },
+    })).toBeNull();
+  });
+
   it('uses a dedicated xAI mark', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);

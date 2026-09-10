@@ -89,6 +89,17 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect((state as { text: string }).text).toContain('设置 → 模型供应商');
   });
 
+  it('localizes a persisted output limit and keeps manual continuation available', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('limit', '2026-01-01T00:00:02.000Z', {
+        message: 'Pi reached the model output limit.', reason: 'output-limit',
+      })],
+    }));
+    expect(state).toMatchObject({
+      kind: 'error-tail', text: i18n.t('session.tail.outputLimit'), retryable: true,
+    });
+  });
+
   it('localizes a tool-loop tail from its stable reason and structured details', () => {
     const state = resolveSessionTailBanner(baseInput({
       messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', {

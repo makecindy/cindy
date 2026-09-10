@@ -1,4 +1,5 @@
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
+import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 /**
  * apps/desktop/src/main/maker-host
  *
@@ -10,6 +11,11 @@ import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
  */
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
+import { isCodexAccountProvider, codexAccountHome, setCodexAccountRetirement } from './codex-account-auth.js';
+import { CodexThreadLocations } from './codex-thread-locations.js';
+import { getActiveAppSession } from '../appSessionState.js';
+import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
@@ -387,7 +393,7 @@ const reviewAutoPermissionAction = createAutoPermissionReviewer({
 let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
-function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
+export function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
   if (_maker) refreshCatalogDerivedModels(_maker, getDesktopSelectableCatalog());
   try {
     providerAccessRuntimeRefreshListener?.();
@@ -1372,6 +1378,7 @@ export function getMaker(): Maker {
     ];
     _mcpProviders.codex = codexMcpProviders;
     const resolveDesiredCodexSubagentRoutingSignature = async (ctx: {
+      providerId?: string;
       credentialMode?: 'oauth-bearer' | 'gateway-key' | 'provider-oauth';
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
     }): Promise<string> => {
@@ -1385,6 +1392,7 @@ export function getMaker(): Maker {
         await getDesktopProviderService().listProviders({ allowSideEffects: false });
       const candidates = selectCodexSmartSubagentCandidates(providerViews, {
         allowChatGptOAuth: ctx.credentialMode === 'oauth-bearer',
+        oauthProviderId: ctx.providerId,
       });
       return codexSmartSubagentRoutingSignature(candidates, getActiveCatalogRevision())
         ?? 'default';
@@ -1466,8 +1474,8 @@ export function getMaker(): Maker {
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex',
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
-      resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow) =>
-        readCodexContextWindowInfo({ codexHome: getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
+      resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
+        readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
       resolveCodexThreadContextWindow: (providerId, modelId) => {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
         const override = source ? readModelContextLimit('codex', source, modelId) : null;
@@ -1475,8 +1483,27 @@ export function getMaker(): Maker {
           getDesktopSelectableCatalog(), 'codex', source, modelId,
         );
       },
-      onCodexLocalModelsListed: (models) => {
-        setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models), { source: 'list' });
+      isCodexAccountProvider,
+      isolateCodexAccountSessions: true,
+      onCodexLocalModelsListed: async (models, providerId) => {
+        const owner = getActiveAppSession();
+        const mapped = mapCodexAppServerModelsToCatalog(models);
+        if (providerId) {
+          const previous = await getCustomProvider(providerId);
+          if (getActiveAppSession().generation !== owner.generation) return;
+          if (!previous?.runtimes.codex || previous.auth?.native !== 'codex') return;
+          const next = { ...previous, runtimes: { codex: { ...previous.runtimes.codex,
+            models: mapped.map((model) => ({ id: model.id, name: model.name,
+              ...(model.contextWindowVerified ? { contextWindow: model.contextWindow } : {}),
+              discoveredMetadata: model.discoveredMetadata,
+            })),
+          } } };
+          const updated = await updateCustomProviderIfUnchanged(providerId, previous, next);
+          if (getActiveAppSession().generation !== owner.generation) return;
+          if (updated) await refreshCustomProvidersIntoCatalog();
+          return;
+        }
+        setDiscoveredCodexModels(mapped, { source: 'list' });
       },
       // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
       // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。
@@ -1539,7 +1566,11 @@ export function getMaker(): Maker {
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           throw error;
         }
-        const usesIsolatedProxy = isControlPlane || isReview || isCustomContext;
+        const accountProxyKey = ctx.accountHostKey;
+        const scopedProxyKey = accountProxyKey || customContextHostKey;
+        const usesScopedProxy = isCustomContext || !!accountProxyKey;
+        const usesIsolatedProxy = isControlPlane || isReview || usesScopedProxy;
+        const effectiveCodexHome = ctx.codexHome ?? getCodexHome();
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
         let buildSessionMcpConfig:
@@ -1571,7 +1602,7 @@ export function getMaker(): Maker {
         }
         const browserCompanion = isControlPlane || isReview
           ? null
-          : await prepareCodexBrowserCompanion({ codexHome: getCodexHome() });
+          : await prepareCodexBrowserCompanion({ codexHome: effectiveCodexHome });
         const browserCompanionSpawnConfig =
           resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
         mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);
@@ -1609,15 +1640,15 @@ export function getMaker(): Maker {
           await broadcastCodexRuntimeRoute();
         }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
-        const customContextProviderRoutes = isCustomContext
+        const customContextProviderRoutes = usesScopedProxy
           ? deriveCodexCustomProviderRoutes(getActiveCatalog())
           : [];
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        if (isCustomContext) {
+        if (usesScopedProxy) {
           await ensureCodexCustomContextProxyReady(
-            customContextHostKey,
+            scopedProxyKey,
             authInjection,
             customContextProviderRoutes,
           );
@@ -1626,8 +1657,8 @@ export function getMaker(): Maker {
         } else {
           await ensureCodexProxyReady();
         }
-        const ready = isCustomContext
-          ? isCodexCustomContextProxyHandleReady(customContextHostKey)
+        const ready = usesScopedProxy
+          ? isCodexCustomContextProxyHandleReady(scopedProxyKey)
           : usesIsolatedProxy
             ? isCodexControlPlaneProxyHandleReady(authInjection)
             : isCodexProxyHandleReady();
@@ -1639,19 +1670,19 @@ export function getMaker(): Maker {
           );
           // fallback OAuth 也是凭据隔离要求,不能被 maker-core 当成普通 MCP 降级吞掉。
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-          if (isCustomContext) {
-            await releaseCodexCustomContextProxy(customContextHostKey);
+          if (usesScopedProxy) {
+            await releaseCodexCustomContextProxy(scopedProxyKey);
           }
           throw error;
         }
         // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = isCustomContext
-          ? getCodexCustomContextProxyEndpoint(customContextHostKey)
+        const endpoint = usesScopedProxy
+          ? getCodexCustomContextProxyEndpoint(scopedProxyKey)
           : usesIsolatedProxy
             ? getCodexControlPlaneProxyEndpoint(authInjection)
             : getCodexProxyEndpoint();
         const codexCustomProviderRoutes =
-          isCustomContext && ready
+          usesScopedProxy && ready
             ? customContextProviderRoutes
             : !usesIsolatedProxy && ready
               ? deriveCodexCustomProviderRoutes(getActiveCatalog())
@@ -1678,9 +1709,10 @@ export function getMaker(): Maker {
             const providerViews: ProviderView[] =
               await getDesktopProviderService().listProviders({ allowSideEffects: false });
             smartSubagentConfig = prepareCodexSmartSubagentConfig({
-              codexHome: getCodexHome(),
+              codexHome: effectiveCodexHome,
               providerViews,
               allowChatGptOAuth: authInjection === 'oauth-bearer',
+              oauthProviderId: ctx.providerId,
               catalogRevision: getActiveCatalogRevision(),
             }) ?? undefined;
           } catch (err) {
@@ -1705,7 +1737,7 @@ export function getMaker(): Maker {
             }
             const customCatalog = await prepareCodexCustomContextCatalog({
               binaryPath: codexPath,
-              codexHome: getCodexHome(),
+              codexHome: effectiveCodexHome,
               modelId,
               contextWindow,
               ...(smartSubagentConfig
@@ -1721,7 +1753,7 @@ export function getMaker(): Maker {
               customContextCatalogArgs = customCatalog.extraArgs;
             }
           } catch (error) {
-            await releaseCodexCustomContextProxy(customContextHostKey);
+            await releaseCodexCustomContextProxy(scopedProxyKey);
             const fatal = error instanceof Error ? error : new Error(String(error));
             (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
             throw fatal;
@@ -1772,10 +1804,10 @@ export function getMaker(): Maker {
           ...(useOAuthBearer && ready
             ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
             : {}),
-          ...(isCustomContext
+          ...(usesScopedProxy
             ? {
                 onHostRetired: () =>
-                  releaseCodexCustomContextProxy(customContextHostKey),
+                  releaseCodexCustomContextProxy(scopedProxyKey),
               }
             : {}),
         };
@@ -1816,7 +1848,23 @@ export function getMaker(): Maker {
         });
       },
       unregisterCodexMcpThreadContext,
-      prepareCodexResumeSession: prepareExternalCodexSessionForResume,
+      prepareCodexResumeSession: async (threadId) => {
+        if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
+        const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
+        return await locations.read(threadId) ?? await prepareExternalCodexSessionForResume(threadId);
+      },
+      resolveCodexThreadStorageHome: async (threadId) => {
+        if (!getActiveAppSession().dataOwnerId) return;
+        return new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations')).readStorageHome(threadId, {
+          home: getCodexHome(),
+          prepare: prepareExternalCodexSessionForResume,
+        });
+      },
+      recordCodexThreadLocation: async (threadId, storageHome, rolloutPath) => {
+        if (!rolloutPath || !getActiveAppSession().dataOwnerId) return;
+        const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
+        await locations.record(threadId, rolloutPath, storageHome);
+      },
       registerCodexSystemPromptForThread: ({
         sessionId,
         threadId,
@@ -1892,6 +1940,13 @@ export function getMaker(): Maker {
     // 模块级回填 codexAgent 引用 —— restartCodexAfterAuthModeChange() 需要它在
     // API 模式切换 / api_key 变更时 dispose 重建 app-server (单例进程, 配置 spawn 冻入)。
     _codexAgent = codexAgent;
+    setCodexAccountRetirement(async (providerId) => {
+      const owner = getActiveAppSession().generation;
+      await codexAgent.disposeAccountHosts(providerId);
+      if (getActiveAppSession().generation !== owner) return;
+      await clearCodexAccountUsageSnapshot(providerId);
+      if (getActiveAppSession().generation === owner) refreshSelectableModelsAndBroadcast({ providerId });
+    });
 
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。

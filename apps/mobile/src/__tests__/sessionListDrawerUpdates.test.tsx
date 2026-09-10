@@ -329,9 +329,16 @@ describe("drawer selective updates", () => {
     ]);
     await render();
     expect(row("s1")?.textContent).toContain("host preview");
-    await act(async () =>
-      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]),
-    );
+    await act(async () => {
+      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]);
+    });
+    expect(row("s1")?.textContent).toContain("host preview");
+    await act(async () => {
+      remoteSessionStore.markSessionMessagesSynced(
+        "s1",
+        session("s1", { preview: "host preview" }),
+      );
+    });
     expect(row("s1")?.textContent).toContain("loaded preview");
     await act(async () => remoteSessionStore.setMessages("s1", []));
     expect(row("s1")?.textContent).toContain("host preview");

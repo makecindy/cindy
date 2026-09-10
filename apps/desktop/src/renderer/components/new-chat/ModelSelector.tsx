@@ -82,7 +82,7 @@ import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/model
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
   filterChatBridgedCodexProviders,
-  isChatBridgedCodexProvider,
+  isLocalOnlyProviderForAgent,
   isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
@@ -1299,7 +1299,7 @@ function ModelSelectorContentView({
     () =>
       excludeChatBridgedCodex
         ? (provider: ProviderView, agent: AgentKind): boolean =>
-            agent === 'codex' && isChatBridgedCodexProvider(provider)
+            isLocalOnlyProviderForAgent(provider, agent)
         : undefined,
     [excludeChatBridgedCodex],
   );
@@ -2830,6 +2830,7 @@ function ModelSelectorContentView({
             />
           </div>
           <UnifiedModelPanel
+            localProviderUsage={!deviceId && !providersOverride}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
@@ -4003,7 +4004,7 @@ export function ModelSelector({
         wrapperClassName="min-w-0 max-w-full shrink"
         panelClassName="flex min-h-0 flex-col p-0"
         // 宽度只进不退(2026-08-14 实测反馈):rail 筛选把内容变窄时面板宽度回缩,
-        // rail 图标在指针底下移位。高度照常双向跟随(底边锚定向上收)。
+        // rail 图标在指针底下移位。统一面板主体使用固定高度，仅随窗口可用空间收缩。
         stickyWidth
         panelAriaLabel={ariaLabel}
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}

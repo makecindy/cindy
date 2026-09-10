@@ -277,7 +277,7 @@ export function resolveDraftSessionProviderId({
   explicitProviderId,
   effectiveProviderId,
 }: DraftSessionProviderResolutionInput): string | null {
-  if (explicitProviderId && explicitProviderId === effectiveProviderId) {
+  if (explicitProviderId) {
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;

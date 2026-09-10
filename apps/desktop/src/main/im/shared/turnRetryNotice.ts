@@ -155,7 +155,7 @@ function toolLoopFailureNotice(data: unknown): string | null {
 }
 
 /**
- * 终态 error 事件的 data -> 渠道要展示的失败文案: 过载类换成上面那条可操作说明,
+ * 终态 error 事件的 data -> 渠道要展示的失败文案: 已知 reason 与过载类使用可操作说明,
  * 其它错误沿用上游原文。
  *
  * 单独抽出来是因为渠道侧有**两条**终态收口路径 —— 用户 turn 的 handleTurnErrorAsync
@@ -165,6 +165,9 @@ function toolLoopFailureNotice(data: unknown): string | null {
  * 不一定带 529)不被丢掉。
  */
 export function terminalErrorText(data: unknown): string {
+  if (data && typeof data === 'object' && 'reason' in data && data.reason === 'output-limit') {
+    return '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。';
+  }
   const record =
     data && typeof data === 'object'
       ? (data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown })

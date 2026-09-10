@@ -1293,8 +1293,7 @@
             "manual": "手動"
           },
           "toast": {
-            "title": "已自動加入詞典",
-            "titleMultiple": "已自動加入 {{count}} 個詞",
+            "title": "已加入詞典",
             "termsSummary": "{{terms}} 等 {{count}} 個詞",
             "automaticAdded": "已自動加入詞典：{{term}}",
             "automaticAddedMultiple": "已自動加入詞典：{{term}} 等 {{count}} 個詞",
@@ -1493,6 +1492,10 @@
       },
       "pill": {
         "connected": "已連線",
+        "configured": "已設定",
+        "disconnected": "未連線",
+        "connecting": "正在連線…",
+        "rename": "重新命名",
         "suspended": "已停用"
       },
       "button": {
@@ -1517,7 +1520,17 @@
         "reconnectRequired": "需要重新連線",
         "connect": "連線 ChatGPT",
         "reconnect": "重新連線 ChatGPT",
-        "cancelConnect": "取消連線"
+        "cancelConnect": "取消連線",
+        "accountSource": {
+          "local": "本機 Codex 帳號",
+          "oauth": "獨立登入帳號",
+          "unknown": "現有 OpenAI 連線"
+        },
+        "useLocalAccount": "使用本機 Codex 帳號",
+        "addIndependentAccount": "登入獨立帳號",
+        "accountSourcesDescription": "使用現有的本機 Codex 連線，或登入獨立儲存的帳號。兩種方式支援相同功能。",
+        "independentAccountDescription": "登入一個獨立儲存的 ChatGPT 帳號，或使用 API key 接入。",
+        "localUnavailable": "目前沒有可直接使用的本機連線。現有供應商繫結的帳號不會被替換。"
       },
       "xai": {
         "title": "xAI",
@@ -1526,7 +1539,7 @@
         "billingLabel": "SuperGrok 訂閱直連",
         "asset": {
           "weeklyTitle": "每週限額",
-          "weeklyUsed": "{{percent}}% 已使用",
+          "weeklyRemaining": "剩餘 {{percent}}%",
           "resetsAt": "{{at}} 重設",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "開啟 Grok 用量頁面"
@@ -1811,7 +1824,7 @@
         "subscription": "訂閱",
         "subscriptionProduct": "{{product}} 訂閱",
         "noResults": "無匹配模型",
-        "capabilityNote": "不支援 {{agent}}",
+        "capabilityNote": "尚未設定 {{agent}}",
         "refreshAria": "重新整理模型列表(僅新增，不改動現有)",
         "refreshBuiltinAria": "重新整理模型列表",
         "refreshingAria": "正在重新整理模型列表…",
@@ -1887,6 +1900,7 @@
           "engines": "引擎支援",
           "enginesHint": "相容模式需要轉換請求，預設關閉，可依需要開啟。",
           "engineUnsupported": "不支援",
+          "engineNotConfigured": "尚未設定",
           "engineNoFast": "無 Fast",
           "vision": {
             "vision": "支援",
@@ -2111,7 +2125,7 @@
         "back": "← 上一步",
         "finish": "完成新增",
         "cancel": "取消",
-        "useApiKey": "改用 API Key 接入",
+        "useApiKey": "API key 接入",
         "metaOAuthOrApi": "訂閱授權 · API Key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 連線",
@@ -2264,27 +2278,15 @@
           "cancel": "取消"
         }
       },
-      "imagesKey": {
-        "label": "影像生成 API key",
-        "placeholder": "貼上 OpenAI 平臺 API key",
-        "save": "儲存",
-        "clear": "清除",
-        "toast": {
-          "saved": "影像生成 API key 已儲存",
-          "saveFailed": "儲存影像生成 API key 失敗，請重試",
-          "cleared": "已清除影像生成 API key",
-          "clearFailed": "清除影像生成 API key 失敗"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 已使用",
+        "percentRemaining": "剩餘 {{percent}}%",
         "resetsAt": "{{at}} 重設",
         "claudePlanFallback": "Claude 訂閱",
-        "claudeWeekly": "7 天視窗 {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7 天窗口剩餘 {{percent}}%",
+        "scopedModel": "{{model}} 剩餘 {{percent}}%",
         "openClaudeUsage": "開啟用量頁面",
         "codexPlanFallback": "ChatGPT 訂閱",
-        "codexSecondary": "次級視窗 {{percent}}%",
+        "codexSecondary": "次級窗口剩餘 {{percent}}%",
         "codexResetCredits": "限額重設券 {{count}} 張"
       }
     },
@@ -6001,6 +6003,8 @@
     "modelWeeklyLabel": "{{model}} 週限",
     "usedPercent": "已用 {{percent}}%",
     "remainingPercent": "剩餘 {{percent}}%",
+    "resetIn": "{{duration}}後重置",
+    "resetPending": "等待重置資料更新",
     "resetAt": "{{at}} 重置",
     "noWindows": "暫無配額視窗資料",
     "limitRejected": "已觸發套餐限額，請求可能被拒絕",
@@ -11266,6 +11270,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "審核未通過",
+      "rejectedDesc": "該版本未通過審核，請根據以下回饋修改後重新發布。",
+      "rejectionReasonUnavailable": "該版本未通過審核，暫未提供具體原因。請聯絡審核方了解詳情。",
+      "rejectionReason": "拒審原因",
       "dismiss": "知道了",
       "passedTitle": "安全掃描通過",
       "passedDesc": "該版本已通過所有安全檢查，現已釋出到市場。",
@@ -11485,6 +11493,7 @@
       "qrExpired": "二維碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
       "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
+      "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",
       "permissionTightenInterruptFailed": "收緊權限時未能停止正在執行的任務，它可能會繼續免確認執行直到結束；如有需要請手動停止。",
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
       "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",

@@ -186,6 +186,7 @@ function sortedStringRecord(
 
 function oauthDescriptorSignature(config: CustomProviderConfig | null): string | null {
   if (config?.auth?.method !== 'oauth') return null;
+  if (config.auth.native) return `native:${config.auth.native}`;
   const oauth = config.auth.oauth;
   const common = {
     tokenUrl: oauth.tokenUrl,
@@ -251,6 +252,7 @@ export interface ProviderHandlerDeps {
   codexCustomProviderConfigSignature?(config: CustomProviderConfig): string;
   /** Force-retire the shared local Codex Host and hold its change guard before mutation. */
   prepareCodexCustomProviderHostChange?(): Promise<void>;
+  retireCodexAccount?(providerId: string): Promise<void>;
   /** Release the prepared Host guard after catalog/credential mutation commits. */
   finalizeCodexCustomProviderHostChange?(): Promise<void>;
   /** Release a prepared Host guard when persistence fails. */
@@ -1817,6 +1819,10 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(ownerAtIngress);
       const previous = await getCustomProvider(providerId);
       assertProviderMutationOwner(ownerAtIngress);
+      if (previous?.auth?.native === 'codex') {
+        await deps.retireCodexAccount?.(providerId);
+        assertProviderMutationOwner(ownerAtIngress);
+      }
       const codexHostChangeRequired = Boolean(
         previous && (deps.codexCustomProviderConfigSignature?.(previous) ?? '').length > 0,
       );
@@ -2028,6 +2034,7 @@ export function registerProviderHandlers(
   registry.handle(
     MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
     async (event, providerId: unknown, rawOptions?: unknown) => {
+      assertTrustedProviderMutationSender(event);
       const id = requireProviderId(providerId);
       const { ownerId } = requireProviderOAuthLoginOptions(rawOptions);
       const sender = providerOAuthRendererSender(event);
@@ -2086,7 +2093,8 @@ export function registerProviderHandlers(
       }
     },
   );
-  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, async (_event, providerId: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, async (event, providerId: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const id = requireProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
     const generation = beginOAuthMutation(id);
@@ -2133,6 +2141,7 @@ export function registerProviderHandlers(
   registry.handle(
     MAKER_INVOKE.PROVIDER_OAUTH_CANCEL,
     async (event, providerId: unknown, rawOptions?: unknown) => {
+      assertTrustedProviderMutationSender(event);
       const id = requireProviderId(providerId);
       const { releaseOwner, ownerId } = requireProviderOAuthCancelOptions(rawOptions);
       if (releaseOwner) {

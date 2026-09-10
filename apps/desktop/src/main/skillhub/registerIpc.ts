@@ -9,14 +9,14 @@ import path from 'node:path';
 import type { Maker } from '@cindy/maker-core';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { getCurrentDataOwnerId } from '../authManager';
-import { isAppSessionBoundaryPending } from '../appSessionState';
+import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState';
 import { ensureReady as ensureLocalDbReady } from '../localDb';
 import {
   getCurrentDbClientSnapshot,
   type CurrentDbClientSnapshot,
 } from '../localDb/client/current.js';
 import { createLogger } from '../logger';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSkillhubCatalogScope } from '../../shared/skillhubCatalog.js';
 import { computeFolderHashDetailed } from './folderHash';
@@ -24,7 +24,7 @@ import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidatio
 import * as importLocalSkill from './importLocalSkill';
 import * as installService from './installService';
 import { SkillhubMarketService, skillhubIpcError } from './marketService';
-import type { PublishParams } from './publishService';
+import type { PublishParams, PublishProgressEvent } from './publishService';
 import { SkillPublishService } from './publishService';
 import { reconcileMineRegistry } from './reconcileMineRegistry';
 import { registryService } from './registry';
@@ -62,6 +62,35 @@ interface ScannedSkillGrant {
     root: string;
     projectRootKey?: string;
   }>;
+}
+
+/** Bound authenticated review reads without changing native/team catalog selection. */
+function reviewReadParams(value: unknown, nameField: 'name' | 'slug') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throwIpcError('INVALID_PARAMS', 'Invalid Skill review request');
+  }
+  const params = value as Record<string, unknown>;
+  const slug = params[nameField];
+  // Existing scan callers may use an empty optional version to request the latest release.
+  const version = params.version === '' ? undefined : params.version;
+  const catalogScope = params.catalogScope;
+  const validText = (text: unknown): text is string => typeof text === 'string'
+    && text.trim().length > 0 && text.length <= 128 && !/[\u0000-\u001f\u007f]/.test(text);
+  if (!validText(slug) || (version !== undefined && !validText(version))
+    || (catalogScope !== undefined && !isSkillhubCatalogScope(catalogScope))) {
+    throwIpcError('INVALID_PARAMS', 'Invalid Skill review request');
+  }
+  return {
+    slug,
+    ...(version !== undefined ? { version } : {}),
+    ...(catalogScope !== undefined ? { catalogScope } : {}),
+  };
+}
+
+function assertReviewOwnerCurrent(ownerScope: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
+    throwIpcError('PRECONDITION_FAILED', 'Skill review request belongs to an inactive account');
+  }
 }
 
 export interface RegisterSkillhubIpcOptions {
@@ -312,10 +341,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     }
   };
 
-  const broadcastPublishProgress = (payload: unknown) => {
+  const broadcastPublishProgress = (payload: PublishProgressEvent) => {
+    if (isAppSessionBoundaryPending()) return;
+    const stampedPayload = { ...payload, ownerStamp: getActiveDataOwnerPushStamp() };
     for (const win of BrowserWindow.getAllWindows()) {
       try {
-        if (!win.isDestroyed()) win.webContents.send('skillhub:publish-progress', payload);
+        if (isTrustedAppRendererWindow(win)) win.webContents.send('skillhub:publish-progress', stampedPayload);
       } catch {
         // Window teardown can race with background scan reconciliation.
       }
@@ -495,9 +526,11 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:rename-local',
     async (event, params: { absolutePath: string; newName: string }) => {
+      const ownerScope = activeOwnerScopeKey();
+      const canMutate = () => ownerScope === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
       if (!await hasScannedSkillGrant(event, params.absolutePath)) return scanGrantDenied();
-      const ownerId = getCurrentDataOwnerId();
-      const result = await renameLocalSkill(params, () => ownerId === getCurrentDataOwnerId() && !isAppSessionBoundaryPending());
+      if (!canMutate()) return { success: false, error: 'Skill mutation context changed' };
+      const result = await renameLocalSkill(params, canMutate);
       if (result.success) broadcastLocalChange();
       return result;
     },
@@ -579,9 +612,15 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:list-published-versions',
-    async (_event, { name, catalogScope }: { name: string; catalogScope?: unknown }) => {
+    async (event, params: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const { slug, catalogScope } = reviewReadParams(params, 'name');
+      const ownerScope = activeOwnerScopeKey();
       try {
-        return await marketService.listPublishedVersions(name, isSkillhubCatalogScope(catalogScope) ? catalogScope : undefined);
+        assertReviewOwnerCurrent(ownerScope);
+        const result = await marketService.listPublishedVersions(slug, catalogScope);
+        assertReviewOwnerCurrent(ownerScope);
+        return result;
       } catch (err) {
         return skillhubIpcError(err);
       }
@@ -705,13 +744,15 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 查询发布后的安全扫描状态（renderer 轮询用）
   ipcMain.handle(
     'skillhub:get-scan-status',
-    async (_event, params: { slug: string; version?: string; catalogScope?: unknown }) => {
+    async (event, params: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const request = reviewReadParams(params, 'slug');
+      const ownerScope = activeOwnerScopeKey();
       try {
-        return await marketService.getScanStatus({
-          slug: params.slug,
-          ...(params.version !== undefined ? { version: params.version } : {}),
-          ...(isSkillhubCatalogScope(params.catalogScope) ? { catalogScope: params.catalogScope } : {}),
-        });
+        assertReviewOwnerCurrent(ownerScope);
+        const result = await marketService.getScanStatus(request);
+        assertReviewOwnerCurrent(ownerScope);
+        return result;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, error: message, status: 'unknown' };

@@ -1,3 +1,4 @@
+import { providerCatalogId } from "./provider-identity.js";
 import type { ModelRegistry } from "./modelAccessBean.js";
 import type { ModelMetadata } from "./modelMetadataLayers.js";
 import {
@@ -49,11 +50,14 @@ export function projectProviderMediaModels(
 ): Provider {
   if (!registry || registry.schemaVersion < 4) return provider;
   const next = { ...provider };
+  const catalogId = providerCatalogId(provider);
+  const catalogModelId = (id: string) => catalogId !== provider.id && id.startsWith(`${provider.id}/`)
+    ? `${catalogId}/${id.slice(provider.id.length + 1)}` : id;
   const declared = registry.models.flatMap((entry) =>
     entry.routes
       .filter(
         (route) =>
-          route.providerId === provider.id && route.agents.length === 0,
+          route.providerId === catalogId && route.agents.length === 0,
       )
       .map((route) => ({
         entry,
@@ -91,19 +95,19 @@ export function projectProviderMediaModels(
         (model) =>
           !declared.some(
             ({ entry, route }) =>
-              route.modelId === model.id && entry.status === "retired",
+              route.modelId === catalogModelId(model.id) && entry.status === "retired",
           ),
       )
       .map((model): ProviderMediaModel => {
         const metadata = resolveModelMetadata(
           registry,
-          provider.id,
-          model.id,
+          catalogId,
+          catalogModelId(model.id),
           options.live ? pickModelMetadata(model) : model.discoveredMetadata,
           options.userMetadata?.(model.id, model),
         );
         const nativeApi = declared.find(
-          ({ route }) => route.modelId === model.id,
+          ({ route }) => route.modelId === catalogModelId(model.id),
         )?.entry.nativeApi;
         // Preserve the source's real ID, payment state and disable flag.
         return {

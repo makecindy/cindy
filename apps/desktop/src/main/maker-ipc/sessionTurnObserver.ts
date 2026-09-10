@@ -3,6 +3,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { verdictForModelRoute } from '../maker-host/model-route-guard-live.js';
+import { describeModelRouteRejection } from '../maker-host/model-route-guard.js';
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
 
 export interface InstallSessionTurnObserverDeps {
@@ -43,6 +44,9 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         }
         if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
           throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+        }
+        if (verdict.kind === 'reject' && verdict.reason === 'explicit-source-unavailable') {
+          throwIpcError('INVALID_PARAMS', describeModelRouteRejection(verdict.reason, model, getSessionProvider(session.id)));
         }
       }
       deps.silentStopTurnLeaseGate.supersede(session.id);

@@ -66,6 +66,8 @@ import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
+import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
+import { buildHomeProjectMachineIdentities, type HomeProjectMachineIdentity } from '@/session/homeProjectMachineIdentity';
 import {
   HomeNativeStackHeader,
   NativePullDownMenu,
@@ -203,7 +205,6 @@ import {
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
-  buildSessionMessagePreviewIndex,
   formatRemoteSessionSidebarTime,
   getRemoteSessionPreviewCollapse,
   type RemoteAutomationSessionGroup,
@@ -386,7 +387,6 @@ function HomeScreenContent() {
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
-  const homePreviewCacheRef = useRef(new Map<string, { messages: readonly unknown[]; preview?: string }>());
   const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
@@ -1643,24 +1643,7 @@ function HomeScreenContent() {
   const messagePreviewIndexRaw = useMemo(() => {
     // 普通首页的预览由可见行按 session 订阅。只有搜索需要跨全部任务建立消息索引。
     if (!normalizedSearchQuery) return new Map<string, string>();
-    const next = new Map<string, string>();
-    const activeIds = new Set<string>();
-    for (const session of sessions) {
-      activeIds.add(session.id);
-      const messages = remoteSessionStore.getMessages(session.id);
-      const cached = homePreviewCacheRef.current.get(session.id);
-      if (cached?.messages === messages) {
-        if (cached.preview) next.set(session.id, cached.preview);
-        continue;
-      }
-      const preview = buildSessionMessagePreviewIndex([session.id], () => messages).get(session.id);
-      homePreviewCacheRef.current.set(session.id, { messages, preview });
-      if (preview) next.set(session.id, preview);
-    }
-    for (const sessionId of homePreviewCacheRef.current.keys()) {
-      if (!activeIds.has(sessionId)) homePreviewCacheRef.current.delete(sessionId);
-    }
-    return next;
+    return remoteSessionStore.getSessionListMessagePreviewIndex(sessions);
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
   const pendingInteractionIndexRaw = useMemo(() => {
@@ -1718,6 +1701,10 @@ function HomeScreenContent() {
       unnamedLabel: t('session.menu.unnamedTitle'),
     }),
     [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t],
+  );
+  const projectMachineIdentities = useMemo(
+    () => buildHomeProjectMachineIdentities(home, deviceConnectionStates),
+    [home, deviceConnectionStates],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2307,6 +2294,7 @@ function HomeScreenContent() {
       expandedAutomationGroups={expandedAutomationGroups}
       isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1 && sections.length > 1}
       item={item}
+      machineIdentity={item.kind === 'project' ? projectMachineIdentities.get(item.project.key) : undefined}
       nextIsBlock={isBlockHomeRow(section.data[index + 1])}
       onArchive={archiveSession}
       onOpenAutomationGroup={openAutomationGroup}
@@ -2355,6 +2343,7 @@ function HomeScreenContent() {
     toggleSessionPinned,
     homeScrollY,
     screenHeight,
+    projectMachineIdentities,
   ]);
 
   // 底部边到边:列表填满到物理屏底(内容滚到 home indicator 下方),用 inset 兜底而非靠 SafeAreaView 留白带。
@@ -3330,6 +3319,7 @@ function ProjectRow({
   expandedAutomationGroups,
   headerRefs,
   kind = 'project',
+  machineIdentity,
   onDragEnd,
   onDragMove,
   onDragStart,
@@ -3350,6 +3340,7 @@ function ProjectRow({
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, View>>;
   kind?: 'project' | 'dialogue';
+  machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
   onDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
@@ -3440,6 +3431,9 @@ function ProjectRow({
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
+  const displayTitle = machineIdentity && !machineIdentity.hideLabel
+    ? `${project.title} (${machineIdentity.displayLabel})`
+    : project.title;
   const reorderable = kind === 'project' && !!onDragStart && !!onDragMove && !!onDragEnd;
   const dragGesture = useMemo(() => {
     if (!onDragStart || !onDragMove || !onDragEnd || kind !== 'project') return null;
@@ -3453,7 +3447,7 @@ function ProjectRow({
           absoluteY: event.absoluteY,
           count: project.sessionCount,
           key: project.key,
-          title: project.title,
+          title: displayTitle,
         });
       })
       .onUpdate((event) => {
@@ -3462,13 +3456,13 @@ function ProjectRow({
       .onFinalize(() => {
         runOnJS(finish)();
       });
-  }, [kind, onDragEnd, onDragMove, onDragStart, project.key, project.sessionCount, project.title]);
+  }, [displayTitle, kind, onDragEnd, onDragMove, onDragStart, project.key, project.sessionCount]);
   const header = (
     <Pressable
       accessibilityHint={reorderable ? t('devices.list.menu.projectOrderManualTip') : undefined}
       accessibilityLabel={kind === 'dialogue'
         ? t('devices.list.a11y.dialogue')
-        : t('devices.list.a11y.project', { title: project.title })}
+        : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
       onLayout={(event) => {
@@ -3500,7 +3494,10 @@ function ProjectRow({
       ) : (
         <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
       )}
-      <Text style={styles.projectTitle} numberOfLines={1}>{project.title}</Text>
+      <View style={styles.projectLabel}>
+        <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
+        {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
+      </View>
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
     </Pressable>
   );
@@ -3648,6 +3645,7 @@ function HomeListRowInner({
   expandedAutomationGroups,
   isLastPinnedRow,
   item,
+  machineIdentity,
   nextIsBlock,
   onArchive,
   onOpenAutomationGroup,
@@ -3675,6 +3673,7 @@ function HomeListRowInner({
   /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
   isLastPinnedRow: boolean;
   item: HomeRow;
+  machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;
   onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
@@ -3706,6 +3705,7 @@ function HomeListRowInner({
         expandedAutomationGroups={expandedAutomationGroups}
         headerRefs={projectHeaderRefs}
         kind={item.kind}
+        machineIdentity={machineIdentity}
         onDragEnd={item.kind === 'project' ? onProjectDragEnd : undefined}
         onDragMove={item.kind === 'project' ? onProjectDragMove : undefined}
         onDragStart={item.kind === 'project' ? onProjectDragStart : undefined}
@@ -4669,6 +4669,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingRight: spacing.lg,
     paddingVertical: spacing.sm,
   },
+  projectLabel: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6, // Desktop ProjectNode name / remote icon / machine label gap-1.5.
+    minWidth: 0,
+  },
   projectTitle: {
     color: colors.textPrimary,
     flex: 1,
@@ -4676,6 +4683,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.listTitle,
     minWidth: 0,
+  },
+  projectFolderTitle: {
+    flex: 0,
+    flexShrink: 1,
   },
   projectCount: {
     color: colors.textTertiary,

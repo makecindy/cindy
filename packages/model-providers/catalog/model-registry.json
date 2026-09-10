@@ -1,6 +1,6 @@
 {
   "schemaVersion": 4,
-  "updatedAt": "2026-09-09T10:02:19.831Z",
+  "updatedAt": "2026-09-09T20:55:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -3500,7 +3500,9 @@
         "description": "OpenAI GPT-5.4 Pro for demanding reasoning tasks",
         "group": "gpt",
         "contextWindow": 1050000,
-        "maxOutputTokens": 128000
+        "maxOutputTokens": 128000,
+        "efforts": [],
+        "defaultEffort": null
       }
     },
     {
@@ -3511,7 +3513,9 @@
         "description": "OpenAI GPT-5.5 Pro for precise, high-quality reasoning",
         "group": "gpt",
         "contextWindow": 1050000,
-        "maxOutputTokens": 128000
+        "maxOutputTokens": 128000,
+        "efforts": [],
+        "defaultEffort": null
       }
     },
     {
@@ -3522,7 +3526,9 @@
         "description": "OpenAI cyber security reasoning model; access requires approval",
         "group": "gpt",
         "contextWindow": 400000,
-        "maxOutputTokens": 128000
+        "maxOutputTokens": 128000,
+        "efforts": [],
+        "defaultEffort": null
       }
     },
     {

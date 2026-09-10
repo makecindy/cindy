@@ -13,6 +13,7 @@ vi.mock('../../hooks/useSkillhub', () => ({
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: mocks.confirm }) }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: null }) }));
 vi.mock('../../ScanResultDialog', () => ({ ScanResultDialog: () => null }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({

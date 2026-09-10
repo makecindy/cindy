@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { triggerLogin, cancelLogin, codexAuthMock } = vi.hoisted(() => ({
+const { createAccount, deleteAccount, triggerLogin, cancelLogin, codexAuthMock } = vi.hoisted(() => ({
+  createAccount: vi.fn(),
+  deleteAccount: vi.fn(),
   triggerLogin: vi.fn(),
   cancelLogin: vi.fn(),
   // 可变快照:各用例自行设定初始态;登录成功用例只有 triggerLogin 翻转
@@ -51,6 +53,8 @@ vi.mock('@/hooks/useCodexAuth', () => ({
     logout: vi.fn(),
   }),
 }));
+
+vi.mock('@/lib/customProviders', () => ({ createCustomProvider: createAccount, deleteCustomProvider: deleteAccount }));
 
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -139,7 +143,9 @@ let providerOAuthProgressListener: ((progress: ProviderOAuthProgress) => void) |
 beforeEach(() => {
   triggerLogin.mockReset();
   cancelLogin.mockReset();
-  providerOAuthLogin.mockReset();
+  createAccount.mockReset().mockResolvedValue(undefined);
+  deleteAccount.mockReset().mockResolvedValue(undefined);
+  providerOAuthLogin.mockReset().mockResolvedValue({ ok: true });
   providerOAuthCancel.mockReset();
   providerOAuthProgressListener = null;
   codexAuthMock.state = { kind: 'authenticated', authSource: 'oauth' };
@@ -175,6 +181,72 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  it.each(['openai', 'anthropic', 'xai'].flatMap(id =>
+    ['cancel', 'unmount'].map(exit => ({ id, exit })),
+  ))('removes $id when login succeeds after $exit', async ({ id, exit }) => {
+    let finish!: (value: { ok: boolean }) => void;
+    providerOAuthLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const onDone = vi.fn();
+    const { unmount } = render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id }]}
+      entry={{ kind: 'builtin', providerId: id }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(screen.getByText(id === 'openai'
+      ? 'settings.providers.openai.addIndependentAccount'
+      : 'settings.providers.button.authorize'));
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
+    const [accountId, options] = providerOAuthLogin.mock.calls[0];
+    if (exit === 'unmount') unmount();
+    else fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    expect(providerOAuthCancel).toHaveBeenCalledWith(accountId, { ownerId: options.ownerId, releaseOwner: true });
+    await act(async () => { finish({ ok: true }); });
+    expect(deleteAccount).toHaveBeenCalledExactlyOnceWith(accountId);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+  it('keeps the retry account when the cancelled login succeeds later', async () => {
+    let finishOld!: (value: { ok: boolean }) => void;
+    providerOAuthLogin.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }));
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
+    const oldId = providerOAuthLogin.mock.calls[0][0];
+    fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    const newId = providerOAuthLogin.mock.calls[1][0];
+    expect(newId).not.toBe(oldId);
+    expect(onDone).toHaveBeenCalledWith(newId);
+    await act(async () => { finishOld({ ok: true }); });
+    expect(deleteAccount).toHaveBeenCalledExactlyOnceWith(oldId);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+  it.each(['anthropic', 'xai'])('cancels only the pending independent %s authorization', async id => {
+    let finish!: (value: { ok: boolean; reason: string }) => void;
+    providerOAuthLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id, connected: true }]}
+      entry={{ kind: 'builtin', providerId: id }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
+    const [accountId, options] = providerOAuthLogin.mock.calls[0];
+    fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    expect(providerOAuthCancel).toHaveBeenCalledWith(accountId, { ownerId: options.ownerId, releaseOwner: true });
+    await act(async () => { finish({ ok: false, reason: 'login_cancelled' }); });
+    expect(deleteAccount).toHaveBeenCalledWith(accountId);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+  it.each([['anthropic', 'claude'], ['xai', 'xai']] as const)('adds another %s account even when its builtin provider is connected', async (id, native) => {
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id, connected: true }]}
+      onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText(id));
+    fireEvent.click(await screen.findByText('settings.providers.button.authorize'));
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
+    const accountId = providerOAuthLogin.mock.calls[0][0];
+    expect(accountId).toMatch(new RegExp(`^${id}-`));
+    expect(createAccount).toHaveBeenCalledWith(expect.objectContaining({ id: accountId, auth: { method: 'oauth', native } }), {});
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(accountId));
+  });
   it('已有系统 Codex OAuth 快照时仍停留在授权页，不自动完成当前 Cindy 绑定', async () => {
     const onDone = vi.fn();
     render(
@@ -187,7 +259,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       />,
     );
 
-    expect(screen.getByText('settings.providers.wizard.authorizeInBrowser')).not.toBeNull();
+    expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
     await waitFor(() => expect(onDone).not.toHaveBeenCalled());
   });
 
@@ -206,17 +278,20 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeInBrowser'));
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
 
-    await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
-    expect(triggerLogin).toHaveBeenCalledWith('browser');
-    await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
+    const accountId = providerOAuthLogin.mock.calls[0][0];
+    expect(accountId).toMatch(/^openai-/);
+    expect(createAccount).toHaveBeenCalledWith(expect.objectContaining({ id: accountId, auth: { method: 'oauth', native: 'codex' } }), {});
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(accountId));
+    expect(triggerLogin).not.toHaveBeenCalled();
   });
 
   it('点击授权但本次登录被取消时不完成绑定', async () => {
     // 负向边界:点击本身不算完成——登录取消、状态未翻转,不得收口。
     codexAuthMock.state = { kind: 'unauthenticated' };
-    triggerLogin.mockImplementation(async () => 'cancelled');
+    providerOAuthLogin.mockResolvedValue({ ok: false, reason: 'login_cancelled' });
     const onDone = vi.fn();
     render(
       <AddProviderWizard
@@ -228,62 +303,29 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeInBrowser'));
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
 
-    await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledTimes(1));
     // 先等授权流程 settle(按钮从「取消」回到「授权」= loggingIn 已复位),
     // 再做负向断言——避免「负向 waitFor」首查即过、断言早于异步流程收尾。
     await waitFor(() =>
-      expect(screen.getByText('settings.providers.wizard.authorizeInBrowser')).not.toBeNull(),
+      expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull(),
     );
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  it('设备码路径展示代码，并支持复制和打开官方验证页', async () => {
-    codexAuthMock.state = { kind: 'unauthenticated' };
-    triggerLogin.mockImplementation(() => {
-      codexAuthMock.state = {
-        kind: 'login-pending',
-        mode: 'device-code',
-        deviceCode: {
-          verificationUrl: 'https://auth.openai.com/codex/device',
-          userCode: 'RUH2-7E2VH',
-        },
-      };
-      return new Promise<string>(() => undefined);
-    });
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    });
-    const openExternal = vi.fn().mockResolvedValue({ success: true });
-    (
-      window.electronAPI as unknown as {
-        openExternal: typeof openExternal;
-      }
-    ).openExternal = openExternal;
-
-    render(
-      <AddProviderWizard
-        providers={[OPENAI_PROVIDER]}
-        entry={{ kind: 'builtin', providerId: 'openai' }}
-        onOpenCustomForm={vi.fn()}
-        onClose={vi.fn()}
-        onDone={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeWithDeviceCode'));
-    await waitFor(() => expect(screen.getByText('RUH2-7E2VH')).not.toBeNull());
-    expect(triggerLogin).toHaveBeenCalledWith('device-code');
-
-    fireEvent.click(screen.getByText('settings.providers.wizard.copyDeviceCode'));
-    fireEvent.click(screen.getByText('settings.providers.wizard.openVerificationPage'));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('RUH2-7E2VH'));
-    await waitFor(() =>
-      expect(openExternal).toHaveBeenCalledWith('https://auth.openai.com/codex/device'),
-    );
+  it('关闭向导后才完成供应商创建时，不启动登录并清理空供应商', async () => {
+    let finishCreate!: () => void;
+    createAccount.mockImplementation(() => new Promise<void>((resolve) => { finishCreate = resolve; }));
+    const { unmount } = render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
+    await waitFor(() => expect(createAccount).toHaveBeenCalledTimes(1));
+    const id = createAccount.mock.calls[0][0].id;
+    unmount();
+    await act(async () => { finishCreate(); });
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledWith(id));
+    expect(providerOAuthLogin).not.toHaveBeenCalled();
   });
 
   it('目录声明 Device Grant 时，添加流程直接展示供应商设备码', async () => {

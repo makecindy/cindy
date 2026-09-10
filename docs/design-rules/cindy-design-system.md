@@ -25,6 +25,8 @@ DS-6 表单贡献入口：先读 [DESIGN §4](./DESIGN.md#inputs--forms)，在�
 | [`gamepads/switch-joy-con/`](./gamepads/switch-joy-con/) | 设置页 Joy-Con 交稿包（SVG / PNG / 热区 / 键位表） | 交稿包 |
 | [`gamepads/ultimate-c1/`](./gamepads/ultimate-c1/) | 设置页 Ultimate C1 / 通用手柄交稿包（SVG / PNG / 热区 / 键位表） | 交稿包 |
 
+供应商设置的顶部视觉合同见 [DESIGN §4](./DESIGN.md#provider-detail-header)，身份、状态和操作语义见 [供应商设置](../product-rules/provider-settings.md)。
+
 ## 新贡献者从这里开始
 
 1. 先读 [DESIGN.md](./DESIGN.md) 的适用视觉/组件规则，再读 [治理合同](./design-governance.md) §4 兼容、§6 证据、§7/8 风险与门禁；当前顺序及目标验收见 §12。

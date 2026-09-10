@@ -1,3 +1,4 @@
+import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -27,7 +28,8 @@ import {
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
-import { triggerXaiSubscriptionUsageRefresh } from './usage.js';
+import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
+import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import {
   rebroadcastCodexTodayUsage,
   recordCodexTurnUsage,
@@ -35,11 +37,9 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { broadcastSchedulerChanged } from './schedule.js';
-import { getSessionProvider } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { isUserProviderSession } from '../maker-host/provider-route.js';
 
 export interface RecordSessionCodexTurnUsageDeps {
+  readonly turnUsageContextBySession: Map<string, TurnUsageContext>;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly readSessionModelForUsage: (sessionId: string) => Promise<string>;
   readonly unpricedSubscriptionValueMarker: () => RegionalMoney;
@@ -55,11 +55,13 @@ export function recordSessionCodexTurnUsage(
   // codex/index.ts 在 turn.completed 时把 SDK usage 翻成 camelCase 塞进 done.data.usage, 这里直接转给 broadcaster。
   // Codex SDK 不报 cost, 所以走 token 量(codex chip 显示 "本 session N token"), 跟 Claude 的 $ chip 是两条管道。
   if (event.type === 'done' && event.source === 'codex') {
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    deps.turnUsageContextBySession.delete(session.id);
     // 本会话显式选定的供应商('xd' / 'openai' / null=默认)。退役全局 authMode 后,
     // 「是否走订阅(不计网关费)」改由 spawn 注入 + 该会话是否显式选了 XD 网关决定。
-    const sessionProvider = getSessionProvider(session.id);
+    const sessionProvider = turnContext.providerId;
     const isRemoteCodexSession = Boolean(session.remoteHostId);
-    const isCustomProviderRoute = !isRemoteCodexSession && isUserProviderSession(session.id);
+    const isCustomProviderRoute = !isRemoteCodexSession && turnContext.isUserProviderRoute;
     const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
@@ -124,10 +126,7 @@ export function recordSessionCodexTurnUsage(
         // 显式来源的订阅判定以目录 access.kind 为权威(内置 anthropic 的 Claude.ai
         // 订阅同样是订阅价值,不能只认 OpenAI/xAI);目录缺 access 的旧快照仍靠下面
         // 的 openai oauth 分支兜底。
-        const sessionProviderAccessKind = sessionProvider
-          ? getActiveCatalog().providers.find((provider) => provider.id === sessionProvider)?.access
-              ?.kind
-          : null;
+        const sessionProviderAccessKind = turnContext.accessKind;
         const isCodexSubscriptionAccessRoute =
           !isRemoteCodexSession &&
           sessionProvider != null &&
@@ -261,8 +260,12 @@ export function recordSessionCodexTurnUsage(
     void modelPromise
       .then((model) => {
         const hasGatewayKey = Boolean(readClaudeApiKey());
+        if (!isRemoteCodexSession && isClaudeSubscriptionProviderId(sessionProvider)) {
+          triggerClaudeSubscriptionUsageRefresh(sessionProvider ?? undefined);
+          return;
+        }
         if (!isRemoteCodexSession && isExclusiveXaiModelId(model)) {
-          triggerXaiSubscriptionUsageRefresh();
+          triggerXaiSubscriptionUsageRefresh(sessionProvider ?? undefined);
           return;
         }
         if (

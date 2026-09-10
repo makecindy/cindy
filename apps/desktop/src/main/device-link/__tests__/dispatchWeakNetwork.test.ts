@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkClient,
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
@@ -234,6 +235,15 @@ afterEach(() => {
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  it('declares history projection support in the host accept, including for legacy controllers', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-1', undefined);
+    expect(client.sendLinkAccept).toHaveBeenCalledWith('ctrl-a', 'open-1', expect.objectContaining({
+      capabilities: expect.arrayContaining([DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1]),
+    }));
+  });
+
   it('背压首发失败 → 不提交订阅;500ms 重试成功后才提交', () => {
     const sendLinkAccept = vi.fn().mockImplementationOnce(() => {
       throw backpressure();

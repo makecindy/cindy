@@ -15,7 +15,7 @@ import {
 import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import { textComposerDocument } from '@/session/composerDocument';
-import { localizeToolLoopError } from '@/session/toolLoopErrorI18n';
+import { localizeAgentError } from '@/session/agentErrorI18n';
 import type { RemoteSession } from '@/session/types';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
@@ -396,8 +396,17 @@ describe('inputProjection', () => {
     }).toolLoop).toBeNull();
   });
 
+  it('localizes the output-limit reason carried by the live projection', () => {
+    const projection = normalizeInputProjection({
+      sessionId: 'output-limit', error: 'Pi reached the model output limit.', errorReason: 'output-limit',
+    });
+    expect(localizeAgentError(projection.errorReason, projection.toolLoop ?? null)).toBe(
+      i18n.t('session.tail.outputLimit'),
+    );
+  });
+
   it('localizes live tool-loop errors instead of rendering the host message', () => {
-    const localized = localizeToolLoopError(
+    const localized = localizeAgentError(
       'tool_use_loop_detected',
       { kind: 'contract', count: 3 },
     );
