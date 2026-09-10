@@ -7,10 +7,10 @@
 从仓库根目录、依赖已准备好的环境执行：
 
 ```sh
-pnpm exec vitest run --root docs/examples model-catalog.test.ts
+pnpm --filter @cindy/model-providers test -- src/__tests__/documentedModelCatalog.test.ts
 ```
 
-校验直接提取本文 JSON 块，检查解析和覆盖结果，不另维护一份重复 fixture。
+校验直接提取本文 JSON 块，已纳入 model-providers 标准单测与 CI，不另维护重复 fixture。
 
 ## 1. 新增公共型号和接入声明
 

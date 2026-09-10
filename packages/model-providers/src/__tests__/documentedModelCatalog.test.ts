@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseModelRegistry } from "../../packages/model-providers/src/modelAccessValidator.js";
-import { resolveModelMetadata } from "../../packages/model-providers/src/modelMetadataLayers.js";
+import { parseModelRegistry } from "../modelAccessValidator.js";
+import { resolveModelMetadata } from "../modelMetadataLayers.js";
 
 const markdown = readFileSync(
-  new URL("./model-catalog.md", import.meta.url),
+  new URL("../../../../docs/examples/model-catalog.md", import.meta.url),
   "utf8",
 );
 const examples = new Map(
