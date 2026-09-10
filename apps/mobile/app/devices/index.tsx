@@ -626,15 +626,23 @@ function HomeScreenContent() {
     return result;
   }, []);
 
-  const softInvalidateDeviceMirror = useCallback((deviceId: string) => {
+  // 批量软失效:同一波(REST 快照整批 offline)只让两个 store 各 notify 一次。
+  // 逐台通知时设备数超过 React 嵌套更新上限即致命退出(2026-09-10 Android)。
+  const softInvalidateDeviceMirrors = useCallback((deviceIds: readonly string[]) => {
+    const idSet = new Set(deviceIds);
+    if (idSet.size === 0) return;
     const sessionIds = remoteSessionStore.getSessions()
-      .filter((session) => session.deviceLinkDeviceId === deviceId)
+      .filter((session) => !!session.deviceLinkDeviceId && idSet.has(session.deviceLinkDeviceId))
       .map((session) => session.id);
-    invalidateScheduleIndexForDevice(deviceId);
-    remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
-    remoteSessionStore.markDeviceOffline(deviceId);
+    for (const deviceId of idSet) invalidateScheduleIndexForDevice(deviceId);
+    remoteScheduleEventStore.invalidateDeviceMirrors([...idSet]);
+    remoteSessionStore.markDevicesOffline([...idSet]);
     setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(current, sessionIds));
   }, []);
+
+  const softInvalidateDeviceMirror = useCallback((deviceId: string) => {
+    softInvalidateDeviceMirrors([deviceId]);
+  }, [softInvalidateDeviceMirrors]);
 
   const markDeviceOffline = useCallback((deviceId: string) => {
     // 普通离线是可恢复的传输状态:保留 session/messages,只清 live 投影并失效
@@ -964,9 +972,11 @@ function HomeScreenContent() {
       ));
       // 单次 REST 快照里的 offline 只是可恢复状态,不能硬删刚同步的会话/消息;
       // 显式关闭远控或撤权才是权限终态,继续清敏感镜像。
+      // soft 处先收拢成一批再失效:整批 offline 时逐台通知会击穿 React 嵌套上限。
+      const softInvalidateIds: string[] = [];
       for (const item of deviceRows) {
         const disposition = deviceMirrorCleanupDisposition(item.state);
-        if (disposition === 'soft') softInvalidateDeviceMirror(item.device.deviceId);
+        if (disposition === 'soft') softInvalidateIds.push(item.device.deviceId);
         if (disposition === 'hard') {
           invalidateScheduleIndexForDevice(item.device.deviceId);
           remoteScheduleEventStore.clearDevice(item.device.deviceId);
@@ -974,6 +984,7 @@ function HomeScreenContent() {
           remoteSessionStore.removeDevice(item.device.deviceId);
         }
       }
+      if (softInvalidateIds.length > 0) softInvalidateDeviceMirrors(softInvalidateIds);
       // 整表对账:REST 全量清单对“设备是否仍绑定”是权威。冷启动从缓存种入、
       // 随后被解绑(完全不在清单里)的设备不会出现在状态分类里,按差集硬清 shard;
       // 这与短暂 offline 不同,否则幽灵项会被快照回写无限续存。
