@@ -200,9 +200,9 @@ it('真实 Git smoke：刷新失败后 --stale 恢复正文和 TOC', async () =>
   expect(updated.frontmatter.stale).toBe(false);
   expect(updated.frontmatter.last_synced_commit).toBe(previous.frontmatter.last_synced_commit);
   expect(fs.readFileSync(f.paths.tocPath, 'utf8')).toContain('新版描述');
-  // Git 可能将 Windows 8.3 短路径展开；比较实际目录而非路径拼写。
-  expect(fs.realpathSync(String(vi.mocked(spawn).mock.calls[0][2]?.cwd))).toBe(
-    fs.realpathSync(f.cwd),
+  // 原生 realpath 才会展开 Windows 8.3 短路径，与 Git 返回的长路径一致。
+  expect(fs.realpathSync.native(String(vi.mocked(spawn).mock.calls[0][2]?.cwd))).toBe(
+    fs.realpathSync.native(f.cwd),
   );
 });
 
