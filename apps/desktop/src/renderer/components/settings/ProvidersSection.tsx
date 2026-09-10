@@ -255,6 +255,7 @@ async function disconnectProvider(
     if (provider.id === 'openai') await window.electronAPI.maker.auth.logout('codex', scope);
     else if (provider.id === 'anthropic') await window.electronAPI.maker.claudeOAuthLogout(scope);
     else if (provider.id === 'xai') await window.electronAPI.maker.xaiOAuthLogout(scope);
+    else if (provider.auth.method === 'oauth') await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
     else await window.electronAPI.builtinApiKeyRemove(provider.id, scope);
   } else if (provider.auth.method === 'oauth') {
     await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
@@ -1003,7 +1004,7 @@ function GenericOAuthHeader({
       });
       if (!confirmed) return;
       setBusy(true);
-      await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
+      await disconnectProvider(provider, scope);
       toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
       onChanged();
     } catch {
@@ -1011,7 +1012,7 @@ function GenericOAuthHeader({
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, provider.id, provider.name, t]);
+  }, [confirm, onChanged, provider, t]);
 
   const reconnectRequired = provider.openAiAccount?.reconnectRequired === true;
   const status = {

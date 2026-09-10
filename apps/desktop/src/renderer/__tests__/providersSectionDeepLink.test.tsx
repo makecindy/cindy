@@ -188,6 +188,7 @@ beforeEach(() => {
     maker: {
       listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
       setProviderPresentation: vi.fn(async () => ({ ok: true })),
+      providerOAuthLogout: vi.fn(async () => ({ ok: true })),
       auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
@@ -428,6 +429,32 @@ describe('ProvidersSection — 深链定位', () => {
     expect(window.electronAPI.builtinApiKeyRemove).toHaveBeenCalledWith(
       'openai-images', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }),
     );
+  });
+
+  it.each(['disconnect', 'delete', 'delete-failed'])('generic builtin OAuth uses the OAuth bridge for %s', async (action) => {
+    providersState.providers = [makeProvider('fixture-oauth', { name: 'Fixture OAuth', connected: true })];
+    const events: string[] = [];
+    vi.mocked(window.electronAPI.maker.setProviderPresentation).mockImplementation(async (input) => {
+      events.push(input.action);
+    });
+    vi.mocked(window.electronAPI.maker.providerOAuthLogout).mockImplementation(async () => {
+      events.push('oauth-logout');
+      if (action === 'delete-failed') throw new Error('fixture failure');
+      return { ok: true };
+    });
+    renderAt('?tab=providers&connect=fixture-oauth');
+    if (action === 'disconnect') {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.disconnect' }));
+    } else {
+      fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.custom.deleteAria' }));
+    }
+    if (action === 'delete-failed') {
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith('settings.providers.custom.toast.deleteFailed'));
+    }
+    await waitFor(() => expect(events).toEqual(action === 'delete' ? ['restore', 'oauth-logout', 'remove'] : ['restore', 'oauth-logout']));
+    expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenCalledWith('fixture-oauth', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }));
+    expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
   });
 
   it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
