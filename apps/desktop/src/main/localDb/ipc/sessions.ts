@@ -1202,14 +1202,13 @@ export function registerSessionIpc(
 
         scheduleSessionListProjectionBackfill(mergedRows);
         return mergedRows.map((r) =>
-          projectSessionContextWindow(
-            sessionToCamel({
+          sessionToCamel(
+            projectSessionContextWindow({
               ...r.session,
               messageCount: r.messageCount,
               latestMessageExtract: r.latestMessageExtract,
               latestMessageRole: r.latestMessageRole,
-            }),
-            opts.resolveContextWindow,
+            }, opts.resolveContextWindow),
           ),
         );
       };
@@ -1489,7 +1488,7 @@ export function registerSessionIpc(
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionContextWindow(sessionToCamel(row), opts.resolveContextWindow);
+    return sessionToCamel(projectSessionContextWindow(row, opts.resolveContextWindow));
   });
 
   /**
@@ -2568,6 +2567,7 @@ function selectSessionUsageRows(
       | 'totalTokenUsage'
       | 'contextTokens'
       | 'contextWindow'
+      | 'contextWindowRuntime'
       | 'agentKind'
       | 'userSendAt'
       | 'updatedAt'
@@ -2583,6 +2583,7 @@ function selectSessionUsageRows(
       totalTokenUsage: sessions.totalTokenUsage,
       contextTokens: sessions.contextTokens,
       contextWindow: sessions.contextWindow,
+      contextWindowRuntime: sessions.contextWindowRuntime,
       agentKind: sessions.agentKind,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,

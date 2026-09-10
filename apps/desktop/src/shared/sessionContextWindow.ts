@@ -56,11 +56,12 @@ export function resolveSessionContextWindow(
   );
 }
 
-/** Fill missing history metadata without replacing the budget applied to its recorded usage. */
+/** Preserve proven runtime budgets; legacy catalog snapshots retain read-time correction. */
 export function projectSessionContextWindow<
-  T extends ContextWindowSession & { contextWindow: number },
+  T extends ContextWindowSession & { contextWindow: number; contextWindowRuntime?: number | null },
 >(session: T, resolve?: (session: ContextWindowSession) => number | null): T {
-  if (Number.isFinite(session.contextWindow) && session.contextWindow > 0) return session;
+  if (Number.isFinite(session.contextWindow) && session.contextWindow > 0 &&
+      session.contextWindowRuntime === session.contextWindow) return session;
   const window = resolve?.(session);
   return window && Number.isFinite(window) && window > 0 && window !== session.contextWindow
     ? { ...session, contextWindow: window }

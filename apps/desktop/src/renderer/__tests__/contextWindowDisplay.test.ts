@@ -67,13 +67,37 @@ describe('resolveDisplayContextWindow', () => {
 });
 
 describe('makerChatStore context window refresh', () => {
-  it.each(['codex', 'pi', 'claude-code'] as const)('preserves %s usage when a model selection supplies another catalog window', (agentKind) => {
+  it.each(['pi', 'claude-code'] as const)('refreshes %s metadata on consecutive model choices before any runtime usage', (agentKind) => {
     const sessionId = `${agentKind}-context-window-switch-test`;
     makerChatStore.purgeSession(sessionId);
-    makerChatStore.setContextWindow(sessionId, 1_000);
     makerChatStore.setSessionRuntime(sessionId, { agentKind });
+    for (const window of [1_000, 32_000, 1_050_000, 1_000]) {
+      makerChatStore.setContextWindow(sessionId, window);
+      expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(window);
+    }
+    makerChatStore.purgeSession(sessionId);
+  });
+
+  it.each([0, 9_000])('preserves an actual runtime budget with %s tokens against later metadata', (contextTokens) => {
+    const sessionId = 'runtime-budget-test';
+    makerChatStore.purgeSession(sessionId);
+    makerChatStore.setContextWindow(sessionId, 32_000);
+    makerChatStore.__applyStatusUpdateForTest(sessionId, {
+      sessionId, status: 'Done', isRunning: false, tokenUsage: 0, costUsd: 0,
+      contextTokens, contextWindow: 1_000,
+    });
     makerChatStore.setContextWindow(sessionId, 1_050_000);
     expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(1_000);
+    makerChatStore.purgeSession(sessionId);
+  });
+
+  it('keeps Codex metadata unknown before a native snapshot arrives', () => {
+    const sessionId = 'codex-metadata-test';
+    makerChatStore.purgeSession(sessionId);
+    makerChatStore.setSessionRuntime(sessionId, { agentKind: 'codex' });
+    makerChatStore.setContextWindow(sessionId, 1_000);
+    makerChatStore.setContextWindow(sessionId, 32_000);
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(0);
     makerChatStore.purgeSession(sessionId);
   });
 

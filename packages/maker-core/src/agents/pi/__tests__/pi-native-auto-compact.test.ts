@@ -17,6 +17,7 @@ const knobs = vi.hoisted(() => ({
   runtimeProvider: "cindy",
   runtimeModel: "m",
   runtimeContextWindow: 200_000,
+  contextTokens: null as number | null,
   targetRuntimeContextWindow: 100_000,
   setModelReportsContextWindow: true,
   verifiedContextWindows: [] as number[],
@@ -58,6 +59,11 @@ vi.mock("../rpc-client.js", () => ({
       error?: string;
     }> {
       knobs.rpcCalls.push(cmd);
+      if (cmd.type === "get_session_stats" && knobs.contextTokens !== null) {
+        return { success: true, data: { contextUsage: {
+          tokens: knobs.contextTokens, contextWindow: knobs.runtimeContextWindow,
+        } } };
+      }
       if (cmd.type === "get_state") {
         return {
           success: true,
@@ -172,6 +178,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.runtimeProvider = "cindy";
     knobs.runtimeModel = "m";
     knobs.runtimeContextWindow = 200_000;
+    knobs.contextTokens = null;
     knobs.targetRuntimeContextWindow = 100_000;
     knobs.setModelReportsContextWindow = true;
     knobs.verifiedContextWindows = [];
@@ -195,7 +202,10 @@ describe("PiAgent native auto-compaction ownership", () => {
     try {
       expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
       expect((await handle.getContextUsage!()).maxTokens).toBe(1_000);
-      expect((await handle.getContextUsage!()).rawMaxTokens).toBe(200_000);
+      knobs.contextTokens = 6_000;
+      expect(await handle.getContextUsage!()).toMatchObject({
+        totalTokens: 6_000, maxTokens: 1_000, rawMaxTokens: 1_000, percentage: 100,
+      });
       expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(false);
       budget = 32_000;
       expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);

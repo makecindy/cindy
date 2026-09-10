@@ -1921,7 +1921,7 @@
           "close": "닫기",
           "maxOutput": "최대 출력",
           "catalogCapabilities": "카탈로그에 명시된 기능",
-          "contextInvalid": "1–100,000 K 범위의 정수를 입력하세요.",
+          "contextInvalid": "{{min}}–100,000 K 범위의 정수를 입력하세요.",
           "contextWriteFailed": "저장되지 않았습니다. 다시 시도하세요.",
           "contextMixed": "실행 환경별 설정이 다릅니다. 변경하거나 초기화하면 모두에 적용됩니다.",
           "inputModalities": "입력 형식",

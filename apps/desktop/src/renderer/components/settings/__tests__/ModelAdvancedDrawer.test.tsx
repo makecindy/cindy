@@ -99,6 +99,39 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it('rejects new 1K settings but accepts 10K without rewriting existing small overrides', () => {
+    mocks.limit = 1_000;
+    draw();
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('1');
+    expect(input.hasAttribute('aria-invalid')).toBe(false);
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.blur(input);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '10' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(10_000);
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([2_048, 4_096, 8_192])('keeps a small model with %s native tokens editable below 10K', (window) => {
+    draw({ ...model, contextWindow: window, contextWindowMax: window });
+    const input = screen.getByRole('textbox');
+    const floor = Math.floor(window / 1000);
+    fireEvent.change(input, { target: { value: String(floor - 1) } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: String(floor) } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
+  });
+
+
   it('keeps useful identity fields without exposing internal defaults, normal lifecycle or raw descriptions', () => {
     draw({ ...model, status: 'active', defaultEnabled: false, description: 'GPT for coding tasks' });
     expect(screen.queryByText('active')).toBeNull();

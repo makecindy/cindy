@@ -7266,18 +7266,20 @@ export class PiAgent extends BaseAgent {
             | undefined
         )?.contextUsage;
         const totalTokens = typeof contextUsage?.tokens === 'number' && contextUsage.tokens >= 0 ? contextUsage.tokens : ctx.contextTokens;
-        const rawMaxTokens =
+        const nativeCapacity =
           typeof contextUsage?.contextWindow === 'number' && contextUsage.contextWindow > 0
             ? contextUsage.contextWindow
             : ctx.contextWindow;
         const maxTokens = ctx.workingContextWindow && ctx.workingContextWindow > 0
-          ? Math.min(ctx.workingContextWindow, rawMaxTokens) : rawMaxTokens;
+          ? Math.min(ctx.workingContextWindow, nativeCapacity) : nativeCapacity;
         const percentage = maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0;
         return {
           categories: [{ name: 'Messages', tokens: totalTokens, color: '#8b8b8b' }],
           totalTokens,
           maxTokens,
-          rawMaxTokens,
+          // Context cards and shared summaries use rawMaxTokens as their denominator.
+          // Pi has no separate usable-window reserve within the working budget.
+          rawMaxTokens: maxTokens,
           percentage,
           gridRows: [],
           model: mutableModel,

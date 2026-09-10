@@ -1921,7 +1921,7 @@
           "close": "閉じる",
           "maxOutput": "最大出力",
           "catalogCapabilities": "カタログに記載された機能",
-          "contextInvalid": "1～100,000 K の整数を入力してください。",
+          "contextInvalid": "{{min}}～100,000 K の整数を入力してください。",
           "contextWriteFailed": "保存できませんでした。再試行してください。",
           "contextMixed": "実行環境ごとに設定が異なります。変更やリセットはすべてに適用されます。",
           "inputModalities": "入力形式",

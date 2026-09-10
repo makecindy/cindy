@@ -1922,7 +1922,7 @@
           "close": "Close",
           "maxOutput": "Maximum output",
           "catalogCapabilities": "Capabilities declared in the catalog",
-          "contextInvalid": "Enter a whole number from 1 to 100,000 K.",
+          "contextInvalid": "Enter a whole number from {{min}} to 100,000 K.",
           "contextWriteFailed": "Not saved. Please retry.",
           "contextMixed": "Existing harness settings differ. Editing or resetting applies to all harnesses.",
           "inputModalities": "Input types",

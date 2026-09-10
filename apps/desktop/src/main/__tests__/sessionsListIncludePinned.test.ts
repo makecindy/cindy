@@ -120,6 +120,7 @@ function sessionRow(id: string, patch: Record<string, unknown> = {}) {
     totalCostUsd: 0,
     contextTokens: 0,
     contextWindow: 0,
+    contextWindowRuntime: null as number | null,
     fastMode: 0,
     clearedAt: null,
     pinnedAt: null,
@@ -181,7 +182,7 @@ describe('local-db:sessions:list includePinned', () => {
     registerSessionIpc(undefined, { resolveContextWindow });
     const handler = h.ipcHandle.mock.calls.find(([name]) => name === 'local-db:sessions:list')![1];
     h.queryResults.push([
-      sessionRow('codex', { agentKind: 'codex', contextWindow: 1_050_000, contextTokens: 140_500 }),
+      sessionRow('codex', { agentKind: 'codex', contextWindow: 1_050_000, contextWindowRuntime: 1_050_000, contextTokens: 140_500 }),
       sessionRow('pi', { agentKind: 'pi', contextWindow: 872_000, contextTokens: 140_500 }),
     ]);
     const result = await handler({}, 20, 'all', { usageHistory: true });
@@ -192,14 +193,14 @@ describe('local-db:sessions:list includePinned', () => {
   });
 
   it.each(['local-db:sessions:get', 'local-db:sessions:list'])(
-    '%s fills missing historical context using the stored route without writing it',
+    '%s corrects legacy history but preserves proven runtime windows without writing it',
     async (channel) => {
       const resolveContextWindow = vi.fn(() => 272_000);
       registerSessionIpc(undefined, { resolveContextWindow });
       const handler = h.ipcHandle.mock.calls.find(([name]) => name === channel)![1];
       const saved = listRow('old-astra', {
         agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
-        contextTokens: 140_500, contextWindow: 0,
+        contextTokens: 140_500, contextWindow: 1_050_000,
       });
       h.queryResults.push([saved]);
       const result = channel.endsWith(':get')
@@ -209,7 +210,16 @@ describe('local-db:sessions:list includePinned', () => {
       expect(resolveContextWindow).toHaveBeenCalledWith(expect.objectContaining({
         agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
       }));
-      expect(saved.session.contextWindow).toBe(0);
+      expect(saved.session.contextWindow).toBe(1_050_000);
+      expect(result).not.toHaveProperty('contextWindowRuntime');
+      saved.session.contextWindow = 1_000;
+      saved.session.contextWindowRuntime = 1_000;
+      h.queryResults.push([saved]);
+      const runtime = channel.endsWith(':get')
+        ? await handler({}, 'old-astra')
+        : (await handler({}, 20, 'active'))[0];
+      expect(runtime).toMatchObject({ contextTokens: 140_500, contextWindow: 1_000 });
+      expect(runtime).not.toHaveProperty('contextWindowRuntime');
     },
   );
 
@@ -270,6 +280,7 @@ describe('local-db:sessions:list includePinned', () => {
       'totalTokenUsage',
       'contextTokens',
       'contextWindow',
+      'contextWindowRuntime',
       'agentKind',
       'userSendAt',
       'updatedAt',

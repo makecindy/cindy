@@ -256,6 +256,11 @@ export function ModelAdvancedDrawer({
   const ctxDirtyRef = useRef(false);
   const defaultWindow = contextAgent === 'codex' && ctx.codexContext
     ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
+  // The editor guard is not a native request-capacity limit. Keep small/local
+  // model windows selectable and never derive this floor from a saved override.
+  const modelWindows = chatAgents.map((agent) => row?.byAgent[agent]?.contextWindow)
+    .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
+  const minimumContextK = Math.max(1, Math.floor(Math.min(10_000, ...modelWindows) / 1000));
   const routeWindow = primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
@@ -270,8 +275,8 @@ export function ModelAdvancedDrawer({
   const parsedK = Number(ctxDraft.trim());
   const parsedTokens = parsedK * 1000;
   const ctxInvalid =
-    ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedTokens < 1000 || parsedTokens > 100_000_000);
+    ctxDirtyRef.current && ctxDraft.trim() !== '' &&
+    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > 100_000_000);
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading) return;
     ctxDirtyRef.current = false;
@@ -700,6 +705,7 @@ export function ModelAdvancedDrawer({
                             <p role="status" className="mt-1.5 text-12 text-[var(--warning-fg)]">
                               {t(
                                 `settings.providers.models.advanced.${ctxInvalid ? 'contextInvalid' : ctx.error ? 'contextWriteFailed' : 'contextMixed'}`,
+                                { min: minimumContextK },
                               )}
                             </p>
                           )}

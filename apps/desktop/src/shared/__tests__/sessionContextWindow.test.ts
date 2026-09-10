@@ -75,7 +75,7 @@ describe('session context read projection', () => {
     'preserves the applied %s history budget when catalog or settings change',
     (agentKind) => {
       for (const contextWindow of [1_000, 32_000, 500_000, 1_050_000]) {
-        const saved = { ...session, agentKind, contextWindow };
+        const saved = { ...session, agentKind, contextWindow, contextWindowRuntime: contextWindow };
         expect(projectSessionContextWindow(saved, () => 272_000)).toBe(saved);
       }
       const unknown = { ...session, agentKind, contextWindow: 0 };
@@ -83,6 +83,14 @@ describe('session context read projection', () => {
         .toEqual({ ...unknown, contextWindow: 32_000 });
     },
   );
+
+  it.each([undefined, null, 500_000])('corrects unproven legacy windows with runtime marker %s', (contextWindowRuntime) => {
+    const legacy = { ...session, contextWindowRuntime };
+    expect(projectSessionContextWindow(legacy, (row) => resolveSessionContextWindow(catalog, row)))
+      .toEqual({ ...legacy, contextWindow: 272_000 });
+    expect(legacy.contextWindow).toBe(1_050_000);
+    expect(projectSessionContextWindow(legacy, () => null)).toBe(legacy);
+  });
 
   it('uses the actual provider, preserving explicit long-window overrides', () => {
     const routes = {
