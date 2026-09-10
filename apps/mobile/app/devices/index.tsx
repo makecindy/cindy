@@ -203,7 +203,6 @@ import {
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
-  buildSessionMessagePreviewIndex,
   formatRemoteSessionSidebarTime,
   getRemoteSessionPreviewCollapse,
   type RemoteAutomationSessionGroup,
@@ -386,7 +385,6 @@ function HomeScreenContent() {
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
-  const homePreviewCacheRef = useRef(new Map<string, { messages: readonly unknown[]; preview?: string }>());
   const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
@@ -1643,24 +1641,7 @@ function HomeScreenContent() {
   const messagePreviewIndexRaw = useMemo(() => {
     // 普通首页的预览由可见行按 session 订阅。只有搜索需要跨全部任务建立消息索引。
     if (!normalizedSearchQuery) return new Map<string, string>();
-    const next = new Map<string, string>();
-    const activeIds = new Set<string>();
-    for (const session of sessions) {
-      activeIds.add(session.id);
-      const messages = remoteSessionStore.getMessages(session.id);
-      const cached = homePreviewCacheRef.current.get(session.id);
-      if (cached?.messages === messages) {
-        if (cached.preview) next.set(session.id, cached.preview);
-        continue;
-      }
-      const preview = buildSessionMessagePreviewIndex([session.id], () => messages).get(session.id);
-      homePreviewCacheRef.current.set(session.id, { messages, preview });
-      if (preview) next.set(session.id, preview);
-    }
-    for (const sessionId of homePreviewCacheRef.current.keys()) {
-      if (!activeIds.has(sessionId)) homePreviewCacheRef.current.delete(sessionId);
-    }
-    return next;
+    return remoteSessionStore.getSessionListMessagePreviewIndex(sessions);
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
   const pendingInteractionIndexRaw = useMemo(() => {

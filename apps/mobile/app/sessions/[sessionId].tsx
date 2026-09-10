@@ -3226,6 +3226,13 @@ export default function SessionScreen() {
     // 旧连接代的 in-flight load 若在尾部读 ref 的最新值,会把旧窗口数据标成新代已同步,
     // 抢在排队的 resync 之前放行回执。开始时捕获则旧 load 落的是旧代 key,门槛不放行。
     const readAckEpochAtStart = readAckEpochRef.current;
+    const reportSyncPhase = (phase: string, extra: { readMs?: number; commitMs?: number; outcome?: string } = {}) => {
+      if (syncRun.isStale() || !messageAuthorityCurrent()) return;
+      mobileDebugLog('debug', 'recovery', 'detail sync phase', {
+        startedAt: snapshotStartedAt, connection: readAckEpochAtStart, phase,
+        totalMs: Math.max(0, Date.now() - snapshotStartedAt), ...extra,
+      });
+    };
     const subscriptionIdentityAtStart = JSON.stringify([
       deviceId,
       sessionId,
@@ -3335,6 +3342,7 @@ export default function SessionScreen() {
     setLoading(true);
     try {
       await prepareLinkAndSubscription();
+      reportSyncPhase('link-ready');
       if (syncRun.isStale() || !messageAuthorityCurrent()) return;
       // Capture at the first snapshot read, after link-open. An ACK received while
       // opening the link is already covered; it must not force another full batch.
@@ -3401,22 +3409,34 @@ export default function SessionScreen() {
           }
         },
       });
-      const commitRead = <T,>(read: () => Promise<T>, commit: (value: T) => void) =>
-        runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, commit);
+      const commitRead = <T,>(phase: string, read: () => Promise<T>, commit: (value: T) => void) => {
+        const startedAt = Date.now();
+        return runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, (value) => {
+          const commitAt = Date.now();
+          commit(value);
+          reportSyncPhase(phase, { readMs: Math.max(0, commitAt - startedAt), commitMs: Math.max(0, Date.now() - commitAt), outcome: 'applied' });
+        }).catch((error) => {
+          reportSyncPhase(phase, { readMs: Math.max(0, Date.now() - startedAt), outcome: 'failed' });
+          throw error;
+        });
+      };
       // Only the control/read-receipt barrier waits for all resources. Each response
       // is applied independently, and a changed metadata response starts history
       // immediately rather than waiting for pending/projection/active.
       await waitForIndependentSnapshotReads([
-        messageRead,
-        commitRead(fetchPendingInteractions, (pendingInteractions) => {
+        messageRead.then(() => reportSyncPhase('history-settled')).catch((error) => {
+          reportSyncPhase('history', { outcome: 'failed' });
+          throw error;
+        }),
+        commitRead('pending', fetchPendingInteractions, (pendingInteractions) => {
           remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         }),
-        commitRead(fetchProjection, (projectionResult) => {
+        commitRead('projection', fetchProjection, (projectionResult) => {
           remoteSessionStore.setInputProjectionIfCurrent(
             sessionId, projectionResult.projection, projectionResult.authorityEpochAtStart,
           );
         }),
-        commitRead(fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
+        commitRead('active', fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
           remoteSessionStore.setActiveSessionSnapshots(
             deviceId,
             Array.isArray(activeSessionSnapshot.activeSessions) ? activeSessionSnapshot.activeSessions : [],
@@ -3437,8 +3457,7 @@ export default function SessionScreen() {
       setContentSyncedKey(contentKeyAtStart);
       if (contentKeyAtStart !== null && contentRecoveryKeyRef.current === contentKeyAtStart) {
         syncRun.satisfy('subscription-acked');
-        console.debug('[device-link] recovery snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
-        mobileDebugLog('debug', 'recovery', 'snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
+        reportSyncPhase('complete');
       }
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早

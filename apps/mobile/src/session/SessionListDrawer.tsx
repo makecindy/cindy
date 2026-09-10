@@ -72,7 +72,6 @@ import type { RemoteSessionLiveActivity } from '@/session/sessionList';
 import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import {
   buildRemoteSessionCardPreview,
-  buildSessionMessagePreviewIndex,
   formatRemoteSessionSidebarTime,
   type RemoteSessionListItem,
 } from '@/session/sessionList';
@@ -361,10 +360,7 @@ export function SessionListDrawer({
     void homeStatusVersion;
     void messageSearchVersion;
     const messagePreviewIndex = searchQuery.trim()
-      ? buildSessionMessagePreviewIndex(
-          sessions.map((session) => session.id),
-          (sessionId) => remoteSessionStore.getMessages(sessionId),
-        )
+      ? remoteSessionStore.getSessionListMessagePreviewIndex(sessions)
       : undefined;
     // 与首页同口径的行内状态输入:等待授权/回复(awaiting)与 live error/done 都来自
     // 这两个 index,缺了会全部退化成普通时间行。
@@ -565,11 +561,11 @@ const DrawerSessionRow = memo(function DrawerSessionRow({
   // 运行态走订阅(行 memo 化后命令式读取会 stale,与首页行同一取舍)。
   const latestItem = latestMobileSessionRow(item);
   const sessionIsRunning = useSessionRunning(latestItem.session.id);
-  const loadedMessagePreview = useRemoteSessionMessagePreview(item.session.id);
   const running = sessionIsRunning || !!latestItem.scheduleInfo?.running;
   const { status: rightStatus, target: statusTarget } = resolveMobileSessionRowStatus(item, sessionIsRunning);
   // 索引搜索展示命中摘要；普通行（含自动化代表行）才使用自己的最新消息预览。
   const previewItem = item.automationGroup ? statusTarget : item;
+  const loadedMessagePreview = useRemoteSessionMessagePreview(previewItem.session.id);
   const preview = buildRemoteSessionCardPreview(
     searchResult || loadedMessagePreview === undefined || loadedMessagePreview === previewItem.messagePreview
       ? previewItem

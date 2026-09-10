@@ -1596,6 +1596,30 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('redacts unknown channels from reliable timeout diagnostics', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 5, transportMaxRetryAttempts: 2 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const opened = establishInboundReliableLink(h, 'unknown-channel-stream');
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+      h.client.sendPush('dev-b', 'private-user-content\nforged-log', { secret: 'private-body' });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('kind=push channel=unknown'));
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private-user-content|forged-log|private-body/);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('入站 link 的可靠重试耗尽只重置该 peer link:relay 连接不拆,发 transport-timeout link-close,重开后 live 帧按原 seq 重放', async () => {
     vi.useFakeTimers();
     const warn = vi.fn();
@@ -1638,7 +1662,7 @@ describe('DeviceLinkClient', () => {
       expect(firstSocket.closed).toBeNull();
       expect(h.sockets).toHaveLength(1);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(
-        /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push request=\S+ attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
+        /ACK timeout; resetting peer link .*dst=dev-b seq=1 kind=push channel=maker:event request=\S+ attempts=2 sent=true ageMs=\d+ pending=2\/\d+ ack=0 next=3 send=ready receive=true stream=.{8} remoteStream=inbound-/,
       ));
 
       // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
