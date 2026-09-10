@@ -29,7 +29,6 @@ export function BotDirectMessageView() {
   const { botId, threadId } = useParams();
   const deviceId = new URLSearchParams(location.search).get('deviceId');
   const allProfiles = useBotProfiles();
-  const profiles = deviceId ? [] : allProfiles;
   const [state, setState] = useState<DirectMessageState>({ kind: 'loading' });
 
   useEffect(() => {
@@ -79,14 +78,16 @@ export function BotDirectMessageView() {
   const thread = state.kind === 'ready' ? state.thread : null;
   const profileFor = useCallback(
     (id: string, fallbackName: string) => {
-      const profile = profiles.find((item) => item.id === id);
+      // Keep the callback stable when a remote thread registers its header.
+      // A fresh empty profiles array here would feed each slot update back into render.
+      const profile = deviceId ? undefined : allProfiles.find((item) => item.id === id);
       return {
         name: profile?.name || fallbackName || id,
         avatar: profile?.avatar ?? null,
         avatarColor: profile?.avatarColor ?? null,
       };
     },
-    [profiles],
+    [allProfiles, deviceId],
   );
   const [leftBot, rightBot] = useMemo(() => {
     if (!thread || !botId) return [null, null] as const;

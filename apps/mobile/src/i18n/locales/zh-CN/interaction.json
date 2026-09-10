@@ -37,7 +37,7 @@
     "queuePositionNth": "第 {{index}}",
     "composerBlockedByPending": "先处理电脑端的待处理请求后才能继续输入。",
     "missingRequestId": "这个远程交互缺少 requestId，无法回传决定。",
-    "desktopConfirmUnsupported": "此确认只能在被控电脑处理。请回到桌面端继续。",
+    "desktopConfirmUnsupported": "此确认只能在远程电脑处理。请回到桌面端继续。",
     "unsupportedType": "手机版暂不支持这个远程交互类型。",
     "unsupportedKind": "暂不支持",
     "desktopOnlyKind": "电脑端处理",
@@ -171,7 +171,7 @@
     "goalObjectiveAccessibility": "目标内容",
     "goalPlaceholder": "想要达成什么？Agent 会围绕这个目标自动续跑，直到完成或达到限制。",
     "advancedSettings": "高级设置",
-    "limitsHint": "未改动时跟随被控端的默认限制；达到任一上限时目标自动停止，可随时手动终止；「不限」表示不设该上限。",
+    "limitsHint": "未改动时跟随远程电脑的默认限制；达到任一上限时目标自动停止，可随时手动终止；「不限」表示不设该上限。",
     "maxTurns": "最大轮数",
     "tokenBudget": "Token 预算",
     "noProgressLimit": "无进展上限",
@@ -193,7 +193,7 @@
     "photoNotReadable": "这张照片暂时无法读取(可能还没从 iCloud 下载完成)，请稍后重试。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
+    "completeOnDesktop": "请在远程电脑完成设置，本卡片会自动更新状态。",
     "chooseOne": "选择一种配置方式",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在电脑端{{action}}",

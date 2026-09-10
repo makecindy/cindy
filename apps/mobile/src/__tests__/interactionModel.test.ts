@@ -727,11 +727,15 @@ describe('interactionModel', () => {
     expect(storeSource).toContain('pendingInteractionsAuthoritative.add(sessionId);');
     expect(storeSource).toContain('hasAuthoritativePendingInteractions(sessionId: string): boolean');
     expect(storeSource).toContain('export function useSessionPendingInteractionsAuthoritative(');
-    // markDeviceOffline 与 removeDevice 都要撤销权威,否则离线期的空列表会被当权威用。
-    const offlineStart = storeSource.indexOf('markDeviceOffline(deviceId: string): void {');
+    // markDeviceOffline(经共享清扫 sweepDevicesOffline,批量版 markDevicesOffline
+    // 同样复用)与 removeDevice 都要撤销权威,否则离线期的空列表会被当权威用。
+    const sweepStart = storeSource.indexOf('function sweepDevicesOffline(');
+    const markStart = storeSource.indexOf('markDeviceOffline(deviceId: string): void {');
     const offlineEnd = storeSource.indexOf('removeDevice(deviceId: string): void {');
-    expect(offlineStart).toBeGreaterThan(0);
-    expect(storeSource.slice(offlineStart, offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
+    expect(sweepStart).toBeGreaterThan(0);
+    expect(markStart).toBeGreaterThan(sweepStart);
+    expect(storeSource.slice(markStart, offlineEnd)).toContain('sweepDevicesOffline([deviceId])');
+    expect(storeSource.slice(sweepStart, offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
     expect(storeSource.slice(offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
     // []→[] 的权威快照必须能通知出去,否则消费方永远等不到清理时机。
     expect(storeSource).toContain('if (streamingChanged || authorityChanged) emit();');

@@ -37,7 +37,7 @@
     "queuePositionNth": "{{index}} 番目",
     "composerBlockedByPending": "パソコンからの保留中のリクエストを処理してから入力を続けてください。",
     "missingRequestId": "このリモート操作には requestId がないため、決定を返信できません。",
-    "desktopConfirmUnsupported": "この確認は操作対象のパソコンでのみ処理できます。デスクトップアプリに戻って続けてください。",
+    "desktopConfirmUnsupported": "この確認はリモートのパソコンでのみ処理できます。デスクトップアプリに戻って続けてください。",
     "unsupportedType": "このリモート操作タイプはモバイルではまだ対応していません。",
     "unsupportedKind": "未対応",
     "desktopOnlyKind": "パソコンで処理",
@@ -171,7 +171,7 @@
     "goalObjectiveAccessibility": "ゴールの内容",
     "goalPlaceholder": "何を達成したいですか？エージェントは完了するか制限に達するまで、このゴールに沿って自動で続行します。",
     "advancedSettings": "詳細設定",
-    "limitsHint": "変更しない場合は操作対象パソコンのデフォルト制限に従います。いずれかの上限に達するとゴールは自動的に停止し、いつでも手動で終了できます。「無制限」はその上限を設定しないことを意味します。",
+    "limitsHint": "変更しない場合はリモートのパソコンのデフォルト制限に従います。いずれかの上限に達するとゴールは自動的に停止し、いつでも手動で終了できます。「無制限」はその上限を設定しないことを意味します。",
     "maxTurns": "最大ターン数",
     "tokenBudget": "トークン予算",
     "noProgressLimit": "無進展の上限",
@@ -193,7 +193,7 @@
     "photoNotReadable": "この写真は現在読み込めません（iCloud からのダウンロードが未完了の可能性があります）。後でもう一度お試しください。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "操作対象のデスクトップで設定を完了してください。このカードは自動的に更新されます。",
+    "completeOnDesktop": "リモートのパソコンで設定を完了してください。このカードは自動的に更新されます。",
     "chooseOne": "設定方法を1つ選択してください",
     "progress": "{{satisfied}}/{{total}} 完了",
     "desktopActionHint": "パソコンで{{action}}",

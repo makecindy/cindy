@@ -83,6 +83,27 @@ export const remoteScheduleEventStore = {
     emit();
   },
 
+  /**
+   * 批量失效:同一波(如 presence 整批离线)只 emit 一次。逐台失效时每台各
+   * notify 一轮,所有挂载屏被同步重渲染 N 次,设备数超过 React 嵌套更新上限
+   * 即致命退出(2026-09-10 Android 冷启动,40/80 台隔离复现)。
+   */
+  invalidateDeviceMirrors(deviceIds: readonly string[]): void {
+    let changed = false;
+    for (const deviceId of deviceIds) {
+      if (!deviceId) continue;
+      snapshots.delete(deviceId);
+      mirrorInvalidationVersions.set(
+        deviceId,
+        (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
+      );
+      changed = true;
+    }
+    if (!changed) return;
+    mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
+    emit();
+  },
+
   clearDeviceMirrorInvalidation(deviceId: string): void {
     if (!mirrorInvalidationVersions.delete(deviceId)) return;
     mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);

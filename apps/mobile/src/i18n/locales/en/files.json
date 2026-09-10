@@ -48,8 +48,13 @@
   },
   "presentation": {
     "grid": {
-      "today": "Today {{time}}", "yesterday": "Yesterday {{time}}", "empty": "Folder is empty",
-      "summaryMixed": "{{dirs}} folders, {{files}} files", "summaryDirs": "{{count}} folders", "summaryFiles": "{{count}} files", "workdir": "Working directory"
+      "today": "Today {{time}}",
+      "yesterday": "Yesterday {{time}}",
+      "empty": "Folder is empty",
+      "summaryMixed": "{{dirs}} folders, {{files}} files",
+      "summaryDirs": "{{count}} folders",
+      "summaryFiles": "{{count}} files",
+      "workdir": "Working directory"
     },
     "preview": {
       "nonText": {
@@ -66,8 +71,8 @@
       "idle": "The remote text preview is loaded on demand; file contents aren't fetched in bulk in the message list.",
       "failure": {
         "oversize": "File exceeds the remote preview limit · {{limit}} · Current size {{size}}",
-        "forbidden": "The controlled computer denied access to this path.",
-        "notFound": "The file wasn't found on the controlled computer.",
+        "forbidden": "The remote computer denied access to this path.",
+        "notFound": "The file wasn't found on the remote computer.",
         "readFailed": "Read failed.",
         "readFailedWithError": "Read failed: {{error}}",
         "default": "This file can't be previewed."

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Alert } from "react-native";
 import { useTranslation } from "react-i18next";
 import { REMOTE_DESKTOP_CHANNEL } from "@cindy/device-link";
 import { useAuth } from "@/auth/AuthContext";
@@ -175,9 +176,10 @@ export function useAutoUnlockSettings(
       if (transaction.current === session) transaction.current = null;
     }
   }
-  async function change(action: () => Promise<void>) {
+  async function change(action: () => Promise<void>, alertTitle?: string) {
     if (pending.current || !supportsAutoUnlock(getHostPlatform())) return;
     const generation = epoch.current;
+    const actionOwner = getMobileAuthOwner();
     pending.current = true;
     setBusy(true);
     setNotice(null);
@@ -187,14 +189,21 @@ export function useAutoUnlockSettings(
     } catch (error) {
       if (
         mounted.current &&
+        activeRef.current &&
+        isMobileAuthOwnerCurrent(actionOwner) &&
         generation === epoch.current &&
         activeTarget.current === target
-      )
-        setNotice(
-          t(
-            `remoteDesktop.${credentialErrorKey(error) === "credentialRequired" ? "autoUnlockUnavailable" : credentialErrorKey(error)}`,
-          ),
+      ) {
+        const key = credentialErrorKey(error);
+        const message = t(
+          `remoteDesktop.${key === "credentialRequired" ? "autoUnlockUnavailable" : key}`,
         );
+        setNotice(message);
+        // Explicit settings actions must not hide failures below the fold.
+        // Automatic connection attempts retain non-modal feedback.
+        if (alertTitle && key !== "credentialCancelled")
+          Alert.alert(alertTitle, message);
+      }
     } finally {
       if (generation === epoch.current) {
         pending.current = false;
@@ -218,7 +227,7 @@ export function useAutoUnlockSettings(
           await native!.forgetSavedUnlock!(...current.args);
           current.check();
         }
-      });
+      }, t("remoteDesktop.autoUnlock"));
     },
     onBiometricVerification: (enabled: boolean) => {
       void change(async () => {
@@ -231,7 +240,7 @@ export function useAutoUnlockSettings(
           ),
         );
         current.check();
-      });
+      }, t("remoteDesktop.faceIdVerification"));
     },
     // A deliberate new connection may try again; media retries and iOS
     // inactive transitions (including Face ID) retain attempt suppression.
