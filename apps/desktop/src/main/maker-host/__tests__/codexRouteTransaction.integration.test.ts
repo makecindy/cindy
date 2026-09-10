@@ -4,6 +4,13 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { sessions } from '../../localDb/schema.js';
+import { commitCodexThreadTransfer, relinkCodexProviderThread, type CodexThreadTransferSnapshot } from '../../maker-ipc/codexProviderThreadRelink.js';
+import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel.js';
+import { clearSessionProvider, setSessionProvider } from '../session-provider-store.js';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
 import { AppServerHost } from '../../../../../../packages/maker-core/src/agents/codex/app-server/host.js';
 import { Maker } from '../../../../../../packages/maker-core/src/maker.js';
@@ -22,22 +29,25 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
     const lateWindow = ['initialize', 'capability', 'resume', 'skills', 'config', 'restricted', 'bot', 'local-skill'].includes(window);
-    const revoked = !lateWindow;
+    const revoked = !lateWindow && !window.startsWith('transfer');
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-host-auth-'));
     const home = path.join(root, 'codex');
     const workingDir = path.join(root, 'work');
     await mkdir(home);
     await mkdir(workingDir);
     const calls: string[] = [];
+    let responseGate: Promise<void> | undefined;
+    let releaseResponse = () => {};
     const server = createServer(async (req, res) => {
       for await (const chunk of req) void chunk;
       calls.push(`${req.method} ${req.url}`);
       if (req.url === '/provider/responses') {
         expect(req.headers.authorization).toBe('Bearer synthetic-invalid-api-key');
+        await responseGate;
         res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
         const events = [
           { type: 'response.created', response: { id: 'response-fixture' } },
@@ -76,16 +86,16 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     setCustomProviders([buildUserProvider({ id: 'cprov-fixture', name: 'Fixture', runtimes: { codex: { baseUrl: `${endpoint}/provider`, wireProtocol: 'openai-responses', models: [{ id: 'fixture-model', name: 'Fixture' }] } } })]);
     const spawnConfigs: string[] = [];
     let preparationGate: Promise<void> | undefined;
-    let delaySecondPreparation = false;
     const preparationEntered = vi.fn();
     let latePreparation: (() => Promise<void>) | undefined;
+    let rejectResumeRequest = false;
     const agent = new CodexAgent({
       binaryPath: binaryPath!, logger, runtimeConfig: {},
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
       ...(window === 'restricted' ? { capabilityRouting: { overrides: [{ capabilityId: 'computer-use', source: { kind: 'harness-plugin' as const, harness: 'codex' as const, surface: 'skill' as const, id: 'computer-use:computer-use', artifactId: 'computer-use', containerId: 'computer-use@openai-bundled' }, invocation: 'disabled' as const }] } } : {}),
       ...(window === 'local-skill' ? { getDisabledSkillPaths: () => [path.join(root, 'disabled-skill')] } : {}),
       resolveCapabilityRouting: async () => { if (window === 'capability') await latePreparation?.(); return undefined; },
-      prepareCodexResumeSession: async () => { preparationEntered(); if (window === 'resume') await latePreparation?.(); if (!delaySecondPreparation || preparationEntered.mock.calls.length >= 2) await preparationGate; return undefined; },
+      prepareCodexResumeSession: async () => { preparationEntered(); if (window === 'resume') await latePreparation?.(); await preparationGate; return undefined; },
       prepareCodexExtraSpawnConfig: async (_providers, ctx) => { spawnConfigs.push(ctx?.localAuthPolicy ?? 'legacy-shared'); return { extraArgs: [], extraEnv: {}, codexProxyActive: true }; },
       auth: {
         getState: async () => ({ authenticated: true }),
@@ -100,15 +110,160 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     });
     const spies: Array<{ mockRestore: () => void }> = [];
     try {
+      if (window.startsWith('transfer')) {
+        const sqlite = new Database(':memory:');
+        sqlite.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, agent_kind TEXT, remote_host_id TEXT, sdk_session_id TEXT, model TEXT, provider_id TEXT, effort TEXT, fast_mode INTEGER, updated_at INTEGER)');
+        const db = { drizzle: drizzle(sqlite) } as unknown as Pick<DbClient, 'drizzle'>;
+        const rows = new Map<string, SessionMeta>();
+        const storage: SessionStorage = {
+          create: async (meta) => {
+            const row = { ...meta, createdAt: 1, updatedAt: 1 }; rows.set(row.id, row);
+            sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)').run(row.id, 'active', 'codex', row.sdkSessionId ?? null, row.model, 'openai', 'high', 0, 1);
+            return row;
+          },
+          get: async (id) => {
+            const persisted = sqlite.prepare('SELECT sdk_session_id AS sdkSessionId, model FROM sessions WHERE id = ?').get(id) as { sdkSessionId: string; model: string } | undefined;
+            return rows.has(id) ? { ...rows.get(id)!, ...persisted } : null;
+          },
+          list: async () => [...rows.values()],
+          update: async (id, patch) => {
+            const row = { ...rows.get(id)!, ...patch }; rows.set(id, row);
+            if (patch.sdkSessionId) sqlite.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(patch.sdkSessionId, id);
+            return row;
+          },
+          compareAndClearSdkSessionId: async () => false,
+          delete: async (id) => { rows.delete(id); },
+        };
+        const maker = new Maker({ agents: { codex: agent }, storage, logger });
+        const send = async (session: NonNullable<ReturnType<Maker['getSession']>>) => {
+          let off: () => void = () => {};
+          const done = new Promise<void>((resolve, reject) => {
+            off = session.onEvent((event) => {
+              if (event.type === 'error') { off(); reject(new Error(JSON.stringify(event))); }
+              if (event.type === 'done') { off(); resolve(); }
+            });
+          });
+          const result = await session.send('fixture transfer');
+          if (!result.accepted) { off(); return; }
+          await done;
+        };
+        const acceptedForks: AppServerHost[] = [];
+        const request = AppServerHost.prototype.request;
+        spies.push(vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
+          if (method === 'thread/resume' && rejectResumeRequest) {
+            rejectResumeRequest = false;
+            params = { ...params as object, modelProvider: 'missing-fixture-provider' };
+          }
+          return request.call(this, method, params, { ...opts, beforeDispatch: () => {
+            opts?.beforeDispatch?.(); if (method === 'thread/fork') acceptedForks.push(this);
+          } });
+        }));
+        try {
+          setSessionProvider('source', 'openai');
+          const sibling = await maker.createSession({ id: 'unrelated', agentKind: 'codex', providerId: 'openai', model: 'fixture-model', workingDir });
+          let source = await maker.createSession({ id: 'source', agentKind: 'codex', providerId: 'openai', model: 'fixture-model', workingDir, ...(reviewMode ? { reviewMode: true as const } : {}) });
+          await send(source);
+          const hostMap = (agent as unknown as { hosts: Map<string, AppServerHost> }).hosts;
+          const siblingHost = hostMap.get('local')!;
+          const connection = siblingHost.getConnectionId();
+          if (window === 'transfer-busy') {
+            responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
+            const inFlight = send(source);
+            await expect.poll(() => source.isTurnRunning()).toBe(true);
+            await expect.poll(() => calls.filter((call) => call === 'POST /provider/responses').length).toBe(2);
+            const relink = vi.fn(async () => {});
+            await expect(applyRuntimeSetModelChange({
+              maker, sessionId: 'source', model: 'fixture-model', providerId: 'cprov-fixture',
+              requiresCodexThreadRelink: true, relinkCodexThread: relink,
+            })).rejects.toThrow(/busy/);
+            expect(relink).not.toHaveBeenCalled();
+            expect(maker.getSession('source')).toBe(source);
+            expect(acceptedForks).toHaveLength(0);
+            await source.abort();
+            releaseResponse();
+            await inFlight;
+            expect(siblingHost.getConnectionId()).toBe(connection);
+            await send(sibling);
+            return;
+          }
+          for (const providerId of ['cprov-fixture', 'openai']) {
+            const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, updatedAt: sessions.updatedAt }).from(sessions)).find((row) => row.id === 'source')!;
+            const original = sourceRow.sdkSessionId!;
+            const rolloutPath = await (agent as unknown as { findRolloutPath(id: string): Promise<string> }).findRolloutPath(original);
+            const history = await readFile(rolloutPath, 'utf8');
+            const target = { sessionId: 'source', model: 'fixture-model', providerId, ...(reviewMode ? { reviewMode: true as const } : {}) };
+            const required = await maker.requiresCodexThreadHostTransfer({ ...target, threadId: original });
+            expect(required).toBe(true);
+            const before = acceptedForks.length;
+            const switching = applyRuntimeSetModelChange({
+              maker, sessionId: 'source', model: target.model, providerId,
+              requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer({ ...target, threadId: original }),
+              relinkCodexThread: async () => {
+                await relinkCodexProviderThread({
+                  readSource: async () => ({ ...sourceRow, model: sourceRow.model!, workingDir }),
+                  needsFork: (threadId) => maker.requiresCodexThreadHostTransfer({ ...target, threadId }),
+                  fork: ({ sourceSdkSessionId }) => maker.forkSdkSession('codex', { sourceSdkSessionId: window === 'transfer-fork-failure' ? '00000000-0000-4000-8000-000000000000' : sourceSdkSessionId, model: target.model, providerId, workingDir, stripEncryptedReasoning: false, upToMessageId: undefined }),
+                  commit: ({ newSdkSessionId }) => {
+                    if (window === 'transfer-cas-failure') sqlite.exec("UPDATE sessions SET model = 'newer', updated_at = 2 WHERE id = 'source'");
+                    return commitCodexThreadTransfer(db, sourceRow as CodexThreadTransferSnapshot, { sdkSessionId: newSdkSessionId, model: target.model, providerId, effort: 'high', fastMode: false });
+                  },
+                }, { sessionId: 'source', target: { model: target.model, providerId, effort: 'high', fastMode: false } });
+              },
+            });
+            if (window === 'transfer-fork-failure' || window === 'transfer-cas-failure') {
+              await expect(switching).rejects.toThrow();
+              expect((await storage.get('source'))!.sdkSessionId).toBe(original);
+              if (window === 'transfer-cas-failure') expect((await storage.get('source'))!.model).toBe('newer');
+              expect(acceptedForks.length - before).toBeLessThanOrEqual(1);
+              expect([...hostMap.keys()].some((key) => key.startsWith('local-fork:'))).toBe(false);
+              expect(await readFile(rolloutPath, 'utf8')).toBe(history);
+              expect(siblingHost.getConnectionId()).toBe(connection);
+              await send(sibling);
+              return;
+            }
+            expect(await switching).toEqual({ status: 'applied', persistedRoute: true });
+            const replacement = (await storage.get('source'))!.sdkSessionId!;
+            // Review's dedicated host may exit at close, so no fork is needed then.
+            expect(acceptedForks.length - before).toBe(reviewMode ? 0 : 1);
+            if (!reviewMode) expect(replacement).not.toBe(original);
+            expect(await readFile(rolloutPath, 'utf8')).toBe(history);
+            expect([...hostMap.keys()].some((key) => key.startsWith('local-fork:'))).toBe(false);
+            const resumeOptions = { id: 'source', agentKind: 'codex' as const, providerId, model: target.model, workingDir, resumeSessionId: replacement, ...(reviewMode ? { reviewMode: true as const } : {}) };
+            if (window === 'transfer-resume-failure') {
+              rejectResumeRequest = true;
+              await expect(maker.createSession(resumeOptions)).rejects.toThrow(/provider/i);
+              expect((await storage.get('source'))!.sdkSessionId).toBe(replacement);
+              expect(acceptedForks.length - before).toBe(1);
+            }
+            source = await maker.createSession(resumeOptions);
+            expect(source.codexHostKey?.includes('external-auth')).toBe(providerId === 'cprov-fixture');
+            await send(source);
+            expect(hostMap.get('local')).toBe(siblingHost);
+            expect(siblingHost.getConnectionId()).toBe(connection);
+            await send(sibling);
+          }
+        } finally {
+          await maker.shutdown();
+          clearSessionProvider('source');
+          sqlite.close();
+        }
+        return;
+      }
       if (lateWindow) {
         // Start a shared sibling first; the target will initially select that host
         // from an unknown route, then the real Desktop transaction installs API auth.
         setCustomProviders([]);
         const sibling = await agent.startSession({ sessionId: 'sibling', model: 'fixture-model', providerId: 'cprov-fixture', workingDir });
+        let resumeThreadId: string | undefined;
         if (window === 'resume') {
-          const done = (async () => { for await (const event of sibling.events()) { if (event.type === 'error') throw new Error(JSON.stringify(event)); if (event.type === 'done') return; } })();
-          await sibling.send({ type: 'user', content: 'persist fixture' }, { throwOnStartFailure: true });
+          const source = await agent.startSession({ sessionId: 'source', model: 'fixture-model', providerId: 'cprov-fixture', workingDir });
+          const done = (async () => { for await (const event of source.events()) { if (event.type === 'error') throw new Error(JSON.stringify(event)); if (event.type === 'done') return; } })();
+          await source.send({ type: 'user', content: 'persist fixture' }, { throwOnStartFailure: true });
           await done;
+          await source.close();
+          // 0.153 retains source's writer after unsubscribe. Resume preparation
+          // starts with a released native child; the unrelated sibling stays live.
+          resumeThreadId = (await agent.forkSdkSession({ sourceSdkSessionId: source.id, upToMessageId: undefined, model: 'fixture-model', providerId: 'cprov-fixture', stripEncryptedReasoning: false })).newSdkSessionId;
         }
         const hostMap = (agent as unknown as { hosts: Map<string, AppServerHost> }).hosts;
         const siblingHost = hostMap.get('local')!;
@@ -153,7 +308,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         } });
         const target = maker.createSession({ id: 'late-target', agentKind: 'codex', providerId: 'cprov-fixture', model: 'fixture-model', workingDir,
           ...(window === 'bot' ? { botRuntimeProfile: { botId: 'fixture', profileVersion: 1, skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] }, toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] }, mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] } } } : {}),
-          ...(reviewMode ? { reviewMode: true as const } : {}), ...(window === 'resume' ? { resumeSessionId: sibling.id } : {}),
+          ...(reviewMode ? { reviewMode: true as const } : {}), ...(resumeThreadId ? { resumeSessionId: resumeThreadId } : {}),
         });
         try {
           await waiting;
@@ -215,6 +370,10 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
       await events;
       await handle.close();
       if (!reviewMode && window === 'B') {
+        const rolloutPath = await (agent as unknown as { findRolloutPath(id: string): Promise<string> }).findRolloutPath(handle.id);
+        const originalRollout = await readFile(rolloutPath, 'utf8');
+        await expect(agent.forkSdkSession({ sourceSdkSessionId: handle.id, upToMessageId: undefined, providerId: 'cprov-fixture', model: 'fixture-model', stripEncryptedReasoning: true })).rejects.toMatchObject({ name: 'CodexHistoryRecoveryRequiredError' });
+        expect(await readFile(rolloutPath, 'utf8')).toBe(originalRollout);
         const acceptedForks: AppServerHost[] = [];
         const forkRequest = AppServerHost.prototype.request;
         spies.push(vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
@@ -223,23 +382,22 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
             if (method === 'thread/fork') acceptedForks.push(this);
           } });
         }));
-        for (const delay of ['none', 'first', 'second']) {
+        for (const delay of ['none', 'after-start']) {
           const acceptedBefore = acceptedForks.length;
           const delayPreparation = delay !== 'none';
-          delaySecondPreparation = delay === 'second';
           let releasePreparation: () => void = () => {};
           if (delayPreparation) preparationGate = new Promise<void>((resolve) => { releasePreparation = resolve; });
           preparationEntered.mockClear();
           let finishFork = delayPreparation ? undefined : beginMutation();
           let forkSettled = false;
-          const forking = agent.forkSdkSession({ sourceSdkSessionId: handle.id, upToMessageId: undefined, providerId: 'cprov-fixture', model: 'fixture-model', stripEncryptedReasoning: true })
+          const forking = agent.forkSdkSession({ sourceSdkSessionId: handle.id, upToMessageId: undefined, providerId: 'cprov-fixture', model: 'fixture-model', stripEncryptedReasoning: false })
             .then((result) => { forkSettled = true; return result; });
           try {
-            await expect.poll(() => preparationEntered.mock.calls.length).toBeGreaterThanOrEqual(delaySecondPreparation ? 2 : 1);
-            const pausedForkHost = delaySecondPreparation
+            if (delayPreparation) await expect.poll(() => preparationEntered.mock.calls.length).toBeGreaterThanOrEqual(1);
+            const pausedForkHost = delayPreparation
               ? [...(agent as unknown as { hosts: Map<string, AppServerHost> }).hosts].find(([key]) => key.startsWith('local-fork:'))?.[1]
               : undefined;
-            if (delaySecondPreparation) expect(pausedForkHost).toBeDefined();
+            if (delayPreparation) expect(pausedForkHost).toBeDefined();
             if (delayPreparation) finishFork = beginMutation();
             releasePreparation();
             await new Promise((resolve) => setTimeout(resolve, 20));
@@ -248,7 +406,8 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
             const fork = await forking;
             expect(fork.newSdkSessionId).not.toBe(handle.id);
             expect(acceptedForks).toHaveLength(acceptedBefore + 1);
-            if (delaySecondPreparation) expect(acceptedForks.at(-1)).not.toBe(pausedForkHost);
+            if (delayPreparation) expect(acceptedForks.at(-1)).not.toBe(pausedForkHost);
+            expect(await readFile(rolloutPath, 'utf8')).toBe(originalRollout);
             expect(spawnConfigs.every((policy) => policy === 'isolated')).toBe(true);
           } finally { releasePreparation(); finishFork?.(); }
         }
@@ -263,6 +422,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         finishCancel();
       }
     } finally {
+      releaseResponse();
       for (const spy of spies) spy.mockRestore();
       for (const release of releases) release();
       setCustomProviders([]);

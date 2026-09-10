@@ -99,8 +99,12 @@ Claude Code／Codex／Pi 的强制换窗线
 与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
 `danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
 route，不能 resume 旧原生窗口。
-Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordinal` / `history_base` 或来源
-变化而 fork、改写历史或交接。本地恢复与分叉必须同时固定该线程的原生历史根
+Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 host、旧 host 仍持有原生 writer
+时，关闭该任务的业务 handle 后使用不剥离历史的原生 fork，并等待一次性 fork host 退出，
+再以任务 owner 与旧 SDK／路由版本为条件原子保存新 SDK thread 和目标路由。任务 ID 与
+消息历史不变，无关任务与 host 不退出；旧 writer 已释放则不 fork。`ordinal` /
+`history_base` 本身不能成为改写历史的理由。
+本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
 凭证、代理路由和模型目录仍按本轮选中账号准备，不能把历史根写回全局账号配置。

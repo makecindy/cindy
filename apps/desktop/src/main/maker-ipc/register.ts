@@ -980,6 +980,7 @@ import {
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
+import { codexThreadTransferSourcePredicate, commitCodexThreadTransfer, relinkCodexProviderThread } from './codexProviderThreadRelink.js';
 import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
@@ -16180,6 +16181,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: sessions.providerId,
           effort: sessions.effort,
           fastMode: sessions.fastMode,
+          updatedAt: sessions.updatedAt,
           workingDir: sessions.workingDir,
           contextTokens: sessions.contextTokens,
           contextWindow: sessions.contextWindow,
@@ -16927,6 +16929,103 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       };
       try {
+        const transferDb = getCurrentDbClientSnapshot();
+        const transferOwner = captureDataOwnerBroadcastScope();
+        // A completed, owner-fenced window handoff may have already replaced the
+        // native thread during this same locked selection.
+        const transferStatus = modelWindowRebuilt && runtimeAgentKind === 'codex'
+          ? (await transferDb!.client.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1))[0]
+          : runtimeStatus;
+        assertRuntimeOwnerCurrent();
+        if (!transferStatus || transferStatus.status !== 'active') {
+          throw new Error('Codex writer transfer task changed');
+        }
+        const transferMeta = runtimeAgentKind === 'codex' ? await maker.getSessionMeta(sessionId) : null;
+        const transferTarget = {
+          sessionId,
+          model,
+          providerId: targetRouteProviderId,
+          remoteHostId: transferStatus.remoteHostId ?? undefined,
+          ...(transferMeta?.reviewMode ? { reviewMode: true as const } : {}),
+        };
+        const canTransferThread = routeExplicit && runtimeAgentKind === 'codex' &&
+          !transferStatus.remoteHostId && !!transferStatus.sdkSessionId;
+        const assertTransferOwner = () => {
+          assertRuntimeOwnerCurrent();
+          if (!transferDb || !isDataOwnerBroadcastScopeCurrent(transferOwner) ||
+              getCurrentDbClientSnapshot()?.clientEpoch !== transferDb.clientEpoch) {
+            throw new Error('Codex writer transfer owner changed');
+          }
+        };
+        const relinkCodexThread = async () => {
+          assertTransferOwner();
+          const sourceSnapshot = { ...transferStatus, id: sessionId };
+          const sourcePredicate = codexThreadTransferSourcePredicate(sourceSnapshot);
+          const transferred = await relinkCodexProviderThread({
+            readSource: async () => {
+              assertTransferOwner();
+              const [source] = await transferDb!.client.drizzle.select({ id: sessions.id })
+                .from(sessions).where(sourcePredicate).limit(1);
+              assertTransferOwner();
+              if (!source) throw new Error('Codex writer transfer source changed');
+              return {
+                sdkSessionId: transferStatus.sdkSessionId,
+                model: transferStatus.model ?? currentRuntimeModel ?? model,
+                providerId: transferStatus.providerId,
+                effort: transferStatus.effort,
+                fastMode: transferStatus.fastMode,
+                workingDir: transferStatus.workingDir,
+              };
+            },
+            needsFork: async (threadId) => {
+              assertTransferOwner();
+              return maker.requiresCodexThreadHostTransfer({ ...transferTarget, threadId });
+            },
+            fork: async ({ sourceSdkSessionId, workingDir }) => {
+              assertTransferOwner();
+              // Native fork never rewrites source history. The core owns the one-shot
+              // writer exit barrier; use the destination route, even if old auth expired.
+              return maker.forkSdkSession('codex', {
+                sourceSdkSessionId, workingDir, model,
+                upToMessageId: undefined,
+                providerId: targetRouteProviderId,
+                stripEncryptedReasoning: false,
+              });
+            },
+            commit: async ({ newSdkSessionId, target }) => {
+              assertTransferOwner();
+              return commitCodexThreadTransfer(transferDb!.client, sourceSnapshot, {
+                sdkSessionId: newSdkSessionId,
+                model: target.model,
+                providerId: target.providerId,
+                ...(target.effort !== null && isSupportedRuntimeEffort(target.effort) ? { effort: target.effort } : {}),
+                fastMode: target.fastMode,
+                ...(modelWindowRebuilt && targetContextWindow ? { contextWindow: targetContextWindow } : {}),
+              });
+            },
+          }, {
+            sessionId,
+            target: {
+              model, providerId: targetRouteProviderId,
+              effort: atomicSelection ? atomicSelection.effort : transferStatus.effort,
+              fastMode: atomicSelection ? atomicSelection.fastMode : transferStatus.fastMode,
+            },
+          });
+          assertTransferOwner();
+          if (transferred) {
+            try {
+              broadcastSessionPatched(sessionId, {
+                sdkSessionId: transferred.newSdkSessionId,
+                model, providerId: targetRouteProviderId,
+              }, transferOwner);
+            } catch (error) {
+              log.warn('Codex writer transfer projection failed after commit', {
+                sessionId, error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+        };
+        assertRuntimeOwnerCurrent();
         const result = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
@@ -16934,6 +17033,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               sessionId,
               model,
               providerId: effectiveProviderId,
+              ...(canTransferThread ? {
+                requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer({
+                  ...transferTarget, threadId: transferStatus.sdkSessionId!,
+                }),
+                relinkCodexThread,
+              } : {}),
               ...(atomicSelection?.effort
                 ? {
                     effort: atomicSelection.effort as
@@ -16979,6 +17084,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
+        }
+        if (result.persistedRoute === true && isDeviceLinkInvoke()) {
+          markRemoteSettingPersistedInsideHandler(response);
         }
         const piSessionAfterRouteChange = maker.getSession(sessionId);
         if (

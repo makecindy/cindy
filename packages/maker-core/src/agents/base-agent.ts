@@ -2636,6 +2636,13 @@ export abstract class BaseAgent {
     return this.throwNotSupported('forkSdkSession', 'sdk-missing');
   }
 
+  async requiresCodexThreadHostTransfer(
+    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId'> & { threadId: string },
+  ): Promise<boolean> {
+    void opts;
+    return false;
+  }
+
   // ── Auth 透传到 deps.auth ────────────────────────────────────────────────
   // Maker 不直接访问 agent.deps (protected), 通过这层 thin façade 暴露给 host
   // 的 maker:auth:* IPC handler。BaseAgent 把"agent 的鉴权"作为一等公民,

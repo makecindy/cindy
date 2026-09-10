@@ -14566,6 +14566,47 @@ assertRouteCurrent();
     return bestPath;
   }
 
+  async requiresCodexThreadHostTransfer(
+    opts: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0],
+  ): Promise<boolean> {
+    if (opts.remoteHostId) return false;
+    // Retired hosts leave the reusable map before process exit. A missing map
+    // entry alone is not proof that its writer has been released.
+    for (const [key, retiring] of this.retiringHosts) {
+      if (!key.startsWith('local')) continue;
+      await awaitCodexRouteSelection(
+        retiring.promise ?? this.beginHostRetirement(key, retiring.host, 'verify Codex writer release'),
+        this.routeResolutionAbort.signal,
+      );
+    }
+    const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model);
+    const contextWindow = opts.reviewMode ? null
+      : await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model);
+    const baseKey = opts.reviewMode ? localReviewHostKey(opts.sessionId ?? '')
+      : typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+        ? localCustomContextHostKey(opts.sessionId ?? '') : hostKey();
+    const targetKey = codexLocalAuthHostIdentity(baseKey, selection.policy);
+    if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+    for (const [key, host] of this.hosts) {
+      if (key === targetKey || !key.startsWith('local') || !host.hasStarted) continue;
+      const generation = this.hostGenerations.get(key);
+      let cursor: string | null = null;
+      do {
+        const result: { data: string[]; nextCursor?: string | null } = await awaitCodexRouteSelection(
+          host.request('thread/loaded/list', { cursor }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS }),
+          this.routeResolutionAbort.signal,
+        );
+        if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+        if (this.hosts.get(key) !== host || this.hostGenerations.get(key) !== generation) break;
+        // A closed business handle does not release the native 0.153 writer.
+        // Only fork when another still-live process reports owning this thread.
+        if (result.data?.includes(opts.threadId)) return true;
+        cursor = result.nextCursor ?? null;
+      } while (cursor !== null);
+    }
+    return false;
+  }
+
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);

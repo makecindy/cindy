@@ -379,6 +379,26 @@ describe('Codex official OAuth host isolation', () => {
     });
   }
 
+  it.each(['openai', 'cprov-test'])('detects a retained native writer only across hosts from %s', async (providerId) => {
+    const agent = new CodexAgent(isolatedDeps());
+    try {
+      const source = await agent.startSession({ sessionId: 'source', providerId, model: 'gpt-5.4', workingDir: '/repo' });
+      const sibling = await agent.startSession({ sessionId: 'unrelated', providerId, model: 'gpt-5.4', workingDir: '/repo' });
+      const transport = createdTransports[0];
+      transport.setMockResponse('thread/loaded/list', { result: { data: [source.id, sibling.id], nextCursor: null } });
+      await source.close();
+      const query = { sessionId: 'source', threadId: source.id, model: 'gpt-5.4' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, providerId })).toBe(false);
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, providerId: providerId === 'openai' ? 'cprov-test' : 'openai' })).toBe(true);
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'openai', remoteHostId: 'ssh' })).toBe(false);
+      transport.setMockResponse('thread/loaded/list', { result: { data: [sibling.id], nextCursor: null } });
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, providerId: providerId === 'openai' ? 'cprov-test' : 'openai' })).toBe(false);
+      expect(transport.closed).toBe(false);
+      expect(createdTransports).toHaveLength(1);
+      await sibling.close();
+    } finally { await agent.dispose(); }
+  });
+
   it('keeps external credentials and subscription hosts alive concurrently', async () => {
     const agent = new CodexAgent(isolatedDeps());
     try {
