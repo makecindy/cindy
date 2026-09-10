@@ -807,6 +807,42 @@ describe('compact model defaults upgrade', () => {
     expect(JSON.parse(memStorage.getItem(scopedKey)!)).toEqual({});
   });
 
+  it('initializes image and video display switches from catalog defaults', async () => {
+    const snapshot = {
+      ...provider,
+      imageModels: [
+        { id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' },
+        { id: 'openai/gpt-image-2', name: 'GPT Image 2' },
+        { id: 'openai/old-image', name: 'Old Image', defaultEnabled: false },
+      ],
+      videoModels: [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }],
+    } as unknown as ProviderView;
+    const prefs = await upgrade('owner-a', 1, snapshot);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2.5-sunburst' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/old-image' })).toBe(false);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'xai/grok-imagine-video' })).toBe(true);
+  });
+
+  it('does not auto-enable image models added after the media axis was initialized', async () => {
+    const first = {
+      ...provider,
+      imageModels: [{ id: 'openai/gpt-image-2.5-sunburst', name: 'Sunburst' }],
+    } as unknown as ProviderView;
+    await upgrade('owner-a', 1, first);
+    vi.resetModules();
+    const later = {
+      ...first,
+      imageModels: [
+        { id: 'openai/gpt-image-2.5-sunburst', name: 'Sunburst' },
+        { id: 'openai/gpt-image-3', name: 'Image 3' },
+      ],
+    } as unknown as ProviderView;
+    const prefs = await upgrade('owner-a', 1, later);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2.5-sunburst' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-3' })).toBe(false);
+  });
+
   it('preserves old on/off switches without enabling history, favorites, or new defaults', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({
       'claude-code:xd:chatgpt/fable-5': true,

@@ -535,6 +535,19 @@ export async function migrateModelVisibilityDefaults(
           }
           if (!next.scopes.includes(scope)) next.scopes.push(scope);
         }
+        const mediaModels = [...(provider.imageModels ?? []), ...(provider.videoModels ?? [])];
+        if (mediaModels.length) {
+          const mediaScope = JSON.stringify([provider.id, 'media']);
+          // First time this provider's image/video display axis appears: snapshot
+          // catalog defaults. Later models stay off unless the user restores defaults.
+          const initializeMedia = !next.scopes.includes(mediaScope);
+          const mediaAgent = provider.agents[0] ?? 'claude-code';
+          for (const model of mediaModels) {
+            const key = keyOf(mediaAgent, provider.id, model.id);
+            if (initializeMedia) next.defaults[key] = model.defaultEnabled !== false;
+          }
+          if (!next.scopes.includes(mediaScope)) next.scopes.push(mediaScope);
+        }
       }
       if (Object.keys(aliases).length !== Object.keys(map).length
         && !persist(aliases, { operation: 'bulk', providerId: '*', enabled: true })) return false;

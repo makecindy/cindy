@@ -29,8 +29,9 @@ describe('model management state across execution channels', () => {
     });
     expect(modelManagementState(provider, image)).toMatchObject({
       ready: true,
-      selected: false,
+      selected: true,
       hidden: false,
+      canSelect: true,
     });
   });
   it('does not invent readiness for an older host or another media model', () => {

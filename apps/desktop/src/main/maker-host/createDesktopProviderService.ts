@@ -116,6 +116,7 @@ import {
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
+import { clearOpenAiMediaModels } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -437,6 +438,7 @@ function handleProviderSecretsCleared(): void {
   clearDiscoveredProviderModels();
   clearXaiDiscoveredModels();
   clearXaiMediaModels();
+  clearOpenAiMediaModels();
 }
 
 /**

@@ -12,6 +12,7 @@ function deps(
     refreshXd: vi.fn(async () => {}),
     refreshAnthropic: vi.fn(async () => true),
     refreshOpenAi: vi.fn(async () => true),
+    refreshOpenAiMedia: vi.fn(async () => true),
     refreshXai: vi.fn(async () => true),
     refreshXaiMedia: vi.fn(async () => true),
     ...overrides,
@@ -28,6 +29,7 @@ describe('refreshBuiltinProviderModels', () => {
     const d = deps();
     await refreshBuiltinProviderModels(providerId, d);
     expect(d[method]).toHaveBeenCalledOnce();
+    if (providerId === 'openai') expect(d.refreshOpenAiMedia).toHaveBeenCalledOnce();
     if (providerId === 'xai') expect(d.refreshXaiMedia).toHaveBeenCalledOnce();
   });
 
@@ -38,6 +40,9 @@ describe('refreshBuiltinProviderModels', () => {
     await expect(
       refreshBuiltinProviderModels('openai', deps({ refreshOpenAi: async () => false })),
     ).rejects.toThrow(/OpenAI model discovery/);
+    const openaiMediaMiss = deps({ refreshOpenAiMedia: async () => false });
+    await expect(refreshBuiltinProviderModels('openai', openaiMediaMiss)).resolves.toBeUndefined();
+    expect(openaiMediaMiss.refreshOpenAi).toHaveBeenCalledOnce();
     await expect(
       refreshBuiltinProviderModels('xai', deps({ refreshXai: async () => false })),
     ).rejects.toThrow(/xAI account model discovery/);

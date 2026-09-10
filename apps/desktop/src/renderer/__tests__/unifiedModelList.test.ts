@@ -194,6 +194,12 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     expect(isRowDisabled(image)).toBe(true);
     expect(isRowPaymentRequired(image)).toBe(true);
     expect(rows.find((r) => r.id === 'seedance-fast')).toBeTruthy();
+    expect(
+      modelVisibilityTargets(withMedia, image, true),
+    ).toEqual([{ agent: 'claude-code', modelId: 'gpt-image-2' }]);
+    expect(
+      modelVisibilityTargets(withMedia, rows.find((r) => r.id === 'seedance-fast')!, false),
+    ).toEqual([{ agent: 'claude-code', modelId: 'seedance-fast' }]);
     // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
     expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);
     expect(

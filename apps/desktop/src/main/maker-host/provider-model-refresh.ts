@@ -11,6 +11,7 @@ export interface BuiltinProviderModelRefreshDeps {
   refreshXd(): Promise<void>;
   refreshAnthropic(): Promise<boolean>;
   refreshOpenAi(): Promise<boolean>;
+  refreshOpenAiMedia(): Promise<boolean>;
   refreshXai(): Promise<boolean>;
   refreshXaiMedia(): Promise<boolean>;
 }
@@ -32,6 +33,10 @@ export async function refreshBuiltinProviderModels(
       if (!(await deps.refreshOpenAi())) {
         throw new Error('OpenAI model discovery did not apply to the current runtime');
       }
+      // ChatGPT model/list is chat-only. Image discovery is a separate /v1/models
+      // pass; 401 or a chat-only payload must not fail the chat refresh or wipe
+      // the bundled GPT Image catalog.
+      await deps.refreshOpenAiMedia();
       return;
     case 'xai':
       if (!(await deps.refreshXai())) {

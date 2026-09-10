@@ -159,6 +159,11 @@ export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderVie
         if (value !== undefined) snapshot[keyOf(agent, provider.id, model.id)] = value;
       }
     }
+    const mediaAgent = provider.agents[0] ?? 'claude-code';
+    for (const model of [...(provider.imageModels ?? []), ...(provider.videoModels ?? [])]) {
+      const value = getModelVisibilityOverride(mediaAgent, provider.id, model.id);
+      if (value !== undefined) snapshot[keyOf(mediaAgent, provider.id, model.id)] = value;
+    }
   }
   return snapshot;
 }

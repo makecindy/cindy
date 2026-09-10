@@ -29,6 +29,9 @@ export interface ProviderMediaRuntimeResult {
 interface ProviderMediaRuntime {
   listModels(): ProviderMediaRuntimeModel[];
   listVideoModels?(): ProviderMediaRuntimeModel[];
+  /** Settings readiness; must include hidden models so the display switch stays togglable. */
+  listExecutableModels?(): ProviderMediaRuntimeModel[];
+  listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
   invoke(request: ProviderMediaRuntimeRequest): Promise<ProviderMediaRuntimeResult>;
 }
 
@@ -44,7 +47,10 @@ export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
 
 /** Readiness only; dispatch still belongs to the image/video execution registries. */
 export function listReadyProviderMediaModels(): ProviderMediaRuntimeModel[] {
-  return [...listProviderMediaModels(), ...(runtime?.listVideoModels?.() ?? [])];
+  return [
+    ...(runtime?.listExecutableModels?.() ?? listProviderMediaModels()),
+    ...(runtime?.listExecutableVideoModels?.() ?? runtime?.listVideoModels?.() ?? []),
+  ];
 }
 
 export function resolveProviderMediaModel(

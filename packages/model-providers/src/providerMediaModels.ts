@@ -106,14 +106,17 @@ export function projectProviderMediaModels(
           options.live ? pickModelMetadata(model) : model.discoveredMetadata,
           options.userMetadata?.(model.id, model),
         );
-        const nativeApi = declared.find(
+        const declaredMatch = declared.find(
           ({ route }) => route.modelId === catalogModelId(model.id),
-        )?.entry.nativeApi;
+        );
+        const nativeApi = declaredMatch?.entry.nativeApi;
+        const defaultEnabled = declaredMatch?.entry.defaultEnabled;
         // Preserve the source's real ID, payment state and disable flag.
         return {
           ...model,
           ...metadata,
           ...(nativeApi !== undefined ? { nativeApi } : {}),
+          ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           id: model.id,
           name: metadata.name ?? model.name,
         };
