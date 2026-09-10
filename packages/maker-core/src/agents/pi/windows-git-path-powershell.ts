@@ -104,10 +104,10 @@ function windowsPathKindProbeLines(outputLine: string): string[] {
   ];
 }
 
-export function maxWindowsPathKindProbeBatchCount(timeoutMs: number): number {
+export function maxWindowsPathKindProbeBatchCount(timeoutMs: number, requestedOperationTimeoutMs = 1_250): number {
   const budgetMs = Math.max(timeoutMs - 250, 1);
   const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
-  const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
+  const operationTimeoutMs = Math.min(availableOperationBudgetMs, Math.max(requestedOperationTimeoutMs, 1));
   const maxOperationWaves = Math.max(Math.floor(availableOperationBudgetMs / operationTimeoutMs), 1);
   return 4 * maxOperationWaves;
 }
@@ -116,6 +116,7 @@ export function buildWindowsPathKindProbeScript(
   candidateCount: number,
   timeoutMs: number,
   batchCount = candidateCount,
+  options: { operationTimeoutMs?: number } = {},
 ): string {
   const inputPrelude = [
     '$stdin = [Console]::OpenStandardInput()',
@@ -134,8 +135,8 @@ export function buildWindowsPathKindProbeScript(
   const operationCount = Math.min(Math.max(batchCount, 1), Math.max(candidateCount, 1));
   const maxConcurrency = Math.min(operationCount, 4);
   const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
-  const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
-  const maxOperationCount = Math.min(operationCount, maxWindowsPathKindProbeBatchCount(timeoutMs));
+  const operationTimeoutMs = Math.min(availableOperationBudgetMs, Math.max(options.operationTimeoutMs ?? 1_250, 1));
+  const maxOperationCount = Math.min(operationCount, maxWindowsPathKindProbeBatchCount(timeoutMs, operationTimeoutMs));
   const encodedProbeCommand = Buffer.from([
     '$paths = @(([string]$env:CINDY_WINDOWS_GIT_PATH_CANDIDATES | ConvertFrom-Json))',
     'foreach ($pathValue in $paths) {',
