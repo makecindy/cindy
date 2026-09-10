@@ -3,6 +3,7 @@ import { LockKeyhole, ScanFace } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { NativeSwitch } from "@/platform/chrome/NativeSwitch";
+import { supportsAutoUnlock } from "./autoUnlockSupport";
 import {
   iconSize,
   iconStroke,
@@ -13,6 +14,7 @@ import {
 } from "@/theme";
 
 export interface RemoteDesktopSecuritySettingsProps {
+  hostPlatform?: string;
   autoUnlock: boolean;
   biometricVerification: boolean;
   biometricAvailable?: boolean;
@@ -57,7 +59,7 @@ export function RemoteDesktopSecuritySettings(
   );
   return (
     <View style={{ gap: spacing.sm }}>
-      {Platform.OS === "ios" && (
+      {supportsAutoUnlock(props.hostPlatform) && (
         <>
           <View
             style={{
@@ -198,7 +200,7 @@ export function RemoteDesktopSecuritySettings(
           />
         </View>
       </View>
-      {Platform.OS === "ios" &&
+      {supportsAutoUnlock(props.hostPlatform) &&
         (props.notice || (!props.available && !props.busy)) && (
           <Text style={hint} accessibilityRole="alert">
             {props.notice || t("remoteDesktop.autoUnlockUnavailable")}

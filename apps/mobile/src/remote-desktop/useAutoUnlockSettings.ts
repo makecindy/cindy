@@ -13,6 +13,7 @@ import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { remoteCredentials as native } from "../../modules/cindy-remote-credentials/src";
 import { configureCredentialIdentity } from "./credentialIdentity";
 import { credentialStep } from "./credentialDiagnostics";
+import { supportsAutoUnlock } from "./autoUnlockSupport";
 import {
   credentialErrorKey,
   RemoteDesktopCredentialSession,
@@ -25,7 +26,11 @@ const defaults = {
   biometricPreferred: true,
 };
 
-export function useAutoUnlockSettings(target: string, active = true) {
+export function useAutoUnlockSettings(
+  target: string,
+  active: boolean,
+  getHostPlatform: () => string | undefined,
+) {
   const auth = useAuth(),
     link = useDeviceLink();
   const { t, i18n } = useTranslation(),
@@ -76,6 +81,7 @@ export function useAutoUnlockSettings(target: string, active = true) {
     const check = () => {
       if (
         !activeRef.current ||
+        !supportsAutoUnlock(getHostPlatform()) ||
         !mounted.current ||
         generation !== epoch.current ||
         activeTarget.current !== target ||
@@ -91,7 +97,7 @@ export function useAutoUnlockSettings(target: string, active = true) {
     };
   }
   async function read() {
-    if (!available) return defaults;
+    if (!available || !supportsAutoUnlock(getHostPlatform())) return defaults;
     const current = await scope();
     const value = await credentialStep("read-settings", () =>
       native!.savedUnlockSettings!(...current.args),
@@ -170,7 +176,7 @@ export function useAutoUnlockSettings(target: string, active = true) {
     }
   }
   async function change(action: () => Promise<void>) {
-    if (pending.current) return;
+    if (pending.current || !supportsAutoUnlock(getHostPlatform())) return;
     const generation = epoch.current;
     pending.current = true;
     setBusy(true);
@@ -233,7 +239,13 @@ export function useAutoUnlockSettings(target: string, active = true) {
       attempted.current = false;
     },
     maybeUnlock: async () => {
-      if (!available || attempted.current || pending.current) return;
+      if (
+        !available ||
+        !supportsAutoUnlock(getHostPlatform()) ||
+        attempted.current ||
+        pending.current
+      )
+        return;
       try {
         const saved = await read();
         if (!saved.autoUnlock) return;

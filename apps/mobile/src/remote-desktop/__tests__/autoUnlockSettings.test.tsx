@@ -5,6 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoUnlockSettings } from "../useAutoUnlockSettings";
 
 const fixture = vi.hoisted(() => ({
+  hostPlatform: "darwin" as string | undefined,
+  platform: "ios",
   owner: {
     accountId: "test-account",
     accountKey: "test-account",
@@ -19,6 +21,13 @@ const fixture = vi.hoisted(() => ({
   openLink: vi.fn(),
   ensure: vi.fn(),
   close: vi.fn(),
+}));
+vi.mock("react-native", () => ({
+  Platform: {
+    get OS() {
+      return fixture.platform;
+    },
+  },
 }));
 vi.mock("@/auth/AuthContext", () => ({
   useAuth: () => ({ getAccessToken: async () => "test-token" }),
@@ -62,11 +71,13 @@ let root: Root,
   host: HTMLDivElement,
   value: ReturnType<typeof useAutoUnlockSettings>;
 function Probe({ active = true }: { active?: boolean }) {
-  value = useAutoUnlockSettings("test-mac", active);
+  value = useAutoUnlockSettings("test-mac", active, () => fixture.hostPlatform);
   return null;
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  fixture.hostPlatform = "darwin";
+  fixture.platform = "ios";
   fixture.settings = { autoUnlock: false, biometricVerification: false };
   fixture.read.mockImplementation(async () => ({ ...fixture.settings }));
   fixture.invoke.mockResolvedValue({
@@ -88,6 +99,37 @@ it("does not perform any network or password operation when automatic unlock is 
   await act(async () => value.maybeUnlock());
   expect(fixture.invoke).not.toHaveBeenCalled();
   expect(fixture.ensure).not.toHaveBeenCalled();
+});
+it.each(["win32", "linux", undefined])(
+  "does not access credentials for unsupported host %s",
+  async (platform) => {
+    fixture.hostPlatform = platform;
+    fixture.settings.autoUnlock = true;
+    vi.clearAllMocks();
+    await act(async () => {
+      await value.maybeUnlock();
+      value.onAutoUnlock(true);
+      value.onBiometricVerification(true);
+    });
+    expect(fixture.read).not.toHaveBeenCalled();
+    expect(fixture.invoke).not.toHaveBeenCalled();
+    expect(fixture.biometric).not.toHaveBeenCalled();
+    expect(fixture.ensure).not.toHaveBeenCalled();
+  },
+);
+it("uses the just-discovered Mac platform before a React render", async () => {
+  fixture.hostPlatform = undefined;
+  await act(async () => value.maybeUnlock());
+  fixture.hostPlatform = "darwin";
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValue({
+    version: 1,
+    state: "locked",
+    ready: true,
+    descriptor: "test-descriptor",
+  });
+  await act(async () => value.maybeUnlock());
+  expect(fixture.ensure).toHaveBeenCalledTimes(1);
 });
 it("does not use a saved password or Face ID when the Mac is already unlocked", async () => {
   fixture.settings.autoUnlock = true;

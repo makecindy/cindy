@@ -8,17 +8,24 @@ import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 
 vi.mock("../useAutoUnlockSettings", () => ({
-  useAutoUnlockSettings: () => ({
-    autoUnlock: fixture.securityAutoUnlock,
-    biometricVerification: true,
-    available: true,
-    busy: fixture.securityBusy,
-    notice: null,
-    onAutoUnlock: vi.fn(),
-    onBiometricVerification: vi.fn(),
-    maybeUnlock: async () => {},
-    resetConnectionAttempt: fixture.resetUnlockAttempt,
-  }),
+  useAutoUnlockSettings: (
+    _target: string,
+    _active: boolean,
+    getHost: () => string | undefined,
+  ) => {
+    fixture.getHost = getHost;
+    return {
+      autoUnlock: fixture.securityAutoUnlock,
+      biometricVerification: true,
+      available: true,
+      busy: fixture.securityBusy,
+      notice: null,
+      onAutoUnlock: vi.fn(),
+      onBiometricVerification: vi.fn(),
+      maybeUnlock: fixture.maybeUnlock,
+      resetConnectionAttempt: fixture.resetUnlockAttempt,
+    };
+  },
 }));
 vi.mock("../useLockOnExitPreference", () => ({
   useLockOnExitPreference: () => [
@@ -39,6 +46,10 @@ const fixture = vi.hoisted(() => ({
   lockSupported: true,
   alert: vi.fn(),
   resetUnlockAttempt: vi.fn(),
+  maybeUnlock: vi.fn(async () => {}),
+  hostPlatform: "darwin" as string | undefined,
+  deviceId: "computer",
+  getHost: (() => undefined) as () => string | undefined,
   platform: "ios",
   keyboardListeners: {} as Record<string, (event: unknown) => void>,
   views: {} as Record<string, any>,
@@ -125,7 +136,10 @@ vi.mock("expo-router", () => ({
   Stack: { Screen: () => null },
   useIsFocused: () => fixture.focused,
   useRouter: () => ({}),
-  useLocalSearchParams: () => ({ deviceId: "computer", deviceName: "My Mac" }),
+  useLocalSearchParams: () => ({
+    deviceId: fixture.deviceId,
+    deviceName: "My Mac",
+  }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
 vi.mock("react-native-safe-area-context", () => ({
@@ -290,6 +304,8 @@ beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   fixture.platform = "ios";
+  fixture.hostPlatform = "darwin";
+  fixture.deviceId = "computer";
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
   fixture.themeMode = "light";
@@ -323,7 +339,7 @@ beforeEach(() => {
           canControl: fixture.canControl,
           systemAudio: fixture.systemAudio,
           videoSettings: fixture.systemAudio,
-          platform: "darwin",
+          platform: fixture.hostPlatform,
           displays: [display],
         };
       case "start":
@@ -602,27 +618,54 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
   });
-  it("hides iOS-only unlock settings on Android while retaining exit locking", async () => {
-    fixture.platform = "android";
+  it("does not reuse Mac eligibility when the route changes to another host", async () => {
     await connect();
+    expect(fixture.getHost()).toBe("darwin");
     act(() => button("operations").click());
     act(() => button("security").click());
     expect(
       host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
-    ).toBeNull();
-    expect(
-      host.querySelector('[data-testid="remoteDesktop.biometricVerification"]'),
-    ).toBeNull();
-    expect(host.textContent).not.toContain(
-      "remoteDesktop.autoUnlockStorageHint",
-    );
-    expect(host.textContent).not.toContain(
-      "remoteDesktop.autoUnlockUnavailable",
-    );
-    expect(
-      host.querySelector('[data-testid="remoteDesktop.lockOnExit"]'),
     ).not.toBeNull();
+    fixture.deviceId = "other-computer";
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(fixture.getHost()).toBeUndefined();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+    ).toBeNull();
   });
+  it.each([
+    ["android", "darwin"],
+    ["ios", "win32"],
+    ["ios", "linux"],
+    ["ios", undefined],
+  ])(
+    "hides unsupported unlock settings for %s / %s while retaining exit locking",
+    async (controller, remote) => {
+      fixture.platform = controller!;
+      fixture.hostPlatform = remote;
+      await connect();
+      expect(fixture.maybeUnlock).not.toHaveBeenCalled();
+      act(() => button("operations").click());
+      act(() => button("security").click());
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+      ).toBeNull();
+      expect(
+        host.querySelector(
+          '[data-testid="remoteDesktop.biometricVerification"]',
+        ),
+      ).toBeNull();
+      expect(host.textContent).not.toContain(
+        "remoteDesktop.autoUnlockStorageHint",
+      );
+      expect(host.textContent).not.toContain(
+        "remoteDesktop.autoUnlockUnavailable",
+      );
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.lockOnExit"]'),
+      ).not.toBeNull();
+    },
+  );
   it.each(["light", "dark"])(
     "keeps panel geometry and controls stable across pages and loading in %s",
     async (theme) => {

@@ -81,6 +81,7 @@ import { remoteDesktopViewerHtml } from "./viewerHtml";
 import { useMouseButtonsPreference } from "./useMouseButtonsPreference";
 import { useInputModePreference } from "./useInputModePreference";
 import { useAutoUnlockSettings } from "./useAutoUnlockSettings";
+import { supportsAutoUnlock } from "./autoUnlockSupport";
 import { useLockOnExitPreference } from "./useLockOnExitPreference";
 import { useVideoSettingsPreference } from "./useVideoSettingsPreference";
 import { PermissionGuide } from "./PermissionGuide";
@@ -164,7 +165,17 @@ export default function RemoteDesktopScreen() {
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
   const link = useDeviceLink();
-  const security = useAutoUnlockSettings(deviceId, focused);
+  const [hostCaps, setHostCaps] = useState<{
+    deviceId: string;
+    value: RemoteDesktopCapabilities;
+  } | null>(null);
+  const caps = hostCaps?.deviceId === deviceId ? hostCaps.value : null;
+  const capsRef = useRef(hostCaps);
+  const security = useAutoUnlockSettings(deviceId, focused, () =>
+    capsRef.current?.deviceId === deviceId
+      ? capsRef.current.value.platform
+      : undefined,
+  );
   const securityRef = useRef(security);
   securityRef.current = security;
   const [lockOnExit, setLockOnExit, lockOnExitLoaded] =
@@ -214,11 +225,8 @@ export default function RemoteDesktopScreen() {
   const frameBusy = useRef<string | null>(null);
   const inputBusy = useRef<string | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
-  const [caps, setCaps] = useState<RemoteDesktopCapabilities | null>(null);
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
-  const capsRef = useRef(caps);
-  capsRef.current = caps;
   const [status, setStatus] = useState("connecting");
   const [error, setError] = useState<string | null>(null);
   const [frameReady, setFrameReady] = useState(false);
@@ -506,14 +514,25 @@ export default function RemoteDesktopScreen() {
       try {
         await linkRef.current.openLink(deviceId);
         if (current !== generation.current) return;
-        await securityRef.current.maybeUnlock();
-        if (current !== generation.current) return;
-        const result = await request<RemoteDesktopCapabilities>({
+        let result = await request<RemoteDesktopCapabilities>({
           op: "capabilities",
         });
         if (current !== generation.current) return;
         if (result?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
-        setCaps(result);
+        // Publish host eligibility synchronously before native credential work;
+        // React may not have rendered the capability response yet.
+        capsRef.current = { deviceId, value: result };
+        if (result.enabled && supportsAutoUnlock(result.platform)) {
+          await securityRef.current.maybeUnlock();
+          if (current !== generation.current) return;
+          result = await request<RemoteDesktopCapabilities>({
+            op: "capabilities",
+          });
+          if (current !== generation.current) return;
+          if (result?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
+          capsRef.current = { deviceId, value: result };
+        }
+        setHostCaps({ deviceId, value: result });
         if (!result.enabled) throw new Error("DESKTOP_DISABLED");
         if (recovery.current.resuming && !result.automaticReconnect)
           throw new Error("CHANNEL_NOT_ALLOWED");
@@ -730,7 +749,9 @@ export default function RemoteDesktopScreen() {
       }>({
         op: "frame",
         lease: current.lease,
-        cursorOverlay: capsRef.current?.cursorOverlay === true,
+        cursorOverlay:
+          capsRef.current?.deviceId === deviceId &&
+          capsRef.current.value.cursorOverlay === true,
       })
         .then((result) => {
           if (
@@ -1632,6 +1653,7 @@ export default function RemoteDesktopScreen() {
                   onPage={setControlPage}
                   security={{
                     ...security,
+                    hostPlatform: caps?.platform,
                     lockOnExit,
                     lockOnExitAvailable:
                       lockOnExitLoaded && caps?.lockOnExit === true,
