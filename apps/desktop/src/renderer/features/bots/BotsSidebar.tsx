@@ -26,6 +26,7 @@ import {
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { useRemoteBots } from './useRemoteBots';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
@@ -138,13 +139,14 @@ function BotsSidebarContent() {
   }, [botId, bots, sessionId]);
   const fireSessionNotification = useCallback(
     (targetSessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      const dataOwnerAtNotification = getDataOwnerGeneration();
       const owner = sessionOwners.get(targetSessionId);
       if (owner) {
         const title =
           owner.title.trim() && owner.title !== owner.bot.name
             ? `${owner.bot.name} · ${owner.title}`
             : owner.bot.name;
-        void sendSessionEventNotification(targetSessionId, title, kind);
+        void sendSessionEventNotification(targetSessionId, title, kind, dataOwnerAtNotification);
         return;
       }
       // useSessionRunningStatus observes the shared runtime map, so it also
@@ -158,6 +160,7 @@ function BotsSidebarContent() {
             targetSessionId,
             projectDraftSessionTitle(session.title, t('ccAgent.common.unnamedSession')),
             kind,
+            dataOwnerAtNotification,
           );
         })
         .catch(() => {
@@ -165,6 +168,7 @@ function BotsSidebarContent() {
             targetSessionId,
             t('ccAgent.common.unnamedSession'),
             kind,
+            dataOwnerAtNotification,
           );
         });
     },
