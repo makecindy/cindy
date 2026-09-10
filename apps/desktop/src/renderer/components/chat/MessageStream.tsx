@@ -75,7 +75,12 @@ import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
-import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
+import { useTurnChangeSets } from './useTurnChangeSets';
+import {
+  canCompensateMessageHeight,
+  rememberedItemIntrinsicSize,
+  viewportAnchorCorrection,
+} from './messageViewportCompensation';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -2699,41 +2704,7 @@ export function MessageStream({
     }
   }, [messages]);
 
-  const [turnChangeSets, setTurnChangeSets] = useState<TurnChangeSetSummary[]>([]);
-  useEffect(() => {
-    if (!sessionId || remoteHostId !== null || isRemoteSessionSticky(sessionId)) {
-      setTurnChangeSets([]);
-      return;
-    }
-    let cancelled = false;
-    setTurnChangeSets([]);
-    const off = subscribeTurnChangeSetUpdated(sessionId, ({ summary }) => {
-      if (cancelled) return;
-      setTurnChangeSets((current) => {
-        const next = current.filter((item) => item.id !== summary.id);
-        next.push(summary);
-        next.sort((a, b) => a.createdAt - b.createdAt);
-        return next;
-      });
-    });
-    void window.electronAPI.maker
-      .listTurnChangeSets(sessionId)
-      .then((next) => {
-        if (cancelled) return;
-        setTurnChangeSets((current) => {
-          const merged = new Map(next.map((item) => [item.id, item]));
-          for (const item of current) merged.set(item.id, item);
-          return Array.from(merged.values()).sort((a, b) => a.createdAt - b.createdAt);
-        });
-      })
-      .catch(() => {
-        // A live push may already have arrived; keep it instead of clearing the card.
-      });
-    return () => {
-      cancelled = true;
-      off();
-    };
-  }, [remoteHostId, sessionId]);
+  const turnChangeSets = useTurnChangeSets(sessionId, remoteHostId);
 
   // 「用户实际看得见的那份序列」。turn 边界与 last-user 这类**可见 UI 派生**统一吃它,
   // 否则被隐藏的子代理行会被当成 turn 边界或「最后一条 user 消息」,让可见气泡丢掉编辑
@@ -3172,9 +3143,12 @@ export function MessageStream({
       const child =
         idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
       if (!container || !child) return;
-      const delta =
-        child.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
-      if (Math.abs(delta) < 1) return;
+      const delta = viewportAnchorCorrection(
+        container.getBoundingClientRect().top,
+        child.getBoundingClientRect().top,
+        offset,
+      );
+      if (delta === 0) return;
       const generation = beginProgrammaticScroll();
       container.scrollTop += delta;
       requestAnimationFrame(() => finishProgrammaticScroll(generation));
@@ -3188,9 +3162,10 @@ export function MessageStream({
       // 会让隐藏 child 继续当活锚点，删除后把组滚到顶。focus 跳转仍走 queryFocusElement。
       const target = container ? queryMessageElement(container, clientId) : null;
       if (!container || !target) return false;
-      const delta =
-        target.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
-      if (Math.abs(delta) < 1) return true;
+      const rect = target.getBoundingClientRect();
+      if (rect.height <= 0) return false;
+      const delta = viewportAnchorCorrection(container.getBoundingClientRect().top, rect.top, offset);
+      if (delta === 0) return true;
       const generation = beginProgrammaticScroll();
       container.scrollTop += delta;
       requestAnimationFrame(() => finishProgrammaticScroll(generation));
@@ -3611,6 +3586,21 @@ export function MessageStream({
     }
   }, [firstVisibleItemKey, windowCoversEnd]);
 
+  // Seed Chromium's offscreen estimates before positioning the saved anchor.
+  // Remounting otherwise forgets the measured sizes and starts every row at
+  // 240px, which can clamp scrollTop for one paint even with cached cards.
+  useLayoutEffect(() => {
+    const items = itemsRef.current;
+    const sizes = restoreSnapshotRef.current?.itemHeights;
+    if (!items || !sizes) return;
+    const width = items.getBoundingClientRect().width;
+    visibleRenderItems.forEach((item, index) => {
+      const element = items.children[index] as HTMLElement | undefined;
+      const size = rememberedItemIntrinsicSize(sizes.byKey[item.key], sizes.width, width);
+      if (element) element.style.containIntrinsicBlockSize = size ?? '';
+    });
+  }, [visibleRenderItems]);
+
   // 把视口滚回快照记录的「锚点 item + 偏移」。按条目相对定位,所以即使上方图片 /
   // markdown 还没异步渲染完导致高度偏小,也会落在正确的 item 上;settle 期间由
   // ResizeObserver 反复调用本函数纠偏(幂等,不漂移)。stable 引用(无依赖)。
@@ -3623,6 +3613,15 @@ export function MessageStream({
     if (idx < 0) return; // 锚点 item 不在当前窗口(消息被删 / clear)→ 放弃还原,停在默认位置
     const child = items.children[idx] as HTMLElement | undefined;
     if (!child) return;
+    // A work group can remount collapsed or settle internally after its outer
+    // row was positioned. Prefer the same visible child when it still exists.
+    if (
+      snap.messageClientId &&
+      scrollMessageToViewportTop(snap.messageClientId, snap.messageOffset ?? 0)
+    ) {
+      refreshViewportAnchor();
+      return;
+    }
     const cTop = container.getBoundingClientRect().top;
     const rect = child.getBoundingClientRect();
     // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 rect.top 上移 delta。
@@ -3636,7 +3635,12 @@ export function MessageStream({
     requestAnimationFrame(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
-  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+  }, [
+    beginProgrammaticScroll,
+    finishProgrammaticScroll,
+    refreshViewportAnchor,
+    scrollMessageToViewportTop,
+  ]);
   // ResizeObserver 回调用 ref 取最新 applyRestore,避免把它放进 observer 依赖导致
   // 流式每 token(visibleRenderItems 变)都 disconnect/reconnect。
   const applyRestoreRef = useRef(applyRestore);
@@ -3645,13 +3649,38 @@ export function MessageStream({
   // 保存当前浏览位置到 sessionScrollStore,并同步刷新删除前快照(单次量测)。用户
   // 滚动时持续调用(DOM 一定存活),unmount cleanup 兜底最后一帧;量测失败则跳过。
   const saveRafRef = useRef<number | null>(null);
-  const saveScrollSnapshot = useCallback(() => {
+  const saveScrollSnapshot = useCallback((includeHeights = false) => {
     const measured = refreshViewportAnchor();
     if (!sessionId || !measured) return;
+    const items = itemsRef.current;
+    let itemHeights: SessionScrollSnapshot['itemHeights'];
+    // Only capture sizes on leave, and bound them to the last mounted tail.
+    if (includeHeights && items) {
+      const byKey: Record<string, number> = {};
+      const visible = visibleRenderItemsRef.current;
+      for (
+        let index = Math.max(0, visible.length - RENDER_WINDOW_INITIAL_ITEMS);
+        index < visible.length;
+        index++
+      ) {
+        const element = items.children[index] as HTMLElement | undefined;
+        if (!element) continue;
+        const style = getComputedStyle(element);
+        // contain-intrinsic-size describes the content box, excluding padding/borders.
+        byKey[visible[index].key] =
+          element.getBoundingClientRect().height -
+          (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0) -
+          (parseFloat(style.borderTopWidth) || 0) - (parseFloat(style.borderBottomWidth) || 0);
+      }
+      itemHeights = { width: items.getBoundingClientRect().width, byKey };
+    }
     saveSessionScroll(sessionId, {
       windowAnchorKey: firstVisibleItemKeyRef.current,
       viewportTopKey: measured.viewportTopKey,
       offset: measured.offset,
+      messageClientId: measured.messageClientId,
+      messageOffset: measured.messageOffset,
+      itemHeights,
       isNearBottom: isNearBottomRef.current,
       anchoredForwardCount:
         firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
@@ -3694,7 +3723,7 @@ export function MessageStream({
         cancelAnimationFrame(saveRafRef.current);
         saveRafRef.current = null;
       }
-      saveScrollSnapshot();
+      saveScrollSnapshot(true);
     };
     // sessionId 在本组件生命周期内不变(parent 用 key 重挂载);saveScrollSnapshot
     // 通过 ref 镜像在 cleanup 时读到最新的位置 / 锚点 / nearBottom。
@@ -3844,6 +3873,7 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
+    restoringRef.current = false;
     if (!isNearBottomRef.current) return;
     bumpSendFollowCancelGeneration(sessionId);
     isNearBottomRef.current = false;
@@ -3855,6 +3885,7 @@ export function MessageStream({
   // 那里开始跟随(与 resolveEffectiveNearBottom 同口径)。覆盖末尾的锚定窗也要
   // 一并清掉,否则下一条 token 会 uncover 再 unpin。
   const pinAutoFollowForUserDownIntent = useCallback(() => {
+    restoringRef.current = false;
     if (!windowCoversEndRef.current) return;
     if (isNearBottomRef.current) return;
     isNearBottomRef.current = true;
@@ -3933,6 +3964,11 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
+    // Only input intent ends restoration. Chromium's intrinsic-size correction
+    // also emits scroll events and must not be mistaken for a user scroll.
+    restoringRef.current = false;
+    suppressHeightCompensationUntilRef.current = 0;
+    disclosureAnchorRef.current = null;
     // 只在打断真正的导航跳转(chip / focus / 延期删除补偿)时解除跟随。
     // 流式 pinToBottom 也会打开 programmaticScrollRef,把它算进接管条件会让
     // 生成期间任意滚轮或点滚动条都把跟随掐死;人已经在底部时再也产生不了
@@ -4003,6 +4039,7 @@ export function MessageStream({
   );
   const beginChipJump = useCallback(
     (target: Omit<ChipJumpTarget, 'generation'>) => {
+      restoringRef.current = false;
       if (chipJumpClearTimerRef.current !== null) {
         window.clearTimeout(chipJumpClearTimerRef.current);
       }
@@ -4229,6 +4266,10 @@ export function MessageStream({
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
       if (!ownsHardwareScrollActions) return;
       if (event.defaultPrevented) return;
+      if (event.key === 'Tab') {
+        clearChipJumpSuppression();
+        return;
+      }
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
       if (isEditableKeyboardTarget(event.target)) return;
       clearChipJumpSuppression();
@@ -4301,6 +4342,7 @@ export function MessageStream({
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    restoringRef.current = false;
     // 显式的新导航取代尚未落定的搜索 focus；自身的底部落点会消费此前延期的删除补偿。
     cancelFocusJump({ consumeDeferredDelete: true });
     const chipJumpGeneration = chipJumpGenerationRef.current;
@@ -4520,6 +4562,38 @@ export function MessageStream({
     applyRestore();
   }, [visibleRenderItems, applyRestore]);
 
+  const suppressHeightCompensationUntilRef = useRef(0);
+  const disclosureAnchorRef = useRef<{ element: Element; offset: number } | null>(null);
+  const compensateMessageHeight = useCallback(() => {
+    if (
+      !canCompensateMessageHeight({
+        restoring: restoringRef.current,
+        nearBottom: isNearBottomRef.current,
+        programmatic: programmaticScrollRef.current,
+        loadingMore: isLoadingMore === true,
+        pendingPrepend: prevScrollHeightRef.current > 0,
+        pendingUserScroll: saveRafRef.current !== null,
+        dragging: scrollbarDragStartTopRef.current !== null,
+        expanding: performance.now() < suppressHeightCompensationUntilRef.current,
+      })
+    ) return;
+    const snapshot = lastViewportTopRef.current;
+    if (!snapshot) {
+      refreshViewportAnchor();
+      return;
+    }
+    // Missing rows are handled by the existing delete/window restoration path.
+    if (!visibleRenderItemsRef.current.some((item) => item.key === snapshot.viewportTopKey)) return;
+    restoreViewportSnapshot(snapshot);
+  }, [isLoadingMore, refreshViewportAnchor, restoreViewportSnapshot]);
+
+  // Card insertion changes the row sequence before paint; asynchronous work-group
+  // height changes use the same correction below. Both preserve a measured anchor,
+  // rather than adding scrollHeight deltas that Chromium may have applied already.
+  useLayoutEffect(() => {
+    compensateMessageHeight();
+  }, [visibleRenderItems, bottomPadding, compensateMessageHeight]);
+
   // ── Continuous auto-follow via ResizeObserver. ──
   // Catches every source of content-height growth:
   //   • streaming tokens appending to an assistant message
@@ -4533,15 +4607,32 @@ export function MessageStream({
   // 例外:卡片内用户点击"展开详情"(CARD_EXPAND_TOGGLE_EVENT 冒泡上来)。
   // 这是"就地看内容"的意图,贴底时若照常 pin-to-bottom,展开区的高度会把
   // 卡片头部顶出视口上方,看起来像"往上展开"。收到事件后开一个短抑制窗口,
-  // 窗口内的高度变化不 pin(scrollTop 不动 = 展开区自然向下铺开);窗口一过
+  // 窗口内保持被点击的标题位置(也抵消浏览器自己的 anchoring);窗口一过
   // auto-follow 原样恢复,流式跟随不受影响。
   useEffect(() => {
     const content = contentRef.current;
     if (!content) return;
-    let suppressPinUntil = 0;
-    const onCardExpandToggle = () => {
-      suppressPinUntil = performance.now() + CARD_EXPAND_PIN_SUPPRESS_MS;
+    const onCardExpandToggle = (event: Event) => {
+      suppressHeightCompensationUntilRef.current = performance.now() + CARD_EXPAND_PIN_SUPPRESS_MS;
+      restoringRef.current = false;
+      const header = event.target instanceof Element ? event.target.closest('button') : null;
+      const container = scrollRef.current;
+      disclosureAnchorRef.current = header && container
+        ? {
+            element: header,
+            offset: container.getBoundingClientRect().top - header.getBoundingClientRect().top,
+          }
+        : null;
+      refreshViewportAnchor();
     };
+    // Work groups and other disclosure buttons also intentionally change height.
+    // Let the user open/close them, then keep the resulting reading position.
+    const onDisclosureClick = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest('button[aria-expanded]')) {
+        onCardExpandToggle(event);
+      }
+    };
+    content.addEventListener('click', onDisclosureClick, true);
     content.addEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
     const ro = new ResizeObserver(() => {
       // 还原中:内容高度因异步渲染 settle 时,持续按锚点纠偏(直到用户手动滚动接管)。
@@ -4549,19 +4640,46 @@ export function MessageStream({
         applyRestoreRef.current();
         return;
       }
-      if (performance.now() < suppressPinUntil) return;
+      if (performance.now() < suppressHeightCompensationUntilRef.current) {
+        const anchor = disclosureAnchorRef.current;
+        const container = scrollRef.current;
+        if (container && anchor?.element.isConnected) {
+          const delta = viewportAnchorCorrection(
+            container.getBoundingClientRect().top,
+            anchor.element.getBoundingClientRect().top,
+            anchor.offset,
+          );
+          if (delta !== 0) {
+            const generation = beginProgrammaticScroll();
+            container.scrollTop += delta;
+            requestAnimationFrame(() => finishProgrammaticScroll(generation));
+          }
+        }
+        refreshViewportAnchor();
+        return;
+      }
+      disclosureAnchorRef.current = null;
       if (isNearBottomRef.current) {
         pinToBottom();
         return;
       }
+      compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
     ro.observe(content);
     return () => {
       content.removeEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
+      content.removeEventListener('click', onDisclosureClick, true);
       ro.disconnect();
     };
-  }, [pinToBottom, refreshHiddenChildViewportAnchor]);
+  }, [
+    pinToBottom,
+    refreshViewportAnchor,
+    refreshHiddenChildViewportAnchor,
+    compensateMessageHeight,
+    beginProgrammaticScroll,
+    finishProgrammaticScroll,
+  ]);
 
   // 折叠动画末帧可能已是 0fr，再卸载时内容高度几乎不变，ResizeObserver 不一定
   // 再触发。精确 child 节点从 items 子树消失时补一次（数据仍在才重测）。
@@ -4569,11 +4687,12 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!items) return;
     const observer = new MutationObserver(() => {
+      compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
     observer.observe(items, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [refreshHiddenChildViewportAnchor]);
+  }, [compensateMessageHeight, refreshHiddenChildViewportAnchor]);
 
   // F-SYNC-2 + render-window: Preserve scroll position after either
   //   (a) DB prepend (messages 数组前端追加,触发 isLoadingMore false → render)
@@ -4898,6 +5017,11 @@ export function MessageStream({
     const threshold = 100;
 
     const draggingScrollbar = scrollbarDragStartTopRef.current != null;
+    if (restoringRef.current && !draggingScrollbar) {
+      applyRestoreRef.current();
+      prevScrollTopRef.current = el.scrollTop;
+      return;
+    }
     if (!programmaticScrollRef.current || draggingScrollbar) {
       // 用户手动滚动 = 接管浏览,退出「还原中」,后续恢复正常 auto-follow 判定。
       restoringRef.current = false;
