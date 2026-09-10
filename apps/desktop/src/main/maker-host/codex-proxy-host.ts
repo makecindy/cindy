@@ -41,7 +41,9 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
+  chainResponseTransforms,
   createResponsesCustomToolFunctionAdapter,
+  createResponsesNullArrayRepairTransform,
   normalizeResponsesToolItemIds,
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
@@ -3396,10 +3398,18 @@ function createCodexProxyHandle(
       return path.kind !== 'not-custom-provider-route'
         && !(path.kind === 'route' && path.pathKind === 'responses');
     },
-    transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
-      contentType: ctx.responseHeaders['content-type'] ?? '',
-      contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
-    }),
+    transformResponse: (ctx) => {
+      const response = {
+        contentType: ctx.responseHeaders['content-type'] ?? '',
+        contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
+      };
+      // Repair runs first so items with `null` arrays reach the custom-tool adapter (and Codex)
+      // as valid ResponseItems (#4251). The adapter keeps its own compressed/MIME rejections.
+      return chainResponseTransforms(
+        createResponsesNullArrayRepairTransform(response),
+        execAdapter.createResponseTransform(ctx.reqId, response),
+      );
+    },
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
