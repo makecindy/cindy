@@ -104,7 +104,7 @@ describe('history prefetch', () => {
 
 describe('wheel history intent', () => {
   it.each([500, 9000])(
-    'ignores horizontal noise before a vertical gesture (height=%s)',
+    'ignores zoom and horizontal noise before a vertical gesture (height=%s)',
     (scrollHeight) => {
       const fill = vi.fn();
       const unpin = vi.fn();
@@ -129,6 +129,15 @@ describe('wheel history intent', () => {
       const wheel = new Function(...Object.keys(bindings), code + ';return onWheel;')(
         ...Object.values(bindings),
       );
+      for (const modifier of ['ctrlKey', 'metaKey']) {
+        for (const deltaY of [-40, 40]) {
+          wheel({ deltaX: 0, deltaY, [modifier]: true });
+        }
+      }
+      expect(fill).not.toHaveBeenCalled();
+      expect(unpin).not.toHaveBeenCalled();
+      expect(bindings.pinAutoFollowForUserDownIntent).not.toHaveBeenCalled();
+      expect(bindings.clearChipJumpSuppression).not.toHaveBeenCalled();
       wheel({ deltaX: 40, deltaY: -1 });
       wheel({ deltaX: -40, deltaY: -1 });
       wheel({ deltaX: 0, deltaY: 0 });

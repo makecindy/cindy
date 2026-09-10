@@ -4187,6 +4187,9 @@ export function MessageStream({
     // wheel/touchstart 挂在 scroll 容器上(与上 chip 抑制对称)。容器不可滚时
     // 不会产生 scroll 事件,所以用户继续向上滚动的意图必须在这里接住。
     const onWheel = (event: WheelEvent) => {
+      // Chromium reports pinch/modified-wheel zoom as wheel events. Filter at
+      // the input boundary before navigation, follow-state or history effects.
+      if (event.ctrlKey || event.metaKey) return;
       clearChipJumpSuppression();
       if (isUpwardWheelIntent(event)) {
         if (hasNestedScrollableAncestorThatCanScrollUp(root, event.target)) return;
