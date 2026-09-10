@@ -464,6 +464,45 @@ describe('CodexAgent spawn configuration', () => {
     await ordinaryAgain.close();
     await agent.dispose();
   });
+
+  it('keeps an allowlisted plugin runtime policy when dynamic spawn preparation fails', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => {
+      throw new Error('bridge unavailable');
+    });
+    const prepareCodexPluginRuntimeConfig = vi.fn(async () => ({
+      extraArgs: [
+        '--enable',
+        'plugins',
+        '--disable',
+        'remote_plugin',
+        '-c',
+        'plugins."nowledge-mem@nowledge-community".enabled=true',
+      ],
+      enabledPluginIds: ['nowledge-mem@nowledge-community'],
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      disableCodexPluginRuntime: true,
+      prepareCodexPluginRuntimeConfig,
+      prepareCodexExtraSpawnConfig,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-allowlisted-plugin-runtime-fallback',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(createdStdioOptions[0]?.extraArgs).toEqual([
+      '--enable',
+      'plugins',
+      '--disable',
+      'remote_plugin',
+      '-c',
+      'plugins."nowledge-mem@nowledge-community".enabled=true',
+    ]);
+    await handle.close();
+    await agent.dispose();
+  });
 });
 
 describe('CodexAgent oneShot dispatch guard', () => {

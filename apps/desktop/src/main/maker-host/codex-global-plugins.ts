@@ -77,6 +77,11 @@ interface PrepareOptions {
   capabilityRouting?: CapabilityRoutingPolicy;
 }
 
+export interface CodexAllowlistedPluginRuntimeConfig {
+  extraArgs: string[];
+  enabledPluginIds: string[];
+}
+
 type PluginEnablementSnapshot =
   | { status: 'known'; enabledPluginKeys: ReadonlySet<string> }
   | { status: 'unknown' };
@@ -976,6 +981,60 @@ async function readPluginsTable(file: string): Promise<{
       plugins && typeof plugins === 'object' && !Array.isArray(plugins)
         ? (plugins as Record<string, unknown>)
         : {},
+  };
+}
+
+/**
+ * Build a complete local Codex plugin policy for one app-server spawn.
+ * Only explicitly enabled, cached entries from the host allowlist survive;
+ * every other configured plugin is disabled and remote installation stays off.
+ */
+export async function prepareCodexAllowlistedPluginRuntimeConfig(
+  codexHome: string,
+  allowedPluginIds: readonly string[],
+): Promise<CodexAllowlistedPluginRuntimeConfig> {
+  const paths = codexGlobalPluginsPaths(codexHome);
+  const { plugins } = await readPluginsTable(paths.configFile);
+  const allowed = new Set(allowedPluginIds);
+  const enabledPluginIds: string[] = [];
+
+  for (const pluginId of [...allowed].sort()) {
+    const config = plugins[pluginId];
+    if (!isRecord(config) || config['enabled'] === false) continue;
+    const marketplace = marketplaceOfPluginKey(pluginId);
+    if (!marketplace) continue;
+    const pluginName = pluginId.slice(0, -(marketplace.length + 1));
+    if (!(await isDirectory(path.join(paths.cacheDir, marketplace, pluginName)))) {
+      throw new Error(`allowlisted Codex plugin cache is missing: ${pluginId}`);
+    }
+    enabledPluginIds.push(pluginId);
+  }
+
+  if (enabledPluginIds.length === 0) {
+    return {
+      extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin'],
+      enabledPluginIds: [],
+    };
+  }
+
+  const enabled = new Set(enabledPluginIds);
+  const pluginOverrides = Object.keys(plugins)
+    .sort()
+    .flatMap((pluginId) => [
+      '-c',
+      `plugins.${JSON.stringify(pluginId)}.enabled=${enabled.has(pluginId)}`,
+    ]);
+  return {
+    extraArgs: [
+      '--enable',
+      'plugins',
+      '--enable',
+      'hooks',
+      '--disable',
+      'remote_plugin',
+      ...pluginOverrides,
+    ],
+    enabledPluginIds,
   };
 }
 

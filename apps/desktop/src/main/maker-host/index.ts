@@ -99,6 +99,7 @@ import {
   getCodexHome,
   readClaudeApiKey,
 } from './auth-adapters.js';
+import { prepareCodexAllowlistedPluginRuntimeConfig } from './codex-global-plugins.js';
 import { syncOpenAiMediaAfterCodexAuthChange } from './model-discovery/openai-media.js';
 import {
   desktopSessionStorage,
@@ -1405,6 +1406,11 @@ export function getMaker(): Maker {
       binaryPath: codexPath,
       logger: desktopMakerLogger,
       disableCodexPluginRuntime: true,
+      prepareCodexPluginRuntimeConfig: ({ codexHome }) =>
+        prepareCodexAllowlistedPluginRuntimeConfig(
+          codexHome ?? getCodexHome(),
+          ['nowledge-mem@nowledge-community'],
+        ),
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig

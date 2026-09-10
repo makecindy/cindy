@@ -8,6 +8,7 @@ import type { CapabilityRoutingPolicy } from '@cindy/maker-core';
 
 import {
   codexGlobalPluginsPaths,
+  prepareCodexAllowlistedPluginRuntimeConfig,
   prepareCodexGlobalPluginsBridge,
   writeFileAtomicIfUnchanged,
 } from '../maker-host/codex-global-plugins';
@@ -127,6 +128,66 @@ afterEach(async () => {
   const dirs = tmpDirs;
   tmpDirs = [];
   await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe('prepareCodexAllowlistedPluginRuntimeConfig', () => {
+  it('enables only an explicitly enabled cached allowlisted plugin', async () => {
+    const { codexHome, paths } = await setup();
+    await writePluginCache(paths.cacheDir, 'nowledge-community', 'nowledge-mem');
+    await writePluginCache(paths.cacheDir, 'personal', 'other-plugin');
+    await fs.writeFile(
+      paths.configFile,
+      [
+        '[plugins."nowledge-mem@nowledge-community"]',
+        'enabled = true',
+        '',
+        '[plugins."other-plugin@personal"]',
+        'enabled = true',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await prepareCodexAllowlistedPluginRuntimeConfig(
+      codexHome,
+      ['nowledge-mem@nowledge-community'],
+    );
+
+    expect(result.enabledPluginIds).toEqual(['nowledge-mem@nowledge-community']);
+    expect(result.extraArgs).toEqual(expect.arrayContaining([
+      '--enable',
+      'plugins',
+      '--enable',
+      'hooks',
+      '--disable',
+      'remote_plugin',
+      '-c',
+      'plugins."nowledge-mem@nowledge-community".enabled=true',
+      '-c',
+      'plugins."other-plugin@personal".enabled=false',
+    ]));
+  });
+
+  it('keeps the plugin runtime disabled when the allowlisted plugin is disabled', async () => {
+    const { codexHome, paths } = await setup();
+    await writePluginCache(paths.cacheDir, 'nowledge-community', 'nowledge-mem');
+    await writePluginEnabledState(
+      paths.configFile,
+      'nowledge-mem',
+      'nowledge-community',
+      false,
+    );
+
+    await expect(
+      prepareCodexAllowlistedPluginRuntimeConfig(
+        codexHome,
+        ['nowledge-mem@nowledge-community'],
+      ),
+    ).resolves.toEqual({
+      extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin'],
+      enabledPluginIds: [],
+    });
+  });
 });
 
 describe('prepareCodexGlobalPluginsBridge', () => {
