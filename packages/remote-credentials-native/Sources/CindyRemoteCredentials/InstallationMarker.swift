@@ -12,15 +12,19 @@ public enum InstallationMarker {
       var values = URLResourceValues(); values.isExcludedFromBackup = true
       try directory.setResourceValues(values)
       let file = directory.appendingPathComponent("installation-id")
-      let descriptor = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-      if descriptor >= 0 {
-        defer { close(descriptor) }
+      // Publish only a fully written marker. A crash before link leaves an
+      // unreferenced temporary file, never a partial installation identity.
+      let temporary = directory.appendingPathComponent(".installation-id-" + UUID().uuidString)
+      let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+      guard descriptor >= 0 else { throw CredentialError.unavailable }
+      defer { close(descriptor); unlink(temporary.path) }
+      do {
         let id = UUID(), bytes = Array(id.uuidString.lowercased().utf8)
         guard bytes.withUnsafeBytes({ write(descriptor, $0.baseAddress, $0.count) }) == bytes.count,
           fsync(descriptor) == 0 else { throw CredentialError.unavailable }
-        return id
+        if link(temporary.path, file.path) == 0 { return id }
+        guard errno == EEXIST else { throw CredentialError.unavailable }
       }
-      guard errno == EEXIST else { throw CredentialError.unavailable }
       let existing = open(file.path, O_RDONLY | O_NOFOLLOW)
       guard existing >= 0 else { throw CredentialError.unavailable }
       defer { close(existing) }
