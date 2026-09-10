@@ -259,6 +259,20 @@ describe('local profile visibility adoption', () => {
     expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'default', defaultEnabled: false })).toBe(false);
   });
+
+  it('does not adopt a corrupt local map as empty catalog defaults', async () => {
+    seed();
+    memStorage.setItem(mapKey('local-v1'), '{ not valid json');
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'off', defaultEnabled: true })).toBe(false);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBeNull();
+    expect(memStorage.getItem(mapKey('owner-a'))).toBeNull();
+    memStorage.setItem(mapKey('local-v1'), JSON.stringify({ 'pi:xd:off': false }));
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'off', defaultEnabled: true })).toBe(false);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBe('1');
+  });
 });
 
 describe('model visibility across renderer windows', () => {

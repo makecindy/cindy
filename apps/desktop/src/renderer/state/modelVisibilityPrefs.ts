@@ -149,11 +149,18 @@ function adoptLocalModelVisibility(ownerId: string): void {
     followCatalogKeys: [...new Set([...source.followCatalogKeys.filter((key) => !hasTargetScope(key)), ...target?.followCatalogKeys ?? []])],
   };
   const targetFollowCatalogKeys = new Set(target?.followCatalogKeys ?? []);
-  const sourceOverrides = readStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID)));
+  const sourceParsed = parseStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID)));
+  const targetParsed = parseStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
+  if (sourceParsed.corrupt || targetParsed.corrupt) {
+    // Don't copy an empty sanitization of a broken local map, and don't mark adoption
+    // complete — the source can still be retried after it is repaired.
+    mapCorrupt = true;
+    return;
+  }
   const overrides = {
     // Restore defaults is an explicit target choice even though it has no override.
-    ...Object.fromEntries(Object.entries(sourceOverrides).filter(([key]) => !targetFollowCatalogKeys.has(key))),
-    ...readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId))),
+    ...Object.fromEntries(Object.entries(sourceParsed.map).filter(([key]) => !targetFollowCatalogKeys.has(key))),
+    ...targetParsed.map,
   };
   // A failed write leaves the handoff pending. Re-reading and merging under the locks
   // makes retry/restart safe without overwriting intervening target choices.
