@@ -1026,6 +1026,17 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  *   `agent_plan` item in the chat timeline. The composer capsule observes the
  *   latest inline card and only takes over after that card leaves the viewport.
  */
+function deferredWorkContainsClientId(
+  item: Extract<RenderItem, { type: 'work_group' }>,
+  clientId: string,
+): boolean {
+  return (
+    item.deferred?.key?.split('|').some(
+      (key) => key === `work-${clientId}` || key === `work-summary-${clientId}`,
+    ) ?? false
+  );
+}
+
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
  * 首段 render item 是 tool_segment,segment 会向前合并吸收这些 toolCall —— 原
@@ -1078,8 +1089,12 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
       // `msg-${cid}` / `work-${cid}`)递归落到任一后代即由外组接住。
       // Remote placeholders can merge and disappear from children; their original
       // summary identities remain in deferred.key even when the visible key changes.
-      const identities = [it.key, ...(it.deferred?.key?.split('|') ?? [])];
-      if (identities.some((key) => key === lostKey || key === `work-${lostCid}` || key === `work-summary-${lostCid}`)) return i;
+      if (
+        it.key === lostKey ||
+        it.key === `work-${lostCid}` ||
+        it.key === `work-summary-${lostCid}` ||
+        deferredWorkContainsClientId(it, lostCid)
+      ) return i;
       // Remote deferred groups retain their key before their children are loaded.
       if (recoverLostAnchorIdx(it.children, lostKey) >= 0) return i;
     } else if (it.type !== 'fork_origin') {
@@ -2289,7 +2304,7 @@ function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
   return collectDeleteAnchorClientIds(children);
 }
 
-function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
+export function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
   if (item.type === 'fork_origin') return false;
   if (item.type === 'message') return item.message.clientId === clientId;
   if (item.type === 'tool_segment')
@@ -2297,7 +2312,12 @@ function renderItemContainsClientId(item: RenderItem, clientId: string): boolean
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
   if (item.type === 'agent_plan') return item.sourceClientIds.includes(clientId);
   if (item.type === 'work_group') {
-    return item.children.some((child) => renderItemContainsClientId(child, clientId));
+    // Retained remote identities survive unloaded children; a group key alone
+    // does not prove that a previously rendered child still exists.
+    return (
+      deferredWorkContainsClientId(item, clientId) ||
+      item.children.some((child) => renderItemContainsClientId(child, clientId))
+    );
   }
   return item.key.endsWith(`-${clientId}`);
 }

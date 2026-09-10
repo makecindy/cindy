@@ -27,6 +27,7 @@ import {
   hasBotAssistantOutputInCurrentTurn,
   isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
+  renderItemContainsClientId,
   groupWorkRuns,
   insertForkOriginItem,
   isScrollNavigationKey,
@@ -1642,7 +1643,7 @@ describe('groupWorkRuns — work-group collapsing', () => {
     expect(findRestorableViewportItemIdx([regrouped], 'work-summary-missing')).toBe(-1);
   });
 
-  it.each(['work-rs_old-anchor', 'work-earlier|work-rs_old-anchor'])(
+  it.each(['work-rs_old-anchor', 'work-earlier|work-rs_old-anchor', 'work-summary-rs_old-anchor'])(
     'restores a remote summary through its retained deferred identity: %s',
     (key) => {
       const group = build(
@@ -1663,6 +1664,17 @@ describe('groupWorkRuns — work-group collapsing', () => {
       expect(findRestorableViewportItemIdx(items, 'work-rs_old-anchor')).toBe(0);
       expect(findRestorableViewportItemIdx(items, 'work-summary-anchor')).toBe(-1);
       expect(findRestorableViewportItemIdx(items, 'work-summary-missing')).toBe(-1);
+      // The same identity must survive the deletion guard, even while its
+      // exact child is unloaded. Near-suffix matches are not identities.
+      expect(renderItemContainsClientId(items[0], 'rs_old-anchor')).toBe(true);
+      expect(renderItemContainsClientId(items[0], 'anchor')).toBe(false);
+      expect(renderItemContainsClientId(items[0], 'missing')).toBe(false);
+      const deleted = {
+        ...items[0],
+        children: [{ ...child, key: 'work-rs_old-anchor', deferred: undefined }],
+      };
+      // A stale group key alone must not keep a genuinely deleted child alive.
+      expect(renderItemContainsClientId(deleted, 'rs_old-anchor')).toBe(false);
     },
   );
 
