@@ -73,6 +73,8 @@ function sanitize(raw: unknown): VisibilityMap {
 let cache: VisibilityMap | null = null;
 /** Owner/legacy JSON 无法解析时 fail-closed：不能当成「从没拨过」去跟目录默认。 */
 let mapCorrupt = false;
+/** adopt-local 源损坏时保持 latch，不因目标 map 合法而提前清掉。 */
+let adoptionSourceCorrupt = false;
 let activeOwnerId: string | null = null;
 let activeOwnerGeneration = 0;
 let activeOwnerReadyForWrites = false;
@@ -155,8 +157,10 @@ function adoptLocalModelVisibility(ownerId: string): void {
     // Don't copy an empty sanitization of a broken local map, and don't mark adoption
     // complete — the source can still be retried after it is repaired.
     mapCorrupt = true;
+    adoptionSourceCorrupt = sourceParsed.corrupt;
     return;
   }
+  adoptionSourceCorrupt = false;
   const overrides = {
     // Restore defaults is an explicit target choice even though it has no override.
     ...Object.fromEntries(Object.entries(sourceParsed.map).filter(([key]) => !targetFollowCatalogKeys.has(key))),
@@ -210,7 +214,7 @@ async function withOwnerLock(
     if (ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration
       || activeOwnerMode === 'signed-out') return false;
     const snapshot = (): string => JSON.stringify([
-      cache, initialization, mayInitializeDefaults, activeOwnerReadyForWrites, activeOwnerMigrationPending, mapCorrupt,
+      cache, initialization, mayInitializeDefaults, activeOwnerReadyForWrites, activeOwnerMigrationPending, mapCorrupt, adoptionSourceCorrupt,
     ]);
     const before = snapshot();
     try {
@@ -268,7 +272,7 @@ function parseStoredMap(raw: string | null): { map: VisibilityMap; corrupt: bool
 function readStoredMap(raw: string | null): VisibilityMap {
   const parsed = parseStoredMap(raw);
   if (parsed.corrupt) mapCorrupt = true;
-  else if (raw !== null && raw !== '') mapCorrupt = false;
+  else if (raw !== null && raw !== '' && !adoptionSourceCorrupt) mapCorrupt = false;
   return parsed.map;
 }
 
@@ -482,7 +486,7 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
-  mapCorrupt = false;
+  if (!adoptionSourceCorrupt) mapCorrupt = false;
   return true;
 }
 
@@ -515,6 +519,7 @@ export async function setModelVisibilityOwner(
   activeOwnerMigrationPending = !!ownerId && mode !== 'signed-out';
   cache = null;
   mapCorrupt = false;
+  adoptionSourceCorrupt = false;
   initialization = null;
   mayInitializeDefaults = false;
   if (ownerId && mode !== 'signed-out') {
@@ -779,6 +784,7 @@ export function __resetForTest(): void {
   if (activeOwnerId) window.localStorage.removeItem(initializationKey(activeOwnerId));
   cache = null;
   mapCorrupt = false;
+  adoptionSourceCorrupt = false;
   initialization = null;
   mayInitializeDefaults = false;
   activeOwnerId = null;
