@@ -33,7 +33,7 @@ type Props = {
     settings: RemoteDesktopVideoSettings;
     busy: boolean;
     modesSupported: boolean;
-    onChange(settings: RemoteDesktopVideoSettings): void;
+    onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
     onResolution(id: string): Promise<void>;
   };
@@ -74,7 +74,7 @@ export function RemoteDesktopDisplaySettings({
       active = false;
     };
   }, [connected, video.modesSupported, reload]);
-  const disabled = !connected || !video.supported || video.busy;
+  const disabled = !connected || !video.supported;
   const title = { color: colors.textPrimary, fontSize: typeScale.body };
   const hint = { color: colors.textTertiary, fontSize: typeScale.caption };
   const segment = (label: string, selected: boolean, onPress: () => void) => (
@@ -114,22 +114,32 @@ export function RemoteDesktopDisplaySettings({
     backgroundColor: colors.surfaceChip,
   };
   const segmented = (
+    name: "frameRate" | "quality",
     values: string[],
     selectedIndex: number,
     onSelect: (index: number) => void,
   ) =>
     Platform.OS === "ios" ? (
-      <SegmentedControl
-        values={values}
-        selectedIndex={selectedIndex}
-        enabled={!disabled}
-        appearance={colorScheme}
-        style={{ minHeight: 44 }}
-        onChange={({ nativeEvent }) => {
-          const index = nativeEvent.selectedSegmentIndex;
-          if (!disabled && index >= 0 && index < values.length) onSelect(index);
-        }}
-      />
+      <View
+        testID={`remoteDesktop.${name}Control`}
+        pointerEvents={disabled ? "none" : "auto"}
+        accessible={disabled}
+        accessibilityLabel={t(`remoteDesktop.${name}`)}
+        accessibilityState={{ disabled }}
+      >
+        <SegmentedControl
+          values={values}
+          selectedIndex={selectedIndex}
+          enabled={!disabled}
+          appearance={colorScheme}
+          style={{ height: 44 }}
+          onChange={({ nativeEvent }) => {
+            const index = nativeEvent.selectedSegmentIndex;
+            if (!disabled && index >= 0 && index < values.length)
+              onSelect(index);
+          }}
+        />
+      </View>
     ) : (
       <View style={segments}>
         {values.map((label, index) =>
@@ -208,18 +218,19 @@ export function RemoteDesktopDisplaySettings({
     <View style={{ gap: spacing.md }}>
       <Text style={hint}>{t("remoteDesktop.frameRate")}</Text>
       {segmented(
+        "frameRate",
         fpsValues.map((fps) => t("remoteDesktop.fps", { count: fps })),
         fpsValues.indexOf(video.settings.fps),
-        (index) => video.onChange({ ...video.settings, fps: fpsValues[index] }),
+        (index) => video.onChange({ fps: fpsValues[index] }),
       )}
       <Text style={hint}>{t("remoteDesktop.quality")}</Text>
       {segmented(
+        "quality",
         ["automatic", "clear", "highDefinition", "original"].map((key) =>
           t(`remoteDesktop.${key}`),
         ),
         qualityValues.indexOf(video.settings.bitrate),
-        (index) =>
-          video.onChange({ ...video.settings, bitrate: qualityValues[index] }),
+        (index) => video.onChange({ bitrate: qualityValues[index] }),
       )}
       <Text style={hint}>{t("remoteDesktop.qualityHint")}</Text>
       <View

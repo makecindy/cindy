@@ -247,6 +247,10 @@ export default function RemoteDesktopScreen() {
   const [settingNotice, setSettingNotice] = useState<string | null>(null);
   const [settingBusy, setSettingBusy] = useState(false);
   const settingInFlight = useRef(false);
+  const pendingMediaOffers = useRef(new Map<RemoteDesktopLease, number>());
+  const pendingVideoSettings = useRef<RemoteDesktopLease | null>(null);
+  const [settingsRevision, setSettingsRevision] = useState(0);
+  const applyPendingVideoSettings = useRef<() => void>(() => {});
   const [canPip, setCanPip] = useState(false);
   const presentation = useRef(false);
   const presentationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -383,6 +387,8 @@ export default function RemoteDesktopScreen() {
       connecting.current = false;
       const previous = active.current;
       active.current = null;
+      pendingVideoSettings.current = null;
+      if (previous) pendingMediaOffers.current.delete(previous);
       mediaAttempt.current = null;
       heldKeys.current.clear();
       streaming.current = false;
@@ -912,6 +918,10 @@ export default function RemoteDesktopScreen() {
         )
           return;
         mediaAttempt.current = message.attemptId;
+        pendingMediaOffers.current.set(
+          current,
+          (pendingMediaOffers.current.get(current) ?? 0) + 1,
+        );
         void request<{ sdp: string }>(
           {
             op: "offer",
@@ -965,6 +975,14 @@ export default function RemoteDesktopScreen() {
               setSettingBusy(false);
               setSettingNotice(t("remoteDesktop.videoSettingsFailed"));
             }
+          })
+          .finally(() => {
+            const remaining =
+              (pendingMediaOffers.current.get(current) ?? 1) - 1;
+            if (remaining > 0)
+              pendingMediaOffers.current.set(current, remaining);
+            else pendingMediaOffers.current.delete(current);
+            if (alive.current) setSettingsRevision((value) => value + 1);
           });
         break;
       case "ice": {
@@ -1171,7 +1189,20 @@ export default function RemoteDesktopScreen() {
       if (alive.current) setBusy(false);
     }
   };
-  const changeVideoSettings = async (settings: RemoteDesktopVideoSettings) => {
+  const changeVideoSettings = async (
+    patch: Partial<RemoteDesktopVideoSettings>,
+    applyPending = false,
+  ) => {
+    const settings = { ...videoSettingsRef.current, ...patch };
+    const audioChanged = settings.audio !== videoSettingsRef.current.audio;
+    if (!active.current || !caps?.videoSettings) return;
+    if (!applyPending && !audioChanged) {
+      // Selection is immediate; negotiation consumes only the newest choice.
+      pendingVideoSettings.current = active.current;
+      videoSettingsRef.current = settings;
+      setVideoSettings(settings);
+      return;
+    }
     if (
       !active.current ||
       !caps?.videoSettings ||
@@ -1184,7 +1215,10 @@ export default function RemoteDesktopScreen() {
     setSettingBusy(true);
     setSettingNotice(null);
     try {
-      if (presentation.current) {
+      const wasPresenting = presentation.current;
+      if (wasPresenting) {
+        if (presentationTimer.current) clearTimeout(presentationTimer.current);
+        presentationTimer.current = null;
         presentation.current = false;
         send({ type: "presentation", enabled: false });
         await request({
@@ -1193,22 +1227,43 @@ export default function RemoteDesktopScreen() {
           enabled: false,
         });
       }
-      if (settings.audio) await remotePresentation?.playback(true);
-      else if (!presentation.current) await remotePresentation?.playback(false);
+      if (audioChanged || wasPresenting)
+        await remotePresentation?.playback(settings.audio);
       if (active.current !== current) return;
-      audioUnavailable.current = false;
-      videoSettingsRef.current = settings;
-      setVideoSettings(settings);
+      if (audioChanged) audioUnavailable.current = false;
+      const latest = { ...videoSettingsRef.current, audio: settings.audio };
+      videoSettingsRef.current = latest;
+      setVideoSettings(latest);
+      pendingVideoSettings.current = null;
       streaming.current = false;
       setCanPip(false);
       send({ type: "videoSettings", audio: settings.audio });
     } catch {
-      setSettingNotice(t("remoteDesktop.settingFailed"));
-      setSettingBusy(false);
+      if (active.current === current) {
+        setSettingNotice(t("remoteDesktop.settingFailed"));
+        setSettingBusy(false);
+      }
     } finally {
       settingInFlight.current = false;
+      if (alive.current) setSettingsRevision((value) => value + 1);
     }
   };
+  applyPendingVideoSettings.current = () => {
+    void changeVideoSettings(videoSettingsRef.current, true);
+  };
+  useEffect(() => {
+    if (
+      !pendingVideoSettings.current ||
+      pendingVideoSettings.current !== active.current ||
+      settingBusy ||
+      settingInFlight.current ||
+      pendingMediaOffers.current.has(active.current!) ||
+      (status !== "live" && status !== "compatibility")
+    )
+      return;
+    pendingVideoSettings.current = null;
+    applyPendingVideoSettings.current();
+  }, [videoSettings, settingBusy, settingsRevision, status, lease]);
   const startPresentation = async () => {
     const current = active.current;
     if (
@@ -1269,6 +1324,7 @@ export default function RemoteDesktopScreen() {
       setSettingNotice(t("remoteDesktop.pipUnavailable"));
     } finally {
       settingInFlight.current = false;
+      if (alive.current) setSettingsRevision((value) => value + 1);
     }
   };
   const changeResolution = async (modeId: string) => {

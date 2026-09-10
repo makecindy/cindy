@@ -90,7 +90,7 @@ export function RemoteDesktopControls({
     busy: boolean;
     modesSupported: boolean;
     notice: string | null;
-    onChange(settings: RemoteDesktopVideoSettings): void;
+    onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
     onResolution(id: string): Promise<void>;
   };
@@ -124,8 +124,7 @@ export function RemoteDesktopControls({
     {
       key: "sound",
       icon: Volume2,
-      onPress: () =>
-        video.onChange({ ...video.settings, audio: !video.settings.audio }),
+      onPress: () => video.onChange({ audio: !video.settings.audio }),
       disabled: !presentation.canAudio || video.busy || !connected,
       selected: video.settings.audio,
     },

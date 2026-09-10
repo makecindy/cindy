@@ -3,6 +3,7 @@ import { act, createElement, forwardRef, useImperativeHandle } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RemoteDesktopScreen from "../RemoteDesktopScreen";
+import { RemoteDesktopDisplaySettings } from "../RemoteDesktopDisplaySettings";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 
@@ -429,6 +430,178 @@ describe("remote desktop controls", () => {
     expect(sent().filter((m) => m.type === "iceConfig")).toHaveLength(0);
   });
 
+  it("keeps native pickers interactive while settings are applying", () => {
+    const onChange = vi.fn();
+    const renderSettings = (busy: boolean) => {
+      act(() =>
+        root.render(
+          <RemoteDesktopDisplaySettings
+            connected
+            controlling
+            displayControl={null}
+            video={{
+              supported: true,
+              busy,
+              modesSupported: false,
+              settings: { fps: 30, bitrate: 0, audio: false },
+              onChange,
+              readModes: async () => [],
+              onResolution: async () => {},
+            }}
+          />,
+        ),
+      );
+    };
+    renderSettings(true);
+    expect(fixture.views["remoteDesktop.frameRateControl"].pointerEvents).toBe(
+      "auto",
+    );
+    expect(
+      fixture.views["remoteDesktop.qualityControl"].accessibilityState,
+    ).toEqual({ disabled: false });
+    const pickerButton = host.querySelector("button")!;
+    expect(pickerButton.disabled).toBe(false);
+    act(() => pickerButton.click());
+    expect(onChange).toHaveBeenCalledOnce();
+    renderSettings(false);
+    expect(fixture.views["remoteDesktop.frameRateControl"].pointerEvents).toBe(
+      "auto",
+    );
+    act(() => host.querySelector("button")!.click());
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+  it.each(["streaming", "fallback"])(
+    "coalesces continuous quality choices until %s",
+    async (terminal) => {
+      fixture.systemAudio = true;
+      await connect();
+      const message = async (value: object) =>
+        act(async () => {
+          fixture.message!({
+            nativeEvent: { data: JSON.stringify({ epoch: "lease", ...value }) },
+          });
+        });
+      await message({ type: "streaming" });
+      act(() => button("operations").click());
+      act(() => button("displaySettings").click());
+      const select = async (control: string, index: number) =>
+        act(async () => {
+          host
+            .querySelectorAll<HTMLButtonElement>(
+              `[data-testid="remoteDesktop.${control}Control"] button`,
+            )
+            [index].click();
+        });
+      const changes = () => sent().filter((m) => m.type === "videoSettings");
+      fixture.playback.mockClear();
+      await select("frameRate", 1);
+      expect(changes()).toHaveLength(1);
+      await select("quality", 1);
+      await select("quality", 2);
+      await select("quality", 3);
+      expect(button("original").getAttribute("aria-selected")).toBe("true");
+      expect(changes()).toHaveLength(1);
+      expect(fixture.playback).not.toHaveBeenCalled();
+      await message({ type: terminal });
+      expect(changes()).toHaveLength(2);
+      await message({ type: "offer", sdp: "sdp", attemptId: "latest" });
+      expect(
+        requests()
+          .filter((r) => r.op === "offer")
+          .at(-1).settings,
+      ).toMatchObject({ fps: 60, bitrate: 20000000 });
+      await message({ type: "streaming" });
+      expect(changes()).toHaveLength(2);
+      await select("quality", 1);
+      await select("quality", 2);
+      expect(changes()).toHaveLength(3);
+      act(() => root.unmount());
+      mounted = false;
+      await message({ type: "streaming" });
+      expect(changes()).toHaveLength(3);
+    },
+  );
+  it("waits for an outstanding host offer even after the viewer falls back", async () => {
+    fixture.systemAudio = true;
+    await connect();
+    const message = async (value: object) =>
+      act(async () => {
+        fixture.message!({
+          nativeEvent: { data: JSON.stringify({ epoch: "lease", ...value }) },
+        });
+      });
+    let finish!: (value: unknown) => void;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "offer"
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : original(...args),
+    );
+    await message({ type: "offer", sdp: "sdp", attemptId: "pending" });
+    await message({ type: "streaming" });
+    act(() => button("operations").click());
+    act(() => button("displaySettings").click());
+    await act(async () => button("original").click());
+    await message({ type: "fallback" });
+    expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(0);
+    await act(async () => finish({ sdp: "answer" }));
+    expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(1);
+  });
+  it("preserves FPS and quality selected in the same render batch", async () => {
+    fixture.systemAudio = true;
+    await connect();
+    act(() => button("operations").click());
+    act(() => button("displaySettings").click());
+    await act(async () => {
+      host
+        .querySelectorAll<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.frameRateControl"] button',
+        )[1]
+        .click();
+      button("original").click();
+    });
+    expect(
+      host
+        .querySelectorAll<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.frameRateControl"] button',
+        )[1]
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(button("original").getAttribute("aria-selected")).toBe("true");
+  });
+  it("cancels the PiP timeout when queued quality changes exit PiP", async () => {
+    fixture.systemAudio = true;
+    await connect();
+    const message = async (value: object) =>
+      act(async () => {
+        fixture.message!({
+          nativeEvent: { data: JSON.stringify({ epoch: "lease", ...value }) },
+        });
+      });
+    await message({ type: "streaming" });
+    await message({ type: "pipCapability", supported: true });
+    let finish!: (value: unknown) => void;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "presentation" && args[2][0].enabled
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : original(...args),
+    );
+    act(() => button("operations").click());
+    await act(async () => button("smallWindow").click());
+    act(() => button("displaySettings").click());
+    await act(async () => button("original").click());
+    await act(async () => finish({}));
+    expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(1);
+    await message({ type: "streaming" });
+    await act(async () => vi.advanceTimersByTimeAsync(4000));
+    act(() => button("operations").click());
+    expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
+  });
   it.each(["light", "dark"])(
     "keeps panel geometry and controls stable across pages and loading in %s",
     async (theme) => {
