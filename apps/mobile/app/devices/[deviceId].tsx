@@ -41,7 +41,6 @@ import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useRemoteSyncTask } from '@/device-link/remoteSyncTask';
 import {
   automationGroupKey,
-  buildSessionMessagePreviewIndex,
   buildRemoteSessionListContext,
   buildRemoteSessionSections,
   deviceSessionEmptyState,
@@ -367,10 +366,7 @@ function DeviceDetailScreenContent() {
   // useStableValue 在内容未变时保留旧引用,阻断 sections 派生链的无谓全量重建
   // (与首页同款处理,风暴背景见 devices/index.tsx 对应注释)。
   const messagePreviewIndexRaw = useMemo(
-    () => buildSessionMessagePreviewIndex(
-      sessions.map((session) => session.id),
-      (sessionId) => remoteSessionStore.getMessages(sessionId),
-    ),
+    () => remoteSessionStore.getSessionListMessagePreviewIndex(sessions),
     [messageVersion, sessions],
   );
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
