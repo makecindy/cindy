@@ -33,6 +33,27 @@ async function writePluginCache(
   await fs.writeFile(path.join(dir, 'plugin.json'), `{"name":"${plugin}"}`, 'utf8');
 }
 
+async function writeLoadablePluginCache(
+  cacheDir: string,
+  marketplace: string,
+  plugin: string,
+  version = '1.0.0',
+): Promise<void> {
+  const dir = path.join(cacheDir, marketplace, plugin, version);
+  await fs.mkdir(path.join(dir, '.codex-plugin'), { recursive: true });
+  await fs.mkdir(path.join(dir, 'skills', 'memory'), { recursive: true });
+  await fs.writeFile(
+    path.join(dir, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ name: plugin, version, skills: './skills/' }),
+    'utf8',
+  );
+  await fs.writeFile(
+    path.join(dir, 'skills', 'memory', 'SKILL.md'),
+    '---\nname: memory\ndescription: Memory helper\n---\n',
+    'utf8',
+  );
+}
+
 async function writePluginEnabledState(
   configFile: string,
   plugin: string,
@@ -133,7 +154,11 @@ afterEach(async () => {
 describe('prepareCodexAllowlistedPluginRuntimeConfig', () => {
   it('enables only an explicitly enabled cached allowlisted plugin', async () => {
     const { codexHome, paths } = await setup();
-    await writePluginCache(paths.cacheDir, 'nowledge-community', 'nowledge-mem');
+    await writeLoadablePluginCache(
+      paths.cacheDir,
+      'nowledge-community',
+      'nowledge-mem',
+    );
     await writePluginCache(paths.cacheDir, 'personal', 'other-plugin');
     await fs.writeFile(
       paths.configFile,
@@ -187,6 +212,88 @@ describe('prepareCodexAllowlistedPluginRuntimeConfig', () => {
       extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin'],
       enabledPluginIds: [],
     });
+  });
+
+  it('requires the allowlisted plugin to be explicitly enabled', async () => {
+    const { codexHome, paths } = await setup();
+    await writeLoadablePluginCache(
+      paths.cacheDir,
+      'nowledge-community',
+      'nowledge-mem',
+    );
+    await fs.writeFile(
+      paths.configFile,
+      '[plugins."nowledge-mem@nowledge-community"]\n',
+      'utf8',
+    );
+
+    await expect(
+      prepareCodexAllowlistedPluginRuntimeConfig(
+        codexHome,
+        ['nowledge-mem@nowledge-community'],
+      ),
+    ).resolves.toEqual({
+      extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin'],
+      enabledPluginIds: [],
+    });
+  });
+
+  it('rejects an empty cache for an enabled allowlisted plugin', async () => {
+    const { codexHome, paths } = await setup();
+    await fs.mkdir(
+      path.join(paths.cacheDir, 'nowledge-community', 'nowledge-mem'),
+      { recursive: true },
+    );
+    await writePluginEnabledState(
+      paths.configFile,
+      'nowledge-mem',
+      'nowledge-community',
+      true,
+    );
+
+    await expect(
+      prepareCodexAllowlistedPluginRuntimeConfig(
+        codexHome,
+        ['nowledge-mem@nowledge-community'],
+      ),
+    ).rejects.toThrow(
+      'allowlisted Codex plugin cache is incomplete: nowledge-mem@nowledge-community',
+    );
+  });
+
+  it('rejects a cache whose manifest points to missing plugin content', async () => {
+    const { codexHome, paths } = await setup();
+    const versionDir = path.join(
+      paths.cacheDir,
+      'nowledge-community',
+      'nowledge-mem',
+      '1.0.0',
+    );
+    await fs.mkdir(path.join(versionDir, '.codex-plugin'), { recursive: true });
+    await fs.writeFile(
+      path.join(versionDir, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'nowledge-mem',
+        version: '1.0.0',
+        skills: './missing-skills/',
+      }),
+      'utf8',
+    );
+    await writePluginEnabledState(
+      paths.configFile,
+      'nowledge-mem',
+      'nowledge-community',
+      true,
+    );
+
+    await expect(
+      prepareCodexAllowlistedPluginRuntimeConfig(
+        codexHome,
+        ['nowledge-mem@nowledge-community'],
+      ),
+    ).rejects.toThrow(
+      'allowlisted Codex plugin cache is incomplete: nowledge-mem@nowledge-community',
+    );
   });
 });
 
