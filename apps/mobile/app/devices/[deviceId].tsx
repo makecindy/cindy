@@ -267,15 +267,35 @@ function DeviceDetailScreenContent() {
 
   // Mirror 失效标记在权威同步成功前持续存在,所以同一 generation 只消费一次;
   // 否则每次 sessions 引用变化(离线标记、后台对账)都会把本 effect 重新拉进
-  // 更新链(2026-09-10 Android Maximum update depth 崩溃)。会话列表晚于本次
-  // 消费到达的场景由 syncSessions 的权威索引重载兜底,不在此重复清理。
-  const consumedMirrorGenerationsRef = useRef<Map<string, number>>(new Map());
+  // 更新链(2026-09-10 Android Maximum update depth 崩溃)。代次内后进入可见
+  // 列表的会话仍要清 running:按 generation 记录已处理的会话,只处理增量。
+  // 标记被清除时丢弃消费记录——store 代次虽单调,这里同步重置可对账户切换等
+  // 全量重置场景保持正确。
+  const consumedMirrorGenerationsRef = useRef<Map<string, {
+    generation: number;
+    sessionIds: Set<string>;
+  }>>(new Map());
   useEffect(() => {
     if (!deviceId) return;
     const generation = scheduleMirrorInvalidations.get(deviceId);
-    if (generation === undefined) return;
-    if (consumedMirrorGenerationsRef.current.get(deviceId) === generation) return;
-    consumedMirrorGenerationsRef.current.set(deviceId, generation);
+    if (generation === undefined) {
+      consumedMirrorGenerationsRef.current.delete(deviceId);
+      return;
+    }
+    const consumed = consumedMirrorGenerationsRef.current.get(deviceId);
+    if (consumed?.generation === generation) {
+      const freshSessionIds = sessions
+        .filter((session) => !consumed.sessionIds.has(session.id))
+        .map((session) => session.id);
+      if (freshSessionIds.length === 0) return;
+      for (const id of freshSessionIds) consumed.sessionIds.add(id);
+      setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(current, freshSessionIds));
+      return;
+    }
+    consumedMirrorGenerationsRef.current.set(deviceId, {
+      generation,
+      sessionIds: new Set(sessions.map((session) => session.id)),
+    });
     setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(
       current,
       sessions.map((session) => session.id),

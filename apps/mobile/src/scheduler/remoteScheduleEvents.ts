@@ -36,6 +36,10 @@ const snapshots = new Map<string, RemoteScheduleEventSnapshot>();
 // `clearDevice()` so mounted screens can observe a presence-offline cleanup even when
 // that device had not emitted a schedule event in the current process.
 const mirrorInvalidationVersions = new Map<string, number>();
+// 单调代次计数:不随 `clearDeviceMirrorInvalidation` 回绕,消费方(设备详情页)
+// 据此区分「同一轮失效」与「清除后的新一轮失效」,离线 → 恢复 → 再离线时
+// running 徽标不会被已消费的旧代次挡住。
+const mirrorInvalidationGenerationCounter = new Map<string, number>();
 let mirrorInvalidationSnapshot: ReadonlyMap<string, number> = new Map();
 const subs = new Set<() => void>();
 
@@ -80,16 +84,16 @@ export const remoteScheduleEventStore = {
     // 失效后有新事件写入快照时,快照重新上膛,这里照常清掉并广播一次。
     if (!snapshots.has(deviceId) && mirrorInvalidationVersions.has(deviceId)) return;
     snapshots.delete(deviceId);
-    mirrorInvalidationVersions.set(
-      deviceId,
-      (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
-    );
+    const generation = (mirrorInvalidationGenerationCounter.get(deviceId) ?? 0) + 1;
+    mirrorInvalidationGenerationCounter.set(deviceId, generation);
+    mirrorInvalidationVersions.set(deviceId, generation);
     mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
     emit();
   },
 
   clearDeviceMirrorInvalidation(deviceId: string): void {
     if (!mirrorInvalidationVersions.delete(deviceId)) return;
+    // 计数器不清:代次跨清除单调,下一轮失效的 generation 继续前进。
     mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
     emit();
   },
@@ -98,6 +102,7 @@ export const remoteScheduleEventStore = {
     if (snapshots.size === 0 && mirrorInvalidationVersions.size === 0) return;
     snapshots.clear();
     mirrorInvalidationVersions.clear();
+    mirrorInvalidationGenerationCounter.clear();
     mirrorInvalidationSnapshot = new Map();
     emit();
   },

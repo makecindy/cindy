@@ -83,15 +83,18 @@ const runMirrorEffect = new Function(
   ts.transpile(`(${mirrorEffectSource})();`),
 );
 
-it('consumes a mirror invalidation generation once even as session identities churn', () => {
+it('consumes a mirror invalidation generation once, with incremental sessions and reset on clear', () => {
   expect(mirrorEffectDependencies).toEqual(
     expect.arrayContaining(['deviceId', 'scheduleMirrorInvalidations', 'sessions']),
   );
-  const consumedMirrorGenerationsRef = { current: new Map<string, number>() };
-  const current = new Map([['s1', { running: true }]]);
+  const consumedMirrorGenerationsRef = {
+    current: new Map<string, { generation: number; sessionIds: Set<string> }>(),
+  };
+  // s3 在 scheduleIndex 里 running,但尚未进入当前可见会话列表。
+  const current = new Map([['s1', { running: true }], ['s3', { running: true }]]);
   const setScheduleIndex = vi.fn((updater: (map: typeof current) => typeof current) => updater(current));
   const sessions = [{ id: 's1' }, { id: 's2' }];
-  const run = (generation: number | undefined, nextSessions: typeof sessions) => runMirrorEffect(
+  const run = (generation: number | undefined, nextSessions: Array<{ id: string }>) => runMirrorEffect(
     'device',
     generation === undefined ? new Map() : new Map([['device', generation]]),
     consumedMirrorGenerationsRef,
@@ -106,11 +109,19 @@ it('consumes a mirror invalidation generation once even as session identities ch
   expect(setScheduleIndex).toHaveBeenCalledTimes(1);
   const cleared = setScheduleIndex.mock.results[0]?.value;
   expect(cleared?.get('s1')).toMatchObject({ running: false });
+  // 不可见的 s3 本轮不被触碰。
+  expect(cleared?.get('s3')).toMatchObject({ running: true });
 
-  // 新 generation(失效后有新事件快照再被清)才允许消费下一次。
-  run(2, sessions);
+  // 代次内后进入可见列表的会话要增量清理 running(greptile P1:遗漏后到会话)。
+  run(1, [...sessions, { id: 's3' }]);
   expect(setScheduleIndex).toHaveBeenCalledTimes(2);
-  // 标记被清除(generation 消失)后回到静止,不得再触发。
+  const incremental = setScheduleIndex.mock.results[1]?.value;
+  expect(incremental?.get('s3')).toMatchObject({ running: false });
+
+  // 标记被清除时丢弃消费记录;新一轮失效(更高代次)重新消费
+  // (codex P2:代次跨 marker 清除单调,不回绕)。
   run(undefined, sessions);
-  expect(setScheduleIndex).toHaveBeenCalledTimes(2);
+  expect(consumedMirrorGenerationsRef.current.has('device')).toBe(false);
+  run(2, sessions);
+  expect(setScheduleIndex).toHaveBeenCalledTimes(3);
 });

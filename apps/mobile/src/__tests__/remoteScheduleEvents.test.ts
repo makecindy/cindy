@@ -99,6 +99,19 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getVersion('dev-1')).toBe(0);
     expect(sub).toHaveBeenCalledTimes(3);
 
+    // 清除后再失效:代次跨 marker 清除单调前进,不回绕为 1——消费方据此识别
+    // 「离线 → 恢复 → 再离线」的新一轮失效(codex P2:代次回绕会让已消费
+    // 记录挡住第二次离线的 running 清理)。
+    remoteScheduleEventStore.clearDeviceMirrorInvalidation('dev-1');
+    expect(sub).toHaveBeenCalledTimes(4);
+    remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
+    const afterReinvalidate = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    expect(afterReinvalidate.get('dev-1')).toBe(3);
+    expect(sub).toHaveBeenCalledTimes(5);
+    // 幂等依旧:重复标记静默。
+    remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
+    expect(sub).toHaveBeenCalledTimes(5);
+
     off();
   });
 
