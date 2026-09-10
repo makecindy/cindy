@@ -2713,12 +2713,17 @@ async function repairStableCloudOwnerDataReservations(ownerId: string): Promise<
   }
 }
 
-function commitCloudAppSession(ownerId: string): void {
+function commitCloudAppSession(ownerId: string, authRealmChanged = false): void {
+  // Saved identities are [realm, membershipId]. Same-id realm moves must fence old API work too.
   if (isPassiveSharedUserDataInstance()) {
-    commitVolatileAppSession('cloud', ownerId);
+    commitVolatileAppSession('cloud', ownerId, authRealmChanged);
   } else {
-    commitActiveAppSession('cloud', ownerId);
+    commitActiveAppSession('cloud', ownerId, authRealmChanged);
   }
+  // Publish the new generation in the same synchronous commit as the token
+  // and endpoint switch, before any post-commit migration/projection await.
+  // Same-id realm moves do not necessarily enter a Ghost owner boundary.
+  if (authRealmChanged) notifyRenderer();
 }
 
 /**
@@ -4787,13 +4792,14 @@ async function runColdStartRefreshFlow(
         }
       },
       commit: () => {
-        if (storedRealm !== activeAuthRealm) {
+        const authRealmChanged = storedRealm !== activeAuthRealm;
+        if (authRealmChanged) {
           activateClientEndpointRealm(storedRealm);
           activeAuthRealm = storedRealm;
         }
         accessToken = refreshData.accessToken;
         currentUser = mapMembershipToAuthUser(refreshData.membership);
-        commitCloudAppSession(currentUser.id);
+        commitCloudAppSession(currentUser.id, authRealmChanged);
         persistedRefreshTokenNeedsIdentityCheck = false;
         clearReplacementIntegrationReloadTimers();
       },
@@ -5015,6 +5021,7 @@ async function completeLogin(
                 accessToken = outcome.accessToken;
                 persistedRefreshTokenNeedsIdentityCheck = false;
                 clearReplacementIntegrationReloadTimers();
+                const authRealmChanged = committedRealm !== activeAuthRealm;
                 activateClientEndpointRealm(committedRealm);
                 activeAuthRealm = committedRealm;
                 if (!isPassiveSharedUserDataInstance()) {
@@ -5029,10 +5036,10 @@ async function completeLogin(
                 passiveLocalSignOut = false;
                 foreignDeviceLocalSignOut = false;
                 currentUser = nextUser;
-                commitCloudAppSession(currentUser.id);
                 if (!isPassiveSharedUserDataInstance()) {
                   canaryFlagStore.clear();
                 }
+                commitCloudAppSession(currentUser.id, authRealmChanged);
                 pendingAuthRealm = null;
               }),
           });
@@ -5688,7 +5695,7 @@ export async function refresh(): Promise<boolean> {
             }
             accessToken = data.accessToken;
             currentUser = nextUser;
-            commitCloudAppSession(currentUser.id);
+            commitCloudAppSession(currentUser.id, authRealmChanged);
           },
         });
         await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
@@ -5746,7 +5753,7 @@ export async function refresh(): Promise<boolean> {
           }
           accessToken = data.accessToken;
           currentUser = nextUser;
-          commitCloudAppSession(currentUser.id);
+          commitCloudAppSession(currentUser.id, authRealmChanged);
         },
       });
       await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);

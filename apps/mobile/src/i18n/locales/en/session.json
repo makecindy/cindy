@@ -469,6 +469,7 @@
     "continueTask": "Continue Task",
     "retry": "Retry",
     "ignore": "Ignore",
+    "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
     "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",

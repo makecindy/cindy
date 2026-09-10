@@ -57,6 +57,20 @@ const mkAssistant = (id: string, content = 'ok'): ChatMessage => ({
   content,
 });
 
+it('keeps modal-only Cindy Make cards out of the message timeline', () => {
+  const built = buildRenderItems([
+    mkUser('u1', '之前的消息'),
+    {
+      ...mkAssistant('make-card'),
+      systemCardType: 'cindy-make',
+      systemCardData: { modalOnly: true, report: { runId: 'run-1' } },
+    },
+  ]).items;
+  expect(built.some((item) => item.type === 'message' && item.message.clientId === 'make-card')).toBe(
+    false,
+  );
+});
+
 describe('Bot 流式正文呈现', () => {
   it('运行中隐藏工作卡，但从首字开始保留 assistant 正文', () => {
     const messages = [
@@ -518,6 +532,48 @@ describe('buildRenderItems — key stability', () => {
     expect(cards.map((card) => card.key)).toEqual(['turnchanges-cs1', 'turnchanges-cs2']);
     expect(cards.map((card) => card.changeSet.id)).toEqual(['cs1', 'cs2']);
     expect(items.indexOf(cards[0])).toBeGreaterThan(items.findIndex((item) => item.key === 'msg-a1'));
+  });
+
+  it('places the preceding turn changes before an appended Cindy Make card', () => {
+    const firstUser = mkUser('u1');
+    const makeCard = {
+      ...mkAssistant('make-card', ''),
+      systemCardType: 'cindy-make' as const,
+    };
+    const changeSet: TurnChangeSetSummary = {
+      id: 'cs-before-make',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'codex',
+      providerTurnId: 'turn-1',
+      cwd: 'C:/work',
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [{
+        id: 'turn-1:a.ts',
+        path: 'a.ts',
+        oldPath: null,
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+      }],
+      fileCount: 1,
+      additions: 1,
+      deletions: 0,
+    };
+
+    const { items } = buildRenderItems([firstUser, mkAssistant('a1'), makeCard], undefined, undefined, {
+      turnChangeSets: [changeSet],
+    });
+    const changeIndex = items.findIndex((item) => item.type === 'turn_changes');
+    const cardIndex = items.findIndex((item) => item.key === 'msg-make-card');
+
+    expect(changeIndex).toBeGreaterThanOrEqual(0);
+    expect(cardIndex).toBeGreaterThan(changeIndex);
   });
 
   it('hides all zero-file change cards because they have no reviewable content', () => {

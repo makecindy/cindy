@@ -52,6 +52,23 @@ function makeHubSkill(slug: string, overrides: Partial<HubSkillInfoForDesktop> =
 }
 
 describe('SkillhubMarketService', () => {
+  it('preserves manual feedback for the requested rejected version, including legacy responses without a reason', async () => {
+    const rejected = {
+      status: 'rejected', rejectionReason: 'Remove private notes',
+      gates: [{ name: 'security-scan', status: 'passed' }],
+    };
+    const { fetch, calls } = makeFetch([rejected, { status: 'rejected', gates: [] }]);
+    const service = new SkillhubMarketService({ fetch });
+    expect(await service.getScanStatus({ slug: 'review-helper', version: '1.0.1' }))
+      .toEqual({ success: true, ...rejected });
+    expect(calls[0]).toMatchObject({
+      path: '/api/skills-hub/skills/review-helper/scan?version=1.0.1',
+      opts: { cache: 'no-store' },
+    });
+    expect(await service.getScanStatus({ slug: 'review-helper', version: '1.0.0' }))
+      .toEqual({ success: true, status: 'rejected', gates: [] });
+  });
+
   it('normalizes and deduplicates sync slugs before batch-detail lookup', async () => {
     const { fetch, calls } = makeFetch([
       { items: [makeHubSkill('alpha')], availableCount: 4 },

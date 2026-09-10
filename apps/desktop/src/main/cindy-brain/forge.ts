@@ -2764,8 +2764,9 @@ cindy.onHostMessage(function (msg) {
   // ── did- 旁听:收到就收到,主机不等你,你也改变不了任何事 ──
   if (msg.name === 'did-turn-end') {
     // msg.data = { sessionId, agent, model?, durationMs, endReason, usage? }
-    // usage 各字段可选(cc/codex 上报详尽度不同,别假设字段必在):
+    // usage 各字段可选(各引擎上报详尽度不同,别假设字段必在):
     //   { inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens? }
+    // error 终态也可带已消耗的 usage；Pi 输出上限会保留它，不要只统计 completed。
     // msg.seq 每意识单调递增;msg.dropped(可选)= 你熄灯期溢出丢弃的事件数。
     // 生命周期:会话被关掉或引擎被替换时,主机会给还在场的那一轮补发
     // endReason: 'interrupted',让 start/end 成对。但这不是投递保证——熄灯期

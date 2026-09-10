@@ -5,8 +5,8 @@
  * 背景:
  *   每个来源(provider)在某个 agent 下可能提供很多模型(XD 网关 Claude Code 有 20 个),
  *   用户本地全列出来会很长。设置 → 模型供应商 展开来源后,用户可逐个开关哪些模型显示。
- *   显式开关与新用户首次初始化的启用清单分开保存。既有账号不再跟随目录自动加模型；
- *   只有用户点名恢复默认的路线继续读取目录 defaultEnabled。
+ *   显式开关与目录 defaultEnabled 分开：没拨过的跟当前下发默认，拨过的升级也不清。
+ *   目录新增的默认开模型会显示出来；客户端不得把「没开关记录」做成全关。
  *
  * 为什么 key 必须带 agent:
  *   同一来源可同时服务多个 agent(XD = claude-code + codex),且两个 agent 下模型集不同、
@@ -15,7 +15,7 @@
  *
  * 与系统默认值的关系（configuration-and-overrides.md 模型可见性例外）:
  *   - 原 key 只记显式 override(布尔)，独立 owner key 保存一次性的初始化清单。
- *   - 新用户初始化后默认不再漂移；老用户缺少开关记录的路线不会被自动补开。
+ *   - 没拨过的路线跟随当前目录 defaultEnabled；手动开/关作为 override 跨升级保留。
  *   - 收藏、历史选择不能改变开关；恢复默认只授权点名路线跟随当前/未来目录。
  *   - 「全部开启 / 全部关闭」是显式批量动作 → 为当前 agent 该来源的每个模型写显式 override。
  *
@@ -71,6 +71,10 @@ function sanitize(raw: unknown): VisibilityMap {
 
 // 进程内缓存(惰性加载)。读多写少,避免每次读都 parse localStorage。
 let cache: VisibilityMap | null = null;
+/** Owner/legacy JSON 无法解析时 fail-closed：不能当成「从没拨过」去跟目录默认。 */
+let mapCorrupt = false;
+/** adopt-local 源损坏时保持 latch，不因目标 map 合法而提前清掉。 */
+let adoptionSourceCorrupt = false;
 let activeOwnerId: string | null = null;
 let activeOwnerGeneration = 0;
 let activeOwnerReadyForWrites = false;
@@ -147,11 +151,20 @@ function adoptLocalModelVisibility(ownerId: string): void {
     followCatalogKeys: [...new Set([...source.followCatalogKeys.filter((key) => !hasTargetScope(key)), ...target?.followCatalogKeys ?? []])],
   };
   const targetFollowCatalogKeys = new Set(target?.followCatalogKeys ?? []);
-  const sourceOverrides = readStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID)));
+  const sourceParsed = parseStoredMap(window.localStorage.getItem(ownerStorageKey(LOCAL_OWNER_ID)));
+  const targetParsed = parseStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId)));
+  if (sourceParsed.corrupt || targetParsed.corrupt) {
+    // Don't copy an empty sanitization of a broken local map, and don't mark adoption
+    // complete — the source can still be retried after it is repaired.
+    mapCorrupt = true;
+    adoptionSourceCorrupt = sourceParsed.corrupt;
+    return;
+  }
+  adoptionSourceCorrupt = false;
   const overrides = {
     // Restore defaults is an explicit target choice even though it has no override.
-    ...Object.fromEntries(Object.entries(sourceOverrides).filter(([key]) => !targetFollowCatalogKeys.has(key))),
-    ...readStoredMap(window.localStorage.getItem(ownerStorageKey(ownerId))),
+    ...Object.fromEntries(Object.entries(sourceParsed.map).filter(([key]) => !targetFollowCatalogKeys.has(key))),
+    ...targetParsed.map,
   };
   // A failed write leaves the handoff pending. Re-reading and merging under the locks
   // makes retry/restart safe without overwriting intervening target choices.
@@ -201,7 +214,7 @@ async function withOwnerLock(
     if (ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration
       || activeOwnerMode === 'signed-out') return false;
     const snapshot = (): string => JSON.stringify([
-      cache, initialization, mayInitializeDefaults, activeOwnerReadyForWrites, activeOwnerMigrationPending,
+      cache, initialization, mayInitializeDefaults, activeOwnerReadyForWrites, activeOwnerMigrationPending, mapCorrupt, adoptionSourceCorrupt,
     ]);
     const before = snapshot();
     try {
@@ -235,9 +248,7 @@ async function withOwnerLock(
   }
 }
 function effectiveMap(map: VisibilityMap): VisibilityMap {
-  const defaults = { ...initialization?.defaults };
-  for (const key of initialization?.followCatalogKeys ?? []) delete defaults[key];
-  return { ...defaults, ...map };
+  return { ...map };
 }
 
 
@@ -249,13 +260,20 @@ function ownerMigrationCompleteKey(ownerId: string): string {
   return `${MIGRATION_COMPLETE_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
 }
 
-function readStoredMap(raw: string | null): VisibilityMap {
-  if (!raw) return {};
+function parseStoredMap(raw: string | null): { map: VisibilityMap; corrupt: boolean } {
+  if (raw === null || raw === '') return { map: {}, corrupt: false };
   try {
-    return sanitize(JSON.parse(raw));
+    return { map: sanitize(JSON.parse(raw)), corrupt: false };
   } catch {
-    return {};
+    return { map: {}, corrupt: true };
   }
+}
+
+function readStoredMap(raw: string | null): VisibilityMap {
+  const parsed = parseStoredMap(raw);
+  if (parsed.corrupt) mapCorrupt = true;
+  else if (raw !== null && raw !== '' && !adoptionSourceCorrupt) mapCorrupt = false;
+  return parsed.map;
 }
 
 /**
@@ -325,9 +343,20 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
       return { readyForWrites: true, migrationPending: true };
     }
 
-    const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-    const legacy = readStoredMap(legacyRaw);
-    const scoped = readStoredMap(window.localStorage.getItem(scopedKey));
+    const legacyParsed = parseStoredMap(window.localStorage.getItem(LEGACY_STORAGE_KEY));
+    const scopedParsed = parseStoredMap(window.localStorage.getItem(scopedKey));
+    if (scopedParsed.corrupt) {
+      mapCorrupt = true;
+      return BLOCKED_MIGRATION;
+    }
+    if (legacyParsed.corrupt) {
+      // Don't import a broken snapshot as empty, and don't mark complete just because
+      // the scoped key already has incremental writes from the deferred-import window.
+      mapCorrupt = true;
+      return { readyForWrites: true, migrationPending: true };
+    }
+    const legacy = legacyParsed.map;
+    const scoped = scopedParsed.map;
     // 非独占期间可能已经有新设置；完成迁移时由新设置覆盖同槽旧值，其余历史值仍被保留。
     window.localStorage.setItem(scopedKey, JSON.stringify({ ...legacy, ...scoped }));
     // 快照先落盘再标完成；任一步失败都会在下次写入/登录时幂等重试。
@@ -390,8 +419,11 @@ function mirrorToMain(map: VisibilityMap): void {
   const generation = activeOwnerGeneration;
   const pending = !!ownerId && (activeOwnerMigrationPending
     || (mayInitializeDefaults && !initialization?.scopes.length));
-  const policy = ownerId ? { fallback: false as const,
-    followCatalogKeys: initialization?.followCatalogKeys ?? [], ...(pending ? { pending: true as const } : {}) } : undefined;
+  const policy = ownerId ? {
+    followCatalogKeys: initialization?.followCatalogKeys ?? [],
+    ...(pending ? { pending: true as const } : {}),
+    ...(mapCorrupt ? { fallback: false as const } : {}),
+  } : undefined;
   const snapshot = effectiveMap(map);
   const send = (attempt: number): void => {
     if (revision !== mirrorRevision || ownerId !== activeOwnerId || generation !== activeOwnerGeneration) return;
@@ -447,7 +479,17 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
+  if (!adoptionSourceCorrupt) mapCorrupt = false;
+  retryPendingLocalAdoption();
   return true;
+}
+
+function retryPendingLocalAdoption(): void {
+  if (!activeOwnerId || activeOwnerMode !== 'cloud' || activeOwnerId === LOCAL_OWNER_ID) return;
+  const completed = `${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(activeOwnerId)}`;
+  if (window.localStorage.getItem(completed) === '1') return;
+  adoptLocalModelVisibility(activeOwnerId);
+  if (window.localStorage.getItem(completed) === '1') readOwnerState(activeOwnerId);
 }
 
 function subscribe(cb: () => void): () => void {
@@ -478,6 +520,8 @@ export async function setModelVisibilityOwner(
   activeOwnerReadyForWrites = false;
   activeOwnerMigrationPending = !!ownerId && mode !== 'signed-out';
   cache = null;
+  mapCorrupt = false;
+  adoptionSourceCorrupt = false;
   initialization = null;
   mayInitializeDefaults = false;
   if (ownerId && mode !== 'signed-out') {
@@ -492,10 +536,9 @@ export async function setModelVisibilityOwner(
 }
 
 /**
- * Initialize a new profile's first nonempty provider/agent catalogs once. Existing profiles
- * keep their explicit switches; history/favorites never grant permission to enable a model.
- * Missing routes remain off. Baselines are separate from user overrides so customization
- * and Restore defaults retain their meaning. No remote catalog enters this path.
+ * Record first-seen provider/agent catalogs for restore-default and alias mapping.
+ * Visibility itself is override ?? current catalog defaultEnabled; this snapshot no longer
+ * hides models the catalog says should be on. History/favorites never write an on switch.
  */
 export async function migrateModelVisibilityDefaults(
   ownerId: string | null,
@@ -553,9 +596,9 @@ export async function migrateModelVisibilityDefaults(
 }
 
 /**
- * 该 (agent, 来源, 模型) 当前是否应显示:显式开关优先，其次初始化清单；未知路线关闭。
+ * 该 (agent, 来源, 模型) 当前是否应显示:显式开关优先，否则跟随当前目录 defaultEnabled。
+ * 偏好 JSON 无法解析、或旧开关尚未迁入 owner namespace 时 fail-closed（不当成从没拨过）。
  * model 至少需带 id + 可选 defaultEnabled(直接传 CatalogModel 即可)。
- * 只有首次新用户与明确恢复默认的路线读取目录默认值。
  */
 export function isModelEnabled(
   agent: AgentKind,
@@ -565,12 +608,14 @@ export function isModelEnabled(
   const key = keyOf(agent, providerId, model.id);
   const override = load()[key];
   if (override !== undefined) return override;
-  if (initialization?.followCatalogKeys.includes(key)) return isModelVisible(undefined, model.defaultEnabled);
-  if (initialization && (!mayInitializeDefaults || initialization.scopes.length > 0)) {
-    return initialization.defaults[key] ?? false;
+  // Restore defaults 记在独立 initialization 里：偏好 map 损坏时仍跟随目录。
+  if (initialization?.followCatalogKeys.includes(key)) {
+    return isModelVisible(undefined, model.defaultEnabled);
   }
-  return !activeOwnerId || (mayInitializeDefaults && !activeOwnerMigrationPending)
-    ? isModelVisible(undefined, model.defaultEnabled) : false;
+  if (mapCorrupt) return false;
+  // 旧全局开关还在等独占导入：不能用目录默认把用户关过的模型暂时打开。
+  if (activeOwnerMigrationPending && !mayInitializeDefaults) return false;
+  return isModelVisible(undefined, model.defaultEnabled);
 }
 
 async function setVisibilityTargets(
@@ -598,14 +643,24 @@ async function setVisibilityTargets(
     const map = load();
     let changed = false;
     const next = { ...map };
+    const keys: string[] = [];
     for (const { agent, modelId } of targets) {
       const k = keyOf(agent, providerId, modelId);
+      keys.push(k);
       if (next[k] !== enabled) {
         next[k] = enabled;
         changed = true;
       }
     }
-    return changed ? persist(next, context) : true;
+    if (changed && !persist(next, context)) return false;
+    const state = initialization ?? emptyInitialization();
+    const follows = new Set(state.followCatalogKeys);
+    let followChanged = false;
+    for (const key of keys) {
+      if (follows.delete(key)) followChanged = true;
+    }
+    if (followChanged && !saveInitialization({ ...state, followCatalogKeys: [...follows] })) return false;
+    return true;
   });
 }
 
@@ -704,19 +759,27 @@ export async function resetModelVisibilities(
 // trusting event.newValue, which may already be stale when the event is delivered.
 const removeStorageListener = (() => {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  const watchesPendingSource = (key: string): boolean => {
+    if (!activeOwnerId) return false;
+    if (key === LEGACY_STORAGE_KEY) {
+      return activeOwnerMode !== 'signed-out'
+        && activeOwnerMigrationPending
+        && window.localStorage.getItem(ownerMigrationCompleteKey(activeOwnerId)) !== '1';
+    }
+    if (activeOwnerMode !== 'cloud' || activeOwnerId === LOCAL_OWNER_ID) return false;
+    if (window.localStorage.getItem(`${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(activeOwnerId)}`) === '1') {
+      return false;
+    }
+    return key === initializationKey(LOCAL_OWNER_ID) || key === ownerStorageKey(LOCAL_OWNER_ID);
+  };
   const onStorage = (event: StorageEvent): void => {
     if (!activeOwnerId || (event.storageArea && event.storageArea !== window.localStorage)) return;
     if (event.key !== null && event.key !== initializationKey(activeOwnerId)
       && event.key !== ownerStorageKey(activeOwnerId)
-      && event.key !== ownerMigrationCompleteKey(activeOwnerId)) return;
+      && event.key !== ownerMigrationCompleteKey(activeOwnerId)
+      && !watchesPendingSource(event.key)) return;
     const ownerId = activeOwnerId;
-    void withOwnerLock(ownerId, activeOwnerGeneration, () => {
-      if (window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === '1') {
-        activeOwnerReadyForWrites = true;
-        activeOwnerMigrationPending = false;
-      }
-      return true;
-    });
+    void withOwnerLock(ownerId, activeOwnerGeneration, ensureActiveOwnerReadyForWrites);
   };
   window.addEventListener('storage', onStorage);
   return () => window.removeEventListener('storage', onStorage);
@@ -744,6 +807,8 @@ export function __resetForTest(): void {
   const currentMigrationKey = activeOwnerId ? ownerMigrationCompleteKey(activeOwnerId) : null;
   if (activeOwnerId) window.localStorage.removeItem(initializationKey(activeOwnerId));
   cache = null;
+  mapCorrupt = false;
+  adoptionSourceCorrupt = false;
   initialization = null;
   mayInitializeDefaults = false;
   activeOwnerId = null;

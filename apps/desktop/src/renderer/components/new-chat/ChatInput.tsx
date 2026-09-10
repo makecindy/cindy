@@ -20,6 +20,7 @@ import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projec
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
+import { CindyMakeCommandDialog } from '@/components/chat/CindyMakeCommandDialog';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { FullAccessConfirmContent } from './FullAccessConfirmContent';
@@ -1153,6 +1154,7 @@ export function ChatInput({
   const deviceLinkDeviceId = _deviceLinkDeviceId;
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [makeDialogSessionId, setMakeDialogSessionId] = useState<string | null>(null);
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
@@ -5205,7 +5207,7 @@ export function ChatInput({
             hydratedHistoryDocumentRef.current = null;
             draftRef.current = null;
             if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
-            if (!sourceSessionId) navigate(`/cc-agent/${makeResult.sessionId}`);
+            setMakeDialogSessionId(makeResult.sessionId);
             return;
           }
         }
@@ -8145,6 +8147,13 @@ export function ChatInput({
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+      <CindyMakeCommandDialog
+        sessionId={makeDialogSessionId}
+        open={makeDialogSessionId !== null}
+        onOpenChange={(open) => {
+          if (!open) setMakeDialogSessionId(null);
+        }}
+      />
       {/* 计划模式激活态 chip(输入框上方,与 GoalIndicator 同形)。-mb-2 抵一部分
           root gap-4,让 chip 与输入框间距接近 GoalIndicator 的节奏。 */}
       {planModeEntry && planModeEnabled && (

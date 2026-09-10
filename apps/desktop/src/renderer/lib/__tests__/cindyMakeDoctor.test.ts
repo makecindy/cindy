@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startMakeDoctor } from '../cindyMakeDoctor';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import type { MakeDoctorReport } from '../../../shared/cindyMakeDoctor';
+import { MAKE_DOCTOR_CHECK_IDS, type MakeDoctorReport } from '../../../shared/cindyMakeDoctor';
 
 const done = (runId: string): MakeDoctorReport => ({
   runId,
@@ -87,4 +87,54 @@ describe('Main-owned progress in the doctor card', () => {
     await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalled());
     expect(getMakeDoctorReport(runId)?.status).not.toBe('completed');
   });
+
+  it.each(['source', 'upstream'] as const)(
+    'ends the active %s step after an invoke failure without losing completed steps',
+    async (step) => {
+      let listener!: (event: { command: string; doctorReport: MakeDoctorReport }) => void;
+      const unsubscribe = vi.fn();
+      const checks = MAKE_DOCTOR_CHECK_IDS.map((id) => ({ id, status: 'passed' as const }));
+      const runId = startMakeDoctor(
+        onReport,
+        {
+          onDesktopCommandTriggered: (handler) => {
+            listener = handler;
+            return unsubscribe;
+          },
+          executeDesktopCommand: async (_command, ctx) => {
+            listener({
+              command: 'cindy-make',
+              doctorReport: {
+                ...done(ctx!.doctorRunId!),
+                mode: 'prepare',
+                status: 'running',
+                checks,
+                source:
+                  step === 'source'
+                    ? {
+                        status: 'preparing',
+                        path: 'managed-source',
+                        progress: { stage: 'receiving', percent: 20 },
+                      }
+                    : { status: 'ready', path: 'managed-source' },
+                upstream: { status: step === 'source' ? 'pending' : 'searching', items: [] },
+              },
+            });
+            throw new Error('private diagnostic');
+          },
+        },
+        'cindy-make',
+        { request: 'fix scrolling' },
+      );
+      await vi.waitFor(() => expect(getMakeDoctorReport(runId)?.status).toBe('failed'));
+      expect(getMakeDoctorReport(runId)).toMatchObject({
+        checks,
+        source: { status: step === 'source' ? 'failed' : 'ready', path: 'managed-source' },
+        upstream: { status: step === 'source' ? 'pending' : 'failed' },
+      });
+      expect(getMakeDoctorReport(runId)?.source?.progress).toBeUndefined();
+      expect(JSON.stringify(getMakeDoctorReport(runId))).not.toContain('private diagnostic');
+      expect(unsubscribe).toHaveBeenCalledOnce();
+    },
+  );
 });

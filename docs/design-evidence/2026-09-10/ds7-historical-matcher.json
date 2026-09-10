@@ -1,0 +1,178 @@
+[
+  {
+    "scriptRef": "9d6ee6ddbafaf31cc885f014c52e0e5597b2ed96",
+    "base": "79c89d14a9f073d93485c7e7d5c0bec79bd6a961",
+    "head": "6559d2610a35e5ff85adf9b41c2a620ac4a4c196",
+    "raw": 13,
+    "allowed": 2,
+    "unexpected": 11,
+    "hits": [
+      {
+        "file": "apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx",
+        "line": 2703,
+        "value": "#4108",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx",
+        "line": 3057,
+        "value": "#4108",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 327,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 327,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 327,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 378,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 99,
+        "value": "#3931",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 99,
+        "value": "#4010",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 177,
+        "value": "#4072",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 177,
+        "value": "#4076",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-rules/design-governance.md",
+        "line": 299,
+        "value": "#4022",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-rules/design-inventory.md",
+        "line": 142,
+        "value": "#4064",
+        "allowed": true
+      },
+      {
+        "file": "docs/design-rules/design-inventory.md",
+        "line": 142,
+        "value": "#4076",
+        "allowed": true
+      }
+    ]
+  },
+  {
+    "scriptRef": "3047a83c6f43ce6b0fb94de9df26db81c881e737",
+    "base": "79c89d14a9f073d93485c7e7d5c0bec79bd6a961",
+    "head": "6559d2610a35e5ff85adf9b41c2a620ac4a4c196",
+    "raw": 13,
+    "allowed": 2,
+    "unexpected": 11,
+    "hits": [
+      {
+        "file": "apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx",
+        "line": 2703,
+        "value": "#4108",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx",
+        "line": 3057,
+        "value": "#4108",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 327,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 327,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 327,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "apps/desktop/src/renderer/components/ui/confirm-dialog.tsx",
+        "line": 378,
+        "value": "hsl(var(--destructive)",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 99,
+        "value": "#3931",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 99,
+        "value": "#4010",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 177,
+        "value": "#4072",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-evidence/2026-09-08/ds6-forms.md",
+        "line": 177,
+        "value": "#4076",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-rules/design-governance.md",
+        "line": 299,
+        "value": "#4022",
+        "allowed": false
+      },
+      {
+        "file": "docs/design-rules/design-inventory.md",
+        "line": 142,
+        "value": "#4064",
+        "allowed": true
+      },
+      {
+        "file": "docs/design-rules/design-inventory.md",
+        "line": 142,
+        "value": "#4076",
+        "allowed": true
+      }
+    ]
+  }
+]

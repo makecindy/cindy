@@ -30,10 +30,10 @@ import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 import {
-  localizeToolLoopError,
+  localizeAgentError,
   parseMobileToolLoopErrorDetails,
   type MobileToolLoopErrorDetails,
-} from '@/session/toolLoopErrorI18n';
+} from '@/session/agentErrorI18n';
 
 export interface SessionTailErrorBanner {
   kind: 'error-tail';
@@ -100,11 +100,11 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
     const nonRetryableGuidance = describeNonRetryableTailError(tail.text);
-    const toolLoopGuidance = localizeToolLoopError(tail.reason, tail.toolLoop);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: nonRetryableGuidance ?? toolLoopGuidance ?? tail.text,
+      text: nonRetryableGuidance ?? agentErrorGuidance ?? tail.text,
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
       retryable: nonRetryableGuidance === null,
     };
