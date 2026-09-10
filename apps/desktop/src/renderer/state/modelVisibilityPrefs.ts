@@ -750,11 +750,19 @@ export async function resetModelVisibilities(
 // trusting event.newValue, which may already be stale when the event is delivered.
 const removeStorageListener = (() => {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  const watchesPendingAdoptionSource = (key: string): boolean => {
+    if (activeOwnerMode !== 'cloud' || !activeOwnerId || activeOwnerId === LOCAL_OWNER_ID) return false;
+    if (window.localStorage.getItem(`${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(activeOwnerId)}`) === '1') {
+      return false;
+    }
+    return key === initializationKey(LOCAL_OWNER_ID) || key === ownerStorageKey(LOCAL_OWNER_ID);
+  };
   const onStorage = (event: StorageEvent): void => {
     if (!activeOwnerId || (event.storageArea && event.storageArea !== window.localStorage)) return;
     if (event.key !== null && event.key !== initializationKey(activeOwnerId)
       && event.key !== ownerStorageKey(activeOwnerId)
-      && event.key !== ownerMigrationCompleteKey(activeOwnerId)) return;
+      && event.key !== ownerMigrationCompleteKey(activeOwnerId)
+      && !watchesPendingAdoptionSource(event.key)) return;
     const ownerId = activeOwnerId;
     void withOwnerLock(ownerId, activeOwnerGeneration, () => {
       if (window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === '1') {

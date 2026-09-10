@@ -356,6 +356,25 @@ describe('model visibility across renderer windows', () => {
     expect(prefs.isModelEnabled('pi', 'xd', model('pi'))).toBe(false);
   });
 
+  it('retries adopted-local handoff when another window repairs the local source', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.initialization.owner.local-v1', JSON.stringify({
+      eligibleForDefaults: true, defaults: { 'pi:xd:pi': true },
+      scopes: [JSON.stringify(['xd', 'pi'])], followCatalogKeys: [],
+    }));
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.local-v1', '{ not valid json');
+    setOwnerClaim('owner-a', 1, false, false, true);
+    ownerClaim.profileOrigin = 'adopted-local';
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'other', defaultEnabled: true })).toBe(false);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBeNull();
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.local-v1', JSON.stringify({ 'pi:xd:pi': false }));
+    await locks.settle();
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a')).toBe('1');
+    expect(prefs.isModelEnabled('pi', 'xd', model('pi'))).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'other', defaultEnabled: true })).toBe(true);
+  });
+
   it('serializes first catalogs without optimistic overwrites and keeps the first baseline frozen', async () => {
     const { a, b } = await windows();
     const release = locks.hold();
