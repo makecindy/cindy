@@ -750,8 +750,14 @@ export async function resetModelVisibilities(
 // trusting event.newValue, which may already be stale when the event is delivered.
 const removeStorageListener = (() => {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
-  const watchesPendingAdoptionSource = (key: string): boolean => {
-    if (activeOwnerMode !== 'cloud' || !activeOwnerId || activeOwnerId === LOCAL_OWNER_ID) return false;
+  const watchesPendingSource = (key: string): boolean => {
+    if (!activeOwnerId) return false;
+    if (key === LEGACY_STORAGE_KEY) {
+      return activeOwnerMode !== 'signed-out'
+        && activeOwnerMigrationPending
+        && window.localStorage.getItem(ownerMigrationCompleteKey(activeOwnerId)) !== '1';
+    }
+    if (activeOwnerMode !== 'cloud' || activeOwnerId === LOCAL_OWNER_ID) return false;
     if (window.localStorage.getItem(`${LOCAL_ADOPTION_KEY_PREFIX}.${encodeURIComponent(activeOwnerId)}`) === '1') {
       return false;
     }
@@ -762,15 +768,9 @@ const removeStorageListener = (() => {
     if (event.key !== null && event.key !== initializationKey(activeOwnerId)
       && event.key !== ownerStorageKey(activeOwnerId)
       && event.key !== ownerMigrationCompleteKey(activeOwnerId)
-      && !watchesPendingAdoptionSource(event.key)) return;
+      && !watchesPendingSource(event.key)) return;
     const ownerId = activeOwnerId;
-    void withOwnerLock(ownerId, activeOwnerGeneration, () => {
-      if (window.localStorage.getItem(ownerMigrationCompleteKey(ownerId)) === '1') {
-        activeOwnerReadyForWrites = true;
-        activeOwnerMigrationPending = false;
-      }
-      return true;
-    });
+    void withOwnerLock(ownerId, activeOwnerGeneration, ensureActiveOwnerReadyForWrites);
   };
   window.addEventListener('storage', onStorage);
   return () => window.removeEventListener('storage', onStorage);

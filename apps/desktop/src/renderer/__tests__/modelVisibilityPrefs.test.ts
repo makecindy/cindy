@@ -375,6 +375,21 @@ describe('model visibility across renderer windows', () => {
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'other', defaultEnabled: true })).toBe(true);
   });
 
+  it('retries legacy migration when another window repairs the global key', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1', '{ not valid json');
+    setOwnerClaim('owner-a', 1, true, true);
+    ownerClaim.profileOrigin = 'existing';
+    const prefs = await import('../state/modelVisibilityPrefs');
+    await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    expect(prefs.isModelEnabled('codex', 'openai', { id: 'other', defaultEnabled: true })).toBe(false);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBeNull();
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'codex:openai:gpt-5.6': false }));
+    await locks.settle();
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBe('1');
+    expect(prefs.isModelEnabled('codex', 'openai', { id: 'gpt-5.6', defaultEnabled: true })).toBe(false);
+    expect(prefs.isModelEnabled('codex', 'openai', { id: 'other', defaultEnabled: true })).toBe(true);
+  });
+
   it('serializes first catalogs without optimistic overwrites and keeps the first baseline frozen', async () => {
     const { a, b } = await windows();
     const release = locks.hold();
