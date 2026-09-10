@@ -1991,6 +1991,8 @@ export class CodexAgent extends BaseAgent {
     generation: number;
     promise: Promise<void> | null;
   }>();
+  // Keep exact-process exit evidence even after its reusable registry entry is gone.
+  private hostRetirementResults = new WeakMap<AppServerHost, Promise<void>>();
 
   /**
    * app-server 启动时返回的 $CODEX_HOME 绝对路径 (InitializeResponse.codexHome)。
@@ -14570,41 +14572,60 @@ assertRouteCurrent();
     opts: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0],
   ): Promise<boolean> {
     if (opts.remoteHostId) return false;
-    // Retired hosts leave the reusable map before process exit. A missing map
-    // entry alone is not proof that its writer has been released.
-    for (const [key, retiring] of this.retiringHosts) {
-      if (!key.startsWith('local')) continue;
-      await awaitCodexRouteSelection(
-        retiring.promise ?? this.beginHostRetirement(key, retiring.host, 'verify Codex writer release'),
-        this.routeResolutionAbort.signal,
-      );
+    const observedHosts = new Set<AppServerHost>();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const hosts = new Map([...this.hosts].filter(([key]) => key.startsWith('local')));
+      const generations = new Map([...this.hostGenerations].filter(([key]) => key.startsWith('local')));
+      const startedHosts = new Set([...hosts.values()].filter((host) => host.hasStarted));
+      for (const host of hosts.values()) observedHosts.add(host);
+      const registryCurrent = () => {
+        const currentHosts = [...this.hosts].filter(([key]) => key.startsWith('local'));
+        const currentGenerations = [...this.hostGenerations].filter(([key]) => key.startsWith('local'));
+        return currentHosts.length === hosts.size && currentGenerations.length === generations.size
+          && currentHosts.every(([key, host]) => hosts.get(key) === host && startedHosts.has(host) === host.hasStarted)
+          && currentGenerations.every(([key, generation]) => generations.get(key) === generation);
+      };
+      const settleRetirements = async () => {
+        for (const [key, entry] of this.retiringHosts) {
+          if (key.startsWith('local')) observedHosts.add(entry.host);
+        }
+        // Do not retry a failed retirement here: callers must not commit a new
+        // route after a failed exit proof, even if the registry later changes.
+        await awaitCodexRouteSelection(Promise.all([...observedHosts].map((host) =>
+          this.hostRetirementResults.get(host))), this.routeResolutionAbort.signal);
+      };
+      await settleRetirements();
+      if (!registryCurrent()) continue;
+      const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model);
+      const contextWindow = opts.reviewMode ? null
+        : await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model);
+      const baseKey = opts.reviewMode ? localReviewHostKey(opts.sessionId ?? '')
+        : typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+          ? localCustomContextHostKey(opts.sessionId ?? '') : hostKey();
+      const targetKey = codexLocalAuthHostIdentity(baseKey, selection.policy);
+      if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+      for (const [key, host] of hosts) {
+        if (!registryCurrent()) break;
+        if (key === targetKey || !host.hasStarted) continue;
+        let cursor: string | null = null;
+        do {
+          const result: { data: string[]; nextCursor?: string | null } | null = await awaitCodexRouteSelection(
+            host.request<{ data: string[]; nextCursor?: string | null }>('thread/loaded/list', { cursor }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS }),
+            this.routeResolutionAbort.signal,
+          ).catch((error) => { if (!registryCurrent()) return null; throw error; });
+          if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+          if (!result || !registryCurrent()) break;
+          // A closed business handle does not release the native 0.153 writer.
+          if (result.data?.includes(opts.threadId)) return true;
+          cursor = result.nextCursor ?? null;
+        } while (cursor !== null);
+      }
+      await settleRetirements();
+      if (!registryCurrent()) continue;
+      if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
+      return false;
     }
-    const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model);
-    const contextWindow = opts.reviewMode ? null
-      : await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model);
-    const baseKey = opts.reviewMode ? localReviewHostKey(opts.sessionId ?? '')
-      : typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
-        ? localCustomContextHostKey(opts.sessionId ?? '') : hostKey();
-    const targetKey = codexLocalAuthHostIdentity(baseKey, selection.policy);
-    if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
-    for (const [key, host] of this.hosts) {
-      if (key === targetKey || !key.startsWith('local') || !host.hasStarted) continue;
-      const generation = this.hostGenerations.get(key);
-      let cursor: string | null = null;
-      do {
-        const result: { data: string[]; nextCursor?: string | null } = await awaitCodexRouteSelection(
-          host.request('thread/loaded/list', { cursor }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS }),
-          this.routeResolutionAbort.signal,
-        );
-        if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
-        if (this.hosts.get(key) !== host || this.hostGenerations.get(key) !== generation) break;
-        // A closed business handle does not release the native 0.153 writer.
-        // Only fork when another still-live process reports owning this thread.
-        if (result.data?.includes(opts.threadId)) return true;
-        cursor = result.nextCursor ?? null;
-      } while (cursor !== null);
-    }
-    return false;
+    throw new CodexRouteSelectionChangedError('Codex writer registry did not stabilize', false);
   }
 
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
@@ -15051,6 +15072,7 @@ assertRouteCurrent();
     };
     const promise = Promise.resolve().then(() => host.retire(reason, { throwOnTransportError: true }));
     entry.promise = promise;
+    this.hostRetirementResults.set(host, promise);
     this.retiringHosts.set(key, entry);
     // 失败保留 key/Host 屏障；下次请求可重查迟到的 exit，不自动重试或另启 writer。
     void promise.then(() => {

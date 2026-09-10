@@ -29,7 +29,7 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
     const lateWindow = ['initialize', 'capability', 'resume', 'skills', 'config', 'restricted', 'bot', 'local-skill'].includes(window);
@@ -160,12 +160,79 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         }));
         try {
           setSessionProvider('source', 'openai');
-          const sibling = await maker.createSession({ id: 'unrelated', agentKind: 'codex', providerId: 'openai', model: 'fixture-model', workingDir });
+          const retirementWindow = window.startsWith('transfer-retire');
+          const sibling = await maker.createSession({ id: 'unrelated', agentKind: 'codex', providerId: retirementWindow ? 'cprov-fixture' : 'openai', model: 'fixture-model', workingDir });
           let source = await maker.createSession({ id: 'source', agentKind: 'codex', providerId: 'openai', model: 'fixture-model', workingDir, ...(reviewMode ? { reviewMode: true as const } : {}) });
           await send(source);
           const hostMap = (agent as unknown as { hosts: Map<string, AppServerHost> }).hosts;
-          const siblingHost = hostMap.get('local')!;
+          const siblingHost = hostMap.get(retirementWindow ? 'local:external-auth' : 'local')!;
           const connection = siblingHost.getConnectionId();
+          if (retirementWindow) {
+            await maker.closeSession('source');
+            const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, updatedAt: sessions.updatedAt }).from(sessions)).find((row) => row.id === 'source')!;
+            const sourceHost = hostMap.get('local')!;
+            const internals = agent as unknown as {
+              resolveLocalAuthSelection(providerId: string | null | undefined, model: string): Promise<{ policy: 'isolated' | 'legacy-shared'; isCurrent(): boolean }>;
+              retireHostKey(key: string, reason: string, opts: { failIfActive: boolean; logPrefix: string }): Promise<void>;
+            };
+            let queryEntered = false;
+            let releaseQuery = () => {};
+            let releaseExit = () => {};
+            let rejectExit: (error: Error) => void = () => {};
+            const queryGate = new Promise<void>((resolve) => { releaseQuery = resolve; });
+            const exitGate = new Promise<void>((resolve, reject) => { releaseExit = resolve; rejectExit = reject; });
+            const retire = sourceHost.retire.bind(sourceHost);
+            const retireSpy = vi.spyOn(sourceHost, 'retire').mockImplementation(async (...args) => { await exitGate; return retire(...args); });
+            spies.push(retireSpy);
+            const originalResolve = internals.resolveLocalAuthSelection.bind(internals);
+            const queryHook = window.includes('resolve')
+              ? vi.spyOn(internals, 'resolveLocalAuthSelection').mockImplementationOnce(async (...args) => {
+                  queryEntered = true; await queryGate; return originalResolve(...args);
+                })
+              : vi.spyOn(sourceHost, 'request').mockImplementationOnce(async (method, params, options) => {
+                  expect(method).toBe('thread/loaded/list'); queryEntered = true; await queryGate;
+                  return request.call(sourceHost, method, params, options);
+                });
+            spies.push(queryHook);
+            const target = { model: 'fixture-model', providerId: 'cprov-fixture', effort: 'high', fastMode: false };
+            const commit = vi.fn(async ({ newSdkSessionId }: { newSdkSessionId: string }) => commitCodexThreadTransfer(db, sourceRow as CodexThreadTransferSnapshot, { ...target, sdkSessionId: newSdkSessionId, effort: 'high' }));
+            const fork = vi.fn();
+            let settled = false;
+            const transfer = relinkCodexProviderThread({
+              readSource: async () => ({ ...sourceRow, model: sourceRow.model!, workingDir }),
+              needsFork: (threadId) => maker.requiresCodexThreadHostTransfer({ sessionId: 'source', threadId, model: target.model, providerId: target.providerId }),
+              fork, commit,
+            }, { sessionId: 'source', target });
+            void transfer.then(() => { settled = true; }, () => { settled = true; });
+            try {
+              await expect.poll(() => queryEntered).toBe(true);
+              const retirement = internals.retireHostKey('local', 'fixture retirement race', { failIfActive: false, logPrefix: 'fixture' });
+              await expect.poll(() => retireSpy.mock.calls.length).toBe(1);
+              releaseQuery();
+              await new Promise((resolve) => setTimeout(resolve, 20));
+              expect(settled).toBe(false);
+              expect(commit).not.toHaveBeenCalled();
+              if (window.endsWith('failure')) {
+                rejectExit(new Error('fixture writer exit failed'));
+                await retirement;
+                await expect(transfer).rejects.toThrow('fixture writer exit failed');
+                expect(commit).not.toHaveBeenCalled();
+              } else {
+                releaseExit(); await retirement;
+                await expect(transfer).resolves.toMatchObject({ newSdkSessionId: sourceRow.sdkSessionId });
+                expect(commit).toHaveBeenCalledTimes(1);
+                const resumed = await maker.createSession({ id: 'source', agentKind: 'codex', model: target.model, providerId: target.providerId, workingDir, resumeSessionId: sourceRow.sdkSessionId! });
+                await send(resumed);
+              }
+              const persisted = sqlite.prepare('SELECT sdk_session_id, provider_id FROM sessions WHERE id = ?').get('source');
+              expect(persisted).toEqual({ sdk_session_id: sourceRow.sdkSessionId, provider_id: window.endsWith('failure') ? sourceRow.providerId : target.providerId });
+              expect(fork).not.toHaveBeenCalled();
+              expect((await storage.get('source'))!.sdkSessionId).toBe(sourceRow.sdkSessionId);
+              expect(siblingHost.getConnectionId()).toBe(connection);
+              await send(sibling);
+            } finally { releaseQuery(); releaseExit(); retireSpy.mockRestore(); await retire('fixture cleanup'); }
+            return;
+          }
           if (window === 'transfer-busy') {
             responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
             const inFlight = send(source);

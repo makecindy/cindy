@@ -13,7 +13,7 @@ import {
 import { CodexForkError } from './fork-error.js';
 import { Session } from '../../session.js';
 import { Method } from './app-server/protocol.js';
-import type { ThreadEventHandlers } from './app-server/host.js';
+import type { AppServerHost, ThreadEventHandlers } from './app-server/host.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
@@ -397,6 +397,69 @@ describe('Codex official OAuth host isolation', () => {
       expect(createdTransports).toHaveLength(1);
       await sibling.close();
     } finally { await agent.dispose(); }
+  });
+
+  it.each(['resolve-success', 'resolve-failure', 'list-success', 'list-failure'])('waits for exact writer retirement during %s', async (window) => {
+    const deps: AgentDeps = isolatedDeps();
+    const agent = new CodexAgent(deps);
+    const internals = agent as unknown as {
+      hosts: Map<string, AppServerHost>;
+      retiringHosts: Map<string, unknown>;
+      retireHostKey(key: string, reason: string, opts: { failIfActive: boolean; logPrefix: string }): Promise<void>;
+    };
+    let releaseQuery = () => {};
+    let releaseExit = () => {};
+    let rejectExit: (error: Error) => void = () => {};
+    const queryGate = new Promise<void>((resolve) => { releaseQuery = resolve; });
+    const exitGate = new Promise<void>((resolve, reject) => { releaseExit = resolve; rejectExit = reject; });
+    try {
+      const source = await agent.startSession({ sessionId: 'source', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo' });
+      const sibling = await agent.startSession({ sessionId: 'unrelated', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
+      await source.close();
+      const host = internals.hosts.get('local')!;
+      const siblingTransport = createdTransports[1];
+      let entered = false;
+      if (window.startsWith('resolve')) {
+        const resolve = deps.resolveCodexLocalAuthPolicy!;
+        deps.resolveCodexLocalAuthPolicy = async (...args) => {
+          entered = true; await queryGate; return resolve(...args);
+        };
+      } else {
+        const request = host.request.bind(host);
+        vi.spyOn(host, 'request').mockImplementation(async (method, params, options) => {
+          if (method === 'thread/loaded/list') { entered = true; await queryGate; return { data: [source.id], nextCursor: null }; }
+          return request(method, params, options);
+        });
+      }
+      const retire = host.retire.bind(host);
+      const retirementSpy = vi.spyOn(host, 'retire').mockImplementation(async (...args) => { await exitGate; return retire(...args); });
+      const decision = agent.requiresCodexThreadHostTransfer({ sessionId: 'source', threadId: source.id, providerId: 'cprov-test', model: 'gpt-5.4' });
+      let settled = false;
+      void decision.then(() => { settled = true; }, () => { settled = true; });
+      await vi.waitFor(() => expect(entered).toBe(true));
+      const retirement = internals.retireHostKey('local', 'test writer race', { failIfActive: false, logPrefix: 'test' });
+      await vi.waitFor(() => expect(retirementSpy).toHaveBeenCalled());
+      expect(internals.hosts.has('local')).toBe(false);
+      if (window.endsWith('failure')) {
+        rejectExit(new Error('writer exit failed'));
+        await retirement;
+        // Even removal of the current registry entry cannot erase the exact host's failure.
+        internals.retiringHosts.delete('local');
+        releaseQuery();
+        await expect(decision).rejects.toThrow('writer exit failed');
+      } else {
+        releaseQuery();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(settled).toBe(false);
+        releaseExit();
+        await retirement;
+        await expect(decision).resolves.toBe(false);
+      }
+      expect(siblingTransport.closed).toBe(false);
+      retirementSpy.mockRestore();
+      await retire('test cleanup');
+      await sibling.close();
+    } finally { releaseQuery(); releaseExit(); await agent.dispose(); }
   });
 
   it('keeps external credentials and subscription hosts alive concurrently', async () => {
