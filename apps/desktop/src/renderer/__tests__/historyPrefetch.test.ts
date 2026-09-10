@@ -3,10 +3,17 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { historyPrefetchThreshold } from '@cindy/maker-shared/message-window';
+import {
+  isUpwardWheelIntent,
+  shouldUnpinOnWheel,
+  shouldRepinOnWheel,
+} from '../components/chat/autoFollowIntent';
 import { decideUserIntentFillAction } from '../components/chat/viewportFillDetect';
 
-const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8')
-  .replace(/\r\n/g, '\n');
+const source = readFileSync(
+  resolve(__dirname, '../components/chat/MessageStream.tsx'),
+  'utf8',
+).replace(/\r\n/g, '\n');
 const start = source.indexOf('  const triggerUserIntentFill =');
 const end = source.indexOf('\n  useEffect(', start);
 const callback = ts.transpileModule(source.slice(start, end), {
@@ -91,6 +98,52 @@ describe('history prefetch', () => {
       expect(onLoadMore).toHaveBeenCalledTimes(2);
       settle();
       await Promise.resolve();
+    },
+  );
+});
+
+describe('wheel history intent', () => {
+  it.each([500, 9000])(
+    'ignores horizontal noise before a vertical gesture (height=%s)',
+    (scrollHeight) => {
+      const fill = vi.fn();
+      const unpin = vi.fn();
+      let nestedOwnsScroll = false;
+      const bindings = {
+        root: { scrollHeight, clientHeight: 754, scrollTop: 0 },
+        clearChipJumpSuppression: vi.fn(),
+        isUpwardWheelIntent,
+        shouldUnpinOnWheel,
+        shouldRepinOnWheel,
+        hasNestedScrollableAncestorThatCanScrollUp: () => nestedOwnsScroll,
+        hasNestedScrollableAncestorThatCanScrollDown: () => false,
+        unpinAutoFollowForUserUpIntent: unpin,
+        pinAutoFollowForUserDownIntent: vi.fn(),
+        triggerUserIntentFill: fill,
+      };
+      const start = source.indexOf('    const onWheel = (event: WheelEvent) => {');
+      const end = source.indexOf('    const onTouchStart =', start);
+      const code = ts.transpileModule(source.slice(start, end), {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      const wheel = new Function(...Object.keys(bindings), code + ';return onWheel;')(
+        ...Object.values(bindings),
+      );
+      wheel({ deltaX: 40, deltaY: -1 });
+      wheel({ deltaX: -40, deltaY: -1 });
+      wheel({ deltaX: 0, deltaY: 0 });
+      expect(fill).not.toHaveBeenCalled();
+      expect(unpin).not.toHaveBeenCalled();
+      wheel({ deltaX: 1, deltaY: -40 });
+      expect(fill).toHaveBeenCalledTimes(1);
+      expect(unpin).toHaveBeenCalledTimes(scrollHeight > 754 ? 1 : 0);
+      wheel({ deltaX: 0, deltaY: 40 });
+      expect(fill).toHaveBeenCalledTimes(1);
+      wheel({ deltaX: 40, deltaY: -40 });
+      expect(fill).toHaveBeenCalledTimes(2);
+      nestedOwnsScroll = true;
+      wheel({ deltaX: 0, deltaY: -40 });
+      expect(fill).toHaveBeenCalledTimes(2);
     },
   );
 });

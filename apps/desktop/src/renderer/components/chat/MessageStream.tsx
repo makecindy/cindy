@@ -360,6 +360,7 @@ import {
   shouldUnpinOnScrollbarDrag,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
+  isUpwardWheelIntent,
 } from './autoFollowIntent';
 import { countUnreadAdded } from './unreadCount';
 import {
@@ -4187,7 +4188,7 @@ export function MessageStream({
     // 不会产生 scroll 事件,所以用户继续向上滚动的意图必须在这里接住。
     const onWheel = (event: WheelEvent) => {
       clearChipJumpSuppression();
-      if (event.deltaY < 0) {
+      if (isUpwardWheelIntent(event)) {
         if (hasNestedScrollableAncestorThatCanScrollUp(root, event.target)) return;
         if (
           shouldUnpinOnWheel({
