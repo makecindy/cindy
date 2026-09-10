@@ -4584,6 +4584,17 @@ export function MessageStream({
     }
     // Missing rows are handled by the existing delete/window restoration path.
     if (!visibleRenderItemsRef.current.some((item) => item.key === snapshot.viewportTopKey)) return;
+    // A deleted child can leave its work-group row intact. Preserve its exact
+    // anchor for the deletion effect below; restoring the group here would erase
+    // the child ID before that effect can choose the next surviving message.
+    // Check data, not DOM: collapsing a group only hides its children.
+    const messageClientId = snapshot.messageClientId;
+    if (
+      messageClientId !== undefined &&
+      !allRenderItemsRef.current.some((item) =>
+        renderItemContainsClientId(item, messageClientId),
+      )
+    ) return;
     restoreViewportSnapshot(snapshot);
   }, [isLoadingMore, refreshViewportAnchor, restoreViewportSnapshot]);
 
