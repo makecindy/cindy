@@ -13,6 +13,7 @@ import {
   type DesktopCapturerSource,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { loadDesktopIceServers } from './iceConfig';
 import {
   isDesktopPermission,
   REMOTE_DESKTOP_OFFER_BUDGET,
@@ -168,7 +169,7 @@ async function offer(
     const ready = captureWindow.start();
     host = captureWindow.contents;
     const currentHost = host;
-    await ready;
+    const [, iceServers] = await Promise.all([ready, loadDesktopIceServers()]);
     if (!current() || host !== currentHost || !currentHost || currentHost.isDestroyed())
       throw new Error('DESKTOP_LEASE_EXPIRED');
     let source: DesktopCapturerSource | null = null;
@@ -216,6 +217,7 @@ async function offer(
         sdp,
         settings,
         attemptId,
+        iceServers,
       },
       REMOTE_DESKTOP_OFFER_BUDGET.hostMs,
     );

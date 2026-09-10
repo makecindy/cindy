@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, FileText, GraduationCap, X } from 'lucide-react';
 
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { Button } from '@/components/ui/button';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
@@ -29,6 +32,7 @@ import {
   publishedStatusLabelKey,
 } from './lib/publishedStatus';
 import { MarketPreviewTree } from './components/MarketPreviewTree';
+import { MarketLocalSkills } from './components/MarketLocalSkills';
 import { ManageMenu, type MarketCardManageAction } from './components/MarketCard';
 import { ScanResultDialog } from './ScanResultDialog';
 import type { ScanResultPayload } from './PublishDialog';
@@ -49,7 +53,7 @@ interface SkillhubMarketPreviewPanelProps {
  * 结构:
  *   Hero 头部 — 标题行(标题+可见性 chip | 操作按钮),元信息行,描述(满宽)
  *   正文 — 左栏(FILES 树) + 右侧 Markdown
- * 遮罩盖整个内容区,sidebar 保持可见可点(本地安装位置只看 sidebar 的 MarketSelectionPanel)。
+ * 遮罩盖整个内容区,sidebar 保持可见可点；头部显示本地安装位置及管理操作。
  */
 export function SkillhubMarketPreviewPanel({
   skill,
@@ -61,6 +65,8 @@ export function SkillhubMarketPreviewPanel({
 }: SkillhubMarketPreviewPanelProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { dataOwnerId } = useAuth();
+  const owner = getDataOwnerGeneration();
   const skillName = skill?.name ?? null;
   const skillVersion = skill?.latestVersion;
   const panelOpen = open && skillName !== null;
@@ -73,7 +79,18 @@ export function SkillhubMarketPreviewPanel({
   // 审核状态徽标点击 → 拉取扫描结果,复用发布完成时的 ScanResultDialog
   const [scanResult, setScanResult] = useState<ScanResultPayload | null>(null);
   const [scanDialogOpen, setScanDialogOpen] = useState(false);
+  const [scanResultOwner, setScanResultOwner] = useState<DataOwnerGeneration | null>(null);
   const status = skill ? effectivePublishedStatus(skill) : null;
+  const reviewVersion = skill ? effectivePublishedStatusVersion(skill) ?? skill.latestVersion : undefined;
+  const scanRequestId = useRef(0);
+
+  useEffect(() => {
+    setScanDialogOpen(false);
+    setScanResult(null);
+    setScanResultOwner(null);
+    // A late reply must not show another Skill/version's private review feedback.
+    return () => { scanRequestId.current += 1; };
+  }, [panelOpen, skillName, reviewVersion, status, skill?.catalogScope, skill?.canManage, dataOwnerId, owner]);
 
   // ESC 关闭
   useEffect(() => {
@@ -154,6 +171,7 @@ export function SkillhubMarketPreviewPanel({
   }, [panelOpen, selectedPath, skill?.catalogScope, skillName, skillVersion, t]);
 
   const tree = useMemo(() => buildPreviewTree(files), [files]);
+  const currentScanResult = scanResultOwner && isDataOwnerGenerationCurrent(scanResultOwner) ? scanResult : null;
 
   return (
     <>
@@ -184,8 +202,8 @@ export function SkillhubMarketPreviewPanel({
           <div className="flex h-full min-h-0 flex-col">
             {/* Hero 头部 — 仅标题行与操作同排,元信息/描述满宽 */}
             <header className="shrink-0 border-b border-[var(--cmd-palette-border)] px-6 pb-5 pt-5">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex items-center gap-3">
+                <div className="flex min-w-24 flex-1 items-center gap-2.5 overflow-hidden">
                   <h2 className="truncate text-lg font-semibold leading-tight">
                     {skill.displayName || skill.name}
                   </h2>
@@ -204,16 +222,28 @@ export function SkillhubMarketPreviewPanel({
                       type="button"
                       title={t('skillhub.marketActions.viewScanResult')}
                       onClick={() => {
+                        if (!isDataOwnerGenerationCurrent(owner)) return;
+                        const requestId = ++scanRequestId.current;
+                        const isCurrentRequest = () => requestId === scanRequestId.current && isDataOwnerGenerationCurrent(owner);
                         void window.electronAPI.skillhub
                           .getScanStatus({
                             slug: skill.name,
-                            version: effectivePublishedStatusVersion(skill) ?? skill.latestVersion,
-                            catalogScope: skill.catalogScope,
+                            version: reviewVersion,
+                            // Catalog reads only expose approved releases; owners read failed/rejected releases natively.
+                            catalogScope: status === 'rejected' && skill.canManage ? undefined : skill.catalogScope,
                           })
                           .then((res) => {
+                            if (!isCurrentRequest()) return;
+                            setScanResultOwner(owner);
                             setScanResult(res.success
-                              ? { status: res.status, gates: res.gates as ScanResultPayload['gates'] }
+                              ? { status: res.status, gates: res.gates as ScanResultPayload['gates'], rejectionReason: res.rejectionReason }
                               : { status: 'scan_status_unavailable', gates: [{ name: 'scan-status', status: 'unavailable' }] });
+                            setScanDialogOpen(true);
+                          })
+                          .catch(() => {
+                            if (!isCurrentRequest()) return;
+                            setScanResultOwner(owner);
+                            setScanResult({ status: 'scan_status_unavailable', gates: [{ name: 'scan-status', status: 'unavailable' }] });
                             setScanDialogOpen(true);
                           });
                       }}
@@ -228,10 +258,10 @@ export function SkillhubMarketPreviewPanel({
                   ) : null}
                 </div>
 
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex min-w-0 items-center gap-2 overflow-x-auto py-1">
                   {primaryAction === 'clone' ? (
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
                       onClick={() => {
                         // Learn = 以该 skill 为参考蒸馏本地技能(不安装原件)。
                         // 不预创建会话:把 `/learn hub:<slug> ` 预填进系统原生的
@@ -249,42 +279,35 @@ export function SkillhubMarketPreviewPanel({
                         onClose();
                         navigate('/cc-agent/new');
                       }}
-                      className={cn(
-                        'flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-default)] transition-colors',
-                        'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]',
-                      )}
-                      style={{ height: '32px', padding: '0 14px', fontSize: '13px', fontWeight: 500 }}
+                      className="gap-1.5 px-3.5"
                     >
                       <GraduationCap size={14} className="shrink-0" />
                       <span className="leading-none">{t('learn.hub.learnButton')}</span>
-                    </button>
+                    </Button>
                   ) : null}
                   {primaryAction === 'clone' && onClone ? (
-                    <button
-                      type="button"
+                    <Button
+                      variant="cta"
                       onClick={() => onClone(skill)}
-                      className={cn(
-                        'flex shrink-0 items-center gap-1.5 rounded-full transition-colors',
-                        'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-                      )}
-                      style={{ height: '32px', padding: '0 14px', fontSize: '13px', fontWeight: 500 }}
+                      className="gap-1.5 px-3.5"
                     >
                       <Download size={14} className="shrink-0" />
                       <span className="leading-none">{t('skillhub.marketCard.clone')}</span>
-                    </button>
+                    </Button>
                   ) : null}
                   {primaryAction === 'manage' && onManageAction ? (
                     <ManageMenu skill={skill} onAction={onManageAction} />
                   ) : null}
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    aria-label={t('diffPanel.shell.closeAria')}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
-                  >
-                    <X size={16} />
-                  </button>
+                  <MarketLocalSkills key={`${skill.catalogScope}:${skill.name}`} skill={skill} />
                 </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label={t('diffPanel.shell.closeAria')}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
+                >
+                  <X size={16} />
+                </button>
               </div>
 
               <p className="mt-1 truncate text-xs text-[var(--cmd-palette-item-meta)]">
@@ -362,9 +385,9 @@ export function SkillhubMarketPreviewPanel({
       </aside>
 
       <ScanResultDialog
-        open={scanDialogOpen}
-        onClose={() => setScanDialogOpen(false)}
-        result={scanResult}
+        open={scanDialogOpen && currentScanResult !== null}
+        onClose={() => { scanRequestId.current += 1; setScanDialogOpen(false); }}
+        result={currentScanResult}
       />
     </>
   );

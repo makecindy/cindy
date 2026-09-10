@@ -1890,7 +1890,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 **setup 就绪声明**(可选,顶层字段):回答"这段意识**用之前必须配好什么**"。用户在
 插件页点「使用」或 Agent 调用你的工具时,主机按它做前置检查；没配齐就用统一设置卡
 引导用户完成配置：普通 user Secret 直接在卡内填写，OAuth 在卡内发起授权，KV 与连接等
-复杂配置再进入插件详情页。配齐后继续原调用。检查、字段绑定、保存状态和恢复都在主机
+复杂配置再进入插件详情页。普通任务配齐后继续原调用；伙伴会保留独立授权卡并结束当前轮，
+授权完成后由主机通知伙伴继续原工作。没有图标时不生成占位图标，插件已有配置面板与成果
+UI 保留。检查、字段绑定、保存状态和恢复都在主机
 代码里执行,你只声明需求,不用写卡片回调或检查逻辑,也不要在电子脑里自己重复检查。
 
 \`\`\`json
@@ -2762,8 +2764,9 @@ cindy.onHostMessage(function (msg) {
   // ── did- 旁听:收到就收到,主机不等你,你也改变不了任何事 ──
   if (msg.name === 'did-turn-end') {
     // msg.data = { sessionId, agent, model?, durationMs, endReason, usage? }
-    // usage 各字段可选(cc/codex 上报详尽度不同,别假设字段必在):
+    // usage 各字段可选(各引擎上报详尽度不同,别假设字段必在):
     //   { inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens? }
+    // error 终态也可带已消耗的 usage；Pi 输出上限会保留它，不要只统计 completed。
     // msg.seq 每意识单调递增;msg.dropped(可选)= 你熄灯期溢出丢弃的事件数。
     // 生命周期:会话被关掉或引擎被替换时,主机会给还在场的那一轮补发
     // endReason: 'interrupted',让 start/end 成对。但这不是投递保证——熄灯期

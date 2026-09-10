@@ -82,6 +82,37 @@ beforeEach(() => {
   __testing.reset();
 });
 
+it('strips Desktop credential links from authorization history and live metadata pushes', () => {
+  const card = { v: 1, sessionId: 's1', createdAt: 1, target: { kind: 'plugin', id: 'p' },
+    snapshot: { kind: 'plugin_setup', requestId: 'r', revision: 1, ghost: { id: 'p', name: 'Plugin' },
+      steps: [{ id: 'step', groupId: 'group', groupMode: 'any_of', title: 'Key', description: '', phase: 'pending',
+        action: { id: 'inline', kind: 'inline_form', form: { fields: [{ id: 'value', type: 'secret', label: 'Key',
+          required: true, maxLength: 4096, externalLink: { url: 'https://example.com/keys' } }] } } }] } };
+  const row = { id: 'm', clientId: 'm', sessionId: 's1', role: 'assistant', content: 'Configure key', agentMeta: { botAuthorization: card } };
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', []);
+  const client = mkClient();
+  __testing.setActiveClient(client as never);
+  __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: row });
+  const push = client.sendPush.mock.calls.find((c) => c[1] === 'local-db:messages:created')![2];
+  expect(push.message.agentMeta.botAuthorization.snapshot.steps[0].action.kind).toBe('inline_form');
+  expect(JSON.stringify(push)).not.toContain('externalLink');
+  for (const channel of ['local-db:messages:list', 'local-db:messages:around']) {
+    __testing.sendInvokeResultSafe(client as never, 'mobile', channel, { ok: true, result: [row] }, channel);
+  }
+  for (const call of client.sendInvokeResult.mock.calls) {
+    expect(call[2].result[0].agentMeta.botAuthorization).toBeDefined();
+    expect(JSON.stringify(call[2])).not.toContain('externalLink');
+  }
+  for (const channel of ['local-db:messages:view', 'local-db:messages:work-details']) {
+    __testing.sendInvokeResultSafe(client as never, 'mobile', channel, { ok: true,
+      result: { messages: [row], items: [{ type: 'messages', key: 'auth', messages: [row] }] } }, channel);
+    const result = client.sendInvokeResult.mock.calls.at(-1)![2].result;
+    expect(result.messages[0].agentMeta.botAuthorization).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain('externalLink');
+  }
+  expect(row.agentMeta.botAuthorization.snapshot.steps[0].action.form.fields[0].externalLink.url).toBe('https://example.com/keys');
+});
+
 describe('negotiated mobile tool projection', () => {
   const input = { command: 'echo ' + 'x'.repeat(40_000) };
   const row = { id: 'row', clientId: 'persist', sessionId: 's1', role: 'tool_use',

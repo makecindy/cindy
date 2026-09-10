@@ -214,7 +214,7 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
 }
 
 describe('CustomProviderDialog accessibility', () => {
-  it('opens the requested runtime and focuses the model context-window field', async () => {
+  it.each(['target-model', 'flux-image-x'])('opens and focuses the custom chat window field for %s', async (modelId) => {
     const initial: CustomProviderConfig = {
       id: 'deep-link-provider',
       name: 'Deep Link Provider',
@@ -226,7 +226,7 @@ describe('CustomProviderDialog accessibility', () => {
         },
         codex: {
           baseUrl: 'https://codex.example.test',
-          models: [{ id: 'target-model', name: 'Target Model' }],
+          models: [{ id: modelId, name: 'Target Model' }],
         },
       },
     };
@@ -236,7 +236,7 @@ describe('CustomProviderDialog accessibility', () => {
       <CustomProviderDialog
         initial={initial}
         focusAgent="codex"
-        focusModelId="target-model"
+        focusModelId={modelId}
         onSaved={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -252,6 +252,9 @@ describe('CustomProviderDialog accessibility', () => {
       name: 'settings.providers.custom.fields.modelContextWindowTitle',
     });
     await waitFor(() => expect(document.activeElement).toBe(contextWindow));
+    expect(contextWindow).toBe(
+      screen.getByPlaceholderText('settings.providers.custom.fields.modelContextWindowPlaceholder'),
+    );
   });
 
   it('cancels a pending manual create without discarding the Provider draft', async () => {
@@ -1376,4 +1379,229 @@ describe('CustomProviderDialog accessibility', () => {
     await user.click(capability);
     expect(capability.checked).toBe(true);
   });
+});
+
+describe('DS-6 field errors and save ownership', () => {
+  it('reports name validation on the field and focuses it', async () => {
+    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    const name = screen.getByLabelText('settings.providers.custom.fields.name');
+    expect(document.activeElement).toBe(name);
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(document.getElementById(name.getAttribute('aria-describedby')!)?.textContent).toBe(
+      'settings.providers.custom.errors.nameRequired',
+    );
+    expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
+  });
+
+  it('locks only an actual save request and restores Cancel after failure', async () => {
+    let reject!: (error: Error) => void;
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+    customProviderMocks.updateCustomProvider.mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+    );
+    const onClose = vi.fn(),
+      onSaved = vi.fn();
+    render(
+      <CustomProviderDialog
+        initial={modelRoutedCodexProvider()}
+        onSaved={onSaved}
+        onClose={onClose}
+      />,
+    );
+    await waitForInitialDialogFocus();
+    await act(async () => {});
+    const save = screen.getByRole('button', { name: 'settings.providers.custom.save' });
+    const cancel = screen.getByRole('button', { name: 'settings.providers.custom.cancel' });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(save.getAttribute('aria-busy')).toBe('true');
+    await act(async () => reject(new Error('Try again')));
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it('raises secret eye and remove-row tooltips above the z-10000 modal overlay', async () => {
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+    const user = userEvent.setup();
+    render(
+      <CustomProviderDialog
+        initial={modelRoutedCodexProvider()}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitForInitialDialogFocus();
+
+    // Tip 经 Portal 渲染到 body,默认 z-[60] 会被 z-[10000] 模态层盖住;
+    // 弹窗内必须把提示抬到 z-[10001](review P2)。Radix Tooltip 1.2 的
+    // role="tooltip" 挂在 Content 内的 sr-only 副本上,带 z class 的可见层
+    // 是它的父节点(Popper.Content)。
+    const eye = screen.getByRole('button', { name: 'settings.apiKey.showKey' });
+    await user.hover(eye);
+    const eyeTip = await screen.findByRole('tooltip');
+    expect(eyeTip.textContent).toBe('settings.apiKey.showKey');
+    expect(eyeTip.parentElement!.className).toContain('z-[10001]');
+    // 模态 open 时 Radix 会把 body 置 pointer-events:none,userEvent.unhover 的
+    // 交互前检查会拒绝;直接派发 pointerleave 关闭提示(Radix 监听 pointer 事件)。
+    fireEvent.pointerLeave(eye);
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+
+    const remove = screen.getAllByRole('button', {
+      name: 'settings.providers.custom.fields.removeRow',
+    })[0]!;
+    await user.hover(remove);
+    const removeTip = await screen.findByRole('tooltip');
+    expect(removeTip.textContent).toBe('settings.providers.custom.fields.removeRow');
+    expect(removeTip.parentElement!.className).toContain('z-[10001]');
+  });
+
+  it('keeps the field error while other fields change and clears it when the errored field is edited', async () => {
+    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    const name = screen.getByLabelText('settings.providers.custom.fields.name');
+    const baseUrl = screen.getByLabelText('settings.providers.custom.fields.baseUrl');
+    fireEvent.change(name, { target: { value: 'X' } });
+    fireEvent.change(baseUrl, { target: { value: 'not-a-url' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    // 非法 URL 报错落在 baseUrl,首错聚焦并带 aria-invalid。
+    expect(document.activeElement).toBe(baseUrl);
+    expect(baseUrl.getAttribute('aria-invalid')).toBe('true');
+    expect(
+      document.getElementById(baseUrl.getAttribute('aria-describedby')!)?.textContent,
+    ).toBe('settings.providers.custom.errors.baseUrlInvalid');
+
+    // 编辑其它字段(name)不得清掉 baseUrl 的错误——面板级 onChangeCapture 只在
+    // 报错字段自身被编辑时清除(review P2)。
+    fireEvent.change(name, { target: { value: 'XY' } });
+    expect(baseUrl.getAttribute('aria-invalid')).toBe('true');
+    expect(
+      document.getElementById(baseUrl.getAttribute('aria-describedby')!)?.textContent,
+    ).toBe('settings.providers.custom.errors.baseUrlInvalid');
+
+    // 编辑报错字段本身:错误清除,等下次保存重新校验。
+    fireEvent.change(baseUrl, { target: { value: 'https://example.test/v1' } });
+    expect(baseUrl.getAttribute('aria-invalid')).not.toBe('true');
+    expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
+  });
+
+  it('clears the list-level model error when the new model row is filled after adding it back', async () => {
+    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    // 名称 / baseUrl 合法,删掉仅有的空模型行 → 保存报列表级错误(渲染在「添加模型」旁,
+    // 不依赖任何行存在)。
+    fireEvent.change(screen.getByLabelText('settings.providers.custom.fields.name'), {
+      target: { value: 'X' },
+    });
+    fireEvent.change(screen.getByLabelText('settings.providers.custom.fields.baseUrl'), {
+      target: { value: 'https://example.test/v1' },
+    });
+    fireEvent.click(
+      screen.getAllByRole('button', {
+        name: 'settings.providers.custom.fields.removeRow',
+      })[0]!,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    expect(screen.getByText('settings.providers.custom.errors.modelRequired')).toBeTruthy();
+
+    // 重新添加模型并填写:新行输入的 change 就是对列表级错误的修正,提示须同步清除
+    // ——否则会滞留到再次保存(review P1)。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }),
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText('settings.providers.custom.fields.modelIdPlaceholder'),
+      { target: { value: 'm1' } },
+    );
+    expect(screen.queryByText('settings.providers.custom.errors.modelRequired')).toBeNull();
+    expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
+  });
+
+  it('clears any field error when a preset programmatically replaces the form values', async () => {
+    window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({
+      presets: [
+        {
+          id: 'preset-a',
+          name: 'Preset A',
+          runtimes: {
+            'claude-code': {
+              baseUrl: 'https://preset.example.test/v1',
+              models: [{ id: 'pm-1', name: 'PM 1' }],
+            },
+          },
+        },
+      ],
+    }));
+    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    // 保存空表单 → 名称必填报错。
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    expect(screen.getByText('settings.providers.custom.errors.nameRequired')).toBeTruthy();
+
+    // 应用预设:程序化替换名称/鉴权/全部 runtime,不触发任何输入的 change——
+    // 既有字段错误的指向已整体失效,须同步清除(review P1)。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.providers.custom.presets.label' }),
+    );
+    fireEvent.click(screen.getByRole('option', { name: 'Preset A' }));
+    await waitFor(() =>
+      expect(screen.queryByText('settings.providers.custom.errors.nameRequired')).toBeNull(),
+    );
+    expect(
+      (screen.getByLabelText('settings.providers.custom.fields.name') as HTMLInputElement)
+        .value,
+    ).toBe('Preset A');
+    expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
+  });
+});
+
+it.each(['1,', '-5'])('saves a media type while its hidden context draft is %s', async (draft) => {
+  const user = userEvent.setup();
+  const initial: CustomProviderConfig = {
+    id: 'media-draft', name: 'Media Draft', auth: { method: 'apiKey' },
+    runtimes: { codex: { baseUrl: 'https://example.test/v1', models: [{ id: 'model', name: 'Model' }] } },
+  };
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  render(<CustomProviderDialog initial={initial} focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  const context = await screen.findByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' });
+  fireEvent.change(context, { target: { value: draft } });
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.modelType' }));
+  await user.click(screen.getByRole('menuitemradio', { name: /image/i }));
+  expect(screen.queryByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[0].runtimes.codex.models[0].mode).toBe('image_generation');
+});
+
+
+it('preserves preset media metadata through probing and saving', async () => {
+  const media = { id: 'media-first', name: 'Media', mode: 'image_generation' as const,
+    modalities: { input: ['text'], output: ['image'] }, officialDocs: 'https://example.test/docs' };
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [{
+    id: 'media-preset', name: 'Media Preset', runtimes: { codex: {
+      baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const,
+      models: [media, { id: 'chat-second', name: 'Chat', mode: 'chat' as const }],
+    } },
+  }] }));
+  render(<CustomProviderDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.presets.label' }));
+  fireEvent.click(await screen.findByRole('option', { name: 'Media Preset' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+  await waitFor(() => expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'adhoc', spec: expect.objectContaining({ modelId: 'chat-second' }) }),
+  ));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce());
+  expect(customProviderMocks.createCustomProvider.mock.calls[0][0].runtimes.codex.models[0]).toMatchObject(media);
 });

@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
+import { syncUninstallCleanupNotices, resetUninstallCleanupNotices } from '../lib/uninstallCleanupNotifications';
 import { invalidateSkillSyncRequests, registerSyncStoreSetters } from './useSkillSync';
 
 interface SkillhubProject {
@@ -89,6 +90,7 @@ export function refresh(): Promise<SkillhubSkill[]> {
         return latestScan?.id === scanRequestId ? latestScan.promise : state.skills;
       }
       if (result.success) {
+        syncUninstallCleanupNotices(result.pendingCleanups ?? [], refresh);
         const skills = result.skills ?? [];
         setState({
           skills,
@@ -196,6 +198,7 @@ export function setSyncError(err: string | null): void {
  * owner's late result cannot repopulate the new owner's store.
  */
 export function reset(): void {
+  resetUninstallCleanupNotices();
   scanRequestId += 1;
   latestScan = null;
   invalidateSkillSyncRequests();
@@ -224,11 +227,28 @@ export function setSkillhubDataOwner(dataOwnerId: string | null): void {
 // ── Auth change listener — reset store on every data-owner boundary ─────────
 
 let authListenerUnsubscribe: (() => void) | null = null;
+let localStateListenerUnsubscribe: (() => void) | null = null;
 
 function ensureAuthListener(): void {
+  if (!localStateListenerUnsubscribe && window.electronAPI.skillhub.onLocalStateChanged) {
+    localStateListenerUnsubscribe = window.electronAPI.skillhub.onLocalStateChanged(() => { void refresh(); });
+  }
   if (authListenerUnsubscribe) return;
   authListenerUnsubscribe = window.electronAPI.onAuthStateChange((authState) => {
     setSkillhubDataOwner(authState.dataOwnerId);
+  });
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    resetUninstallCleanupNotices();
+    authListenerUnsubscribe?.();
+    localStateListenerUnsubscribe?.();
+    authListenerUnsubscribe = null;
+    localStateListenerUnsubscribe = null;
+    scanRequestId += 1;
+    latestScan = null;
+    listeners.clear();
   });
 }
 

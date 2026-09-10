@@ -1,5 +1,13 @@
 import type { AgentKind } from '@cindy/maker-core';
 
+/** Read-only context for evaluating a companion's next-turn toolset catalog. */
+export interface BotToolsetContext {
+  botId: string;
+  agentKind: AgentKind;
+  workingDir: string;
+  remoteHostId?: string | null;
+}
+
 /**
  * SSH Claude/Codex only receive the narrowly scoped host bridge declared in
  * codexHttpBridge.ts. Pi has a per-session SSH tunnel for the complete MCP

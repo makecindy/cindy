@@ -13,6 +13,11 @@ import {
 import type { ScanStagingResult } from '../staging';
 import { computeProposalFingerprint } from '../stagingValidation.pure';
 import { tryAcquireSkillInstallLock } from '../../skillhub/installLock';
+vi.mock('../../skillhub/sharedMutationLease', () => ({
+  acquireSharedSkillMutationLease: vi.fn(async () => Object.assign(async () => {}, {
+    run: <T>(operation: () => Promise<T>) => operation(),
+  })),
+}));
 
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -1110,6 +1115,12 @@ describe('LearnController 状态机', () => {
     } finally {
       releaseMarket();
     }
+
+    const { acquireSharedSkillMutationLease } = await import('../../skillhub/sharedMutationLease');
+    vi.mocked(acquireSharedSkillMutationLease).mockResolvedValueOnce(null);
+    await expect(h.controller.apply('r1')).rejects.toMatchObject({ code: 'LEARN_BUSY' });
+    expect(h.applyCalls).toHaveLength(0);
+    expect(h.store.get('r1')!.status).toBe('awaiting-review');
 
     // 不同名的市场安装不阻塞;同名锁释放后重试成功
     const releaseUnrelated = tryAcquireSkillInstallLock('unrelated-skill', 'market-install')!;

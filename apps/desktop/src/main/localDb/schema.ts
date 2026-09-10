@@ -1145,6 +1145,8 @@ export const schedules = sqliteTable(
      */
     intervalMs: integer('interval_ms'),
     agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** NULL preserves legacy bound-task Harness inheritance. */
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,

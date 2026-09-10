@@ -3,6 +3,8 @@ import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import type { RemoteSession } from "./types";
 import {
   canUseLocalCodexRateLimitControl,
+  isSessionOpenAiAccount,
+  type OpenAiAccountProvider,
   shouldFallbackToLegacyCodexUsage,
 } from "./sessionControls";
 
@@ -51,20 +53,21 @@ const record = (value: unknown): Record<string, unknown> =>
 export async function readSessionMenuAccountUsage(
   session: RemoteSession,
   reader: Reader,
+  accountProvider?: OpenAiAccountProvider,
 ): Promise<SessionMenuAccountUsage> {
   if (session.remoteHostId?.trim()) return empty("unavailable");
   // The host projects runtime-effective selection onto providerId. Missing
   // selection alone proves neither a Gateway nor an OpenAI web account route.
   const provider = session.providerId?.trim() || null;
   const model = session.model.trim();
-  if (canUseLocalCodexRateLimitControl(session))
+  if (canUseLocalCodexRateLimitControl(session, accountProvider))
     return readCodexAccount(session, reader);
   if (
     session.agentKind !== "codex" &&
-    provider === "openai" &&
+    isSessionOpenAiAccount(provider, accountProvider) &&
     model.startsWith("chatgpt/")
   ) {
-    const payload = record(await reader.getAccountUsage("codex"));
+    const payload = record(await (session.providerId && session.providerId !== 'openai' ? reader.getAccountUsage("codex", session.providerId) : reader.getAccountUsage("codex")));
     // The ChatGPT bridge uses the web slot, not the CLI's app-server bucket.
     const web =
       payload.webSnapshot ?? (payload.source === "openai-web" ? payload : null);
@@ -128,14 +131,14 @@ async function readCodexAccount(
   let observedAt: number | null = null;
   let plan: string | null = null;
   try {
-    const result = await reader.getCodexRateLimits();
+    const result = await (session.providerId && session.providerId !== 'openai' ? reader.getCodexRateLimits(session.providerId) : reader.getCodexRateLimits());
     raw = result.rateLimits;
     byLimitId = result.rateLimitsByLimitId;
     plan = result.account.planType;
     observedAt = Date.now();
   } catch (error) {
-    if (!shouldFallbackToLegacyCodexUsage(error)) throw error;
-    raw = await reader.getAccountUsage("codex");
+    if ((session.providerId && session.providerId !== 'openai') || !shouldFallbackToLegacyCodexUsage(error)) throw error;
+    raw = await (session.providerId && session.providerId !== 'openai' ? reader.getAccountUsage("codex", session.providerId) : reader.getAccountUsage("codex"));
   }
   return projectCodexAccount(
     raw,

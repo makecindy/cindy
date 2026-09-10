@@ -85,7 +85,8 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { botInvitationProgress } from '../../../shared/botInvitation.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
-import { getMakerIfReady } from '../../maker-host/index.js';
+import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
+import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
 import { getResolvedMainLocale } from '../../i18n.js';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 
@@ -1077,6 +1078,170 @@ export async function createBotProfile(raw: unknown) {
   return profile;
 }
 
+/** Shared profile mutation for trusted settings and owner-bound capability selection. */
+export async function updateBotProfile(raw: unknown, expectedVersion?: number,
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>) {
+  const body =
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const id = readText(body.id, 'botId', 128, true);
+  const owner = captureBotOperationOwner();
+  const client = getDbClient();
+  if (body.retryInvitation === true) {
+    queueBotInvitation(id, true);
+    return readProfile(client, id);
+  }
+  const db = client.drizzle;
+  const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, id)).limit(1);
+  if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
+  if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) {
+    throwIpcError('PRECONDITION_FAILED', '伙伴配置已更新，请重新读取后重试');
+  }
+  const now = Date.now();
+  const patch: Partial<typeof botProfiles.$inferInsert> = { updatedAt: now };
+  if (body.name !== undefined || body.displayName !== undefined)
+    patch.displayName = readText(body.name ?? body.displayName, 'name', 200, true);
+  if (body.description !== undefined)
+    patch.description = readText(body.description, 'description');
+
+  const expectedAvatar =
+    body.avatar !== undefined && body.expectedAvatar !== undefined
+      ? readBotAvatar(body.expectedAvatar, true)
+      : current.avatar;
+  if (body.avatar !== undefined) {
+    const nextAvatar = readBotAvatar(body.avatar, true);
+    if (isManagedBotAvatarUrl(nextAvatar) && nextAvatar !== current.avatar) {
+      throwIpcError('INVALID_PARAMS', '请通过头像选择器上传图片');
+    }
+    // A delayed full-form autosave must not roll back an avatar that won in
+    // another window. An idempotent echo of the winner remains harmless.
+    if (expectedAvatar === current.avatar || nextAvatar === current.avatar) {
+      patch.avatar = nextAvatar;
+    }
+  }
+  if (body.avatarColor !== undefined)
+    patch.avatarColor = readText(body.avatarColor, 'avatarColor', 32, true);
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== 'boolean')
+      throwIpcError('INVALID_PARAMS', 'enabled 必须是 boolean');
+    patch.status = body.enabled ? 'active' : 'paused';
+  }
+  const hiddenAt =
+    body.hidden === undefined
+      ? undefined
+      : body.hidden === true
+        ? now
+        : body.hidden === false
+          ? null
+          : throwIpcError('INVALID_PARAMS', 'hidden 必须是 boolean');
+  const pinnedAt =
+    body.pinned === undefined
+      ? undefined
+      : body.pinned === true
+        ? now
+        : body.pinned === false
+          ? null
+          : throwIpcError('INVALID_PARAMS', 'pinned 必须是 boolean');
+  const [version] = await db
+    .select()
+    .from(botProfileVersions)
+    .where(
+      and(
+        eq(botProfileVersions.botId, id),
+        eq(botProfileVersions.version, current.currentVersion),
+      ),
+    )
+    .limit(1);
+  const previous = parseJson(version?.capabilitiesJson ?? '{}');
+  const preparation = botInvitationProgress(previous.invitation);
+  const retryingPortrait = preparation?.stage === 'avatar' && current.canonicalSessionId;
+  if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
+    throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面，请完成准备后再编辑资料');
+  }
+  const nextConfig = mergeBotProfileCapabilities({
+    previous,
+    capabilities:
+      body.capabilities &&
+      typeof body.capabilities === 'object' &&
+      !Array.isArray(body.capabilities)
+        ? (body.capabilities as Record<string, unknown>)
+        : undefined,
+    skills: body.skills,
+    hasSkills: Object.prototype.hasOwnProperty.call(body, 'skills'),
+    capabilityBaseline: body.capabilityBaseline,
+  });
+  // Keep preparation checkpoints outside caller-editable capabilities.
+  if (previous.invitation) nextConfig.invitation = previous.invitation;
+  else delete nextConfig.invitation;
+  if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
+    nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+  }
+  // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
+  // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
+  if (Object.prototype.hasOwnProperty.call(body, 'gender')) {
+    const nextGender = readBotGender(body.gender);
+    if (nextGender) nextConfig.gender = nextGender;
+    else delete nextConfig.gender;
+  }
+  const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
+  const nextIdentitySource =
+    body.identitySource !== undefined
+      ? readText(body.identitySource, 'identitySource', 12000) ||
+        buildDefaultBotIdentity(patch.displayName ?? current.displayName)
+      : (version?.identitySource ?? '');
+  const profileContentChanged = botProfileContentChanged({
+    previousCapabilities: previous,
+    nextCapabilities: normalizedNextConfig,
+    previousIdentitySource: version?.identitySource ?? '',
+    nextIdentitySource,
+  });
+  // Only the renderer save boundary needs this hook; model-side selections already validate
+  // before calling this function. Both paths retain the transaction's profile-version CAS.
+  await validateAdditions?.({ botId: id, canonicalSessionId: current.canonicalSessionId,
+    previous, next: normalizedNextConfig });
+  owner.assertCurrent();
+  await client.tx('bots.updateProfile', {
+    id,
+    ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+    ...(patch.description !== undefined ? { description: patch.description } : {}),
+    ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
+    ...(patch.avatarColor !== undefined ? { avatarColor: patch.avatarColor } : {}),
+    ...(patch.status !== undefined ? { status: patch.status } : {}),
+    ...(hiddenAt !== undefined ? { hiddenAt } : {}),
+    ...(pinnedAt !== undefined ? { pinnedAt } : {}),
+    identitySource: nextIdentitySource,
+    capabilitiesJson: safeJson(normalizedNextConfig),
+    profileContentChanged,
+    expectedCurrentVersion: current.currentVersion,
+    clearBotAvatarRefs:
+      patch.avatar !== undefined &&
+      isManagedBotAvatarUrl(current.avatar) &&
+      !isManagedBotAvatarUrl(patch.avatar),
+    now,
+  });
+  owner.assertCurrent();
+  await syncBotProfileFolder(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
+  owner.assertCurrent();
+  if (profileContentChanged) {
+    const [canonical] = await db
+      .select({ sessionId: botSessionLinks.sessionId })
+      .from(botSessionLinks)
+      .where(
+        and(
+          eq(botSessionLinks.botId, id),
+          eq(botSessionLinks.role, 'canonical'),
+          isNull(botSessionLinks.archivedAt),
+        ),
+      )
+    .limit(1);
+    owner.assertCurrent();
+    if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId, 'profile');
+  }
+  const profile = await readProfile(client, id);
+  owner.assertCurrent();
+  broadcastBotProfileChanged({ botId: id, change: 'updated' });
+  return profile;
+}
+
 export function registerBotIpc(): void {
   setRemoteBotSessionLookup(readRemoteBotSessionAccess);
   ipcMain.handle('local-db:bots:model-chain-settings-get', async (event) => {
@@ -1282,156 +1447,7 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:update', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const body =
-      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-    const id = readText(body.id, 'botId', 128, true);
-    const owner = captureBotOperationOwner();
-    const client = getDbClient();
-    if (body.retryInvitation === true) {
-      queueBotInvitation(id, true);
-      return readProfile(client, id);
-    }
-    const db = client.drizzle;
-    const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, id)).limit(1);
-    if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    const now = Date.now();
-    const patch: Partial<typeof botProfiles.$inferInsert> = { updatedAt: now };
-    if (body.name !== undefined || body.displayName !== undefined)
-      patch.displayName = readText(body.name ?? body.displayName, 'name', 200, true);
-    if (body.description !== undefined)
-      patch.description = readText(body.description, 'description');
-
-    const expectedAvatar =
-      body.avatar !== undefined && body.expectedAvatar !== undefined
-        ? readBotAvatar(body.expectedAvatar, true)
-        : current.avatar;
-    if (body.avatar !== undefined) {
-      const nextAvatar = readBotAvatar(body.avatar, true);
-      if (isManagedBotAvatarUrl(nextAvatar) && nextAvatar !== current.avatar) {
-        throwIpcError('INVALID_PARAMS', '请通过头像选择器上传图片');
-      }
-      // A delayed full-form autosave must not roll back an avatar that won in
-      // another window. An idempotent echo of the winner remains harmless.
-      if (expectedAvatar === current.avatar || nextAvatar === current.avatar) {
-        patch.avatar = nextAvatar;
-      }
-    }
-    if (body.avatarColor !== undefined)
-      patch.avatarColor = readText(body.avatarColor, 'avatarColor', 32, true);
-    if (body.enabled !== undefined) {
-      if (typeof body.enabled !== 'boolean')
-        throwIpcError('INVALID_PARAMS', 'enabled 必须是 boolean');
-      patch.status = body.enabled ? 'active' : 'paused';
-    }
-    const hiddenAt =
-      body.hidden === undefined
-        ? undefined
-        : body.hidden === true
-          ? now
-          : body.hidden === false
-            ? null
-            : throwIpcError('INVALID_PARAMS', 'hidden 必须是 boolean');
-    const pinnedAt =
-      body.pinned === undefined
-        ? undefined
-        : body.pinned === true
-          ? now
-          : body.pinned === false
-            ? null
-            : throwIpcError('INVALID_PARAMS', 'pinned 必须是 boolean');
-    const [version] = await db
-      .select()
-      .from(botProfileVersions)
-      .where(
-        and(
-          eq(botProfileVersions.botId, id),
-          eq(botProfileVersions.version, current.currentVersion),
-        ),
-      )
-      .limit(1);
-    const previous = parseJson(version?.capabilitiesJson ?? '{}');
-    const preparation = botInvitationProgress(previous.invitation);
-    const retryingPortrait = preparation?.stage === 'avatar' && current.canonicalSessionId;
-    if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
-      throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面，请完成准备后再编辑资料');
-    }
-    const nextConfig = mergeBotProfileCapabilities({
-      previous,
-      capabilities:
-        body.capabilities &&
-        typeof body.capabilities === 'object' &&
-        !Array.isArray(body.capabilities)
-          ? (body.capabilities as Record<string, unknown>)
-          : undefined,
-      skills: body.skills,
-      hasSkills: Object.prototype.hasOwnProperty.call(body, 'skills'),
-    });
-    // Keep preparation checkpoints outside caller-editable capabilities.
-    if (previous.invitation) nextConfig.invitation = previous.invitation;
-    else delete nextConfig.invitation;
-    if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
-      nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
-    }
-    // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
-    // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
-    if (Object.prototype.hasOwnProperty.call(body, 'gender')) {
-      const nextGender = readBotGender(body.gender);
-      if (nextGender) nextConfig.gender = nextGender;
-      else delete nextConfig.gender;
-    }
-    const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
-    const nextIdentitySource =
-      body.identitySource !== undefined
-        ? readText(body.identitySource, 'identitySource', 12000) ||
-          buildDefaultBotIdentity(patch.displayName ?? current.displayName)
-        : (version?.identitySource ?? '');
-    const profileContentChanged = botProfileContentChanged({
-      previousCapabilities: previous,
-      nextCapabilities: normalizedNextConfig,
-      previousIdentitySource: version?.identitySource ?? '',
-      nextIdentitySource,
-    });
-    await client.tx('bots.updateProfile', {
-      id,
-      ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
-      ...(patch.description !== undefined ? { description: patch.description } : {}),
-      ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
-      ...(patch.avatarColor !== undefined ? { avatarColor: patch.avatarColor } : {}),
-      ...(patch.status !== undefined ? { status: patch.status } : {}),
-      ...(hiddenAt !== undefined ? { hiddenAt } : {}),
-      ...(pinnedAt !== undefined ? { pinnedAt } : {}),
-      identitySource: nextIdentitySource,
-      capabilitiesJson: safeJson(normalizedNextConfig),
-      profileContentChanged,
-      expectedCurrentVersion: current.currentVersion,
-      clearBotAvatarRefs:
-        patch.avatar !== undefined &&
-        isManagedBotAvatarUrl(current.avatar) &&
-        !isManagedBotAvatarUrl(patch.avatar),
-      now,
-    });
-    owner.assertCurrent();
-    await syncBotProfileFolder(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
-    owner.assertCurrent();
-    if (profileContentChanged) {
-      const [canonical] = await db
-        .select({ sessionId: botSessionLinks.sessionId })
-        .from(botSessionLinks)
-        .where(
-          and(
-            eq(botSessionLinks.botId, id),
-            eq(botSessionLinks.role, 'canonical'),
-            isNull(botSessionLinks.archivedAt),
-          ),
-        )
-      .limit(1);
-      owner.assertCurrent();
-      if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId, 'profile');
-    }
-    const profile = await readProfile(client, id);
-    owner.assertCurrent();
-    broadcastBotProfileChanged({ botId: id, change: 'updated' });
-    return profile;
+    return updateBotProfile(raw, undefined, validateBotCapabilityAdditions);
   });
 
   const createBotCanonicalSessionUnlocked = async (

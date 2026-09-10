@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { createBackgroundConnection } from './backgroundConnection';
+import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
@@ -30,7 +31,7 @@ import {
   type RemoteResourceChangedPayload,
   type Topic,
 } from '@cindy/device-link';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
@@ -77,8 +78,7 @@ import {
   clearSessionScheduleIndexCache,
   invalidateOfflineScheduleIndexFailureFor,
   invalidateScheduleIndexForDevice,
-  invalidateTransientScheduleIndexFailureFor,
-  invalidateTransientScheduleIndexFailures,
+  invalidateScheduleIndexesAfterLinkRecovery,
 } from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import {
@@ -151,6 +151,8 @@ import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
+  /** Peers with queued, running, or retrying recovery work. Read-only UI projection. */
+  recoveringDeviceIds: ReadonlySet<string>;
   /** 连接层可分类的失败原因(鉴权失效/被顶号/超限/版本不符);null = 无异常 */
   connectionIssue: DeviceLinkConnectionIssue | null;
   presenceVersion: number;
@@ -351,6 +353,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
     );
   }
+  const recoveringDeviceIds = useSyncExternalStore(
+    peerRecoverySchedulerRef.current.subscribe,
+    peerRecoverySchedulerRef.current.getActiveDeviceIds,
+  );
   const presenceWipeTimersRef = useRef(
     new Map<string, PresenceWipeTimerEntry>(),
   );
@@ -582,8 +588,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     );
     if (!plan) return { retry: false };
 
-    // 只清当前 peer 在断线窗口留下的瞬时负缓存，避免 A 的恢复改变 B 的节流状态。
-    invalidateTransientScheduleIndexFailureFor(targetDeviceId);
+    // 只失效当前 peer 的旧成功快照和瞬时链路失败，避免 A 的恢复改变 B 的节流状态。
+    invalidateScheduleIndexesAfterLinkRecovery(targetDeviceId);
     const result = await rehydrateDeviceLinkPeer(plan, {
       isCancelled: () => (
         backgroundReleaseInFlightRef.current
@@ -734,10 +740,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     if (targetDeviceId) {
       scheduler?.request(targetDeviceId);
     } else {
-      // Relay 重连 / App 回前台是共享生命周期事件：即使某设备此刻没有持有
-      // topic，它此前因 WSS 掉线留下的 NOT_CONNECTED 负缓存也已经失效。
-      // 单 peer 恢复不会走这里，仍只清自己的缓存。
-      invalidateTransientScheduleIndexFailures();
+      // Relay 重连 / App 回前台可能漏过日程推送:在通知页面恢复前统一失效
+      // 旧成功快照和本机断线负缓存。单 peer 恢复仍只清自己的缓存。
+      invalidateScheduleIndexesAfterLinkRecovery();
       const deviceIds = new Set(registryRef.current.deviceIds());
       for (const deviceId of forcedPeerRecoveryIntentRef.current.deviceIds()) {
         deviceIds.add(deviceId);
@@ -835,6 +840,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
     });
     clientRef.current = client;
+    mobileDebugLog('debug', 'device-link', 'runtime identity', {
+      commit: /^[a-f0-9]{7,40}$/i.test(process.env.EXPO_PUBLIC_XDT_GIT_COMMIT ?? '')
+        ? process.env.EXPO_PUBLIC_XDT_GIT_COMMIT : 'unknown',
+      version: Constants.nativeAppVersion ?? 'unknown',
+      build: Constants.nativeBuildVersion ?? 'unknown',
+    });
     const diagnostics = createRecoveryDiagnostics(
       (event) => mobileDeviceLinkLogger.info('recovery phase', event),
       () => connectionEpochRef.current,
@@ -1106,6 +1117,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       ));
       clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
       if (shouldRecover) void rehydrateWithClient(client, deviceId);
+      return shouldRecover;
     });
     client.start();
 
@@ -1174,6 +1186,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       graceMs: BACKGROUND_STOP_GRACE_MS,
       releaseWaitMs: BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS,
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
+      report: (event) => mobileDebugLog('debug', 'device-link', 'background lifecycle', event),
     });
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
@@ -1303,8 +1316,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       opts?.preSend?.();
     };
     preSend();
-    return sendInvokeWithAccessHandling<T>(requireClient(clientRef.current), deviceId, channel, args, { preSend });
-  }, []);
+    const client = requireClient(clientRef.current);
+    return invokeWithHistoryViewCapability(
+      channel,
+      async () => {
+        // Reuse the existing peer-scoped handshake cache and its invalidation.
+        // A late accept from an obsolete link must not declare a downgrade.
+        const tracked = sendOpenLinkOnce(client, deviceId);
+        const accepted = await tracked.request;
+        if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
+        }
+        preSend();
+        return accepted;
+      },
+      () => sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend }),
+    );
+  }, [sendOpenLinkOnce]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
     // `owner` is the stable id of the mounted consumer (e.g. `session:<id>`). Tracking is
@@ -1345,6 +1373,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     status,
+    recoveringDeviceIds,
     connectionIssue,
     presenceVersion,
     connectionEpoch,
@@ -1362,6 +1391,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     onRemoteResourceChanged: subscribeRemoteResourceChanged,
   }), [
     closeLink,
+    recoveringDeviceIds,
     connectionEpoch,
     connectionIssue,
     getPresenceAvailability,

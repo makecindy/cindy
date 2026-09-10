@@ -216,6 +216,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 	assert.deepEqual(makerCore.tiers.unit.exclude, [
 		"**/*.integration.test.ts",
 		"**/*.e2e.test.ts",
+		"**/*.git-integration.test.ts",
 	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
@@ -239,6 +240,7 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	assert.equal(makerCore.tiers.integration.coverage, "allowlist");
 	assert.deepEqual(makerCore.tiers.integration.include, [
 		"src/agents/codex/*.integration.test.ts",
+		"src/agents/claude-code/__tests__/*.integration.test.ts",
 		"src/agents/pi/__tests__/*.integration.test.ts",
 	]);
 	assert.deepEqual(piManager.tiers.unit.exclude, [
@@ -552,6 +554,32 @@ test("desktop real-Git coverage is an explicit coordinated tier outside default 
 		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
 	]);
 	assert.deepEqual(selectFilesForTier(desktop, tier, files), files.slice(0, 2));
+});
+
+test("maker-core real-Git worktree matrix is an explicit tier outside default unit", () => {
+	const makerCore = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "packages/maker-core",
+	);
+	const tier = makerCore.tiers["git-integration"];
+
+	assert.equal(tier.status, "manual");
+	assert.equal(tier.coverage, "allowlist");
+	assert.deepEqual(tier.include, ["src/**/*.git-integration.test.ts"]);
+	assert.deepEqual(tier.command, {
+		type: "packageBin",
+		bin: "vitest",
+		args: ["run", "--maxWorkers=1"],
+	});
+	assert.ok(makerCore.tiers.unit.exclude.includes("**/*.git-integration.test.ts"));
+
+	const files = [
+		"packages/maker-core/src/memory/scope-resolver.git-integration.test.ts",
+		"packages/maker-core/src/memory/scope-resolver.test.ts",
+	];
+	assert.deepEqual(selectFilesForTier(makerCore, makerCore.tiers.unit, files), [
+		"packages/maker-core/src/memory/scope-resolver.test.ts",
+	]);
+	assert.deepEqual(selectFilesForTier(makerCore, tier, files), files.slice(0, 1));
 });
 
 test("default desktop unit keeps real Git subprocess coverage to one smoke", () => {

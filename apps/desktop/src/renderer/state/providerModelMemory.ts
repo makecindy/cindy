@@ -557,6 +557,11 @@ export function hasAnyProviderModelOverride(): boolean {
   );
 }
 
+/** Saved selections identify an existing profile without creating a settings override. */
+export function hasProviderModelHistory(): boolean {
+  return Object.values(load()).some((slot) => slot.lastModel.length > 0);
+}
+
 function persist(
   map: Record<string, ProviderMemory>,
   ops: ProviderMemoryOp[],
@@ -573,12 +578,6 @@ function persist(
     // 只记最小操作；恢复可写后重放到最新共享快照，不能用本窗口旧整表覆盖另一 renderer。
     for (const op of ops) recordPendingOp(key, op, base);
   }
-}
-
-/** Last selected model, including models without an effort control. */
-export function getProviderLastModel(agent: AgentKind, providerId: string): string | undefined {
-  if (!providerId || providerId === MODEL_PRESET_SLOT_ID) return undefined;
-  return load()[keyOf(agent, providerId)]?.lastModel || undefined;
 }
 
 /**

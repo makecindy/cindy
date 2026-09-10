@@ -811,6 +811,8 @@ describe('explicit provider metadata fields', () => {
           {
             id: 'model',
             name: '',
+            mode: 'audio_transcription',
+            modalities: { input: ['audio'], output: ['text'] },
             context_length: 64000,
             max_output_tokens: 8000,
             reasoning: { supportedEfforts: [], defaultEffort: null },
@@ -825,6 +827,8 @@ describe('explicit provider metadata fields', () => {
         name: 'model',
         contextWindow: 64000,
         discoveredMetadata: {
+          mode: 'audio_transcription',
+          modalities: { input: ['audio'], output: ['text'] },
           contextWindow: 64000,
           maxOutputTokens: 8000,
           efforts: [],

@@ -82,7 +82,7 @@ import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/model
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
   filterChatBridgedCodexProviders,
-  isChatBridgedCodexProvider,
+  isLocalOnlyProviderForAgent,
   isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
@@ -687,6 +687,8 @@ interface ModelSelectorProps {
   maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口与行内状态摘要；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
+  /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
+  fastModeConfigurable?: boolean | readonly AgentKind[];
   /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，默认开启）。 */
   unifiedPanel?: boolean;
   /** 语义同 ModelSelectorContentProps.sessionEngineFilter（统一面板的会话内形态）。 */
@@ -823,6 +825,8 @@ interface ModelSelectorContentProps {
   followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
+  /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
+  fastModeConfigurable?: boolean | readonly AgentKind[];
   /** A is the default for every entry. False is reserved for capabilities-only remote compatibility. */
   unifiedPanel?: boolean;
   /**
@@ -1037,6 +1041,7 @@ function ModelSelectorContentView({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
+  fastModeConfigurable = true,
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents: requestedUnifiedAgents,
@@ -1292,7 +1297,7 @@ function ModelSelectorContentView({
     () =>
       excludeChatBridgedCodex
         ? (provider: ProviderView, agent: AgentKind): boolean =>
-            agent === 'codex' && isChatBridgedCodexProvider(provider)
+            isLocalOnlyProviderForAgent(provider, agent)
         : undefined,
     [excludeChatBridgedCodex],
   );
@@ -2702,12 +2707,12 @@ function ModelSelectorContentView({
   );
   const unifiedAgentFastCapable = useCallback(
     (agent: AgentKind): boolean =>
-      !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
+      (typeof fastModeConfigurable === 'boolean' ? fastModeConfigurable : fastModeConfigurable.includes(agent)) && !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
         ? !!cc.capabilities?.hasFastMode
         : agent === 'codex'
           ? !!codex.capabilities?.hasFastMode
           : !!pi.capabilities?.hasFastMode),
-    [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect],
+    [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
   if (emptyState) return emptyState;
@@ -2823,6 +2828,7 @@ function ModelSelectorContentView({
             />
           </div>
           <UnifiedModelPanel
+            localProviderUsage={!deviceId && !providersOverride}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
@@ -3195,6 +3201,7 @@ export function ModelSelector({
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
+  fastModeConfigurable = true,
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
   unifiedAgents,
@@ -3947,6 +3954,7 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
+      fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}
@@ -3994,7 +4002,7 @@ export function ModelSelector({
         wrapperClassName="min-w-0 max-w-full shrink"
         panelClassName="flex min-h-0 flex-col p-0"
         // 宽度只进不退(2026-08-14 实测反馈):rail 筛选把内容变窄时面板宽度回缩,
-        // rail 图标在指针底下移位。高度照常双向跟随(底边锚定向上收)。
+        // rail 图标在指针底下移位。统一面板主体使用固定高度，仅随窗口可用空间收缩。
         stickyWidth
         panelAriaLabel={ariaLabel}
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}

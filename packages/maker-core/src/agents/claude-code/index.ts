@@ -74,7 +74,7 @@ import {
   CONTACTS_RULES_ENABLED,
 } from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
-import { buildMemoryScopeKey } from '../../memory/storage.js';
+import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -115,6 +115,7 @@ import {
   applyOAuthSpawnEntrypointGate,
   applySubagentModelEnv,
   buildClaudeEnv,
+  applyClaudeContextWindow,
   exploreInheritCapEnvNeedsSync,
   REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
 } from './env-builder.js';
@@ -175,7 +176,8 @@ import type {
   MemoryResetResult,
 } from '../../types/memory.js';
 import type { McpProviderContext } from '../../interfaces/mcp-provider.js';
-import { scanClaudeCustomizations } from './customization-scanner.js';
+import { claudeDisabledSkillOverrides, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
+import { scanClaudeCustomizations, scanClaudeRuntimeSkills } from './customization-scanner.js';
 import {
   REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS,
   isReviewSensitiveCredentialSelector,
@@ -962,7 +964,9 @@ export class ClaudeCodeAgent extends BaseAgent {
    */
   private async refreshSubscriptionTokenInPlace(env: Record<string, string>): Promise<string | null> {
     try {
-      const fresh = await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN);
+      const fresh = env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID
+        ? await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN, env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID)
+        : await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN);
       if (fresh) env.CLAUDE_CODE_OAUTH_TOKEN = fresh;
       return fresh ?? null;
     } catch (e) {
@@ -1268,8 +1272,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const modelContextWindows = [...new Map([
       ...providerRoutedModels,
       ...(sessionRouteWindowEntry ? [sessionRouteWindowEntry] : []),
-      // Explicit local overrides win for this provider only. Uncustomized models
-      // retain their upstream/default metadata and continue to follow updates.
+      // The host resolves this route’s user budget or current catalog default.
+      // Never reuse another provider’s working-window policy.
       ...configuredWindows,
     ].map((entry) => [entry.id, entry])).values()];
     // #3557:会话模型 id 带命名空间前缀(anthropic/... 等网关目录形态)时,CLI
@@ -1490,10 +1494,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
-    // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
-    // 键规则与理由见 buildMemoryScopeKey (memory/storage.ts)。
-    const memoryScopeKey =
-      opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key;
+    // 本地会话额外做 git worktree 归一化 (#2379)。已注入的 makerMemoryScopeKey
+    // (含 bot:) 原样透传。Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1):
+    // 解析结果本就不会被用, 失败还能空耗 3s timeout。
+    const memoryScopeKey = makerMemoryEnabled
+      ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
+      : (opts.makerMemoryScopeKey ?? opts.workingDir);
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
@@ -1610,7 +1617,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const context: McpProviderContext = {
         agentKind: 'claude-code' as const,
         workingDir: opts.workingDir,
-        ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
+        ...((makerMemoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
         vendorOptions: vo,
         // business sessionId 由 maker.createSession 通过 opts.sessionId 注入
         // (见 maker.ts: agent.startSession({...opts, sessionId: id}))。MCP server
@@ -2351,8 +2358,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkModelFor(selectedModel),
       ]),
     ];
-    const resolveModelContextWindow = (model: string): number | undefined => {
-      const configured = this.deps.resolveModelContextLimit?.(mutableProviderId, model);
+    const resolveModelContextWindow = (model: string, providerId = mutableProviderId): number | undefined => {
+      const configured = this.deps.resolveModelContextLimit?.(providerId, model);
       if (configured && Number.isFinite(configured) && configured > 0) return configured;
 
       // 核实窗口按会话实际来源取。host 注入了 resolver 时,null = 不要收敛
@@ -2360,7 +2367,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 只有未注入 resolver 的路径(测试 / 无 host)才退回扁平目录。
       const resolveVerified = this.deps.resolveVerifiedContextWindow;
       if (resolveVerified) {
-        const verified = resolveVerified(mutableProviderId, model);
+        const verified = resolveVerified(providerId, model);
         return typeof verified === 'number' && verified > 0 ? verified : undefined;
       }
       const descriptor = this.capabilities.availableModels.find((item) => item.id === model);
@@ -2374,6 +2381,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
     // mutableFastMode 读最新值 (setMemory / setFastMode 运行时改) 而不是 buildQuery
     // 时快照。装配逻辑(含 apiKeyHelper 恒置空的鉴权防线)在 flag-settings.ts。
+    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode
+      ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
+    const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
+    const disabledSkillSnapshot = disabledSkillLaunch.identities;
+    const disabledSkillOverrides = disabledSkillPaths.length > 0
+      ? claudeDisabledSkillOverrides((await scanClaudeRuntimeSkills(opts.workingDir)).items, currentDisabledSkillLaunchPaths(disabledSkillLaunch))
+      : {};
     const buildSettings = (): Settings => {
       const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
@@ -2392,6 +2406,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
       });
+      if (Object.keys(disabledSkillOverrides).length > 0) {
+        settings.skillOverrides = { ...settings.skillOverrides, ...disabledSkillOverrides };
+      }
       if (!reviewMode) return settings;
       return {
         ...settings,
@@ -3043,6 +3060,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       fresh?: boolean;
     }): Promise<Query> => {
       const currentSdkModel = sdkModelFor(mutableModel);
+      const workingWindow = resolveModelContextWindow(mutableModel);
+      applyClaudeContextWindow(env, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
+      if (remoteEnv) applyClaudeContextWindow(remoteEnv, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort);
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
@@ -3275,7 +3295,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           makerMemoryEnabled,
           // 同一个 scope key 也必须随注册的 session ctx 走: prompt 段用它读索引
           // (上方 memoryScopeKey), 远端工具侧不给就会回落到 workdir 键。
-          ...(opts.makerMemoryScopeKey ? { makerMemoryScopeKey: opts.makerMemoryScopeKey } : {}),
+          ...((makerMemoryEnabled || opts.makerMemoryScopeKey) ? { makerMemoryScopeKey: memoryScopeKey } : {}),
           onApprovalRequest: async (rawParams: unknown) => {
             // 110s timeout — must respond before daemon's 120s server-request timeout.
             // On timeout, dismiss the pending interaction (clears UI) and reject to
@@ -5600,6 +5620,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     };
     const handle: AgentSessionHandle = {
+      disabledSkillPaths: disabledSkillSnapshot,
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(
           action,
@@ -6527,6 +6548,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       // (renderer 端表现为"设置切换失败,未生效" toast)。窗口内只更新闭包状态即可:
       // buildQuery 重建时读的就是 mutableModel / mutableEffort / mutableFastMode /
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
+
+      requiresModelSwitchRebuild: (model, target) => {
+        const provider = target?.providerId !== undefined ? target.providerId : mutableProviderId;
+        const window = resolveModelContextWindow(model, provider);
+        const expected = typeof window === 'number' && window > 0 ? String(Math.floor(window)) : undefined;
+        const liveEnv = opts.remoteHostId ? remoteEnv : env;
+        return expected !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+      },
 
       async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
         if (reviewMode) return;

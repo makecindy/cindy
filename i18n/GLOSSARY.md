@@ -279,6 +279,10 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
 
+### Audio Generation
+
+V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。
+
 ### Compression
 
 issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。

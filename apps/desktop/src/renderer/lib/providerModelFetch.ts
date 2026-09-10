@@ -1,4 +1,5 @@
 import {
+  isAgentSelectableModel,
   isLoopbackProviderUrl,
   resolvePiModelRoute,
   type AgentKind,
@@ -19,7 +20,14 @@ export interface ProviderModelFetchSignatureFields {
 
 export interface ProviderConnectionTestSignatureFields extends ProviderModelFetchSignatureFields {
   wireProtocol: ProviderWireProtocol;
-  models: ReadonlyArray<{ id: string; piApi?: PiModelApi; route?: ProviderModelRouteConfig }>;
+  models: ReadonlyArray<{ id: string; mode?: string; discoveredMetadata?: { mode?: string }; piApi?: PiModelApi; route?: ProviderModelRouteConfig }>;
+}
+
+export function firstProviderChatModel<T extends { id: string; mode?: string; discoveredMetadata?: { mode?: string } }>(models: readonly T[]): T | undefined {
+  return models.find((model) => model.id.trim().length > 0 && isAgentSelectableModel(
+    { id: model.id, group: 'custom', mode: model.mode ?? model.discoveredMetadata?.mode },
+    { userProvider: true },
+  ));
 }
 
 type ProviderProbeAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
@@ -38,7 +46,7 @@ export function resolveProviderConnectionProbeRoute(
     'baseUrl' | 'requestPath' | 'wireProtocol' | 'models'
   >,
 ): ProviderConnectionProbeRoute | null {
-  const firstModel = fields.models.find((model) => model.id.trim().length > 0);
+  const firstModel = firstProviderChatModel(fields.models);
   if (agent === 'pi') {
     const route = resolvePiModelRoute(firstModel, {
       baseUrl: fields.baseUrl,
@@ -235,7 +243,7 @@ export function connectionTestCanUseSaved(
   if (form.baseUrl.trim() !== baseline.baseUrl.trim()) return false;
   if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
   if (form.wireProtocol !== baseline.wireProtocol) return false;
-  const firstModel = form.models.find((model) => model.id.trim().length > 0);
+  const firstModel = firstProviderChatModel(form.models);
   if ((firstModel?.piApi ?? null) !== (baseline.modelPiApi ?? null)) return false;
   if (
     JSON.stringify(normalizedModelRoute(firstModel?.route)) !==
@@ -254,10 +262,10 @@ export function providerConnectionTestRequestSignature(
   return JSON.stringify({
     request: providerModelFetchRequestSignature(fields, authMode),
     wireProtocol: fields.wireProtocol,
-    modelId: fields.models.map((model) => model.id.trim()).find(Boolean) ?? null,
-    modelPiApi: fields.models.find((model) => model.id.trim().length > 0)?.piApi ?? null,
+    modelId: firstProviderChatModel(fields.models)?.id.trim() ?? null,
+    modelPiApi: firstProviderChatModel(fields.models)?.piApi ?? null,
     modelRoute: normalizedModelRoute(
-      fields.models.find((model) => model.id.trim().length > 0)?.route,
+      firstProviderChatModel(fields.models)?.route,
     ),
   });
 }

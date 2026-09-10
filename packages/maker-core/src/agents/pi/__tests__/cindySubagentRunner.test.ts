@@ -1374,7 +1374,18 @@ describe('Cindy durable PI Subagent runner', () => {
       childId: running.tasks[0]?.childId,
       message: 'continue from the completed result',
     })).resolves.toBe(1);
-    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    const commands = await waitFor(
+      async () => {
+        const parsed = await readCommandsIfPresent(fixture.commandsFile);
+        return parsed?.some((command) => (
+          command.type === 'follow_up' && command.message === 'continue from the completed result'
+        ))
+          ? parsed
+          : null;
+      },
+      undefined,
+      'the exact follow-up command to reach the child',
+    );
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'steer', message: 'late correction' }));
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'follow_up', message: 'continue from the completed result',

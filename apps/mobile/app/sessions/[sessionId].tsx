@@ -1,6 +1,5 @@
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
-import { loadLightweightSessionScheduleIndex, loadSessionScheduleIndex } from '@/session/scheduleIndex';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -80,6 +79,8 @@ import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
+import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndicator';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -335,6 +336,7 @@ import {
   type QueueEditTextState,
 } from '@/session/inputProjection';
 import {
+  appendPendingSendItems,
   buildPendingSendItems,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -376,6 +378,11 @@ import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUpload';
 import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
+import {
+  getSentMessageImagePreview,
+  rememberSentMessageImagePreviews,
+  type SentMessageImagePreviews,
+} from '@/session/sentMessageImagePreviews';
 import {
   buildOutboxItem,
   createOutboxClientId,
@@ -1018,6 +1025,9 @@ export default function SessionScreen() {
   const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
   const remoteHistoryAvailable = status === 'online' && getPresenceAvailability(deviceId) === true;
+  // Unknown presence while connecting is loading, not evidence of a lost computer.
+  const showCachedHistoryNotice = status !== 'connecting'
+    && (status !== 'online' || getPresenceAvailability(deviceId) === false);
   const historyView = useRemoteHistoryView(deviceId, sessionId, maker,
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   useEffect(() => {
@@ -1473,31 +1483,24 @@ export default function SessionScreen() {
   }, [sessionId]);
   const settlingAddedAtRef = useRef<Map<string, number>>(new Map());
   /**
-   * 「附件 ossRef → 发送时刻的本地预览 file://」。
+   * 按任务、消息和图片顺序保存发送预览，跨桌面端媒体地址物化继续使用。
    *
    * 排队气泡里的图不能等 sentAttachmentThumbStore 那条链(上传落定 → 拷进自有目录 →
    * AsyncStorage hydrate)——期间查询一律返回 null,气泡只能画空占位格。发送时手边就有
    * 预览,记下来直接用;store 仍是重开会话 / 预览失效后的后备。
-   * 上限防无界:窗口本来就短(消息回流即不再需要),留 64 条覆盖极端连发。
+   * 最多保留 64 条消息的预览；正式内容还会核对图片指纹，防止同名替换误用旧图。
    */
-  const sentPreviewByOssRefRef = useRef<Map<string, string>>(new Map());
+  const sentImagePreviewsRef = useRef<SentMessageImagePreviews>(new Map());
   const rememberSentAttachmentPreviews = useCallback((
+    clientId: string,
     attachments: readonly RemoteSerializedAttachment[],
     previewOf: (attachment: RemoteSerializedAttachment) => string | null | undefined,
   ) => {
-    const map = sentPreviewByOssRefRef.current;
-    for (const attachment of attachments) {
-      const ossRef = attachment.url ?? attachment.path;
-      const preview = previewOf(attachment);
-      if (!ossRef || !preview) continue;
-      map.set(ossRef, preview);
-    }
-    while (map.size > 64) {
-      const oldest = map.keys().next();
-      if (oldest.done) break;
-      map.delete(oldest.value);
-    }
-  }, []);
+    rememberSentMessageImagePreviews(sentImagePreviewsRef.current, sessionId, clientId, attachments, previewOf);
+  }, [sessionId]);
+  const getSentImagePreview = useCallback((clientId: string, imageIndex: number, name: string, attachmentId?: string, sha256?: string, sourceRef?: string) => (
+    getSentMessageImagePreview(sentImagePreviewsRef.current, sessionId, clientId, imageIndex, name, attachmentId, sha256, sourceRef)
+  ), [sessionId]);
   // 「乐观气泡已上屏、enqueue RPC 尚未落定」的 clientId:这段窗口消息是否真的发出
   // 还没有答案(弱网可达数秒,且失败会回滚摘除气泡),徽标必须是转圈而不是「排入
   // 队尾」——后者是已确认入队的语义。成功 / 回滚 / 转失败任一落定即移除。
@@ -1963,7 +1966,25 @@ export default function SessionScreen() {
     [sessionId, sessions],
   );
   const sessionManagedByHost = isHostManagedSession(currentSession);
-  const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession);
+  const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
+  const accountProvider = composerDeviceProviders.ready
+    ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)
+    : undefined;
+  const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession, accountProvider);
+  const accountProviderId = currentSession?.providerId ?? 'openai';
+  const accountControlScope = `${deviceId}\0${sessionId}\0${accountProviderId}`;
+  const accountControlScopeRef = useRef(accountControlScope);
+  accountControlScopeRef.current = accountControlScope;
+  const [storedAccountControlScope, setStoredAccountControlScope] = useState(accountControlScope);
+  // Reset during render, before a menu or reset callback can receive another account's offer.
+  // React rerenders this component before committing its children when its own state changes here.
+  if (storedAccountControlScope !== accountControlScope) {
+    setStoredAccountControlScope(accountControlScope);
+    setAccountUsage(null);
+    setCodexRateLimits(null);
+    setCodexResetBusy(false);
+    setCodexResetRetryKey(null);
+  }
   const isDeviceAccessRevoked = !!deviceId && revokedDevices.has(deviceId);
   // 熔断 open:被控电脑「进程活着但不回包」的半死态;relay status 恒 online,必须单独入参。
   const isDeviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
@@ -2071,7 +2092,6 @@ export default function SessionScreen() {
     bannerError,
     connectionIssue,
     isDeviceUnresponsive,
-    contentRecoveryState,
   );
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
@@ -2132,18 +2152,7 @@ export default function SessionScreen() {
     let active = true;
     const isActive = () => active && messageScreenFocusedRef.current && messageAppActiveRef.current;
     const cancel = deferScheduleIndexHydration(() => {
-      void withTransientRemoteRetry(() => markSessionScheduleRunsRead(maker, sessionId, {
-        isActive,
-        // The same read supplies the notice and existing read receipts. Old
-        // Hosts retain their original query; no second schedule scan is added.
-        loadIndex: async () => {
-          try { return await loadLightweightSessionScheduleIndex(deviceId, invoke); }
-          catch (error) {
-            if (!isHistoryViewUnavailable(error)) throw error;
-            if (!isActive()) return new Map();
-            return loadSessionScheduleIndex(maker, { throwOnTransientRunListError: true });
-          }
-        },
+      void withTransientRemoteRetry(() => markSessionScheduleRunsRead(maker, sessionId, deviceId, isActive, {
         onIndex: (index) => setScheduleFailure({ source: scheduleNoticeSource, run: index.get(sessionId)?.latestFailedRun }),
       })).catch(() => undefined);
     });
@@ -2402,7 +2411,6 @@ export default function SessionScreen() {
     [composerDisplayRuntimeOptions, composerDisplaySession, i18nInstance.language],
   );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
-  const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
   const composerModelSections = useMemo(
     () => composerDisplaySession
       ? buildMobileModelSections({
@@ -3235,6 +3243,13 @@ export default function SessionScreen() {
     // 旧连接代的 in-flight load 若在尾部读 ref 的最新值,会把旧窗口数据标成新代已同步,
     // 抢在排队的 resync 之前放行回执。开始时捕获则旧 load 落的是旧代 key,门槛不放行。
     const readAckEpochAtStart = readAckEpochRef.current;
+    const reportSyncPhase = (phase: string, extra: { readMs?: number; commitMs?: number; outcome?: string } = {}) => {
+      if (syncRun.isStale() || !messageAuthorityCurrent()) return;
+      mobileDebugLog('debug', 'recovery', 'detail sync phase', {
+        startedAt: snapshotStartedAt, connection: readAckEpochAtStart, phase,
+        totalMs: Math.max(0, Date.now() - snapshotStartedAt), ...extra,
+      });
+    };
     const subscriptionIdentityAtStart = JSON.stringify([
       deviceId,
       sessionId,
@@ -3344,6 +3359,7 @@ export default function SessionScreen() {
     setLoading(true);
     try {
       await prepareLinkAndSubscription();
+      reportSyncPhase('link-ready');
       if (syncRun.isStale() || !messageAuthorityCurrent()) return;
       // Capture at the first snapshot read, after link-open. An ACK received while
       // opening the link is already covered; it must not force another full batch.
@@ -3410,22 +3426,34 @@ export default function SessionScreen() {
           }
         },
       });
-      const commitRead = <T,>(read: () => Promise<T>, commit: (value: T) => void) =>
-        runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, commit);
+      const commitRead = <T,>(phase: string, read: () => Promise<T>, commit: (value: T) => void) => {
+        const startedAt = Date.now();
+        return runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, (value) => {
+          const commitAt = Date.now();
+          commit(value);
+          reportSyncPhase(phase, { readMs: Math.max(0, commitAt - startedAt), commitMs: Math.max(0, Date.now() - commitAt), outcome: 'applied' });
+        }).catch((error) => {
+          reportSyncPhase(phase, { readMs: Math.max(0, Date.now() - startedAt), outcome: 'failed' });
+          throw error;
+        });
+      };
       // Only the control/read-receipt barrier waits for all resources. Each response
       // is applied independently, and a changed metadata response starts history
       // immediately rather than waiting for pending/projection/active.
       await waitForIndependentSnapshotReads([
-        messageRead,
-        commitRead(fetchPendingInteractions, (pendingInteractions) => {
+        messageRead.then(() => reportSyncPhase('history-settled')).catch((error) => {
+          reportSyncPhase('history', { outcome: 'failed' });
+          throw error;
+        }),
+        commitRead('pending', fetchPendingInteractions, (pendingInteractions) => {
           remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         }),
-        commitRead(fetchProjection, (projectionResult) => {
+        commitRead('projection', fetchProjection, (projectionResult) => {
           remoteSessionStore.setInputProjectionIfCurrent(
             sessionId, projectionResult.projection, projectionResult.authorityEpochAtStart,
           );
         }),
-        commitRead(fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
+        commitRead('active', fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
           remoteSessionStore.setActiveSessionSnapshots(
             deviceId,
             Array.isArray(activeSessionSnapshot.activeSessions) ? activeSessionSnapshot.activeSessions : [],
@@ -3446,8 +3474,7 @@ export default function SessionScreen() {
       setContentSyncedKey(contentKeyAtStart);
       if (contentKeyAtStart !== null && contentRecoveryKeyRef.current === contentKeyAtStart) {
         syncRun.satisfy('subscription-acked');
-        console.debug('[device-link] recovery snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
-        mobileDebugLog('debug', 'recovery', 'snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
+        reportSyncPhase('complete');
       }
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早
@@ -4264,9 +4291,16 @@ export default function SessionScreen() {
       prefix: renderWindow.prefix,
     };
   }, [renderItems, renderWindow.prefix, sessionId]);
-  // 后台静默刷新:仅在首次加载、还没有任何内容(messages 为空)时显示"正在同步";已有内容
-  // (重开已看过的会话,messages 还在内存)时后台对账一律静默,不再弹同步提示打扰用户。
-  const showSyncingIndicator = loading && !hasRenderedMessages;
+  // Known stale entry content bypasses the quiet delay; routine sync stays subtle.
+  const showSyncingIndicator = !showConnectionBanner && !showCachedHistoryNotice
+    && (loading || historyView.snapshot.loading || status === 'connecting' || contentRecoveryState === 'syncing');
+  const showSyncingImmediately = showSyncingIndicator && hasSessionEntryPreviewMismatch(
+    sessionId,
+    remoteSessionStore.getSessionMessagePreview(sessionId),
+    currentSession?.preview,
+    messages,
+    historyView.snapshot,
+  );
   const diffCount = renderWindow.diffCount;
   const searchHits = useMemo(
     () => searchOpen && searchQuery.trim()
@@ -5439,6 +5473,7 @@ export default function SessionScreen() {
     updateOutbox((items) => items.filter((entry) => entry.clientId !== item.clientId));
     // outbox 条目的槽位预览接着给排队气泡用:交接后图不能因为换了数据源就消失。
     rememberSentAttachmentPreviews(
+      item.clientId,
       outboxItemAttachments(item),
       (attachment) => {
         const slotIndex = item.attachmentSlots.findIndex((slot) => slot?.id === attachment.id);
@@ -5664,11 +5699,12 @@ export default function SessionScreen() {
         editingClientId: queueEditing?.clientId ?? null,
         steeringClientIds: new Set(inputProjection.steeringQueueClientIds),
         presentationByClientId,
-        previewByOssRef: sentPreviewByOssRefRef.current,
+        getImagePreview: getSentImagePreview,
       });
     },
     [
       i18nInstance.language,
+      getSentImagePreview,
       inputProjection,
       outboxDisplayItems,
       queueBusy,
@@ -5680,7 +5716,7 @@ export default function SessionScreen() {
     ],
   );
   const messageListItems = useMemo(
-    () => (pendingSendItems.length === 0 ? renderItems : [...renderItems, ...pendingSendItems]),
+    () => appendPendingSendItems(renderItems, pendingSendItems),
     [pendingSendItems, renderItems],
   );
   const messageListStructureKey = useMemo(
@@ -6241,6 +6277,8 @@ export default function SessionScreen() {
               const projectionEpochAtRequestStart =
                 remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
               const projection = await maker.input.updateContent(sessionId, editingQueueItem.clientId, updated);
+              rememberSentAttachmentPreviews(editingQueueItem.clientId, sendAttachments,
+                (attachment) => attachmentPreviews[attachment.id]);
               applyProjectionIfCurrent(projection, projectionEpochAtRequestStart);
             } catch (err) {
               if (
@@ -6429,6 +6467,7 @@ export default function SessionScreen() {
       });
       // 排队气泡的图立刻可见(先记预览,再让 projection 变化触发重算)。
       rememberSentAttachmentPreviews(
+        queued.clientId,
         sendAttachments,
         (attachment) => attachmentPreviews[attachment.id],
       );
@@ -8052,30 +8091,30 @@ export default function SessionScreen() {
       return;
     }
     try {
-      const snapshot = await maker.getCodexRateLimits();
+      const snapshot = await maker.getCodexRateLimits(accountProviderId === 'openai' ? undefined : accountProviderId);
       // 迟到结果仍按账号控制快照的会话归属校验。
-      if (contextUsageSessionRef.current !== sessionId) return;
+      if (accountControlScopeRef.current !== accountControlScope) return;
       setCodexRateLimits(snapshot);
       setAccountUsage(snapshot.rateLimits);
     } catch (err) {
-      if (contextUsageSessionRef.current !== sessionId) return;
+      if (accountControlScopeRef.current !== accountControlScope) return;
       // 权威控制面读取失败后只能降级为只读用量；旧 offer / retry key 不得继续可消费。
       setCodexRateLimits(null);
       setCodexResetRetryKey(null);
-      if (!shouldFallbackToLegacyCodexUsage(err)) {
+      if (accountProviderId !== 'openai' || !shouldFallbackToLegacyCodexUsage(err)) {
         // 账号切换期间 legacy cache 仍可能属于旧 workspace；等待下一次权威读取。
         setAccountUsage(null);
         return;
       }
       try {
-        const snapshot = await maker.getAccountUsage('codex');
-        if (contextUsageSessionRef.current !== sessionId) return;
+        const snapshot = await maker.getAccountUsage('codex', accountProviderId === 'openai' ? undefined : accountProviderId);
+        if (accountControlScopeRef.current !== accountControlScope) return;
         setAccountUsage(snapshot);
       } catch {
         // 静默:通道不支持 / 网络瞬断都不打扰用户。
       }
     }
-  }, [localCodexRateLimitControl, maker, sessionId]);
+  }, [localCodexRateLimitControl, maker, sessionId, accountProviderId, accountControlScope]);
 
   // reset 只接受 desktop read 签发的 UUID。网络等结果不明的失败保留同一幂等键；
   // Desktop 明确拒绝的 stale offer 则立即作废并刷新，避免反复提交已失效凭证。
@@ -8089,22 +8128,22 @@ export default function SessionScreen() {
       || (codexResetRetryKey !== null && offer.idempotencyKey !== codexResetRetryKey)) {
       setCodexResetRetryKey(null);
       await refreshAccountUsage();
-      if (contextUsageSessionRef.current !== sessionId) return;
+      if (accountControlScopeRef.current !== accountControlScope) return;
       Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'));
       return;
     }
     setCodexResetRetryKey(idempotencyKey);
     setCodexResetBusy(true);
     try {
-      const result = await maker.resetCodexRateLimits(idempotencyKey);
-      if (contextUsageSessionRef.current !== sessionId) return;
+      const result = await maker.resetCodexRateLimits(idempotencyKey, accountProviderId === 'openai' ? undefined : accountProviderId);
+      if (accountControlScopeRef.current !== accountControlScope) return;
       setCodexResetRetryKey(null);
       if (result.rateLimits) {
         setCodexRateLimits(result.rateLimits);
         setAccountUsage(result.rateLimits.rateLimits);
       } else {
         await refreshAccountUsage();
-        if (contextUsageSessionRef.current !== sessionId) return;
+        if (accountControlScopeRef.current !== accountControlScope) return;
       }
       const message = {
         reset: t('session.screen.resetOutcomeReset'),
@@ -8114,12 +8153,12 @@ export default function SessionScreen() {
       }[result.outcome];
       Alert.alert(result.outcome === 'reset' ? t('session.screen.resetDoneTitle') : t('session.screen.resetResultTitle'), message);
     } catch (err) {
-      if (contextUsageSessionRef.current === sessionId) {
+      if (accountControlScopeRef.current === accountControlScope) {
         if (isPreconditionFailedRemoteError(err)) {
           setCodexResetRetryKey(null);
           setCodexRateLimits((current) => current ? { ...current, resetOffer: null } : null);
           await refreshAccountUsage();
-          if (contextUsageSessionRef.current === sessionId) {
+          if (accountControlScopeRef.current === accountControlScope) {
             Alert.alert(t('session.screen.resetReconfirmTitle'), humanizeRemoteError(err));
           }
         } else {
@@ -8127,9 +8166,9 @@ export default function SessionScreen() {
         }
       }
     } finally {
-      if (contextUsageSessionRef.current === sessionId) setCodexResetBusy(false);
+      if (accountControlScopeRef.current === accountControlScope) setCodexResetBusy(false);
     }
-  }, [codexRateLimits, codexResetBusy, codexResetRetryKey, maker, refreshAccountUsage, sessionId]);
+  }, [codexRateLimits, codexResetBusy, codexResetRetryKey, maker, refreshAccountUsage, sessionId, accountProviderId, accountControlScope]);
 
   const loadExtraDirBrowsePath = useCallback(async (targetPath: string) => {
     if (!deviceId || !currentSession || currentSession.workspaceKind !== 'project') return;
@@ -8801,6 +8840,7 @@ export default function SessionScreen() {
                 <ShareSelectAllButton busy={conversationShareBusy} shareableIds={allShareableIds} />
               ) : undefined}
               syncing={showSyncingIndicator}
+              syncingImmediately={showSyncingImmediately}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               messageOnly={sessionManagedByHost}
               onBack={goBackToHome}
@@ -8841,10 +8881,10 @@ export default function SessionScreen() {
                   || (connectionError ? t('session.screen.sessionNotSynced') : (deviceName || t('session.screen.conversationFallback')))}
             />
 
-            {showConnectionBanner || !remoteHistoryAvailable ? (
+            {showConnectionBanner || showCachedHistoryNotice ? (
               <ConnectionBanner
                 density="compact"
-                cachedOnly={!remoteHistoryAvailable}
+                cachedOnly={showCachedHistoryNotice}
                 deviceUnresponsive={isDeviceUnresponsive}
                 error={bannerError}
                 requestErrorAutoRecovering={bannerRetriesHistory ? false : undefined}
@@ -8864,6 +8904,7 @@ export default function SessionScreen() {
         {currentSession && !sessionManagedByHost ? (
           <SessionMenuSheet
             usageReader={maker}
+            accountProvider={accountProvider}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}
@@ -9093,9 +9134,12 @@ export default function SessionScreen() {
             apiKeyStatus={deviceApiKeyStatus}
             capabilities={modelSheetCapabilities}
             disabled={controlBusy || !canUseRemoteSessionControls}
-            emptyHint={modelSheetCapabilitiesError ?? undefined}
+            emptyHint={composerDeviceProviders.error && !composerDeviceProviders.unsupported
+              ? humanizeRemoteError(composerDeviceProviders.error)
+              : modelSheetCapabilitiesError ?? undefined}
             flatOptions={modelSheetRuntimeOptions.modelOptions}
             providersReady={composerDeviceProviders.ready}
+            providersUnsupported={composerDeviceProviders.unsupported}
             modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             loading={composerDeviceProviders.loading || modelSheetCapabilitiesLoading}
@@ -9212,6 +9256,7 @@ export default function SessionScreen() {
                     items={messageListItems}
                     itemsStructureKey={messageListStructureKey}
                     pendingSend={pendingSendActions}
+                    getSentImagePreview={getSentImagePreview}
                     loadingEarlier={historyView.snapshot.ready ? historyView.snapshot.loading : loadingEarlier}
                     loadEarlierProgressKey={oldestLoadedMessageCursor}
                     onCopyMessageLink={copyMessageLink}
@@ -9595,6 +9640,7 @@ function SessionHeaderBar({
   shareSelectionLeadingInset,
   shareSelectAllNode,
   syncing,
+  syncingImmediately,
   messageCount,
   messageOnly,
   onBack,
@@ -9621,6 +9667,7 @@ function SessionHeaderBar({
   /** 分享选择模式下替换头部动作区。 */
   shareSelectAllNode?: ReactNode;
   syncing: boolean;
+  syncingImmediately: boolean;
   messageCount: number;
   /** Host-managed canonical Sessions expose conversation controls only. */
   messageOnly: boolean;
@@ -9673,7 +9720,6 @@ function SessionHeaderBar({
   } satisfies Record<SessionActionStripActionId, () => void>;
   const notice = compactSessionHeaderNotice({
     isDeviceAccessRevoked,
-    syncing,
     pendingCount,
     queuePaused,
     readOnlyReason,
@@ -9729,6 +9775,7 @@ function SessionHeaderBar({
           <Text numberOfLines={1} style={styles.sessionHeaderTitle} testID="session.title">
             {title}
           </Text>
+          <QuietSyncIndicator active={syncing} immediate={syncingImmediately} />
         </View>
         {notice ? (
           <Text numberOfLines={1} style={styles.sessionHeaderNotice} testID="session.headerNotice">
@@ -9833,22 +9880,19 @@ function sessionHeaderActionIcon(actionId: SessionActionStripActionId): SessionH
 
 function compactSessionHeaderNotice({
   isDeviceAccessRevoked,
-  syncing,
   pendingCount,
   queuePaused,
   readOnlyReason,
   session,
 }: {
   isDeviceAccessRevoked: boolean;
-  syncing: boolean;
   pendingCount: number;
   queuePaused: boolean;
   readOnlyReason?: string | null;
   session: RemoteSession | null;
 }): string | null {
   if (isDeviceAccessRevoked) return i18n.t('session.screen.accessRevoked');
-  if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;
-  if (syncing) return i18n.t('session.screen.syncing');
+  if (!session) return null;
   if (pendingCount > 0) return i18n.t('session.screen.pendingCount', { num: pendingCount });
   // readOnlyReason 现在传入的是 composer 只读 reason:worker(只读)→「只读模式」;Lead(可聊天)→ 不显示。
   if (readOnlyReason) return i18n.t('session.screen.readOnlyMode');
@@ -11350,6 +11394,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
   },
   sessionHeaderTitle: {
+    flexShrink: 1,
     color: colors.textPrimary,
     fontSize: typeScale.body,
     fontWeight: fontWeight.semibold,

@@ -213,6 +213,37 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 3. 没有标准替代道路时不上阻断级门禁——先报告模式运行并用历史 PR 回放验证误报率，
    再升级阻断；门禁错误信息必须包含文件、行号与推荐改法。
 
+### DS-7 首批接线（2026-09-10 提交候选，尚未合入）
+
+复用 `client-ci` 的 `verify-checks → verify`，增量运行 `pnpm check:design-colors` 与
+`pnpm check:design-inventory`。`hardcoded-color-audit.test.mjs` 验证脚本入口、真实 CLI
+失败及两个汇总的 success/failure/cancelled/skipped 行为。实时 required 另作带时间的只读
+核对，不能由单测替代；DCO 是外部 App，不制造本地同名 workflow。完整证据、固定
+历史回放与复现命令见 [DS-7 证据](../design-evidence/2026-09-10/ds7-guards.md)。
+
+| 规则 | 候选方式 | 维护与升级边界 |
+| --- | --- | --- |
+| Desktop renderer 消费者新增 HEX 字面颜色、样式语境中的 RGB/HSL/OKLCH 等字面颜色函数与字面 fallback | block；准确新增行、列、原因、建议；已验证范围见证据 | 语义角色入口为 `themes/colors.ts`；不能机械替换为随意 Token。数值颜色函数要求位于样式属性、CSS 声明/函数或任意值语境——普通文案字符串里的颜色函数文本不算设计变化。不清洗已有存量 |
+| 颜色来源、测试 fixture、已正式批准的具体角色/值 | allowed，输出仍保留 | 来源由现有冻结测试保护；消费者只读窄 `matches`，旧 glob 记录不再整文件放行；窄规则可经 `object` 绑定获批对象路径（如 `VARIANT_MAP.info`、`MASCOT_PREVIEW_CONFIGS.cindy`），同文件其它对象/变体复用批准色即违规；原批准值/上下文和新违规均有反例 |
+| Mobile 及非上述生产消费者、素材/文档中的字面颜色 | report（是否违规仍需判断） | Mobile 既有 designTokenDiscipline / typographyTokenDiscipline 继续阻断；新增 diff 规则不冒充覆盖所有平台 |
+| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
+| 广泛表单采用、焦点/secret/保存行为 | 采用建议 report，现有 DS-6 行为测试保留 | G2 独立试用未完成；不以类名检查取代行为测试，不将全部确认改 CTA |
+| Desktop/Mobile 入口台账新鲜度 | block | 入口发现不等于迁移；人工 owner/pilot/legacy/下一动作不由生成器重写 |
+
+异常/错误引用或无法读取源文件退出 2，不能当无命中；`--report` 只把真实违规的退出 1
+变成报告成功，操作错误仍失败。未提交候选用 `--worktree --base-ref <实际基线>`，默认
+commit 模式不覆盖未提交内容。正式 CI 比较事件 base 与当前候选 merge/head，所有引用
+经环境变量和参数数组传递。
+
+2026-09-10 手机端协作约定：同事正在重构，DS-7入口发现不冻结布局或组件；DS-10与未成熟规则等重构方案明确后一起评估。新增/改名路由同步台账，不能把旧组件结构当永久规范。
+
+回退本批新增颜色检查时，可把该 CI 步骤切到 `pnpm report:design-colors` 或撤回新增
+接线；保留现有主题、排版、Mobile、单测、类型、Windows 与 verify 汇总。台账发现和
+有效回归样本可保留。任何新颜色例外须带正式依据、具体角色/值、owner、复查日期，
+不能因旧文件出现过就获准；规则扩大仍走报告→反例→回放→管理员审核。DS-12 接收
+未知几何、动态通道/拼接、自绘内容、跨端报告和表单采用：kirozeng 协调、执行者维护，
+2026-09-17 复查待决事项；未成熟不转阻断。合并前须有管理员实际批准，本地自测不代替它。
+
 ## 9. 计数纪律
 
 文档中出现的任何统计数字（Token 数、主题数、违规数）都是**当日快照**，必须标注统计
@@ -237,16 +268,15 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 | --- | --- | --- |
 | Permission 按钮 / 非按钮圆角 | 2026-08-29 用户裁决，#3619 回写：按钮胶囊，textarea 与盒内非按钮 8px；见 `DESIGN.md §5` 与 [decision-log](./design-decision-log.md) 对应日期；不决定外层卡片几何 | **已批准、尚未全部实现**：[PermissionPrompt](../../apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx):209/241/267 按钮仍 8px，DS-11 随迁移落实；三项待决未关闭前不借此提前改文件。Mobile Permission 按钮已 pill；外层卡片差异见下表 |
 | 快捷键键帽外框 | 2026-09-06 用户裁决 [#4001](https://github.com/makecindy/cindy/pull/4001)：所有可见快捷键外框（含承载快捷键的交互按钮）4px；边框/填充/内边距/颜色按所在表面 | 已回写 `DESIGN.md §5` / decision-log；Desktop Permission 本样本键帽已 4px，不重开该决定，不把键帽按普通按钮胶囊改掉 |
-| DS-4 基础控件 | `DESIGN.md §4` 与 decision-log 2026-09-04：按钮/输入尺寸、按钮字号字重、hover/pressed、通用 secondary Tier-1、ivory 暂留 | DS-4 已落地；DS-4b 设置封装恢复局部覆盖。暂留 ivory 不等于批准永久统一，完整表单/证据与第二消费者在 DS-6 |
+| DS-4 基础控件 | `DESIGN.md §4` 与 decision-log 2026-09-04：按钮/输入尺寸、按钮字号字重、hover/pressed、通用 secondary Tier-1、ivory 暂留 | DS-4 已落地；DS-4b 设置封装恢复局部覆盖。ivory 的长期用途已由下列 DS-6 裁决明确；完整表单/证据与第二消费者在 DS-6 |
+
+**DS-6 已批准、验收另记（2026-09-08）**：D1 soft/50% 输入焦点环，亮暗/错误/旧主题可辨识是验收前提；不通过须提供实际对照再讨论该项。D2 elevated 默认＋用途明确的 ivory，保留局部覆盖。D3 普通确认保留反相中性主按钮、轮廓次/第三按钮、主→第三→取消排列、默认 Cancel / 显式主按钮 / typed 输入优先分支及 default/destructive；仅指定两处删除入口 opt-in，授权不迁。D4 原必填/格式规则转字段错误并定位首错，服务失败保留 Toast。D5 仅实际保存禁止重复提交及 Cancel/Esc/遮罩关闭，成功关闭/失败恢复，不锁独立测试连接/获取模型，不改业务语义。实现与实际证据见 [DS-6 索引](../design-evidence/2026-09-08/ds6-forms.md)，未验证不记通过。
 
 ### 待决：只阻塞对应范围
 
 | 问题 / 当前实际行为与依据 | 可选择的可见结果 / 推荐理由（未批准） | 影响、未决定时的保持方式 / 最晚阻塞 |
 | --- | --- | --- |
-| **Input 焦点环**：`DESIGN.md §4` 规定 soft/50%，[ui/input.tsx](../../apps/desktop/src/renderer/components/ui/input.tsx):85 实际 opaque `--focus-ring`。设置壳另保留 `settings-input-border-focus`；聊天输入的描边是另一用途 | A：焦点环变柔和，按现规范实现；B：保留当前鲜明环并正式修订规范。建议先用真实设置表单比较聚焦与错误态可辨识度，再选 A/B；源码不能替视觉判断 | 所有标准 Input 消费者及旧设置主题受影响。pending 时保持 opaque 和规范中的偏差标注；DS-6 如获决定同批实施，否则保留现状并登记，DS-8 可等值接管但不能写“已统一”；最终 G4 前需结论 |
-| **ivory / elevated 长期关系**：[ui/input.tsx](../../apps/desktop/src/renderer/components/ui/input.tsx):39—41 默认 elevated，显式 ivory 走 `settings-input-bg` → `surface-card-ivory`；DS-4 已批准暂留 | A：长期保留可说明用途的 ivory 变体；B：默认统一 elevated，仍尊重用户显式局部覆盖。建议先在白色面板与嵌套卡片比较边界，避免统一后层次消失；不能把暂留当永久决定 | 设置表单、输入卡片与显式主题覆盖。pending 保持已有两变体，DS-6 按实际消费者准备；DS-8 保留等值路径，最终 G1/G4 前明确长期用途 |
 | **用户 `colors.radius` 效果**：[theme-service.ts](../../apps/desktop/src/renderer/themes/theme-service.ts):11 优先主题显式值；[Tailwind](../../apps/desktop/tailwind.config.ts):85—87 用 `--radius` 派生 rounded-lg/md/sm；实际 computed 可偏离默认档 | A：保留用户覆盖，并区分默认基线与合法自定义；B：以后让标准控件固定几何，仅在明确兼容方案与用户裁决下讨论。**建议 A**，保留现有用户能力。B 不能通过删字段/白名单绕过旧主题红线，当前未授权 | 自定义圆角主题。pending 保留字段与实际效果；DS-7 棘轮不能把合法覆盖报违规，可按类名与默认主题建基线；DS-8 必须等值保留，不能保留就先关闭该部分决定，不得先切换 |
-| **普通确认主次与局部色**：[confirm-dialog.tsx](../../apps/desktop/src/renderer/components/ui/confirm-dialog.tsx):323/360/379 使用独立 `confirm-btn-*`；普通主按钮反相中性，取消/第三按钮轮廓；危险动作已有 destructive 分支。主按钮 DOM 在取消前，`:215` 仅显式 `autoFocusConfirm` 改为主按钮焦点，不能当规范示例已实现 | A：复用标准组件但保留现有确认层级、排列与焦点；B：调整可见主次/排列/默认焦点。建议 A 先建立复用与局部覆盖合同，B 需针对真实危险/普通样本单独明确；不能盲套 CTA | 所有普通确认消费者及 `confirm-bg` / `confirm-shadow` / `confirm-title` / `confirm-desc` 容器与文案，以及 `confirm-btn-*` 按钮的主题覆盖。pending 保持现状；DS-6 迁移前确认所选结果，未明确的可见改动不实施，旧 alias 必须留原作用域 |
 | **跨 surface 旧 alias**：DS-4b 仅设置输入；`msg-user-text/msg-assistant-text` 默认同指 `text-primary` 仍允许独立用户覆盖，设置同理。来源：`colors.ts`、theme-service 与 Token README 真实消费者 | A：以语义源供默认值，保留旧局部 ID 及覆盖优先级；B：强制局部跟随全局会改旧用户主题效果，不能在现兼容合同下执行。**建议 A**，按族核对，不能靠默认同值猜意图 | 设置、消息、确认/授权及其它主题用户。pending 原 ID、作用域、加载幂等和磁盘不变；DS-6/8/9/11 分别在相关消费者切换前核对，历史“49 文件”不当实时清单 |
 | **Permission 允许/拒绝主次**：[PermissionPrompt](../../apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx):209/241 为拒绝/整任务允许轮廓，:267 允许一次实底，CINDY 内置覆盖为反相中性；Mobile [InteractionPanel](../../apps/mobile/src/session/InteractionPanel.tsx):635—672 拒绝/始终允许 secondary、允许一次 primary（cta） | A：保留允许一次为视觉主动作、其它次级；B：降低允许强调或突出拒绝以增强审慎感。建议先比较普通/高风险真实样本；不以 Desktop 默认白底推断所有主题。选项仅指视觉，不改含义/顺序/默认/审批生命周期 | 所有授权用户，两端与主题。pending 原样保留；**DS-11 前必须关闭**，责任为用户/设计师决定，DS-11 执行者准备/落实 |
 | **Permission 危险样式**：Desktop PermissionPrompt 没有危险视觉 variant；Mobile [interactionModel](../../apps/mobile/src/session/interactionModel.ts):64—82 判高风险，[InteractionPanel](../../apps/mobile/src/session/InteractionPanel.tsx):611—620 高风险允许要二次点击且不提供始终允许；风险提示为中性色，无 destructive 红 | A：保留中性风险信息与已有确认行为；B：危险授权加清晰的危险色/层级，普通授权保持中性。建议比较风险提示的辨识度再决定 B 的范围，不能因普通 ConfirmDialog 已有 destructive 就认为授权已裁决 | 高风险授权及信息色；pending 保留现有行为与配色，尤其不移除 Mobile 二次点击、不恢复高风险始终允许。**DS-11 前必须关闭**；若要求权限业务变化则退出设计迁移范围另议 |
@@ -264,7 +294,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 
 | 资产 | 现定位 | 去向 |
 | --- | --- | --- |
-| `scripts/hardcoded-color-audit.mjs` + `scripts/hardcoded-color-exemptions.json` | 现行硬编码颜色门禁与豁免 | DS-7 首批、DS-12 扩大成熟范围，在其上扩展（新增裸圆角/间距检查、豁免补 owner/理由/复查日期）；不另造平行系统 |
+| `scripts/hardcoded-color-audit.mjs` + `scripts/hardcoded-color-exemptions.json` | 新增行颜色审计、共享 matcher 与窄例外 | DS-7 候选已扩展报告/精确位置/候选扫描，范围与回退见 §8；DS-12 按证据扩大成熟范围，不另造平行系统 |
 | `scripts/check-pr-design-basis.mjs` | UI PR 设计依据校验 | DS-7 / DS-12 按成熟范围复用；UI 路径定义抽成唯一来源供其共读，证据锚点校验若确有需要在其上扩展；现有字段检查不代表视觉质量审核 |
 | `scripts/brand-terminology-guard.mjs` | 品牌术语门禁 | 保持现状，不受本计划影响 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR 模板（UI 变化 + 设计规范引用字段） | DS-7 / DS-12 若需证据锚点检查，随对应门禁同步模板，不单为记账另拆 PR |
@@ -297,9 +327,9 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | DS-3 | 最小语义 Token 影子层 | 零视觉 | [#3798](https://github.com/makecindy/cindy/pull/3798)，2026-09-03 合入 |
 | DS-4 | Button 与 Input 标准组件（既有 `components/ui/`） | 有意可见 | [#3920](https://github.com/makecindy/cindy/pull/3920)，2026-09-04 合入；完整表单 / 公开附件缺口由 DS-6 补齐 |
 | DS-4b | 设置输入旧主题局部覆盖兼容收口 | 零视觉兼容修复 | [#4010](https://github.com/makecindy/cindy/pull/4010)，2026-09-06 合入；只覆盖设置封装，未完成全仓 alias 收口 |
-| DS-5 | 对齐执行路线、数值权威、双端语义与待决合同；仅文档及必要台账静态说明 | 零视觉 | 本批，PR 待创建 |
-| DS-6 | 完整设置表单、第二消费者与普通确认复用；按真实需求补 FormField / loading，附使用说明、真实状态证据与独立贡献者首轮试用 | 有意可见 | 待 DS-5；FormField / loading 当前不存在；G2 未到场可待验收，不能冒称通过 |
-| DS-7 | 复用守卫，成熟写法先报告/反例/历史回放后阻断；增量发现 Mobile 入口；未成熟范围继续报告 | CI 门禁 | 待 DS-6；§8 审核，用户 radius 合法覆盖不误报 |
+| DS-5 | 对齐执行路线、数值权威、双端语义与待决合同；仅文档及必要台账静态说明 | 零视觉 | [#4022](https://github.com/makecindy/cindy/pull/4022)，2026-09-07 已合入 |
+| DS-6 | 完整设置表单、第二消费者与普通确认复用；按真实需求补 FormField / loading，附使用说明、真实状态证据与独立贡献者首轮试用 | 有意可见 | [#4135](https://github.com/makecindy/cindy/pull/4135) 已合入（head `62472f559c` / merge `6559d2610a`）；已实现 FormField / loading、两个消费者和指定普通确认；用户测试版手动审核通过。工程验证、G2 与公开附件分别见[证据索引](../design-evidence/2026-09-08/ds6-forms.md)，不把 PR 交付等同目标全部验收 |
+| DS-7 | 复用守卫，成熟写法先报告/反例/历史回放后阻断；增量发现 Mobile 入口；未成熟范围继续报告 | CI 门禁 | 本地候选：20 张历史报告回放与正反例完成，成熟颜色增量接 verify，Mobile 入口纳入同一台账；[证据](../design-evidence/2026-09-10/ds7-guards.md)。待管理员 §8 审核及实际合入 |
 | DS-8 | Desktop 颜色与排版、间距、圆角/尺寸、动效的 DTCG → 生成 → 生产消费链；旧主题与动态/保护边界逐族验证，结束影子阶段 | 零视觉接管 | 待 DS-7；有新观感须独立归类，不能混入等值接管 |
 | DS-9 | 工具、推理、消息、代码、附件的完整聊天呈现；按台账核验 Orca、定时任务、文件、Bots、主布局、登录、浮层、宿主插件 UI、辅助/原生入口的继承与残余去向 | 有意可见 | 待 DS-8；不依赖 Mobile，Permission 仍隔离；延期须有理由、负责人和复查日期 |
 | DS-10 | Mobile 接入同一数值源，保留平台静态覆盖与运行期适配，分别验证 iOS/Android | 零视觉接管 | 在 DS-9 后交付，数值接管依赖 DS-8；以实际 fingerprint 判断冷更（§4），新视觉单独归类 |
@@ -323,11 +353,13 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 
 以下是本治理体系**做不到**的事。登记它们的目的：不得把「机器没拦」当作「合规」的证据。
 
-1. **正则扫描的边界**——`hardcoded-color-audit` 扫 diff 全部新增行，`style={{...}}`
-   TSX 内联样式里的 `#hex` / `rgb()` / `hsl()` 字面量**会被发现**（它不按文件类型过滤）。
-   真正扫不到的是：正则表达不了的动态值（变量拼接、数值通道、运行期计算结果）与
-   canvas / xterm 一类自绘内容——这些不经过样式文件，靠 review 与 §11 登记的
-   `check-pr-design-basis` 必读要求约束；
+1. **词法扫描的边界**——共享 matcher 在新增行上下文中识别 HEX 与完整字面颜色函数，
+   纯语义包装/PR编号/注释排除，嵌套字面 fallback 仍检查。默认阻断仅限 §8 列出的
+   Desktop renderer 消费者后缀；`.svg`、assets/vendor、Mobile 和其它路径仅报告。
+   它不是 JS/CSS AST 或运行期求值器：命名色、拼接/转义字符串、部分数值通道、动态
+   样式、自绘 canvas/xterm、复杂模板嵌套、间接调用和裸数字几何仍须 review。普通
+   `color(surface)` 与空函数文档不是颜色；未知写法不能据“未命中”判合规。
+   `--worktree` 扫 staged/unstaged/指定源码目录内 untracked，commit 模式仅扫明确 refs。
 2. **「复用道路唯一」是纪律不是机器闸**——防止出现第二套 Button / Toast / 菜单动作模型，
    靠 review 裁决，机器只能发现雷同、不能自动判定谁该让位；
 3. **语义分层是渐进的**——存量代码混引语义层与原始值是登记在案的现状；**新代码默认走
@@ -337,3 +369,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
    代码中不强迁——这两条是合同本身开的准入，不是「新代码优先语义层」的例外漏洞；
    存量随各表面迁移顺带收敛，不专门开重构 PR。
 4. **圆角分类审查边界：** 自动审查应先识别 §5 已登记成员及其具体可见层，再检查对应约束。未决分类、缺少证据与明确违反登记值须分开报告。**不得仅凭 DOM 标签、可访问名称或局部样式类推导 pill，也不得用建议改形状代替缺失的分类裁决。** 未登记的新例外仍须裁决；已登记的待迁移差异按对应台账处理，不重复制造相反的「修复」要求。评论应指出登记项、作用层及违反的条款，严重级别按现行审查规则判断。
+
+DS-7 的运行期报告只自动认领带显式 `data-usage-mark` 的用量图层、其 target/indicator
+身份与有可见框的 `<kbd>`；其它普通框、状态格或仅声称是键帽的按钮先报 unknown。
+分类器的完整登记值正反例不表示生产识别已覆盖这些成员；缺证据与待决命中不能当通过。

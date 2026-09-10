@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 import {
   PeerRecoveryOpenIntentRegistry,
   PeerRecoveryScheduler,
@@ -18,6 +19,71 @@ async function flush(): Promise<void> {
 }
 
 describe('PeerRecoveryScheduler', () => {
+  it('hands recovery off to queued Home hydration without exposing the old manual failure', async () => {
+    const subscribed = deferred<void>();
+    const syncing = new Set<string>();
+    const scheduler = new PeerRecoveryScheduler(async (id) => {
+      await subscribed.promise;
+      // Home reseed marks syncing before its limiter starts the snapshot reads.
+      syncing.add(id);
+      return { retry: false };
+    });
+    const failure = { deviceId: 'a', deviceName: 'Mac', error: '[INVOKE_TIMEOUT] failed' };
+    const feedback = () => resolveHomeConnectionFeedback(failure, new Set([...scheduler.getActiveDeviceIds(), ...syncing]));
+    scheduler.request('a');
+    expect(feedback().deviceRecovery).toBe(true);
+    subscribed.resolve();
+    await flush();
+    expect(scheduler.getActiveDeviceIds().size).toBe(0);
+    expect(feedback().deviceRecovery).toBe(true);
+    syncing.delete('a');
+    // A failed hydrate may retain the ordinary error; only now is manual retry available.
+    expect(feedback().deviceRecovery).toBe(false);
+    expect(resolveHomeConnectionFeedback(null, syncing).error).toBeNull();
+  });
+  it('publishes stable active snapshots across queue, retry, completion and cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = deferred<{ retry: boolean }>();
+      const scheduler = new PeerRecoveryScheduler(() => first.promise, { maxConcurrent: 1 });
+      const changed = vi.fn();
+      const off = scheduler.subscribe(changed);
+      const initial = scheduler.getActiveDeviceIds();
+      scheduler.requestMany(['a', 'b']);
+      expect([...scheduler.getActiveDeviceIds()]).toEqual(['a', 'b']);
+      expect(initial.size).toBe(0);
+      const active = scheduler.getActiveDeviceIds();
+      first.resolve({ retry: true });
+      await flush();
+      expect(scheduler.getActiveDeviceIds()).toBe(active);
+      scheduler.cancel('a');
+      expect([...scheduler.getActiveDeviceIds()]).toEqual(['b']);
+      scheduler.pause();
+      expect(scheduler.getActiveDeviceIds().size).toBe(0);
+      const calls = changed.mock.calls.length;
+      off();
+      scheduler.clear();
+      expect(changed).toHaveBeenCalledTimes(calls);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps a re-request visible while a cancelled generation settles', async () => {
+    const old = deferred<{ retry: boolean }>();
+    const next = deferred<{ retry: boolean }>();
+    const run = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+    const scheduler = new PeerRecoveryScheduler(run);
+    scheduler.request('a');
+    scheduler.cancel('a');
+    expect(scheduler.getActiveDeviceIds().size).toBe(0);
+    scheduler.request('a');
+    expect(scheduler.getActiveDeviceIds().has('a')).toBe(true);
+    old.resolve({ retry: false });
+    await flush();
+    expect(scheduler.getActiveDeviceIds().has('a')).toBe(true);
+    next.resolve({ retry: false });
+    await flush();
+    expect(scheduler.getActiveDeviceIds().size).toBe(0);
+  });
   it('does not let an old forced-open completion clear a newer intent for the same peer', () => {
     const intents = new PeerRecoveryOpenIntentRegistry();
     const first = intents.request('desktop-a');

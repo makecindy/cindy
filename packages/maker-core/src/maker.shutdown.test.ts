@@ -63,6 +63,7 @@ function createHandle(overrides: Partial<AgentSessionHandle>): AgentSessionHandl
     abort: async () => undefined,
     close: async () => undefined,
     events: async function* () {
+      yield* [];
       await new Promise<never>(() => undefined);
     },
     getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
@@ -86,9 +87,9 @@ function createAgent(handle: AgentSessionHandle): BaseAgent {
   } as unknown as BaseAgent;
 }
 
-function createDeferred<T = void>(): { promise: Promise<T>; resolve: (value?: T | PromiseLike<T>) => void } {
-  let resolve!: (value?: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => { resolve = res; });
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => { resolve = res; });
   return { promise, resolve };
 }
 

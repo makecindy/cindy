@@ -27,6 +27,7 @@ import {
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
+import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 
 export type MobilePendingSendPhase =
   /** 已确认入队,等被控端派发。 */
@@ -104,6 +105,21 @@ export function pendingSendItemKey(clientId: string): string {
 }
 
 /**
+ * History and queue snapshots can arrive independently. Deduplicate against the
+ * rows actually being rendered, even when the queue's hidden-id snapshot is stale.
+ * Duplicate keys reserve two list positions while mounting only one bubble.
+ */
+export function appendPendingSendItems<T extends { key: string }>(
+  rendered: readonly T[],
+  pending: readonly MobilePendingSendItem[],
+): readonly (T | MobilePendingSendItem)[] {
+  if (pending.length === 0) return rendered;
+  const renderedKeys = new Set(rendered.map((item) => item.key));
+  const remaining = pending.filter((item) => !renderedKeys.has(item.key));
+  return remaining.length === 0 ? rendered : [...rendered, ...remaining];
+}
+
+/**
  * 气泡显示文本:合成 UI 指令行(桌面「失败后继续」等隐藏 prompt)用遮蔽标签替代原文
  * —— 裸英文指令不能给用户看(对齐桌面 PendingQueuePanel 的 i18n 遮蔽标签)。
  */
@@ -152,6 +168,7 @@ function buildPendingSentInlineTokens(input: {
 function queuedAttachmentThumbs(
   item: Pick<QueuedRemoteMessage, 'clientId' | 'files'>,
   previewByOssRef?: ReadonlyMap<string, string>,
+  getImagePreview?: GetSentMessageImagePreview,
 ): { thumbs: MobileOutboxThumb[]; fileCount: number } {
   const thumbs: MobileOutboxThumb[] = [];
   let fileCount = 0;
@@ -161,14 +178,16 @@ function queuedAttachmentThumbs(
       return;
     }
     const ossRef = file.url ?? file.path;
+    const preview = getImagePreview?.(item.clientId, thumbs.length, file.name, file.id);
     thumbs.push({
-      key: `${item.clientId}-file-${index}`,
+      key: `${item.clientId}-slot-${index}`,
       // 发送时刻抓下的本地预览优先:sentAttachmentThumbStore 那条兜底链要等「上传落定 →
       // 拷进自有目录 → AsyncStorage hydrate」全部完成才查得到,期间 getSentAttachmentThumbUri
       // 一律返回 null,排队气泡只能画空占位格(实测:兜底文件已生成,气泡仍是空方块)。
       // 乐观语义下图必须从第一帧就在,所以直接用手边的 file:// 预览,store 只作为
       // 「重开会话 / 预览已失效」时的后备。
-      uri: (ossRef && previewByOssRef?.get(ossRef)) || null,
+      uri: preview?.uri ?? ((ossRef && previewByOssRef?.get(ossRef)) || null),
+      ...(preview ? { previewRef: preview.sourceRef } : {}),
       ossRef,
       uploading: false,
     });
@@ -198,6 +217,7 @@ export interface BuildPendingSendItemsInput {
    * 排队气泡的图靠它即时显示,不等 sentAttachmentThumbStore 的拷贝 + hydrate 链。
    */
   previewByOssRef?: ReadonlyMap<string, string>;
+  getImagePreview?: GetSentMessageImagePreview;
 }
 
 /**
@@ -213,7 +233,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   const pushQueued = (item: QueuedRemoteMessage, phase: MobilePendingSendPhase, queueIndex: number | null) => {
     if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
-    const attachments = queuedAttachmentThumbs(item, input.previewByOssRef);
+    const attachments = queuedAttachmentThumbs(item, input.previewByOssRef, input.getImagePreview);
     const presentation = queueIndex === null
       ? null
       : input.presentationByClientId.get(item.clientId) ?? null;

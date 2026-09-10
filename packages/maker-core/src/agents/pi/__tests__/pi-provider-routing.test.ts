@@ -29,6 +29,12 @@ const captured = vi.hoisted(() => ({
     | undefined
   >,
   closes: 0,
+  onExit: undefined as
+    | undefined
+    | ((info: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      }) => void),
   initialProvider: undefined as string | undefined,
   initialModel: undefined as string | undefined,
   runtimeProvider: undefined as string | undefined,
@@ -81,6 +87,14 @@ vi.mock("../rpc-client.js", () => {
     PiRpcRequestTimeoutError,
     PiRpcProcess: class {
       isClosed = false;
+      constructor(opts: {
+        onExit: (info: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        }) => void;
+      }) {
+        captured.onExit = opts.onExit;
+      }
       async request(
         command: Record<string, unknown>,
         options?: {
@@ -205,6 +219,7 @@ describe("Pi provider-aware model routing", () => {
     captured.requests = [];
     captured.requestOptions = [];
     captured.closes = 0;
+    captured.onExit = undefined;
     captured.initialProvider = undefined;
     captured.initialModel = undefined;
     captured.runtimeProvider = undefined;
@@ -3956,6 +3971,64 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it.each([
+    { input: ["text", "image"] as Array<"text" | "image">, supported: true },
+    { input: ["text"] as Array<"text" | "image">, supported: false },
+    { input: undefined, supported: false },
+  ])("uses the native ChatGPT image snapshot for models.json, send and steer: $input", async ({ input, supported }) => {
+    const modelId = "chatgpt/gpt-5.6-sol";
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: "openai-codex", sourceProviderId: "openai", name: "ChatGPT",
+        baseUrl: "http://127.0.0.1:9", inheritModels: true,
+        models: [{
+          id: modelId, wireId: "gpt-5.6-sol", api: "openai-codex-responses", input,
+        }],
+      }],
+      env: {},
+    }), [{
+      id: modelId, displayName: "Same-id gateway model", contextWindow: 272_000,
+      efforts: [], defaultEffort: null, supportsImageInput: !supported,
+    }]));
+    const handle = await agent.startSession({
+      sessionId: "chatgpt-images", workingDir: cwd, model: modelId, providerId: "openai",
+    });
+    try {
+      const config = JSON.parse(readFileSync(
+        path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"), "utf8",
+      ));
+      expect(config.providers["openai-codex"].models).toEqual([
+        expect.objectContaining({
+          id: "gpt-5.6-sol", api: "openai-codex-responses", input: input ?? ["text"],
+        }),
+      ]);
+      const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+      const imagePath = path.join(cwd, "image.png");
+      writeFileSync(imagePath, Buffer.from(data, "base64"));
+      const image = { type: "image" as const, path: imagePath };
+      for (const content of [[image], [{ type: "text" as const, text: "describe" }, image], [image, image]]) {
+        for (const method of ["send", "steer"] as const) {
+          captured.requests.length = 0;
+          const sent = handle[method]!({ type: "user", content });
+          if (supported) {
+            await sent;
+            expect(captured.requests).toContainEqual(expect.objectContaining({
+              type: method === "send" ? "prompt" : "steer",
+              images: content.filter((part) => part.type === "image").map(() => ({
+                type: "image", mimeType: "image/png", data,
+              })),
+            }));
+          } else {
+            await expect(sent).rejects.toMatchObject({ code: "PI_IMAGE_INPUT_UNSUPPORTED" });
+            expect(captured.requests).toHaveLength(0);
+          }
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
   it("guards image prompts by the startup provider-model capability and follows model switches", async () => {
     const gatewayModels: ModelDescriptor[] = [
       {
@@ -5428,6 +5501,68 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("preserves the stable remote config home across a transport disconnect and reattach", async () => {
+    const remoteStub: import("../transport.js").PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: "/remote/pi",
+      killRemoteSession: async () => {},
+    };
+    const remoteRm = vi.fn(async () => {});
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    const base = byomDeps(async () => ({ providers: [], env: {} }));
+    const deps: AgentDeps = {
+      ...base,
+      runtimeConfig: {
+        ...base.runtimeConfig,
+        remoteEndpoint: "https://gateway.example.test",
+      },
+      resolveRemotePiBinaryPath: async () => "/remote/pi",
+      getRemotePiTransport: async (_hostId, opts) => {
+        capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+        return remoteStub;
+      },
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: remoteRm,
+        listDir: async () => [],
+        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
+      }),
+    };
+
+    await new PiAgent(deps).startSession({
+      sessionId: "remote-disconnect-reattach",
+      workingDir: cwd,
+      model: "local-model",
+      remoteHostId: "remote-host",
+    });
+    const firstEnv = capturedRemoteEnvs[0]!;
+    const configHome = firstEnv.PI_CODING_AGENT_DIR!;
+
+    captured.onExit?.({ code: null, signal: null });
+    await Promise.resolve();
+    expect(remoteRm).not.toHaveBeenCalledWith(configHome, { recursive: true });
+
+    const reattached = await new PiAgent(deps).startSession({
+      sessionId: "remote-disconnect-reattach",
+      workingDir: cwd,
+      model: "local-model",
+      remoteHostId: "remote-host",
+    });
+    expect(capturedRemoteEnvs[1]).toEqual(firstEnv);
+    expect(capturedRemoteEnvs[1]?.PI_CODING_AGENT_DIR).toBe(configHome);
+    await reattached.close();
+    expect(remoteRm).not.toHaveBeenCalledWith(configHome, { recursive: true });
+  });
+
   it("hashes the remote permission snapshot into spawn env so a later Full-access attach restarts", async () => {
     const remoteStub: import("../transport.js").PiTransport = {
       writeLine: async () => {},
@@ -5778,4 +5913,44 @@ describe("Pi provider-aware model routing", () => {
     ).rejects.toThrow(/cannot use local path mentions/);
     await handle.close();
   });
+
+  it("switches ChatGPT accounts with exact parent and subagent routes and retains missing-target failures", async () => {
+    const model = "chatgpt/gpt-5.6-luna";
+    let resolveParent: (() => string | null | undefined) | undefined;
+    const subagentAccounts: Array<string | null | undefined> = [];
+    const deps = byomDeps(async () => ({
+      providers: ["openai", "account-b"].map(sourceProviderId => ({
+        id: `native-${sourceProviderId}`, sourceProviderId, name: sourceProviderId,
+        baseUrl: "http://127.0.0.1:9", api: "openai-codex-responses" as const,
+        headers: { "x-cindy-pi-provider-id": sourceProviderId,
+          "x-cindy-pi-session-id": "$CINDY_PI_SESSION_ID",
+          "x-cindy-pi-session-token": "$CINDY_PI_SESSION_TOKEN" },
+        models: [{ id: model, wireId: "gpt-5.6-luna", contextWindow: 200000, reasoning: false }],
+      })), env: {},
+    }), [{ id: model, displayName: "Luna", contextWindow: 200000, efforts: [], defaultEffort: null }]);
+    deps.registerPiProxySession = (_id, _token, resolveProvider, options) => {
+      if (options?.scope === "subagent-route") subagentAccounts.push(resolveProvider());
+      else resolveParent = resolveProvider;
+    };
+    const handle = await new PiAgent(deps).startSession({ sessionId: "native-accounts", workingDir: cwd,
+      model, providerId: "openai", effort: "low" });
+    const config = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR!, "models.json"), "utf8"));
+    expect(config.providers["native-openai"].headers["x-cindy-pi-provider-id"]).toBe("openai");
+    expect(config.providers["native-account-b"].headers["x-cindy-pi-provider-id"]).toBe("account-b");
+    expect(subagentAccounts).toEqual(expect.arrayContaining(["openai", "account-b"]));
+    for (const account of ["account-b", "openai"]) {
+      await handle.setModel!(model, { providerId: account });
+      expect(resolveParent?.()).toBe(account);
+      expect(captured.requests).toContainEqual({ type: "set_model", provider: `native-${account}`, modelId: "gpt-5.6-luna" });
+      const snapshot = JSON.parse(readFileSync(runtimeFileOf("subagent", "native-accounts"), "utf8"));
+      expect(snapshot.provider).toBe(`native-${account}`);
+      expect(snapshot.pending).not.toBe(true);
+    }
+    const requestsBefore = captured.requests.length;
+    await expect(handle.setModel!(model, { providerId: "not-in-startup" })).rejects.toThrow(/cannot serve/);
+    expect(captured.requests.length).toBe(requestsBefore);
+    expect(resolveParent?.()).toBe("openai");
+    await handle.close();
+  });
+
 });

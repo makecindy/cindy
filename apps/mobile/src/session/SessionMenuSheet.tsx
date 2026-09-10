@@ -1,3 +1,4 @@
+import type { OpenAiAccountProvider } from './sessionControls';
 /**
  * SessionMenuSheet —— 会话右上角「…」菜单浮窗(取代旧三 tab 的会话设置面板)。
  *
@@ -96,6 +97,7 @@ export interface SessionExtraDirBrowserState {
 }
 
 export interface SessionMenuSheetProps {
+  accountProvider?: OpenAiAccountProvider;
   usageReader: SessionMenuUsageReader & Pick<MobileMakerTransport, 'getContextUsage'>;
   visible: boolean;
   /** 打开时落在哪个视图(header 用量入口可直达 info)。 */
@@ -137,6 +139,7 @@ export interface SessionMenuSheetProps {
 
 export function SessionMenuSheet({
   usageReader,
+  accountProvider,
   visible,
   initialView,
   session,
@@ -167,7 +170,7 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
-  const menuUsage = useSessionMenuUsage(session, usageReader, visible, codexRateLimits);
+  const menuUsage = useSessionMenuUsage(session, usageReader, visible, codexRateLimits, accountProvider);
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 

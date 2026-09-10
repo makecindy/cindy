@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, type ReactElement } from 'reac
 import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
+import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
 import {
   fontWeight,
   radius,
@@ -426,7 +427,7 @@ function RootLayout() {
               <StartupSplashOverlay
                 hidden={endpointGate.status === 'error' || forcedUpdate !== null}
               >
-                {body}
+                <ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>
               </StartupSplashOverlay>
             </MobileLoginHandoffProvider>
           </LocaleProvider>

@@ -18,6 +18,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'empty-response': 'logic.errors.emptyResponse',
   'turn-failed': 'logic.errors.turnFailed',
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
+  'output-limit': 'logic.errors.outputLimit',
   tool_use_loop_detected: 'logic.errors.toolUseLoopDetected',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',
   'runtime-selection-cancelled': 'newChat.chatInput.switchFailed',

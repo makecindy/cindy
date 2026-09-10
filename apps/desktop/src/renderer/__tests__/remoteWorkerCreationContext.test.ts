@@ -7,6 +7,16 @@ const read = (relativePath: string): string =>
   readFileSync(resolve(__dirname, '..', relativePath), 'utf8').replace(/\r\n/g, '\n');
 
 describe('remote Orca Worker creation context', () => {
+  it('uses SSH-filtered candidates for remote-project models and provider selection', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const sshConnected = filterChatBridgedCodexProviders(');
+    const end = draft.indexOf('const sshFastMode =', start);
+    expect(start).toBeGreaterThan(-1);
+    const selection = draft.slice(start, end);
+    expect(selection).toContain('connectedProvidersForAgent(localProviders, capabilityAgentKind)');
+    expect(selection).toContain('deriveModelsFromProviders(sshConnected, capabilityAgentKind');
+    expect(selection).toMatch(/effectiveSourceIdForModel\(\s*sshConnected,/);
+  });
   it('scopes capabilities, providers, and the nested model selector to the controlled device', () => {
     const popover = read('features/cc-agent/CreateWorkerPopover.tsx');
 

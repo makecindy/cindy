@@ -55,6 +55,13 @@ function createSessionHarness() {
 }
 
 describe('backfillSessionMeta', () => {
+  it.each([true, false])('persists the resolved Fast state (%s), including clearing a stale true', async (fastMode) => {
+    const { db, set } = createUpdateDb();
+    const { logger } = createLogger();
+    await backfillSessionMeta(db, 'sess-1', { fastMode }, logger);
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ fastMode }));
+  });
+
   it('preserves teammate permissions while updating routine runtime metadata', async () => {
     const { db, set } = createUpdateDb();
     const { logger } = createLogger();

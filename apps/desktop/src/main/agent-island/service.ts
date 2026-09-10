@@ -2419,6 +2419,7 @@ function buildAgentIslandStrings(): AgentIslandStrings {
     needsInput: t('agentIsland.native.needsInput'),
     completed: t('agentIsland.native.completed'),
     error: t('agentIsland.native.error'),
+    outputLimit: t('logic.errors.outputLimit'),
     input: t('agentIsland.native.input'),
     done: t('agentIsland.native.done'),
     running: t('agentIsland.native.running'),

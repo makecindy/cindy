@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 菜单分四段语义（侧边栏重设计,docs/product-rules/sidebar-redesign-plan.md §3）：
  *   - 分组：独立复选——按项目分组 / 按设备分组(仅远程连接时出现)/ 对话归为一组
- *   - 排序：任务排序（recency / priority）+ 按项目分组时的项目顺序
+ *   - 排序：任务排序（recency / created / priority）+ 按项目分组时的项目顺序
  *     （activity / custom）
  *   - 筛选：一级只占一行，右侧显示摘要（「无」/「N 项生效」），展开二级子菜单
  *     承载 Status / Project / Agent / Last activity 四维度 + 重置筛选
@@ -126,7 +126,8 @@ const LAST_ACTIVITY_OPTIONS: ReadonlyArray<Option<FilterLastActivity>> = [
 
 /** 「最早优先」(旧 time)与旧「手动排序」都已从任务排序里拿掉。 */
 const SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
-  { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.recency' },
+  { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.activity' },
+  { value: 'created', labelKey: 'ccAgent.sidebar.filterSortBy.created' },
   {
     value: 'priority',
     labelKey: 'ccAgent.sidebar.filterSortBy.priority',
@@ -602,7 +603,21 @@ export function SidebarFilterPopover({
           <div className="px-2 py-1.5 text-xs font-medium text-[var(--cmd-palette-item-meta)]">
             {t('ccAgent.sidebar.filterTaskSortHeading')}
           </div>
-          {SORT_BY_OPTIONS.map((option) => (
+          <MenuSubRow
+            label={t('ccAgent.sidebar.filterSortBy.recency')}
+            value={sortBy === 'priority' ? '' : sortByValue}
+            valueEmphasized={sortBy !== 'priority'}
+          >
+            {SORT_BY_OPTIONS.filter((option) => option.value !== 'priority').map((option) => (
+              <SelectMenuItem
+                key={option.value}
+                label={t(option.labelKey)}
+                selected={sortBy === option.value}
+                onSelect={() => setSortBy(option.value)}
+              />
+            ))}
+          </MenuSubRow>
+          {SORT_BY_OPTIONS.filter((option) => option.value === 'priority').map((option) => (
             <SelectMenuItem
               key={option.value}
               label={t(option.labelKey)}

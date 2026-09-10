@@ -13,8 +13,9 @@
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   4. 其余                —— 逐次弹窗（第三方 server、cindy_ssh、插件 ghost_call…）
+ *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件仍逐次确认
+ *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
+ *   5. 其余                —— 逐次弹窗（第三方 server、cindy_ssh、其它 ghost_call…）
  */
 
 import type {
@@ -173,6 +174,29 @@ function skipsRoutelessDeviceApproval(args: unknown): boolean {
   return !hasIOSSimulatorInstanceRoute(parsed);
 }
 
+/** 第一方 Cindy Art 的媒体生成工具。风险是额度而非越权，用户点名作图即授权。 */
+const CINDY_ART_MEDIA_TOOLS: ReadonlySet<string> = new Set([
+  'gen_image',
+  'edit_image',
+  'gen_video',
+  'edit_video',
+]);
+
+/**
+ * ghost_call 是聚合入口，默认逐次确认。Cindy Art 的作图/改图/视频是第一方媒体
+ * 能力，用户发「画一张」即构成授权；Auto-review 下再弹卡会把常规作图变成手动授权。
+ * 读不出 ghost_id / tool 时 fail closed，其它插件不受影响。
+ */
+function canAutoApproveCindyArtGhostCall(context: McpToolApprovalContext): boolean {
+  if (context.serverName !== 'cindy') return false;
+  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return false;
+  const params = readJsonObject(context.toolParams);
+  if (!params) return false;
+  const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
+  const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
+  return ghostId === 'cindy-art' && CINDY_ART_MEDIA_TOOLS.has(tool);
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -202,6 +226,9 @@ export function getDesktopMcpToolApprovalPolicy(
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
       : 'prompt-each-time';
+  }
+  if (canAutoApproveCindyArtGhostCall(context)) {
+    return 'auto-approve';
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {

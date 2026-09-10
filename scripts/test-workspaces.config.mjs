@@ -80,6 +80,7 @@ const desktopGitIntegrationInclude = [
 ];
 const makerCoreIntegrationInclude = [
   'src/agents/codex/*.integration.test.ts',
+  'src/agents/claude-code/__tests__/*.integration.test.ts',
   'src/agents/pi/__tests__/*.integration.test.ts',
 ];
 const makerPiManagerIntegrationInclude = [
@@ -257,11 +258,18 @@ export default {
         unit: {
           status: 'required',
           command: unitVitestCommand(1, 'forks'),
-          exclude: ['**/*.integration.test.ts', '**/*.e2e.test.ts'],
+          exclude: ['**/*.integration.test.ts', '**/*.e2e.test.ts', '**/*.git-integration.test.ts'],
+        },
+        'git-integration': {
+          status: 'manual',
+          reason: 'Full real-Git coverage is explicit because each case builds temporary repos, linked worktrees and separate-git-dir clones via git subprocesses.',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--maxWorkers=1'),
+          include: ['src/**/*.git-integration.test.ts'],
         },
         integration: {
           status: 'manual',
-          reason: 'Pi/Codex integration tests spawn real agent binaries and local protocol servers.',
+          reason: 'Claude/Pi/Codex integration tests spawn real agent binaries and local protocol servers.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--pool=forks', '--maxWorkers=1'),

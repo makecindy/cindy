@@ -1038,6 +1038,14 @@ describe('normalizeRemoteMessages', () => {
     expect(items[1].body).toBe('something exploded');
   });
 
+  it('localizes a persisted output limit in message history', () => {
+    const items = normalizeRemoteMessages([message({
+      id: 'output-limit', role: 'error',
+      content: JSON.stringify({ message: 'Pi reached the model output limit.', reason: 'output-limit' }),
+    })]);
+    expect(items[0]).toMatchObject({ kind: 'system', label: 'error', body: i18n.t('session.tail.outputLimit') });
+  });
+
   it('localizes persisted tool-loop errors from reason and bounded details', () => {
     const items = normalizeRemoteMessages([
       message({

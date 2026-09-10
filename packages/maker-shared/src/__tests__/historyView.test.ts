@@ -243,6 +243,43 @@ describe('shared history view lifecycle', () => {
     expect(view.getSnapshot().expanded.size).toBe(0);
   });
 
+  it.each([false, true])('joins an expanded detail read through its latest revision (changed=%s)', async (changed) => {
+    let rows = [row(1, 'thinking', 'old')];
+    const replies: Array<(page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void> = [];
+    const details = vi.fn(() => new Promise<Parameters<typeof replies[number]>[0]>(resolve => { replies.push(resolve); }));
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(rows, true), hasMore: false, nextCursor: null }),
+      details, expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    let completed = false;
+    const joined = view.loadDetails(group.summary).then(() => { completed = true; });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(completed).toBe(false);
+    expect(details).toHaveBeenCalledTimes(1);
+    if (changed) {
+      rows = [row(1, 'thinking', 'corrected'), row(2, 'thinking', 'appended')];
+      await view.refresh();
+      expect(details).toHaveBeenCalledTimes(1);
+    }
+    replies[0]({ version: 1, messages: [row(1, 'thinking', 'old')], hasMore: false, nextCursor: null });
+    if (changed) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(completed).toBe(false);
+      expect(details).toHaveBeenCalledTimes(2);
+      replies[1]({ version: 1, messages: rows, hasMore: false, nextCursor: null });
+    }
+    await joined;
+    expect(view.getSnapshot().details.get(group.key)).toMatchObject({ complete: true, loading: false, messages: rows });
+    const latest = view.getSnapshot().items[0];
+    if (latest.type !== 'work') throw new Error('Expected the current work group');
+    await view.loadDetails(latest.summary);
+    expect(details).toHaveBeenCalledTimes(changed ? 2 : 1);
+  });
+
   it('reloads an edited prefix when new rows arrive in the same revision', async () => {
     let rows = [row(1, 'thinking', 'old'), row(2, 'thinking', 'tail')];
     const cursors: Array<string | undefined> = [];
@@ -360,6 +397,48 @@ describe('shared history view lifecycle', () => {
     expect(rendered).toEqual(['c1']);
   });
 
+  it('preserves pending observation order without moving known history or other live rows', async () => {
+    const known = row(1, 'assistant', 'history');
+    const first = row(4, 'assistant', 'first pending');
+    const second = row(2, 'assistant', 'second pending');
+    const other = row(3, 'user', 'other live');
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([known], false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const liveMessages = [known, second, other, first];
+    const pendingHandoff = new Set(['removed', known.clientId, first.clientId, second.clientId]);
+    const output = renderHistoryView({ view, snapshot: view.getSnapshot(), liveMessages, pendingHandoff,
+      streaming: true, isLive: () => true, build: rows => [...rows], structure: ungroupedStructure });
+    expect(output).toEqual([known, first, other, second]);
+    expect(liveMessages).toEqual([known, second, other, first]);
+    expect([...pendingHandoff]).toEqual(['removed', known.clientId, first.clientId, second.clientId]);
+    view.setActive(false);
+  });
+
+  it.each(['pending', 'blocked'])('anchors %s local users to the reordered handoff slots', async (status) => {
+    const known = row(10, 'assistant', 'history');
+    const first = row(4, 'assistant', 'first');
+    const second = row(2, 'assistant', 'second');
+    const users = [20, 21, 22, 23].map(id => ({ ...row(id, 'user', status), createdAt: row(0, 'user', '').createdAt }));
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([known], false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const liveMessages = [known, users[0], second, users[1], users[2], first, users[3]];
+    const output = renderHistoryView({ view, snapshot: view.getSnapshot(), liveMessages,
+      pendingHandoff: new Set([first.clientId, second.clientId]), streaming: true,
+      isLocalUser: message => message.role === 'user' && message.content === status,
+      build: rows => [...rows], structure: ungroupedStructure });
+    expect(output).toEqual([known, users[0], first, users[1], users[2], second, users[3]]);
+    expect(liveMessages).toEqual([known, users[0], second, users[1], users[2], first, users[3]]);
+    view.setActive(false);
+  });
+
   it('preserves current local user bubbles, source authority and store order despite clock skew', async () => {
     type Message = HistoryMessageSource & { isPendingPersist?: boolean; blockedByGhost?: boolean };
     const source = [row(1, 'user', 'kept'), row(10, 'assistant', 'answer'), row(11, 'user', 'persisted rewrite')];
@@ -407,6 +486,28 @@ describe('shared history view lifecycle', () => {
       liveMessages: [stale, { ...prose, content: 'latest answer' }], streaming: active,
       isLive: () => true, build: (rows) => rows.map((item) => item.content), structure: ungroupedStructure });
     expect(rendered).toEqual(['complete thinking', 'latest answer']);
+  });
+
+  it('loads a collapsed work range for recovery without changing expansion state', async () => {
+    const target = row(1, 'thinking', 'authoritative terminal');
+    const details = vi.fn(async () => ({ version: 1 as const, messages: [target], hasMore: false, nextCursor: null }));
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([target], false), hasMore: false, nextCursor: null }),
+      details,
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+
+    await view.loadDetails(group.summary, { allowCollapsed: true });
+
+    expect(details).toHaveBeenCalledOnce();
+    expect(view.getSnapshot().expanded).toEqual(new Set());
+    expect(view.getSnapshot().details.get(group.key)).toMatchObject({
+      complete: true,
+      messages: [target],
+    });
   });
 });
 

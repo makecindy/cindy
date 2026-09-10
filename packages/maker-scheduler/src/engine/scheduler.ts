@@ -56,9 +56,14 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'model'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  if (schedule.modelAgentKind != null) {
+    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+      throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
   if ((schedule.executionMode ?? 'agent') !== 'script') {
     // 堵 update 逃逸:script 任务(prompt 合法为空)经 patch 只切 executionMode='agent'
     // 时,若不校验会落库空提示词的 agent 任务,触发即烧一轮空输入。checkAgentPrompt
@@ -106,6 +111,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
+    selection: Pick<Schedule, 'modelAgentKind'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -771,7 +777,7 @@ export class Scheduler extends EventEmitter {
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
-        await this.validateTargetSession?.(schedule.targetSessionId, 'fire');
+        await this.validateTargetSession?.(schedule.targetSessionId, 'fire', schedule);
       }
       const result = await this.runner.fire(schedule, {
         runId,
@@ -1081,7 +1087,7 @@ export class Scheduler extends EventEmitter {
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
-        await this.validateTargetSession?.(schedule.targetSessionId, 'fire');
+        await this.validateTargetSession?.(schedule.targetSessionId, 'fire', schedule);
       }
       const result = await this.runner.fire(schedule, {
         runId,
@@ -1323,7 +1329,7 @@ export class Scheduler extends EventEmitter {
     };
     validateScheduleExecutionShape(schedule);
     if (schedule.targetSessionId) {
-      await this.validateTargetSession?.(schedule.targetSessionId, 'create');
+      await this.validateTargetSession?.(schedule.targetSessionId, 'create', schedule);
     }
     const inserted = await this.storage.insert(schedule);
     this.activeSchedules.set(id, inserted);
@@ -1376,6 +1382,21 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    // 换引擎(agentKind 变了)时,上一引擎的 model / providerId / effort 是另一套模型
+    // 目录里的路由,对新引擎没有意义,patch 没显式给就丢弃(带 key 的 undefined →
+    // storage 清列 NULL),让任务回到新引擎的默认路由。否则陈旧路由会被原样带过去:
+    // fire 时路由守卫对「没有任何来源提供该模型」的组合放行,runner 再把绑定会话的
+    // 凭证/模型切到这条跑不通的路由上,每轮都以上游拒绝失败,会话 meta 也被写坏
+    // (伙伴接管期用 Codex 模型钉过的任务改回 Claude Code 后即复现)。
+    // 显式给了(含带 key 的 undefined)按调用方意图,不覆盖。fastMode 同属完整运行路由
+    // (harness + provider + model + effort + fastMode),旧引擎的 Fast 开关同样不该
+    // 潜伏到下一次切回 Codex/Pi 时复活(codex review),未显式给则关掉。
+    if (patch.agentKind !== undefined && patch.agentKind !== existing.agentKind) {
+      for (const key of ['model', 'providerId', 'effort'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(patch, key)) updates[key] = undefined;
+      }
+      if (!Object.prototype.hasOwnProperty.call(patch, 'fastMode')) updates.fastMode = false;
+    }
     const candidate: Schedule = { ...existing, ...updates };
     validateScheduleExecutionShape(
       candidate,
@@ -1386,7 +1407,7 @@ export class Scheduler extends EventEmitter {
       },
     );
     if (candidate.targetSessionId) {
-      await this.validateTargetSession?.(candidate.targetSessionId, 'update');
+      await this.validateTargetSession?.(candidate.targetSessionId, 'update', candidate);
     }
     // expired 是一次性任务已消费的终态。编辑后的配置若已经表达为“循环且非手动”，
     // 继续保留 expired 会让持久化状态与排期语义冲突：即使算出了 nextFireAt，任务也

@@ -124,3 +124,28 @@ describe('runtime-configs', () => {
     }
   });
 });
+
+it('uses only the selected independent Claude credentials for native spawn flags', async () => {
+  vi.resetModules();
+  const readAccount = vi.fn(() => ({ accessToken: 'work-token' }));
+  const readBuiltin = vi.fn(() => false);
+  vi.doMock('../active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
+    { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },
+  ] }) }));
+  vi.doMock('../subscription-account-auth.js', () => ({ readClaudeAccountOAuth: readAccount }));
+  vi.doMock('../claude-credentials-store.js', () => ({ hasClaudeAiOAuth: readBuiltin }));
+  try {
+    const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
+    const flags = buildDesktopClaudeRuntimeConfig(() => 'http://localhost').behaviorFlags;
+    if (typeof flags !== 'function') throw new Error('expected spawn flags');
+    expect(flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never))
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'auto' });
+    expect(readAccount).toHaveBeenCalledWith('claude-work');
+    expect(readBuiltin).not.toHaveBeenCalled();
+  } finally {
+    vi.doUnmock('../active-catalog.js');
+    vi.doUnmock('../subscription-account-auth.js');
+    vi.doUnmock('../claude-credentials-store.js');
+    vi.resetModules();
+  }
+});

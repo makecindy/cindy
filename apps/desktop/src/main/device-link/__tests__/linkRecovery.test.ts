@@ -37,6 +37,37 @@ describe('device-link closed link recovery', () => {
     expect(reopen.mock.invocationCallOrder[0]).toBeLessThan(invoke.mock.invocationCallOrder[1]);
   });
 
+  it('peer reset 的幂等读请求会 reopen 后只重试一次', async () => {
+    const peerReset = new DeviceLinkError('PEER_RESET', 'peer link reset');
+    peerReset.inFlight = true;
+    let invokeCount = 0;
+    const invoke = vi.fn(async () => {
+      invokeCount += 1;
+      if (invokeCount === 1) throw peerReset;
+      return { ok: true };
+    });
+    const reopen = vi.fn(async () => undefined);
+
+    await expect(invokeWithClosedLinkRecovery(invoke, reopen)).resolves.toEqual({ ok: true });
+    expect(reopen).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('第二次 peer reset 不会开启第二轮自动重试', async () => {
+    const firstReset = new DeviceLinkError('PEER_RESET', 'first peer reset');
+    firstReset.inFlight = true;
+    const secondReset = new DeviceLinkError('PEER_RESET', 'second peer reset');
+    secondReset.inFlight = true;
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(firstReset)
+      .mockRejectedValueOnce(secondReset);
+    const reopen = vi.fn(async () => undefined);
+
+    await expect(invokeWithClosedLinkRecovery(invoke, reopen)).rejects.toBe(secondReset);
+    expect(reopen).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('已发出的请求即使标成 LINK_NOT_OPEN 也不重试', async () => {
     const closed = new DeviceLinkError('LINK_NOT_OPEN', 'late close');
     closed.inFlight = true;

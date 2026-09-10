@@ -1,3 +1,4 @@
+import { isClaudeSubscriptionProviderId, readClaudeAccountOAuth } from './subscription-account-auth.js';
 /**
  * remote-claude-route —— 远端 Claude Code 会话的「路由 materialization」(host 侧)。
  *
@@ -58,7 +59,7 @@ export async function resolveRemoteClaudeRoute(opts: {
 
   // 内置 Anthropic 的 catalog route 是 oauth-passthrough(本地 cc 子进程自己带订阅 bearer)；
   // 远端没有这个 bearer 来源，必须由 host 读取 native OAuth token 后显式 materialize。
-  if (providerId === 'anthropic') return nativeAnthropicRoute();
+  if (providerId && isClaudeSubscriptionProviderId(providerId)) return nativeAnthropicRoute(providerId);
 
   // 显式选定供应商(非网关)→ 按其 RoutingDescriptor materialize。
   if (providerId && providerId !== 'xd') {
@@ -103,18 +104,19 @@ export async function resolveRemoteClaudeRoute(opts: {
 }
 
 /** 内置 Anthropic 订阅直连:endpoint 取运行时目录 anthropic 描述符 upstream,缺省隐式直连上游。 */
-function nativeAnthropicRoute(): RemoteClaudeRoute {
-  const oauth = getClaudeAiOAuthForSpawn();
+function nativeAnthropicRoute(providerId = 'anthropic'): RemoteClaudeRoute {
+  const oauth = providerId === 'anthropic' ? getClaudeAiOAuthForSpawn() : readClaudeAccountOAuth(providerId);
   if (!oauth?.accessToken) {
     throw new Error(
       '[REMOTE_NATIVE_OAUTH_UNAVAILABLE] Anthropic subscription is not connected on this desktop; connect Claude.ai or pick a gateway model for the remote session.',
     );
   }
-  const descriptor = getActiveCatalog().providers.find((p) => p.id === 'anthropic')?.routing[
+  const descriptor = getActiveCatalog().providers.find((p) => p.id === providerId)?.routing[
     REMOTE_AGENT
   ];
   const endpoint = descriptor?.upstream?.trim() || ANTHROPIC_DIRECT_UPSTREAM;
   const env = claudeOAuthSpawnEnv(oauth);
+  if (providerId !== 'anthropic') env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID = providerId;
   const customHeaders = descriptor?.headerOverride;
   if (customHeaders && Object.keys(customHeaders).length > 0) {
     env.ANTHROPIC_CUSTOM_HEADERS = serializeCustomHeaders(customHeaders);

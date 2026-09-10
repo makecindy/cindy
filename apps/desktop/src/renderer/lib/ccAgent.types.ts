@@ -197,6 +197,7 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
   botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
 
   /**

@@ -190,16 +190,20 @@ describe('XD 网关权威模型清单重建', () => {
       {
         id: 'openai/gpt-image-2',
         name: 'GPT Image 2',
+        mode: 'image_generation',
+        discoveredMetadata: { name: 'GPT Image 2', mode: 'image_generation', modalities: { input: ['text', 'image'], output: ['image'] } },
         modalities: { input: ['text', 'image'], output: ['image'] },
       },
     ]);
     expect(activeXd?.imageDefaults).toEqual({ standard: 'openai/gpt-image-2' });
-    expect(activeXd?.embeddingModels).toEqual([{ id: 'voyage/voyage-4', name: 'Voyage 4' }]);
+    expect(activeXd?.embeddingModels).toEqual([{ id: 'voyage/voyage-4', name: 'Voyage 4', mode: 'embedding', discoveredMetadata: { name: 'Voyage 4', mode: 'embedding' } }]);
     expect(activeXd?.embeddingDefaults).toEqual({ standard: 'voyage/voyage-4' });
     expect(activeXd?.videoModels).toEqual([
       {
         id: 'bytedance/seedance-2.5',
         name: 'Seedance 2.5',
+        mode: 'video_generation',
+        discoveredMetadata: { name: 'Seedance 2.5', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } },
         modalities: { input: ['text', 'image'], output: ['video'] },
       },
     ]);
@@ -629,6 +633,22 @@ describe('XD 网关权威模型清单重建', () => {
     ]);
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex').map((model) => model.id)).toEqual(['chat-model']);
+  });
+
+  it('keeps three declared working defaults separate from maximum capacity', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([{
+      id: 'context-policy-test', name: 'Context policy',
+      agents: ['claude-code', 'codex', 'pi'], contextWindow: 1_000_000,
+      efforts: [], perAgent: {
+        'claude-code': { contextWindow: 350_000 },
+        codex: { contextWindow: 450_000 },
+        pi: { contextWindow: 550_000, wireProtocol: 'openai-responses' },
+      },
+    }]);
+    for (const [agent, window] of [['claude-code', 350_000], ['codex', 450_000], ['pi', 550_000]] as const) {
+      expect(xdModels(agent)[0]).toMatchObject({ contextWindow: window, contextWindowMax: 1_000_000 });
+    }
   });
 
   it('perAgent Fast 差异保留，GPT 工作窗口采用保守默认', () => {

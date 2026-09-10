@@ -2,6 +2,7 @@ import {
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
+  INHERITED_CAPABILITY_SELECTION,
   appendAutoReviewUserIntent,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
@@ -2148,6 +2149,20 @@ describe('session-agent-switch handoff injection', () => {
     expect(intent).toContain('修复伙伴未读状态，不要部署。');
     expect(intent).toContain('修吧。');
     expect(intent).not.toContain('assistant handoff');
+  });
+
+  it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {
+    const { deps, session } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Internal continuation', undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: 'Continue',
+      [AUTO_REVIEW_USER_INTENT]: intent,
+      [INHERITED_CAPABILITY_SELECTION]: '$image-plugin',
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBe(intent);
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('Continue');
+    expect(opts[INHERITED_CAPABILITY_SELECTION]).toBe('$image-plugin');
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('invalidates old grants for oversized stamped input (deviceLink=%s)', async (deviceLink) => {

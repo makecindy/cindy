@@ -50,9 +50,9 @@ import {
   type RemoteMoney,
 } from '@/session/remoteMoney';
 import {
-  localizeToolLoopError,
+  localizeAgentError,
   parseMobileToolLoopErrorDetails,
-} from '@/session/toolLoopErrorI18n';
+} from '@/session/agentErrorI18n';
 import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type NormalizedRemoteMessageKind =
@@ -80,6 +80,7 @@ export interface NormalizedRemoteMessage {
   /** user Composer 的结构化语义引用；用于 fork / rewind 恢复同款 chip。 */
   agentReferences?: AgentInputReference[];
   secondaryBody?: string;
+  authorization?: Record<string, unknown>;
   systemCardData?: Record<string, unknown>;
   systemCardType?: MobileSystemCardType;
   attachments?: NormalizedAttachment[];
@@ -151,6 +152,7 @@ export interface NormalizedAttachment {
   uri?: string;
   path?: string;
   mimeType?: string;
+  sha256?: string;
   previewable: boolean;
 }
 
@@ -189,8 +191,13 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
 const toolResultPreviewByContent = new WeakMap<object, { language: string; preview: string }>();
 const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
-export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
-  const sorted = sortMessagesByCreatedAt(messages);
+export function normalizeRemoteMessages(
+  messages: readonly RemoteMessage[],
+  options: { preserveSourceOrder?: boolean } = {},
+): NormalizedRemoteMessage[] {
+  // History views already place live tails after their persisted prefix. A live
+  // row's provisional timestamp must not undo that order during normalization.
+  const sorted = options.preserveSourceOrder ? messages : sortMessagesByCreatedAt(messages);
   const toolResultPairing = buildMessageToolResultPairing(sorted, {
     contentToPreview: toolResultContentToPreview,
   });
@@ -199,6 +206,15 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
   for (const message of sorted) {
     if (message.role === 'tool_result') continue;
     if (message.role === 'assistant') {
+      const authorization = readRecord(message.agentMeta?.botAuthorization);
+      const snapshot = readRecord(authorization?.snapshot);
+      if (authorization?.v === 1 && authorization.sessionId === message.sessionId && snapshot?.kind === 'plugin_setup') {
+        result.push({ key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
+          label: 'authorization', body: typeof message.content === 'string' ? message.content : '', align: 'agent',
+          createdAt: message.createdAt, authorization: snapshot });
+        continue;
+      }
+
       const task = readBotCollaborationMeta(message.agentMeta?.botCollaboration);
       const direct = readBotDirectMessageMeta(message.agentMeta?.botDirectMessage);
       if (task?.role === 'delegation-request' || task?.role === 'interjection' || direct) {
@@ -285,7 +301,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
       const errText =
-        describeAgentAuthError(rawText) ?? localizeToolLoopError(c?.reason, toolLoop) ?? rawText;
+        describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop) ?? rawText;
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -603,6 +619,7 @@ function readImageAttachments(value: unknown): NormalizedAttachment[] {
     const base64 = readString(record.base64);
     const mimeType = readString(record.mimeType) ?? readString(record.type) ?? 'image/png';
     const name = readString(record.originalName) ?? readString(record.name) ?? `image-${index + 1}`;
+    const sha256 = readString(record.sha256);
     const uri = url ?? (base64 ? `data:${mimeType};base64,${base64}` : undefined);
     if (!uri) return [];
     return [{
@@ -610,6 +627,7 @@ function readImageAttachments(value: unknown): NormalizedAttachment[] {
       name,
       uri,
       mimeType,
+      ...(sha256 ? { sha256 } : {}),
       previewable: isPreviewableUri(uri),
     }];
   });

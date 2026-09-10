@@ -704,6 +704,112 @@ describe('running session recovery on slow links', () => {
     type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
   } };
 
+  it.each([
+    ['batch', 'queue'], ['batch', 'peer'], ['legacy', 'queue'], ['legacy', 'peer'],
+  ] as const)('restores %s streaming within 250ms after %s recovery without polling the snapshot while blocked', (mode, blocker) => {
+    const h = mkClient();
+    let blocked = true;
+    const canSendPush = vi.fn(() => blocker !== 'peer' || !blocked);
+    h.client.getReliableSendQueueDepth.mockImplementation(() => blocker === 'queue' && blocked ? 16 : 0);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', mode === 'batch'
+      ? capabilities : [CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1]);
+    let currentText = 'missing prefix';
+    const readSnapshot = vi.fn(() => ({ ...snapshot, event: {
+      ...snapshot.event, data: { ...snapshot.event.data, text: currentText },
+    } }));
+    setSessionTextSnapshotReader(readSnapshot);
+    __testing.forwardPush('maker:event', delta(currentText));
+    vi.advanceTimersByTime(WINDOW_MS);
+    currentText += ' plus latest text';
+    __testing.forwardPush('maker:event', delta(' plus latest text'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(logSpy.debug.mock.calls.filter(([line]) => line.startsWith('session sync repair queued'))).toHaveLength(1);
+    expect(logSpy.debug.mock.calls.some(([line]) => line.startsWith('session sync repair admitted'))).toBe(false);
+
+    blocked = false;
+    // Recovery must not depend on another token arriving: a thinking/tool gap
+    // after the last delta must still reveal the latest accumulated text.
+    vi.advanceTimersByTime(250);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    expect(h.sent[0].payload).toMatchObject({
+      resyncRequired: false, event: { data: { text: currentText, isFullText: true } },
+    });
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    __testing.forwardPush('maker:event', delta(' live again'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([
+      SESSION_SYNC_CHANNEL, mode === 'batch' ? MAKER_EVENT_BATCH_CHANNEL : 'maker:event',
+    ]);
+    vi.advanceTimersByTime(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    const repairLogs = logSpy.debug.mock.calls.map(([line]) => line).filter(line => line.startsWith('session sync repair'));
+    expect(repairLogs).toHaveLength(2);
+    expect(repairLogs[1]).toContain('resyncRequired=false');
+    expect(repairLogs.join('\n')).not.toContain(currentText);
+  });
+
+  it.each(['sync', 'async'] as const)('keeps failed snapshot admission paced at two seconds through the %s authorization path', async (authorization) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    if (authorization === 'async') setRemoteBotSessionLookup(async () => 'visible');
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    const readSnapshot = vi.fn(() => snapshot);
+    setSessionTextSnapshotReader(readSnapshot);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('missed'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'socket bytes full'); });
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'socket bytes full'); });
+    await vi.advanceTimersByTimeAsync(200);
+    // The repair flushes this later batch, which can re-arm the same timer.
+    // A failed admission must still keep the slower pacing in that case.
+    __testing.forwardPush('maker:event', delta('later suffix'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(h.sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not let a late failed admission delay a newer repair stage', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    const readSnapshot = vi.fn(() => snapshot);
+    setSessionTextSnapshotReader(readSnapshot);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('first'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('new stage'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+  });
+
   it('replays only the requested current block after old deltas and before new deltas', () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);

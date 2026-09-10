@@ -1393,6 +1393,7 @@ export function MainLayout() {
               onResetWidth={resetWidth}
               onOpenUpdateNotice={openNotice}
               onOpenVersionNotice={openVersionNotice}
+              onOpenStorage={() => navigate('/settings?tab=storage')}
               peekState={sidebarPeek.isPeekVisible ? sidebarPeek.peekState : null}
               peekDrawerProps={sidebarPeek.drawerProps}
             />

@@ -21,7 +21,6 @@ import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { extractIpcError } from '@/utils/ipcError';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { StorageManagementCard } from './StorageManagementCard';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
@@ -170,11 +169,6 @@ export function AboutSection() {
       </div>
 
       {/* 存储空间(媒体总仓占用 / 清理 / 体检) */}
-      <h3 className="mt-2 text-13 font-medium text-[var(--settings-section-title)]">
-        {t('settings.about.storage.title')}
-      </h3>
-      <StorageManagementCard />
-
       <SocialLinksPanel />
     </div>
   );

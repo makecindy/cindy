@@ -1,3 +1,4 @@
+import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 /**
  * SystemCard
  * ---------------------------------------------------------------------------
@@ -65,6 +66,7 @@ interface SystemCardProps {
     | 'bot-session-task-message'
     | 'bot-session-task'
     | 'bot-direct-message'
+    | 'bot-authorization'
     | 'context-rebuild';
   data?: Record<string, unknown>;
   /**
@@ -1344,6 +1346,8 @@ export function SystemCard({
       return <BotSessionTaskMessageTrace data={data} />;
     case 'bot-session-task':
       return <BotSessionTaskCard data={data} sessionId={sessionId} />;
+    case 'bot-authorization':
+      return <BotAuthorizationCardView data={data} sessionId={sessionId} />;
     case 'bot-direct-message':
       return <BotDirectMessageCard data={data} sessionId={sessionId} />;
     default:

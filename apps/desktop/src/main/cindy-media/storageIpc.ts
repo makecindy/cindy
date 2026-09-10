@@ -25,6 +25,7 @@ import * as blobStore from './blobStore';
 import * as ledger from './ledger';
 import * as recycler from './recycler';
 import * as legacyDeadDirs from './legacyDeadDirs';
+import type { FixedDirectoryStats } from './fixedDirectory';
 import type { LiveHashSources } from './recycler';
 
 const log = createLogger('cindy-media-storage-ipc');
@@ -51,6 +52,8 @@ export interface StorageIpcDeps {
   openChatAttachmentsDir?: () => Promise<boolean>;
   /** Delete only the active owner's staged attachment root; no ledger or message lookup. */
   clearChatAttachmentsDir?: () => Promise<void>;
+  getLegacyImagesDirStats?: () => Promise<FixedDirectoryStats>;
+  getChatAttachmentsDirStats?: () => Promise<FixedDirectoryStats>;
 }
 
 export interface StorageStatsResult {
@@ -58,6 +61,10 @@ export interface StorageStatsResult {
   error?: string;
   blobs: ledger.MediaStorageStats;
   legacy: { bytes: number; fileCount: number };
+  fixedCaches: {
+    legacyImages: FixedDirectoryStats;
+    chatAttachments: FixedDirectoryStats;
+  };
   deadDirs: legacyDeadDirs.DeadDirStatus[];
 }
 
@@ -195,21 +202,31 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
 
     async stats(): Promise<StorageStatsResult> {
       try {
-        const [blobs, deadDirs] = await Promise.all([
+        const [blobs, deadDirs, legacyImages, chatAttachments] = await Promise.all([
           ledger.getStorageStats(deps.db),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),
+          deps.getLegacyImagesDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
+          deps.getChatAttachmentsDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
         ]);
-        // The legacy root can contain many image sidecars. Do not walk it when the
-        // settings page mounts; users manage that fixed directory outside Cindy.
-        return { success: true, blobs, legacy: { bytes: 0, fileCount: 0 }, deadDirs };
+        return {
+          success: true,
+          blobs,
+          legacy: { bytes: 0, fileCount: 0 },
+          fixedCaches: { legacyImages, chatAttachments },
+          deadDirs,
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn('storage stats failed', { error: message });
         return {
           success: false,
-          error: message,
+          error: 'storage statistics unavailable',
           blobs: EMPTY_STATS,
           legacy: { bytes: 0, fileCount: 0 },
+          fixedCaches: {
+            legacyImages: { bytes: 0, fileCount: 0 },
+            chatAttachments: { bytes: 0, fileCount: 0 },
+          },
           deadDirs: [],
         };
       }

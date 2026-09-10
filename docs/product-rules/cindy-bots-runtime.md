@@ -135,9 +135,16 @@ harness + provider + model + effort + fastMode
 
 1. 伙伴家目录中的自有 / 后学 Skill；
 2. 用户在伙伴设置里明确授予的工具集或 MCP；
-3. 没有第 3 层：Cindy 全局 Skill、项目 Skill、harness 预装 Skill 和全局 MCP 不会被 Bot
-   默认继承，也不以目录、摘要或“可发现”提示进入 Bot 上下文。
+3. Cindy 已安装的插件、Skill、MCP 与内置工具可以按需发现并复用。默认不灌入全量
+   Skill、MCP schema 或插件花名册；伙伴通过轻量入口搜索，再引用需要的能力。
 
+- Skill / MCP / 工具集引用保存在各伙伴自己的 Profile，复用共享源的安装与连接；加入或移除
+  不修改共享源、凭证或全局开关。配置改变后在同一主任务下一轮重建能力快照，不要求新建任务。
+  插件经共享 `cindy` 网关按需发现和调用，仍执行已有账号、工作目录、启停和调用授权门禁；
+  内置工具集名单不得拿来过滤插件 ID。需要改写共享 Skill 时保存为伙伴自有 Skill。
+- 命令行和文件操作沿用普通任务权限；workspace 是默认目录，不是额外硬沙箱。伙伴启动的
+  后台任务继承发起时实际生效的权限档；权限切换在途时等待稳定，不能读取旧的宽权限。
+  已有连接的授权和限制继续由宿主执行，一次性操作批准不扩展到其它请求。
 - **提示词承诺必须等于工具面**。能力说明按实际挂载的工具集逐块注入（挂了 docs 才讲怎么
   做文档），且挂载必须真实生效：显式挂载 docs 工具集时，运行时把 `cindy_docs` 写进该伙伴
   的 MCP allowlist——不允许出现「提示词说有、运行时够不到」或反向的错位。
@@ -248,8 +255,9 @@ Session 任务遵守同一套机制与呈现契约：
 - canonical Session 能反查唯一 Bot；后台任务能反查发起任务，彼此上下文隔离。
 - 压缩或异常恢复前后使用同一个 `<bot home>/workspace/`；不同 owner / Bot 的 Home 不串用。
 - 关闭全局 Maker Memory 后 Bot Memory 仍可读写；全局列举与清空不包含 Bot Memory。
-- 新伙伴不继承或发现全局 / 项目 / harness Skill；Bot-own Skill 始终可用，显式外部能力按
-  allowlist 挂载，普通 Bot 无 Orca / harness subagent 入口。
+- 新伙伴不默认加载全量 Skill / MCP，但能按需发现并加入已有能力；Bot-own Skill 始终可用。
+  伙伴可发现、调用用户已有插件，保留实时授权限制；普通 Bot 无 Orca / harness subagent 入口。
+- 后台任务承接 ask / auto / bypassPermissions 三档，权限变更中不读旧值；既有计划快照可恢复。
 - 伙伴会话的上下文里没有项目 / 全局 AGENTS.md、CLAUDE.md 与 Cindy 产品提示词。
 - `start_session_task` 能：任务卡实时更新到终态、挂起交互回到伙伴代答、完成信号对用户不可见、
   父任务异常恢复后仍投递到当前主任务；check / message / stop 都只能控制它创建的 Session 任务。

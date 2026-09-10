@@ -61,6 +61,13 @@ export const MODEL_NATIVE_APIS = [
   "openai-responses",
   "openai-completions",
   "google-generative-ai",
+  "openai-images",
+  "openai-videos",
+  "xai-videos",
+  "openai-audio-speech",
+  "openai-audio-transcriptions",
+  "openai-realtime",
+  "openai-embeddings",
 ] as const;
 export type ModelNativeApi = (typeof MODEL_NATIVE_APIS)[number];
 export const MODEL_REGISTRY_STATUSES = [
@@ -149,10 +156,10 @@ export interface ModelRegistryAgentOverride extends Omit<
   defaultEffort?: ModelEffort | null;
 }
 
-export interface ModelRegistryEntry extends Omit<
-  ModelRegistryEntryBase,
-  "defaultEffort" | "perAgent"
-> {
+export interface ModelRegistryEntry
+  extends
+    Pick<ModelMetadata, "mode" | "modalities" | "officialDocs">,
+    Omit<ModelRegistryEntryBase, "defaultEffort" | "perAgent"> {
   /** V4 entry-level image capability default. */
   supportsImageInput?: boolean;
   /** V4 only: null explicitly clears an inherited default. */

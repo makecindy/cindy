@@ -1,3 +1,4 @@
+import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
 import { getRoutineEngine, disconnectRoutineSource } from '../routines/service.js';
@@ -1011,6 +1012,7 @@ export function suspendCindyAccountGhosts(): void {
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   cancelActiveGhostOauthFlow();
+  await getBotAuthorizationService()?.dispose();
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
@@ -4061,6 +4063,7 @@ const GHOST_ASPECT_TO_GATEWAY_SIZE: Record<GhostImageAspectRatio, string> = {
  * size 枚举的翻译在适配层完成(通道各家 wire 不同,意图翻译是通道自己的知识)。
  * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
  */
+const registeredCodexImageAccounts = new Set<string>();
 let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
 function getImageChannelRegistry(): ImageChannelRegistry {
   if (!imageChannelRegistrySingleton) {
@@ -4204,6 +4207,19 @@ function getImageChannelRegistry(): ImageChannelRegistry {
           : codexImagesClient.editImage(params),
     });
     imageChannelRegistrySingleton = registry;
+  }
+  for (const provider of getActiveCatalog().providers) {
+    if (provider.auth.native !== 'codex' || registeredCodexImageAccounts.has(provider.id)) continue;
+    const providerId = provider.id;
+    imageChannelRegistrySingleton.register(providerId, createCodexImageChannel({
+      providerId,
+      hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
+      getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
+      onAuthFailure: async (failure) => { await getCodexImageAuthBinding().onAuthFailure(failure, providerId); },
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
+    }));
+    registeredCodexImageAccounts.add(providerId);
   }
   return imageChannelRegistrySingleton;
 }
@@ -4974,6 +4990,9 @@ export async function executeGhostSetupAction(args: {
   ghostId: string;
   action: GhostSetupAllowedAction;
   responseTarget?: GhostSetupInteractionResponseTarget;
+  onAuthorizationUrl?: (url: string) => void;
+  assertCurrent?: () => void;
+  beforeCommit?: () => Promise<void>;
 }): Promise<GhostSetupActionResult> {
   const ghost = findAvailableGhost(args.ghostId);
   if (!ghost) {
@@ -5010,9 +5029,7 @@ export async function executeGhostSetupAction(args: {
       args.ghostId,
       secretKey,
       decl,
-      runtimeManifest.network?.hosts?.length
-        ? { deliveryHosts: runtimeManifest.network.hosts }
-        : undefined,
+      { deliveryHosts: runtimeManifest.network?.hosts, onAuthorizationUrl: args.onAuthorizationUrl, assertCurrent: args.assertCurrent, beforeCommit: args.beforeCommit },
     );
     return connected.ok
       ? { ok: true }

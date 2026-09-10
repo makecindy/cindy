@@ -445,14 +445,20 @@ export interface ForkSdkSessionOptions {
   upToMessageId: string | undefined;
   /**
    * Fork 后从新 session 尾部移除多少个完整 turn。
-   * Codex 精确 fork 使用 thread/rollback 实现；Claude 路径不消费此字段。
+   * Codex 旧 daemon 使用 thread/rollback；分页 daemon 先查询原生边界。
+   * Claude 路径不消费此字段。
    */
   tailTurnsToDrop?: number;
   /**
    * Codex only: provider-native turn boundary for a direct thread/fork.
-   * Old messages omit it and keep using tailTurnsToDrop + rollback.
+   * Old/failed messages can resolve it through native turn metadata instead.
    */
   lastTurnId?: string;
+  /**
+   * Codex only: timestamp of the last copied event in the requested native turn.
+   * Used to resolve old/failed history without counting soft-deleted UI retries.
+   */
+  forkAtTimestampMs?: number;
   /** 新 session title (可选, 仅给 SDK 写入 jsonl 头)。 */
   title?: string;
   /** workingDir — 用于定位 Claude SDK project JSONL 并修复 fork 后的 uuid 引用。 */
