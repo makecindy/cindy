@@ -8,7 +8,7 @@ import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelR
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { getCustomProvider, listCustomProviders } from '../../maker-host/custom-provider-store.js';
+import { createCustomProvider, getCustomProvider, listCustomProviders } from '../../maker-host/custom-provider-store.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
   beginProviderRouteMutation,
@@ -3845,6 +3845,21 @@ describe('model context limit IPC', () => {
 
 
 describe('provider connection management', () => {
+  it('stores managed Ollama rename with its configuration and drops it when deleting and readding', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = { ...validConfig, id: 'cindy-local-ollama', name: 'Ollama' };
+    await createCustomProvider(config);
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, { providerId: config.id, action: 'rename', name: 'My local models', dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect((await getCustomProvider(config.id))?.name).toBe('My local models');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id);
+    await createCustomProvider(config);
+    expect((await getCustomProvider(config.id))?.name).toBe('Ollama');
+  });
   it('renames only the stored name and preserves runtimes, models and credentials', async () => {
     mountDb();
     const harness = new IpcHarness();

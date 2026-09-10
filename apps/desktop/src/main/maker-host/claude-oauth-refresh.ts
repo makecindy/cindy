@@ -752,7 +752,7 @@ export async function disconnectClaudeAiOAuth(): Promise<void> {
 /** Reattach the existing native login; never write or remove system credentials. */
 export function reconnectClaudeAiOAuth(): boolean {
   const oauth = readClaudeAiOAuthUnbound();
-  if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth))) return false;
+  if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth), { explicitReconnect: true })) return false;
   invalidateClaudeOAuthRefresh();
   bindNativeProviderAuth('anthropic', { sharedSystem: true });
   // Binding commits login synchronously; auxiliary disk contention must not keep Cancel open.

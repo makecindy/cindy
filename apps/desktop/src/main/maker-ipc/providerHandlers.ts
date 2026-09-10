@@ -1172,7 +1172,7 @@ export function registerProviderHandlers(
       throwIpcError('INVALID_PARAMS', 'Provider does not support presentation overrides');
     }
     if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
-      if (provider.source === 'builtin' || provider.id === MANAGED_OLLAMA_PROVIDER_ID) {
+      if (provider.source === 'builtin') {
         await setProviderPresentation(providerId, { name: value.name });
       } else {
         const id = storedCustomProviderId(providerId);

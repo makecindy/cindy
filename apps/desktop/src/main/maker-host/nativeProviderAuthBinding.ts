@@ -114,6 +114,7 @@ type BindingRead =
   | { ok: true; bindings: BindingFile }
   /** 文件本身读不出来 / 根不是对象：整份归属都无从判断，没有可挽救的部分。 */
   | { ok: false; reason: 'unreadable' }
+  | { ok: false; reason: 'badDigests'; bindings: BindingFile }
   /** 根有效、各 provider 归属可信，只有 revoked 这个字段被改坏。 */
   | { ok: false; reason: 'badRevoked'; bindings: Omit<BindingFile, 'revoked'> };
 
@@ -178,10 +179,17 @@ function readBindingsOrFail(): BindingRead {
     // 误认领口子(PR #548 review)。
     const revoked = (value as { revoked?: unknown }).revoked;
     const digests = (value as BindingFile).rejectedCredentialDigests;
-    if (digests !== undefined && (
+    const badDigests = digests !== undefined && (
       !digests || typeof digests !== 'object' || Array.isArray(digests) ||
       Object.values(digests).some(digest => typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest))
-    )) return { ok: false, reason: 'unreadable' };
+    );
+    if (badDigests) {
+      // Explicit repair preserves valid rejection evidence and unrelated owner metadata.
+      (value as BindingFile).rejectedCredentialDigests = Object.fromEntries(
+        Object.entries(digests && typeof digests === 'object' && !Array.isArray(digests) ? digests : {})
+          .filter(([, digest]) => typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest)),
+      );
+    }
     if (
       revoked !== undefined &&
       (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))
@@ -190,7 +198,9 @@ function readBindingsOrFail(): BindingRead {
       delete rest.revoked;
       return { ok: false, reason: 'badRevoked', bindings: rest };
     }
-    return { ok: true, bindings: value as BindingFile };
+    return badDigests
+      ? { ok: false, reason: 'badDigests', bindings: value as BindingFile }
+      : { ok: true, bindings: value as BindingFile };
   } catch {
     return { ok: false, reason: 'unreadable' };
   }
@@ -478,10 +488,14 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 }
 
 /** Unreadable binding state cannot prove that reusing a native credential is safe. */
-export function isNativeProviderCredentialRejected(provider: NativeProviderId, digest: string): boolean {
+export function isNativeProviderCredentialRejected(provider: NativeProviderId, digest: string, opts?: { explicitReconnect: true }): boolean {
   if (rejectedCredentialFallback.get(`${bindingPath()}:${provider}`) === digest) return true;
   const read = readBindingsOrFail();
-  return !read.ok || read.bindings.rejectedCredentialDigests?.[provider] === digest;
+  if (!read.ok && !opts?.explicitReconnect) return true;
+  // An explicit reconnect can reach bindNativeProviderAuth's conservative repair path.
+  return read.ok || read.reason !== 'unreadable'
+    ? read.bindings.rejectedCredentialDigests?.[provider] === digest
+    : false;
 }
 
 /** Bind newly completed native OAuth to the current data owner. */
@@ -493,7 +507,7 @@ export function bindNativeProviderAuth(
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
   const written = withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
-    if (read.ok) {
+    if (read.ok || read.reason === 'badDigests') {
       const bindings = read.bindings;
       const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
       if (opts?.sharedSystem) sharedSystemCredential[provider] = owner;

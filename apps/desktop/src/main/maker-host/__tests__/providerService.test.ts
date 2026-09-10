@@ -9,6 +9,18 @@ import { createProviderService } from '../provider-service.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('uses managed provider configuration names instead of stale presentation overrides', async () => {
+    const provider = buildUserProvider({
+      id: 'cindy-local-ollama', name: 'Ollama', auth: { method: 'none' },
+      runtimes: { codex: { baseUrl: 'http://localhost:11434/v1', models: [] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: () => ({ name: 'Deleted name', removed: true }),
+    });
+    expect((await svc.listProviders())[0]).toMatchObject({ id: 'cindy-local-ollama', name: 'Ollama' });
+  });
   it('keeps authenticated accounts visible despite a stale removal preference', async () => {
     let connected = true;
     const svc = createProviderService({
