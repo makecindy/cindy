@@ -358,6 +358,61 @@ describe('desktop MCP approval policy', () => {
     );
   });
 
+  it('auto-approves first-party Cindy Art media ghost_call tools without prompting', () => {
+    for (const tool of ['gen_image', 'edit_image', 'gen_video', 'edit_video']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy',
+          toolName: 'ghost_call',
+          toolParams: { ghost_id: 'cindy-art', tool, args: { prompt: 'a cat' } },
+        }),
+        `${tool} should be auto-approved`,
+      ).toBe('auto-approve');
+    }
+
+    // Codex elicitation 可能省略外层 toolName，仍按内层 ghost_id / tool 判定。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolParams: { ghost_id: 'cindy-art', tool: 'gen_image', args: { prompt: 'a cat' } },
+      }),
+    ).toBe('auto-approve');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: JSON.stringify({
+          ghost_id: 'cindy-art',
+          tool: 'gen_image',
+          args: { prompt: 'a cat' },
+        }),
+      }),
+    ).toBe('auto-approve');
+
+    // 其它插件、未知工具、缺内层身份仍 fail closed。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { ghost_id: 'google-gmail', tool: 'gmail', args: { action: 'send' } },
+      }),
+    ).toBe('prompt');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { ghost_id: 'cindy-art', tool: 'unknown_tool' },
+      }),
+    ).toBe('prompt');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { tool: 'gen_image' },
+      }),
+    ).toBe('prompt');
+  });
+
   it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {
     // 回归锚点: cindy_browser 的真实动作全部走 call_tool。Claude 侧过去只静态放行
     // list_tools, 于是每次 navigate / snapshot / click 都弹一次窗。
