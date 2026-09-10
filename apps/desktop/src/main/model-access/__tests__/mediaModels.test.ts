@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
 const listProviderMediaModelsMock = vi.hoisted(() => vi.fn());
-const isCatalogMediaModelVisibleMock = vi.hoisted(() => vi.fn(() => true));
+const isCatalogMediaModelVisibleMock = vi.hoisted(() =>
+  vi.fn((_providerId: string, _modelId: string, _defaultEnabled?: boolean) => true),
+);
 
 vi.mock('../../serverApiClient.js', () => ({
   serverApiFetch: serverApiFetchMock,
@@ -156,7 +158,8 @@ describe('listAvailableMediaModels', () => {
 
   it('Gateway 图像型号尊重设置页显示开关', async () => {
     isCatalogMediaModelVisibleMock.mockImplementation(
-      (_providerId: string, modelId: string) => modelId !== 'image-without-guide',
+      (_providerId: string, modelId: string, _defaultEnabled?: boolean) =>
+        modelId !== 'image-without-guide',
     );
     await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
       { id: 'image-with-guide' },
