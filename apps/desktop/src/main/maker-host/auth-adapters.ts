@@ -786,6 +786,7 @@ type PendingCodexLogin = {
 };
 
 type CodexDisconnectIntent = {
+  ownerScopeKey: string;
   /** 显式 logout / 用户取消是单调升级意图；后到的 server invalidation 不能把它降级。 */
   explicitRequested: boolean;
   /** 当前磁盘 marker 已足以抑制残留 local auth；unlink 失败时仍可继续安全收口。 */
@@ -2203,6 +2204,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }): Promise<void> {
     const explicitRequested = !opts?.preserveInvalidatedReason;
     if (this.logoutOperation) {
+      if (this.logoutIntent && !this.isCodexDisconnectCurrent(this.logoutIntent)) {
+        const requestedOwner = activeOwnerScopeKey();
+        // 新 owner 的显式断开不能合并进旧 owner 的操作，也不能假报成功。
+        return this.logoutOperation.catch(() => undefined).then(() => {
+          if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === requestedOwner) return this.logout(opts);
+        });
+      }
       // 登录可能在第一次 logout 之后排队、等待同一个 barrier。后来的 logout 仍代表更新的
       // 用户意图，必须把这份 queued login 标成 cancelled，不能只复用旧 Promise 后让它启动。
       this.cancelLogin();
@@ -2250,6 +2258,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return this.logoutOperation;
     }
     const intent: CodexDisconnectIntent = {
+      ownerScopeKey: activeOwnerScopeKey(),
       explicitRequested,
       invalidationMarkerCommitted: opts?.invalidationMarkerCommitted === true,
       explicitBoundaryCommitted: false,
@@ -2272,6 +2281,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private async runLogout(intent: CodexDisconnectIntent): Promise<void> {
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     this.ensureInvalidationMarkerLoaded();
     // 登出与在途登录串行：先取消并等它完全收口，防迟到的 auth.json 在登出后复活账号。
     const pendingLogin = this.pendingLogin?.promise;
@@ -2279,15 +2289,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.cancelLogin();
       await pendingLogin.catch(() => undefined);
     }
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     await this.disconnectCodexOAuth(intent);
   }
 
   private async runDevReadOnlyLogout(intent: CodexDisconnectIntent): Promise<void> {
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     const pendingLogin = this.pendingLogin?.promise;
     if (pendingLogin) {
       this.cancelLogin();
       await pendingLogin.catch(() => undefined);
     }
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     this.devReadOnlyDetached = true;
     this.suppressSystemCodexReconcile = true;
     if (intent.explicitRequested) {
@@ -2308,6 +2321,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         });
       }
     }
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     intent.acceptingIntent = false;
     if (intent.explicitRequested) {
       this.commitExplicitCodexDisconnectBoundary(intent);
@@ -2321,7 +2335,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     log.info('dev read-only Codex auth detached in memory; durable credentials unchanged');
   }
 
+  private isCodexDisconnectCurrent(intent: CodexDisconnectIntent): boolean {
+    return !isAppSessionBoundaryPending() && intent.ownerScopeKey === activeOwnerScopeKey();
+  }
+
   private commitExplicitCodexDisconnectBoundary(intent: CodexDisconnectIntent): boolean {
+    if (!this.isCodexDisconnectCurrent(intent)) return false;
     if (!intent.explicitRequested || intent.explicitBoundaryCommitted) return false;
     const persisted = writeInvalidatedSystemCodexAuthMarker(
       this.codexHome,
@@ -2349,12 +2368,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private async disconnectCodexOAuth(intent?: CodexDisconnectIntent): Promise<void> {
     const activeIntent: CodexDisconnectIntent = intent ?? {
+      ownerScopeKey: activeOwnerScopeKey(),
       explicitRequested: true,
       invalidationMarkerCommitted: false,
       explicitBoundaryCommitted: false,
       acceptingIntent: true,
       devReadOnly: false,
     };
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
     try {
@@ -2376,6 +2397,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         },
       );
     }
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     // ⚠️ 不删 sessions/ —— 历史上这里会 `rm -rf sessions/` 清空所有 thread 的 rollout
     // .jsonl(那是 resume 功能还不存在的年代留下的"登出即清本地状态"清理)。后来加了
     // 「从磁盘 rollout 续聊」(CodexAgent thread/resume) 和外部会话导入,xdt-maker 的会话
@@ -2396,7 +2418,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // models_cache.json 没有账号 ID，必须与 auth 边界一起失效。先 dispose host 再删，
     // 降低 Windows 文件锁概率；删失败仍由 disconnect marker + 内存快照清空保证 fail-closed，
     // 下次登录前会再次清理并在锁未释放时拒绝继续。
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     await removeDesktopCodexModelsCache(this.codexHome);
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     // invalidation 可能在显式 logout 进行中改写 marker；结束前再提交一次显式边界，保证
     // 后到的用户意图永久胜出。该 helper 无 await，因此这里之后不会再接受竞态升级。
     activeIntent.acceptingIntent = false;

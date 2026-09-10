@@ -207,6 +207,59 @@ afterEach(() => {
 });
 
 describe('Codex system credential suppression marker', () => {
+  it.each(['pending-login', 'host-cleanup', 'cache-cleanup', 'owner-generation', 'new-owner-logout'])(
+    'does not revoke a replacement owner binding after %s yields', async (phase) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-logout-owner-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      vi.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'empty-home'));
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      const localAuth = path.join(codexHome, 'auth.json');
+      const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'fixture-token' } }));
+      fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-a' }));
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      const gate = deferred();
+      const entered = deferred();
+      if (phase === 'pending-login') {
+        Object.defineProperty(adapter, 'pendingLogin', { value: { promise: gate.promise, cancelled: false } });
+        vi.spyOn(adapter, 'cancelLogin').mockImplementation(() => entered.resolve());
+      } else if (phase === 'cache-cleanup') {
+        const remove = fs.promises.rm.bind(fs.promises);
+        vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
+          await remove(target, options);
+          if (String(target) === path.join(codexHome, 'models_cache.json')) {
+            entered.resolve();
+            await gate.promise;
+          }
+        });
+      } else {
+        adapter.setOnLogoutSuccess(() => { entered.resolve(); return gate.promise; });
+      }
+      const logout = adapter.logout();
+      await entered.promise;
+      h.dataOwnerId = phase === 'owner-generation' ? 'owner-a' : 'owner-b';
+      h.sessionGeneration += 1;
+      const replacement = JSON.stringify({ openai: h.dataOwnerId, selfAuthorized: { openai: h.dataOwnerId } });
+      fs.writeFileSync(bindingFile, replacement);
+      const nextLogout = phase === 'new-owner-logout' ? adapter.logout() : null;
+      gate.resolve();
+      await logout;
+      if (nextLogout) {
+        await nextLogout;
+        expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({ revoked: { openai: h.dataOwnerId } });
+        expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8')).openai).toBeUndefined();
+      } else {
+        expect(fs.readFileSync(bindingFile, 'utf8')).toBe(replacement);
+      }
+      expect(JSON.parse(fs.readFileSync(localAuth, 'utf8')).tokens.access_token).toBe('fixture-token');
+      if (phase === 'pending-login') expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    },
+  );
+
   it('qualifies the Windows ACL principal when the machine and user names can collide', async () => {
     const { resolveWindowsAclPrincipal } = await import('../auth-adapters.js');
 

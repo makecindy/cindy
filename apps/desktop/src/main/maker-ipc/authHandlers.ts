@@ -8,7 +8,7 @@
 import type { AgentKind, AgentLoginMode, AuthState, Maker } from '@cindy/maker-core';
 
 import { optionalEnum, requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
-import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -526,7 +526,9 @@ export function registerMakerAuthHandlers(
     if (activeOperation) activeOperation.acceptingOwners = false;
     clearOwnersForKind(kind);
     const generation = beginMutation(kind);
-    const isCurrent = (): boolean => isMutationCurrent(kind, generation);
+    const capturedOwner = activeOwnerScopeKey();
+    const isCurrent = (): boolean => isMutationCurrent(kind, generation)
+      && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === capturedOwner;
     const finalization = (async (): Promise<void> => {
       try {
         await maker.logoutAgent(kind);

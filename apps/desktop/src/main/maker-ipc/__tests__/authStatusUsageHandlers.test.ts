@@ -7,12 +7,35 @@ import { registerMakerUsageHandlers, toLegacyUsdModelPricing } from '../usageHan
 import { CodexRateLimitResetRejectedError } from '../../usage/codexRateLimitReset';
 import { IpcHarness } from './helpers/ipcHarness';
 import { zeroUsageMoney } from '../../../shared/regionalMoney';
+import * as appSessionState from '../../appSessionState';
 
 function createMakerStub(methods: Partial<Maker>): Maker {
   return methods as Maker;
 }
 
 describe('maker auth IPC handlers', () => {
+  it.each(['logout', 'auth-change'])('does not broadcast an old owner logout after %s yields', async (phase) => {
+    const owner = vi.spyOn(appSessionState, 'activeOwnerScopeKey').mockReturnValue('owner-a:1');
+    try {
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => { finish = resolve; });
+      const harness = new IpcHarness();
+      const broadcast = vi.fn();
+      const logoutAgent = vi.fn(() => phase === 'logout' ? gate : Promise.resolve());
+      const onCodexAuthChange = vi.fn(() => phase === 'auth-change' ? gate : Promise.resolve());
+      registerMakerAuthHandlers(harness, createMakerStub({ logoutAgent }), broadcast, () => null, onCodexAuthChange);
+      const result = harness.invoke(MAKER_INVOKE.AUTH_LOGOUT, 'codex');
+      await vi.waitFor(() => expect(phase === 'logout' ? logoutAgent : onCodexAuthChange).toHaveBeenCalledOnce());
+      owner.mockReturnValue('owner-b:2');
+      finish();
+      await result;
+      expect(broadcast).not.toHaveBeenCalled();
+      if (phase === 'logout') expect(onCodexAuthChange).not.toHaveBeenCalled();
+    } finally {
+      owner.mockRestore();
+    }
+  });
+
   it('rejects a stale owner before disconnecting any account', async () => {
     const harness = new IpcHarness();
     const logoutAgent = vi.fn();
