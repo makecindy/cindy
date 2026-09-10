@@ -979,6 +979,8 @@ export async function forkSessionAtMessage(
         totalCostUsd: 0,
         contextTokens: forkContextTokens,
         contextWindow: forkContextWindow,
+        contextWindowRuntime: forkContextWindow > 0 && source.contextWindowRuntime === forkContextWindow
+          ? forkContextWindow : null,
         fastMode: forkSource.agentKind === source.agentKind ? source.fastMode : false,
         clearedAt: null,
         pinnedAt: null,
