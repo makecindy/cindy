@@ -18,6 +18,7 @@ import {
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 import { listProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
+import { isCatalogMediaModelVisible } from '../cindy-brain/mediaDisplayVisibility.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 
@@ -232,7 +233,15 @@ export async function listAvailableMediaModels(
       await fetchGatewayMediaModels(),
       capability,
       readModelDisableOverrides(),
-    ).map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
+    )
+      .filter((model) =>
+        isCatalogMediaModelVisible(
+          CINDY_AI_PROVIDER_ID,
+          model.id,
+          'defaultEnabled' in model ? model.defaultEnabled : undefined,
+        ),
+      )
+      .map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
     return mergeMediaModels(gatewayModels, providerModels);
   } catch (error) {
     if (providerModels.length > 0) return providerModels;

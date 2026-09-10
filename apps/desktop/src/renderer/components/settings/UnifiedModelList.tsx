@@ -792,8 +792,18 @@ export function UnifiedModelList({
       !isRowPaymentRequired(row) &&
       !rowDisabledEffective(row),
   );
+  const userProvider = provider.source === 'user';
+  const writableRows = selectableRows.filter((row) =>
+    canWriteModelVisibility({
+      connected: provider.connected,
+      suspended: provider.suspended,
+      mediaRow: isCapabilityRow(row, userProvider) && rowHasVisibilitySwitch(row, userProvider),
+      mediaReady: rowState(row).canSelect,
+    }),
+  );
+  const visibilityWriteAvailable = writableRows.length > 0;
   // Saved preferences survive disconnection; the count and switches show effective selection.
-  const selectedCount = selectableRows.filter((row) => rowState(row).selected).length;
+  const selectedCount = writableRows.filter((row) => rowState(row).selected).length;
   const refreshLabel = refreshing
     ? t('settings.providers.models.refreshingAria')
     : (refreshIdleLabel ?? t('settings.providers.models.refreshAria'));
@@ -827,11 +837,11 @@ export function UnifiedModelList({
   // Separate commands have stable meanings even when the selection is mixed. Adding all
   // models skips already selected rows, preserving every explicit advanced harness choice.
   const handleBulk = async (action: 'show' | 'hide' | 'reset') => {
-    if (!selectionAvailable) return;
+    if (!visibilityWriteAvailable) return;
     const next = action === 'show';
     const rows = next
-      ? selectableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
-      : selectableRows;
+      ? writableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
+      : writableRows;
     const targets = rows.flatMap((row) => modelVisibilityTargets(provider, row, next));
     const success =
       action === 'reset'
@@ -1085,19 +1095,19 @@ export function UnifiedModelList({
                     {t('settings.providers.models.manage.selection')}
                   </DropdownMenuLabel>
                   <DropdownMenuItem
-                    disabled={!selectionAvailable || selectedCount === selectableRows.length}
+                    disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
                     onSelect={() => handleBulk('show')}
                   >
                     {t('settings.providers.models.manage.showAll')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    disabled={!selectionAvailable || selectedCount === 0}
+                    disabled={!visibilityWriteAvailable || selectedCount === 0}
                     onSelect={() => handleBulk('hide')}
                   >
                     {t('settings.providers.models.manage.hideAll')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    disabled={!selectionAvailable || selectableRows.length === 0}
+                    disabled={!visibilityWriteAvailable}
                     onSelect={() => handleBulk('reset')}
                   >
                     {t('settings.providers.models.manage.reset')}

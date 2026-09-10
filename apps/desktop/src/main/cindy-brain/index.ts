@@ -381,14 +381,13 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
-  isModelVisible,
   isProviderDisabled,
   type MediaCapability,
   xaiApiOfficialRuntimeAgents,
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
-import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirror.js';
+import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
@@ -3450,25 +3449,6 @@ function isXdMediaModelExecutableForCatalog(
  * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
  * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
  */
-function isCatalogMediaModelVisible(
-  providerId: string,
-  modelId: string,
-  defaultEnabled?: boolean,
-): boolean {
-  try {
-    const provider = getActiveCatalog().providers.find((item) => item.id === providerId);
-    const agent = provider?.agents[0] ?? 'claude-code';
-    return isModelVisible(
-      getModelVisibilityOverride(agent, providerId, modelId),
-      defaultEnabled,
-    );
-  } catch {
-    // Mirror not ready or owner boundary: fail closed so hidden models cannot
-    // leak into Art / cindy-request while renderer preferences are still syncing.
-    return false;
-  }
-}
-
 function getCatalogMediaConfig(
   kind: CindyCapabilityKind,
   action?: LegacyCindyMediaAction,
@@ -3627,6 +3607,12 @@ function getMediaPreferenceConfig(
       getXdGatewayModels(),
       coreCapability,
       readModelDisableOverrides(),
+    ).filter((model) =>
+      isCatalogMediaModelVisible(
+        'xd',
+        model.id,
+        'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      ),
     ),
     kind,
     (model) => isMediaModelExecutable(model.id, coreCapability),

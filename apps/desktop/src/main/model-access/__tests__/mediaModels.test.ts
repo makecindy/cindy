@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
 const listProviderMediaModelsMock = vi.hoisted(() => vi.fn());
+const isCatalogMediaModelVisibleMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock('../../serverApiClient.js', () => ({
   serverApiFetch: serverApiFetchMock,
@@ -24,6 +25,9 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../cindy-media/providerMediaRuntime.js', () => ({
   listProviderMediaModels: listProviderMediaModelsMock,
+}));
+vi.mock('../../cindy-brain/mediaDisplayVisibility.js', () => ({
+  isCatalogMediaModelVisible: isCatalogMediaModelVisibleMock,
 }));
 
 import {
@@ -88,6 +92,7 @@ describe('listAvailableMediaModels', () => {
     serverApiFetchMock.mockReset().mockResolvedValue(payload);
     readModelDisableOverridesMock.mockReset().mockReturnValue({});
     listProviderMediaModelsMock.mockReset().mockReturnValue([]);
+    isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
   });
 
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
@@ -147,6 +152,15 @@ describe('listAvailableMediaModels', () => {
     await expect(listAvailableMediaModels('image.edit')).resolves.toContainEqual(
       expect.objectContaining({ id: 'xai/grok-imagine-image', providerId: 'xai' }),
     );
+  });
+
+  it('Gateway 图像型号尊重设置页显示开关', async () => {
+    isCatalogMediaModelVisibleMock.mockImplementation(
+      (_providerId: string, modelId: string) => modelId !== 'image-without-guide',
+    );
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide' },
+    ]);
   });
 
   it('叠加客户端现有 XD provider/model 停用准入', async () => {
