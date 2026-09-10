@@ -1,5 +1,6 @@
 import type { ConfigFile } from '../types.js';
 import { createClaudeCodeAdapter } from './claude-code.js';
+import { createCodexAdapter } from './codex.js';
 import type { AgentAdapter } from './types.js';
 
 /**
@@ -16,6 +17,12 @@ export function makeAdapter(config: ConfigFile): AgentAdapter {
         command: config.agent_options?.command,
       });
     case 'codex':
+      return createCodexAdapter({
+        model: config.agent_options?.model,
+        timeoutSeconds: config.agent_options?.timeout,
+        refreshTimeoutSeconds: config.agent_options?.refreshTimeout,
+        command: config.agent_options?.command,
+      });
     case 'custom':
       throw new Error(`agent "${config.agent}" is not implemented in MVP. Use "claude-code".`);
   }

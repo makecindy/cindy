@@ -185,6 +185,7 @@ export async function runUpdate(options: UpdateOptions = {}): Promise<UpdateResu
       try {
         const fullOld = fs.readFileSync(filePath, 'utf8');
         const newBody = await adapter.rewriteKnowledge({
+          cwd: repoRoot,
           oldContent: fullOld,
           diff: diffText,
           instruction: REWRITE_INSTRUCTION,
