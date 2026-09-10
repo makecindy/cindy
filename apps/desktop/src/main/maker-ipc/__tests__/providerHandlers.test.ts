@@ -1529,6 +1529,7 @@ describe('provider:custom:* CRUD handlers', () => {
     mountDb();
     const harness = new IpcHarness();
     const finalize = vi.fn(async () => {});
+    const broadcastChanged = vi.fn();
     const refreshCatalog = vi
       .fn<() => Promise<void>>()
       .mockResolvedValueOnce(undefined)
@@ -1538,6 +1539,7 @@ describe('provider:custom:* CRUD handlers', () => {
       makeDeps({
         beginRouteMutation: beginProviderRouteMutation,
         refreshCatalog,
+        broadcastChanged,
         finalizeCodexCustomProviderHostChange: finalize,
       }),
     );
@@ -1553,12 +1555,13 @@ describe('provider:custom:* CRUD handlers', () => {
           codex: { ...config.runtimes.codex!, requestPath: '/replacement-responses' },
         },
       }),
-    ).rejects.toThrow('catalog refresh failed');
+    ).resolves.toEqual({ ok: true });
     expect((await getCustomProvider(config.id))?.runtimes.codex?.requestPath).toBe(
       '/replacement-responses',
     );
     expect(getProviderRouteCredentialRevision(config.id)).not.toBe(oldRevision);
     expect(finalize).toHaveBeenCalledTimes(2);
+    expect(broadcastChanged).toHaveBeenCalledTimes(2);
   });
 
   it('never revives an old dispatch generation after deleting and recreating the same Provider id', async () => {
@@ -3882,6 +3885,37 @@ describe('provider connection management', () => {
       source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt',
     })).resolves.toEqual({ ok: true });
     expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+  });
+
+  it.each([MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT])('reports committed %s and broadcasts despite catalog refresh failure', async (channel) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      beginRouteMutation: beginProviderRouteMutation,
+      hasAppliedCodexCustomProviderImageGeneration: () => true,
+    });
+    registerProviderHandlers(harness, deps);
+    const config = imageProviderConfig('committed-catalog-failure');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { codex: 'fixture-key' });
+    const oldRevision = getProviderRouteCredentialRevision(config.id);
+    vi.mocked(deps.refreshCatalog).mockRejectedValueOnce(new Error('catalog refresh failed'));
+    vi.mocked(deps.broadcastChanged).mockClear();
+    vi.mocked(deps.finalizeCodexCustomProviderHostChange!).mockClear();
+
+    await expect(harness.invoke(channel, config.id)).resolves.toEqual({ ok: true });
+    expect(getProviderRouteCredentialRevision(config.id)).not.toBe(oldRevision);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+    expect(deps.finalizeCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    if (channel === MAKER_INVOKE.PROVIDER_CUSTOM_DELETE) {
+      expect(await getCustomProvider(config.id)).toBeNull();
+    } else {
+      expect(await getCustomProvider(config.id)).not.toBeNull();
+    }
+    if (channel === MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT) {
+      expect(deps.oauthLogout).toHaveBeenCalledWith(config.id);
+    } else {
+      expect(deps.removeCustomProviderKey).toHaveBeenCalledWith(config.id, 'codex');
+    }
   });
 
   it('disconnects all API runtime credentials while retaining connection configuration', async () => {

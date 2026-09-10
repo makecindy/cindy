@@ -1104,6 +1104,10 @@ export function registerProviderHandlers(
     commitRouteMutation?.();
     try {
       await deps.refreshCatalog();
+    } catch {
+      // The credential/configuration mutation has committed. Catalog refresh is auxiliary:
+      // notify consumers of the real state instead of reporting the mutation as failed.
+      log.warn('provider catalog refresh failed after committed configuration change');
     } finally {
       // 持久化一旦成功，即使 catalog refresh 报错也不能让旧 Host 留在新凭证代次旁继续跑。
       if (codexHostPrepared) {
@@ -1949,9 +1953,8 @@ export function registerProviderHandlers(
             }
             throw err;
           }
-          // 刷目录也在队列内:队列释放的那一刻 listProviders() 必须已看不到该
-          // provider。afterChange 失败时配置已删,凭证/override 不回写(与改动前
-          // 语义一致 —— 恢复只覆盖删除本身失败的场景)。
+          // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
+          // 凭证/override 的恢复只覆盖删除本身失败的场景。
           assertProviderMutationOwner(ownerAtIngress);
           await afterChange(codexHostPrepared, commitRouteMutation);
           assertProviderMutationOwner(ownerAtIngress);
