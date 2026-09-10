@@ -30,14 +30,10 @@ export async function refreshBuiltinProviderModels(
       }
       return;
     case 'openai': {
-      // Images API key discovery must not wait on Codex chat refresh. ChatGPT
-      // model/list is chat-only; a missing OAuth login still has to hit /v1/models.
       const chatApplied = await deps.refreshOpenAi();
-      await deps.refreshOpenAiMedia();
-      if (!chatApplied) {
-        throw new Error('OpenAI model discovery did not apply to the current runtime');
-      }
-      return;
+      const mediaApplied = await deps.refreshOpenAiMedia();
+      if (chatApplied || mediaApplied) return;
+      throw new Error('OpenAI model discovery did not apply to the current runtime');
     }
     case 'xai':
       if (!(await deps.refreshXai())) {

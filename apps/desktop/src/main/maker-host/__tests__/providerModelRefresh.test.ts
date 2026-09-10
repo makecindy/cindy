@@ -37,11 +37,21 @@ describe('refreshBuiltinProviderModels', () => {
     await expect(
       refreshBuiltinProviderModels('anthropic', deps({ refreshAnthropic: async () => false })),
     ).rejects.toThrow(/Anthropic model discovery/);
-    const openaiChatMiss = deps({ refreshOpenAi: async () => false });
+    const openaiChatMissMediaHit = deps({
+      refreshOpenAi: vi.fn(async () => false),
+      refreshOpenAiMedia: vi.fn(async () => true),
+    });
     await expect(
-      refreshBuiltinProviderModels('openai', openaiChatMiss),
+      refreshBuiltinProviderModels('openai', openaiChatMissMediaHit),
+    ).resolves.toBeUndefined();
+    expect(openaiChatMissMediaHit.refreshOpenAiMedia).toHaveBeenCalledOnce();
+    const openaiBothMiss = deps({
+      refreshOpenAi: vi.fn(async () => false),
+      refreshOpenAiMedia: vi.fn(async () => false),
+    });
+    await expect(
+      refreshBuiltinProviderModels('openai', openaiBothMiss),
     ).rejects.toThrow(/OpenAI model discovery/);
-    expect(openaiChatMiss.refreshOpenAiMedia).toHaveBeenCalledOnce();
     const openaiMediaMiss = deps({ refreshOpenAiMedia: async () => false });
     await expect(refreshBuiltinProviderModels('openai', openaiMediaMiss)).resolves.toBeUndefined();
     expect(openaiMediaMiss.refreshOpenAi).toHaveBeenCalledOnce();

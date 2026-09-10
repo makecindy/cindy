@@ -2,8 +2,8 @@
  * OpenAI 图像模型发现。
  *
  * ChatGPT `model/list` / models_cache 只含聊天型号。图像成员来自 Platform
- * `GET /v1/models`（优先 Images API key，否则 ChatGPT OAuth bearer）。
- * 混排聊天清单里滤不出图像型号时保留本地目录兜底，不能当成账号空清单清空。
+ * `GET /v1/models`，且只能用 Images API key：ChatGPT/Codex OAuth 不能打公共
+ * Platform API，401/403 也不得注销本来有效的订阅登录。无 key 时保留本地目录。
  */
 
 import { categorize, type Provider } from '@cindy/model-providers';
@@ -12,11 +12,6 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessi
 import { createLogger, type Logger } from '../../logger.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import { setDiscoveredProviderMediaModels } from '../active-catalog.js';
-import {
-  getChatgptBridgeAuth,
-  invalidateChatgptBridgeAuth,
-} from '../anthropic-responses-bridge-host.js';
-import { hasCodexOAuthLoginReadOnly } from '../codex-oauth-readiness.js';
 import { outboundFetch } from '../outbound-fetch.js';
 
 const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
@@ -360,22 +355,16 @@ const log = createLogger('model-discovery:openai-media');
 let credentialGeneration = 0;
 
 const discovery = createOpenAiMediaDiscovery({
-  hasCredential: () => Boolean(imagesApiKey()) || hasCodexOAuthLoginReadOnly(),
+  hasCredential: () => Boolean(imagesApiKey()),
   getCredential: async () => {
     const key = imagesApiKey();
-    if (key) return { kind: 'api-key', token: key };
-    if (!hasCodexOAuthLoginReadOnly()) return null;
-    const auth = await getChatgptBridgeAuth();
-    return { kind: 'oauth', token: auth.accessToken };
+    return key ? { kind: 'api-key', token: key } : null;
   },
   getCredentialGeneration: () => credentialGeneration,
   getOwnerScopeKey: () => activeOwnerScopeKey(),
   isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
   fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
   applySnapshot: (snapshot) => setDiscoveredProviderMediaModels('openai', snapshot),
-  onOAuthRejected: async (failure) => {
-    await invalidateChatgptBridgeAuth(failure);
-  },
   log,
 });
 
@@ -385,10 +374,10 @@ export const clearOpenAiMediaModels = (): void => {
   discovery.clear();
 };
 
-/** Images API key store/remove: drop the previous snapshot, then refresh if any credential remains. */
+/** Images API key store/remove/startup: drop the previous snapshot, then refresh if a Platform key remains. */
 export function notifyOpenAiMediaCredentialChanged(): void {
   clearOpenAiMediaModels();
-  if (imagesApiKey() || hasCodexOAuthLoginReadOnly()) {
+  if (imagesApiKey()) {
     void discovery.refresh();
   }
 }

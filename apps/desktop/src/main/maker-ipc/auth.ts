@@ -17,10 +17,7 @@ import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { clearChatgptBridgeCredentialCache } from '../maker-host/anthropic-responses-bridge-host.js';
 import { refreshDiscoveredCodexModels } from '../maker-host/createDesktopProviderService.js';
 import { requestCodexModelBackfill } from '../maker-host/index.js';
-import {
-  clearOpenAiMediaModels,
-  refreshOpenAiMediaModels,
-} from '../maker-host/model-discovery/openai-media.js';
+import { notifyOpenAiMediaCredentialChanged } from '../maker-host/model-discovery/openai-media.js';
 import { registerMakerAuthHandlers } from './authHandlers.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 
@@ -65,10 +62,8 @@ export function registerMakerAuthIpc(maker: Maker): void {
       // 的 cache 回退**之后**：那次回退会以空快照收口，先补拉就会被它覆盖掉。
       if (authenticated && isCurrent()) {
         await requestCodexModelBackfill();
-        void refreshOpenAiMediaModels();
-      } else if (!authenticated) {
-        clearOpenAiMediaModels();
       }
+      notifyOpenAiMediaCredentialChanged();
     },
   );
 
