@@ -322,6 +322,10 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function hasRetainedBuiltinConnection(provider: ProviderView): boolean {
+  return !provider.removed && (provider.connected || provider.removed === false);
+}
+
 export function AddProviderWizard({
   providers,
   entry,
@@ -473,21 +477,21 @@ export function AddProviderWizard({
         (p) =>
           p.id !== 'xd' &&
           p.source === 'builtin' &&
-          (!p.connected || ['anthropic', 'openai', 'xai'].includes(p.id)) &&
+          (!hasRetainedBuiltinConnection(p) || ['anthropic', 'openai', 'xai'].includes(p.id)) &&
           (['anthropic', 'openai', 'xai'].includes(p.id) ||
             (p.auth.method === 'oauth' && !!p.auth.oauth)),
       ),
     [providers],
   );
   // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目):
-  // 已连接的不再进向导;声明了媒体清单才展示(纯占位条目没有可配置的能力面)。
+  // 已添加（包括断开后保留）的连接不再进向导；声明了媒体清单才展示。
   const builtinApiKeyChoices = useMemo(
     () =>
       providers.filter(
         (p) =>
           p.source === 'builtin' &&
           p.auth.method === 'apiKey' &&
-          !p.connected &&
+          !hasRetainedBuiltinConnection(p) &&
           PROVIDER_MEDIA_FIELDS.some((field) => (p[field]?.length ?? 0) > 0),
       ),
     [providers],
