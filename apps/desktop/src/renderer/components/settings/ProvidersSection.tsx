@@ -676,7 +676,7 @@ function AnthropicHeader({
   return (
     <DetailHeader
       icon={<AnthropicMark size={18} />}
-      title={t('settings.providers.anthropic.title')}
+      title={provider?.name ?? t('settings.providers.anthropic.title')}
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.anthropic.modelLabel'), {
         fallback: t('settings.providers.anthropic.subtitle'),
       })}
@@ -917,7 +917,7 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
   return (
     <DetailHeader
       icon={<ProviderLogoMark providerId="xai" size={18} />}
-      title={t('settings.providers.xai.title')}
+      title={provider?.name ?? t('settings.providers.xai.title')}
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xai.modelLabel'), {
         fallback: t('settings.providers.xai.subtitle'),
       })}
@@ -1580,7 +1580,7 @@ function OllamaHeader({ provider, onDelete }: { provider: ProviderView; onDelete
   return (
     <DetailHeader
       icon={providerIcon(provider, 18)}
-      title={t('settings.providers.local.title')}
+      title={provider.name || t('settings.providers.local.title')}
       subtitle={t('settings.providers.local.subtitle')}
       status={{
         kind: provider.connected ? 'connected' : 'neutral',

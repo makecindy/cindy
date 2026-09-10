@@ -549,8 +549,8 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     // 订阅 refresh token 被服务端作废(锁内确认的 invalid_grant)→ 清态 + 广播重登提示,
     // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
     // 副作用(authAdaptersImportPurity 约定)。
-    setClaudeOAuthInvalidGrantHandler(() => {
-      void this.invalidate('claude_oauth_refresh_invalid_grant');
+    setClaudeOAuthInvalidGrantHandler((digest) => {
+      void this.invalidateNativeCredential('claude_oauth_refresh_invalid_grant', digest);
     });
   }
 
@@ -563,10 +563,14 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
    * 订阅凭证被服务端作废时：停止刷新、撤销 Cindy 使用许可并广播重新登录提示。
    * 保留系统 Claude Code 凭证。
    */
-  async invalidate(reason: string): Promise<void> {
+  invalidate(reason: string): Promise<void> {
+    return this.invalidateNativeCredential(reason);
+  }
+
+  private async invalidateNativeCredential(reason: string, rejectedCredentialDigest?: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
     invalidateClaudeOAuthRefresh();
-    unbindNativeProviderAuth('anthropic', { revoked: true });
+    unbindNativeProviderAuth('anthropic', { revoked: true, ...(rejectedCredentialDigest ? { rejectedCredentialDigest } : {}) });
     retainInvalidatedProviderPresentation('anthropic');
     if (this.onInvalidatedBroadcast) {
       try {

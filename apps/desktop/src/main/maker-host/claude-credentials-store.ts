@@ -175,6 +175,11 @@ function writeBlob(blob: Record<string, unknown>): void {
  */
 export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
   if (!isNativeProviderAuthBound('anthropic')) return null;
+  return readClaudeAiOAuthUnbound();
+}
+
+/** Read native credentials for an explicit reattachment without changing their owner. */
+export function readClaudeAiOAuthUnbound(): ClaudeAiOAuth | null {
   const blob = readBlob();
   const oauth = blob?.claudeAiOauth as ClaudeAiOAuth | undefined;
   if (oauth && typeof oauth.accessToken === 'string' && oauth.accessToken.length > 0) {
@@ -190,9 +195,7 @@ export function hasClaudeAiOAuth(): boolean {
 
 /** Legacy upgrade probe; intentionally bypasses owner binding once at migration time. */
 export function hasClaudeAiOAuthUnbound(): boolean {
-  const blob = readBlob();
-  const oauth = blob?.claudeAiOauth as ClaudeAiOAuth | undefined;
-  return typeof oauth?.accessToken === 'string' && oauth.accessToken.length > 0;
+  return readClaudeAiOAuthUnbound() !== null;
 }
 
 /**

@@ -28,6 +28,7 @@ import {
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
+  isNativeProviderCredentialRejected,
   isNativeProviderAuthSelfAuthorized,
   isNativeProviderAuthSharedSystemCredential,
   markNativeProviderAuthSharedSystemCredential,
@@ -55,6 +56,25 @@ afterEach(() => {
 });
 
 describe('native provider auth legacy binding', () => {
+  it('persists only the rejected digest and retains it across disconnect and unrelated binding writes', async () => {
+    const digest = 'a'.repeat(64);
+    bindNativeProviderAuth('anthropic', { sharedSystem: true });
+    unbindNativeProviderAuth('anthropic', { revoked: true, rejectedCredentialDigest: digest });
+    unbindNativeProviderAuth('anthropic', { revoked: true });
+    bindNativeProviderAuth('openai');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8')).rejectedCredentialDigests).toEqual({ anthropic: digest });
+    vi.resetModules();
+    const restarted = await import('../nativeProviderAuthBinding.js');
+    expect(restarted.isNativeProviderCredentialRejected('anthropic', digest)).toBe(true);
+    expect(restarted.isNativeProviderCredentialRejected('anthropic', 'b'.repeat(64))).toBe(false);
+    expect(restarted.isNativeProviderAuthBound('openai')).toBe(true);
+  });
+
+  it('does not interpret malformed rejection metadata as permission to reconnect', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ rejectedCredentialDigests: { anthropic: 42 } }));
+    expect(isNativeProviderCredentialRejected('anthropic', 'a'.repeat(64))).toBe(true);
+  });
   it('claims available legacy credentials for the first owner only', () => {
     migrateLegacyNativeProviderAuthBindings('owner-a', {
       anthropic: true,

@@ -43,16 +43,17 @@
  */
 
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
 import {
-  hasClaudeAiOAuthUnbound,
+  readClaudeAiOAuthUnbound,
   readClaudeAiOAuth,
   writeClaudeAiOAuth,
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
-import { bindNativeProviderAuth, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
+import { bindNativeProviderAuth, isNativeProviderCredentialRejected, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import { setProviderPresentation } from './provider-presentation-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
@@ -165,7 +166,7 @@ export interface ClaudeOAuthRefresherDeps {
   /** 锁冲突退避 sleep(测试注入 0 延迟)。 */
   sleep?: (ms: number) => Promise<void>;
   /** refresh token 被服务端作废(invalid_grant)时通知 —— adapter 接 invalidate 广播。 */
-  onInvalidGrant?: () => void;
+  onInvalidGrant?: (credentialDigest: string) => void;
   /** 预续期开关(测试关掉避免悬挂 timer)。默认开。 */
   proactiveRenewal?: boolean;
 }
@@ -524,6 +525,8 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
           // refresh token;若 HTTP 在途期间凭证库已被换账号登录替换,invalidate 会把
           // 刚登录的新账号一并清掉 —— 先重读比对,库已换则采信新凭证、不触发失效。
           const postFail = deps.readOAuth();
+          // Owner switch or unbinding removed access while the request was in flight.
+          if (!postFail?.accessToken) return null;
           if (
             postFail?.accessToken &&
             (postFail.accessToken !== fresh.accessToken ||
@@ -535,7 +538,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
           // 库仍是失败那套凭证且服务端明确作废 → 刷新无望,通知 UI 重登。
           log.error('claude oauth refresh token revoked by server (invalid_grant)');
           try {
-            deps.onInvalidGrant?.();
+            deps.onInvalidGrant?.(claudeOAuthCredentialDigest(fresh));
           } catch (e) {
             log.warn('onInvalidGrant handler threw', {
               error: e instanceof Error ? e.message : String(e),
@@ -693,7 +696,7 @@ function defaultLockDir(): string {
 }
 
 let defaultRefresher: ReturnType<typeof createClaudeOAuthRefresher> | null = null;
-let invalidGrantHandler: (() => void) | null = null;
+let invalidGrantHandler: ((credentialDigest: string) => void) | null = null;
 
 function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
   if (!defaultRefresher) {
@@ -704,7 +707,7 @@ function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
       fetchFn: outboundFetch,
       now: Date.now,
       lockDir: defaultLockDir,
-      onInvalidGrant: () => invalidGrantHandler?.(),
+      onInvalidGrant: (digest) => invalidGrantHandler?.(digest),
     });
   }
   return defaultRefresher;
@@ -748,7 +751,8 @@ export function disconnectClaudeAiOAuth(): void {
 
 /** Reattach the existing native login; never write or remove system credentials. */
 export function reconnectClaudeAiOAuth(): boolean {
-  if (!hasClaudeAiOAuthUnbound()) return false;
+  const oauth = readClaudeAiOAuthUnbound();
+  if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth))) return false;
   invalidateClaudeOAuthRefresh();
   bindNativeProviderAuth('anthropic', { sharedSystem: true });
   try { setProviderPresentation('anthropic', { removed: false }); }
@@ -757,6 +761,11 @@ export function reconnectClaudeAiOAuth(): boolean {
 }
 
 /** refresh token 被服务端作废时的通知接线(auth-adapters 装配,内存操作零副作用)。 */
-export function setClaudeOAuthInvalidGrantHandler(handler: (() => void) | null): void {
+export function setClaudeOAuthInvalidGrantHandler(handler: ((credentialDigest: string) => void) | null): void {
   invalidGrantHandler = handler;
+}
+
+/** Only token identity matters; profile and expiry metadata may change independently. */
+export function claudeOAuthCredentialDigest(oauth: ClaudeAiOAuth): string {
+  return createHash('sha256').update(JSON.stringify([oauth.accessToken, oauth.refreshToken ?? null])).digest('hex');
 }

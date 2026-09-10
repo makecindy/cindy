@@ -18,7 +18,8 @@ const h = vi.hoisted(() => ({
   cleared: 0,
   revoked: false,
   refresherInvalidated: 0,
-  invalidGrantHandler: null as (() => void) | null,
+  invalidGrantHandler: null as ((digest: string) => void) | null,
+  rejectedDigest: undefined as string | undefined,
   /** getValidClaudeAiOAuth 的可注入延迟(测回调超时用)。 */
   refreshDelayMs: 0,
   lastRefreshOpts: null as { staleToken?: string; forceRefresh?: boolean } | null,
@@ -53,8 +54,9 @@ vi.mock('../../appCapabilities.js', () => ({
 vi.mock('../nativeProviderAuthBinding.js', async (original) => ({
   ...(await original<typeof import('../nativeProviderAuthBinding.js')>()),
   isNativeProviderAuthRevoked: () => h.revoked,
-  unbindNativeProviderAuth: () => {
+  unbindNativeProviderAuth: (_provider: string, opts?: { rejectedCredentialDigest?: string }) => {
     h.revoked = true;
+    h.rejectedDigest = opts?.rejectedCredentialDigest;
   },
 }));
 
@@ -80,7 +82,7 @@ vi.mock('../claude-oauth-refresh.js', () => ({
     h.refresherInvalidated += 1;
     h.revoked = true;
   },
-  setClaudeOAuthInvalidGrantHandler: (handler: (() => void) | null) => {
+  setClaudeOAuthInvalidGrantHandler: (handler: ((digest: string) => void) | null) => {
     h.invalidGrantHandler = handler;
   },
 }));
@@ -291,6 +293,9 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
   it('构造期接线 invalid_grant handler(刷新模块通知 → invalidate 链路可达)', async () => {
     await makeAdapter();
     expect(typeof h.invalidGrantHandler).toBe('function');
+    h.invalidGrantHandler?.('a'.repeat(64));
+    expect(h.rejectedDigest).toBe('a'.repeat(64));
+    expect(h.cleared).toBe(0);
   });
 
   it('logout preserves native credentials and revokes Cindy access', async () => {

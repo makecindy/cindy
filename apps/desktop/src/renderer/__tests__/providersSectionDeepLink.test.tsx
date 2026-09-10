@@ -131,6 +131,8 @@ import { updateCustomProvider } from '@/lib/customProviders';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
+vi.mock('@/components/settings/OllamaProviderDetail', () => ({ OllamaProviderDetail: () => null }));
+
 function makeProvider(id: string, over?: Partial<ProviderView>): ProviderView {
   return {
     id,
@@ -188,6 +190,8 @@ beforeEach(() => {
       setProviderPresentation: vi.fn(async () => ({ ok: true })),
       auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
+      localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
+      onLocalModelStatus: vi.fn(() => () => undefined),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
       setProviderOrder: vi.fn(async () => ({ ok: true })),
     },
@@ -239,6 +243,15 @@ describe('ProvidersSection — 深链定位', () => {
       ).toBeTruthy();
     },
   );
+
+  it.each(['anthropic', 'xai', 'cindy-local-ollama'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
+    providersState.providers = [makeProvider(id, {
+      name: 'My renamed provider', connected: true,
+      source: id === 'cindy-local-ollama' ? 'user' : 'builtin',
+    })];
+    renderAt(`?tab=providers&connect=${id}`);
+    await waitFor(() => expect(screen.getAllByText('My renamed provider').length).toBeGreaterThanOrEqual(2));
+  });
 
   it('added OpenAI shares status and moves rename/delete into the single menu', async () => {
     providersState.providers = [
