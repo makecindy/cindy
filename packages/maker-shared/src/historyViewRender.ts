@@ -10,7 +10,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   build(messages: readonly T[], streaming: boolean): TItem[];
   streaming: boolean;
   isLive?(message: T): boolean;
-  /** Already displayed assistant identities awaiting history, not arbitrary cached rows. */
+  /** Already displayed assistant identities in observation order, awaiting history. */
   pendingHandoff?: ReadonlySet<string>;
   isLocalUser?(message: T): boolean;
   structure: {
@@ -69,7 +69,17 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     }
     endMs = Math.max(endMs, summary.endedAtMs);
   }
-  for (const row of options.liveMessages) {
+  // Durable pushes can change a pending row's provisional timestamp before the
+  // history page includes it. Preserve the handoff's observation order for those
+  // rows, without moving other live rows or changing authoritative history order.
+  const pendingTail = [...(options.pendingHandoff ?? [])].flatMap((id) => {
+    const row = live.get(id);
+    return row?.role === 'assistant' && !seen.has(id) ? [row] : [];
+  });
+  let pendingIndex = 0;
+  for (const source of options.liveMessages) {
+    const row = isPendingHandoff(source) && !seen.has(source.clientId)
+      ? pendingTail[pendingIndex++] : source;
     if (isLive(row) && !seen.has(row.clientId) && (row.role === 'assistant' || row.role === 'user')
       && (Date.parse(row.createdAt) >= endMs
         || isPendingHandoff(row))) rows.push(row);

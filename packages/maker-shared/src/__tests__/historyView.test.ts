@@ -397,6 +397,27 @@ describe('shared history view lifecycle', () => {
     expect(rendered).toEqual(['c1']);
   });
 
+  it('preserves pending observation order without moving known history or other live rows', async () => {
+    const known = row(1, 'assistant', 'history');
+    const first = row(4, 'assistant', 'first pending');
+    const second = row(2, 'assistant', 'second pending');
+    const other = row(3, 'user', 'other live');
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([known], false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const liveMessages = [known, second, other, first];
+    const pendingHandoff = new Set(['removed', known.clientId, first.clientId, second.clientId]);
+    const output = renderHistoryView({ view, snapshot: view.getSnapshot(), liveMessages, pendingHandoff,
+      streaming: true, isLive: () => true, build: rows => [...rows], structure: ungroupedStructure });
+    expect(output).toEqual([known, first, other, second]);
+    expect(liveMessages).toEqual([known, second, other, first]);
+    expect([...pendingHandoff]).toEqual(['removed', known.clientId, first.clientId, second.clientId]);
+    view.setActive(false);
+  });
+
   it('preserves current local user bubbles, source authority and store order despite clock skew', async () => {
     type Message = HistoryMessageSource & { isPendingPersist?: boolean; blockedByGhost?: boolean };
     const source = [row(1, 'user', 'kept'), row(10, 'assistant', 'answer'), row(11, 'user', 'persisted rewrite')];

@@ -191,8 +191,13 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
 const toolResultPreviewByContent = new WeakMap<object, { language: string; preview: string }>();
 const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
-export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
-  const sorted = sortMessagesByCreatedAt(messages);
+export function normalizeRemoteMessages(
+  messages: readonly RemoteMessage[],
+  options: { preserveSourceOrder?: boolean } = {},
+): NormalizedRemoteMessage[] {
+  // History views already place live tails after their persisted prefix. A live
+  // row's provisional timestamp must not undo that order during normalization.
+  const sorted = options.preserveSourceOrder ? messages : sortMessagesByCreatedAt(messages);
   const toolResultPairing = buildMessageToolResultPairing(sorted, {
     contentToPreview: toolResultContentToPreview,
   });
