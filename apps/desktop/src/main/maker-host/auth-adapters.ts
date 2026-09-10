@@ -1892,12 +1892,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       const owner = getActiveAppSession();
       const systemAuth = getSystemCodexAuthPath();
       const localAuth = path.join(this.codexHome, 'auth.json');
-      const stillCurrent = () => {
+      const ownerCurrent = () => {
         const current = getActiveAppSession();
-        return !this.loginAborted && !isCancelled() && !isAppSessionBoundaryPending() &&
+        return !isAppSessionBoundaryPending() &&
           !!owner.dataOwnerId && current.generation === loginOwner.generation &&
           current.dataOwnerId === loginOwner.dataOwnerId;
       };
+      const stillCurrent = () => ownerCurrent() && !this.loginAborted && !isCancelled();
       try {
         if (!stillCurrent()) {
           return { authenticated: false, errorReason: 'login_cancelled' };
@@ -1941,7 +1942,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         this.lastKnownCodexCredentialScope = 'system-shared';
         this.loginCancellationOpen = false;
         await this.notifyCodexLoginSuccess();
-        if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+        if (!ownerCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+        // Match browser finalization: a late Cancel must revoke Cindy's committed binding.
+        // Return the promise so failed cleanup is not swallowed by the local setup catch.
+        if (!stillCurrent()) return this.disconnectCodexOAuth().then(() => ({
+          authenticated: false, errorReason: 'login_cancelled',
+        }));
         return { authenticated: true, authSource: 'oauth', identity: identity?.label, credentialScope: 'system-shared' };
       } catch {
         if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };

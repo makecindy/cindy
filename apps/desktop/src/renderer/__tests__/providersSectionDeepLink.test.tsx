@@ -77,8 +77,9 @@ vi.mock('@/hooks/useModelAccessStatus', () => ({
   useModelAccessStatus: () => ({ state: 'failed', source: null, endpoint: null }),
 }));
 
+const confirmSpy = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+  useConfirmDialog: () => ({ confirm: confirmSpy }),
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -171,6 +172,7 @@ function renderAt(search: string) {
 }
 
 beforeEach(() => {
+  confirmSpy.mockReset().mockResolvedValue(true);
   codexAuthState.state = { kind: 'unauthenticated' };
   codexAuthState.reconnectCredentialScope = undefined;
   codexAuthState.recoveryCheck = 'idle';
@@ -431,6 +433,20 @@ describe('ProvidersSection — 深链定位', () => {
     );
   });
 
+  it.each([false, true])('busy disconnect retries only after explicit task interruption confirmation (%s)', async (interrupt) => {
+    providersState.providers = [makeProvider('fixture-oauth', { name: 'Fixture OAuth', connected: true })];
+    confirmSpy.mockResolvedValueOnce(true).mockResolvedValueOnce(interrupt);
+    vi.mocked(window.electronAPI.maker.providerOAuthLogout)
+      .mockResolvedValueOnce({ ok: false, confirmationRequired: 'codex-image-generation-reload', busyCount: 1 })
+      .mockResolvedValueOnce({ ok: true });
+    renderAt('?tab=providers&connect=fixture-oauth');
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.disconnect' }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenCalledTimes(interrupt ? 2 : 1));
+    expect(confirmSpy).toHaveBeenLastCalledWith(expect.objectContaining({ description: 'settings.providers.custom.imageGenerationReload.description' }));
+    if (interrupt) expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenLastCalledWith('fixture-oauth', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }), { source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt' });
+  });
+
   it.each(['disconnect', 'delete', 'delete-failed'])('generic builtin OAuth uses the OAuth bridge for %s', async (action) => {
     providersState.providers = [makeProvider('fixture-oauth', { name: 'Fixture OAuth', connected: true })];
     const events: string[] = [];
@@ -453,7 +469,7 @@ describe('ProvidersSection — 深链定位', () => {
       await waitFor(() => expect(toastError).toHaveBeenCalledWith('settings.providers.custom.toast.deleteFailed'));
     }
     await waitFor(() => expect(events).toEqual(action === 'delete' ? ['restore', 'oauth-logout', 'remove'] : ['restore', 'oauth-logout']));
-    expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenCalledWith('fixture-oauth', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }));
+    expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenCalledWith('fixture-oauth', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }), { source: 'manual-settings' });
     expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
   });
 

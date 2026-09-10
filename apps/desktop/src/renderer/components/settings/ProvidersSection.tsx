@@ -62,6 +62,7 @@ import {
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
 import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
+import type { CustomProviderUpdateOptions, CustomProviderUpdateResult } from '../../../shared/customProviderUpdate';
 
 import {
   customProviderSubtitleForDisplay,
@@ -241,10 +242,28 @@ function BetaTag({ label }: { label: string }) {
 // ---------------------------------------------------------------------------
 
 type ProviderOwnerScope = { dataOwnerId: string | null; ownerGeneration: number };
+/** Reuse the image Host restart confirmation for settings mutations that remove its source. */
+function useProviderChangeConfirmation() {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  return useCallback(async (change: (options: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult | void>) => {
+    const result = await change({ source: 'manual-settings' });
+    if (!result || result.ok) return true;
+    if (!(await confirm({
+      title: t('settings.providers.custom.imageGenerationReload.title'),
+      description: t('settings.providers.custom.imageGenerationReload.description'),
+      confirmText: t('settings.providers.custom.imageGenerationReload.interrupt'),
+      cancelText: t('settings.providers.custom.imageGenerationReload.cancel'),
+    }))) return false;
+    const retry = await change({ source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt' });
+    return !retry || retry.ok;
+  }, [confirm, t]);
+}
 async function disconnectProvider(
   provider: ProviderView,
   scope: ProviderOwnerScope,
-): Promise<void> {
+  options?: CustomProviderUpdateOptions,
+): Promise<CustomProviderUpdateResult | void> {
   if (provider.source === 'builtin') {
     // Keep the entry available for reconnect, even when the original source was auto-detected.
     await window.electronAPI.maker.setProviderPresentation({
@@ -255,18 +274,19 @@ async function disconnectProvider(
     if (provider.id === 'openai') await window.electronAPI.maker.auth.logout('codex', scope);
     else if (provider.id === 'anthropic') await window.electronAPI.maker.claudeOAuthLogout(scope);
     else if (provider.id === 'xai') await window.electronAPI.maker.xaiOAuthLogout(scope);
-    else if (provider.auth.method === 'oauth') await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
+    else if (provider.auth.method === 'oauth') return window.electronAPI.maker.providerOAuthLogout(provider.id, scope, options);
     else await window.electronAPI.builtinApiKeyRemove(provider.id, scope);
   } else if (provider.auth.method === 'oauth') {
-    await window.electronAPI.maker.providerOAuthLogout(provider.id, scope);
+    return window.electronAPI.maker.providerOAuthLogout(provider.id, scope, options);
   } else {
-    await window.electronAPI.maker.disconnectCustomProvider(provider.id, scope);
+    return window.electronAPI.maker.disconnectCustomProvider(provider.id, scope, options);
   }
 }
 
 function useProviderManagement(provider?: ProviderView) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
   const { refetch } = useProviders();
   const [busy, setBusy] = useState(false);
   const rename = async () => {
@@ -326,7 +346,7 @@ function useProviderManagement(provider?: ProviderView) {
       if (provider.id === 'openai') {
         await window.electronAPI.builtinApiKeyRemove('openai-images', scope);
       }
-      await disconnectProvider(provider, scope);
+      if (!(await confirmProviderChange(options => disconnectProvider(provider, scope, options)))) return;
       await window.electronAPI.maker.setProviderPresentation({
         providerId: provider.id,
         action: 'remove',
@@ -960,6 +980,7 @@ function GenericOAuthHeader({
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider.connected;
@@ -1018,7 +1039,7 @@ function GenericOAuthHeader({
       });
       if (!confirmed) return;
       setBusy(true);
-      await disconnectProvider(provider, scope);
+      if (!(await confirmProviderChange(options => disconnectProvider(provider, scope, options)))) return;
       toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
       onChanged();
     } catch {
@@ -1026,7 +1047,7 @@ function GenericOAuthHeader({
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, provider, t]);
+  }, [confirm, confirmProviderChange, onChanged, provider, t]);
 
   const reconnectRequired = provider.openAiAccount?.reconnectRequired === true;
   const status = {
@@ -1625,6 +1646,7 @@ function CustomProviderHeader({
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
   const [disconnecting, setDisconnecting] = useState(false);
   const disconnect = async () => {
     try {
@@ -1641,7 +1663,7 @@ function CustomProviderHeader({
       )
         return;
       setDisconnecting(true);
-      await disconnectProvider(provider, scope);
+      if (!(await confirmProviderChange(options => disconnectProvider(provider, scope, options)))) return;
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }));
     } finally {
@@ -1950,6 +1972,7 @@ export function ProvidersSection() {
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
   const { providers, providerOrder, ownerGeneration, loading, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
@@ -2309,13 +2332,13 @@ export function ProvidersSection() {
           cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
         });
         if (!ok) return;
-        await deleteCustomProvider(p.id, scope);
+        if (!(await confirmProviderChange(options => deleteCustomProvider(p.id, scope, options)))) return;
         toast.success(t('settings.providers.custom.toast.deleted'));
       } catch {
         toast.error(t('settings.providers.custom.toast.deleteFailed'));
       }
     },
-    [confirm, t],
+    [confirm, confirmProviderChange, t],
   );
 
   const handleDeleteOllama = useCallback(async () => {

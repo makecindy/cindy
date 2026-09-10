@@ -1605,8 +1605,8 @@
         },
         "imageGenerationReload": {
           "title": "Codex 다시 로드",
-          "description": "이 이미지 생성 설정을 저장하려면 Codex를 다시 로드해야 하며 현재 실행 중인 Codex 작업이 중단됩니다.",
-          "interrupt": "저장하고 중지",
+          "description": "이 변경 사항을 적용하려면 Codex를 다시 로드해야 하며 현재 실행 중인 Codex 작업이 중단됩니다.",
+          "interrupt": "계속하고 작업 중지",
           "cancel": "취소",
           "close": "닫기"
         },

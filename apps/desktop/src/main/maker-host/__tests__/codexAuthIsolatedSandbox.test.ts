@@ -544,7 +544,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     }
   });
 
-  it.each(['success', 'failure', 'owner-change'] as const)('settles local runtime refresh without revoking committed credentials (%s)', async (outcome) => {
+  it.each(['success', 'failure', 'owner-change', 'cancel'] as const)('settles local runtime refresh with the correct credential boundary (%s)', async (outcome) => {
     const { systemAuth } = fixture();
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
@@ -564,12 +564,14 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(settled).not.toHaveBeenCalled();
     await expect(adapter.getAccessToken()).resolves.toBe('system-token');
     if (outcome === 'owner-change') h.dataOwnerId = 'owner-b';
+    if (outcome === 'cancel') adapter.cancelLogin();
     release();
-    await expect(login).resolves.toMatchObject(outcome === 'owner-change'
+    await expect(login).resolves.toMatchObject(outcome === 'owner-change' || outcome === 'cancel'
       ? { authenticated: false, errorReason: 'login_cancelled' }
       : { authenticated: true });
     h.dataOwnerId = 'owner-a';
-    await expect(adapter.getAccessToken()).resolves.toBe('system-token');
+    await expect(adapter.getAccessToken()).resolves.toBe(outcome === 'cancel' ? null : 'system-token');
+    await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBe(outcome === 'cancel' ? null : 'system-token');
     expect(fs.readFileSync(systemAuth)).toEqual(before);
   });
 

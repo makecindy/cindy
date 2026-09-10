@@ -1605,8 +1605,8 @@
         },
         "imageGenerationReload": {
           "title": "Reload Codex",
-          "description": "Saving this image generation configuration requires reloading Codex and will interrupt the Codex tasks currently in progress.",
-          "interrupt": "Save and stop",
+          "description": "Applying this change requires reloading Codex and will interrupt the Codex tasks currently in progress.",
+          "interrupt": "Continue and stop tasks",
           "cancel": "Cancel",
           "close": "Close"
         },

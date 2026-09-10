@@ -5637,9 +5637,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: CustomProviderUpdateOptions,
     ): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:update', config, keys, options),
-    disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ ok: true }> => ipcRenderer.invoke('maker:provider:custom:disconnect', providerId, ownerScope),
-    deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:custom:delete', providerId, ownerScope),
+    disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> => ipcRenderer.invoke('maker:provider:custom:disconnect', providerId, ownerScope, options),
+    deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
+      ipcRenderer.invoke('maker:provider:custom:delete', providerId, ownerScope, options),
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: (): Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
@@ -5826,8 +5826,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { ownerId?: string },
     ): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke('maker:provider:oauth:login', providerId, options),
-    providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:oauth:logout', providerId, ownerScope),
+    providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
+      ipcRenderer.invoke('maker:provider:oauth:logout', providerId, ownerScope, options),
     providerOAuthCancel: (
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },

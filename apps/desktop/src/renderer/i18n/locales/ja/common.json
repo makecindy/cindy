@@ -1605,8 +1605,8 @@
         },
         "imageGenerationReload": {
           "title": "Codex を再読み込み",
-          "description": "この画像生成設定を保存するには Codex の再読み込みが必要で、現在実行中の Codex タスクは中断されます。",
-          "interrupt": "保存して停止",
+          "description": "この変更を適用するには Codex の再読み込みが必要で、現在実行中の Codex タスクは中断されます。",
+          "interrupt": "続行してタスクを停止",
           "cancel": "キャンセル",
           "close": "閉じる"
         },

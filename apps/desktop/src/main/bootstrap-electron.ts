@@ -1,4 +1,4 @@
-import { setProviderPresentation } from './maker-host/provider-presentation-store.js';
+import { setProviderPresentation, restoreProviderPresentationAfterLogin } from './maker-host/provider-presentation-store.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
 import { clearSubscriptionAccountDiscoveredModels, setSubscriptionAccountInvalidatedHandler } from './maker-host/subscription-account-auth.js';
@@ -4923,7 +4923,7 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
     if (result.ok) {
-      setProviderPresentation('xai', { removed: false });
+      restoreProviderPresentationAfterLogin('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
@@ -5577,7 +5577,7 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
-      setProviderPresentation(providerId as string, { removed: false });
+      restoreProviderPresentationAfterLogin(providerId as string);
     },
   );
 

@@ -3439,6 +3439,23 @@ describe('provider:oauth mutation ordering', () => {
     expect(calls).toEqual(['cancel', 'logout']);
   });
 
+  it('does not invalidate an ongoing login when logout only asks for busy confirmation', async () => {
+    const harness = new IpcHarness();
+    let finish!: (result: { ok: boolean }) => void;
+    const login = vi.fn(() => new Promise<{ ok: boolean }>(resolve => { finish = resolve; }));
+    const deps = makeDeps({ oauthLogin: login,
+      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      listBusyLocalCodexSessionIds: () => ['busy-task'],
+    });
+    registerProviderHandlers(harness, deps);
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(login).toHaveBeenCalledOnce());
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, 'openrouter', undefined, { source: 'manual-settings' })).resolves.toMatchObject({ ok: false, confirmationRequired: 'codex-image-generation-reload' });
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    finish({ ok: true });
+    await expect(pending).resolves.toEqual({ ok: true });
+  });
+
   it('encodes credential deletion failures as an IPC INTERNAL error', async () => {
     const harness = new IpcHarness();
     registerProviderHandlers(
@@ -3841,6 +3858,32 @@ describe('provider connection management', () => {
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
   });
 
+  it.each([MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT])('requires busy Host confirmation before %s changes credentials', async (channel) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listBusyLocalCodexSessionIds: () => ['busy-task'],
+      hasAppliedCodexCustomProviderImageGeneration: () => true,
+    });
+    registerProviderHandlers(harness, deps);
+    const config = imageProviderConfig('disconnect-image-provider');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { codex: 'fixture-key' });
+    vi.mocked(deps.prepareCodexCustomProviderHostChange!).mockClear();
+    vi.mocked(deps.oauthCancel).mockClear();
+    vi.mocked(deps.removeCustomProviderKey).mockClear();
+    await expect(harness.invoke(channel, config.id, undefined, { source: 'manual-settings' })).resolves.toEqual({
+      ok: false, confirmationRequired: 'codex-image-generation-reload', busyCount: 1,
+    });
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+    expect(await getCustomProvider(config.id)).not.toBeNull();
+    await expect(harness.invoke(channel, config.id, undefined, {
+      source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt',
+    })).resolves.toEqual({ ok: true });
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+  });
+
   it('disconnects all API runtime credentials while retaining connection configuration', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3864,7 +3907,7 @@ describe('provider connection management', () => {
     registerProviderHandlers(harness, deps);
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
     const before = await getCustomProvider(validConfig.id);
-    await expect(harness.invoke(channel, validConfig.id, { dataOwnerId: 'owner-a', ownerGeneration: 1 })).rejects.toThrow('active account changed');
+    await expect(harness.invoke(channel, validConfig.id, { dataOwnerId: 'owner-a', ownerGeneration: 1 }, { source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt' })).rejects.toThrow('active account changed');
     expect(await getCustomProvider(validConfig.id)).toEqual(before);
     expect(deps.oauthLogout).not.toHaveBeenCalled();
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();

@@ -19,8 +19,21 @@ const {
   renameLocalCodexProvider,
   setLocalCodexProviderRemoved,
   retainInvalidatedProviderPresentation,
+  restoreProviderPresentationAfterLogin,
 } = await import('../provider-presentation-store.js');
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+it.each(['openai', 'anthropic', 'xai', 'google'])('does not fail committed %s authentication when presentation cannot be written', (id) => {
+  owner = `failed-presentation-${id}`;
+  const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('test readonly disk'); });
+  try {
+    expect(() => restoreProviderPresentationAfterLogin(id)).not.toThrow();
+    expect(write).toHaveBeenCalled();
+  } finally {
+    write.mockRestore();
+    owner = 'first';
+  }
+});
 
 it('persists the name across removal and reconnect, isolated by Cindy owner', () => {
   expect(readLocalCodexPresentation()).toEqual({});

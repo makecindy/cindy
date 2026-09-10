@@ -1605,8 +1605,8 @@
         },
         "imageGenerationReload": {
           "title": "重新載入 Codex",
-          "description": "儲存此圖片生成設定需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
-          "interrupt": "儲存並停止",
+          "description": "套用此變更需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
+          "interrupt": "繼續並停止任務",
           "cancel": "取消",
           "close": "關閉"
         },

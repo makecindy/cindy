@@ -1857,9 +1857,11 @@ export function registerProviderHandlers(
     },
   );
 
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (event, providerId: unknown, ownerScope?: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (event, providerId: unknown, ownerScope?: unknown, optionsInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
     assertOptionalRequestedOwner(ownerScope);
+    const options = parseCustomProviderUpdateOptions(optionsInput);
+    if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
@@ -1871,21 +1873,22 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(ownerAtIngress);
       const previous = await getCustomProvider(providerId);
       assertProviderMutationOwner(ownerAtIngress);
-      if (previous?.auth?.native === 'codex') {
-        await deps.retireCodexAccount?.(providerId);
-        assertProviderMutationOwner(ownerAtIngress);
-      }
       const codexHostChangeRequired = Boolean(
         previous && (deps.codexCustomProviderConfigSignature?.(previous) ?? '').length > 0,
       );
       const preparation = await prepareCodexCustomProviderChange(
         codexHostChangeRequired,
-        {},
+        options,
         ownerAtIngress,
       );
+      if (preparation.confirmation) return preparation.confirmation;
       codexHostPrepared = preparation.prepared;
       const generation = beginOAuthMutation(providerId);
       try {
+        if (previous?.auth?.native === 'codex') {
+          await deps.retireCodexAccount?.(providerId);
+          assertProviderMutationOwner(ownerAtIngress);
+        }
         deps.oauthCancel(providerId);
         const credentialSnapshots = stageProviderCredentials(
           providerId,
@@ -2145,9 +2148,11 @@ export function registerProviderHandlers(
       }
     },
   );
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, async (event, providerId: unknown, ownerScope?: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, async (event, providerId: unknown, ownerScope?: unknown, optionsInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
     assertOptionalRequestedOwner(ownerScope);
+    const options = parseCustomProviderUpdateOptions(optionsInput);
+    if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     const id = storedCustomProviderId(requireProviderId(providerId));
     const owner = captureProviderOwnerSession();
     return withProviderConfigMutation(id, async (commitRouteMutation) => {
@@ -2156,8 +2161,9 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(owner);
       if (!config || (config.auth && config.auth.method !== 'apiKey')) throwIpcError('INVALID_PARAMS', 'API connection required');
       const preparation = await prepareCodexCustomProviderChange(
-        deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true, {}, owner,
+        deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true, options, owner,
       );
+      if (preparation.confirmation) return preparation.confirmation;
       try {
         assertProviderMutationOwner(owner);
         stageProviderCredentials(id,
@@ -2174,21 +2180,25 @@ export function registerProviderHandlers(
       }
     });
   });
-  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, async (event, providerId: unknown, ownerScope?: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, async (event, providerId: unknown, ownerScope?: unknown, optionsInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
     assertOptionalRequestedOwner(ownerScope);
+    const options = parseCustomProviderUpdateOptions(optionsInput);
+    if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     const id = requireProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
-    const generation = beginOAuthMutation(id);
+    let generation: symbol | null = null;
     try {
       return await withProviderConfigMutation(id, async (commitRouteMutation) => {
         let codexHostPrepared = false;
         try {
           const preparation = await prepareCodexCustomProviderChange(
             deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true,
-            {},
+            options,
             ownerAtIngress,
           );
+          if (preparation.confirmation) return preparation.confirmation;
+          generation = beginOAuthMutation(id);
           codexHostPrepared = preparation.prepared;
           // Do not alter OAuth flow or credential state until the local Codex Host has crossed the
           // hard-stop boundary. Failed Host retirement must leave the old generation usable.
@@ -2217,7 +2227,7 @@ export function registerProviderHandlers(
         }
       });
     } finally {
-      finishOAuthMutation(id, generation);
+      if (generation !== null) finishOAuthMutation(id, generation);
     }
   });
   registry.handle(

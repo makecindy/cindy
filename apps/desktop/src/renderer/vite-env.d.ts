@@ -5103,8 +5103,8 @@ interface ElectronAPI {
       keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
       options?: CustomProviderUpdateOptions,
     ) => Promise<CustomProviderUpdateResult>;
-    disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<{ ok: true }>;
-    deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<{ ok: true }>;
+    disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult>;
+    deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult>;
     localModelStatus: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelStart: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelList: () => Promise<{
@@ -5232,7 +5232,7 @@ interface ElectronAPI {
       providerId: string,
       options?: { ownerId?: string },
     ) => Promise<{ ok: boolean; reason?: string }>;
-    providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<{ ok: true }>;
+    providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult>;
     providerOAuthCancel: (
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },
