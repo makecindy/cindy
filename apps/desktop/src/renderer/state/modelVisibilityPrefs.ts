@@ -599,6 +599,10 @@ export function isModelEnabled(
   const key = keyOf(agent, providerId, model.id);
   const override = load()[key];
   if (override !== undefined) return override;
+  // Restore defaults 记在独立 initialization 里：偏好 map 损坏时仍跟随目录。
+  if (initialization?.followCatalogKeys.includes(key)) {
+    return isModelVisible(undefined, model.defaultEnabled);
+  }
   if (mapCorrupt) return false;
   // 旧全局开关还在等独占导入：不能用目录默认把用户关过的模型暂时打开。
   if (activeOwnerMigrationPending && !mayInitializeDefaults) return false;

@@ -796,6 +796,20 @@ describe('modelVisibilityPrefs store', () => {
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBe('1');
   });
 
+  it('配置损坏时仍尊重 Restore defaults 的跟随目录路线', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', '{ not valid json');
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a', JSON.stringify({
+      eligibleForDefaults: false,
+      defaults: {},
+      scopes: [JSON.stringify(['xd', 'claude-code'])],
+      followCatalogKeys: ['claude-code:xd:claude-opus-4-8'],
+    }));
+    const { isModelEnabled } = await loadModuleForOwner();
+    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8', defaultEnabled: true })).toBe(true);
+    expect(isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6', defaultEnabled: true })).toBe(false);
+  });
+
   it('owner-scoped 配置损坏时不把目录默认当成开启', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', '{ not valid json');
     memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
