@@ -70,7 +70,7 @@ describe('remote schedule event store', () => {
     off();
   });
 
-  it('publishes mirror invalidation even without an existing schedule event snapshot', () => {
+  it('publishes mirror invalidation once per generation and re-arms after a fresh event', () => {
     const before = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
     const sub = vi.fn();
     const off = remoteScheduleEventStore.subscribe(sub);
@@ -83,11 +83,21 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getVersion('dev-1')).toBe(0);
     expect(sub).toHaveBeenCalledTimes(1);
 
+    // 已失效且没有新事件快照:重复的离线标记(闪断、两层各标一次)必须静默,
+    // 否则挂载中的屏幕被反复拉进更新链(2026-09-10 Maximum update depth 崩溃)。
     remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
-    const afterSecond = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
-    expect(afterSecond).not.toBe(afterFirst);
-    expect(afterSecond.get('dev-1')).toBe(2);
+    expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot()).toBe(afterFirst);
+    expect(sub).toHaveBeenCalledTimes(1);
+
+    // 失效后有新事件写入快照:快照重新上膛,下一次离线标记要清掉它并广播。
+    remoteScheduleEventStore.apply('dev-1', { type: 'fired', scheduleId: 'sched-1', runId: 'run-1' });
     expect(sub).toHaveBeenCalledTimes(2);
+    remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
+    const afterThird = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    expect(afterThird).not.toBe(afterFirst);
+    expect(afterThird.get('dev-1')).toBe(2);
+    expect(remoteScheduleEventStore.getVersion('dev-1')).toBe(0);
+    expect(sub).toHaveBeenCalledTimes(3);
 
     off();
   });

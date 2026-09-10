@@ -265,8 +265,17 @@ function DeviceDetailScreenContent() {
     swipeRegistry,
   } = useSessionListActions();
 
+  // Mirror 失效标记在权威同步成功前持续存在,所以同一 generation 只消费一次;
+  // 否则每次 sessions 引用变化(离线标记、后台对账)都会把本 effect 重新拉进
+  // 更新链(2026-09-10 Android Maximum update depth 崩溃)。会话列表晚于本次
+  // 消费到达的场景由 syncSessions 的权威索引重载兜底,不在此重复清理。
+  const consumedMirrorGenerationsRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    if (!deviceId || !scheduleMirrorInvalidations.has(deviceId)) return;
+    if (!deviceId) return;
+    const generation = scheduleMirrorInvalidations.get(deviceId);
+    if (generation === undefined) return;
+    if (consumedMirrorGenerationsRef.current.get(deviceId) === generation) return;
+    consumedMirrorGenerationsRef.current.set(deviceId, generation);
     setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(
       current,
       sessions.map((session) => session.id),

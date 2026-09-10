@@ -74,6 +74,11 @@ export const remoteScheduleEventStore = {
 
   invalidateDeviceMirror(deviceId: string): void {
     if (!deviceId) return;
+    // 幂等:marker 尚在且没有新事件快照时,重复的离线标记(presence 闪断、首页与
+    // device-link 两层各标一次)不得再次 emit——否则挂载中的所有屏幕被反复拉进
+    // 更新链,最终触发 React Maximum update depth(2026-09-10 Android 冷启动崩溃)。
+    // 失效后有新事件写入快照时,快照重新上膛,这里照常清掉并广播一次。
+    if (!snapshots.has(deviceId) && mirrorInvalidationVersions.has(deviceId)) return;
     snapshots.delete(deviceId);
     mirrorInvalidationVersions.set(
       deviceId,
