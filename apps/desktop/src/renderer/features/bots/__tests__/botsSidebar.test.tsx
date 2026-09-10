@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   unread: {} as Record<string, number>,
   groupMessages: new Map<string, unknown[]>(),
   pathname: '/bots',
+  collapsed: false,
   refreshBotProfiles: vi.fn(),
   setBotHidden: vi.fn(async () => undefined),
   setBotPinned: vi.fn(async () => undefined),
@@ -48,11 +49,11 @@ vi.mock('@/hooks/useSessionRunningStatus', () => ({
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
-  useLocation: () => ({ pathname: mocks.pathname }),
+  useLocation: () => ({ pathname: mocks.pathname, search: '', hash: '' }),
   useParams: () => ({}),
 }));
 vi.mock('../../feature-context', () => ({
-  useSidebarCollapsedState: () => false,
+  useSidebarCollapsedState: () => mocks.collapsed,
   useRegisterSidebarUpper: (node: ReactNode) => {
     mocks.registered.node = node;
   },
@@ -75,6 +76,7 @@ vi.mock('../BotDeleteDialog', () => ({
 }));
 
 import { BotsSidebar } from '../BotsSidebar';
+import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
 
 interface BotFixture {
@@ -128,6 +130,7 @@ beforeEach(() => {
   mocks.unread = {};
   mocks.groupMessages = new Map();
   mocks.pathname = '/bots';
+  mocks.collapsed = false;
   mocks.profiles = [];
   mocks.registered.node = null;
   mocks.islandActivity = new Map();
@@ -153,6 +156,31 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+describe('BotsSidebar rail return', () => {
+  it.each([
+    '/cc-agent/session-1?remoteHostId=host-1#message-2',
+    undefined,
+  ])('restores the remembered task route %s, falling back to the index', (taskPath) => {
+    mocks.collapsed = true;
+    mocks.pathname = '/bots/teammate-2';
+    const history: { current: MainViewHistory } = {
+      current: {
+        lastMatchedKey: 'bots',
+        paths: taskPath ? { 'cc-agent': taskPath } : {},
+      },
+    };
+    render(<BotsSidebar />);
+    render(
+      <MainViewHistoryContext.Provider value={history}>
+        {mocks.registered.node}
+      </MainViewHistoryContext.Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.backToSessions' }));
+    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith(taskPath ?? '/cc-agent');
+  });
 });
 
 describe('BotsSidebar 「正在输入…」', () => {

@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
@@ -67,6 +68,7 @@ const UNREAD_BADGE_CLASS =
   'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]';
 
 function BotsSidebarContent() {
+  const { navigateToView } = useActiveMainView();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { botId, sessionId, deviceId } = useParams();
@@ -253,7 +255,7 @@ function BotsSidebarContent() {
           icon={ArrowLeft}
           label={t('sidebar.backToSessions')}
           variant="rail"
-          onClick={() => navigate('/cc-agent')}
+          onClick={() => navigateToView('cc-agent')}
         />
         <BotCreateMenu compact />
       </div>
