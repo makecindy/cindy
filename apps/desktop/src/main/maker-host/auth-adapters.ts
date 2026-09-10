@@ -2179,6 +2179,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     const cancelledAfterHostRestart = cancelFinalization();
     if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
+    setLocalCodexProviderRemoved(false);
     return state;
   }
 

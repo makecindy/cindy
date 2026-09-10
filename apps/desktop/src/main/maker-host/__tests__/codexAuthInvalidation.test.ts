@@ -132,6 +132,8 @@ it('does not chmod a system-shared auth file while finalizing login', async () =
     JSON.stringify({ tokens: { access_token: 'shared-token', account_id: 'acct-1' } }),
   );
   fs.linkSync(systemAuth, localAuth);
+  const { setProviderPresentation, readProviderPresentation } = await import('../provider-presentation-store.js');
+  setProviderPresentation('openai', { name: 'My OpenAI', removed: true });
   const chmod = vi.spyOn(fs.promises, 'chmod');
   const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
   const adapter = new DesktopCodexAuthAdapter();
@@ -142,6 +144,7 @@ it('does not chmod a system-shared auth file while finalizing login', async () =
   ).finishSuccessfulCodexLogin.bind(adapter);
 
   await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
+  expect(readProviderPresentation('openai')).toEqual({ name: 'My OpenAI', removed: false });
   expect(chmod).not.toHaveBeenCalled();
   expect(fs.statSync(systemAuth).ino).toBe(fs.statSync(localAuth).ino);
 });
