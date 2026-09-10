@@ -7275,7 +7275,11 @@
       "deleteTitle": "永久刪除夥伴",
       "deleteDescription": "這會刪掉 {{name}}：個性、已連的通道、排定的行程都會消失。刪了找不回來。",
       "working": "正在更新…",
-      "actionFailed": "操作未完成，請稍後重試。"
+      "actionFailed": "操作未完成，請稍後重試。",
+      "restart": "重新啟動夥伴",
+      "restartDescription": "停止目前執行並重新準備，保留對話記錄、記憶和檔案。",
+      "restarting": "正在重新啟動…",
+      "restarted": "已重新啟動，傳送訊息即可繼續。"
     },
     "backToChat": "返回對話",
     "memoryRecovery": {

@@ -7277,7 +7277,11 @@
       "deleteTitle": "Permanently delete teammate",
       "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
       "working": "Updating…",
-      "actionFailed": "The action did not finish. Try again shortly."
+      "actionFailed": "The action did not finish. Try again shortly.",
+      "restart": "Restart teammate",
+      "restartDescription": "Stop the current run and prepare a fresh start. Conversation history, memories, and files are kept.",
+      "restarting": "Restarting…",
+      "restarted": "Restarted. Send a message to continue."
     },
     "backToChat": "Back to chat",
     "memoryRecovery": {

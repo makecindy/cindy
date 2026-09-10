@@ -289,7 +289,7 @@ describe('createContextOverflowRollover', () => {
           agentKind: string;
           remoteHostId: string | null;
           clearedAt: number | null;
-          sdkSessionId: string;
+          sdkSessionId: string | null;
           contextTokens: number;
           contextWindow: number;
           model: string;
@@ -335,6 +335,46 @@ describe('createContextOverflowRollover', () => {
       log: { info: vi.fn(), warn: vi.fn() },
     };
   }
+
+  it.each(['cc', 'codex', 'pi'] as const)('explicit Bot restart replaces a running %s context without replay', async (agentKind) => {
+    const deps = makeDeps([msg('user', 'keep my request', 'u1', 1)]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', agentKind });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => true });
+    deps.closeSession.mockImplementation(async () => {
+      deps.listMessages.mockResolvedValue([
+        msg('user', 'keep my request', 'u1', 1),
+        msg('assistant', 'saved before close', 'a1', 2),
+      ]);
+    });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', null, vi.fn());
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.stringContaining('saved before close'),
+      expect.objectContaining({ reason: 'native-session-recovery', sourceAgentKind: agentKind }));
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String),
+      expect.not.objectContaining({ replacementRoute: expect.anything() }));
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('can restart a Bot before a native handle was ever created', async () => {
+    const deps = makeDeps([]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', null, vi.fn());
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not reset history bindings or publish success when the old Bot cannot close', async () => {
+    const deps = makeDeps([msg('user', 'keep', 'u1', 1)]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot' });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => true });
+    deps.closeSession.mockRejectedValueOnce(new Error('close failed'));
+    const recovery = createContextOverflowRollover(deps);
+    await expect(recovery.prepareNativeSessionRecovery('s1', null, vi.fn())).rejects.toThrow('close failed');
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    await recovery.prepareNativeSessionRecovery('s1', null, vi.fn());
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+  });
 
   it.each(['cc', 'codex', 'pi'] as const)('native recovery carries %s history and the full target route without replay', async (agentKind) => {
     const deps = makeDeps([msg('user', 'KEEP_CONTEXT', 'u1', 1), msg('assistant', 'already finished', 'a1', 2)]);

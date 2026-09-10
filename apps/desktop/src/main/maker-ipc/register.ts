@@ -403,6 +403,7 @@ import {
   createBotDirectMessageService,
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
+import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { updateBotRoutineLifecycle } from '../routines/service.js';
 import {
@@ -9304,6 +9305,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   registerBotLifecycleHandlers({
     maker,
+    restartRuntime: async (sessionId, assertOwnerCurrent) => {
+      const recovery = contextOverflowRolloverHolder;
+      if (!recovery) throwIpcError('PRECONDITION_FAILED', 'Bot recovery is not ready');
+      await restartBotRuntime(sessionId, assertOwnerCurrent, {
+        stopInput: (id) => {
+          // Save the visible partial reply before abort/close clears the stream buffers.
+          flushAssistantBlock(id);
+          flushOrphanToolResults(id, null);
+          resetAutomaticRecoveryForExplicitStop(id);
+          recovery.cancelRecovery(id);
+          // Cancel sends/retries before waiting for their serialization lock.
+          // Preserve queued user input, paused until the user explicitly resumes it.
+          agentInputCoordinatorHolder?.stop(id, { keepQueue: true, pauseQueue: true });
+        },
+        withSessionLock: withSendToSessionLock,
+        rebuild: async (id, assertCurrent, signal) => {
+          await pauseGoalBeforeExplicitStop(id);
+          assertCurrent();
+          cleanupPendingInteractionsForSession(id, 'session_closed');
+          await recovery.prepareNativeSessionRecovery(id, null, assertCurrent, signal);
+        },
+        onClosed: (id) => agentInputCoordinatorHolder?.onSessionClosed(id),
+      });
+    },
     getDelegationService: () => botDelegationServiceHolder,
     onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
     onResumed: (botId) => updateBotRoutineLifecycle(botId, 'resume'),

@@ -1,11 +1,12 @@
-import { useState } from 'react';
-import { PauseCircle, PlayCircle, Search, Settings2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { PauseCircle, PlayCircle, RotateCcw, Search, Settings2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
 import type { BotProfile } from './botStore';
 import { runBotLifecycleAction } from './botStore';
+import { Button } from '@/components/ui/button';
 import { BotSettingsBlock } from './BotSettingsBlock';
 
 /**
@@ -25,8 +26,10 @@ export function BotLifecycleSettings({
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(false);
   const [searchResult, setSearchResult] = useState<ConversationSearchResponse | null>(null);
-  const [actionBusy, setActionBusy] = useState<'pause' | 'resume' | null>(null);
+  const [actionBusy, setActionBusy] = useState<'pause' | 'resume' | 'restart' | null>(null);
   const [actionError, setActionError] = useState(false);
+  const [restarted, setRestarted] = useState(false);
+  const actionInFlight = useRef(false);
 
   const archivedSessions = bot.sessions
     .filter((item) => item.kind === 'history')
@@ -34,14 +37,19 @@ export function BotLifecycleSettings({
   const isPaused = bot.status === 'paused';
   const isArchived = bot.status === 'archived';
 
-  const runLifecycleAction = async (action: 'pause' | 'resume') => {
+  const runLifecycleAction = async (action: 'pause' | 'resume' | 'restart') => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setRestarted(false);
     setActionBusy(action);
     setActionError(false);
     try {
       await runBotLifecycleAction({ botId: bot.id, action });
+      setRestarted(action === 'restart');
     } catch {
       setActionError(true);
     } finally {
+      actionInFlight.current = false;
       setActionBusy(null);
     }
   };
@@ -110,6 +118,29 @@ export function BotLifecycleSettings({
           ) : null}
         </div>
       </div>
+
+      {!isArchived && !isPaused && bot.status !== 'deleting' ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] p-4">
+          <p className="min-w-0 flex-1 text-12 leading-5 text-[var(--text-secondary)]">
+            {t('bots.lifecycle.restartDescription')}
+          </p>
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => void runLifecycleAction('restart')}
+            disabled={actionBusy !== null}
+            aria-busy={actionBusy === 'restart'}
+          >
+            <RotateCcw size={15} aria-hidden />
+            {t(actionBusy === 'restart' ? 'bots.lifecycle.restarting' : 'bots.lifecycle.restart')}
+          </Button>
+        </div>
+      ) : null}
+      {restarted ? (
+        <p className="mt-3 text-12 text-[var(--text-secondary)]" role="status">
+          {t('bots.lifecycle.restarted')}
+        </p>
+      ) : null}
 
       {actionError ? (
         <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">

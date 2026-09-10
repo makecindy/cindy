@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
-import type { BotProfile } from '../botStore';
+import { runBotLifecycleAction, type BotProfile } from '../botStore';
 import { BotLifecycleSettings } from '../BotLifecycleSettings';
 
 vi.mock('react-i18next', () => ({
@@ -53,6 +53,7 @@ function bot(status: BotProfile['status']): BotProfile {
 }
 
 beforeEach(() => {
+  vi.mocked(runBotLifecycleAction).mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -70,6 +71,32 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotLifecycleSettings v1 actions', () => {
+  it('restarts from settings with pending and success feedback and no confirmation', async () => {
+    let finish!: () => void;
+    vi.mocked(runBotLifecycleAction).mockImplementation(() => new Promise((resolve) => {
+      finish = () => resolve({ botId: 'bot-1', action: 'restart', status: 'active',
+        affected: { sessions: 1, routes: 0, automations: 0, delegations: 0, deliveries: 0, worktrees: 0 } });
+    }));
+    render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.restart' }));
+    expect(runBotLifecycleAction).toHaveBeenCalledWith({ botId: 'bot-1', action: 'restart' });
+    const pending = screen.getByRole('button', { name: 'bots.lifecycle.restarting' }) as HTMLButtonElement;
+    expect(pending.disabled).toBe(true);
+    fireEvent.click(pending);
+    expect(runBotLifecycleAction).toHaveBeenCalledOnce();
+    finish();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('bots.lifecycle.restarted'));
+  });
+
+  it('keeps restart available after a failed attempt', async () => {
+    vi.mocked(runBotLifecycleAction).mockRejectedValueOnce(new Error('unavailable'));
+    render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.restart' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect((screen.getByRole('button', { name: 'bots.lifecycle.restart' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('offers pause while deletion stays in the teammate list', async () => {
     render(
       <MemoryRouter>

@@ -7275,7 +7275,11 @@
       "deleteTitle": "永久删除伙伴",
       "deleteDescription": "这会删掉 {{name}}：性格、已连的通道、定的日程都会没。删了找不回来。",
       "working": "正在更新…",
-      "actionFailed": "操作未完成，请稍后重试。"
+      "actionFailed": "操作未完成，请稍后重试。",
+      "restart": "重启伙伴",
+      "restartDescription": "停止当前运行并重新准备，保留对话记录、记忆和文件。",
+      "restarting": "正在重启…",
+      "restarted": "已重启，发送消息即可继续。"
     },
     "backToChat": "返回对话",
     "memoryRecovery": {

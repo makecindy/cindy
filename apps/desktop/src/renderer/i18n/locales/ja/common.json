@@ -7275,7 +7275,11 @@
       "deleteTitle": "仲間を完全に削除",
       "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
       "working": "更新中…",
-      "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。"
+      "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。",
+      "restart": "チームメイトを再起動",
+      "restartDescription": "現在の実行を停止して再開の準備をします。会話履歴、メモリ、ファイルは保持されます。",
+      "restarting": "再起動中…",
+      "restarted": "再起動しました。メッセージを送信して続けられます。"
     },
     "backToChat": "チャットに戻る",
     "memoryRecovery": {
