@@ -384,3 +384,13 @@ export const clearOpenAiMediaModels = (): void => {
   credentialGeneration += 1;
   discovery.clear();
 };
+
+/** Images API key store/remove: bump generation and refresh or clear without Codex login. */
+export function notifyOpenAiMediaCredentialChanged(): void {
+  if (imagesApiKey() || hasCodexOAuthLoginReadOnly()) {
+    credentialGeneration += 1;
+    void discovery.refresh();
+  } else {
+    clearOpenAiMediaModels();
+  }
+}

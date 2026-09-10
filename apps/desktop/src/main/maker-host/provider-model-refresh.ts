@@ -29,15 +29,16 @@ export async function refreshBuiltinProviderModels(
         throw new Error('Anthropic model discovery did not produce a current snapshot');
       }
       return;
-    case 'openai':
-      if (!(await deps.refreshOpenAi())) {
+    case 'openai': {
+      // Images API key discovery must not wait on Codex chat refresh. ChatGPT
+      // model/list is chat-only; a missing OAuth login still has to hit /v1/models.
+      const chatApplied = await deps.refreshOpenAi();
+      await deps.refreshOpenAiMedia();
+      if (!chatApplied) {
         throw new Error('OpenAI model discovery did not apply to the current runtime');
       }
-      // ChatGPT model/list is chat-only. Image discovery is a separate /v1/models
-      // pass; 401 or a chat-only payload must not fail the chat refresh or wipe
-      // the bundled GPT Image catalog.
-      await deps.refreshOpenAiMedia();
       return;
+    }
     case 'xai':
       if (!(await deps.refreshXai())) {
         throw new Error('xAI account model discovery did not apply to the current runtime');

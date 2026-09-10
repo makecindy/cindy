@@ -592,6 +592,7 @@ import {
   loadXaiModelsFromDiskCache,
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
+import { notifyOpenAiMediaCredentialChanged } from './maker-host/model-discovery/openai-media.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
 import {
   clearXaiRateLimitSnapshot,
@@ -5363,6 +5364,9 @@ const registerIpcHandlers = () => {
       source: 'host_config',
       ref: `provider:${providerId}`,
     });
+    if (providerId === 'openai-images') {
+      notifyOpenAiMediaCredentialChanged();
+    }
     // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {

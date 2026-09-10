@@ -37,9 +37,11 @@ describe('refreshBuiltinProviderModels', () => {
     await expect(
       refreshBuiltinProviderModels('anthropic', deps({ refreshAnthropic: async () => false })),
     ).rejects.toThrow(/Anthropic model discovery/);
+    const openaiChatMiss = deps({ refreshOpenAi: async () => false });
     await expect(
-      refreshBuiltinProviderModels('openai', deps({ refreshOpenAi: async () => false })),
+      refreshBuiltinProviderModels('openai', openaiChatMiss),
     ).rejects.toThrow(/OpenAI model discovery/);
+    expect(openaiChatMiss.refreshOpenAiMedia).toHaveBeenCalledOnce();
     const openaiMediaMiss = deps({ refreshOpenAiMedia: async () => false });
     await expect(refreshBuiltinProviderModels('openai', openaiMediaMiss)).resolves.toBeUndefined();
     expect(openaiMediaMiss.refreshOpenAi).toHaveBeenCalledOnce();

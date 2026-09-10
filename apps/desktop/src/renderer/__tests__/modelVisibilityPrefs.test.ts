@@ -807,6 +807,16 @@ describe('compact model defaults upgrade', () => {
     expect(JSON.parse(memStorage.getItem(scopedKey)!)).toEqual({});
   });
 
+  it('does not auto-enable image models for existing accounts', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const snapshot = {
+      ...provider,
+      imageModels: [{ id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' }],
+    } as unknown as ProviderView;
+    const prefs = await upgrade('owner-a', 1, snapshot);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2.5-sunburst' })).toBe(false);
+  });
+
   it('initializes image and video display switches from catalog defaults', async () => {
     const snapshot = {
       ...provider,

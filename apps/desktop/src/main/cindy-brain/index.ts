@@ -3463,7 +3463,9 @@ function isCatalogMediaModelVisible(
       defaultEnabled,
     );
   } catch {
-    return defaultEnabled !== false;
+    // Mirror not ready or owner boundary: fail closed so hidden models cannot
+    // leak into Art / cindy-request while renderer preferences are still syncing.
+    return false;
   }
 }
 
