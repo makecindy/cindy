@@ -3,12 +3,10 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/7a188fd38c636b249f8ca6c8e292a748e66535e389b72d172b7b74e1cbd3975e",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/e7f9b863272c3418e5d4500080cde79497fe814150f31ec2a5f164ec0a1b464f",
   "creationInfo": {
-    "created": "2026-09-02T19:21:04Z",
-    "creators": [
-      "Tool: scripts/generate-third-party-notices.mjs"
-    ]
+    "created": "2026-09-08T11:11:04Z",
+    "creators": ["Tool: scripts/generate-third-party-notices.mjs"]
   },
   "packages": [
     {
@@ -59,6 +57,16 @@
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "JOSESwift",
+      "SPDXID": "SPDXRef-Package-252de9e411c654b4",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "https://github.com/airsidemobile/JOSESwift/tree/3.0.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
       "copyrightText": "NOASSERTION"
     },
     {
@@ -14902,6 +14910,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e57785feb130dc56"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-252de9e411c654b4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

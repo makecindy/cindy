@@ -19,6 +19,14 @@ import {
 
 export interface DesktopControllerDeps {
   authorized(peer: string): boolean;
+  /**
+   * Trusted host authentication provider, never a controller-supplied flag.
+   * A nonempty ID identifies one verified credential session. Return null on
+   * expiry/revocation or while authentication is pending. A replacement session
+   * must have a new ID, even for the same peer. Omit only for legacy hosts that
+   * do not advertise credential authentication.
+   */
+  authenticationSession?(peer: string): string | null;
   capabilities(): Promise<RemoteDesktopCapabilities>;
   permissions?(action: 'check' | 'guide'): Promise<RemoteDesktopPermissions>;
   frame(displayId: string, cursorOverlay?: boolean): Promise<string | RemoteDesktopCursorFrame | null>;
@@ -26,6 +34,7 @@ export interface DesktopControllerDeps {
   input(events: DesktopInput[]): void;
   stopInput(): void;
   stopVideo(): void;
+  lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   offer(
     lease: RemoteDesktopLease,
     sdp: string,
@@ -53,10 +62,13 @@ export class RemoteDesktopController {
         peer: string;
         expires: number;
         sequence: number;
+        authenticationSession: string | undefined;
         backgroundViewing?: boolean;
       })
     | null = null;
   private starting = false;
+  private locking = false;
+  private lockAbort: AbortController | null = null;
   private startingPeer: string | null = null;
   private framePending = false;
   private clipboardPending = false;
@@ -80,10 +92,29 @@ export class RemoteDesktopController {
   private now(): number {
     return this.deps.now?.() ?? Date.now();
   }
+  private authenticationSession(peer: string): string | undefined {
+    if (!this.deps.authenticationSession) return undefined;
+    try {
+      const session = this.deps.authenticationSession(peer);
+      if (typeof session === 'string' && session.length > 0) return session;
+    } catch {
+      // Native errors must not carry credential diagnostics into invoke replies.
+    }
+    throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+  }
+  private authenticationCurrent(peer: string, session: string | undefined): boolean {
+    try {
+      return this.authenticationSession(peer) === session;
+    } catch {
+      // A failing native provider must revoke existing access, not preserve it.
+      return false;
+    }
+  }
   tick(): void {
     if (
       this.active &&
-      (this.active.expires <= this.now() || !this.deps.authorized(this.active.peer))
+      (this.active.expires <= this.now() || !this.deps.authorized(this.active.peer) ||
+        !this.authenticationCurrent(this.active.peer, this.active.authenticationSession))
     )
       this.stop();
   }
@@ -93,6 +124,7 @@ export class RemoteDesktopController {
       if (this.startingPeer === peer) this.startingPeer = null;
       return;
     }
+    this.lockAbort?.abort();
     if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
     this.clipboardTransfer.reset();
     this.controlGeneration++;
@@ -141,24 +173,38 @@ export class RemoteDesktopController {
   async request(peer: string, raw: unknown): Promise<unknown> {
     const request = parseRemoteDesktopRequest(raw);
     this.tick();
-    if (request.op === 'capabilities')
-      return { ...(await this.deps.capabilities()), automaticReconnect: true, connectionTakeover: true };
+    if (request.op === 'capabilities') {
+      // Protected hosts use a separate, minimal pre-auth handshake. The normal
+      // capabilities response includes display information and is post-auth.
+      const session = this.authenticationSession(peer);
+      if (session !== undefined && !this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+      const caps = await this.deps.capabilities();
+      if (!this.authenticationCurrent(peer, session)) throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      if (session !== undefined && !this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+      return { ...caps, automaticReconnect: true, connectionTakeover: true };
+    }
     if (!this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
     if (request.op === 'permissions') {
+      const session = this.authenticationSession(peer);
       if (!this.deps.permissions) throw new Error('DESKTOP_PERMISSIONS_UNAVAILABLE');
-      return this.deps.permissions(request.action);
+      const permissions = await this.deps.permissions(request.action);
+      if (!this.authenticationCurrent(peer, session)) throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      return permissions;
     }
     if (request.op === 'start') {
+      const authenticationSession = this.authenticationSession(peer);
       if (request.resume && this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
       const resumesActive = request.resume && this.active?.peer === peer &&
         this.active.display.id === request.displayId;
-      if (this.starting || (this.active && !request.takeover && !resumesActive))
+      if (this.locking || this.starting || (this.active && !request.takeover && !resumesActive))
         throw new Error('DESKTOP_BUSY');
       this.starting = true;
       this.startingPeer = peer;
       const generation = this.controlGeneration;
       try {
         const caps = await this.deps.capabilities();
+        if (!this.authenticationCurrent(peer, authenticationSession))
+          throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
         const display = caps.displays.find((d) => d.id === request.displayId);
         if (!display) throw new Error('DESKTOP_DISPLAY_MISSING');
         if (this.startingPeer !== peer || generation !== this.controlGeneration || !this.deps.authorized(peer))
@@ -177,6 +223,7 @@ export class RemoteDesktopController {
           peer,
           expires: this.now() + REMOTE_DESKTOP_LEASE_MS,
           sequence: -1,
+          authenticationSession,
         };
         this.deps.changed();
         return lease;
@@ -187,9 +234,30 @@ export class RemoteDesktopController {
     }
     const active = this.require(peer, request.lease);
     switch (request.op) {
-      case 'stop':
+      case 'stop': {
+        if (request.lockScreen) {
+          if (!this.deps.lockScreen) throw new Error('DESKTOP_LOCK_UNAVAILABLE');
+          if (this.locking || this.starting) throw new Error('DESKTOP_BUSY');
+          this.locking = true;
+          const cancellation = new AbortController();
+          this.lockAbort = cancellation;
+          active.controlling = false;
+          this.controlGeneration++;
+          try {
+            await this.deps.lockScreen(() => {
+              this.tick();
+              return this.active === active && this.deps.authorized(peer);
+            }, cancellation.signal);
+          } finally {
+            this.lockAbort = null;
+            this.locking = false;
+            if (this.active === active) this.stop(peer);
+          }
+          return { ok: true };
+        }
         this.stop(peer);
         return { ok: true };
+      }
       case 'heartbeat':
         active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
         return { controlling: active.controlling };
@@ -205,6 +273,7 @@ export class RemoteDesktopController {
         return { controlling: active.controlling };
       }
       case 'control': {
+        if (this.locking) throw new Error('DESKTOP_BUSY');
         if (request.enabled) active.backgroundViewing = false;
         if (request.enabled && this.inputStarting) throw new Error('DESKTOP_INPUT_BUSY');
         this.clipboardTransfer.reset();

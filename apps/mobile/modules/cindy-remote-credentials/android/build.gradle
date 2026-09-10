@@ -1,0 +1,34 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'app.cindy.credentials'
+version = '0.1.0'
+android {
+  namespace 'app.cindy.credentials'
+  defaultConfig {
+    minSdkVersion 24
+    versionCode 1
+    versionName '0.1.0'
+  }
+  sourceSets.main.assets.srcDirs += '../../../../../packages/remote-credentials-native/Sources/CindyRemoteCredentials/Resources'
+}
+dependencies {
+  implementation 'com.nimbusds:nimbus-jose-jwt:10.9.1'
+  implementation 'androidx.biometric:biometric:1.1.0'
+}
+
+dependencies {
+  testImplementation 'org.json:json:20240303'
+}
+// A test-only JVM peer used by Swift's opt-in two-process interoperability test.
+// The file contains class paths, never fixture keys or application credentials.
+tasks.register('writeInteropClasspath') {
+  dependsOn 'compileDebugUnitTestKotlin'
+  doLast {
+    def jars = tasks.named('compileDebugUnitTestKotlin').get().libraries.files.findAll { it.name.endsWith('.jar') }
+      .sort { it.name.startsWith('json-') ? 0 : 1 }
+    def outputs = [file("$buildDir/tmp/kotlin-classes/debug"), file("$buildDir/tmp/kotlin-classes/debugUnitTest")]
+    file("$buildDir/interop-classpath.txt").text = (outputs + jars).collect { it.absolutePath }.join(File.pathSeparator)
+  }
+}

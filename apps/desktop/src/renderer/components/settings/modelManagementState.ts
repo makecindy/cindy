@@ -20,9 +20,9 @@ export function modelManagementState(
       : provider.connected);
   return {
     ready,
-    selected: !model.capability && ready && model.savedSelected,
+    selected: ready && model.savedSelected,
     // Disconnected models remain in their brand groups; they aren't user-disabled models.
-    hidden: !model.capability && ready && !model.savedSelected,
-    canSelect: !model.capability && ready,
+    hidden: ready && !model.savedSelected,
+    canSelect: ready,
   };
 }

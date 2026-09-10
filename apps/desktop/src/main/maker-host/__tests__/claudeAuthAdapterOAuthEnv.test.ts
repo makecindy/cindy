@@ -9,6 +9,7 @@
  * gateway-key 模式不受影响、不带订阅 token。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildClaudeEnv } from '../../../../../../packages/maker-core/src/agents/claude-code/env-builder.js';
 
 const h = vi.hoisted(() => ({
   hasOAuth: true,
@@ -23,6 +24,8 @@ const h = vi.hoisted(() => ({
   encryptionAvailable: true,
   proxyReady: true,
   canUseGateway: true,
+  accounts: new Map<string, Record<string, unknown> | null>(),
+  refreshAccount: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -67,6 +70,13 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   },
 }));
 
+vi.mock('../subscription-account-auth.js', () => ({
+  subscriptionAccountKind: (id: string) => h.accounts.has(id) ? 'claude' : null,
+  readClaudeAccountOAuth: (id: string) => h.accounts.get(id) ?? null,
+  subscriptionAccountState: (id: string) => ({ authenticated: !!h.accounts.get(id), authSource: 'oauth' }),
+  getValidClaudeAccountOAuth: (...args: unknown[]) => h.refreshAccount(...args),
+}));
+
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   getProviderSecretStore: () => ({
     get: () => h.gatewayKey,
@@ -102,6 +112,8 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     h.encryptionAvailable = true;
     h.proxyReady = true;
     h.canUseGateway = true;
+    h.accounts.clear();
+    h.refreshAccount.mockReset();
   });
 
   it('keeps the owner-scoped BYOK key readable when Cindy gateway access is disabled', async () => {
@@ -127,6 +139,49 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBe('max');
     expect(env.CLAUDE_CODE_RATE_LIMIT_TIER).toBe('default_claude_max_20x');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('builds native OAuth environments for the selected independent accounts', async () => {
+    h.hasOAuth = false;
+    h.gatewayKey = null;
+    const adapter = await makeAdapter();
+    for (const providerId of ['anthropic-a', 'anthropic-b']) {
+      h.accounts.set(providerId, { ...h.oauth, accessToken: `test-token-${providerId}` });
+      await expect(adapter.getState({ credentialMode: 'provider-oauth', providerId })).resolves.toMatchObject({
+        authenticated: true, authSource: 'oauth',
+      });
+      const env = await buildClaudeEnv(adapter, { endpoint: 'http://127.0.0.1:1' }, {
+        credentialMode: 'provider-oauth', sessionProviderId: providerId,
+      });
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-token-${providerId}`);
+      expect(env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID).toBe(providerId);
+      expect(env.CLAUDE_CODE_OAUTH_SCOPES).toBe('user:inference user:profile');
+      expect(env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBe('max');
+      expect(env.CLAUDE_CODE_RATE_LIMIT_TIER).toBe('default_claude_max_20x');
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    }
+    h.refreshAccount.mockResolvedValue({ accessToken: 'test-refreshed-a' });
+    await expect(adapter.getFreshSubscriptionToken('test-token-anthropic-a', 'anthropic-a')).resolves.toBe('test-refreshed-a');
+    expect(h.refreshAccount).toHaveBeenCalledWith('anthropic-a', {
+      forceRefresh: true, staleToken: 'test-token-anthropic-a',
+    });
+  });
+
+  it('keeps independent account startup closed when the proxy or account is unavailable', async () => {
+    const providerId = 'anthropic-a';
+    h.accounts.set(providerId, { accessToken: 'test-account-a' });
+    const adapter = await makeAdapter();
+    h.proxyReady = false;
+    await expect(adapter.getState({ credentialMode: 'provider-oauth', providerId })).resolves.toEqual({
+      authenticated: false, errorReason: 'proxy_not_ready',
+    });
+    h.proxyReady = true;
+    h.accounts.set(providerId, null);
+    await expect(adapter.getState({ credentialMode: 'provider-oauth', providerId })).resolves.toMatchObject({
+      authenticated: false,
+    });
+    await expect(adapter.getAuthEnv({ credentialMode: 'provider-oauth', providerId })).rejects.toThrow('Claude account requires login');
   });
 
   it('订阅字段缺省时只注入 token 本体,不留空值 env', async () => {

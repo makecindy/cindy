@@ -125,6 +125,8 @@ export interface RemoteDesktopCapabilities {
   automaticReconnect?: boolean;
   /** Explicit same-account replacement of the active viewer. */
   connectionTakeover?: boolean;
+  /** Explicit remote exit can lock the host; ordinary stop/recovery is unchanged. */
+  lockOnExit?: boolean;
   videoSettings?: boolean;
   trickleIce?: boolean;
   systemAudio?: boolean;
@@ -162,7 +164,8 @@ export type RemoteDesktopRequest =
   | { op: "capabilities" }
   | { op: "permissions"; action: "check" | "guide" }
   | { op: "start"; displayId: string; resume?: boolean; takeover?: boolean }
-  | { op: "heartbeat" | "stop"; lease: string }
+  | { op: "heartbeat"; lease: string }
+  | { op: "stop"; lease: string; lockScreen?: boolean }
   | { op: "frame"; lease: string; cursorOverlay?: boolean }
   | { op: "control" | "presentation"; lease: string; enabled: boolean }
   | { op: "input"; lease: string; sequence: number; events: DesktopInput[] }
@@ -230,7 +233,11 @@ export function parseRemoteDesktopRequest(
     if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean") throw new Error("INVALID_REQUEST");
     return { op: v.op, lease, ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}) };
   }
-  if (v.op === "heartbeat" || v.op === "stop")
+  if (v.op === "stop") {
+    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean") throw new Error("INVALID_REQUEST");
+    return { op: v.op, lease, ...(v.lockScreen === true ? { lockScreen: true } : {}) };
+  }
+  if (v.op === "heartbeat")
     return { op: v.op, lease };
   if (
     (v.op === "control" || v.op === "presentation") &&

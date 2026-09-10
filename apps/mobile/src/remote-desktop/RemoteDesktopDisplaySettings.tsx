@@ -1,5 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import { Check, ChevronDown } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -27,7 +33,7 @@ type Props = {
     settings: RemoteDesktopVideoSettings;
     busy: boolean;
     modesSupported: boolean;
-    onChange(settings: RemoteDesktopVideoSettings): void;
+    onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
     onResolution(id: string): Promise<void>;
   };
@@ -68,7 +74,7 @@ export function RemoteDesktopDisplaySettings({
       active = false;
     };
   }, [connected, video.modesSupported, reload]);
-  const disabled = !connected || !video.supported || video.busy;
+  const disabled = !connected || !video.supported;
   const title = { color: colors.textPrimary, fontSize: typeScale.body };
   const hint = { color: colors.textTertiary, fontSize: typeScale.caption };
   const segment = (label: string, selected: boolean, onPress: () => void) => (
@@ -108,22 +114,32 @@ export function RemoteDesktopDisplaySettings({
     backgroundColor: colors.surfaceChip,
   };
   const segmented = (
+    name: "frameRate" | "quality",
     values: string[],
     selectedIndex: number,
     onSelect: (index: number) => void,
   ) =>
     Platform.OS === "ios" ? (
-      <SegmentedControl
-        values={values}
-        selectedIndex={selectedIndex}
-        enabled={!disabled}
-        appearance={colorScheme}
-        style={{ minHeight: 44 }}
-        onChange={({ nativeEvent }) => {
-          const index = nativeEvent.selectedSegmentIndex;
-          if (!disabled && index >= 0 && index < values.length) onSelect(index);
-        }}
-      />
+      <View
+        testID={`remoteDesktop.${name}Control`}
+        pointerEvents={disabled ? "none" : "auto"}
+        accessible={disabled}
+        accessibilityLabel={t(`remoteDesktop.${name}`)}
+        accessibilityState={{ disabled }}
+      >
+        <SegmentedControl
+          values={values}
+          selectedIndex={selectedIndex}
+          enabled={!disabled}
+          appearance={colorScheme}
+          style={{ height: 44 }}
+          onChange={({ nativeEvent }) => {
+            const index = nativeEvent.selectedSegmentIndex;
+            if (!disabled && index >= 0 && index < values.length)
+              onSelect(index);
+          }}
+        />
+      </View>
     ) : (
       <View style={segments}>
         {values.map((label, index) =>
@@ -162,40 +178,59 @@ export function RemoteDesktopDisplaySettings({
       style={styles.row}
       accessibilityRole="button"
       accessibilityState={{ expanded: nativeMenu ? undefined : expanded }}
+      accessibilityLabel={
+        failure
+          ? t("remoteDesktop.retrySettings")
+          : t("remoteDesktop.resolution")
+      }
     >
       <View style={{ flex: 1, gap: spacing.xs }}>
         <Text style={title}>{t("remoteDesktop.resolution")}</Text>
-        <Text style={hint}>
+        <Text style={hint} numberOfLines={1}>
           {!video.modesSupported
             ? t("remoteDesktop.settingUnsupported")
-            : loading
-              ? t("remoteDesktop.loadingSettings")
-              : failure
-                ? t("remoteDesktop.retrySettings")
-                : current
-                  ? modeLabel(current)
-                  : t("remoteDesktop.followComputer")}
+            : current
+              ? modeLabel(current)
+              : t("remoteDesktop.followComputer")}
         </Text>
       </View>
-      <ChevronDown size={iconSize.md} color={colors.textTertiary} />
+      <View
+        style={{
+          width: 24,
+          height: 24,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {loading || video.busy ? (
+          <ActivityIndicator
+            size="small"
+            color={colors.textTertiary}
+            accessibilityLabel={t("remoteDesktop.loadingSettings")}
+          />
+        ) : (
+          <ChevronDown size={iconSize.md} color={colors.textTertiary} />
+        )}
+      </View>
     </Pressable>
   );
   return (
     <View style={{ gap: spacing.md }}>
       <Text style={hint}>{t("remoteDesktop.frameRate")}</Text>
       {segmented(
+        "frameRate",
         fpsValues.map((fps) => t("remoteDesktop.fps", { count: fps })),
         fpsValues.indexOf(video.settings.fps),
-        (index) => video.onChange({ ...video.settings, fps: fpsValues[index] }),
+        (index) => video.onChange({ fps: fpsValues[index] }),
       )}
       <Text style={hint}>{t("remoteDesktop.quality")}</Text>
       {segmented(
+        "quality",
         ["automatic", "clear", "highDefinition", "original"].map((key) =>
           t(`remoteDesktop.${key}`),
         ),
         qualityValues.indexOf(video.settings.bitrate),
-        (index) =>
-          video.onChange({ ...video.settings, bitrate: qualityValues[index] }),
+        (index) => video.onChange({ bitrate: qualityValues[index] }),
       )}
       <Text style={hint}>{t("remoteDesktop.qualityHint")}</Text>
       <View
@@ -228,10 +263,13 @@ export function RemoteDesktopDisplaySettings({
         ) : (
           resolutionTrigger
         )}
-        <Text style={hint}>{t("remoteDesktop.resolutionHint")}</Text>
-        {!controlling && (
-          <Text style={hint}>{t("remoteDesktop.resolutionControlHint")}</Text>
-        )}
+        <Text style={hint}>
+          {t(
+            controlling
+              ? "remoteDesktop.resolutionHint"
+              : "remoteDesktop.resolutionControlHint",
+          )}
+        </Text>
         {!nativeMenu &&
           expanded &&
           modes.map((mode) => (
@@ -252,6 +290,11 @@ export function RemoteDesktopDisplaySettings({
               )}
             </Pressable>
           ))}
+        {failure && (
+          <Text style={hint} accessibilityRole="alert">
+            {t("remoteDesktop.retrySettings")}
+          </Text>
+        )}
       </View>
       {!video.supported && (
         <Text style={hint}>{t("remoteDesktop.settingUnsupported")}</Text>

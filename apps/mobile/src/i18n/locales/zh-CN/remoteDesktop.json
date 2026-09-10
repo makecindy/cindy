@@ -1,4 +1,9 @@
 {
+  "credentialPasswordRejected": "Mac 登录密码验证失败，请重新输入。",
+  "credentialCancelled": "已取消密码验证，准备好后可重新连接。",
+  "credentialIdentityChanged": "无法确认电脑身份，不会向未经验证的设备发送密码。",
+  "credentialExpired": "安全连接已过期，请重新连接并验证。",
+  "credentialRequired": "请完成 Mac 密码验证后重新连接。如果无法验证，请更新手机和电脑上的 Cindy。",
   "takeoverConnection": "接管连接",
   "connectionBusyTakeover": "已有其他设备连接此远程桌面。接管连接后，上一台设备会断开。",
   "clipboard": "剪贴板",
@@ -113,5 +118,18 @@
   "pipUnavailable": "当前无法开启系统画中画，请保持 Cindy 在前台观看。",
   "clipboardUnsupported": "这种剪贴板内容暂不支持，请单独复制一张图片、文字或链接。文件和应用专有格式暂不能传输。",
   "clipboardTransferring": "正在传输剪贴板内容…",
-  "nativeResolution": "原生"
+  "nativeResolution": "原生",
+  "credentialAccessibilityRequired": "请在 Mac 的系统设置 → 隐私与安全性 → 辅助功能中允许 Cindy，然后重新连接。",
+  "credentialUnlockUnavailable": "暂时无法安全解锁这台 Mac。请在锁屏界面选中你的账户后重连；若仍失败，请在电脑上手动解锁。",
+  "security": "安全",
+  "autoUnlock": "自动解锁电脑",
+  "autoUnlockHint": "在本机保存这台 Mac 的登录密码，连接时自动解锁。",
+  "faceIdVerification": "Face ID 验证",
+  "biometricVerification": "生物识别验证",
+  "biometricVerificationHint": "使用保存的密码前，验证你的身份。",
+  "autoUnlockStorageHint": "密码仅加密保存在当前设备。设置和密码不随账号同步。",
+  "autoUnlockUnavailable": "暂时无法自动解锁。你仍可连接，并手动解锁 Mac。",
+  "lockOnExit": "远程结束后，被控端锁屏",
+  "lockOnExitHint": "退出远程桌面时锁屏。重连或切换 App 不会触发。",
+  "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。"
 }

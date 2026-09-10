@@ -11,6 +11,7 @@ export interface BuiltinProviderModelRefreshDeps {
   refreshXd(): Promise<void>;
   refreshAnthropic(): Promise<boolean>;
   refreshOpenAi(): Promise<boolean>;
+  refreshOpenAiMedia(): Promise<boolean>;
   refreshXai(): Promise<boolean>;
   refreshXaiMedia(): Promise<boolean>;
 }
@@ -28,11 +29,19 @@ export async function refreshBuiltinProviderModels(
         throw new Error('Anthropic model discovery did not produce a current snapshot');
       }
       return;
-    case 'openai':
-      if (!(await deps.refreshOpenAi())) {
-        throw new Error('OpenAI model discovery did not apply to the current runtime');
+    case 'openai': {
+      let chatApplied = false;
+      let chatError: unknown;
+      try {
+        chatApplied = await deps.refreshOpenAi();
+      } catch (error) {
+        chatError = error;
       }
-      return;
+      const mediaApplied = await deps.refreshOpenAiMedia();
+      if (chatApplied || mediaApplied) return;
+      if (chatError) throw chatError;
+      throw new Error('OpenAI model discovery did not apply to the current runtime');
+    }
     case 'xai':
       if (!(await deps.refreshXai())) {
         throw new Error('xAI account model discovery did not apply to the current runtime');

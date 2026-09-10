@@ -119,6 +119,7 @@ import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -807,6 +808,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setToken = useCallback((token: string | null) => {
     accessTokenRef.current = token;
+    updateCredentialAccessToken(token);
     setAccessToken(token);
   }, []);
 

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildUnionRows,
+  canWriteModelVisibility,
   managementKindOfRow,
   managementKindsOfRow,
   hasPaymentRequiredDisabledRow,
@@ -194,6 +195,12 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     expect(isRowDisabled(image)).toBe(true);
     expect(isRowPaymentRequired(image)).toBe(true);
     expect(rows.find((r) => r.id === 'seedance-fast')).toBeTruthy();
+    expect(
+      modelVisibilityTargets(withMedia, image, true),
+    ).toEqual([{ agent: 'claude-code', modelId: 'gpt-image-2' }]);
+    expect(
+      modelVisibilityTargets(withMedia, rows.find((r) => r.id === 'seedance-fast')!, false),
+    ).toEqual([{ agent: 'claude-code', modelId: 'seedance-fast' }]);
     // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
     expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);
     expect(
@@ -335,4 +342,26 @@ it.each([false, true])('aggregates mixed runtime types independent of order (%s)
   expect(isCapabilityRow(row!, true)).toBe(false);
   expect(modelVisibilityTargets(mixed, row!, true)).toEqual([{ agent: 'claude-code', modelId: 'shared' }]);
   expect(modelVisibilityTargets(mixed, row!, false)).toEqual([{ agent: 'claude-code', modelId: 'shared' }]);
+});
+
+describe('canWriteModelVisibility', () => {
+  it('lets image switches write when only the Images API key is ready', () => {
+    expect(
+      canWriteModelVisibility({
+        connected: false,
+        mediaRow: true,
+        mediaReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('still requires chat connection for conversation model switches', () => {
+    expect(
+      canWriteModelVisibility({
+        connected: false,
+        mediaRow: false,
+        mediaReady: false,
+      }),
+    ).toBe(false);
+  });
 });

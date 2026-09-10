@@ -1,4 +1,9 @@
 {
+  "credentialPasswordRejected": "The Mac login password was not accepted. Enter it again.",
+  "credentialCancelled": "Password verification was cancelled. Tap reconnect when you are ready.",
+  "credentialIdentityChanged": "The computer identity could not be verified. No password was sent to an unverified device.",
+  "credentialExpired": "The secure connection expired. Reconnect to verify again.",
+  "credentialRequired": "Complete Mac password verification, then reconnect. If verification is unavailable, update Cindy on both devices.",
   "takeoverConnection": "Take over connection",
   "connectionBusyTakeover": "Another device is connected to this desktop. Taking over will disconnect that device.",
   "clipboard": "Clipboard",
@@ -113,5 +118,18 @@
   "pipUnavailable": "Picture in picture is unavailable. Keep Cindy open to view the desktop.",
   "clipboardUnsupported": "This clipboard content is not supported yet. Copy a single image, text, or link. Files and app-specific formats cannot be transferred yet.",
   "clipboardTransferring": "Transferring clipboard content…",
-  "nativeResolution": "Native"
+  "nativeResolution": "Native",
+  "credentialAccessibilityRequired": "Allow Cindy in System Settings → Privacy & Security → Accessibility on the Mac, then reconnect.",
+  "credentialUnlockUnavailable": "Could not safely unlock this Mac. Select your account on its lock screen, then reconnect; if it still fails, unlock the Mac locally.",
+  "security": "Security",
+  "autoUnlock": "Automatically unlock computer",
+  "autoUnlockHint": "Save this Mac’s login password on this device to unlock it when connecting.",
+  "faceIdVerification": "Face ID verification",
+  "biometricVerification": "Biometric verification",
+  "biometricVerificationHint": "Verify your identity before using the saved password.",
+  "autoUnlockStorageHint": "The password is stored encrypted on this device only. Settings and passwords do not sync with your account.",
+  "autoUnlockUnavailable": "Automatic unlock is unavailable. You can still connect and unlock the Mac manually.",
+  "lockOnExit": "Lock computer when remote desktop ends",
+  "lockOnExitHint": "Locks when you leave remote desktop. Reconnecting or switching apps does not lock the computer.",
+  "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended."
 }

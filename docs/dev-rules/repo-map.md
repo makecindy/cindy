@@ -44,7 +44,7 @@
 | `orca-workflow` | Orca 多 worker 协同的 lead 侧：MCP 桥接 + lead prompt；改动前必读 [`orca-team-architecture.md`](orca-team-architecture.md) | desktop |
 | `device-link` | 跨设备远程控制（同账号互联）：envelope 协议、IPC 隧道 allowlist、重连／心跳；零依赖，WS 实现由 host 注入 | desktop + mobile |
 | `auth-client` | 平台无关的 Cindy auth-server 客户端契约（zod） | desktop + mobile |
-| `model-providers` | 模型供应商目录 + 路由抽象（Anthropic／OpenAI／XD），纯逻辑 | desktop + mobile |
+| `model-providers` | 模型供应商目录、Registry 资料合并与路由抽象；先读 [模型配置与下发](model-catalog-maintenance.md) 获取代码导航 | desktop + mobile |
 | `anthropic-compat-proxy` | 本地回环 HTTP 代理：剥离 Anthropic 专有字段，让 Claude Code SDK 可经网关访问非 Anthropic 后端 | desktop |
 | `anthropic-responses-bridge` | 挂载在 `anthropic-compat-proxy` 回环 HTTP 代理内部的进程内协议转换处理器：作为 `RoutingDecision.localHandler` 完成 Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
 | `responses-anthropic-bridge` | 本地 Responses → Anthropic Messages 桥：请求、图片／工具／thinking 转换与 Responses SSE 回译 | desktop |
