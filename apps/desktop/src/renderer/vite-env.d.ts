@@ -3435,6 +3435,7 @@ interface ElectronAPI {
     }) => Promise<{
       success: boolean;
       status: string;
+      rejectionReason?: string;
       gates?: Array<{ name: string; status: string; issues?: unknown[] }>;
       scorecard?: Record<string, unknown>;
       error?: string;
@@ -6975,7 +6976,7 @@ type SkillhubPublishErrorCode =
   | 'INVALID_VISIBILITY'
   | 'INTERNAL';
 
-type SkillhubPublishProgressEvent =
+type SkillhubPublishProgressEvent = (
   | { phase: 'packing' }
   | { phase: 'init' }
   | { phase: 'uploading' }
@@ -6998,6 +6999,7 @@ type SkillhubPublishProgressEvent =
       name: string;
       version: string;
       status: string;
+      rejectionReason?: string;
       gates?: Array<{
         name: string;
         label?: Record<string, string>;
@@ -7005,7 +7007,8 @@ type SkillhubPublishProgressEvent =
         issues?: unknown[];
       }>;
     }
-  | { phase: 'failed'; name?: string; errorCode: SkillhubPublishErrorCode; message: string };
+  | { phase: 'failed'; name?: string; errorCode: SkillhubPublishErrorCode; message: string }
+) & { ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp };
 
 interface Window {
   electronAPI: ElectronAPI;

@@ -4,7 +4,9 @@
 > 设计类 `.md` 一律放本目录，并在下表登记；规范正文不要写进本文件。
 
 
-DS-6 表单贡献入口：先读 [DESIGN §4](./DESIGN.md#inputs--forms)，在真实字段中复用 [FormField](../../apps/desktop/src/renderer/components/ui/form-field.tsx) 与 [SettingsTextInput](../../apps/desktop/src/renderer/components/settings/SettingsTextInput.tsx)（普通域用 Input）；保存反馈用 [Button loading](../../apps/desktop/src/renderer/components/ui/button.tsx)。业务校验、请求与焦点由表单持有；首消费者为 [CustomProviderDialog](../../apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx)，第二消费者为 [McpServerDialog](../../apps/desktop/src/renderer/components/settings/McpServerDialog.tsx)。[证据与未验收项](../design-evidence/2026-09-08/ds6-forms.md) 区分组件/整页/人工/G2，settings 仍是 pilot。
+DS-6 已随 [#4135](https://github.com/makecindy/cindy/pull/4135) 合入（head `62472f559c` / merge `6559d2610a`）。表单贡献入口：先读 [DESIGN §4](./DESIGN.md#inputs--forms)，在真实字段中复用 [FormField](../../apps/desktop/src/renderer/components/ui/form-field.tsx) 与 [SettingsTextInput](../../apps/desktop/src/renderer/components/settings/SettingsTextInput.tsx)（普通域用 Input）；保存反馈用 [Button loading](../../apps/desktop/src/renderer/components/ui/button.tsx)。业务校验、请求与焦点由表单持有；首消费者为 [CustomProviderDialog](../../apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx)，第二消费者为 [McpServerDialog](../../apps/desktop/src/renderer/components/settings/McpServerDialog.tsx)。[证据与未验收项](../design-evidence/2026-09-08/ds6-forms.md) 区分组件/整页/人工/G2，settings 仍是 pilot。
+
+DS-7 提交候选入口：[规则范围与回退](./design-governance.md#8-治理接线纪律)、[固定历史回放、注入和接线证据](../design-evidence/2026-09-10/ds7-guards.md)。新增颜色可用 `pnpm check:design-colors --base-ref <基线> --worktree` 检查；只报告用 `pnpm report:design-colors`。当前 main 尚未启用候选接线，管理员审核与实际合并另行记录。
 
 ## 文档索引
 
@@ -12,7 +14,7 @@ DS-6 表单贡献入口：先读 [DESIGN §4](./DESIGN.md#inputs--forms)，在�
 |---|---|---|
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
-| [`design-inventory.md`](./design-inventory.md) | Cindy Desktop 生产可达 UI 台账：GENERATED 机器事实（稳定 ID / 入口 / 组件 / 样式来源 / Token 与裸值统计）+ 人工迁移状态 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`） |
+| [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 机器事实（稳定 ID / 入口 / 组件 / 样式来源 / Token 与裸值统计）+ 人工迁移状态 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`） |
 | [Token README](../../packages/design-tokens/README.md) | 当前影子层边界、DS-8 / DS-10 生产接管、双端真实语义样本与平台覆盖唯一来源 | **Token 合同入口**（当前无生产消费者，不是另一份数值表） |
 | [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |

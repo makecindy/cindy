@@ -290,6 +290,18 @@ describe('Agent Island display state', () => {
     expect(display.sessions.map((session) => session.sessionId)).toEqual(['ask', 'err', 'done']);
   });
 
+  it('localizes output-limit details and keeps the terminal error projection', () => {
+    const state = createAgentIslandState();
+    setAgentIslandStrings(state, { ...DEFAULT_AGENT_ISLAND_STRINGS, outputLimit: '回复可能不完整' });
+    applyAgentIslandEvent(state, { sessionId: 'limit', agentKind: 'pi' },
+      terminalErrorEvent('Pi reached the model output limit.', 'output-limit'), 1_000);
+    const session = buildAgentIslandDisplayState(state, 1_001).sessions[0];
+    expect(session?.detail).toBe('回复可能不完整');
+    expect(session?.activityLines).toContainEqual(
+      expect.objectContaining({ kind: 'status', text: '回复可能不完整' }),
+    );
+  });
+
   it('localizes tool-loop terminal details in the Agent Island projection', () => {
     const state = createAgentIslandState();
     setAgentIslandStrings(state, {

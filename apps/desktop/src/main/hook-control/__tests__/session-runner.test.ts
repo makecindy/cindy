@@ -2232,6 +2232,30 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
   });
 
+  it.each([
+    ['output-limit', 'partial answer'],
+    ['output-limit', ''],
+    ['turn-failed', 'partial answer'],
+  ])('official Telegram failure preserves only output-limit text (%s, %s)', async (reason, text) => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const emit = h.eventCbs.get('sess-new')!;
+    emit({ type: 'text', source: 'pi', data: { text, isFinal: false } });
+    emit({ type: 'error', source: 'pi', data: { reason, message: 'provider failure', isTerminal: true } });
+    expect(h.eventCbs.has('sess-new')).toBe(false);
+    // A trailing done has no subscriber: the failure must carry the observed body.
+    h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
+    const outcome = await pending;
+    expect(outcome).toMatchObject({ status: 'error', finalText: reason === 'output-limit' ? text : '' });
+    expect(outcome.errorMessage).toBe(reason === 'output-limit'
+      ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
+      : 'provider failure');
+  });
+
   it('工具循环终态在官方 bot 也走共享安全文案, 不透出内部分类', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
@@ -3140,6 +3164,24 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     await flush();
 
     expect(ends[0]?.finalText).toBe('第一段\n\n第二段');
+  });
+
+  it.each(['output-limit', 'turn-failed'])('continuation failure retains output-limit body only (%s)', async (reason) => {
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, ends } = watchReq({ source: { im: 'telegram' } });
+    const cancel = runner.watchContinuation!(req as never);
+    const emit = h.eventCbs.get('sess-live')!;
+    emit({ type: 'text', source: 'pi', data: { text: 'partial continuation', isFinal: true } });
+    emit({ type: 'error', source: 'pi', data: { reason, message: 'provider failure', isTerminal: true } });
+    expect(h.eventCbs.has('sess-live')).toBe(false);
+    await flush();
+    cancel();
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({ status: 'error', finalText: reason === 'output-limit' ? 'partial continuation' : '' });
+    expect(ends[0]?.errorMessage).toBe(reason === 'output-limit'
+      ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
+      : 'provider failure');
   });
 
   it('续跑轮自己失败 -> onEnd(error) 带错误信息', async () => {

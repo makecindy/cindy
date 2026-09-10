@@ -42,14 +42,15 @@ export function parseMobileToolLoopErrorDetails(value: unknown): MobileToolLoopE
 }
 
 /**
- * Localize the stable tool-loop reason for both the normal message stream and
+ * Localize stable agent error reasons for both the normal message stream and
  * the session-tail banner. Returning null keeps unrelated error rows on their
  * existing auth-guidance/raw-message paths.
  */
-export function localizeToolLoopError(
+export function localizeAgentError(
   reason: unknown,
   toolLoop: MobileToolLoopErrorDetails | null,
 ): string | null {
+  if (reason === 'output-limit') return i18n.t('session.tail.outputLimit');
   if (reason !== 'tool_use_loop_detected') return null;
   if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
   return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });

@@ -25,9 +25,14 @@ describe('market route scope', () => {
     expect(localDetailSource).not.toContain('marketManagePath');
   });
 
-  it('reads rejected management versions from the native record', () => {
-    expect(localDetailSource).toContain('listPublishedVersions(entry.name)');
-    expect(localDetailSource).not.toContain('listPublishedVersions(entry.name, entry.registryEntry?.catalogScope)');
+  it('reads rejected management feedback through the native-version hook', () => {
+    const feedbackSource = readFileSync(resolve(skillhubDir, 'hooks/useRejectionFeedback.ts'), 'utf8');
+    expect(localDetailSource).toContain('useRejectionFeedback({');
+    expect(localDetailSource).toContain('void rejectionFeedback.open()');
+    const scanRequest = feedbackSource.match(/getScanStatus\(\{([\s\S]*?)\}\)/)?.[1];
+    expect(scanRequest).toContain('slug: scope.name');
+    expect(scanRequest).toContain('version: scope.version');
+    expect(scanRequest).not.toContain('catalogScope');
   });
 
   it('keeps Clone wording for acquisition actions', () => {
