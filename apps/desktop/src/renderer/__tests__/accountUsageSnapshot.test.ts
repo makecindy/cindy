@@ -240,12 +240,12 @@ describe('mergeCodexAccountUsageSnapshot', () => {
     const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
 
     expect(mainSource).toContain("USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed'");
-    expect(mainSource).toContain('broadcastCodexAccountUsage(payload);');
+    expect(mainSource).toContain('broadcastCodexAccountUsage(payload, providerId);');
     expect(mainSource).toContain('isCodexZeroWindowFallback(incoming)');
     expect(mainSource).toContain('isCodexWindowlessFallback(incoming)');
-    expect(mainSource).toContain('broadcastCodexAccountUsage(null);');
+    expect(mainSource).toContain('broadcastCodexAccountUsage(null, providerId);');
     expect(preloadSource).toContain("createIpcFanOut('usage:codex-account-changed')");
-    expect(preloadSource).toContain('onCodexAccountChanged: fanOutMakerUsageCodexAccount');
+    expect(preloadSource).toContain("providerId === 'openai' ? fanOutMakerUsageCodexAccount(cb)");
     expect(hookSource).toContain('api.onCodexAccountChanged');
     expect(hookSource).toContain('options: { clearOnNull?: boolean } = {}');
     expect(hookSource).toContain('selectCodexSlot(quotaSource');
@@ -585,11 +585,11 @@ describe('renderer sparse update bucket routing', () => {
     // renderer 增量路径若仍按缺省桶归类, 模型专属窗口会被当通用桶暴露给其它
     // 会话(review 反馈)。这里锁定实现选择。
     const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
-    expect(hookSource).toContain('let lastCodexAppServerBucketKey: string | null = null;');
+    expect(hookSource).toContain('latestBucketKey: string | null;');
     expect(hookSource).toContain('function resolveIncrementalBucketKey(');
-    expect(hookSource).toContain('return lastCodexAppServerBucketKey ?? codexLimitBucketKey(incoming);');
+    expect(hookSource).toContain('return state.latestBucketKey ?? codexLimitBucketKey(incoming);');
     // 增量分支必须走 resolveIncrementalBucketKey, 不能直接用 codexLimitBucketKey
-    expect(hookSource).toContain('resolveIncrementalBucketKey(parts.appServer),');
+    expect(hookSource).toContain('resolveIncrementalBucketKey(parts.appServer, state),');
     expect(hookSource).not.toContain('codexLimitBucketKey(parts.appServer),\n              parts.appServer,');
   });
 });

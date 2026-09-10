@@ -19,6 +19,8 @@ const native = vi.hoisted(() => ({
   sections: [] as HomeSection[],
   search: { query: "", onChangeQuery: (_value: string) => {} },
   invoke: vi.fn(),
+  appState: 'active',
+  appStateListeners: new Set<(state: string) => void>(),
 }));
 
 vi.mock("react-native", async () => {
@@ -69,6 +71,13 @@ vi.mock("react-native", async () => {
       );
     },
     AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
+    AppState: {
+      get currentState() { return native.appState; },
+      addEventListener: (_event: string, listener: (state: string) => void) => {
+        native.appStateListeners.add(listener);
+        return { remove: () => native.appStateListeners.delete(listener) };
+      },
+    },
     BackHandler: { addEventListener: () => ({ remove() {} }) },
     findNodeHandle: () => null,
     StyleSheet: {
@@ -237,6 +246,8 @@ describe("drawer selective updates", () => {
   };
 
   beforeEach(async () => {
+    native.appState = 'active';
+    native.appStateListeners.clear();
     clearSessionScheduleIndexCache();
     remoteScheduleEventStore.clearAll();
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -318,9 +329,16 @@ describe("drawer selective updates", () => {
     ]);
     await render();
     expect(row("s1")?.textContent).toContain("host preview");
-    await act(async () =>
-      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]),
-    );
+    await act(async () => {
+      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]);
+    });
+    expect(row("s1")?.textContent).toContain("host preview");
+    await act(async () => {
+      remoteSessionStore.markSessionMessagesSynced(
+        "s1",
+        session("s1", { preview: "host preview" }),
+      );
+    });
     expect(row("s1")?.textContent).toContain("loaded preview");
     await act(async () => remoteSessionStore.setMessages("s1", []));
     expect(row("s1")?.textContent).toContain("host preview");
@@ -387,6 +405,7 @@ describe("drawer selective updates", () => {
   it("refreshes failed unread from the lightweight host index when read elsewhere", async () => {
     let readAt: number | undefined;
     native.invoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:schedule:list') return [{ id: 'auto', name: 'auto', status: 'active', targetSessionId: 's1' }];
       expect(channel).toBe("maker:schedule:list-sidebar-index-runs");
       return { runs: [{ sessionId: "s1", scheduleId: "auto", runId: "run", scheduleName: "auto", scheduleStatus: "active", status: "failed", firedAt: 1, readAt }] };
     });
@@ -395,7 +414,22 @@ describe("drawer selective updates", () => {
     readAt = 10;
     await act(async () => remoteScheduleEventStore.apply("dev-1", { type: "read", scheduleId: "auto" }));
     expect(status("s1", "error")).toBeNull();
-    expect(native.invoke).toHaveBeenCalledTimes(2);
+    expect(native.invoke).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry or start schedule scans in the background and refreshes on return', async () => {
+    native.invoke.mockRejectedValue(new Error('[INVOKE_TIMEOUT] timeout'));
+    await render();
+    expect(native.invoke).toHaveBeenCalledTimes(1);
+    native.appState = 'background';
+    await act(async () => native.appStateListeners.forEach((listener) => listener('background')));
+    await tick(5000);
+    await act(async () => remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'auto' }));
+    expect(native.invoke).toHaveBeenCalledTimes(1);
+    native.invoke.mockImplementation(async (_device, channel) => channel === 'maker:schedule:list' ? [] : { runs: [] });
+    native.appState = 'active';
+    await act(async () => native.appStateListeners.forEach((listener) => listener('active')));
+    expect(native.invoke).toHaveBeenCalledTimes(3);
   });
 
   it("refreshes device search reachability without a session-array change", async () => {

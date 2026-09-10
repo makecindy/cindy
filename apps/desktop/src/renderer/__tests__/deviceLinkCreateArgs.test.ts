@@ -339,19 +339,17 @@ describe('resolveDeviceLinkSubmission', () => {
     expect(args.workingDir).toBe('/peer/proj');
   });
 
-  it('被控端已断开该来源时不得原样透传 —— 回落到该模型的原生默认来源', () => {
+  it('被控端已断开时保留显式连接，交给被控端校验而不改用其他账号', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'stale-source' },
       deviceProviders: [deviceProvider('anthropic', true, ['claude-sonnet-4-6'])],
       capabilityAgentKind: AGENT,
     });
-    // 关键反向断言:绝不能等于那个已失效的显式选择。
-    expect(args.providerId).not.toBe('stale-source');
-    expect(args.providerId).toBe('anthropic');
+    expect(args.providerId).toBe('stale-source');
   });
 
-  it('来源仍在但已不提供当前模型时同样回落', () => {
+  it('来源仍在但已不提供当前模型时仍保留账号身份', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'other' },
@@ -361,27 +359,27 @@ describe('resolveDeviceLinkSubmission', () => {
       ],
       capabilityAgentKind: AGENT,
     });
-    expect(args.providerId).toBe('anthropic');
+    expect(args.providerId).toBe('other');
   });
 
-  it('没有任何来源提供该模型 → 不带 providerId(交回被控端默认路由,provider_id 留 NULL)', () => {
+  it('没有任何来源提供模型时也不丢弃显式账号', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'stale-source' },
       deviceProviders: [deviceProvider('other', true, ['some-other-model'])],
       capabilityAgentKind: AGENT,
     });
-    expect(args.providerId).toBeUndefined();
+    expect(args.providerId).toBe('stale-source');
   });
 
-  it('目录尚未加载完(空数组)时不带 providerId,而不是把失效值送出去', () => {
+  it('目录尚未加载完时仍保留显式账号', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'anything' },
       deviceProviders: [],
       capabilityAgentKind: AGENT,
     });
-    expect(args.providerId).toBeUndefined();
+    expect(args.providerId).toBe('anything');
   });
 
   it('无项目目录 → dialogue,且不把 workingDir 塞进 payload(转调派生未被绕过)', () => {
@@ -421,6 +419,6 @@ describe('resolveDeviceLinkSubmission', () => {
     });
     expect(fromGoal).toEqual(fromSend);
     // 且两者都已被校准(不是「一致地都错」)。
-    expect(fromSend.providerId).toBe('anthropic');
+    expect(fromSend.providerId).toBe('stale-source');
   });
 });

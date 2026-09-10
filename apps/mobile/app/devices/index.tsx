@@ -115,7 +115,8 @@ import {
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
 import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
-import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerVisibility, resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -202,7 +203,6 @@ import {
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
-  buildSessionMessagePreviewIndex,
   formatRemoteSessionSidebarTime,
   getRemoteSessionPreviewCollapse,
   type RemoteAutomationSessionGroup,
@@ -229,7 +229,6 @@ import {
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
   loadDeviceSessionScheduleIndex,
-  loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
@@ -356,6 +355,9 @@ export default function HomeScreen() {
 }
 
 function HomeScreenContent() {
+  const screenFocused = useIsFocused();
+  const screenFocusedRef = useRef(screenFocused);
+  screenFocusedRef.current = screenFocused;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -383,7 +385,6 @@ function HomeScreenContent() {
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
-  const homePreviewCacheRef = useRef(new Map<string, { messages: readonly unknown[]; preview?: string }>());
   const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
@@ -647,8 +648,9 @@ function HomeScreenContent() {
   const refreshDeviceScheduleIndex = useCallback((
     deviceId: string,
     sessionIds: readonly string[],
-    options?: { accountGeneration?: number; force?: boolean; homeSyncGeneration?: number },
+    options?: { accountGeneration?: number; homeSyncGeneration?: number },
   ) => {
+    if (!screenFocusedRef.current || AppState.currentState !== 'active') return;
     const expectedAccountGeneration = options?.accountGeneration ?? accountGeneration;
     const expectedHomeSyncGeneration = options?.homeSyncGeneration
       ?? homeSyncGenerationByDeviceRef.current.get(deviceId);
@@ -659,19 +661,18 @@ function HomeScreenContent() {
     ) return;
     // 节流(单飞 + 30s TTL):focus / hydrate / schedule 推送三个触发源高频交叠,每次都全量
     // 重放 1+N×listRuns 会拥塞 device-link 管道、拖慢会话打开的关键读(见 scheduleIndex 注释)。
-    // force = 已读类权威信号(read / all-read 推送),必须绕过 TTL 立即重拉——否则「看完
-    // 返回首页」这个最常见路径永远命中 30s 内的陈旧缓存,未读徽标清不掉(review P1)。
+    // Authoritative events invalidate the shared cache before notifying screens.
     const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
     void homeDeviceSyncLimiterRef.current.run(async () => {
       if (
-        homeAccountGenerationRef.current !== expectedAccountGeneration
+        !screenFocusedRef.current || AppState.currentState !== 'active'
+        || homeAccountGenerationRef.current !== expectedAccountGeneration
         || !isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)
       ) return null;
-      return loadSessionScheduleIndexThrottled(
-        deviceId,
-        () => loadDeviceSessionScheduleIndex(deviceId, invoke),
-        { force: options?.force },
-      );
+      return loadDeviceSessionScheduleIndex(deviceId, invoke,
+        () => screenFocusedRef.current && AppState.currentState === 'active'
+          && homeAccountGenerationRef.current === expectedAccountGeneration
+          && isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration));
     })
       .then((nextIndex) => {
         if (!nextIndex) return;
@@ -1224,14 +1225,7 @@ function HomeScreenContent() {
         remoteSessionStore.requestReseed(deviceId);
         continue;
       }
-      // schedule 列表变化(changed,含 pause / resume / 改绑)与 read / all-read 都是低频
-      // 权威信号,force 穿透节流保证状态即时更新;fired / running 等高频事件照常吃 TTL
-      // (全量 force 会把 listRuns 风暴请回来)。
-      refreshDeviceScheduleIndex(deviceId, sessionIds, {
-        force: projection.refresh.scheduleList === true
-          || projection.unreadImpact === 'may-clear-schedule'
-          || projection.unreadImpact === 'clear-all',
-      });
+      refreshDeviceScheduleIndex(deviceId, sessionIds);
     }
   }), [refreshDeviceScheduleIndex]);
 
@@ -1647,24 +1641,7 @@ function HomeScreenContent() {
   const messagePreviewIndexRaw = useMemo(() => {
     // 普通首页的预览由可见行按 session 订阅。只有搜索需要跨全部任务建立消息索引。
     if (!normalizedSearchQuery) return new Map<string, string>();
-    const next = new Map<string, string>();
-    const activeIds = new Set<string>();
-    for (const session of sessions) {
-      activeIds.add(session.id);
-      const messages = remoteSessionStore.getMessages(session.id);
-      const cached = homePreviewCacheRef.current.get(session.id);
-      if (cached?.messages === messages) {
-        if (cached.preview) next.set(session.id, cached.preview);
-        continue;
-      }
-      const preview = buildSessionMessagePreviewIndex([session.id], () => messages).get(session.id);
-      homePreviewCacheRef.current.set(session.id, { messages, preview });
-      if (preview) next.set(session.id, preview);
-    }
-    for (const sessionId of homePreviewCacheRef.current.keys()) {
-      if (!activeIds.has(sessionId)) homePreviewCacheRef.current.delete(sessionId);
-    }
-    return next;
+    return remoteSessionStore.getSessionListMessagePreviewIndex(sessions);
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
   const pendingInteractionIndexRaw = useMemo(() => {
@@ -1844,12 +1821,21 @@ function HomeScreenContent() {
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const selectedDeviceDisconnected = home.deviceFilters.some((item) => item.deviceId !== null
+  const selectedDeviceDisconnected = status !== 'connecting' && home.deviceFilters.some((item) => item.deviceId !== null
     && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.sessionCount > 0)
     && !home.deviceFilters.some((item) => item.deviceId !== null
       && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.available);
-  const showConnectionRow = homeRecoveringDeviceIds.size > 0 || selectedDeviceDisconnected || !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility({
+    offline: status !== 'online',
+    connecting: status === 'connecting',
+    offlineLongEnough: true,
+    hasError: !!connectionError,
+    hasIssue: activeConnectionIssue !== null,
+    hasUnstableIssue: activeConnectionIssue?.kind === 'unstable',
+    deviceUnresponsive: homeDeviceUnresponsive,
+  });
   const showConnectionNotice = useDelayedConnectionNotice(showConnectionRow);
+  const quietSyncing = !showConnectionRow && (refreshing || homeRecoveringDeviceIds.size > 0 || status === 'connecting');
   const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
     online: status === 'online',
     hasActiveIssue: activeConnectionIssue !== null,
@@ -2458,6 +2444,7 @@ function HomeScreenContent() {
     >
       {nativeHomeHeader ? (
         <HomeNativeStackHeader
+          syncing={quietSyncing}
           displayA11y={t('devices.list.a11y.openDisplaySettings')}
           displayActions={homeDisplayPullDownActions}
           menuA11y={t('devices.list.a11y.openMenu')}
@@ -2515,6 +2502,7 @@ function HomeScreenContent() {
               <View style={styles.headerTitleCluster}>
                 <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
                 <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
+                <QuietSyncIndicator active={quietSyncing} />
               </View>
             </Pressable>
           </NativePullDownMenu>

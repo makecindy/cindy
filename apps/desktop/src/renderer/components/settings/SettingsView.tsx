@@ -27,6 +27,7 @@ import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
 import { AboutSection } from './AboutSection';
+import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
 import { CompactionSection } from './CompactionSection';
@@ -644,6 +645,18 @@ export function SettingsView() {
               <div role="tabpanel" id="settings-panel-about" aria-labelledby="settings-tab-about">
                 <section aria-label={t('settings.sections.about')}>
                   <AboutSection />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'storage' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-storage"
+                aria-labelledby="settings-tab-storage"
+              >
+                <section aria-label={t('settings.about.storage.title')}>
+                  <StorageManagementCard />
                 </section>
               </div>
             )}

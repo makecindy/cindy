@@ -581,8 +581,6 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
     expect(m.getProviderModelEffort('claude-code', 'anthropic', 'bad')).toBeUndefined();
     expect(m.getProviderModelChoice('claude-code', 'xd')).toBeUndefined();
-    expect(m.getProviderLastModel('claude-code', 'xd')).toBe('x');
-    expect(m.getProviderLastModel('codex', '*')).toBeUndefined();
     expect(m.getProviderModelEffort('codex', 'openai', 'gpt-5.5')).toBe('medium');
     expect(m.getProviderModelChoice('codex', 'openai')).toBeUndefined();
   });
@@ -705,4 +703,15 @@ describe('providerModelMemory —— clear:恢复推荐删键(不写默认快照
     expect(seen).not.toHaveBeenCalled();
     expect(memStorage.getItem(m.__STORAGE_KEY)).toBeNull();
   });
+});
+
+
+it('last-model-only history is evidence of an existing user configuration', async () => {
+  memStorage.setItem('xdt:providerModelMemory:v2', JSON.stringify({
+    'codex:xd': { lastModel: 'old-model', effortByModel: {} },
+  }));
+  vi.resetModules();
+  const memory = await loadModule();
+  expect(memory.hasProviderModelHistory()).toBe(true);
+  expect(memory.hasAnyProviderModelOverride()).toBe(false);
 });

@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import type { ReactNode } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import type { Edge } from "react-native-safe-area-context";
@@ -41,6 +42,7 @@ export function SimpleStackHeader({
   subtitle,
   title,
   titleTestID,
+  syncing,
 }: {
   action?: MainWindowAction;
   right?: ReactNode;
@@ -50,6 +52,7 @@ export function SimpleStackHeader({
   subtitle?: string | null;
   title: string;
   titleTestID?: string;
+  syncing?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeNativeTitleStyles);
@@ -65,6 +68,7 @@ export function SimpleStackHeader({
         subtitle={subtitle}
         title={title}
         titleTestID={titleTestID}
+        syncing={syncing}
       />
     );
   }
@@ -82,6 +86,7 @@ export function SimpleStackHeader({
             <Text numberOfLines={1} style={styles.title}>
               {title}
             </Text>
+            {syncing !== undefined ? <QuietSyncIndicator active={syncing} /> : null}
           </View>
         ),
         headerLeft: onBack
@@ -104,10 +109,12 @@ export function SimpleStackHeader({
 const makeNativeTitleStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     wrap: {
+      flexDirection: 'row',
       alignItems: "center",
       maxWidth: 220,
     },
     title: {
+      flexShrink: 1,
       color: colors.textPrimary,
       fontSize: typeScale.body,
       fontWeight: fontWeight.medium,

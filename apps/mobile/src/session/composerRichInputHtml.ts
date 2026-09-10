@@ -571,6 +571,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   }, { passive: false });
 
   window.cindyComposer = {
+    ping(id) { post({ type: 'pong', id }); },
     applyDocument(value, focusAfter, caret, nextDocumentId) {
       if (Number.isSafeInteger(nextDocumentId)) documentId = nextDocumentId;
       render(value, focusAfter === true && !caret);

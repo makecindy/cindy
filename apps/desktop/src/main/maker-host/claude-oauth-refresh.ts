@@ -108,6 +108,7 @@ const ORG_TYPE_TO_SUBSCRIPTION: Record<string, string> = {
 export interface SubscriptionProfile {
   subscriptionType: string | null;
   rateLimitTier: string | null;
+  identity?: string;
 }
 
 /**
@@ -136,11 +137,13 @@ export async function fetchSubscriptionProfile(
     if (res.status !== 200) return null;
     const data = (await res.json()) as {
       organization?: { organization_type?: string; rate_limit_tier?: string };
+      account?: { email?: unknown; display_name?: unknown };
     };
     const orgType = data.organization?.organization_type;
     return {
       subscriptionType: (orgType && ORG_TYPE_TO_SUBSCRIPTION[orgType]) || null,
       rateLimitTier: data.organization?.rate_limit_tier ?? null,
+      ...(typeof data.account?.email === 'string' ? { identity: data.account.email } : {}),
     };
   } catch (e) {
     log.warn('subscription profile fetch failed (best-effort)', {
@@ -454,6 +457,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         ...fresh,
         subscriptionType: fresh.subscriptionType ?? profile.subscriptionType,
         rateLimitTier: fresh.rateLimitTier ?? profile.rateLimitTier,
+        ...(profile.identity ? { identity: profile.identity } : {}),
       });
       log.info('subscription profile backfilled', {
         subscriptionType: fresh.subscriptionType ?? profile.subscriptionType,

@@ -214,7 +214,7 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
 }
 
 describe('CustomProviderDialog accessibility', () => {
-  it('opens the requested runtime and focuses the model context-window field', async () => {
+  it.each(['target-model', 'flux-image-x'])('opens and focuses the custom chat window field for %s', async (modelId) => {
     const initial: CustomProviderConfig = {
       id: 'deep-link-provider',
       name: 'Deep Link Provider',
@@ -226,7 +226,7 @@ describe('CustomProviderDialog accessibility', () => {
         },
         codex: {
           baseUrl: 'https://codex.example.test',
-          models: [{ id: 'target-model', name: 'Target Model' }],
+          models: [{ id: modelId, name: 'Target Model' }],
         },
       },
     };
@@ -236,7 +236,7 @@ describe('CustomProviderDialog accessibility', () => {
       <CustomProviderDialog
         initial={initial}
         focusAgent="codex"
-        focusModelId="target-model"
+        focusModelId={modelId}
         onSaved={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -1563,4 +1563,45 @@ describe('DS-6 field errors and save ownership', () => {
     ).toBe('Preset A');
     expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
   });
+});
+
+it.each(['1,', '-5'])('saves a media type while its hidden context draft is %s', async (draft) => {
+  const user = userEvent.setup();
+  const initial: CustomProviderConfig = {
+    id: 'media-draft', name: 'Media Draft', auth: { method: 'apiKey' },
+    runtimes: { codex: { baseUrl: 'https://example.test/v1', models: [{ id: 'model', name: 'Model' }] } },
+  };
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  render(<CustomProviderDialog initial={initial} focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  const context = await screen.findByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' });
+  fireEvent.change(context, { target: { value: draft } });
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.modelType' }));
+  await user.click(screen.getByRole('menuitemradio', { name: /image/i }));
+  expect(screen.queryByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[0].runtimes.codex.models[0].mode).toBe('image_generation');
+});
+
+
+it('preserves preset media metadata through probing and saving', async () => {
+  const media = { id: 'media-first', name: 'Media', mode: 'image_generation' as const,
+    modalities: { input: ['text'], output: ['image'] }, officialDocs: 'https://example.test/docs' };
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [{
+    id: 'media-preset', name: 'Media Preset', runtimes: { codex: {
+      baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const,
+      models: [media, { id: 'chat-second', name: 'Chat', mode: 'chat' as const }],
+    } },
+  }] }));
+  render(<CustomProviderDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.presets.label' }));
+  fireEvent.click(await screen.findByRole('option', { name: 'Media Preset' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+  await waitFor(() => expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'adhoc', spec: expect.objectContaining({ modelId: 'chat-second' }) }),
+  ));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce());
+  expect(customProviderMocks.createCustomProvider.mock.calls[0][0].runtimes.codex.models[0]).toMatchObject(media);
 });

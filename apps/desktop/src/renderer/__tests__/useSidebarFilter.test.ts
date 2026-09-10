@@ -494,6 +494,8 @@ describe('persist round-trip', () => {
   });
 
   it('persistSortBy → loadSortBy returns the same value', () => {
+    persistSortBy('created');
+    expect(loadSortBy()).toBe('created');
     persistSortBy('priority');
     expect(loadSortBy()).toBe('priority');
     persistSortBy('recency');

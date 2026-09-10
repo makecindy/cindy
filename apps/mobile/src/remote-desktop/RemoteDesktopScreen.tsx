@@ -53,6 +53,13 @@ import {
   type RemoteDesktopDisplayMode,
 } from "@cindy/device-link";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
+import { useAuth } from "@/auth/AuthContext";
+import { DEVICE_LINK_API_BASE_URL } from "@/config/env";
+import {
+  REMOTE_DESKTOP_ICE_CONFIG_PATH,
+  REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+  resolveDesktopIceServers,
+} from "@cindy/device-link";
 import { Text } from "@/components/AppText";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
@@ -141,6 +148,7 @@ const LABELS: Record<string, string> = {
 };
 
 export default function RemoteDesktopScreen() {
+  const auth = useAuth();
   const { deviceId: rawId, deviceName: rawName } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
@@ -754,6 +762,30 @@ export default function RemoteDesktopScreen() {
         throw new Error("DESKTOP_VIDEO_STOPPED");
     };
     switch (message.type) {
+      case "iceConfig":
+        if (!isDesktopAttemptId(message.attemptId)) return;
+        mediaAttempt.current = message.attemptId;
+        void resolveDesktopIceServers(() =>
+          auth.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
+            baseUrl: DEVICE_LINK_API_BASE_URL,
+            timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+            cache: "no-store",
+          }),
+        ).then((iceServers) => {
+          if (
+            !alive.current ||
+            active.current !== current ||
+            mediaAttempt.current !== message.attemptId
+          )
+            return;
+          send({
+            type: "iceConfig",
+            epoch: current.lease,
+            attemptId: message.attemptId,
+            iceServers,
+          });
+        });
+        break;
       case "offer":
         if (
           typeof message.sdp !== "string" ||

@@ -1,3 +1,5 @@
+import { codexAccountState } from '../maker-host/codex-account-auth.js';
+import { readClaudeAccountOAuth } from '../maker-host/subscription-account-auth.js';
 /**
  * oneshotProviderUsability.ts — 快问快答钉档的「已配置凭证」同步探测。
  *
@@ -21,6 +23,11 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
  * 自定义供应商分支)的凭证判读逐一对应;内置只认执行侧可执行的四家。
  */
 export function hasOneshotProviderCredential(provider: Provider, agentKind: AgentKind): boolean {
+  if (provider.source !== 'builtin') {
+    if (provider.auth.native === 'claude') return Boolean(readClaudeAccountOAuth(provider.id)?.accessToken);
+    if (provider.auth.native === 'xai') return hasGrokOAuthLogin(provider.id);
+    if (provider.auth.native === 'codex') return codexAccountState(provider.id).authenticated;
+  }
   if (provider.source === 'builtin') {
     switch (provider.id) {
       case 'xd':

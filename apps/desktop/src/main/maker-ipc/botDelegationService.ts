@@ -21,6 +21,7 @@ import {
 } from '../localDb/schema.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { createLogger } from '../logger.js';
 import { resolveBusinessSessionId } from '../sessionIds.js';
@@ -110,6 +111,8 @@ export interface BotDelegationServiceDeps {
     typeof sessions.$inferSelect,
     'model' | 'agentKind' | 'providerId' | 'fastMode'
   > & { effort?: (typeof sessions.$inferSelect)['effort'] }) | null;
+  /** null means the live permission is changing or the caller is closing. */
+  readCallerPermission?: (sessionId: string) => string | { mode: string; generation: number } | null;
   now?: () => number;
   createId?: () => string;
   maxActiveChildren?: number;
@@ -1123,12 +1126,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     return { ok: true };
   };
 
-  function scheduleDispatchRetry(delegationId: string, attempt: number): void {
+  function scheduleDispatchRetry(delegationId: string, attempt: number, isCreationPermissionCurrent?: () => boolean): void {
     clearRetryTimer(delegationId);
     const delay = Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(attempt, 6));
     const timer = setTimeout(() => {
       retryTimers.delete(delegationId);
-      void attemptDispatch(delegationId, attempt + 1);
+      void attemptDispatch(delegationId, attempt + 1, isCreationPermissionCurrent);
     }, delay);
     timer.unref?.();
     retryTimers.set(delegationId, timer);
@@ -1160,6 +1163,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   async function attemptDispatch(
     delegationId: string,
     attempt = 0,
+    isCreationPermissionCurrent?: () => boolean,
   ): Promise<{
     ok: boolean;
     status: 'queued' | 'running' | 'failed';
@@ -1182,6 +1186,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const validation = await validateDispatchPlan(row);
     if (!validation.ok) {
       await failDelegationDispatch(row, `${validation.errorCode}: ${validation.message}`);
+      return { ok: false, status: 'failed' };
+    }
+    if (isCreationPermissionCurrent && !isCreationPermissionCurrent()) {
+      await db.update(sessions).set({ permissionMode: 'ask' }).where(eq(sessions.id, row.childSessionId));
+      await failDelegationDispatch(row, 'CALLER_PERMISSION_UNAVAILABLE: 伙伴权限已变更，任务未启动');
       return { ok: false, status: 'failed' };
     }
     const dispatched = await deps.dispatch({
@@ -1258,7 +1267,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         childSessionId: retrying.childSessionId,
         status: 'queued',
       });
-      scheduleDispatchRetry(retrying.id, attempt);
+      scheduleDispatchRetry(retrying.id, attempt, isCreationPermissionCurrent);
     }
     return { ok: false, status: 'queued', error: dispatched };
   }
@@ -1494,7 +1503,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     callerSessionId: string;
     objective: string;
     contextRefs: string[];
-    plan: BotDelegationPlanSnapshot;
+    plan: Omit<BotDelegationPlanSnapshot, 'permission'>;
     session: {
       workingDir: string;
       model: string;
@@ -1502,7 +1511,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       fastMode?: boolean;
       providerId?: string | null;
       agentKind: 'cc' | 'codex' | 'pi';
-      permissionMode: string;
       title: string;
       source: 'desktop';
     };
@@ -1512,9 +1520,42 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     status: 'queued' | 'running' | 'failed';
     deadlineAt: number;
   }>> => {
-    const { plan } = input;
     const delegationId = createId();
     const childSessionId = resolveBusinessSessionId(undefined);
+    await ensureProjectGitInitialized({
+      workingDir: input.session.workingDir,
+      workspaceKind: 'dialogue',
+      remoteHostId: null,
+      sessionId: childSessionId,
+      autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+      source: 'bot-delegation',
+    });
+    // Read stable authority after asynchronous preparation, with no await before
+    // submitting creation. Both persisted records must use this same snapshot.
+    const callerPermission = deps.readCallerPermission
+      ? deps.readCallerPermission(input.callerSessionId)
+      : input.caller.permissionMode;
+    if (callerPermission === null) {
+      return { ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE', message: '伙伴权限正在切换或任务正在关闭，请稍后重试' };
+    }
+    const permissionMode = permissionModeOrAsk(typeof callerPermission === 'string' ? callerPermission : callerPermission.mode);
+    const isCreationPermissionCurrent = (): boolean => {
+      if (!deps.readCallerPermission) return true;
+      const current = deps.readCallerPermission(input.callerSessionId);
+      if (current === null) return false;
+      if (typeof callerPermission === 'string') return current === callerPermission;
+      return typeof current !== 'string' && current.mode === callerPermission.mode
+        && current.generation === callerPermission.generation;
+    };
+    const plan: BotDelegationPlanSnapshot = {
+      ...input.plan,
+      permission: {
+        mode: permissionMode,
+        requesterMode: permissionMode,
+        // Legacy target-profile field; the effective child permission is mode.
+        targetConfigured: 'ask',
+      },
+    };
     const createdAt = plan.createdAt;
     const permissionSnapshotJson = JSON.stringify(plan);
     const childRow = {
@@ -1531,7 +1572,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ? { providerId: input.session.providerId }
             : {}),
           agentKind: input.session.agentKind,
-          permissionMode: input.session.permissionMode,
+          permissionMode,
           parentSessionId: input.callerSessionId,
         },
         createdAt,
@@ -1540,14 +1581,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       source: input.session.source,
     };
     try {
-      await ensureProjectGitInitialized({
-        workingDir: input.session.workingDir,
-        workspaceKind: 'dialogue',
-        remoteHostId: null,
-        sessionId: childSessionId,
-        autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
-        source: 'bot-delegation',
-      });
       await getDbClient().tx('bots.createDelegation', {
         maxActiveChildren,
         session: {
@@ -1583,6 +1616,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           createdAt,
         },
       });
+      // The worker transaction yields: a permission switch may complete while
+      // creation is pending. Never publish or start the stale Full Access child.
+      if (!isCreationPermissionCurrent()) {
+        await getDbClient().drizzle.update(sessions)
+          .set({ permissionMode: 'ask' }).where(eq(sessions.id, childSessionId));
+        await updateTerminal({ delegationId, status: 'failed',
+          lastError: 'CALLER_PERMISSION_UNAVAILABLE', abortChild: true });
+        return { ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE', message: '伙伴权限正在切换或任务正在关闭，请稍后重试' };
+      }
       emitChanged({
         delegationId,
         parentSessionId: input.callerSessionId,
@@ -1635,7 +1677,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       };
     }
     scheduleTimeout(delegationId, plan.limits.deadlineAt);
-    const dispatchResult = await attemptDispatch(delegationId);
+    const dispatchResult = await attemptDispatch(delegationId, 0, isCreationPermissionCurrent);
     return {
       ok: true,
       delegationId,
@@ -1678,8 +1720,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const createdAt = now();
     const deadlineAt = createdAt + timeoutMs;
 
-    // 子任务沿用发起方会话当前的模型与 harness,但权限从 ask 开始。需要授权时
-    // 统一回到发起伙伴代答,不能因为伙伴本身是 trusted 就让完整任务静默越权。
+    // 子任务承接发起伙伴的实际路由与权限档；一次性工具批准仍只属于原请求。
     const [callerSession] = await db
       .select({
         model: sessions.model,
@@ -1718,19 +1759,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         app.getPath('userData'),
       );
     }
-    const permissionMode = 'ask';
-    const plan: BotDelegationPlanSnapshot = {
+    const plan: Omit<BotDelegationPlanSnapshot, 'permission'> = {
       version: 1,
       createdAt,
       targetBotId: null,
       access: { contextRefs: contextRefs.refs },
       completionTarget: { parentSessionId: input.callerSessionId },
       limits: { maxDepth: DEFAULT_MAX_DEPTH, timeoutMs, deadlineAt },
-      permission: {
-        mode: permissionMode,
-        requesterMode: caller.permissionMode ?? null,
-        targetConfigured: 'ask',
-      },
     };
     const started = await startDelegation({
       caller,
@@ -1747,7 +1782,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           : {}),
         ...(callerRuntime.providerId ? { providerId: callerRuntime.providerId } : {}),
         agentKind: callerRuntime.agentKind as 'cc' | 'codex' | 'pi',
-        permissionMode,
         title: input.title?.trim() || objective.split('\n')[0]!.slice(0, 60),
         source: 'desktop',
       },

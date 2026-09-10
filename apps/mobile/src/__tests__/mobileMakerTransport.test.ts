@@ -23,6 +23,19 @@ function harness() {
 }
 
 describe('mobile maker transport', () => {
+  it('rejects a legacy unscoped quota response for an independent account', async () => {
+    const { maker, calls } = harness();
+    await expect(maker.getCodexRateLimits('openai-second')).rejects.toThrow('Account scope unsupported');
+    expect(calls.at(-1)).toMatchObject({ channel: 'maker:usage:codex-rate-limits', args: ['openai-second'] });
+    await expect(maker.getAccountUsage('codex', 'openai-second')).rejects.toThrow('Account scope unsupported');
+  });
+
+  it('accepts only the requested account in scoped quota responses', async () => {
+    const invoke: RemoteInvoke = async () => ({ providerId: 'openai-second' }) as never;
+    const maker = createMobileMakerTransport({ deviceId: 'dev-1', invoke });
+    await expect(maker.getCodexRateLimits('openai-second')).resolves.toMatchObject({ providerId: 'openai-second' });
+    await expect(maker.getCodexRateLimits('openai-third')).rejects.toThrow('Account scope unsupported');
+  });
   it('documents the remote channels used by the mobile transport', () => {
     expect(MOBILE_MAKER_CHANNELS).toEqual([
       'maker:create-session',

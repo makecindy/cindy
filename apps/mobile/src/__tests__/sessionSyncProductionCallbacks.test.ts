@@ -79,6 +79,7 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     listActiveSessions: vi.fn(async () => []),
   };
   const bindings = {
+    mobileDebugLog: vi.fn(),
     remoteHistoryAvailable,
     deviceId: 'd1', deviceName: 'test', sessionId: 's1',
     historyView: { snapshot: { ready: false }, view: { refresh: async (): Promise<void> => undefined, getSnapshot: (): { ready: boolean; error: unknown } => ({ ready: false, error: new Error('[CHANNEL_NOT_ALLOWED] legacy host') }) } },
@@ -263,6 +264,17 @@ describe('production session recovery callbacks', () => {
     expect(f.state.older).toBe(true);
     expect(f.maker.listMessages).not.toHaveBeenCalled();
     expect(f.state.rows).toEqual([{ id: 'cached', clientId: 'cached' }]);
+    expect(f.state.hold).not.toBeNull();
+  });
+
+  it('reports failed history without clearing the read-receipt barrier', async () => {
+    const f = fixture();
+    const error = new Error('history unavailable');
+    f.maker.listMessages.mockRejectedValue(error);
+    await expect(f.sync()).rejects.toBe(error);
+    expect(f.bindings.mobileDebugLog).toHaveBeenCalledWith('debug', 'recovery', 'detail sync phase',
+      expect.objectContaining({ phase: 'history', outcome: 'failed', connection: 1 }));
+    expect(f.state.readAck).toBeNull();
     expect(f.state.hold).not.toBeNull();
   });
 

@@ -189,7 +189,13 @@ export function resolveBundledPiGatewayModelProfile(
     : undefined;
   const canonical = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, 'xd', modelId);
   const api = canonical !== undefined ? canonical : matched?.api;
-  if (!api) return undefined;
+  if (
+    api !== 'anthropic-messages' &&
+    api !== 'openai-responses' &&
+    api !== 'openai-completions' &&
+    api !== 'google-generative-ai'
+  )
+    return undefined;
   const compatible = matched?.api === api ? matched : undefined;
   // Never borrow compat by bare ID across providers. An allowlisted Gateway identity may still
   // use its locally selected API, but provider-specific serialization metadata requires an exact

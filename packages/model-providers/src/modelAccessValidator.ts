@@ -560,6 +560,10 @@ function modelEntryError(
     schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
     (value.mode === "image_generation" ||
       value.mode === "video_generation" ||
+      value.mode === "audio_generation" ||
+      value.mode === "audio_speech" ||
+      value.mode === "audio_transcription" ||
+      value.mode === "realtime" ||
       value.mode === "embedding");
   if (isV4StandaloneModel && supportedAgents.length > 0) {
     return `${path}.agents must be empty for a v4 Gateway standalone capability mode`;
@@ -957,6 +961,7 @@ function registryRouteError(
   value: unknown,
   path: string,
   schemaVersion = 2,
+  media = false,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = unknownFieldError(
@@ -1013,11 +1018,14 @@ function registryRouteError(
   }
   if (
     !Array.isArray(value.agents) ||
-    value.agents.length === 0 ||
+    (value.agents.length === 0 && !media) ||
     value.agents.some((agent) => !isV2ModelAgent(agent)) ||
     new Set(value.agents).size !== value.agents.length
   ) {
     return `${path}.agents must be a unique non-empty array of supported agents`;
+  }
+  if (media && Array.isArray(value.agents) && value.agents.length !== 0) {
+    return `${path}.agents must be empty for a media model`;
   }
   if (value.referencePrices !== undefined) {
     if (!Array.isArray(value.referencePrices)) {
@@ -1056,7 +1064,15 @@ function registryEntryError(
         ? [
             ...MODEL_REGISTRY_ENTRY_V2_FIELDS,
             "nativeApi",
-            ...(schemaVersion >= 4 ? ["modelRef", "supportsImageInput"] : []),
+            ...(schemaVersion >= 4
+              ? [
+                  "modelRef",
+                  "supportsImageInput",
+                  "mode",
+                  "modalities",
+                  "officialDocs",
+                ]
+              : []),
           ]
         : MODEL_REGISTRY_ENTRY_V2_FIELDS,
     path,
@@ -1065,7 +1081,9 @@ function registryEntryError(
   if (
     value.nativeApi !== undefined &&
     value.nativeApi !== null &&
-    !MODEL_NATIVE_APIS.includes(value.nativeApi as never)
+    !(
+      schemaVersion >= 4 ? MODEL_NATIVE_APIS : MODEL_ACCESS_WIRE_PROTOCOLS
+    ).includes(value.nativeApi as never)
   ) {
     return `${path}.nativeApi must be a supported API or null`;
   }
@@ -1082,6 +1100,10 @@ function registryEntryError(
     value.name.length > 256
   ) {
     return `${path}.name must be a non-empty string of at most 256 characters`;
+  }
+  for (const key of ["mode", "modalities", "officialDocs"] as const) {
+    if (value[key] !== undefined && !validModelMetadata({ [key]: value[key] }))
+      return `${path}.${key} is invalid`;
   }
   if (value.status !== undefined && !isModelRegistryStatus(value.status)) {
     return `${path}.status must be a supported registry status`;
@@ -1137,10 +1159,27 @@ function registryEntryError(
   const routeKeys = new Set<string>();
   const supportedAgents = new Set<ModelAgent>();
   for (const [index, route] of value.routes.entries()) {
+    const routeMode = isPlainObject(route)
+      ? ((isPlainObject(route.forceOverrides)
+          ? route.forceOverrides.mode
+          : undefined) ??
+        (isPlainObject(route.defaults) ? route.defaults.mode : undefined) ??
+        value.mode)
+      : value.mode;
     error = registryRouteError(
       route,
       `${path}.routes[${index}]`,
       schemaVersion,
+      schemaVersion >= 4 &&
+        [
+          "image_generation",
+          "video_generation",
+          "audio_speech",
+          "audio_transcription",
+          "audio_generation",
+          "realtime",
+          "embedding",
+        ].includes(routeMode as string),
     );
     if (error) return error;
     const typedRoute = route as {
@@ -1245,7 +1284,11 @@ export function parseModelRegistry(
         typeof rule.modelIdPrefix !== "string" ||
         !rule.modelIdPrefix ||
         rule.modelIdPrefix.length > 256 ||
-        !MODEL_NATIVE_APIS.includes(rule.nativeApi as never)
+        !(
+          value.schemaVersion >= 4
+            ? MODEL_NATIVE_APIS
+            : MODEL_ACCESS_WIRE_PROTOCOLS
+        ).includes(rule.nativeApi as never)
       )
         return fail("modelRegistry.nativeApiRules contains an invalid rule");
       const key = `${rule.providerId}\u0000${rule.modelIdPrefix}`;
@@ -1315,9 +1358,20 @@ export function parseModelRegistry(
       }
       modelIds.add(model.id);
     }
-    // V4 dependencies are checked below after public, route and force layers are applied.
+    // Empty Agent lists are valid only for an explicitly typed V4 media route.
+    const inheritedMode =
+      isPlainObject(model) && typeof model.modelRef === "string"
+        ? (
+            value.baseModels as
+              import("./modelMetadataLayers.js").BaseModel[] | undefined
+          )?.find((base) => base.id === model.modelRef)?.defaults.mode
+        : undefined;
     const error = registryEntryError(
-      model,
+      isPlainObject(model) &&
+        model.mode === undefined &&
+        inheritedMode !== undefined
+        ? { ...model, mode: inheritedMode }
+        : model,
       `modelRegistry.models[${index}]`,
       value.schemaVersion,
       value.schemaVersion < 4,

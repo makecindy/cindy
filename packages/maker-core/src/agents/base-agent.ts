@@ -450,6 +450,7 @@ export interface CodexLocalCredentialModeSwitchContext {
 }
 
 export interface RefreshLocalModelsOptions {
+  providerId?: string;
   /**
    * Bind model discovery to a specific local credential route.
    * Codex serves explicit routes from an isolated control-plane host so live
@@ -502,9 +503,7 @@ export interface TurnChangeCaptureHooks {
 
 export type PiNativePackageEntry = string | ({ source: string } & Record<string, unknown>);
 
-export interface PiManagedPackageMutationRequest {
-  action: 'install' | 'update' | 'remove';
-  source: string;
+export type PiManagedPackageMutationRequest = import('./pi/managed-command.js').PiManagementCommand & {
   /** Host-trusted evidence. This value is never accepted from Renderer or model input. */
   authorization:
     | 'local-desktop-command'
@@ -529,16 +528,87 @@ export type PiManagedPackageMutationFailureCode =
   | 'state-unavailable'
   | 'native-command-failed';
 
+/** Public diagnostics contain only host-selected enums/numbers, never CLI text or argv. */
+export interface PiPackageCommandDiagnostic {
+  phase: 'prepare' | 'native-command' | 'cindy-analysis';
+  outcome: 'failed' | 'timed-out' | 'unknown';
+  command?: 'install' | 'update' | 'remove' | 'list' | 'version' | 'dependency-install' | 'build';
+  exitCode?: number | null;
+  nativeCode?: 'E401' | 'E403' | 'EACCES' | 'EPERM' | 'ETARGET' | 'E404' | 'ENOTFOUND'
+    | 'EAI_AGAIN' | 'ECONNREFUSED' | 'ETIMEDOUT' | 'ENOSPC' | 'ENOENT' | 'ELIFECYCLE';
+  signal?: 'SIGTERM' | 'SIGKILL' | 'SIGINT' | 'other';
+  reason: 'authentication' | 'permission' | 'network' | 'package-not-found'
+    | 'version-not-found' | 'missing-executable' | 'disk-full' | 'build-failed'
+    | 'state-unavailable' | 'missing-file' | 'unknown';
+  recovery: 'check-credentials' | 'check-permissions' | 'check-network'
+    | 'check-source' | 'check-version' | 'check-runtime' | 'free-disk-space'
+    | 'check-build-dependencies' | 'refresh-package-state' | 'inspect-state-before-retry';
+}
+
+/** Pick bounded diagnostic fields at transcript boundaries. Keep self-contained: embedded in the Pi bridge. */
+export function projectPiPackageCommandDiagnostic(value: unknown): PiPackageCommandDiagnostic | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const data = value as Record<string, unknown>;
+  const choices = {
+    phase: ['prepare', 'native-command', 'cindy-analysis'],
+    outcome: ['failed', 'timed-out', 'unknown'],
+    reason: ['authentication', 'permission', 'network', 'package-not-found', 'version-not-found',
+      'missing-executable', 'disk-full', 'build-failed', 'state-unavailable', 'missing-file', 'unknown'],
+    recovery: ['check-credentials', 'check-permissions', 'check-network', 'check-source', 'check-version',
+      'check-runtime', 'free-disk-space', 'check-build-dependencies', 'refresh-package-state', 'inspect-state-before-retry'],
+  };
+  for (const [key, values] of Object.entries(choices)) {
+    if (typeof data[key] !== 'string' || !values.includes(data[key] as string)) return undefined;
+  }
+  return {
+    phase: data.phase as PiPackageCommandDiagnostic['phase'],
+    outcome: data.outcome as PiPackageCommandDiagnostic['outcome'],
+    reason: data.reason as PiPackageCommandDiagnostic['reason'],
+    recovery: data.recovery as PiPackageCommandDiagnostic['recovery'],
+    ...(data.exitCode === null || (Number.isSafeInteger(data.exitCode) && Math.abs(data.exitCode as number) <= 0xffffffff)
+      ? { exitCode: data.exitCode as number | null } : {}),
+    ...(typeof data.command === 'string' && ['install', 'update', 'remove', 'list', 'version', 'dependency-install', 'build'].includes(data.command)
+      ? { command: data.command as PiPackageCommandDiagnostic['command'] } : {}),
+    ...(typeof data.nativeCode === 'string' && ['E401', 'E403', 'EACCES', 'EPERM', 'ETARGET', 'E404', 'ENOTFOUND',
+      'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOSPC', 'ENOENT', 'ELIFECYCLE'].includes(data.nativeCode)
+      ? { nativeCode: data.nativeCode as PiPackageCommandDiagnostic['nativeCode'] } : {}),
+    ...(typeof data.signal === 'string' && ['SIGTERM', 'SIGKILL', 'SIGINT', 'other'].includes(data.signal)
+      ? { signal: data.signal as PiPackageCommandDiagnostic['signal'] } : {}),
+  };
+}
+
+/** Safe command-stage evidence, also embedded in the generated Pi bridge. */
+export function projectPiManagedCommandFailure(value: unknown): import('./pi/managed-command.js').PiManagedCommandFailure | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const data = value as Record<string, unknown>;
+  if (typeof data.phase !== 'string' || !['native-packages', 'native-core', 'native-query', 'host-binary-update'].includes(data.phase)
+    || typeof data.packagesUpdated !== 'boolean'
+    || typeof data.recovery !== 'string' || !['retry-core-only', 'check-host-update-and-retry-core', 'inspect-state-before-retry'].includes(data.recovery)) return undefined;
+  return {
+    phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
+    packagesUpdated: data.packagesUpdated,
+    recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+      ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
+  };
+}
+
 /** Host-classified package failure; raw cause remains Main-local. */
 export class PiManagedPackageMutationFailedError extends Error {
   readonly code = 'PI_PACKAGE_MUTATION_FAILED';
+  readonly diagnostic?: PiPackageCommandDiagnostic;
+  readonly commandFailure?: import('./pi/managed-command.js').PiManagedCommandFailure;
 
   constructor(
     readonly mayHaveChangedState: boolean,
     readonly failureCode: PiManagedPackageMutationFailureCode,
+    details?: PiPackageCommandDiagnostic | import('./pi/managed-command.js').PiManagedCommandFailure,
+    diagnostic?: PiPackageCommandDiagnostic,
   ) {
     super('Pi extension mutation failed');
     this.name = 'PiManagedPackageMutationFailedError';
+    this.diagnostic = projectPiPackageCommandDiagnostic(diagnostic ?? details);
+    this.commandFailure = projectPiManagedCommandFailure(details);
   }
 }
 
@@ -547,7 +617,10 @@ export interface PiExtensionUiStrings {
   cancel: string;
   mutationFailed: string;
   mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
-  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+  mutationSuccess: Record<'install' | 'update' | 'remove', string> & {
+    /** Only used when the returned package explicitly confirms enablement. */
+    installEnabled?: string;
+  };
 }
 
 export interface PiManagedPackageRuntimeConvergence {
@@ -648,7 +721,8 @@ export interface AgentDeps {
   resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
 
   /**
-   * Pi-only: mutate the shared package home through Pi's own package CLI.
+   * Pi-only: shared Host service for typed Pi management commands and legacy
+   * package mutations. Core operations never invoke package retirement hooks.
    * Host routing binds an exact user/tool action but must not add a second
    * compatibility, fingerprint, or content-approval decision.
    */
@@ -845,6 +919,7 @@ export interface AgentDeps {
     modelId: string,
     config: Record<string, unknown>,
     reportedUsableWindow: number | null,
+    codexHome?: string,
   ) => Promise<CodexContextWindowInfo | null>;
 
   /**
@@ -893,6 +968,9 @@ export interface AgentDeps {
   prepareCodexExtraSpawnConfig?: (
     providers: McpProvider[],
     ctx: {
+      providerId?: string;
+      codexHome?: string;
+      accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Original session request when the shared host was upgraded to a credential superset. */
@@ -912,6 +990,7 @@ export interface AgentDeps {
   resolveCodexSubagentRoutingSignature?: (
     providers: McpProvider[],
     ctx: {
+      providerId?: string;
       credentialMode?: AgentCredentialMode;
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
     },
@@ -958,7 +1037,13 @@ export interface AgentDeps {
    */
   onCodexLocalModelsListed?: (
     models: readonly CodexModelListItem[],
+    providerId?: string,
   ) => void | Promise<void>;
+
+  /** Host-confirmed native account identity; ordinary custom API providers return false. */
+  isCodexAccountProvider?: (providerId?: string | null) => boolean;
+  /** Retire each local task's writer on close so native history can change accounts. */
+  isolateCodexAccountSessions?: boolean;
 
   /**
    * Host-owned lightweight reviewer for routes without a healthy vendor-native
@@ -1175,7 +1260,9 @@ export interface AgentDeps {
    *
    * 缺省 / no-op → 行为与改动前一致。
    */
-  prepareCodexResumeSession?: (threadId: string) => Promise<string | void>;
+  prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
+  resolveCodexThreadStorageHome?: (threadId: string) => Promise<string | undefined>;
 
   /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。
@@ -1785,6 +1872,9 @@ export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-conte
 /** Host-restored user authorization for this send; never accepted from wire options. */
 export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
 
+/** Main-only selection from the original input for a retained-history continuation. */
+export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability-selection');
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1798,6 +1888,7 @@ export interface MainOwnedSendContext {
 export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
@@ -2478,13 +2569,14 @@ export abstract class BaseAgent {
    * Read provider account rate limits without starting a model turn.
    * Codex implements this through the app-server control plane.
    */
-  async readAccountRateLimits(): Promise<AccountRateLimitsResponse> {
+  async readAccountRateLimits(_providerId?: string): Promise<AccountRateLimitsResponse> {
     return this.throwNotSupported('account:rate-limits:read', 'not-implemented');
   }
 
   /** Consume one banked provider reset credit without starting a model turn. */
   async consumeAccountRateLimitResetCredit(
     params: ConsumeAccountRateLimitResetCreditParams,
+    _providerId?: string,
   ): Promise<ConsumeAccountRateLimitResetCreditResponse> {
     void params;
     return this.throwNotSupported('account:rate-limit-reset:consume', 'not-implemented');

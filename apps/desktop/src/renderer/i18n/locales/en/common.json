@@ -178,6 +178,7 @@
       "restoreFailed": "Failed to restore default settings"
     },
     "tabs": {
+      "storage": "Storage",
       "general": "General",
       "billing": "Usage and billing",
       "usage": "Usage history",
@@ -920,10 +921,25 @@
         "unknown": "Unknown"
       },
       "storage": {
+        "mediaSectionTitle": "Media files",
+        "databaseSectionTitle": "Database",
+        "overviewTitle": "Local storage overview",
+        "overviewDescription": "Your database and media cache stay on this computer. Cindy does not delete your history automatically.",
+        "mediaSectionHint": "Manage separately; review items before clearing",
+        "databaseUsage": "Using {{size}}",
+        "databaseWarningNote": "Scan first, then choose what to clean. Scanning does not delete files immediately.",
+        "dbSizeWarningThresholdLabel": "Database reminder threshold",
+        "dbSizeWarningThresholdDescription": "Remind me to clean up when the database exceeds this size (G)",
+        "dbSizeWarningThresholdInvalid": "Enter a threshold between 1 and 1024 G.",
+        "dbSizeWarningSaveFailed": "Could not save database reminder settings. Try again.",
+        "dbSizeWarningDisableLabel": "Do not remind me again",
+        "dbSizeWarningDisableDescription": "When enabled, database space reminders are hidden.",
+        "unknown": "Unknown",
         "title": "Storage",
         "usageLabel": "Media storage used",
         "usageValue": "{{size}} ({{count}} files, {{cacheSize}} cache)",
         "statsFailed": "Stats temporarily unavailable",
+        "refreshStatsButton": "Refresh storage usage",
         "legacyUsage": "Legacy data (read-only, not part of cleanup): {{size}}",
         "legacyImagesLabel": "Image cache directory",
         "legacyImagesDescription": "Cindy does not scan or clean this directory automatically. Deleting files may make images in message history unavailable; review them before deleting.",
@@ -1278,7 +1294,6 @@
           },
           "toast": {
             "title": "Added to dictionary",
-            "titleMultiple": "Added {{count}} terms",
             "termsSummary": "{{terms}} and {{count}} terms total",
             "automaticAdded": "Auto-added to dictionary: {{term}}",
             "automaticAddedMultiple": "Auto-added {{count}} terms, including {{term}}",
@@ -1477,6 +1492,10 @@
       },
       "pill": {
         "connected": "Connected",
+        "configured": "Configured",
+        "disconnected": "Not connected",
+        "connecting": "Connecting…",
+        "rename": "Rename",
         "suspended": "Disabled"
       },
       "button": {
@@ -1501,7 +1520,17 @@
         "reconnectRequired": "Reconnect Needed",
         "connect": "Connect ChatGPT",
         "reconnect": "Reconnect ChatGPT",
-        "cancelConnect": "Cancel Connection"
+        "cancelConnect": "Cancel Connection",
+        "accountSource": {
+          "local": "Local Codex account",
+          "oauth": "Independently signed-in account",
+          "unknown": "Existing OpenAI connection"
+        },
+        "useLocalAccount": "Use local Codex account",
+        "addIndependentAccount": "Sign in to a separate account",
+        "accountSourcesDescription": "Use your existing local Codex connection or sign in to a separately saved account. Both support the same features.",
+        "independentAccountDescription": "Sign in to a separately saved ChatGPT account, or connect with an API key.",
+        "localUnavailable": "No local connection is available to reuse. Existing provider accounts will not be replaced."
       },
       "xai": {
         "title": "xAI",
@@ -1510,7 +1539,7 @@
         "billingLabel": "SuperGrok subscription (direct)",
         "asset": {
           "weeklyTitle": "Weekly limit",
-          "weeklyUsed": "{{percent}}% used",
+          "weeklyRemaining": "{{percent}}% remaining",
           "resetsAt": "Resets {{at}}",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Open Grok usage"
@@ -1598,6 +1627,7 @@
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "Display name",
           "modelContextWindowPlaceholder": "Context (tokens)",
+          "modelType": "Model type",
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
@@ -1795,7 +1825,7 @@
         "subscription": "Subscription",
         "subscriptionProduct": "{{product}} Subscription",
         "noResults": "No matching models",
-        "capabilityNote": "Not available in {{agent}}",
+        "capabilityNote": "Not configured for {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
@@ -1871,6 +1901,7 @@
           "engines": "Engine support",
           "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
           "engineUnsupported": "Not supported",
+          "engineNotConfigured": "Not configured",
           "engineNoFast": "No Fast",
           "vision": {
             "vision": "Supported",
@@ -2053,7 +2084,7 @@
         "back": "← Back",
         "finish": "Finish",
         "cancel": "Cancel",
-        "useApiKey": "Use an API key instead",
+        "useApiKey": "API key connection",
         "metaOAuthOrApi": "Subscription (OAuth) · API key",
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
@@ -2206,27 +2237,15 @@
           "cancel": "Cancel"
         }
       },
-      "imagesKey": {
-        "label": "Image generation API key",
-        "placeholder": "Paste OpenAI platform API key",
-        "save": "Save",
-        "clear": "Clear",
-        "toast": {
-          "saved": "Image generation API key saved",
-          "saveFailed": "Failed to save image generation API key. Please try again.",
-          "cleared": "Image generation API key cleared",
-          "clearFailed": "Failed to clear image generation API key"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% used",
+        "percentRemaining": "{{percent}}% remaining",
         "resetsAt": "Resets {{at}}",
         "claudePlanFallback": "Claude subscription",
-        "claudeWeekly": "7-day window {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7-day window: {{percent}}% remaining",
+        "scopedModel": "{{model}}: {{percent}}% remaining",
         "openClaudeUsage": "Open usage page",
         "codexPlanFallback": "ChatGPT subscription",
-        "codexSecondary": "Secondary window {{percent}}%",
+        "codexSecondary": "Secondary window: {{percent}}% remaining",
         "codexResetCredits": "{{count}} limit reset credits"
       }
     },
@@ -3144,12 +3163,29 @@
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
+        "analysisIncomplete": "Pi completed the operation, but Cindy could not finish its follow-up analysis or optional build.",
         "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
         "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
         "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
         "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
       },
+      "recovery": {
+        "check-credentials": "Check the source credentials.",
+        "check-permissions": "Check file and directory permissions.",
+        "check-network": "Check the network connection.",
+        "check-source": "Check the package name or repository address.",
+        "check-version": "Check the requested package version.",
+        "check-runtime": "Check that the Pi runtime is available.",
+        "free-disk-space": "Free up disk space.",
+        "check-build-dependencies": "Check the extension’s build dependencies.",
+        "refresh-package-state": "Refresh the extension list to check its current state.",
+        "inspect-state-before-retry": "Check the current extension state before retrying unfinished steps."
+      },
       "failure": {
+        "commandFailed": "The native Pi package command failed.",
+        "commandNotStarted": "The native Pi package command could not start.",
+        "commandTimedOut": "The native Pi package command timed out.",
+        "commandUnknown": "The result of the native Pi package command could not be confirmed.",
         "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
         "packageNotFound": "The package was not found. Check the package name or repository URL.",
         "versionNotFound": "That version was not found. Choose an available version and try again.",
@@ -5927,6 +5963,8 @@
     "modelWeeklyLabel": "{{model}} weekly",
     "usedPercent": "Used {{percent}}%",
     "remainingPercent": "Remaining {{percent}}%",
+    "resetIn": "Resets in {{duration}}",
+    "resetPending": "Awaiting reset update",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",
     "limitRejected": "Plan limit reached; requests may be rejected",
@@ -7013,6 +7051,12 @@
       "binary-missing": "Component unavailable"
     },
     "ariaLabel": "Sidebar navigation",
+    "databaseSizeWarning": {
+      "title": "Database is using a lot of space",
+      "description": "The database is about {{size}}, above {{threshold}} G. Consider cleaning it up in Storage.",
+      "openSettings": "Open Storage",
+      "disable": "Do not remind me"
+    },
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
       "projects": "Projects",
@@ -7309,6 +7353,16 @@
       "thisDevice": "This computer",
       "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
       "preparing": "Waiting for this teammate to get ready…"
+    },
+    "capabilities": {
+      "title": "Capabilities",
+      "search": "Search capabilities",
+      "loading": "Loading…",
+      "skill": "Skills",
+      "mcp": "MCP",
+      "toolset": "Built-in tools",
+      "unavailable": "Unavailable",
+      "empty": "No matching capabilities"
     }
   },
   "common": {
@@ -7680,6 +7734,7 @@
         "china": "China",
         "image": "Image",
         "video": "Video",
+        "audio": "Audio Generation",
         "tts": "Text to Speech",
         "stt": "Speech to Text",
         "realtime": "Realtime Audio",
@@ -7783,7 +7838,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
+            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -8768,7 +8823,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
-        "labelStrip": "Oversized images removed, continuing",
+        "labelStrip": "Historical images reorganized",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -9336,6 +9391,8 @@
         "all": "All"
       },
       "filterSortBy": {
+        "created": "Created Time",
+        "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
         "priority": "Priority"
@@ -9351,7 +9408,7 @@
       "filterTaskSortHeading": "Session sort",
       "filterProjectOrderHeading": "Project order",
       "filterProjectOrder": {
-        "activity": "By recent activity",
+        "activity": "Follow Session Sorting",
         "custom": "Manual"
       },
       "filterProjectOrderTip": {
@@ -11410,7 +11467,7 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
-      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversized": "Automatic image history recovery and continuation could not finish. Send “Continue” to resume this task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",

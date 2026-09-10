@@ -19,11 +19,60 @@ export interface DeviceProvidersPayload {
 /** 被控端供应商目录的取数器(通常 = `() => transport.listProviders()`)。 */
 export type DeviceProvidersFetcher = () => Promise<DeviceProvidersPayload>;
 
+/** Recognize both transport codes and the host's serialized IPC error prefix. */
+function providerErrorCode(error: unknown): string | undefined {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === 'string' && code !== 'IPC_ERROR') return code;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /^(?:Error invoking remote method '[^']+': Error: )?\[([A-Z0-9_]+)\]/.exec(message)?.[1];
+}
+
+/** Only an explicitly unsupported channel permits the legacy capabilities fallback. */
+export function isDeviceProvidersUnsupportedError(error: unknown): boolean {
+  const code = providerErrorCode(error);
+  return code === 'CHANNEL_NOT_ALLOWED' || code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
+}
+
+async function requestDeviceProviders(
+  fetcher: DeviceProvidersFetcher,
+  isCurrent: () => boolean,
+): Promise<DeviceProvidersPayload> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetcher();
+    } catch (error) {
+      if (providerErrorCode(error) !== 'MODEL_VISIBILITY_NOT_READY' || attempt >= 2 || !isCurrent()) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+      if (!isCurrent()) throw error;
+    }
+  }
+}
+
 // 缓存按被控设备隔离;代际同桌面(evict 时自增,作废在途 fetch 的回写)。
 const cache = new Map<string, DeviceProvidersPayload>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 const listeners = new Map<string, Set<(payload: DeviceProvidersPayload) => void>>();
+const errorListeners = new Map<string, Set<(error: unknown) => void>>();
+
+/** Fresh reads also report failure to mounted pickers without reviving stale catalogs. */
+export function subscribeDeviceProvidersError(deviceId: string, listener: (error: unknown) => void): () => void {
+  const bucket = errorListeners.get(deviceId) ?? new Set<(error: unknown) => void>();
+  bucket.add(listener);
+  errorListeners.set(deviceId, bucket);
+  return () => {
+    bucket.delete(listener);
+    if (bucket.size === 0) errorListeners.delete(deviceId);
+  };
+}
+
+function notifyDeviceProvidersError(deviceId: string, error: unknown): void {
+  // A downgraded host cannot serve any of the cached provider routes. Retire only
+  // that device's snapshot; an empty success notification would incorrectly mark it ready.
+  if (isDeviceProvidersUnsupportedError(error)) cache.delete(deviceId);
+  for (const listener of errorListeners.get(deviceId) ?? []) listener(error);
+}
+
 // 各设备缓存写入时的连接代际(模块级,组件卸载不丢):hook 用它对「重连时未挂载 /
 // 正看其它设备」的旧缓存做重连判定(codex review P1)——组件本地 ref 会随卸载
 // 丢失,旧设备再打开会被当首次挂载、采信断线前缓存。
@@ -85,7 +134,7 @@ export async function fetchDeviceProviders(
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
 
-  const p = fetcher()
+  const p = requestDeviceProviders(fetcher, isCurrent)
     .then((res) => {
       const payload: DeviceProvidersPayload = {
         providers: res?.providers ?? [],
@@ -101,7 +150,10 @@ export async function fetchDeviceProviders(
       return payload;
     })
     .catch((e) => {
-      if (isCurrent()) inflight.delete(deviceId);
+      if (isCurrent()) {
+        inflight.delete(deviceId);
+        notifyDeviceProvidersError(deviceId, e);
+      }
       throw e;
     });
   inflight.set(deviceId, p);
@@ -134,9 +186,6 @@ export async function fetchDeviceProvidersFresh(
   // 为外部驱逐而丢弃结果;仅在确有在途时推进,守卫下一轮重跑(普通在途已清)
   // 即收敛,gen 保持稳定时 fetch 前后一致直接采信。
   const ip = inflight.get(deviceId);
-  // 是否曾作废普通在途:失败时需恢复拉取(copilot review P1 要求失败分支不动
-  // 普通 inflight,这里只在启动时作废过一次;记录以便失败后恢复)。
-  const invalidatedOrdinary = ip !== undefined;
   if (ip) {
     inflight.delete(deviceId);
     deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
@@ -149,7 +198,7 @@ export async function fetchDeviceProvidersFresh(
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
 
-  const p = fetcher()
+  const p = requestDeviceProviders(fetcher, isCurrent)
     .then((res) => {
       const payload: DeviceProvidersPayload = {
         providers: res?.providers ?? [],
@@ -163,32 +212,9 @@ export async function fetchDeviceProvidersFresh(
       }
       return payload;
     })
-    .catch((e) => {
-      // fresh 失败且曾作废普通在途 → 恢复目录(codex review P2):被作废的普通
-      // 请求已因代际失效不回写,hook 会停在 ready=false 不再自动重拉(设备/maker
-      // 未变化不触发 effect)。恢复两条路径:
-      // - 缓存命中:主动重发快照恢复 hook 的 readyFor/readyGen——fetchDeviceProviders
-      //   缓存命中直接返回不触发 payload 订阅回调,fresh 推进的代际已使 ready
-      //   失效,不重发则目录一直未知(codex review P2);
-      // - 无缓存:真正重新访问工作站。
-      // fire-and-forget,不阻塞调用方的 reject。
-      if (invalidatedOrdinary) {
-        const cached = cache.get(deviceId);
-        if (cached) {
-          notifyDeviceProviders(deviceId, cached);
-        } else if (isCurrent()) {
-          // 仅 fresh 所属代际仍有效时才补拉(codex review P2):fresh 请求期间设备
-          // 可能已被驱逐/登出/切号(代际已变),此时补拉成功会重新写入已驱逐设备
-          // 或上一账号的目录——清理完成后不得复活旧目录。
-          // 先清 fresh 槽(codex review P2:在清除 fresh 槽后再启动恢复拉取)——本
-          // promise 仍占着 freshInflight(直到下方 p.finally 才删除),fetchDeviceProviders
-          // 的 fresh 优先分支会 join 同一个正在 reject 的 promise,fetcher 不会再次
-          // 执行,已挂载 hook 停在 ready=false。清槽后恢复调用走正常普通拉取。
-          freshInflight.delete(deviceId);
-          void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined);
-        }
-      }
-      throw e;
+    .catch((error: unknown) => {
+      if (isCurrent()) notifyDeviceProvidersError(deviceId, error);
+      throw error;
     });
   freshInflight.set(deviceId, p);
   void p.finally(() => {

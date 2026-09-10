@@ -43,7 +43,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   private generation = 0;
   // Transport changes invalidate remote reads, not local disk restoration.
   private cacheGeneration = 0;
-  private detailRuns = new Map<string, object>();
+  private detailRuns = new Map<string, { promise: Promise<void> }>();
   private active = true;
   private networkAvailable = true;
   private pagePromise: Promise<void> | null = null;
@@ -208,15 +208,19 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     });
   }
 
-  async loadDetails(summary: HistoryWorkSummary): Promise<void> {
-    if (!this.isActive() || !this.state.expanded.has(summary.key) || this.detailRuns.has(summary.key)) return;
+  async loadDetails(summary: HistoryWorkSummary, options?: { allowCollapsed?: boolean }): Promise<void> {
+    const allowCollapsed = options?.allowCollapsed === true;
+    if (!this.isActive() || (!allowCollapsed && !this.state.expanded.has(summary.key))) return;
+    const inFlight = this.detailRuns.get(summary.key);
+    if (inFlight) return inFlight.promise;
     const existing = this.state.details.get(summary.key);
     if (existing?.complete && existing.revision === summary.revision) return;
-    const token = {};
+    const token = { promise: Promise.resolve() };
     const generation = this.generation;
     this.detailRuns.set(summary.key, token);
     const current = () => this.active && generation === this.generation
-      && this.detailRuns.get(summary.key) === token && this.state.expanded.has(summary.key);
+      && this.detailRuns.get(summary.key) === token
+      && (allowCollapsed || this.state.expanded.has(summary.key));
     // A changed revision may include late edits anywhere in the range, even
     // when its endpoint also advances. Keep the old display while rereading.
     let collected: T[] = [];
@@ -229,27 +233,30 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       this.publish({ details });
     };
     update({});
-    try {
-      await readHistoryWorkDetails({
-        readPage: (cursor) => this.transport.details(summary, cursor ?? undefined),
-        isCurrent: current,
-        onPage: (rows) => {
-          const incoming = new Set(rows.map((row) => row.clientId));
-          collected = [...collected.filter((row) => !incoming.has(row.clientId)), ...rows];
-          update({});
-        },
-      });
-      if (current()) update({ loading: false, complete: true });
-    } catch (error) {
-      if (current()) update({ loading: false, error });
-    } finally {
-      if (this.detailRuns.get(summary.key) === token) {
-        const stillCurrent = current();
-        this.detailRuns.delete(summary.key);
-        const latest = historyWorkSummaries(this.state.items).find((item) => item.key === summary.key);
-        if (stillCurrent && latest && latest.revision !== summary.revision) void this.loadDetails(latest);
+    token.promise = (async () => {
+      try {
+        await readHistoryWorkDetails({
+          readPage: (cursor) => this.transport.details(summary, cursor ?? undefined),
+          isCurrent: current,
+          onPage: (rows) => {
+            const incoming = new Set(rows.map((row) => row.clientId));
+            collected = [...collected.filter((row) => !incoming.has(row.clientId)), ...rows];
+            update({});
+          },
+        });
+        if (current()) update({ loading: false, complete: true });
+      } catch (error) {
+        if (current()) update({ loading: false, error });
+      } finally {
+        if (this.detailRuns.get(summary.key) === token) {
+          const stillCurrent = current();
+          this.detailRuns.delete(summary.key);
+          const latest = historyWorkSummaries(this.state.items).find((item) => item.key === summary.key);
+          if (stillCurrent && latest && latest.revision !== summary.revision) await this.loadDetails(latest);
+        }
       }
-    }
+    })();
+    return token.promise;
   }
 
   /** Locate by visible pages, preserving the original folded aggregate focus behavior. */

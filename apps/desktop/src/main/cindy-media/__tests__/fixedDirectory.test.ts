@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type fs from 'node:fs';
 
-import { openOrCreateFixedDirectory } from '../fixedDirectory';
+import {
+  getFixedDirectoryStats,
+  openOrCreateFixedDirectory,
+  type FixedDirectoryStatsFileSystem,
+} from '../fixedDirectory';
 
 function directoryStat(isDirectory: boolean): fs.Stats {
-  return { isDirectory: () => isDirectory } as fs.Stats;
+  return {
+    isDirectory: () => isDirectory,
+    isSymbolicLink: () => false,
+  } as fs.Stats;
 }
 
 function missingPathError(): NodeJS.ErrnoException {
@@ -186,5 +193,58 @@ describe('openOrCreateFixedDirectory', () => {
     ).resolves.toBe(false);
 
     expect(openPath).toHaveBeenCalledWith('/cache/images');
+  });
+});
+
+describe('getFixedDirectoryStats', () => {
+  it('sums nested regular files and ignores symlinks', async () => {
+    const readdir = vi.fn(async (directory: string) => {
+      if (directory === '/cache') {
+        return [
+          { name: 'a.bin', isDirectory: () => false },
+          { name: 'nested', isDirectory: () => true },
+          { name: 'link', isDirectory: () => false },
+        ];
+      }
+      return [{ name: 'b.bin', isDirectory: () => false }];
+    });
+    const lstat = vi.fn(async (filePath: string) =>
+      filePath === '/cache'
+        ? { isDirectory: () => true, isSymbolicLink: () => false }
+        : {
+            isFile: () => filePath.endsWith('.bin'),
+            size: filePath.endsWith('a.bin') ? 3 : 5,
+          },
+    );
+
+    const fileSystem = { readdir, lstat } as unknown as FixedDirectoryStatsFileSystem;
+    await expect(getFixedDirectoryStats('/cache', fileSystem)).resolves.toEqual({
+      bytes: 8,
+      fileCount: 2,
+    });
+  });
+
+  it('treats a missing directory as empty', async () => {
+    const error = missingPathError();
+    await expect(
+      getFixedDirectoryStats('/cache', {
+        readdir: vi.fn().mockRejectedValue(error),
+        lstat: vi.fn().mockRejectedValue(error),
+      } as unknown as FixedDirectoryStatsFileSystem),
+    ).resolves.toEqual({ bytes: 0, fileCount: 0 });
+  });
+
+  it('does not traverse a symlinked root', async () => {
+    const readdir = vi.fn();
+    await expect(
+      getFixedDirectoryStats('/cache', {
+        lstat: vi.fn().mockResolvedValue({
+          isDirectory: () => true,
+          isSymbolicLink: () => true,
+        }),
+        readdir,
+      } as unknown as FixedDirectoryStatsFileSystem),
+    ).resolves.toEqual({ bytes: 0, fileCount: 0 });
+    expect(readdir).not.toHaveBeenCalled();
   });
 });

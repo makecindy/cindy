@@ -8,6 +8,7 @@ import { useBotTranslation } from './botPronounContext';
 import { Spinner } from '@/components/ui/spinner';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import type { MakerVendor } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import { useRegisterContentHeader } from '../feature-context';
@@ -34,7 +35,8 @@ import {
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
-import type { BotSettingsPayload } from './botSettingsAutosave';
+import { BotCapabilitySettings } from './BotCapabilitySettings';
+import { botSettingsChanges, normalizeBotSettingsPayload, reconcileBotSettingsDraft, type BotSettingsPayload } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -83,7 +85,11 @@ export function BotSettings({
   // Live defaults are display state, not form edits: refreshing them must not
   // dirty autosave or overwrite a local model override / pending text edits.
   useProviders();
-  useAvailableAgents();
+  const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
+  const hiddenVendors = useMemo<MakerVendor[]>(() => {
+    if (!availableAgentsLoaded) return [];
+    return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
+  }, [availableAgentsLoaded, availableVendors]);
   useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
   const displayedModelChain = capabilities.modelChainOverride === null
     ? getEffectiveBotModelChain()
@@ -97,22 +103,18 @@ export function BotSettings({
   // 页面挂载期间本地 state 才是编辑权威;`bot.channels` / `bot.sessions` 等非表单
   // 字段仍直接读 prop,保持实时。
   const botIdentityRef = useRef(bot.id);
-  useEffect(() => {
-    if (botIdentityRef.current === bot.id) return;
-    botIdentityRef.current = bot.id;
-    setName(bot.name);
-    setDescription(bot.description);
-    setIdentitySource(bot.identitySource ?? '');
-    setUserContextSource(bot.userContextSource ?? '');
-    setAvatar(bot.avatar);
-    setAvatarColor(bot.avatarColor);
-    setSelectedSkills(bot.skills);
-    setCapabilities(bot.capabilities);
-  }, [bot]);
-
+  const reconciledBotRef = useRef(bot);
+  const savingProfileRef = useRef(false);
+  const savedSettingsRef = useRef(normalizeBotSettingsPayload({ name, description, identitySource, userContextSource, avatar, avatarColor, capabilities, skills: selectedSkills }, bot.name));
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload) => {
-      await updateBotProfile(bot.id, payload);
+      savingProfileRef.current = true;
+      try {
+        await updateBotProfile(bot.id, botSettingsChanges(savedSettingsRef.current, payload, true));
+        savedSettingsRef.current = payload;
+      } finally {
+        savingProfileRef.current = false;
+      }
     },
     [bot.id],
   );
@@ -131,8 +133,33 @@ export function BotSettings({
     fallbackName: bot.name,
     // 归档 bot 的设置页是只读的(不渲染任何表单字段),自动保存不得为它引入写入。
     enabled: bot.status !== 'archived',
+    baseline: savedSettingsRef,
     commit: commitProfile,
   });
+
+  useEffect(() => {
+    // Store props include optimistic writes and rollback. Reconcile only after
+    // our save settles, retaining edits typed while that request was in flight.
+    if (savingProfileRef.current || reconciledBotRef.current === bot) return;
+    const incoming = normalizeBotSettingsPayload({ ...bot, identitySource: bot.identitySource ?? '', userContextSource: bot.userContextSource ?? '' }, bot.name);
+    const next = botIdentityRef.current === bot.id
+      ? reconcileBotSettingsDraft(savedSettingsRef.current, {
+        name, description, identitySource, userContextSource, avatar, avatarColor,
+        capabilities, skills: selectedSkills,
+      }, incoming)
+      : incoming;
+    botIdentityRef.current = bot.id;
+    reconciledBotRef.current = bot;
+    savedSettingsRef.current = incoming;
+    setName(next.name);
+    setDescription(next.description);
+    setIdentitySource(next.identitySource);
+    setUserContextSource(next.userContextSource);
+    setAvatar(next.avatar);
+    setAvatarColor(next.avatarColor);
+    setSelectedSkills(next.skills);
+    setCapabilities(next.capabilities);
+  }, [bot, autosave.status]);
 
   const updateCapability = <K extends keyof BotCapabilities>(key: K, value: BotCapabilities[K]) => {
     setCapabilities((current) => ({
@@ -287,6 +314,7 @@ export function BotSettings({
           <div data-testid="bot-model-controls" className="min-w-0">
             <BotModelChainEditor
               label={t('bots.settingsTabs.model')}
+              hiddenVendors={hiddenVendors}
               onRestoreDefault={() => {
                 const modelChain = getEffectiveBotModelChain();
                 const primary = modelChain[0];
@@ -320,6 +348,22 @@ export function BotSettings({
             />
           </div>
         </section>
+
+        <BotCapabilitySettings
+          bot={bot}
+          capabilities={capabilities}
+          skills={selectedSkills}
+          onChange={(kind, values) => {
+            if (kind === 'skill') setSelectedSkills(values);
+            setCapabilities((current) => ({
+              ...current,
+              ...(kind === 'skill' ? { skillMode: 'allowlist' as const }
+                : kind === 'mcp' ? { mcpMode: 'allowlist' as const, mcpServers: values }
+                  : { toolsetMode: 'allowlist' as const, toolsets: values }),
+            }));
+            autosave.onEdit('instant');
+          }}
+        />
 
         <details className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
           <summary className="cursor-pointer list-none px-4 py-3 text-12 font-medium text-[var(--text-secondary)] marker:content-none">
@@ -387,7 +431,11 @@ export function BotsHomeView() {
   const bots = useBotProfiles();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
-  useAvailableAgents();
+  const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
+  const hiddenVendors = useMemo<MakerVendor[]>(() => {
+    if (!availableAgentsLoaded) return [];
+    return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
+  }, [availableAgentsLoaded, availableVendors]);
   const hasDefaultModel = useSyncExternalStore(
     subscribeBotGlobalModel,
     () => getEffectiveBotModelChain().length > 0,
@@ -641,6 +689,7 @@ export function BotsHomeView() {
       <main className="flex h-full flex-col items-center justify-center gap-3 px-6" role="main">
         <BotModelChainEditor
           label={t('bots.settingsTabs.model')}
+          hiddenVendors={hiddenVendors}
           value={[]}
           onNavigateToProviders={() => navigate('/settings?tab=providers')}
           onChange={(modelChain) => {

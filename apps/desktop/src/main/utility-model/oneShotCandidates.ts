@@ -1,3 +1,4 @@
+import { isOpenAiSubscriptionProvider, providerCatalogId } from '@cindy/model-providers';
 import { randomUUID } from 'node:crypto';
 
 import { type AgentKind, type Maker } from '@cindy/maker-core';
@@ -13,6 +14,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth } from '../maker-host/anthropic-responses-bridge-host.js';
 import { getValidClaudeAiOAuth } from '../maker-host/claude-oauth-refresh.js';
+import { getValidClaudeAccountOAuth } from '../maker-host/subscription-account-auth.js';
 import { getGrokAccessToken } from '../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
@@ -858,7 +860,7 @@ async function requestExplicitProviderText(
     opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
   }
 
-  if (provider.id === 'xd' || provider.id === 'anthropic' || provider.id === 'openai' || provider.id === 'xai') {
+  if (provider.id === 'xd' || providerCatalogId(provider) === 'anthropic' || isOpenAiSubscriptionProvider(provider) || providerCatalogId(provider) === 'xai') {
     return requestBuiltinProviderText(prompt, {
       provider,
       agentKind,
@@ -1122,8 +1124,10 @@ async function requestBuiltinProviderText(
     }], prompt, [], input);
   }
 
-  if (input.provider.id === 'anthropic') {
-    const oauth = await getValidClaudeAiOAuth();
+  if (providerCatalogId(input.provider) === 'anthropic') {
+    const readOAuth = () => input.provider.id === 'anthropic'
+      ? getValidClaudeAiOAuth() : getValidClaudeAccountOAuth(input.provider.id);
+    const oauth = await readOAuth();
     if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
     if (!oauth?.accessToken) {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
@@ -1162,17 +1166,17 @@ async function requestBuiltinProviderText(
             })
           : undefined,
         credentialStillCurrent: requestOpts?.beforeDispatch
-          ? async () => (await getValidClaudeAiOAuth())?.accessToken === oauth.accessToken
+          ? async () => (await readOAuth())?.accessToken === oauth.accessToken
           : undefined,
         routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
 
-  if (input.provider.id === 'openai') {
+  if (isOpenAiSubscriptionProvider(input.provider)) {
     let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
     try {
-      creds = await getChatgptBridgeAuth();
+      creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
     } catch {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
@@ -1220,7 +1224,7 @@ async function requestBuiltinProviderText(
         credentialStillCurrent: requestOpts?.beforeDispatch
           ? async () => {
               try {
-                const current = await getChatgptBridgeAuth();
+                const current = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
                 return current.accountId === accountId && current.accessToken === creds.accessToken;
               } catch {
                 return false;
@@ -1232,10 +1236,10 @@ async function requestBuiltinProviderText(
     }], prompt, [], input);
   }
 
-  if (input.provider.id === 'xai') {
+  if (providerCatalogId(input.provider) === 'xai') {
     let accessToken: string;
     try {
-      accessToken = await getGrokAccessToken();
+      accessToken = await (input.provider.id === 'xai' ? getGrokAccessToken() : getGrokAccessToken(input.provider.id));
     } catch {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
@@ -1269,7 +1273,7 @@ async function requestBuiltinProviderText(
         credentialStillCurrent: requestOpts?.beforeDispatch
           ? async () => {
               try {
-                return (await getGrokAccessToken()) === accessToken;
+                return (await (input.provider.id === 'xai' ? getGrokAccessToken() : getGrokAccessToken(input.provider.id))) === accessToken;
               } catch {
                 return false;
               }

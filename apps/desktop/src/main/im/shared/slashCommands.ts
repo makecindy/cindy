@@ -12,7 +12,7 @@
  */
 
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
-import { getModelVisibilityOverride } from '../../maker-host/model-visibility-mirror';
+import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
 import {
   buildProviderSections,
@@ -334,6 +334,7 @@ export function createSlashHandlers(
         const agentKind = row.agentKind;
         const currentProviderId = getSessionProvider(row.id) ?? row.providerId;
         const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        await waitForModelVisibilityMirror();
         const connected = connectedProvidersForAgent(providers, agentKind);
         const sections = buildProviderSections({
           providers: connected,

@@ -17,5 +17,6 @@ export * from './contactsSyncProtocol.js';
 export * from './remoteResources.js';
 export * from './remoteDesktop.js';
 export * from './remoteDesktopIce.js';
+export * from './remoteDesktopIceConfig.js';
 export * from './remoteClipboard.js';
 export * from './remoteCursor.js';

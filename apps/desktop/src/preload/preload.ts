@@ -1,4 +1,5 @@
 import type { RoutineInput } from '@cindy/maker-scheduler';
+import type { BotToolsetContext } from '../shared/botRemoteCapabilities';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
@@ -503,6 +504,7 @@ function createIpcFanOut(channel: string): FanOut {
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
+const fanOutDatabaseSizeWarningChanged = createIpcFanOut('database-size-warning:changed');
 const fanOutDbSlimmingStartupProgress = createIpcFanOut(
   DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL,
 );
@@ -773,6 +775,8 @@ const fanOutMakerUsageReferenceModelPricing = createIpcFanOut(
   'usage:reference-model-pricing-changed',
 );
 const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-changed'); // Claude 月度配额
+const fanOutMakerUsageCodexProviderAccount = createIpcFanOut('usage:codex-provider-account-changed');
+const fanOutSubscriptionProviderAccount = createIpcFanOut('usage:subscription-provider-account-changed');
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
 const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
@@ -823,6 +827,8 @@ interface CrossAgentMigrationItem {
 }
 
 interface PluginListItem {
+  /** Present only when queried for a Bot runtime context. */
+  available?: boolean;
   id: string;
   name: string;
   description: string;
@@ -4057,6 +4063,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       error?: string;
       blobs: { totalCount: number; totalBytes: number; cacheCount: number; cacheBytes: number };
       legacy: { bytes: number; fileCount: number };
+      fixedCaches: {
+        legacyImages: { bytes: number; fileCount: number };
+        chatAttachments: { bytes: number; fileCount: number };
+      };
       deadDirs: Array<{
         name: string;
         exists: boolean;
@@ -5078,6 +5088,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
       userId: string,
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
       ipcRenderer.invoke('local-db:ensure-ready', userId),
+    databaseSizeWarning: {
+      // Settings and the startup capacity snapshot are local to this device's
+      // shared Electron userData profile; they are not synced across devices
+      // or persisted in the cloud account.
+      getSettings: (): Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }> => ipcRenderer.invoke('database-size-warning:get-settings'),
+      setSettings: (settings: {
+        thresholdGiB?: number;
+        disabled?: boolean;
+      }): Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }> => ipcRenderer.invoke('database-size-warning:set-settings', settings),
+      resetSettings: (): Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }> => ipcRenderer.invoke('database-size-warning:reset-settings'),
+      getStatus: (): Promise<{ databaseBytes: number | null }> =>
+        ipcRenderer.invoke('database-size-warning:get-status'),
+      measure: (): Promise<{ databaseBytes: number | null }> =>
+        ipcRenderer.invoke('database-size-warning:measure'),
+      onChanged: (callback: () => void) => fanOutDatabaseSizeWarningChanged(callback),
+    },
     maintenance: {
       scan: (
         input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
@@ -5713,9 +5754,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
-    listCustomMcpServers: (): Promise<{
-      servers: import('../shared/customMcp').CustomMcpConfig[];
-    }> => ipcRenderer.invoke('maker:mcp:custom:list'),
+    listCustomMcpServers: (context?: import('../shared/customMcp').CustomMcpListContext): Promise<import('../shared/customMcp').CustomMcpListResult> => context === undefined
+      ? ipcRenderer.invoke('maker:mcp:custom:list')
+      : ipcRenderer.invoke('maker:mcp:custom:list', context),
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
@@ -5792,8 +5833,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       dataOwnerId: string | null,
       ownerGeneration: number,
       map: Record<string, boolean>,
+      policy?: import('../shared/modelVisibility').ModelVisibilityPolicy,
     ): Promise<void> =>
-      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map),
+      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map, policy),
     claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
       const value: unknown = ipcRenderer.sendSync('maker:model-visibility:legacy-owner-claim-sync');
       return isModelVisibilityLegacyOwnerClaim(value)
@@ -7038,16 +7080,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     usage: {
       getToday: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:today', agentKind),
-      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
-        ipcRenderer.invoke('maker:usage:account', agentKind),
+      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi', providerId?: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:usage:account', agentKind, providerId),
       /** Codex app-server authoritative windows and banked reset-credit metadata. */
-      getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult> =>
-        ipcRenderer.invoke('maker:usage:codex-rate-limits'),
+      getCodexRateLimits: (providerId?: string): Promise<MobileCodexRateLimitsResult> =>
+        ipcRenderer.invoke('maker:usage:codex-rate-limits', providerId),
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
-      getClaudeSubscription: (): Promise<unknown | null> =>
-        ipcRenderer.invoke('maker:usage:claude-subscription'),
-      getXaiSubscription: (): Promise<unknown | null> =>
-        ipcRenderer.invoke('maker:usage:xai-subscription'),
+      getClaudeSubscription: (providerId?: string): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:claude-subscription', providerId),
+      getXaiSubscription: (providerId?: string): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:xai-subscription', providerId),
       /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:model-pricing-v2'),
@@ -7069,12 +7111,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Claude 月度配额推送 (turn done 后 best-effort fetch, agentKind=claude-code 时订阅)。 */
       onClaudeAccountChanged: fanOutMakerUsageClaudeAccount,
       /** Codex 订阅用量推送 (WHAM 后台刷新成功后 best-effort 推送)。 */
-      onCodexAccountChanged: fanOutMakerUsageCodexAccount,
+      onCodexAccountChanged: (cb: (payload: unknown) => void, providerId = 'openai') =>
+        providerId === 'openai' ? fanOutMakerUsageCodexAccount(cb) : fanOutMakerUsageCodexProviderAccount((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
       /** xAI(SuperGrok bridge)限流快照推送 (bridge 每个成功上游响应解析 x-ratelimit-* 后推送)。 */
       onXaiRateLimitChanged: fanOutMakerUsageXaiRateLimit,
       /** Claude 订阅余量推送 (端点后台刷新 / proxy 旁路 headers 更新时推送)。 */
-      onClaudeSubscriptionChanged: fanOutMakerUsageClaudeSubscription,
-      onXaiSubscriptionChanged: fanOutMakerUsageXaiSubscription,
+      onClaudeSubscriptionChanged: (cb: (payload: unknown) => void, providerId = 'anthropic') =>
+        providerId === 'anthropic' ? fanOutMakerUsageClaudeSubscription(cb) : fanOutSubscriptionProviderAccount((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId = 'xai') =>
+        providerId === 'xai' ? fanOutMakerUsageXaiSubscription(cb) : fanOutSubscriptionProviderAccount((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
     },
 
     // ── Scheduler (Phase 4) ────────────────────────────────────────────────
@@ -7240,8 +7294,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Plugin system (Phase 1) ──────────────────────────────────────────
     plugins: {
-      list: (workingDir?: string): Promise<PluginListItem[]> =>
-        ipcRenderer.invoke('maker:plugins:list', workingDir),
+      list: (workingDir?: string, includeHidden?: boolean, botContext?: Omit<BotToolsetContext, 'workingDir'>): Promise<PluginListItem[]> =>
+        ipcRenderer.invoke('maker:plugins:list', workingDir, includeHidden, botContext),
       getState: (
         id: string,
         workingDir?: string,

@@ -643,6 +643,54 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
 // ── generateTitleViaProvider — anthropic(Messages)────────────────────────
 
 describe('generateTitleViaProvider — anthropic(Messages)', () => {
+  it.each(['retired', 'deleted'] as const)('独立账号在凭证等待期间 %s 时不派发标题请求', async (change) => {
+    const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
+    const id = 'anthropic-second';
+    const account = { ...original, id, source: 'user' as const, auth: { method: 'oauth' as const, native: 'claude' as const } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] };
+    setActiveCatalog(catalog);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const readAnthropicOAuth = vi.fn(async (_providerId?: string) => { await gate; return { accessToken: 'fake-token' }; });
+    const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应请求' }] } }));
+    const pending = generateTitleViaProvider(
+      { sessionId: 's-account-race', agentKind: 'claude-code', prompt: 'x' },
+      { fetchImpl, readSessionProviderId: async () => id, listConnectedProviders: async () => [providerStub(id)], readAnthropicOAuth },
+    );
+    try {
+      await vi.waitFor(() => expect(readAnthropicOAuth).toHaveBeenCalled());
+      const next = structuredClone(catalog);
+      if (change === 'deleted') next.providers = next.providers.filter(p => p.id !== id);
+      else {
+        next.modelRegistry!.models.find(entry => entry.routes.some(route => route.providerId === 'anthropic' && route.modelId === original.titleModel))!.status = 'retired';
+        next.providers.find(p => p.id === id)!.models = { 'claude-code': [], codex: [], pi: [] };
+      }
+      setActiveCatalog(next);
+      release();
+      await expect(pending).resolves.toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(readAnthropicOAuth.mock.calls.every(call => call[0] === id)).toBe(true);
+    } finally { release(); await pending; setActiveCatalog(BUNDLED_CATALOG); }
+  });
+  it('uses the selected independent Claude account for every credential recheck', async () => {
+    const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
+    const id = 'anthropic-second';
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
+      { ...original, id, source: 'user', auth: { method: 'oauth', native: 'claude' } },
+    ] });
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '账号隔离测试' }] } }));
+      const readAnthropicOAuth = vi.fn((providerId?: string) => ({ accessToken: providerId === id ? 'test-selected' : 'test-wrong' }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 's-scoped', agentKind: 'claude-code', prompt: '为账号隔离测试起标题' },
+        { fetchImpl, readSessionProviderId: async () => id, listConnectedProviders: async () => [providerStub(id)], readAnthropicOAuth },
+      );
+      expect(title).toBe('账号隔离测试');
+      expect(readAnthropicOAuth.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(readAnthropicOAuth.mock.calls.every(([providerId]) => providerId === id)).toBe(true);
+      expect(vi.mocked(fetchImpl).mock.calls[0]?.[1]).toMatchObject({ headers: { authorization: 'Bearer test-selected' } });
+    } finally { setActiveCatalog(BUNDLED_CATALOG); }
+  });
   it('200 → 解析 content[].text;请求形状正确', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: 'TS 编译报错排查' }] },

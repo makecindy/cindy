@@ -1,9 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
+import { getScheduleIndexInvalidationVersion, loadSessionScheduleIndexThrottled, resetScheduleIndexThrottleForTesting } from '@/session/scheduleIndex';
 
 describe('remote schedule event store', () => {
   beforeEach(() => {
     remoteScheduleEventStore.clearAll();
+    resetScheduleIndexThrottleForTesting();
+  });
+
+  it('invalidates once before consumers reload and preserves unrelated device caches', async () => {
+    const load = vi.fn(async () => new Map());
+    const loadOther = vi.fn(async () => new Map());
+    await loadSessionScheduleIndexThrottled('dev-1', load);
+    await loadSessionScheduleIndexThrottled('dev-2', loadOther);
+    const requests: Promise<unknown>[] = [];
+    const off = remoteScheduleEventStore.subscribe(() => {
+      requests.push(loadSessionScheduleIndexThrottled('dev-1', load));
+      requests.push(loadSessionScheduleIndexThrottled('dev-1', load));
+    });
+    try {
+      remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'sched-1' });
+      await Promise.all(requests);
+      await loadSessionScheduleIndexThrottled('dev-2', loadOther);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(loadOther).toHaveBeenCalledTimes(1);
+      expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(1);
+    } finally { off(); }
+  });
+
+  it('preserves a completed-event probe while read feedback does not request another probe', () => {
+    const probeVersion = () => {
+      const state = remoteScheduleEventStore.getSnapshot('dev-1');
+      return state.unreadVersion - state.unreadClearVersion;
+    };
+    remoteScheduleEventStore.apply('dev-1', { type: 'completed', scheduleId: 'sched-1', runId: 'run-1', sessionId: 'task-1' });
+    const completedVersion = probeVersion();
+    expect(completedVersion).toBeGreaterThan(0);
+    remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'sched-1' });
+    remoteScheduleEventStore.apply('dev-1', { type: 'all-read' });
+    expect(probeVersion()).toBe(completedVersion);
   });
 
   it('increments per-device versions for pushed schedule events', () => {

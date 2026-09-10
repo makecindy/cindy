@@ -224,6 +224,8 @@ export interface MobileCodexRateLimitResetOffer {
 
 /** Full read-only Codex quota view plus an optional manually redeemable reset offer. */
 export interface MobileCodexRateLimitsResult {
+  /** Echoed account scope; custom-account clients reject unscoped legacy responses. */
+  providerId?: string;
   account: MobileCodexRateLimitAccount;
   rateLimits: MobileCodexRateLimitSnapshot;
   rateLimitsByLimitId: Record<string, MobileCodexRateLimitSnapshot> | null;
@@ -236,6 +238,7 @@ export interface MobileCodexRateLimitsResult {
 
 /** Stable terminal result for one desktop-issued reset offer. */
 export interface MobileCodexRateLimitResetResult {
+  providerId?: string;
   outcome: 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed';
   /** Fresh snapshot when the post-consume read succeeded. */
   rateLimits: MobileCodexRateLimitsResult | null;
