@@ -96,14 +96,16 @@ describe('AgentTaskCard codex subagent live state', () => {
 
     // 冗余文案:title 与运行状态已经表达了「已启动」,Claude 卡在运行中也没有这行。
     expect(text).not.toContain('chat.agentTask.subagentStarted');
-    // 标题仍是子代理名(agentPath),但不得作为 summary 再出现一次。
-    expect(text.match(/\/root\/scout/g) ?? []).toHaveLength(1);
+    expect(text).not.toContain('/root/');
+    expect(text).toContain('scout');
+    expect(text).toContain('rightSidebar.tabs.kinds.subagents');
   });
 
   it('keeps the localized receipt for history replay (no live update)', () => {
     // 历史回放拿不到 live update(agent_task_update 不落库),回执是唯一可读摘要。
     const { container } = render(<AgentTaskCard toolCall={spawnToolCall()} result="/root/scout" />);
     expect(container.textContent ?? '').toContain('chat.agentTask.subagentStarted');
+    expect(container.textContent ?? '').not.toContain('/root/');
   });
 
   it('renders terminal codex subagent state instead of staying stuck on running', () => {

@@ -4,7 +4,7 @@
  * evict 只清该设备、evict 在途结果丢弃不复活 —— 与 useAgentCapabilities 同范式。
  * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   connectedProvidersForAgent,
   visibleModelUnion,
@@ -520,5 +520,64 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       status: 'ready',
       providers: [provider('fresh-xd')],
     });
+  });
+});
+
+
+describe('provider visibility readiness retry', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it('retries a serialized typed readiness error, deduplicates callers, then retains hidden switches', async () => {
+    vi.useFakeTimers();
+    const invoke = stubDeviceLink();
+    invoke.mockRejectedValueOnce(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
+    invoke.mockResolvedValue({ ...result('host'), modelVisibilityOverrides: { 'codex:xd:hidden': false } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('host', listener);
+    const requests = [mod.prefetchDeviceProviders('host'), mod.prefetchDeviceProviders('host')];
+    await vi.runAllTimersAsync();
+    await Promise.all(requests);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: 'ready', modelVisibilityOverrides: { 'codex:xd:hidden': false } }));
+  });
+
+  it('stops after three not-ready attempts and reports a real error without legacy fallback', async () => {
+    vi.useFakeTimers();
+    const invoke = stubDeviceLink().mockRejectedValue(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('host', listener);
+    const pending = mod.prefetchDeviceProviders('host');
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', unsupported: false }));
+    expect(mod.getCachedDeviceProviders('host')).toBeNull();
+  });
+
+  it.each(['[INTERNAL] failed', 'MODEL_VISIBILITY_NOT_READY: untyped'])('does not retry other errors: %s', async (message) => {
+    const invoke = stubDeviceLink().mockRejectedValue(new Error(message));
+    const mod = await import('@/hooks/useDeviceProviders');
+    await mod.prefetchDeviceProviders('host');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(mod.isDeviceProvidersUnsupportedError(new Error(message))).toBe(false);
+  });
+
+  it('eviction cancels delayed retries without disturbing another device', async () => {
+    vi.useFakeTimers();
+    const invoke = stubDeviceLink();
+    invoke.mockRejectedValueOnce(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
+    const mod = await import('@/hooks/useDeviceProviders');
+    const pending = mod.prefetchDeviceProviders('retired');
+    await vi.advanceTimersByTimeAsync(0);
+    mod.evictDeviceProviders('retired');
+    await mod.prefetchDeviceProviders('healthy');
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(mod.getCachedDeviceProviders('retired')).toBeNull();
+    expect(mod.getCachedDeviceProviders('healthy')).toEqual(result('healthy'));
   });
 });

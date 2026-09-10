@@ -317,7 +317,6 @@ describe('pi: provider-aware Anthropic wire routing', () => {
       upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
       headerOverride: {
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
         authorization: 'Bearer claude-live-token',
       },
       headerDelete: ['x-api-key'],
@@ -856,6 +855,23 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
 });
 
 describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 key)', () => {
+  it('routes A → B → A by connection id despite identical provider and model names', () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: 'Same provider', runtimes: { codex: {
+        baseUrl: `https://${id}.example/v1`,
+        models: [{ id: 'same-model', name: 'Same model' }],
+      } },
+    })));
+    setCustomProviderKeyReader(id => `test-key-${id}`);
+    for (const id of ['account-a', 'account-b', 'account-a']) {
+      setSessionProvider('s-user', id);
+      expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'same-model')).toEqual({
+        upstreamOverride: `https://${id}.example/v1`,
+        headerOverride: { authorization: `Bearer test-key-${id}` },
+        headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+      });
+    }
+  });
   afterEach(() => {
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);

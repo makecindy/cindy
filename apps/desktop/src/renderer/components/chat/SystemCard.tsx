@@ -1,3 +1,4 @@
+import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 /**
  * SystemCard
  * ---------------------------------------------------------------------------
@@ -42,9 +43,12 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { CindyMakeDoctorCard } from './CindyMakeDoctorCard';
 
 interface SystemCardProps {
   cardType:
+    | 'cindy-make-doctor'
+    | 'cindy-make'
     | 'help'
     | 'cost'
     | 'context'
@@ -62,6 +66,7 @@ interface SystemCardProps {
     | 'bot-session-task-message'
     | 'bot-session-task'
     | 'bot-direct-message'
+    | 'bot-authorization'
     | 'context-rebuild';
   data?: Record<string, unknown>;
   /**
@@ -1296,6 +1301,9 @@ export function SystemCard({
   autoResumeInFlight,
 }: SystemCardProps) {
   switch (cardType) {
+    case 'cindy-make-doctor':
+    case 'cindy-make':
+      return <CindyMakeDoctorCard data={data} sessionId={sessionId} />;
     case 'help':
       return <HelpCard data={data} />;
     case 'cost':
@@ -1338,8 +1346,10 @@ export function SystemCard({
       return <BotSessionTaskMessageTrace data={data} />;
     case 'bot-session-task':
       return <BotSessionTaskCard data={data} sessionId={sessionId} />;
+    case 'bot-authorization':
+      return <BotAuthorizationCardView data={data} sessionId={sessionId} />;
     case 'bot-direct-message':
-      return <BotDirectMessageCard data={data} />;
+      return <BotDirectMessageCard data={data} sessionId={sessionId} />;
     default:
       return null;
   }

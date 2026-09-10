@@ -63,6 +63,19 @@ export async function downloadRemoteMediaAsDataUri(
   mimeType: string,
   maxBytes: number,
 ): Promise<string | null> {
+  return withDownloadedRemoteMediaFile(url, mimeType, maxBytes, async (file) => {
+    const base64 = await file.base64();
+    return base64 ? `data:${mimeType};base64,${base64}` : null;
+  });
+}
+
+/** Consume a size-bounded download before deleting its private temporary file. */
+export async function withDownloadedRemoteMediaFile<T>(
+  url: string,
+  mimeType: string,
+  maxBytes: number,
+  read: (file: File) => Promise<T | null>,
+): Promise<T | null> {
   const dir = new Directory(Paths.cache, SHARE_TMP_DIR_NAME);
   let target: File | null = null;
   try {
@@ -72,8 +85,7 @@ export async function downloadRemoteMediaAsDataUri(
     const file = await File.downloadFileAsync(url, target, { idempotent: true });
     const size = file.size ?? 0;
     if (size <= 0 || size > maxBytes) return null;
-    const base64 = await file.base64();
-    return base64 ? `data:${mimeType};base64,${base64}` : null;
+    return await read(file);
   } catch {
     return null;
   } finally {

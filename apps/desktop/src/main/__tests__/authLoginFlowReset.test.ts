@@ -829,6 +829,13 @@ describe('auth login-flow reset', () => {
     const getLoginStart = source.indexOf('export async function getLoginState(');
     const getLoginEnd = source.indexOf('\n}\n\nasync function completeLogin(', getLoginStart);
     const getLoginBody = source.slice(getLoginStart, getLoginEnd);
+    const waitForOwnerChange = getLoginBody.indexOf('await ownerChangeShellGate.waitForSettled();');
+    const captureLoginEpoch = getLoginBody.indexOf(
+      'const expectedLoginFlowEpoch = loginFlowEpoch;',
+    );
+    expect(waitForOwnerChange).toBeGreaterThan(-1);
+    expect(captureLoginEpoch).toBeGreaterThan(-1);
+    expect(waitForOwnerChange).toBeLessThan(captureLoginEpoch);
     expect(getLoginBody).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
     expect(getLoginBody).toContain('mapLoginProvidersLoadFailure(error)');
   });
@@ -897,6 +904,27 @@ describe('auth login-flow reset', () => {
     expect(helperBody).toContain('writePersistedAuthSessionOrThrow(pair.refreshToken, realm);');
   });
 
+  it('advances the existing owner generation when login or restoration commits another realm', () => {
+    for (const [entry, realm] of [
+      ['async function runColdStartRefreshFlow(', 'storedRealm'],
+      ['async function completeLogin(', 'committedRealm'],
+    ]) {
+      const start = source.indexOf(entry);
+      expect(start).toBeGreaterThan(-1);
+      const body = source.slice(start, source.indexOf('\n}\n', start));
+      const capture = body.indexOf(`const authRealmChanged = ${realm} !== activeAuthRealm;`);
+      const activate = body.indexOf(`activeAuthRealm = ${realm};`);
+      const commit = body.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+      expect(capture).toBeGreaterThan(-1);
+      expect(activate).toBeGreaterThan(capture);
+      expect(commit).toBeGreaterThan(activate);
+    }
+    const start = source.indexOf('function commitCloudAppSession(');
+    const helper = source.slice(start, source.indexOf('\n}\n', start));
+    expect(helper).toContain("commitActiveAppSession('cloud', ownerId, authRealmChanged);");
+    expect(helper).toContain("commitVolatileAppSession('cloud', ownerId, authRealmChanged);");
+  });
+
   it('reconnects realm-bound main clients after a runtime realm change commits its new token', () => {
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
@@ -905,6 +933,7 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
+    expect(refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g)).toHaveLength(2);
     expect(refreshBody).toContain(
       'const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;',
     );
@@ -1087,11 +1116,13 @@ describe('auth login-flow reset', () => {
     const completeStart = source.indexOf('async function completeLogin(');
     const completeEnd = source.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
     const completeBody = source.slice(completeStart, completeEnd);
-    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id);');
-    const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', ownerCommit);
-    expect(ownerCommit).toBeGreaterThan(-1);
-    expect(clearPreviousFlag).toBeGreaterThan(ownerCommit);
-    expect(completeBody.slice(ownerCommit, clearPreviousFlag)).toContain(
+    const acceptedUser = completeBody.indexOf('currentUser = nextUser;');
+    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+    const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', acceptedUser);
+    expect(acceptedUser).toBeGreaterThan(-1);
+    expect(clearPreviousFlag).toBeGreaterThan(acceptedUser);
+    expect(ownerCommit).toBeGreaterThan(clearPreviousFlag);
+    expect(completeBody.slice(acceptedUser, clearPreviousFlag)).toContain(
       'if (!isPassiveSharedUserDataInstance()) {',
     );
 

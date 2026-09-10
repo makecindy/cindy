@@ -21,6 +21,10 @@ function toMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+export function sessionCreatedMs(session: Session): number {
+  return toMs(session.createdAt);
+}
+
 export function sessionActivityMs(session: Session): number {
   // 以 userSendAt（用户最近一次按下发送）为主键排序：agent 回复 / /clear 等
   // 只 bump updatedAt 的路径不再重排列表。userSendAt == null 时回落到 updatedAt，

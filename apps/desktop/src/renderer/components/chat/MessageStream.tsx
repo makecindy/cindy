@@ -28,6 +28,8 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import { HistoryViewHandoff, renderHistoryView } from '@cindy/maker-shared/message-window';
+import { getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
@@ -53,7 +55,11 @@ import {
   isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
-import { extractRenderedMarkdownImageTargets } from './markdownImageTargets';
+import {
+  extractCachedRenderedMarkdownImageTargets,
+  extractRenderedMarkdownImageTargets,
+  type MarkdownImageTargetCache,
+} from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -1450,6 +1456,8 @@ export function buildRenderItems(
     workingDir?: string;
     /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
     botSessionId?: string;
+    /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
+    markdownImageTargetCache?: MarkdownImageTargetCache;
   },
 ): {
   items: RenderItem[];
@@ -1499,7 +1507,14 @@ export function buildRenderItems(
     const urls = new Set<string>();
     for (const message of messages.slice(lo, hi)) {
       if (message.role !== 'assistant' || message.systemCardType || message.isStreaming) continue;
-      for (const url of extractRenderedMarkdownImageTargets(message.content)) urls.add(url);
+      const imageTargets = opts?.markdownImageTargetCache
+        ? extractCachedRenderedMarkdownImageTargets(
+            message.content,
+            opts.markdownImageTargetCache,
+            message.clientId,
+          )
+        : extractRenderedMarkdownImageTargets(message.content);
+      for (const url of imageTargets) urls.add(url);
     }
     inlineImageUrlsByTurnStart.set(lo, urls);
   };
@@ -2464,6 +2479,23 @@ export function MessageStream({
   onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
+  const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
+  const historySnapshot = useSyncExternalStore(
+    historyView?.subscribe ?? (() => () => undefined),
+    historyView?.getSnapshot ?? (() => null),
+    historyView?.getSnapshot ?? (() => null),
+  );
+  const historyHandoff = useMemo(() => new HistoryViewHandoff<HistoryChatMessage>(
+    (row) => row.isStreaming === true,
+  ), [historyView]);
+  // Observe live rows before the first history page too: a stream can finish
+  // while that page is in flight. Local tasks retain their existing path.
+  const historyLiveMessages = useMemo(() => historyView ? messages.map((row) => ({
+    ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '',
+  })) : [], [historyView, messages]);
+  const handoff = useMemo(() => historySnapshot
+    ? historyHandoff.reconcile(historySnapshot, historyLiveMessages) : null,
+  [historyHandoff, historySnapshot, historyLiveMessages]);
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
   // 渲染处会兜底跳过(典型场景:其他视图直接用 MessageStream 但不需要栈)。
@@ -2697,19 +2729,64 @@ export function MessageStream({
   const generatedFilesItemCacheRef = useRef(
     new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
   );
+  // Completed assistant bodies are immutable for the rest of a turn, while
+  // the active tail keeps changing on every stream batch. Keep this cache at
+  // MessageStream scope so history pagination and live deltas can share the
+  // parsed image targets without retaining state beyond the session mount.
+  const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
     const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
       historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
+      markdownImageTargetCache: markdownImageTargetCacheRef.current,
     });
+    if (historyView && historySnapshot?.ready) {
+      const results = new Map(built.singleResultMap);
+      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
+        view: historyView, snapshot: historySnapshot, liveMessages: historyLiveMessages, streaming: isSessionStreaming,
+        isLive: (row) => row.isStreaming === true,
+        pendingHandoff: handoff?.pending,
+        isLocalUser: (row) => row.role === 'user' && (row.isPendingPersist === true || !!row.blockedByGhost),
+        build: (rows) => {
+          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
+            historyWindowIncomplete: true, workingDir,
+            markdownImageTargetCache: markdownImageTargetCacheRef.current,
+          });
+          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
+          return groupWorkRuns(chunk.items, isSessionStreaming);
+        },
+        structure: {
+          placeholder: (summary) => ({ id: summary.firstMessageId,
+            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
+            role: 'thinking', content: '', createdAt: new Date(summary.startedAtMs).toISOString(),
+            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
+            thinkingRedacted: true, isStreaming: summary.isStreaming,
+          }),
+          children: (item) => item.type === 'work_group' ? item.children : undefined,
+          sourceIds: (item) => item.type === 'message' ? [item.message.clientId]
+            : item.type === 'tool_segment' ? item.toolCalls.map((tool) => tool.clientId)
+            : item.type === 'agent_task' && item.toolCall ? [item.toolCall.clientId] : [],
+          rebuild: (item, children, deferred) => item.type === 'work_group'
+            ? { ...item, children: children as WorkGroupChildItem[], deferred } : item,
+        },
+      });
+      const keys = new Set<string>();
+      const unique = items.filter((item) => { if (keys.has(item.key)) return false; keys.add(item.key); return true; });
+      return { items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCacheRef.current), singleResultMap: results };
+    }
     return {
       items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
       singleResultMap: built.singleResultMap,
     };
   }, [
     messages,
+    historyView,
+    historySnapshot,
+    historyLiveMessages,
+    handoff,
+    isSessionStreaming,
     taskUpdates,
     ghostCardSnapshot,
     historyLoaded,
@@ -2738,13 +2815,13 @@ export function MessageStream({
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
-      groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
+      historySnapshot?.ready ? ungroupedRenderItems : groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
       forkOrigin,
   );
     return simplifiedBotConversation
       ? simplifyBotRenderItems(grouped, isSessionStreaming)
       : grouped;
-  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation]);
+  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation, historySnapshot?.ready]);
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -5490,6 +5567,7 @@ export function MessageStream({
                             durationMs: child.durationMs,
                             isStreaming: child.isStreaming,
                             startedAtMs: child.startedAtMs,
+                            deferred: child.deferred,
                             childItems: child.children.map(toWorkGroupChild),
                           };
                         }
@@ -5551,6 +5629,7 @@ export function MessageStream({
                             isStreaming={item.isStreaming}
                             startedAtMs={item.startedAtMs}
                             childItems={childItems}
+                            deferred={item.deferred}
                           />
                         </div>
                       );

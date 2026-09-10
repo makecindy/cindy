@@ -5,11 +5,10 @@
  * 圆角：单行一律胶囊（§5）；textarea 变体一律 8px。
  * placeholder 一律 `--text-placeholder`（§4 G3）。
  *
- * `surface="ivory"` 是登记债（DS-4 G6，拍板人 = 用户/设计师，2026-09-03）：
- * colors.ts 的无文档漂移，仅供白弹窗面板场合。独立议题收口，本张不翻案。
+ * `surface="ivory"` 已在 DS-6 D2 确认用于白面板，默认仍为 elevated。
  * API 原样搬：secret 眼睛显形、mono、trailing。
  *
- * FormField（label + 说明 + 错误行）首批调用点未用到，本张不建。
+ * 字段的 label / 说明 / 错误关系由 FormField 组合，业务校验由消费者持有。
  */
 
 import {
@@ -23,6 +22,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Tip } from './tooltip';
 
 export type InputSize = 'sm' | 'md' | 'lg';
 export type InputSurface = 'elevated' | 'ivory';
@@ -31,10 +31,9 @@ export type InputSurface = 'elevated' | 'ivory';
  * 底色：默认 `elevated` = DESIGN.md §4 `input/text` 规定的 fill(`--surface-elevated`)。
  *
  * `ivory` 是给「输入压在白色弹窗面板上」的调用点保留的既有底色(`--settings-input-bg`,
- * 解析到 `--surface-card-ivory`)。这份 ivory 在设计文档里没有任何背书,属 colors.ts 的
- * 无文档漂移;它在白面板上能给出 fill 抬升,所以不在本 PR 里翻成白色,但也不能当默认——
+ * 解析到 `--surface-card-ivory`)。DS-6 D2 保留其明确用途和用户局部覆盖；
  * settings 卡片本身就是 ivory(`--settings-theme-card-bg`),ivory 输入压在 ivory 卡上会和
- * 背景同色,填充对比度归零。settings 域这处 ivory / elevated 的收口是独立议题。
+ * 背景同色，因此不要把 ivory 当成通用默认值。
  */
 const SURFACE_STYLES: Record<InputSurface, string> = {
   elevated: 'bg-[var(--surface-elevated)]',
@@ -82,12 +81,15 @@ const EYE_STYLES: Record<InputSize, { iconSize: number; offset: string }> = {
  * 不把 settings 域 override 提升为所有 Input 或全局 semantic 的默认值。
  */
 const FIELD_CHROME =
-  'text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] border border-[var(--border-default)] focus:border-[var(--text-tertiary-stone)] focus:ring-2 focus:ring-[var(--focus-ring)]';
+  'text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] border border-[var(--border-default)] focus:border-[var(--text-tertiary-stone)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]';
 
 const ERROR_CHROME =
   'border-[var(--error-border)] focus:border-[var(--error-fg)] focus:ring-[var(--error-fg)]';
 
-export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size' | 'onChange'> {
+export interface InputProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  'size' | 'onChange'
+> {
   value: string;
   onChange: (v: string) => void;
   /** 绛兼潵鍏ョ粍浠剁殑 DOM input锛屼緥濡傝缃紑绐楃殑深链 focus。 */
@@ -105,6 +107,12 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   trailing?: ReactNode;
   /** 错误态：边框 / focus 环切到 `--error-*` 族。 */
   error?: boolean;
+  /**
+   * secret 眼睛按钮 Tip 的内容样式。Tip 经 Portal 渲染到 body,默认 `z-[60]` 会被
+   * `z-[10000]` 的模态层盖住;输入位于手写模态内时传 `z-[10001]` 盖过宿主弹窗
+   * (与本仓其它模态内 Tip 的既有做法一致)。
+   */
+  secretTipContentClassName?: string;
   /** 附加到**外层容器**（内层 input 恒为 w-full），供 flex 行传 `flex-1 min-w-0`。 */
   className?: string;
   /** 内层控件的样式扩展；供既有域封装保留局部主题合同，错误态仍优先。 */
@@ -123,6 +131,7 @@ export function Input({
   secret = false,
   trailing,
   error = false,
+  secretTipContentClassName,
   className,
   inputClassName,
   disabled,
@@ -139,21 +148,28 @@ export function Input({
   const eyeStyle = EYE_STYLES[size];
 
   const eyeButton = secret ? (
-    <button
-      type="button"
-      onClick={() => setRevealed((v) => !v)}
-      className={cn(
-        'absolute top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]',
-        // globals.css 的 F3 全局规则把 *:focus-visible 的 outline 抹掉了(只有 input /
-        // textarea 恢复),按钮不自带焦点提示——键盘用户看不出焦点落在眼睛上。按 DESIGN.md
-        // 的 Focus Blue 约定补 ring(--focus-ring),写法与其它图标按钮一致。
-        'rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        eyeStyle.offset,
-      )}
-      aria-label={revealed ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')}
+    <Tip
+      text={revealed ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')}
+      contentClassName={secretTipContentClassName}
     >
-      {revealed ? <Eye size={eyeStyle.iconSize} /> : <EyeOff size={eyeStyle.iconSize} />}
-    </button>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={revealed}
+        onClick={() => setRevealed((v) => !v)}
+        className={cn(
+          'absolute top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors enabled:hover:text-[var(--settings-eye-icon-hover)] disabled:opacity-60',
+          // globals.css 的 F3 全局规则把 *:focus-visible 的 outline 抹掉了(只有 input /
+          // textarea 恢复),按钮不自带焦点提示——键盘用户看不出焦点落在眼睛上。按 DESIGN.md
+          // 的 Focus Blue 约定补 ring(--focus-ring),写法与其它图标按钮一致。
+          'rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          eyeStyle.offset,
+        )}
+        aria-label={revealed ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')}
+      >
+        {revealed ? <Eye size={eyeStyle.iconSize} /> : <EyeOff size={eyeStyle.iconSize} />}
+      </button>
+    </Tip>
   ) : null;
   const trailingNode = eyeButton ?? trailing;
 
@@ -162,7 +178,8 @@ export function Input({
       <input
         {...rest}
         ref={inputRef}
-        aria-label={ariaLabel}
+        aria-label={ariaLabel ?? rest['aria-label']}
+        aria-invalid={error || rest['aria-invalid'] || undefined}
         type={secret ? (revealed ? 'text' : 'password') : type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -194,8 +211,10 @@ export function Input({
   );
 }
 
-export interface TextareaProps
-  extends Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange'> {
+export interface TextareaProps extends Omit<
+  TextareaHTMLAttributes<HTMLTextAreaElement>,
+  'onChange'
+> {
   value: string;
   onChange: (v: string) => void;
   surface?: InputSurface;

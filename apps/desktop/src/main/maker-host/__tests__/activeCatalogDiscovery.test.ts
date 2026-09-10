@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BUNDLED_CATALOG,
+  buildUserProvider,
   type AgentKind,
   type Catalog,
   type CatalogModel,
@@ -24,6 +25,7 @@ import {
   setDiscoveredCodexModels,
   setXaiDiscoveredModels,
   setDiscoveredProviderMediaModels,
+  clearDiscoveredProviderModels,
 } from '../active-catalog.js';
 
 function openaiIds(agent: 'claude-code' | 'codex' | 'pi'): string[] {
@@ -87,12 +89,161 @@ function legacyCatalog(): Catalog {
 }
 
 describe('active-catalog discovered augment', () => {
+  it.each([
+    ['anthropic', 'claude', 'claude-sonnet-4-5', 'claude-sonnet-4-6'],
+    ['xai', 'xai', 'grok-4.5', 'grok-4.6'],
+  ] as const)('uses the same default selection for builtin and independent %s accounts', (id, native, oldId, newId) => {
+    const catalog = bundledWithoutRegistry();
+    const builtin = catalog.providers.find(provider => provider.id === id)!;
+    const models = [fake(oldId), fake(newId)].map(model => ({ ...model, group: id === 'anthropic' ? 'claude' : 'grok' }));
+    builtin.models = { codex: models, 'claude-code': models, pi: models };
+    const account = { ...builtin, id: `${id}-second`, source: 'user' as const,
+      auth: { method: 'oauth' as const, native } };
+    const api = { ...builtin, id: `${id}-api`, source: 'user' as const,
+      auth: { method: 'apiKey' as const } };
+    setActiveCatalog({ ...catalog, providers: [builtin, account, api] });
+    if (id === 'anthropic') setAnthropicDiscoveredModels(models);
+    const actual = getActiveCatalog();
+    for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+      const listed = (providerId: string) => actual.providers.find(provider => provider.id === providerId)!.models[agent]!;
+      expect(listed(account.id).map(model => [model.id, model.defaultEnabled]))
+        .toEqual(listed(builtin.id).map(model => [model.id, model.defaultEnabled]));
+      for (const providerId of [builtin.id, account.id]) {
+        expect(listed(providerId).find(model => model.id === oldId)?.defaultEnabled,
+          `${providerId}/${agent}: ${listed(providerId).map(model => model.id).join(',')}`).toBe(false);
+        // Claude's Codex bridge is explicitly disabled by default; keep it disabled.
+        expect(listed(providerId).find(model => model.id === newId)?.defaultEnabled)
+          .toBe(!(id === 'anthropic' && agent === 'codex'));
+      }
+      expect(listed(api.id).find(model => model.id === oldId)?.defaultEnabled).toBe(true);
+    }
+  });
+  it('clears only the selected Grok account until the owner boundary is cleared', () => {
+    const account = buildUserProvider({
+      id: 'grok-second', name: 'Second Grok', auth: { method: 'oauth', native: 'xai' },
+      runtimes: {},
+    });
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const ids = () => getActiveCatalog().providers.find(p => p.id === account.id)?.models.codex?.map(m => m.id);
+    setXaiDiscoveredModels([{ id: 'xai/grok-account-only' }], account.id);
+    expect(ids()).toContain('xai/grok-account-only');
+    setXaiDiscoveredModels(null);
+    expect(ids()).toContain('xai/grok-account-only');
+    setXaiDiscoveredModels(null, account.id);
+    expect(ids()).not.toContain('xai/grok-account-only');
+    setXaiDiscoveredModels([{ id: 'xai/grok-account-only' }], account.id);
+    clearDiscoveredProviderModels();
+    expect(ids()).not.toContain('xai/grok-account-only');
+  });
+  it('shares OpenAI protocol and Pi metadata with an independent account without sharing identity', () => {
+    const account = buildUserProvider({
+      id: 'openai-parity', name: 'Separate account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const catalog = getActiveCatalog();
+    const selected = catalog.providers.find(p => p.id === account.id)!;
+    const original = catalog.providers.find(p => p.id === 'openai')!;
+    for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+      const id = agent === 'codex' ? 'gpt-5.6-luna' : 'chatgpt/gpt-5.6-luna';
+      const model = selected.models[agent]?.find(m => m.id === id);
+      expect(model?.nativeApi).toBe('openai-responses');
+      if (agent === 'pi') {
+        const baseline = original.models.pi?.find(m => m.id === id);
+        expect(model?.contextWindow).toBe(baseline?.contextWindow);
+        expect(model?.maxOutput).toBe(baseline?.maxOutput);
+        expect(model?.cost).toEqual(baseline?.cost);
+        expect(model?.defaultEffort).toBe(baseline?.defaultEffort);
+      }
+    }
+    expect(selected.id).toBe('openai-parity');
+    expect(selected.auth).toEqual({ method: 'oauth', native: 'codex' });
+  });
   afterEach(() => {
     // 复位全局状态,避免测试间串扰
     setActiveCatalog(BUNDLED_CATALOG);
+    clearDiscoveredProviderModels();
     setDiscoveredCodexModels([]);
+    setAnthropicDiscoveredModels([]);
     setXaiDiscoveredModels(null);
     setDiscoveredProviderMediaModels('xai', null);
+  });
+
+  it('keeps native subscription maxima through Registry refresh and Claude projection', () => {
+    for (const window of [272000, 400000]) {
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      const entry = catalog.modelRegistry!.models.find(
+        (model) => model.id === 'openai/gpt-6-astra',
+      )!;
+      entry.contextWindow = window;
+      catalog.modelRegistry!.updatedAt = `2099-01-01T00:00:0${window === 272000 ? 1 : 2}.000Z`;
+      setActiveCatalog(catalog, { authorityCatalog: catalog });
+      setDiscoveredCodexModels([
+        {
+          ...fake('gpt-6-astra'),
+          contextWindow: 272000,
+          contextWindowMax: 872000,
+          contextWindowVerified: true,
+          supportsImageInput: false,
+          supportsFastMode: false,
+        },
+      ]);
+      const openai = getActiveCatalog().providers.find((provider) => provider.id === 'openai')!;
+      for (const agent of ['codex', 'claude-code'] as const) {
+        expect(
+          openai.models[agent]!.find((model) => model.id.endsWith('gpt-6-astra')),
+        ).toMatchObject({
+          contextWindow: 272000,
+          contextWindowMax: 872000,
+          supportsImageInput: false,
+          supportsFastMode: false,
+        });
+      }
+      // Independent Pi metadata does not acquire Codex-only native limits.
+      expect(
+        openai.models.pi!.find((model) => model.id.endsWith('gpt-6-astra'))?.contextWindowMax,
+      ).not.toBe(872000);
+    }
+  });
+
+  it('partial live lists retain cached metadata, replace membership, and respect auth clearing', () => {
+    setActiveCatalog(bundledWithoutRegistry(), { authorityCatalog: bundledWithoutRegistry() });
+    const cached = {
+      ...fake('gpt-99'),
+      contextWindow: 200000,
+      contextWindowMax: 900000,
+      contextWindowVerified: true,
+      supportsImageInput: false,
+      supportsFastMode: true,
+    };
+    setDiscoveredCodexModels([cached, fake('gpt-removed')]);
+    const live = {
+      ...fake('gpt-99'),
+      contextWindow: 272000,
+      supportsFastMode: false,
+      discoveredMetadata: { supportsFastMode: false },
+    };
+    setDiscoveredCodexModels([live, fake('gpt-new')], { source: 'list' });
+    const models = () =>
+      getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.models.codex!;
+    expect(models().map((model) => model.id)).not.toContain('gpt-removed');
+    expect(models().find((model) => model.id === 'gpt-99')).toMatchObject({
+      contextWindow: 200000,
+      contextWindowMax: 900000,
+      supportsImageInput: false,
+      supportsFastMode: false,
+      discoveredMetadata: {
+        contextWindow: 200000,
+        supportsImageInput: false,
+        supportsFastMode: false,
+      },
+    });
+    setDiscoveredCodexModels([]);
+    setDiscoveredCodexModels([live], { source: 'list' });
+    const afterAuth = models().find((model) => model.id === 'gpt-99')!;
+    expect(afterAuth.contextWindow).toBe(272000);
+    expect(afterAuth.contextWindowMax).toBeUndefined();
+    expect(afterAuth.supportsImageInput).toBeUndefined();
   });
 
   it('Codex discovery 只进入 Codex 与 Claude bridge，不改写 Pi 名单', () => {
@@ -103,7 +254,7 @@ describe('active-catalog discovered augment', () => {
     expect(openaiIds('pi')).not.toContain('chatgpt/gpt-5.7');
   });
 
-  it('旧服务端缺少或下发空 Pi 数组时仍保留客户端原生名单', () => {
+  it('missing Pi declarations use fallback but explicit empty lists remove public Pi membership', () => {
     const expected = openaiIds('pi');
     const omitted = bundledWithoutRegistry();
     delete omitted.providers.find((provider) => provider.id === 'openai')!.models.pi;
@@ -113,7 +264,7 @@ describe('active-catalog discovered augment', () => {
     const empty = bundledWithoutRegistry();
     empty.providers.find((provider) => provider.id === 'openai')!.models.pi = [];
     setActiveCatalog(empty, { authorityCatalog: empty });
-    expect(openaiIds('pi')).toEqual(expected);
+    expect(openaiIds('pi')).toEqual([]);
   });
 
   it('明确的服务端 Pi 条目直接叠加本地目录，不依赖 Codex discovery', () => {
@@ -132,7 +283,8 @@ describe('active-catalog discovered augment', () => {
     expect(projected).toMatchObject({
       id: 'chatgpt/gpt-5.7',
       piApi: 'openai-responses',
-      contextWindow: 400_000,
+      contextWindow: 272_000,
+      contextWindowMax: 400_000,
     });
   });
 
@@ -165,15 +317,12 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
-  it('xAI account snapshot is authoritative and projects canonical ids per harness', () => {
+  it('xAI discovery augments public declarations and projects canonical ids per harness', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([{ id: 'xai/grok-4.5' }, { id: 'xai/grok-4.6' }]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.models['claude-code']?.map((model) => model.id)).toEqual([
-      'xai/grok-4.5',
-      'xai/grok-4.6',
-    ]);
-    expect(xai?.models.codex?.map((model) => model.id)).toEqual(['xai/grok-4.5', 'xai/grok-4.6']);
+    expect(xai?.models['claude-code']?.map((model) => model.id)).toEqual(expect.arrayContaining(['xai/grok-4.5', 'xai/grok-4.6']));
+    expect(xai?.models.codex?.map((model) => model.id)).toEqual(expect.arrayContaining(['xai/grok-4.5', 'xai/grok-4.6']));
     expect(xai?.models.pi?.map((model) => model.id)).toEqual([
       'grok-4.3',
       'grok-4.5',
@@ -192,15 +341,15 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
-  it('keeps official Grok 4.6 xhigh when SuperGrok discovery omits the new ladder rung', () => {
+  it('uses explicit SuperGrok capabilities while Pi retains its independent native facts', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([
       { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
     ]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    // Server Registry 和独立 Pi 目录均声明 xhigh，不被旧 discovery 降档。
+    // 供应商显式列表覆盖默认；Pi 使用自己的原生能力来源。
     expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
-      efforts: ['low', 'medium', 'high', 'xhigh'],
+      efforts: ['low', 'medium', 'high'],
       defaultEffort: 'medium',
     });
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
@@ -241,7 +390,7 @@ describe('active-catalog discovered augment', () => {
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
       efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium',
+      defaultEffort: 'high',
     });
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
       efforts: ['low', 'medium', 'high'],
@@ -249,7 +398,7 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
-  it('keeps the Cindy model default when SuperGrok discovery suggests a different default', () => {
+  it('uses the explicit SuperGrok default before registry defaults', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([
       { id: 'xai/grok-4.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'low' },
@@ -258,7 +407,7 @@ describe('active-catalog discovered augment', () => {
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
       efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium',
+      defaultEffort: 'low',
     });
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
       efforts: ['low', 'medium', 'high'],
@@ -270,12 +419,13 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
-  it('xAI account discovery can clear Claude/Codex without clearing independent Pi membership', () => {
+  it('empty xAI discovery cannot erase server-declared models', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.models['claude-code']).toEqual([]);
-    expect(xai?.models.codex).toEqual([]);
+    for (const agent of ['claude-code', 'codex'] as const) {
+      expect(xai?.models[agent]?.map(model => model.id)).toContain('xai/grok-4.6');
+    }
     expect(xai?.models.pi?.map((model) => model.id)).toEqual([
       'grok-4.3',
       'grok-4.5',
@@ -284,7 +434,7 @@ describe('active-catalog discovered augment', () => {
     ]);
   });
 
-  it('xAI 媒体发现按官方存在性收敛，静态同 id 保持 first-wins', () => {
+  it('xAI 媒体发现按官方存在性收敛，实报资料覆盖目录默认', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setDiscoveredProviderMediaModels('xai', {
       imageModels: [
@@ -294,12 +444,13 @@ describe('active-catalog discovered augment', () => {
       videoModels: [{ id: 'xai/future-video', name: 'Future Video' }],
     });
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.imageModels).toContainEqual({
+    expect(xai?.imageModels).toContainEqual(expect.objectContaining({
       id: 'xai/grok-imagine-image',
-      name: 'Grok Imagine Image',
-    });
-    expect(xai?.imageModels).toContainEqual({ id: 'xai/future-image', name: 'Future Image' });
-    expect(xai?.videoModels).toContainEqual({ id: 'xai/future-video', name: 'Future Video' });
+      name: 'Remote Rename Must Not Win',
+      mode: 'image_generation',
+    }));
+    expect(xai?.imageModels).toContainEqual(expect.objectContaining({ id: 'xai/future-image', name: 'Future Image' }));
+    expect(xai?.videoModels).toContainEqual(expect.objectContaining({ id: 'xai/future-video', name: 'Future Video' }));
     expect(xai?.imageModels?.some((model) => model.id === 'xai/grok-imagine-image-quality')).toBe(
       false,
     );
@@ -332,8 +483,8 @@ describe('active-catalog discovered augment', () => {
       videoModels: [{ id: 'xai/second-video', name: 'Second Video' }],
     });
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.imageModels).toEqual([{ id: 'xai/first-image', name: 'First Image' }]);
-    expect(xai?.videoModels).toEqual([{ id: 'xai/second-video', name: 'Second Video' }]);
+    expect(xai?.imageModels).toEqual([{ id: 'xai/first-image', name: 'First Image', discoveredMetadata: { name: 'First Image' } }]);
+    expect(xai?.videoModels).toEqual([{ id: 'xai/second-video', name: 'Second Video', discoveredMetadata: { name: 'Second Video' } }]);
   });
 
   it('xAI 官方成功返回空清单时清掉该类旧型号', () => {
@@ -379,7 +530,7 @@ describe('active-catalog discovered augment', () => {
     // 动态快照决定存在性，且明确返回的运行时能力高于 registry 基线。
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');
     expect((openai?.models.codex ?? []).find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(
-      400000,
+      272000,
     );
   });
 
@@ -391,7 +542,7 @@ describe('active-catalog discovered augment', () => {
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');
     const m55 = (openai?.models.codex ?? []).find((m) => m.id === 'gpt-5.5');
     // 动态快照决定存在性和明确能力；legacy 静态条目不复活。
-    expect(m55?.contextWindow).toBe(400000);
+    expect(m55).toMatchObject({ contextWindow: 272000, contextWindowMax: 400000 });
   });
 
   it('paired projection 使用同一纯名称和 sortOrder,且按 sortOrder 稳定排序', () => {
@@ -467,7 +618,7 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
     setAnthropicDiscoveredModels([]);
   });
 
-  it('基线统一 Anthropic 名字与排序,新模型不透传 Claude 前缀', () => {
+  it('供应商显式名称优先，缺项继承公共名称与排序', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setAnthropicDiscoveredModels([
       anthro('claude-opus-5', 'Claude Opus 5', 0),
@@ -482,23 +633,25 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
       anthro('claude-sonnet-4-5', 'Claude Sonnet 4.5', 9),
     ]);
     expect(anthropicList().map((m) => [m.id, m.name])).toEqual([
-      ['claude-opus-5', 'Opus 5'],
-      ['claude-fable-5', 'Fable 5'],
-      ['claude-opus-4-8', 'Opus 4.8'],
-      ['claude-opus-4-7', 'Opus 4.7'],
-      ['claude-opus-4-6', 'Opus 4.6'],
-      ['claude-opus-4-5', 'Opus 4.5'],
-      ['claude-sonnet-5', 'Sonnet 5'],
-      ['claude-sonnet-4-6', 'Sonnet 4.6'],
-      ['claude-sonnet-4-5', 'Sonnet 4.5'],
-      ['claude-haiku-4-5', 'Haiku 4.5'],
+      ['claude-opus-5', 'Claude Opus 5'],
+      ['claude-fable-5', 'Claude Fable 5'],
+      ['claude-opus-4-8', 'Claude Opus 4.8'],
+      ['claude-opus-4-7', 'Claude Opus 4.7'],
+      ['claude-opus-4-6', 'Claude Opus 4.6'],
+      ['claude-opus-4-5', 'Claude Opus 4.5'],
+      ['claude-sonnet-5', 'Claude Sonnet 5'],
+      ['claude-sonnet-4-6', 'Claude Sonnet 4.6'],
+      ['claude-sonnet-4-5', 'Claude Sonnet 4.5'],
+      ['claude-haiku-4-5', 'Claude Haiku 4.5'],
       ['claude-fable-5-1', 'Fable 5.1'],
       ['claude-mythos-5', 'Mythos 5'],
     ]);
-    expect(anthropicList('claude-code').filter((model) => model.defaultEnabled !== false)
-      .map((model) => model.id).sort()).toEqual([
-      'claude-fable-5-1', 'claude-haiku-4-5', 'claude-opus-5', 'claude-sonnet-5',
-    ]);
+    expect(
+      anthropicList('claude-code')
+        .filter((model) => model.defaultEnabled !== false)
+        .map((model) => model.id)
+        .sort(),
+    ).toEqual(['claude-fable-5-1', 'claude-haiku-4-5', 'claude-opus-5', 'claude-sonnet-5']);
     expect(anthropicList('codex')).toEqual(
       anthropicList('claude-code').map((model) => ({
         ...model,

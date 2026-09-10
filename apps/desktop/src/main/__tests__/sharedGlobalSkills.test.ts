@@ -1,7 +1,13 @@
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import nodeFs, { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+
+const lockRoot = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'cindy-projection-locks-'));
+vi.mock('electron', () => ({ app: { getPath: () => lockRoot } }));
+vi.mock('../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
+import { acquireSharedSkillMutationLease } from '../skillhub/sharedMutationLease';
 
 import {
   prepareSharedGlobalSkillLinks,
@@ -38,9 +44,95 @@ async function sameRealPath(a: string, b: string): Promise<boolean> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   const dirs = tmpDirs;
   tmpDirs = [];
   await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+afterAll(() => nodeFs.rmSync(lockRoot, { recursive: true, force: true }));
+
+describe('shared Skill projection mutations', () => {
+  it.each(['global', 'project'] as const)('blocks %s projection for a pending uninstall, then permits its installing caller', async (scope) => {
+    const root = await makeTmpDir();
+    const name = randomUUID();
+    const paths = sharedGlobalSkillsPaths(root);
+    const source = await writeSkill(paths.sharedSkillsDir, name);
+    const project = async () => scope === 'global'
+      ? prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false })
+      : prepareSharedProjectSkillLinks({ workingDir: root });
+    const token = randomUUID();
+    const initial = (await acquireSharedSkillMutationLease([name]))!;
+    initial.retainUntilComplete(token);
+    await initial();
+    expect((await project()).changed).toBe(false);
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, name))).rejects.toMatchObject({ code: 'ENOENT' });
+    const owner = (await acquireSharedSkillMutationLease([name], token))!;
+    try {
+      owner.complete(token);
+      expect((await project()).changed).toBe(false); // An independent window still cannot write.
+      expect((await owner.run(project)).changed).toBe(true);
+      expect(await sameRealPath(source, path.join(paths.claudeSkillsDir, name))).toBe(true);
+    } finally { await owner(); }
+  });
+
+  it('locks the physical basename when projecting a differently named external alias', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const name = randomUUID();
+    const alias = randomUUID();
+    const source = await writeSkill(path.join(root, 'external'), name);
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(source, path.join(paths.sharedSkillsDir, alias), process.platform === 'win32' ? 'junction' : 'dir');
+    const lease = (await acquireSharedSkillMutationLease([name]))!;
+    try {
+      const result = await prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false });
+      expect(result.changed).toBe(false);
+      await expect(fs.lstat(path.join(paths.claudeSkillsDir, alias))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await lease(); }
+  });
+
+  it('revalidates the source after the final awaited mkdir before linking', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const name = randomUUID();
+    const source = await writeSkill(paths.sharedSkillsDir, name);
+    const mkdir = fs.mkdir;
+    vi.spyOn(fs, 'mkdir').mockImplementation(async (...args: Parameters<typeof mkdir>) => {
+      const result = await mkdir(...args);
+      if (String(args[0]) === paths.claudeSkillsDir) {
+        await fs.rename(source, `${source}-old`);
+        await mkdir(source);
+      }
+      return result;
+    });
+    await expect(prepareSharedProjectSkillLinks({ workingDir: root })).rejects.toThrow('Skill source changed');
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, name))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a broken link replaced while the cleanup reads its previous target', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const name = randomUUID();
+    const link = path.join(paths.claudeSkillsDir, name);
+    const nextTarget = path.join(paths.sharedSkillsDir, `${name}-new`);
+    await fs.mkdir(paths.claudeSkillsDir, { recursive: true });
+    await fs.symlink(path.join(paths.sharedSkillsDir, name), link, process.platform === 'win32' ? 'junction' : 'dir');
+    const readlink = fs.readlink;
+    let replaced = false;
+    vi.spyOn(fs, 'readlink').mockImplementation(async (...args: Parameters<typeof readlink>) => {
+      const result = await readlink(...args);
+      if (!replaced && String(args[0]) === link) {
+        replaced = true;
+        await fs.unlink(link);
+        await fs.symlink(nextTarget, link, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      return result;
+    });
+    await prepareSharedProjectSkillLinks({ workingDir: root });
+    expect(replaced).toBe(true);
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readlink(link)).toContain(`${name}-new`);
+  });
 });
 
 describe('prepareSharedGlobalSkillLinks', () => {

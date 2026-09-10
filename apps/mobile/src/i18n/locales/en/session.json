@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "Some scheduled runs did not finish. Check the run history.",
+    "dismissTitle": "Dismiss past failure notice"
+  },
   "common": {
     "cancel": "Cancel",
     "delete": "Delete",
@@ -174,6 +178,7 @@
     "composerSessionNotSynced": "This session has not finished syncing yet.",
     "composerCreating": "Creating the session; you can keep sending after the first message goes out.",
     "nextAgentSwitch": "Next switches to {{agent}} · {{model}}",
+    "nextModelSelection": "Next · {{model}}",
     "createFailedTitle": "Session Creation Failed",
     "createFailedDefault": "Session creation failed.",
     "createFailedNotice": "Session creation failed: {{message}}",
@@ -464,6 +469,7 @@
     "continueTask": "Continue Task",
     "retry": "Retry",
     "ignore": "Ignore",
+    "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
     "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",

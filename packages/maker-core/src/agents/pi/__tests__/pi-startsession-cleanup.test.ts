@@ -23,6 +23,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -121,7 +122,7 @@ import { Session } from '../../../session.js';
 import * as piSubagentRuns from '../pi-subagent-runs.js';
 import type { PiSubagentRunStatus } from '../pi-subagent-runs.js';
 import { piProjectKey } from '../project-trust.js';
-import type { AgentDeps } from '../../base-agent.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, type AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { PiProjectTrustInputSnapshot } from '../../../types/pi-project-trust.js';
 
@@ -343,10 +344,24 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(knobs.closeCount).toBe(0); // 构造失败没有 proc 可关
   });
 
-  it('disposes ctx and closes the proc when a startup RPC rejects before handoff', async () => {
+  it('reports confirmed startup cleanup only after the proc closes, preserving the RPC error', async () => {
     knobs.getStateRejects = true;
+    let confirmStopped!: () => void;
+    knobs.closeGate = new Promise<void>((resolve) => { confirmStopped = resolve; });
     const agent = new PiAgent(buildDeps());
-    await expect(agent.startSession(opts())).rejects.toThrow(/get_state rejected/);
+    const rejected = vi.fn();
+    const startup = agent.startSession(opts()).catch((error: unknown) => {
+      rejected(error);
+      return error;
+    });
+    await vi.waitFor(() => expect(knobs.closeCount).toBe(1));
+    expect(rejected).not.toHaveBeenCalled();
+    confirmStopped();
+    const failure = await startup;
+    expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+    if (!(failure instanceof AgentStartupStoppedError)) throw new Error('missing exit evidence');
+    expect(failure.message).toBe('get_state rejected (mock)');
+    expect(failure.cause).toEqual(new Error('get_state rejected (mock)'));
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
@@ -357,16 +372,22 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.closeRejects = true;
     const agent = new PiAgent(buildDeps());
 
-    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    const failure = await agent.startSession(opts()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    if (!(failure instanceof AgentStartupCleanupPendingError)) throw new Error('missing cleanup evidence');
+    const stopped = vi.fn();
+    void failure.whenStopped.then(stopped);
     expect(knobs.spawnedEnvs).toHaveLength(1);
     // Same business id cannot spawn while the old proc still fails cleanup.
     await expect(agent.startSession(opts())).rejects.toThrow(/close unconfirmed/);
     expect(knobs.spawnedEnvs).toHaveLength(1);
+    expect(stopped).not.toHaveBeenCalled();
 
     knobs.closeRejects = false;
     knobs.getStateRejects = false;
     const handle = await agent.startSession(opts());
     expect(knobs.spawnedEnvs).toHaveLength(2);
+    expect(stopped).toHaveBeenCalledOnce();
     await handle.close();
   });
 
@@ -375,17 +396,23 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.closeRejects = true;
     const agent = new PiAgent(buildDeps());
 
-    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    const failure = await agent.startSession(opts()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    if (!(failure instanceof AgentStartupCleanupPendingError)) throw new Error('missing cleanup evidence');
+    const stopped = vi.fn();
+    void failure.whenStopped.then(stopped);
     await expect(agent.startSession({ ...opts(), sessionId: 's2' })).rejects.toThrow(
       /cleanup remains unconfirmed/,
     );
     expect(knobs.closeCount).toBe(2);
+    expect(stopped).not.toHaveBeenCalled();
 
     knobs.closeRejects = false;
     await agent.dispose();
     await agent.dispose();
 
     expect(knobs.closeCount).toBe(4);
+    expect(stopped).toHaveBeenCalledOnce();
   });
 
   it('reclaims a startup cleanup entry registered after dispose begins', async () => {
@@ -1272,8 +1299,13 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       resolver: ReturnType<typeof vi.fn>;
     } {
       const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
-      vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
-      vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+      // Navigation-close tests may still have a detached supervisor draining.
+      // Only this test's unique home owns the run and the captured write gate.
+      const root = piSubagentRuns.piSubagentRunRoot(agentHome, opts().sessionId);
+      vi.spyOn(piSubagentRuns, 'listPiSubagentRuns')
+        .mockImplementation(async candidate => candidate === root ? [run] : []);
+      vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories')
+        .mockImplementation(async candidate => candidate === root ? 1 : 0);
       let openPublish!: () => void;
       let releasePublish!: () => void;
       const publishStarted = new Promise<void>((resolve) => { openPublish = resolve; });
@@ -1282,7 +1314,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       // Stands in for the helper's own multi-await stretch between the caller's
       // check and the mailbox write.
       vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockImplementation(
-        async (_root, _taskId, _action, options) => {
+        async (candidate, _taskId, _action, options) => {
+          if (candidate !== root) return 0;
           captured = (options as { beforeMailboxWrite?: () => boolean } | undefined)
             ?.beforeMailboxWrite;
           openPublish();
@@ -1303,17 +1336,26 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
       const handle = await new PiAgent(buildDeps()).startSession(opts());
       handle.setInteractionResolver(fixture.resolver as never);
-
-      await fixture.publishStarted;
-      // Captured while the boundary is still down: it must answer "write".
-      expect(fixture.gate()?.()).toBe(true);
-
-      const closing = handle.close({ reason: 'account-boundary' });
-      // Same closure, after the flag went up. A snapshot would still say true,
-      // and the answer would land in a child's mailbox behind the sweep.
-      expect(fixture.gate()?.()).toBe(false);
-      fixture.releasePublish();
-      await closing;
+      let closing: Promise<void> | undefined;
+      let stalePublish: Promise<number> | undefined;
+      try {
+        await fixture.publishStarted;
+        // Captured while the boundary is still down: it must answer "write".
+        expect(fixture.gate()?.()).toBe(true);
+        // Reproduce a previous supervisor reaching the global mock late. Its
+        // still-open fence must not replace this handle's captured predicate.
+        stalePublish = piSubagentRuns.controlPiSubagentRuns(
+          piSubagentRuns.piSubagentRunRoot(path.join(agentHome, 'previous-test'), 's1'),
+          'tool-subagent-approval', 'approval', { beforeMailboxWrite: () => true },
+        );
+        closing = handle.close({ reason: 'account-boundary' });
+        // Same closure, after the flag went up. A snapshot would still say true.
+        expect(fixture.gate()?.()).toBe(false);
+      } finally {
+        fixture.releasePublish();
+        await stalePublish;
+        await (closing ?? handle.close({ reason: 'account-boundary' }));
+      }
     });
 
     it('does not start the stop sweep until the publish has left the write phase', async () => {
@@ -1328,13 +1370,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       const handle = await new PiAgent(buildDeps()).startSession(opts());
       handle.setInteractionResolver(fixture.resolver as never);
 
-      await fixture.publishStarted;
-      const closing = handle.close({ reason: 'account-boundary' });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(sweep).not.toHaveBeenCalled();
-
-      fixture.releasePublish();
-      await closing;
+      let closing: Promise<void> | undefined;
+      try {
+        await fixture.publishStarted;
+        closing = handle.close({ reason: 'account-boundary' });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(sweep).not.toHaveBeenCalled();
+      } finally {
+        fixture.releasePublish();
+        await (closing ?? handle.close({ reason: 'account-boundary' }));
+      }
       expect(sweep).toHaveBeenCalled();
     });
   });
@@ -1604,7 +1649,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }, {}, 'input');
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
-    const review = vi.fn(async () => ({ verdict: 'block' as const }));
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'This task is read-only.' }));
     const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
       ...opts(),
       permissionMode: 'auto',
@@ -1616,7 +1661,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect.any(String),
       run.taskId,
       'approval',
-      expect.objectContaining({ value: 'auto-review-deny' }),
+      expect.objectContaining({ value: 'auto-review-deny:This task is read-only.' }),
     ));
     expect(review).toHaveBeenCalledOnce();
     expect(resolver).not.toHaveBeenCalled();
@@ -2324,8 +2369,39 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   // codex review P2:并发普通会话不得共写 agentHome/models.json —— 第二次写入会在首次写完
   // 到 spawn 之间截断/覆盖 provider 快照。每 startSession 用隔离的 configHome
   // (PI_CODING_AGENT_DIR = agentHome/run-tmp/<hex>)承载 models.json,close/退出时清理。
+  it('keeps staged ripgrep bytes private and removes them on close', async () => {
+    const managedRg = path.join(agentHome, 'managed-rg');
+    writeFileSync(managedRg, 'managed ripgrep fixture');
+    const agent = new PiAgent(buildDeps({
+      runtimeConfig: {
+        endpoint: 'http://127.0.0.1:9',
+        managedExecutablePaths: { ripgrep: managedRg },
+      },
+    }));
+    const handles = await Promise.all(['rg-one', 'rg-two'].map((sessionId) =>
+      agent.startSession({ sessionId, workingDir: cwd, model: 'm' })));
+    const copies = knobs.spawnedEnvs.map((env) => path.join(
+      env.PI_CODING_AGENT_DIR!, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg',
+    ));
+    try {
+      expect(copies).toHaveLength(2);
+      expect(copies[0]).not.toBe(copies[1]);
+      expect(readFileSync(copies[0], 'utf8')).toBe('managed ripgrep fixture');
+      writeFileSync(copies[0], 'runtime replacement');
+      expect(readFileSync(managedRg, 'utf8')).toBe('managed ripgrep fixture');
+      expect(readFileSync(copies[1], 'utf8')).toBe('managed ripgrep fixture');
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+    }
+    expect(copies.some((copy) => existsSync(copy))).toBe(false);
+    expect(existsSync(managedRg)).toBe(true);
+  });
+
   it('isolates each session config home under run-tmp and keeps concurrent sessions independent', async () => {
     const { existsSync } = await import('node:fs');
+    const nativeHome = path.join(agentHome, 'native-user-home');
+    mkdirSync(nativeHome);
+    writeFileSync(path.join(nativeHome, 'AGENTS.md'), 'global rules v1');
     const skillOne = path.join(cwd, '.pi', 'skills', 'one');
     const skillTwo = path.join(cwd, '.agents', 'skills', 'two');
     for (const skillPath of [skillOne, skillTwo]) {
@@ -2333,6 +2409,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       writeFileSync(path.join(skillPath, 'SKILL.md'), '# isolated\n');
     }
     const agent = new PiAgent(buildDeps({
+      resolvePiGlobalContextHome: () => nativeHome,
       resolvePiProjectTrustInput: async ({ sessionId, workingDir }) => approvedInput(
         workingDir,
         `rev-${sessionId}`,
@@ -2360,6 +2437,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(home2.startsWith(runTmp)).toBe(true);
     expect(existsSync(path.join(home1, 'models.json'))).toBe(true);
     expect(existsSync(path.join(home2, 'models.json'))).toBe(true);
+    expect(readFileSync(path.join(home1, 'AGENTS.md'), 'utf8')).toBe('global rules v1');
+    expect(readFileSync(path.join(home2, 'AGENTS.md'), 'utf8')).toBe('global rules v1');
+    writeFileSync(path.join(nativeHome, 'AGENTS.md'), 'global rules v2');
+    expect(readFileSync(path.join(home1, 'AGENTS.md'), 'utf8')).toBe('global rules v1');
+    const h3 = await agent.startSession({ sessionId: 's3', workingDir: cwd, model: 'm' });
+    const home3 = knobs.spawnedEnvs[indexForSession('s3')].PI_CODING_AGENT_DIR!;
+    expect(readFileSync(path.join(home3, 'AGENTS.md'), 'utf8')).toBe('global rules v2');
+    writeFileSync(path.join(home3, 'AGENTS.md'), 'runtime edit');
+    expect(readFileSync(path.join(nativeHome, 'AGENTS.md'), 'utf8')).toBe('global rules v2');
+    await h3.close();
     expect(repeatedArgValues(knobs.spawnedArgs[s1Index]!, '--skill')).toEqual([
       stagedSkillPath(home1, 0, skillOne),
     ]);
@@ -2491,7 +2578,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       sessionId: 'approved',
     }));
     expect(resolvePiManagedPackageResources).toHaveBeenCalledOnce();
-    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith();
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith({
+      startupTraceId: expect.stringMatching(/^[a-f0-9]{16}$/),
+    });
     expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
     expect(JSON.parse(readFileSync(path.join(approvedHome, 'settings.json'), 'utf8')))
       .toMatchObject({ packages: [packageRoot] });
@@ -2524,9 +2613,430 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // 上层随后仍可能调用 close() —— cleanup 幂等,不抛。
     await handle.close();
   });
+
+  it("registers ownership before package setup and cleans the config home when setup fails", async () => {
+    const { promises: fs } = await import("node:fs");
+    const originalWriteFile = fs.writeFile.bind(fs);
+    let configHome = "";
+    let ownerWasPresent = false;
+    const writeSpy = vi
+      .spyOn(fs, "writeFile")
+      .mockImplementation(async (target, ...args) => {
+        if (path.basename(String(target)) === "models.json") {
+          configHome = path.dirname(String(target));
+          ownerWasPresent = existsSync(
+            path.join(configHome, ".cindy-owner.json"),
+          );
+          throw new Error("models setup failed (mock)");
+        }
+        return originalWriteFile(
+          target,
+          ...(args as Parameters<typeof fs.writeFile> extends [
+            unknown,
+            ...infer Rest,
+          ]
+            ? Rest
+            : never),
+        );
+      });
+    try {
+      const agent = new PiAgent(buildDeps());
+      await expect(
+        agent.startSession({
+          sessionId: "setup-failure",
+          workingDir: cwd,
+          model: "m",
+        }),
+      ).rejects.toThrow("models setup failed (mock)");
+      expect(ownerWasPresent).toBe(true);
+      expect(configHome).not.toBe("");
+      await waitFor(() => !existsSync(configHome));
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it('preserves a starting home while its published owner write is still completing', async () => {
+    const { promises: fs } = await import('node:fs');
+    const originalWriteFile = fs.writeFile.bind(fs);
+    const originalOpendir = fs.opendir.bind(fs);
+    let releaseWrite!: () => void;
+    const writeReleased = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let publishedHome = '';
+    let completedSweeps = 0;
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
+      await originalWriteFile(...args);
+      if (path.basename(String(args[0])) === '.cindy-owner.json' && !publishedHome) {
+        publishedHome = path.dirname(String(args[0]));
+        await writeReleased;
+      }
+    });
+    vi.spyOn(fs, 'opendir').mockImplementation(async (...args) => {
+      const directory = await originalOpendir(...args);
+      const iterate = directory[Symbol.asyncIterator].bind(directory);
+      directory[Symbol.asyncIterator] = async function* () {
+        try { yield* iterate(); } finally { completedSweeps += 1; }
+        return undefined;
+      };
+      return directory;
+    });
+    // Ensure the first scheduled sweep can open run-tmp before either startup.
+    mkdirSync(path.join(agentHome, 'run-tmp'), { recursive: true });
+    const agent = new PiAgent(buildDeps());
+    const starting = agent.startSession({ sessionId: 'publishing-owner', workingDir: cwd, model: 'm' });
+    let second: Awaited<typeof starting> | undefined;
+    try {
+      await waitFor(() => publishedHome !== '' && completedSweeps >= 1);
+      second = await agent.startSession({ sessionId: 'sweeping-owner', workingDir: cwd, model: 'm' });
+      await waitFor(() => completedSweeps >= 2);
+      expect(existsSync(path.join(publishedHome, '.cindy-owner.json'))).toBe(true);
+    } finally {
+      releaseWrite();
+      await (await starting).close();
+      await second?.close();
+    }
+  });
+
+  it('records process ownership plus redacted session/runtime identity in the local owner marker', async () => {
+    const sessionId = 'owner-marker-session';
+    const handle = await new PiAgent(buildDeps()).startSession({
+      sessionId,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const configHome = knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!;
+    try {
+      const owner = JSON.parse(
+        readFileSync(path.join(configHome, '.cindy-owner.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      expect(owner).toMatchObject({
+        version: 2,
+        ownerPid: process.pid,
+        directoryName: path.basename(configHome),
+        runtimeId: path.basename(configHome),
+        sessionIdHash: createHash('sha256').update(sessionId).digest('hex'),
+      });
+      expect(owner.createdAt).toEqual(expect.any(Number));
+      expect(owner).not.toHaveProperty('sessionId');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('correlates redacted MCP, spawn, RPC-ready, and first-model-request timings', async () => {
+    const info = vi.fn();
+    const timingLogger: Logger = {
+      ...noopLogger,
+      info,
+      child: () => timingLogger,
+    };
+    const resolvePiManagedPackageResources = vi.fn<NonNullable<AgentDeps['resolvePiManagedPackageResources']>>(async () => ({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    }));
+    const handle = await new PiAgent(buildDeps({
+      logger: timingLogger,
+      resolvePiManagedPackageResources,
+    })).startSession({
+      sessionId: 'timing-session-secret',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      await handle.send({ type: 'user', content: 'timing-prompt-secret' });
+      const resolverOptions = resolvePiManagedPackageResources.mock.calls[0]?.[0] as
+        | { startupTraceId?: string }
+        | undefined;
+      expect(resolverOptions?.startupTraceId).toMatch(/^[a-f0-9]{16}$/);
+
+      const events = info.mock.calls
+        .filter(([message]) => message === 'pi startup stage')
+        .map(([, fields]) => fields as Record<string, unknown>);
+      expect(events.map((event) => event.stage)).toEqual([
+        'mcp-ready',
+        'pi-spawn',
+        'rpc-ready',
+        'first-model-request',
+      ]);
+      for (const event of events) {
+        expect(event).toMatchObject({
+          startupTraceId: resolverOptions?.startupTraceId,
+          stage: expect.any(String),
+          durationMs: expect.any(Number),
+          status: 'ok',
+        });
+      }
+      const serialized = JSON.stringify(events);
+      expect(serialized).not.toContain('timing-session-secret');
+      expect(serialized).not.toContain('timing-prompt-secret');
+      expect(serialized).not.toContain(cwd);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('starts a new session while stale config-home cleanup is blocked and finishes the backlog later', async () => {
+    const { promises: fs } = await import('node:fs');
+    const originalRm = fs.rm.bind(fs);
+    const staleHomes = Array.from({ length: 10 }, (_, index) => {
+      const staleHome = path.join(agentHome, 'run-tmp', `stale-budget-${index}`);
+      mkdirSync(staleHome, { recursive: true });
+      writeFileSync(
+        path.join(staleHome, '.cindy-owner.json'),
+        `${JSON.stringify({
+          version: 1,
+          ownerPid: 2_147_483_647,
+          createdAt: 1,
+          directoryName: path.basename(staleHome),
+        })}\n`,
+      );
+      return staleHome;
+    });
+    const staleHomeKeys = new Set(staleHomes.map((home) => path.resolve(home)));
+    let announceRemovalStarted!: () => void;
+    const removalStarted = new Promise<void>((resolve) => { announceRemovalStarted = resolve; });
+    let releaseRemoval!: () => void;
+    const removalGate = new Promise<void>((resolve) => { releaseRemoval = resolve; });
+    let removalReleased = false;
+    let staleRemovalCount = 0;
+    let firstSweepYieldObservedAt: number | undefined;
+    const unblockRemoval = (): void => {
+      if (removalReleased) return;
+      removalReleased = true;
+      releaseRemoval();
+    };
+    const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (staleHomeKeys.has(path.resolve(String(target)))) {
+        staleRemovalCount += 1;
+        if (staleRemovalCount === 1) {
+          // Observe live progress when timers next get a turn. The sweep budget is
+          // over inspected entries, not removals: an active/markerless home may
+          // make this value lower than 8, but it must never exceed the budget.
+          setTimeout(() => { firstSweepYieldObservedAt = staleRemovalCount; }, 0);
+        }
+        announceRemovalStarted();
+        await removalGate;
+        rmSync(String(target), { recursive: true, force: true });
+        return;
+      }
+      return originalRm(target, options);
+    });
+    const startPromise = new PiAgent(buildDeps()).startSession({
+      sessionId: 'bounded-stale-sweep',
+      workingDir: cwd,
+      model: 'm',
+    });
+    let handle: Awaited<typeof startPromise> | undefined;
+    try {
+      await removalStarted;
+      await vi.waitFor(
+        () => expect(knobs.spawnedEnvs.some(
+          (env) => env.CINDY_PI_SESSION_ID === 'bounded-stale-sweep',
+        )).toBe(true),
+        { timeout: 500 },
+      );
+      unblockRemoval();
+      handle = await startPromise;
+      await waitFor(() => staleHomes.every((home) => !existsSync(home)));
+      await vi.waitFor(() => expect(firstSweepYieldObservedAt).toBeDefined());
+      expect(firstSweepYieldObservedAt).toBeGreaterThanOrEqual(1);
+      expect(firstSweepYieldObservedAt).toBeLessThanOrEqual(8);
+    } finally {
+      unblockRemoval();
+      handle ??= await startPromise;
+      rmSpy.mockRestore();
+      await handle.close();
+      await Promise.all(staleHomes.map((home) => originalRm(home, { recursive: true, force: true })));
+    }
+  });
+
+  it('reclaims a v2 local config home whose owner pid was recycled', async () => {
+    const runtimeId = 'a'.repeat(32);
+    const recycledHome = path.join(agentHome, 'run-tmp', runtimeId);
+    mkdirSync(recycledHome, { recursive: true });
+    writeFileSync(
+      path.join(recycledHome, '.cindy-owner.json'),
+      `${JSON.stringify({
+        version: 2,
+        ownerPid: process.pid,
+        ownerStartTimeSec: 1,
+        createdAt: 1,
+        directoryName: path.basename(recycledHome),
+        runtimeId,
+        sessionIdHash: 'b'.repeat(64),
+      })}\n`,
+    );
+
+    const handle = await new PiAgent(buildDeps()).startSession({
+      sessionId: 'after-pid-reuse',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      await waitFor(() => !existsSync(recycledHome));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([-60_000, 60_000])('preserves live foreign owners after a wall-clock correction of %i ms', async (clockStep) => {
+    const runtimeId = 'c'.repeat(32);
+    const ownerHome = path.join(agentHome, 'run-tmp', runtimeId);
+    mkdirSync(ownerHome, { recursive: true });
+    writeFileSync(path.join(ownerHome, '.cindy-owner.json'), JSON.stringify({
+      version: 2,
+      ownerPid: process.ppid,
+      // Earlier builds estimated this timestamp. Even a mismatch cannot prove
+      // whether the PID was reused or the wall clock changed since publication.
+      ownerStartTimeSec: 1,
+      createdAt: Date.now(),
+      directoryName: runtimeId,
+      runtimeId,
+      sessionIdHash: 'e'.repeat(64),
+    }));
+    writeFileSync(path.join(ownerHome, 'models.json'), '{}\n');
+    const { promises: fs } = await import('node:fs');
+    const originalOpendir = fs.opendir.bind(fs);
+    let sweepFinished!: () => void;
+    const swept = new Promise<void>((resolve) => { sweepFinished = resolve; });
+    vi.spyOn(fs, 'opendir').mockImplementation(async (...args) => {
+      const directory = await originalOpendir(...args);
+      if (path.resolve(String(args[0])) !== path.resolve(agentHome, 'run-tmp')) return directory;
+      const iterate = directory[Symbol.asyncIterator].bind(directory);
+      directory[Symbol.asyncIterator] = async function* () {
+        try { yield* iterate(); } finally { sweepFinished(); }
+        return undefined;
+      };
+      return directory;
+    });
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + clockStep);
+    const handle = await new PiAgent(buildDeps()).startSession({
+      sessionId: 'live-owner-after-clock-step', workingDir: cwd, model: 'm',
+    });
+    try {
+      await swept;
+      expect(readFileSync(path.join(ownerHome, 'models.json'), 'utf8')).toBe('{}\n');
+    } finally {
+      clock.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it('preserves markerless legacy homes after the background sweep completes', async () => {
+    const legacyHome = path.join(agentHome, 'run-tmp', '0123456789abcdef');
+    mkdirSync(legacyHome, { recursive: true });
+    writeFileSync(path.join(legacyHome, 'models.json'), '{}\n');
+    const { promises: fs } = await import('node:fs');
+    const originalOpendir = fs.opendir.bind(fs);
+    let sweepFinished!: () => void;
+    const swept = new Promise<void>((resolve) => { sweepFinished = resolve; });
+    vi.spyOn(fs, 'opendir').mockImplementation(async (...args) => {
+      const directory = await originalOpendir(...args);
+      if (path.resolve(String(args[0])) !== path.resolve(agentHome, 'run-tmp')) return directory;
+      const iterate = directory[Symbol.asyncIterator].bind(directory);
+      directory[Symbol.asyncIterator] = async function* () {
+        try { yield* iterate(); } finally { sweepFinished(); }
+        return undefined;
+      };
+      return directory;
+    });
+    const handle = await new PiAgent(buildDeps()).startSession({
+      sessionId: 'legacy-preserve-pre-spawn', workingDir: cwd, model: 'm',
+    });
+    try {
+      await swept;
+      expect(readFileSync(path.join(legacyHome, 'models.json'), 'utf8')).toBe('{}\n');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("reclaims failed cleanup without deleting same-process or other-live-process sessions", async () => {
+    const { promises: fs } = await import("node:fs");
+    const agent = new PiAgent(buildDeps());
+    const orphaned = await agent.startSession({
+      sessionId: "orphaned",
+      workingDir: cwd,
+      model: "m",
+    });
+    const active = await agent.startSession({
+      sessionId: "active",
+      workingDir: cwd,
+      model: "m",
+    });
+    const orphanedHome = knobs.spawnedEnvs.find(
+      (env) => env.CINDY_PI_SESSION_ID === "orphaned",
+    )!.PI_CODING_AGENT_DIR!;
+    const activeHome = knobs.spawnedEnvs.find(
+      (env) => env.CINDY_PI_SESSION_ID === "active",
+    )!.PI_CODING_AGENT_DIR!;
+    const liveOwnerHome = path.join(agentHome, "run-tmp", "live-owner-home");
+    const originalRm = fs.rm.bind(fs);
+    let orphanRemovalFailures = 3;
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockImplementation(async (target, options) => {
+        if (
+          path.resolve(String(target)) === path.resolve(orphanedHome) &&
+          orphanRemovalFailures > 0
+        ) {
+          orphanRemovalFailures -= 1;
+          throw Object.assign(new Error("transient config-home lock"), {
+            code: "EPERM",
+          });
+        }
+        return originalRm(target, options);
+      });
+    try {
+      await orphaned.close();
+      await waitFor(() => orphanRemovalFailures === 0);
+      expect(existsSync(orphanedHome)).toBe(true);
+      expect(existsSync(path.join(activeHome, "models.json"))).toBe(true);
+
+      const deadOwnerHome = path.join(agentHome, "run-tmp", "dead-owner-home");
+      mkdirSync(deadOwnerHome, { recursive: true });
+      writeFileSync(
+        path.join(deadOwnerHome, ".cindy-owner.json"),
+        `${JSON.stringify({
+          version: 1,
+          ownerPid: 2_147_483_647,
+          createdAt: 1,
+          directoryName: path.basename(deadOwnerHome),
+        })}\n`,
+      );
+      expect(process.ppid).toBeGreaterThan(0);
+      mkdirSync(liveOwnerHome, { recursive: true });
+      writeFileSync(
+        path.join(liveOwnerHome, ".cindy-owner.json"),
+        `${JSON.stringify({
+          version: 1,
+          ownerPid: process.ppid,
+          createdAt: 1,
+          directoryName: path.basename(liveOwnerHome),
+        })}\n`,
+      );
+      const next = await agent.startSession({
+        sessionId: "next",
+        workingDir: cwd,
+        model: "m",
+      });
+      try {
+        await waitFor(() => !existsSync(orphanedHome) && !existsSync(deadOwnerHome));
+        expect(existsSync(path.join(activeHome, "models.json"))).toBe(true);
+        expect(existsSync(liveOwnerHome)).toBe(true);
+      } finally {
+        await next.close();
+      }
+    } finally {
+      rmSpy.mockRestore();
+      await active.close();
+      await originalRm(orphanedHome, { recursive: true, force: true });
+      await originalRm(liveOwnerHome, { recursive: true, force: true });
+    }
+  });
 });
 
-/** 轮询等待条件成立(configHome cleanup 是 void fs.rm fire-and-forget,不阻塞 close)。 */
+/** 轮询等待条件成立（onExit 等同步回调里的 configHome cleanup 仍是 fire-and-forget）。 */
 async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
   while (!cond()) {

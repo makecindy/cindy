@@ -43,7 +43,10 @@ import type { BotCredentials } from './internal-types.js';
 const FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024;
 /** 10 MB per image when sending as `msg_type:image`. */
 const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-const HANDLE_PATH_HELPER_TIMEOUT_MS = 5_000;
+// PowerShell's first Add-Type invocation can be slow on hosted Windows
+// runners (Defender scans the generated compiler artifacts). Keep the helper
+// bounded and fail closed, but allow that one-time startup to finish.
+const HANDLE_PATH_HELPER_TIMEOUT_MS = 15_000;
 const HANDLE_PATH_HELPER_MAX_BYTES = 256 * 1024;
 
 /**

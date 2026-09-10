@@ -12,6 +12,9 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import { createLogger } from '../logger.js';
+import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
+
 import {
   buildRegistry,
   type Catalog,
@@ -22,6 +25,8 @@ import {
   type ProviderView,
   type Provider,
 } from '@cindy/model-providers';
+
+const log = createLogger('provider-service');
 
 /**
  * 读取连接态时是否允许附带**本机副作用**（绑定自愈、随之而来的清单拉取）。
@@ -76,6 +81,10 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
+  codexAccountConnected?: (providerId: string) => boolean;
+  subscriptionAccountConnected?: (providerId: string) => boolean;
+  subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
+  openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
   /**
    * 内置 API-key 供应商(auth.method 'apiKey' 且 source 'builtin',如 Gemini 图像来源,
    * 2026-07)的连接态判定:连接 = 该供应商的 key 已存(生产 = providerSecretStore.has)。
@@ -151,7 +160,11 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
-      else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
+      else if (p.auth.native === 'claude' || p.auth.native === 'xai') {
+        connected[p.id] = deps.subscriptionAccountConnected?.(p.id) ?? false;
+      } else if (p.auth.native === 'codex') {
+        connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
+      } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
       } else if (p.source === 'user') {
         connected[p.id] = deps.customApiKeyConnected?.(p) ?? false;
@@ -169,8 +182,31 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         if (failure) discoveryFailures[p.id] = failure;
       }
     }
-    const media = deps.getAvailableMediaModels?.();
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map(
+    let media: readonly { providerId: string; id: string }[] | undefined;
+    try {
+      media = deps.getAvailableMediaModels?.();
+    } catch (error) {
+      // Media is optional enrichment; configuration and chat providers remain usable.
+      media = [];
+      log.warn(
+        'Media readiness unavailable; returning provider configuration without media readiness',
+        { error: mediaErrorForLog(error) },
+      );
+    }
+    const accountInfo = new Map<string, ProviderView['openAiAccount']>();
+    if (deps.openAiAccountInfo) {
+      await Promise.all(catalog.providers.filter((p) => p.id === 'openai' || p.auth.native === 'codex').map(async (p) => {
+        accountInfo.set(p.id, await deps.openAiAccountInfo!(p.id));
+      }));
+    }
+    const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
+    if (deps.subscriptionAccountInfo) await Promise.all(catalog.providers
+      .filter(p => p.auth.native === 'claude' || p.auth.native === 'xai')
+      .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
+    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
+      ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
+      ...provider, ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+    })).map(
       (provider) =>
         media === undefined
           ? provider

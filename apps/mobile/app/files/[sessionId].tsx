@@ -49,6 +49,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text, TextInput } from '@/components/AppText';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
@@ -759,6 +760,7 @@ export default function RemoteFileBrowserScreen() {
             <View style={styles.titleChevronChip}>
               <ChevronDown color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
             </View>
+            <QuietSyncIndicator active={!showConnectionBanner && (loading || status === 'connecting')} />
           </Pressable>
           <Pressable
             accessibilityLabel={t('files.browser.a11ySearch')}
@@ -786,7 +788,6 @@ export default function RemoteFileBrowserScreen() {
           <Text numberOfLines={1} style={styles.sectionLabel}>
             {deviceName}{isRoot ? t('files.browser.workdirSuffix') : ''}
           </Text>
-          {loading && !refreshing ? <ActivityIndicator color={colors.textTertiary} size="small" /> : null}
         </View>
       ) : null}
 
@@ -1500,6 +1501,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
   },
   title: {
+    flexShrink: 1,
+    minWidth: 0,
     color: colors.textPrimary,
     fontSize: typeScale.body,
     fontWeight: fontWeight.semibold,

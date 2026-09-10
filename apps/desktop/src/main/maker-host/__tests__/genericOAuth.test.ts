@@ -190,7 +190,10 @@ describe('临期刷新（单飞）', () => {
   it('临期 + refresh_token → 交换新 token 并落盘', async () => {
     seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs + 1_000 });
     fetchResponder = () =>
-      new Response(JSON.stringify({ access_token: 'new', refresh_token: 'rt-2', expires_in: 3600 }), { status: 200 });
+      new Response(
+        JSON.stringify({ access_token: 'new', refresh_token: 'rt-2', expires_in: 3600 }),
+        { status: 200 },
+      );
     await refreshGenericOAuthIfNeeded('acme', OAUTH);
     expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('new');
     expect(fetchCalls[0]?.url).toBe(OAUTH.tokenUrl);
@@ -209,7 +212,9 @@ describe('临期刷新（单飞）', () => {
     fetchResponder = () => {
       // 刷新响应到达前用户登出。
       logoutGenericOAuth('acme');
-      return new Response(JSON.stringify({ access_token: 'new', expires_in: 3600 }), { status: 200 });
+      return new Response(JSON.stringify({ access_token: 'new', expires_in: 3600 }), {
+        status: 200,
+      });
     };
     await refreshGenericOAuthIfNeeded('acme', OAUTH);
     expect(hasGenericOAuthLogin('acme')).toBe(false);
@@ -242,7 +247,10 @@ describe('登录流与凭证落盘失败', () => {
   it('成功路径：token 交换后凭证落盘 + 内存可读', async () => {
     autoAuthorize();
     fetchResponder = () =>
-      new Response(JSON.stringify({ access_token: 'at-new', refresh_token: 'rt', expires_in: 3600 }), { status: 200 });
+      new Response(
+        JSON.stringify({ access_token: 'at-new', refresh_token: 'rt', expires_in: 3600 }),
+        { status: 200 },
+      );
     const res = await runGenericOAuthLogin({ id: 'acme', name: 'Acme' }, OAUTH);
     expect(res.ok).toBe(true);
     expect(hasGenericOAuthLogin('acme')).toBe(true);
@@ -255,11 +263,11 @@ describe('登录流与凭证落盘失败', () => {
       new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
     let rollback: (() => boolean) | undefined;
 
-    const res = await runGenericOAuthLogin(
-      { id: 'acme', name: 'Acme' },
-      OAUTH,
-      { onCredentialPersisted: (fn) => { rollback = fn; } },
-    );
+    const res = await runGenericOAuthLogin({ id: 'acme', name: 'Acme' }, OAUTH, {
+      onCredentialPersisted: (fn) => {
+        rollback = fn;
+      },
+    });
     expect(res.ok).toBe(true);
     expect(rollback).toBeTypeOf('function');
 
@@ -274,11 +282,11 @@ describe('登录流与凭证落盘失败', () => {
       new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
     let rollback: (() => boolean) | undefined;
 
-    await runGenericOAuthLogin(
-      { id: 'acme', name: 'Acme' },
-      OAUTH,
-      { onCredentialPersisted: (fn) => { rollback = fn; } },
-    );
+    await runGenericOAuthLogin({ id: 'acme', name: 'Acme' }, OAUTH, {
+      onCredentialPersisted: (fn) => {
+        rollback = fn;
+      },
+    });
     storage.read = () => null;
 
     expect(rollback?.()).toBe(true);
@@ -291,11 +299,11 @@ describe('登录流与凭证落盘失败', () => {
       new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
     let rollback: (() => boolean) | undefined;
 
-    await runGenericOAuthLogin(
-      { id: 'acme', name: 'Acme' },
-      OAUTH,
-      { onCredentialPersisted: (fn) => { rollback = fn; } },
-    );
+    await runGenericOAuthLogin({ id: 'acme', name: 'Acme' }, OAUTH, {
+      onCredentialPersisted: (fn) => {
+        rollback = fn;
+      },
+    });
     storage.readStrict = () => {
       throw new Error('safeStorage unavailable');
     };
@@ -521,11 +529,13 @@ describe('discoverGenericOAuthModels', () => {
   it('解析 {data:[{id}]} 形状并去重', async () => {
     seedBlob('acme', { access_token: 'at' });
     fetchResponder = () =>
-      new Response(JSON.stringify({ data: [{ id: 'm-1' }, { id: 'm-2' }, { id: 'm-1' }] }), { status: 200 });
+      new Response(JSON.stringify({ data: [{ id: 'm-1' }, { id: 'm-2' }, { id: 'm-1' }] }), {
+        status: 200,
+      });
     const models = await discoverGenericOAuthModels('acme', OAUTH);
     expect(models).toEqual([
-      { id: 'm-1', name: 'm-1' },
-      { id: 'm-2', name: 'm-2' },
+      { id: 'm-1', name: 'm-1', discoveredMetadata: {} },
+      { id: 'm-2', name: 'm-2', discoveredMetadata: {} },
     ]);
   });
 
@@ -565,11 +575,15 @@ describe('discoverGenericOAuthModels', () => {
 
 describe('deriveModelsDiscoveryUrl', () => {
   it('/vN 结尾只追加 /models，其余追加 /v1/models（尾斜杠归一）', () => {
-    expect(deriveModelsDiscoveryUrl('https://openrouter.ai/api/v1')).toBe('https://openrouter.ai/api/v1/models');
+    expect(deriveModelsDiscoveryUrl('https://openrouter.ai/api/v1')).toBe(
+      'https://openrouter.ai/api/v1/models',
+    );
     expect(deriveModelsDiscoveryUrl('https://api.acme.example/anthropic')).toBe(
       'https://api.acme.example/anthropic/v1/models',
     );
-    expect(deriveModelsDiscoveryUrl('https://api.acme.example/')).toBe('https://api.acme.example/v1/models');
+    expect(deriveModelsDiscoveryUrl('https://api.acme.example/')).toBe(
+      'https://api.acme.example/v1/models',
+    );
   });
 
   it('基于 pathname 追加模型端点，保留 query 并丢弃 fragment', () => {
@@ -601,7 +615,13 @@ describe('oauth-token 路由分支', () => {
     // （ChatGPT OAuth spawn 的子进程会带这些头，发往第三方上游前必须抹掉；
     // 自定义供应商目录条目无法声明 headerDelete，只能靠 oauth-token 分支代码层兜底）。
     expect(dc?.headerDelete).toEqual(
-      expect.arrayContaining(['anthropic-beta', 'chatgpt-account-id', 'openai-beta', 'originator', 'session_id']),
+      expect.arrayContaining([
+        'anthropic-beta',
+        'chatgpt-account-id',
+        'openai-beta',
+        'originator',
+        'session_id',
+      ]),
     );
     expect(dc?.headerDelete).toHaveLength(5);
   });
@@ -645,7 +665,11 @@ describe('oauth-token 路由分支', () => {
           agents: ['claude-code'],
           auth: { method: 'oauth', oauth: OAUTH },
           routing: { 'claude-code': routing },
-          models: { 'claude-code': [{ id: 'acme-1', name: 'A1', contextWindow: 1000, efforts: [], defaultEffort: null }] },
+          models: {
+            'claude-code': [
+              { id: 'acme-1', name: 'A1', contextWindow: 1000, efforts: [], defaultEffort: null },
+            ],
+          },
         },
       ],
     });
@@ -669,16 +693,38 @@ describe('setDiscoveredProviderModels additions-only merge', () => {
           source: 'builtin',
           agents: ['claude-code'],
           auth: { method: 'oauth', oauth: OAUTH },
-          routing: { 'claude-code': { upstream: 'https://api.acme.example', authStrategy: 'oauth-token' } },
+          routing: {
+            'claude-code': { upstream: 'https://api.acme.example', authStrategy: 'oauth-token' },
+          },
           models: {
-            'claude-code': [{ id: 'static-1', name: 'Static', contextWindow: 1000, efforts: [], defaultEffort: null }],
+            'claude-code': [
+              {
+                id: 'static-1',
+                name: 'Static',
+                contextWindow: 1000,
+                efforts: [],
+                defaultEffort: null,
+              },
+            ],
           },
         },
       ],
     });
     setDiscoveredProviderModels('acme', 'claude-code', [
-      { id: 'static-1', name: 'OVERRIDE-IGNORED', contextWindow: 1, efforts: [], defaultEffort: null },
-      { id: 'disc-1', name: 'Discovered', contextWindow: 200_000, efforts: [], defaultEffort: null },
+      {
+        id: 'static-1',
+        name: 'OVERRIDE-IGNORED',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'disc-1',
+        name: 'Discovered',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
     ]);
     const p = getActiveCatalog().providers.find((x) => x.id === 'acme')!;
     expect(p.models['claude-code']!.map((m) => m.name)).toEqual(['Static', 'Discovered']);
@@ -697,7 +743,9 @@ describe('setDiscoveredProviderModels additions-only merge', () => {
         source: 'user',
         agents: ['claude-code'],
         auth: { method: 'oauth', oauth: OAUTH },
-        routing: { 'claude-code': { upstream: 'https://api.my.example', authStrategy: 'oauth-token' } },
+        routing: {
+          'claude-code': { upstream: 'https://api.my.example', authStrategy: 'oauth-token' },
+        },
         models: { 'claude-code': [] },
       },
     ]);
@@ -751,5 +799,44 @@ describe('close() 回执路径(裸 done 消除)', () => {
     expect(body).toContain('data-cindy-oauth-result="error"');
     expect(body).toContain('<span class="badge"');
     expect(body).toContain('Acme');
+  });
+});
+
+describe('explicit provider metadata fields', () => {
+  it('preserves false, empty efforts and null defaults without inventing a supplied name', async () => {
+    const { parseModelsListResponse } = await import('../generic-oauth.js');
+    expect(
+      parseModelsListResponse({
+        data: [
+          {
+            id: 'model',
+            name: '',
+            mode: 'audio_transcription',
+            modalities: { input: ['audio'], output: ['text'] },
+            context_length: 64000,
+            max_output_tokens: 8000,
+            reasoning: { supportedEfforts: [], defaultEffort: null },
+            supports_fast_mode: false,
+            supports_image_input: false,
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: 'model',
+        name: 'model',
+        contextWindow: 64000,
+        discoveredMetadata: {
+          mode: 'audio_transcription',
+          modalities: { input: ['audio'], output: ['text'] },
+          contextWindow: 64000,
+          maxOutputTokens: 8000,
+          efforts: [],
+          defaultEffort: null,
+          supportsFastMode: false,
+          supportsImageInput: false,
+        },
+      },
+    ]);
   });
 });

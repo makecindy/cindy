@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BotDirectMessageView } from '../BotDirectMessageView';
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getThread: vi.fn(),
   navigate: vi.fn(),
   registerHeader: vi.fn(),
+  search: '',
 }));
 
 vi.mock('react-i18next', () => ({
@@ -16,11 +17,13 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('react-router-dom', () => ({
   useLocation: () => ({
+    search: mocks.search,
     state: { botDirectMessageReturnTo: '/bots/bot-a/session/a-main' },
   }),
   useNavigate: () => mocks.navigate,
   useParams: () => ({ botId: 'bot-a', threadId: 'dm-1' }),
 }));
+vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => 1,
   isDataOwnerGenerationCurrent: () => true,
@@ -40,6 +43,7 @@ vi.mock('../BotAvatar', () => ({
 }));
 
 beforeEach(() => {
+  mocks.search = '';
   mocks.navigate.mockClear();
   mocks.registerHeader.mockClear();
   mocks.getThread.mockReset();
@@ -113,4 +117,24 @@ describe('BotDirectMessageView', () => {
     expect(await screen.findByText('bots.directMessage.unavailable')).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
   });
+});
+
+
+it('loads a remote private thread and refreshes it after reconnect without using local profiles', async () => {
+  mocks.search = '?deviceId=home';
+  let status!: (state: any) => void;
+  const response = await mocks.getThread(); mocks.getThread.mockClear();
+  response.thread.botAName = 'Remote Cindy';
+  response.thread.messages[0].senderBotName = 'Remote Cindy';
+  const invoke = vi.fn(async () => response);
+  window.electronAPI.deviceLink = {
+    invoke, onRemotePush: () => () => {}, onStatusChanged: (fn: any) => { status = fn; return () => {}; },
+  } as any;
+  render(<BotDirectMessageView />);
+  await screen.findByText('Can you check this?');
+  expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-direct-message-thread:get', ['dm-1', 'bot-a']);
+  expect(mocks.getThread).not.toHaveBeenCalled();
+  expect(screen.getAllByText(/Remote Cindy/).length).toBeGreaterThan(0);
+  act(() => status({ status: 'online' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
 });

@@ -278,6 +278,7 @@ export interface AppServerHostOptions {
   remoteCompactionProviderId?: string;
   /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
   cindyRemoteCompactionProviderId?: string;
+  localCompactionProviderId?: string;
   /** Generic custom Provider identities and capabilities frozen into this process. */
   codexCustomProviderRoutes?: Array<{
     providerId: string;
@@ -457,6 +458,10 @@ export class AppServerHost {
   /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
   getRemoteCompactionProviderId(): string | null {
     return this.opts.remoteCompactionProviderId ?? null;
+  }
+
+  getLocalCompactionProviderId(): string | null {
+    return this.opts.localCompactionProviderId ?? null;
   }
 
   getCindyRemoteCompactionProviderId(): string | null {

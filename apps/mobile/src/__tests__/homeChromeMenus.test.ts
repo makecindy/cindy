@@ -4,6 +4,7 @@ import {
   buildHomeDisplayPullDownActions,
   buildHomeScopeMenuItems,
   buildHomeScopePullDownActions,
+  parseHomeScopePullDownAction,
   homeDisplayMenuPatch,
 } from "@/session/homeChromeMenus";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
@@ -25,6 +26,12 @@ function filter(
 }
 
 describe("home chrome menus", () => {
+  it("keeps cached offline and unknown computers without granting revoked access", () => {
+    const filters = ["offline", "unknown", "access_revoked", "remote_disabled"].map((state) =>
+      filter({ id: state, label: state, deviceId: state, available: false, state, sessionCount: 2 }));
+    expect(buildHomeScopeMenuItems(filters, "All").map((item) => item.key)).toEqual(["offline", "unknown"]);
+    expect(buildHomeScopePullDownActions(filters, "All").map((item) => item.id)).toEqual(["offline", "unknown"]);
+  });
   it("selects native device scopes directly without a management submenu", () => {
     const actions = buildHomeScopePullDownActions([
       filter({ id: "all", label: "全部任务" }),
@@ -37,6 +44,29 @@ describe("home chrome menus", () => {
       { id: "mac", title: "MacBook", state: "on" },
     ]);
     expect(actions.every((item) => !item.subactions)).toBe(true);
+  });
+
+  it("places host-advertised collections beside All Sessions", () => {
+    const actions = buildHomeScopePullDownActions(
+      [
+        filter({ id: "all", label: "全部任务", selected: true }),
+        filter({ id: "mac", label: "MacBook", deviceId: "d1" }),
+      ],
+      "所有任务",
+      [{ id: "teammates", title: "所有伙伴" }],
+    );
+
+    expect(actions.map((item) => item.id)).toEqual([
+      "all",
+      "scope.collection:teammates",
+      "mac",
+    ]);
+    expect(parseHomeScopePullDownAction("scope.collection:teammates")).toEqual({
+      kind: "collection",
+      collectionId: "teammates",
+    });
+    expect(actions[2]).toEqual({ id: "mac", title: "MacBook", state: "off" });
+    expect(parseHomeScopePullDownAction("mac")).toEqual({ kind: "select", filterId: "mac" });
   });
 
   it("lists all-conversations and available devices, marking the selected one", () => {

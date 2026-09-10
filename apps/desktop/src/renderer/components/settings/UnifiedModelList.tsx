@@ -104,11 +104,12 @@ const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v3';
 const LEGACY_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v2';
 const LEGACY_V1_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
 const DISABLED_GROUP_KEY = '__disabled';
-/** 「未启用」沉底区的折叠 key。默认折叠(见渲染处注释),与能力组同一档默认。 */
+/** 旧「未启用」折叠记录的 key；该分区现在始终展开。 */
 const HIDDEN_GROUP_KEY = '__hidden';
 const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'image',
   'video',
+  'audio',
   'tts',
   'stt',
   'realtime',
@@ -121,7 +122,7 @@ const DEFAULT_COLLAPSED_CATEGORIES = CAPABILITY_CATEGORIES;
 /** 某个折叠 key 未被用户显式改过时是否默认折叠(isCollapsed 与 toggleCollapsed 共用)。 */
 function defaultCollapsedFor(key: string): boolean {
   if (key === DISABLED_GROUP_KEY) return false;
-  if (key === HIDDEN_GROUP_KEY) return true;
+  if (key === HIDDEN_GROUP_KEY) return false;
   return DEFAULT_COLLAPSED_CATEGORIES.has(key.split(':', 1)[0] as ModelCategory);
 }
 
@@ -222,11 +223,22 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     name: string;
     disabled?: boolean;
     availability?: CatalogModel['availability'];
-    group: 'image' | 'video' | 'embedding';
+    group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime';
+    mode?: string;
     modalities?: CatalogModel['modalities'];
   }> = [
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
     ...(provider.videoModels ?? []).map((m) => ({ ...m, group: 'video' as const })),
+    ...(provider.audioModels ?? []).map((m) => ({
+      ...m,
+      group: (m.mode === 'audio_generation'
+        ? 'audio'
+        : m.mode === 'audio_transcription'
+          ? 'stt'
+          : m.mode === 'realtime'
+            ? 'realtime'
+            : 'tts') as 'audio' | 'stt' | 'realtime' | 'tts',
+    })),
     ...(provider.embeddingModels ?? []).map((m) => ({ ...m, group: 'embedding' as const })),
   ];
   for (const m of media) {
@@ -239,11 +251,12 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
       defaultEffort: null,
       group: m.group,
       mode:
-        m.group === 'image'
+        m.mode ??
+        (m.group === 'image'
           ? 'image_generation'
           : m.group === 'video'
             ? 'video_generation'
-            : 'embedding',
+            : 'embedding'),
       ...(m.modalities ? { modalities: m.modalities } : {}),
       ...(m.disabled === true ? { disabled: true } : {}),
       ...(m.availability !== undefined ? { availability: m.availability } : {}),
@@ -261,9 +274,9 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
 }
 
 /** 该行在指定 agent 下的可见性(不可用 → null)。 */
-function rowEnabled(providerId: string, row: UnionModelRow, agent: AgentKind): boolean | null {
+function rowEnabled(providerId: string, row: UnionModelRow, agent: AgentKind, userProvider: boolean): boolean | null {
   const m = row.byAgent[agent];
-  return m ? isModelEnabled(agent, providerId, m) : null;
+  return m && isAgentSelectableModel(m, { userProvider }) ? isModelEnabled(agent, providerId, m) : null;
 }
 
 /** 该行是否被停用(准入轴;单一写入口把全部 avail 一起写,任一端带标志即视为停用)。 */
@@ -287,8 +300,10 @@ export function hasPaymentRequiredDisabledRow(
  *  `userProvider` = 行来自用户自定义供应商 —— 自定义对话模型的未知 group 不吃 id
  *  启发式(`gpt-4o-audio-preview` 是合法对话模型,见 isAgentSelectableModel 注释)。 */
 export function isCapabilityRow(row: UnionModelRow, userProvider: boolean): boolean {
-  const rep = row.byAgent[row.avail[0]];
-  return !!rep && !isAgentSelectableModel(rep, { userProvider });
+  return row.avail.length > 0 && row.avail.every((agent) => {
+    const model = row.byAgent[agent];
+    return !model || !isAgentSelectableModel(model, { userProvider });
+  });
 }
 
 /** A normal list toggle enables recommended engines; compatibility engines remain opt-in. */
@@ -300,7 +315,7 @@ export function modelVisibilityTargets(
   if (!enabled)
     return row.avail.flatMap((agent) => {
       const model = row.byAgent[agent];
-      return model ? [{ agent, modelId: model.id }] : [];
+      return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
     });
   // Choosing a model is not consent to enable every harness. Advanced per-engine choices
   // stay where the user made them; an ordinary enable only needs one usable recommended route.
@@ -308,6 +323,7 @@ export function modelVisibilityTargets(
     const model = row.byAgent[agent];
     return (
       model &&
+      isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) &&
       !model.disabled &&
       model.status !== 'retired' &&
       model.availability !== 'requires_payment'
@@ -320,8 +336,8 @@ export function modelVisibilityTargets(
 }
 
 /** 普通模式的单开关显示值:任一可用 agent 开启即视为开(拨动才归一)。 */
-function rowAnyEnabled(providerId: string, row: UnionModelRow): boolean {
-  return row.avail.some((a) => rowEnabled(providerId, row, a) === true);
+function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boolean): boolean {
+  return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider) === true);
 }
 
 /** 该行全部 avail agent 的真实目录 id(桥接投影两端 id 不同,写停用要两端一起写)。 */
@@ -338,6 +354,22 @@ function rowModelIds(row: UnionModelRow): string[] {
 function rowCategory(row: UnionModelRow): ModelCategory {
   const rep = row.byAgent[row.avail[0]];
   return rep ? classifyModel(rep) : 'ungrouped';
+}
+
+export function managementKindsOfRow(row: UnionModelRow, userProvider: boolean): ManagementKind[] {
+  const kinds = new Set<ManagementKind>();
+  for (const agent of row.avail) {
+    const model = row.byAgent[agent];
+    if (!model) continue;
+    const category = classifyModel(model);
+    kinds.add(isAgentSelectableModel(model, { userProvider }) ? 'chat'
+      : CAPABILITY_CATEGORIES.has(category) ? category as ManagementKind : 'other');
+  }
+  return MANAGEMENT_KIND_ORDER.filter((kind) => kinds.has(kind));
+}
+
+export function managementKindOfRow(row: UnionModelRow, userProvider: boolean): ManagementKind {
+  return managementKindsOfRow(row, userProvider)[0] ?? 'other';
 }
 
 export function UnifiedModelList({
@@ -459,7 +491,7 @@ export function UnifiedModelList({
 
   // 折叠态:分组用 ModelCategory 作 key,两个沉底区用各自的常量 key。
   //   「已停用」默认**展开** —— 区里有东西说明是用户主动停的,找回路径要一眼可见;
-  //   「未启用」默认**折叠** —— 它通常比开着的模型多得多,展开会把启用清单顶出屏幕。
+  //   「未启用」始终展开，不再消费旧折叠记录。
   const isCollapsed = useCallback(
     (key: string) => collapsedMap[key] ?? defaultCollapsedFor(key),
     [collapsedMap],
@@ -496,13 +528,17 @@ export function UnifiedModelList({
     (row: UnionModelRow) => pendingDisabled[row.id] ?? isRowDisabled(row),
     [pendingDisabled],
   );
-  const rowState = useCallback((row: UnionModelRow) => modelManagementState(provider, {
-    ids: rowModelIds(row),
-    capability: isCapabilityRow(row, provider.source === 'user'),
-    savedSelected: rowAnyEnabled(provider.id, row),
-    disabled: rowDisabledEffective(row),
-    paymentRequired: isRowPaymentRequired(row),
-  }), [provider, rowDisabledEffective, visibilityVersion]);
+  const rowState = useCallback(
+    (row: UnionModelRow) =>
+      modelManagementState(provider, {
+        ids: rowModelIds(row),
+        capability: isCapabilityRow(row, provider.source === 'user'),
+        savedSelected: rowAnyEnabled(provider.id, row, provider.source === 'user'),
+        disabled: rowDisabledEffective(row),
+        paymentRequired: isRowPaymentRequired(row),
+      }),
+    [provider, rowDisabledEffective, visibilityVersion],
+  );
   const focusedRow = useMemo(() => {
     if (!focusModelId) return null;
     return (
@@ -561,8 +597,12 @@ export function UnifiedModelList({
   const deleteInstalledModel = useCallback(
     async (row: UnionModelRow) => {
       const ok = await confirm({
-        title: t('settings.providers.local.deleteModelConfirmTitle', { name: localizedModelName(row.name, t) }),
-        description: t('settings.providers.local.deleteModelConfirmBody', { name: localizedModelName(row.name, t) }),
+        title: t('settings.providers.local.deleteModelConfirmTitle', {
+          name: localizedModelName(row.name, t),
+        }),
+        description: t('settings.providers.local.deleteModelConfirmBody', {
+          name: localizedModelName(row.name, t),
+        }),
         confirmText: t('settings.providers.local.deleteModelConfirm'),
         cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
         confirmVariant: 'destructive',
@@ -570,7 +610,9 @@ export function UnifiedModelList({
       if (!ok) return;
       try {
         await window.electronAPI.maker.localModelDelete(row.id);
-        toast.success(t('settings.providers.local.deleteModelDone', { name: localizedModelName(row.name, t) }));
+        toast.success(
+          t('settings.providers.local.deleteModelDone', { name: localizedModelName(row.name, t) }),
+        );
       } catch {
         toast.error(t('settings.providers.local.deleteModelFailed'));
       }
@@ -620,9 +662,7 @@ export function UnifiedModelList({
    */
   const kindOf = useCallback(
     (row: UnionModelRow): ManagementKind => {
-      if (!isCapabilityRow(row, provider.source === 'user')) return 'chat';
-      const category = rowCategory(row);
-      return CAPABILITY_CATEGORIES.has(category) ? (category as ManagementKind) : 'other';
+      return managementKindOfRow(row, provider.source === 'user');
     },
     [provider.source],
   );
@@ -630,10 +670,10 @@ export function UnifiedModelList({
     const present = new Set<ModelCategory | 'chat'>();
     for (const row of unionRows) {
       const rep = row.byAgent[row.avail[0]];
-      if (rep) present.add(kindOf(row));
+      if (rep) for (const kind of managementKindsOfRow(row, provider.source === 'user')) present.add(kind);
     }
     return MANAGEMENT_KIND_ORDER.filter((kind) => present.has(kind));
-  }, [kindOf, unionRows]);
+  }, [kindOf, unionRows, provider.source]);
   const showKindFilter = presentCategories.length > 1;
 
   // 分组(仅未停用的行)+「已停用」分区(停用的行,跨分组沉底)。搜索两边都过滤。
@@ -645,7 +685,7 @@ export function UnifiedModelList({
       : unionRows;
     const matched =
       showKindFilter && kindFilter !== 'all'
-        ? searched.filter((r) => kindOf(r) === kindFilter)
+        ? searched.filter((r) => managementKindsOfRow(r, provider.source === 'user').includes(kindFilter as ManagementKind))
         : searched;
     const active = matched.filter((r) => !rowDisabledEffective(r));
     const disabled = matched.filter((r) => rowDisabledEffective(r));
@@ -673,7 +713,7 @@ export function UnifiedModelList({
     }
     return {
       groups: groupModelsForManagement(reps, managementView, (model) =>
-        kindOf(repByRow.get(model.id)!),
+        showKindFilter && kindFilter !== 'all' ? kindFilter as ManagementKind : kindOf(repByRow.get(model.id)!),
       ).map((g) => ({
         key: g.key,
         kind: g.kind,
@@ -730,11 +770,11 @@ export function UnifiedModelList({
 
   /** 开启只选推荐引擎；关闭清掉该行所有引擎的显示。写入始终使用各引擎真实模型 ID。 */
   const toggleRow = useCallback(
-    (row: UnionModelRow) => {
+    async (row: UnionModelRow) => {
       if (!selectionAvailable) return;
-      const next = !rowAnyEnabled(provider.id, row);
+      const next = !rowAnyEnabled(provider.id, row, provider.source === 'user');
       const targets = modelVisibilityTargets(provider, row, next);
-      if (setModelVisibilities(provider.id, targets, next) === false) {
+      if (await setModelVisibilities(provider.id, targets, next) === false) {
         showVisibilityWriteFailure();
       }
     },
@@ -743,17 +783,17 @@ export function UnifiedModelList({
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
   // models skips already selected rows, preserving every explicit advanced harness choice.
-  const handleBulk = (action: 'show' | 'hide' | 'reset') => {
+  const handleBulk = async (action: 'show' | 'hide' | 'reset') => {
     if (!selectionAvailable) return;
     const next = action === 'show';
     const rows = next
-      ? selectableRows.filter((row) => !rowAnyEnabled(provider.id, row))
+      ? selectableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
       : selectableRows;
     const targets = rows.flatMap((row) => modelVisibilityTargets(provider, row, next));
     const success =
       action === 'reset'
-        ? resetModelVisibilities(provider.id, targets)
-        : setModelVisibilities(provider.id, targets, next);
+        ? await resetModelVisibilities(provider.id, targets)
+        : await setModelVisibilities(provider.id, targets, next);
     if (!success) showVisibilityWriteFailure();
   };
 
@@ -768,7 +808,9 @@ export function UnifiedModelList({
     <Tip text={t('settings.providers.models.advanced.open')}>
       <button
         type="button"
-        aria-label={t('settings.providers.models.advanced.openAria', { name: localizedModelName(row.name, t) })}
+        aria-label={t('settings.providers.models.advanced.openAria', {
+          name: localizedModelName(row.name, t),
+        })}
         onClick={() => openAdvanced(row)}
         className={cn(
           'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
@@ -1168,49 +1210,26 @@ export function UnifiedModelList({
             })
           )}
 
-          {/* 「未启用」分区:显示轴关闭的对话行跨分组沉底。与「已停用」是两回事 ——
-              这里的行只是不出现在模型选择器里,仍可被显式点名与自动兜底命中;下面那个
-              区是准入关。**默认折叠**:它通常比开着的模型多得多(一个来源几十个模型、
-              用户只开几个),默认展开会把刚看完的启用清单直接顶出屏幕。搜索时强制展开。 */}
-          {hiddenRows.length > 0 &&
-            (() => {
-              const collapsed = !query.trim() && isCollapsed(HIDDEN_GROUP_KEY);
-              return (
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-2 pb-0.5">
-                    <button
-                      type="button"
-                      onClick={() => toggleCollapsed(HIDDEN_GROUP_KEY)}
-                      aria-expanded={!collapsed}
-                      className="flex items-center gap-1 px-2 text-left transition-opacity hover:opacity-80"
-                    >
-                      <span
-                        className="inline-flex transition-transform duration-150"
-                        style={{
-                          color: 'var(--text-tertiary)',
-                          transform: collapsed ? 'rotate(-90deg)' : 'none',
-                        }}
-                      >
-                        <ChevronDown size={12} />
-                      </span>
-                      <span
-                        className="text-11 font-medium uppercase"
-                        style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
-                      >
-                        {t('settings.providers.models.hiddenGroup')}
-                      </span>
-                      <span
-                        className="text-11 tabular-nums"
-                        style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
-                      >
-                        {hiddenRows.length}
-                      </span>
-                    </button>
-                  </div>
-                  {!collapsed && hiddenRows.map((row) => renderModelRow(row))}
-                </div>
-              );
-            })()}
+          {/* 未启用型号保持展开，旧折叠偏好不再隐藏这些行。 */}
+          {hiddenRows.length > 0 && (
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1 px-2 pb-0.5">
+                <span
+                  className="text-11 font-medium uppercase"
+                  style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+                >
+                  {t('settings.providers.models.hiddenGroup')}
+                </span>
+                <span
+                  className="text-11 tabular-nums"
+                  style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
+                >
+                  {hiddenRows.length}
+                </span>
+              </div>
+              {hiddenRows.map((row) => renderModelRow(row))}
+            </div>
+          )}
 
           {/* 「已停用」分区:停用的行跨分组沉底;默认展开(区里有东西 = 用户主动停的,
               找回路径要一眼可见),搜索时强制展开。行内「启用此模型」即飞回原分组;

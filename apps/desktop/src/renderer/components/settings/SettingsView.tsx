@@ -27,6 +27,7 @@ import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
 import { AboutSection } from './AboutSection';
+import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
 import { CompactionSection } from './CompactionSection';
@@ -45,6 +46,7 @@ import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
+import { CindyMakeSection } from './CindyMakeSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
@@ -621,6 +623,16 @@ export function SettingsView() {
               </div>
             )}
 
+            {activeTab === 'cindy-make' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-cindy-make"
+                aria-labelledby="settings-tab-cindy-make"
+              >
+                <CindyMakeSection key={`cindy-make:${mode}:${dataOwnerId ?? 'none'}`} />
+              </div>
+            )}
+
             {activeTab === 'help' && (
               <div role="tabpanel" id="settings-panel-help" aria-labelledby="settings-tab-help">
                 <section aria-label={t('settings.sections.help')}>
@@ -633,6 +645,18 @@ export function SettingsView() {
               <div role="tabpanel" id="settings-panel-about" aria-labelledby="settings-tab-about">
                 <section aria-label={t('settings.sections.about')}>
                   <AboutSection />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'storage' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-storage"
+                aria-labelledby="settings-tab-storage"
+              >
+                <section aria-label={t('settings.about.storage.title')}>
+                  <StorageManagementCard />
                 </section>
               </div>
             )}

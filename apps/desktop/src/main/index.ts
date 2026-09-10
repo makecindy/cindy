@@ -1,5 +1,6 @@
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
+import { ensureMacPackageManagerPath } from './agentToolPath.js';
 import { app } from 'electron';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -38,6 +39,7 @@ initLogger();
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
+ensureMacPackageManagerPath();
 log.debug(`[fix-path] after PATH=${process.env.PATH ?? ''}`);
 
 // Guarantee /usr/sbin:/sbin are on PATH before anything resolves the device id.

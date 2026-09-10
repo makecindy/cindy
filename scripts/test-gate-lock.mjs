@@ -11,7 +11,7 @@ const LOCK_PROTOCOL = "cindy-test-workspaces-lock-v1";
 const PROBE_TIMEOUT_MS = 1_000;
 const RETRY_DELAY_MS = 500;
 const WAIT_REPORT_INTERVAL_MS = 60_000;
-const HEAVY_TEST_TIERS = new Set(["unit", "db", "git-integration"]);
+const HEAVY_TEST_TIERS = new Set(["unit", "db", "git-integration", "integration", "e2e"]);
 const BIND_DENIED_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 
 export const TEST_GATE_LOCK_TIMEOUT_EXIT_CODE = 75;

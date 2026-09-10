@@ -9,6 +9,11 @@ import path from 'node:path';
 
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
 vi.mock('../grok-oauth-login.js', () => ({
   hasGrokOAuthLogin: () => true,
 }));
@@ -41,9 +46,62 @@ import {
   resolvePiCindyGatewayModelSpec,
   type PiBundledModelInfo,
 } from '../pi-host.js';
-import { setActiveCatalog, setXdGatewayModels } from '../active-catalog.js';
+import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
+
+it.each([
+  ['anthropic', 'claude', 'anthropic-messages'],
+  ['xai', 'xai', 'openai-responses'],
+] as const)('keeps independent %s native Pi routes bound to their account', (brand, native, api) => {
+  const original = BUNDLED_CATALOG.providers.find(provider => provider.id === brand)!;
+  const id = `${brand}-second`;
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
+    { ...original, id, source: 'user', auth: { method: 'oauth', native } },
+  ] };
+  const result = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:18765');
+  const account = result.providers.find(provider => provider.sourceProviderId === id)!;
+  expect(account.id).not.toBe(brand);
+  expect(account.inheritModels).toBe(false);
+  expect(account.api).toBe(api);
+  expect(account.headers).toMatchObject({ 'x-cindy-pi-provider-id': id });
+  expect(account.models.length).toBeGreaterThan(0);
+});
+
+it('forwards remote Grok through the selected account without exporting its token', async () => {
+  const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'xai')!;
+  setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
+    { ...original, id: 'xai-second', source: 'user', auth: { method: 'oauth', native: 'xai' } },
+  ] });
+  try {
+    const result = await buildXaiPiNativeProvider(undefined, false, true, 'xai-second');
+    expect(result.providers[0]).toMatchObject({
+      sourceProviderId: 'xai-second',
+      headers: { 'x-cindy-pi-provider-id': 'xai-second' },
+      hostProxyForward: { remotePort: PI_XAI_COMPAT_FORWARD_PORT },
+    });
+    expect(result.providers[0]?.id).not.toBe('xai');
+    expect(Object.values(result.env)).toEqual(['cindy-pi-provider-auth-placeholder']);
+  } finally { setActiveCatalog(BUNDLED_CATALOG); }
+});
+
+it('materializes a separate native ChatGPT provider for each independent account', () => {
+  const original = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai')!;
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
+    { ...original, id: 'openai-second', name: 'Second account', source: 'user', auth: { method: 'oauth', native: 'codex' } },
+  ] };
+  const result = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:18765');
+  const account = result.providers.find((provider) => provider.sourceProviderId === 'openai-second')!;
+  const builtin = result.providers.find((provider) => provider.sourceProviderId === 'openai')!;
+  expect(account.id).not.toBe(builtin.id);
+  expect(account.inheritModels).toBe(false);
+  expect(account.api).toBe('openai-codex-responses');
+  expect(account.headers).toMatchObject({ 'x-cindy-pi-provider-id': 'openai-second' });
+  expect(account.models.length).toBeGreaterThan(0);
+  expect(account.models.every((model) => model.api === 'openai-codex-responses')).toBe(true);
+  expect(account.models.map((model) => model.id)).toEqual(builtin.models.map((model) => model.id));
+});
 
 it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
   'does not pass a misleading Gateway Responses hint to Pi for %s',
@@ -80,7 +138,49 @@ const piBundledModel = (
 
 afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
+  setDiscoveredCodexModels([]);
   setXdGatewayModels([]);
+});
+
+describe('ChatGPT image capability authority (#2674)', () => {
+  it.each(['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra'])(
+    'keeps %s visual through the independent Pi catalog despite text-only Codex discovery',
+    (id) => {
+      setActiveCatalog(BUNDLED_CATALOG);
+      setDiscoveredCodexModels([{
+        id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
+        supportsImageInput: false,
+      }]);
+      const catalog = getActiveCatalog();
+      expect(deriveAvailableModels(catalog, 'pi').find((model) => model.id === `chatgpt/${id}`))
+        .toMatchObject({ supportsImageInput: true });
+      const native = piBundledModel(id, 'openai-codex-responses', { input: ['text', 'image'] });
+      for (const probe of [undefined, new Map([['openai-codex', new Map([[id, native]])]])]) {
+        const provider = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567/', probe)
+          .providers.find((candidate) => candidate.id === 'openai-codex');
+        expect(provider?.models.find((model) => model.id === `chatgpt/${id}`))
+          .toMatchObject({ wireId: id, api: 'openai-codex-responses', input: ['text', 'image'] });
+      }
+    },
+  );
+
+  it.each([true, false, undefined])(
+    'preserves explicit image capability %s with and without a native probe',
+    (supportsImageInput) => {
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      const id = 'gpt-5.6-sol';
+      catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [{
+        id: `chatgpt/${id}`, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
+        supportsImageInput,
+      }];
+      const native = piBundledModel(id, 'openai-codex-responses', { input: ['text', 'image'] });
+      for (const probe of [undefined, new Map([['openai-codex', new Map([[id, native]])]])]) {
+        const model = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567/', probe)
+          .providers.find((provider) => provider.id === 'openai-codex')?.models[0];
+        expect(model?.input).toEqual(supportsImageInput === false ? ['text'] : ['text', 'image']);
+      }
+    },
+  );
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
@@ -771,7 +871,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
-  it('overlays host subscriptions onto PI native providers and keeps piApi sparse', () => {
+  it('materializes host subscription metadata with concrete native transports', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const anthropic = catalog.providers.find((provider) => provider.id === 'anthropic')!;
     const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
@@ -853,8 +953,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       sourceProviderId: 'anthropic',
       baseUrl: 'http://127.0.0.1:4567/',
       inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_ANTHROPIC_PROXY_KEY',
       models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
     });
+    // Pi 按 `sk-ant-oat` 前缀识别 OAuth 形态,才会自己拼 claude-code/oauth/server-side-fallback
+    // 等 beta 头与 Claude Code 身份;占位值不能是真 token 形态之外的普通字串。
+    expect(env.CINDY_PI_ANTHROPIC_PROXY_KEY).toContain('sk-ant-oat');
     expect(providers[1]).toMatchObject({
       sourceProviderId: 'openai',
       baseUrl: 'http://127.0.0.1:4567/',
@@ -886,7 +990,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         { id: 'xai/grok-4.20', wireId: 'grok-4.20', api: 'openai-responses' },
       ],
     });
-    expect(providers[2]?.models[0]?.api).toBeUndefined();
+    expect(providers[2]?.models[0]?.api).toBe('openai-responses');
     const proxyJwt = env[providers[1]!.apiKeyEnvVar!];
     expect(proxyJwt).toMatch(/^[^.]+\.[^.]+\.$/);
     expect(proxyJwt).not.toContain('Bearer');
@@ -1441,8 +1545,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         wireId: 'grok-4.6',
         api: 'openai-responses',
         catalogAddition: true,
-        reasoning: true,
-        thinkingLevelMap: expect.objectContaining({ xhigh: 'xhigh' }),
+        reasoning: false,
+        thinkingLevelMap: expect.objectContaining({ xhigh: null }),
         compat: expect.objectContaining({ supportsReasoningEffort: true }),
       }),
     ]);
@@ -1452,7 +1556,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
-  it('does not rewrite bundled xAI protocols when the PI probe is unavailable', () => {
+  it('uses the matching official transport fallback when the PI probe is unavailable', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
     xai.models.pi = [
@@ -1482,10 +1586,10 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const grok46 = provider?.models.find((model) => model.wireId === 'grok-4.6');
     expect(grok43?.id).toBe('grok-4.3');
     expect(grok43?.catalogAddition).toBeUndefined();
-    expect(grok43?.api).toBeUndefined();
+    expect(grok43?.api).toBe('openai-responses');
     expect(grok46?.id).toBe('grok-4.6');
     expect(grok46?.catalogAddition).toBeUndefined();
-    expect(grok46?.api).toBeUndefined();
+    expect(grok46?.api).toBe('openai-responses');
   });
 
   it('keeps missing daily rows while respecting models returned by a partial PI probe', () => {
@@ -1521,7 +1625,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       expect.objectContaining({ wireId: 'grok-known' }),
       expect.objectContaining({ wireId: 'grok-added', api: 'openai-responses' }),
     ]);
-    expect(provider?.models[0]?.api).toBeUndefined();
+    expect(provider?.models[0]?.api).toBe('openai-responses');
   });
 
   it('drops PI bundled serializer metadata when a daily annotation corrects the protocol', () => {
@@ -1831,7 +1935,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     ]);
   });
 
-  it('uses matched bundled reasoning true/false and explicit config when metadata is absent', () => {
+  it('explicit user reasoning overrides native metadata while missing fields inherit', () => {
     const baseUrl = 'https://same-origin.example/v1';
     const bundled = new Map([
       [
@@ -1892,14 +1996,14 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
     expect(providers[0]?.models[0]).toMatchObject({
       id: 'bundled-reasoning-on',
-      reasoning: true,
-      thinkingLevelMap: { low: 'low', high: null },
+      reasoning: false,
     });
     expect(providers[0]?.models[1]).toMatchObject({
       id: 'bundled-reasoning-off',
-      reasoning: false,
+      reasoning: true,
+      thinkingLevelMap: { high: 'high' },
     });
-    expect(providers[0]?.models[1]).not.toHaveProperty('thinkingLevelMap');
+    expect(providers[0]?.models[0]).not.toHaveProperty('thinkingLevelMap');
     expect(providers[0]?.models[2]).toMatchObject({
       id: 'configured-only',
       reasoning: true,
@@ -2342,4 +2446,54 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       compat: { supportsDeveloperRole: false },
     });
   });
+});
+
+
+describe('server metadata reaches every native Pi transport', () => {
+  it.each([
+    ['openai', 'openai-codex', 'chatgpt/gpt-fixture', 'gpt-fixture', 'openai-responses', 'openai-codex-responses'],
+    ['anthropic', 'anthropic', 'claude-fixture', 'claude-fixture', 'anthropic-messages', 'anthropic-messages'],
+    ['xai', 'xai', 'grok-fixture', 'grok-fixture', 'openai-responses', 'openai-responses'],
+  ] as const)('materializes %s declarations with and without a native SDK entry',
+    (providerId, nativeId, id, wireId, piApi, api) => {
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      catalog.providers.find(p => p.id === providerId)!.models.pi = [{
+        id, name: 'Server name', contextWindow: 123456, maxOutput: 12345,
+        efforts: ['low'], defaultEffort: 'low', supportsImageInput: false, piApi,
+        cost: { input: 7, output: 8, cacheRead: 1 },
+      }];
+      for (const known of [false, true]) {
+        const native = piBundledModel(wireId, api, {
+          name: 'Old SDK name', contextWindow: 99999, maxTokens: 9999,
+          input: ['text', 'image'], thinkingLevelMap: { low: 'medium' },
+          compat: { supportsStrictTools: true },
+        });
+        const result = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567',
+          new Map([[nativeId, new Map(known ? [[wireId, native]] : [])]]));
+        const model = result.providers.find(p => p.id === nativeId)!.models[0]!;
+        expect(model).toMatchObject({ id, wireId, api, name: 'Server name',
+          contextWindow: 123456, maxTokens: 12345, input: ['text'], reasoning: true,
+          thinkingLevelMap: { low: known ? 'medium' : 'low', high: null },
+          cost: { input: 7, output: 8, cacheRead: 1 },
+        });
+        if (known) expect(model.compat).toEqual(native.compat);
+      }
+    });
+});
+
+
+it('uses the resolved BYOM catalog without borrowing its route or credentials', () => {
+  const cfg: Cfg = { id: 'my-api', name: 'My API', auth: { method: 'apiKey' },
+    runtimes: { pi: piRuntime({ baseUrl: 'https://user.example/v1', models: [{ id: 'same-model' }] }) } };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [{ ...BUNDLED_CATALOG.providers[0]!,
+    id: cfg.id, models: { pi: [{ id: 'same-model', name: 'Resolved name', contextWindow: 123456,
+      maxOutput: 12345, efforts: ['low'], defaultEffort: 'low', supportsImageInput: true,
+      cost: { input: 5, output: 6 }, route: { baseUrl: 'https://must-not-use.example', wireProtocol: 'openai-responses' },
+    }] } }] };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog);
+  expect(result.providers[0]).toMatchObject({ baseUrl: 'https://user.example/v1', api: 'openai-completions',
+    models: [expect.objectContaining({ name: 'Resolved name', contextWindow: 123456, maxTokens: 12345,
+      reasoning: true, input: ['text', 'image'], cost: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0 } })] });
+  expect(result.providers[0]!.models[0]!.baseUrl).toBeUndefined();
+  expect(result.env[result.providers[0]!.apiKeyEnvVar!]).toBe('fixture-key');
 });

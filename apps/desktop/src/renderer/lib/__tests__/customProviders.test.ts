@@ -278,15 +278,17 @@ describe('PI custom-provider protocol overrides', () => {
   ] as const)(
     'drops a stale Messages route when switching the model override to %s',
     (piApi, expected) => {
-      const models: ProviderRuntimeModelConfig[] = [{
-        id: 'routed-model',
-        name: 'Routed model',
-        piApi: 'anthropic-messages',
-        route: {
-          baseUrl: 'https://provider.example/anthropic',
-          wireProtocol: 'anthropic-messages',
+      const models: ProviderRuntimeModelConfig[] = [
+        {
+          id: 'routed-model',
+          name: 'Routed model',
+          piApi: 'anthropic-messages',
+          route: {
+            baseUrl: 'https://provider.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+          },
         },
-      }];
+      ];
 
       expect(setCustomProviderModelPiApi(models, 0, piApi)[0]).toEqual({
         id: 'routed-model',
@@ -348,7 +350,9 @@ describe('Pi custom-provider reasoning controls', () => {
         reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
       },
     ]);
-    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(models);
+    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(
+      models.map((model) => ({ ...model, reasoning: false })),
+    );
   });
 
   it('keeps canonical order and refuses to remove the final supported effort', () => {
@@ -519,6 +523,20 @@ describe('providerViewToCustomProviderConfig Pi catalog metadata', () => {
 });
 
 describe('providerViewToCustomProviderConfig', () => {
+  it.each(['claude', 'xai'] as const)('preserves the %s account binding when renaming an all-Harness view', native => {
+    const id = `${native}-second`;
+    const config = providerViewToCustomProviderConfig({
+      id, name: 'My account', source: 'user', connected: true,
+      auth: { method: 'oauth', native }, agents: ['claude-code', 'codex', 'pi'], models: {}, routing: {},
+    });
+    const agent = native === 'claude' ? 'claude-code' : 'codex';
+    expect(config.id).toBe(id);
+    expect(config.name).toBe('My account');
+    expect(config.auth).toEqual({ method: 'oauth', native });
+    expect(Object.keys(config.runtimes)).toEqual([agent]);
+    expect(config.runtimes[agent]?.models).toEqual([]);
+    expect(config.runtimes[agent]?.baseUrl).toBe(native === 'claude' ? 'https://api.anthropic.com' : 'https://api.x.ai/v1');
+  });
   it('restores the stored id for a legacy custom xai runtime projection', () => {
     const provider = {
       id: 'custom:xai',
@@ -769,8 +787,8 @@ describe('appendDiscoveredCustomProviderModels', () => {
     );
     expect(result).toEqual({
       models: [
-        { id: 'kept', name: 'Kept' },
-        { id: 'new', name: 'New', defaultEnabled: false },
+        { id: 'kept', name: 'Kept', nameExplicit: true, discoveredMetadata: { name: 'New name' } },
+        { id: 'new', name: 'New', defaultEnabled: false, discoveredMetadata: { name: 'New' } },
       ],
       addedIds: ['new'],
     });
@@ -786,10 +804,15 @@ describe('appendDiscoveredCustomProviderModels', () => {
       ],
     );
     expect(result.models).toEqual([
-      { id: 'big', name: 'Big', contextWindow: 1_000_000, defaultEnabled: false },
-      { id: 'plain', name: 'Plain', defaultEnabled: false },
+      {
+        id: 'big',
+        name: 'Big',
+        discoveredMetadata: { name: 'Big', contextWindow: 1_000_000 },
+        defaultEnabled: false,
+      },
+      { id: 'plain', name: 'Plain', discoveredMetadata: { name: 'Plain' }, defaultEnabled: false },
       // 非法值不落盘,回落保守默认
-      { id: 'bogus', name: 'Bogus', defaultEnabled: false },
+      { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' }, defaultEnabled: false },
     ]);
   });
 });

@@ -129,6 +129,11 @@ export interface IOSSimulatorAccessRequestResult {
   granted: boolean;
 }
 
+/** Owner-scoped presentation preference. Simulator lifecycle and tool access are unaffected. */
+export interface IOSSimulatorPreferences {
+  autoOpenEmbeddedPanel: boolean;
+}
+
 /**
  * Renderer-owned simulator actions. Agent-only build, install, URL, push, media,
  * and diagnostic tools must stay behind the MCP approval/control boundary.

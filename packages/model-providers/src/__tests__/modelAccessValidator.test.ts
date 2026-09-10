@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 
 import {
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
@@ -15,27 +15,27 @@ import {
   parseModelRegistry,
   type ListModelsResponse,
   type ModelRegistry,
-} from '../index.js';
+} from "../index.js";
 
 const VALID_RESPONSE: ListModelsResponse = {
   schemaVersion: MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   models: [
     {
-      id: 'example-chat-model',
-      mode: 'chat',
-      currency: 'CNY',
-      agents: ['claude-code', 'codex'],
-      newSessionDefault: ['claude-code', 'codex'],
-      name: 'Example Chat Model',
-      icon: 'example',
+      id: "example-chat-model",
+      mode: "chat",
+      currency: "CNY",
+      agents: ["claude-code", "codex"],
+      newSessionDefault: ["claude-code", "codex"],
+      name: "Example Chat Model",
+      icon: "example",
       contextWindow: 200_000,
-      modalities: { input: ['text', 'image'], output: ['text'] },
+      modalities: { input: ["text", "image"], output: ["text"] },
       inputCostPerToken: 0.000_001,
       outputCostPerToken: 0.000_002,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium',
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
       perAgent: {
-        'claude-code': { supportsFastMode: false },
+        "claude-code": { supportsFastMode: false },
       },
       tieredPricing: [
         {
@@ -55,11 +55,11 @@ const VALID_V3_RESPONSE: ListModelsResponse = {
     {
       ...VALID_RESPONSE.models[0]!,
       perAgent: {
-        'claude-code': {
+        "claude-code": {
           supportsFastMode: false,
-          wireProtocol: 'anthropic-messages',
+          wireProtocol: "anthropic-messages",
         },
-        codex: { wireProtocol: 'openai-responses' },
+        codex: { wireProtocol: "openai-responses" },
       },
     },
   ],
@@ -72,43 +72,43 @@ const VALID_V4_RESPONSE: ListModelsResponse = {
 
 const VALID_V5_RESPONSE: ListModelsResponse = {
   schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
-  accountTier: 'free',
+  accountTier: "free",
   models: VALID_V4_RESPONSE.models.map((model) => ({
     ...model,
-    availability: 'requires_payment',
+    availability: "requires_payment",
   })),
 };
 
 const VALID_REGISTRY: ModelRegistry = {
   schemaVersion: MODEL_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-07-31T00:00:00.000Z',
+  updatedAt: "2026-07-31T00:00:00.000Z",
   models: [
     {
-      id: 'example/model',
-      name: 'Example Model',
-      status: 'active',
+      id: "example/model",
+      name: "Example Model",
+      status: "active",
       contextWindow: 200_000,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium',
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
       routes: [
         {
-          providerId: 'example',
-          modelId: 'example-model',
-          agents: ['claude-code', 'codex'],
+          providerId: "example",
+          modelId: "example-model",
+          agents: ["claude-code", "codex"],
           referencePrices: [
             {
-              currency: 'USD',
-              variant: 'standard',
+              currency: "USD",
+              variant: "standard",
               inputPerMtok: 1,
               outputPerMtok: 5,
               cacheReadPerMtok: 0.1,
               minInputTokens: 0,
               maxInputTokens: 200_000,
-              effectiveFrom: '2026-07-01',
+              effectiveFrom: "2026-07-01",
               source: {
-                kind: 'provider-official',
-                url: 'https://example.com/pricing',
-                verifiedAt: '2026-07-31',
+                kind: "provider-official",
+                url: "https://example.com/pricing",
+                verifiedAt: "2026-07-31",
               },
             },
           ],
@@ -121,52 +121,61 @@ const VALID_REGISTRY: ModelRegistry = {
 function expectReject(value: unknown, path: string): void {
   const result = parseListModelsResponse(value);
   expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('unreachable');
+  if (result.ok) throw new Error("unreachable");
   expect(result.error).toContain(path);
 }
 
-describe('model access catalog contract', () => {
-  it('round-trips the versioned model catalog with its declared currency', () => {
+describe("model access catalog contract", () => {
+  it("round-trips the versioned model catalog with its declared currency", () => {
     const wire = JSON.parse(JSON.stringify(VALID_RESPONSE));
     const result = parseListModelsResponse(wire);
     expect(result).toEqual({ ok: true, value: VALID_RESPONSE });
-    expect(MODEL_ACCESS_MODELS_PATH).toBe('/api/model-access/models');
+    expect(MODEL_ACCESS_MODELS_PATH).toBe("/api/model-access/models");
   });
 
-  it('parses strict v5 availability and account tier fields', () => {
+  it("parses strict v5 availability and account tier fields", () => {
     expect(parseListModelsResponse(VALID_V5_RESPONSE)).toEqual({
       ok: true,
       value: VALID_V5_RESPONSE,
     });
-    expectReject({ ...VALID_V5_RESPONSE, accountTier: 'vip' }, 'response.accountTier');
+    expectReject(
+      { ...VALID_V5_RESPONSE, accountTier: "vip" },
+      "response.accountTier",
+    );
     expectReject(
       {
         ...VALID_V5_RESPONSE,
-        models: [{ ...VALID_V5_RESPONSE.models[0]!, availability: 'unavailable' }],
+        models: [
+          { ...VALID_V5_RESPONSE.models[0]!, availability: "unavailable" },
+        ],
       },
-      'response.models[0].availability',
+      "response.models[0].availability",
     );
   });
 
-  it('continues to parse v1 responses, while v1 rejects the v2-only default field', () => {
-    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+  it("continues to parse v1 responses, while v1 rejects the v2-only default field", () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } =
+      VALID_RESPONSE.models[0]!;
     const legacy = {
       ...VALID_RESPONSE,
       schemaVersion: MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
       models: [legacyModel],
     };
-    expect(parseListModelsResponse(JSON.parse(JSON.stringify(legacy))).ok).toBe(true);
+    expect(parseListModelsResponse(JSON.parse(JSON.stringify(legacy))).ok).toBe(
+      true,
+    );
     expectReject(
       {
         ...legacy,
-        models: [{ ...legacyModel, newSessionDefault: ['claude-code'] }],
+        models: [{ ...legacyModel, newSessionDefault: ["claude-code"] }],
       },
-      'response.models[0].newSessionDefault',
+      "response.models[0].newSessionDefault",
     );
   });
 
-  it('enforces the complete per-version ListModels allowlist', () => {
-    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+  it("enforces the complete per-version ListModels allowlist", () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } =
+      VALID_RESPONSE.models[0]!;
     const versions = [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
       [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
@@ -178,14 +187,20 @@ describe('model access catalog contract', () => {
       const response = { schemaVersion, models: [model] };
       const tier = model.tieredPricing![0]!;
       const cases: [unknown, string][] = [
-        [{ ...response, producerRevision: 'stale-v2' }, 'response.producerRevision'],
-        [{ ...response, models: [{ ...model, family: 'example' }] }, 'response.models[0].family'],
+        [
+          { ...response, producerRevision: "stale-v2" },
+          "response.producerRevision",
+        ],
+        [
+          { ...response, models: [{ ...model, family: "example" }] },
+          "response.models[0].family",
+        ],
         [
           {
             ...response,
-            models: [{ ...model, provenance: { source: 'stale-v2' } }],
+            models: [{ ...model, provenance: { source: "stale-v2" } }],
           },
-          'response.models[0].provenance',
+          "response.models[0].provenance",
         ],
         [
           {
@@ -194,12 +209,12 @@ describe('model access catalog contract', () => {
               {
                 ...model,
                 perAgent: {
-                  'claude-code': { supportsFastMode: false, verified: true },
+                  "claude-code": { supportsFastMode: false, verified: true },
                 },
               },
             ],
           },
-          'response.models[0].perAgent.claude-code.verified',
+          "response.models[0].perAgent.claude-code.verified",
         ],
         [
           {
@@ -207,11 +222,11 @@ describe('model access catalog contract', () => {
             models: [
               {
                 ...model,
-                tieredPricing: [{ ...tier, provenance: 'stale-v2' }],
+                tieredPricing: [{ ...tier, provenance: "stale-v2" }],
               },
             ],
           },
-          'response.models[0].tieredPricing[0].provenance',
+          "response.models[0].tieredPricing[0].provenance",
         ],
         [
           {
@@ -219,11 +234,11 @@ describe('model access catalog contract', () => {
             models: [
               {
                 ...model,
-                modalities: { ...model.modalities!, source: 'stale-v2' },
+                modalities: { ...model.modalities!, source: "stale-v2" },
               },
             ],
           },
-          'response.models[0].modalities.source',
+          "response.models[0].modalities.source",
         ],
       ];
 
@@ -231,14 +246,17 @@ describe('model access catalog contract', () => {
     }
   });
 
-  it('rejects malformed v2 newSessionDefault values', () => {
+  it("rejects malformed v2 newSessionDefault values", () => {
     const withDefault = (value: unknown) => ({
       ...VALID_RESPONSE,
       models: [{ ...VALID_RESPONSE.models[0], newSessionDefault: value }],
     });
-    expectReject(withDefault([]), 'response.models[0].newSessionDefault');
-    expectReject(withDefault(['codex', 'codex']), 'response.models[0].newSessionDefault');
-    expect(parseListModelsResponse(withDefault(['pi']))).toMatchObject({
+    expectReject(withDefault([]), "response.models[0].newSessionDefault");
+    expectReject(
+      withDefault(["codex", "codex"]),
+      "response.models[0].newSessionDefault",
+    );
+    expect(parseListModelsResponse(withDefault(["pi"]))).toMatchObject({
       ok: true,
     });
     expectReject(
@@ -247,66 +265,85 @@ describe('model access catalog contract', () => {
         models: [
           {
             ...VALID_RESPONSE.models[0],
-            agents: ['claude-code'],
-            newSessionDefault: ['codex'],
+            agents: ["claude-code"],
+            newSessionDefault: ["codex"],
           },
         ],
       },
-      'response.models[0].newSessionDefault',
+      "response.models[0].newSessionDefault",
     );
   });
 
-  it('validates existing mode and normalized modalities in both schema versions', () => {
-    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+  it("validates existing mode and normalized modalities in both schema versions", () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } =
+      VALID_RESPONSE.models[0]!;
     for (const [schemaVersion, model] of [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
       [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
       [MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
       [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V4_RESPONSE.models[0]!],
     ] as const) {
-      expect(parseListModelsResponse({ schemaVersion, models: [model] }).ok).toBe(true);
-      expectReject({ schemaVersion, models: [{ ...model, mode: 42 }] }, 'response.models[0].mode');
+      expect(
+        parseListModelsResponse({ schemaVersion, models: [model] }).ok,
+      ).toBe(true);
       expectReject(
-        { schemaVersion, models: [{ ...model, icon: '   ' }] },
-        'response.models[0].icon',
+        { schemaVersion, models: [{ ...model, mode: 42 }] },
+        "response.models[0].mode",
       );
-      expectReject({ schemaVersion, models: [{ ...model, icon: 42 }] }, 'response.models[0].icon');
+      expectReject(
+        { schemaVersion, models: [{ ...model, icon: "   " }] },
+        "response.models[0].icon",
+      );
+      expectReject(
+        { schemaVersion, models: [{ ...model, icon: 42 }] },
+        "response.models[0].icon",
+      );
       expectReject(
         {
           schemaVersion,
-          models: [{ ...model, modalities: { input: ['text', 42], output: ['text'] } }],
+          models: [
+            { ...model, modalities: { input: ["text", 42], output: ["text"] } },
+          ],
         },
-        'response.models[0].modalities.input',
+        "response.models[0].modalities.input",
       );
     }
   });
 
-  it.each([undefined, 'responses'] as const)(
-    '仍要求 mode=%s 的可聊天模型提供 contextWindow',
+  it.each([undefined, "responses"] as const)(
+    "仍要求 mode=%s 的可聊天模型提供 contextWindow",
     (mode) => {
-      const { contextWindow: _contextWindow, mode: _mode, ...withoutContextWindow } =
-        VALID_V3_RESPONSE.models[0]!;
+      const {
+        contextWindow: _contextWindow,
+        mode: _mode,
+        ...withoutContextWindow
+      } = VALID_V3_RESPONSE.models[0]!;
       expectReject(
         {
           schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
-          models: [{ ...withoutContextWindow, ...(mode === undefined ? {} : { mode }) }],
+          models: [
+            {
+              ...withoutContextWindow,
+              ...(mode === undefined ? {} : { mode }),
+            },
+          ],
         },
-        'response.models[0].contextWindow',
+        "response.models[0].contextWindow",
       );
     },
   );
 
-  it('v4 允许媒体模型省略 contextWindow，v3 保持已发布约束', () => {
-    for (const mode of ['image_generation', 'video_generation'] as const) {
+  it("v4 允许媒体模型省略 contextWindow，v3 保持已发布约束", () => {
+    for (const mode of ["image_generation", "video_generation"] as const) {
       const mediaModel = {
         id: `${mode}-model`,
         name: `${mode} model`,
         mode,
-        currency: 'CNY',
+        currency: "CNY",
         agents: [],
         modalities: {
-          input: mode === 'image_generation' ? ['text'] : ['text', 'image'],
-          output: [mode === 'image_generation' ? 'image' : 'video'],
+          input: mode === "image_generation" ? ["text"] : ["text", "image"],
+          output: [mode === "image_generation" ? "image" : "video"],
         },
       } as const;
       expect(
@@ -320,24 +357,24 @@ describe('model access catalog contract', () => {
           schemaVersion: MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
           models: [mediaModel],
         },
-        'response.models[0].agents',
+        "response.models[0].agents",
       );
       expectReject(
         {
           schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
-          models: [{ ...mediaModel, agents: ['codex'] }],
+          models: [{ ...mediaModel, agents: ["codex"] }],
         },
-        'response.models[0].agents must be empty',
+        "response.models[0].agents must be empty",
       );
     }
   });
 
-  it('v4/v5 允许 provider-level embedding 模型使用空 agents 且省略 contextWindow', () => {
+  it.each(["embedding", "audio_generation", "audio_speech", "audio_transcription", "realtime"])("v4/v5 允许 provider-level %s 模型使用空 agents 且省略 contextWindow", (mode) => {
     const embeddingModel = {
-      id: 'voyage/voyage-4',
-      name: 'Voyage 4',
-      mode: 'embedding',
-      currency: 'CNY',
+      id: "voyage/voyage-4",
+      name: "Voyage 4",
+      mode,
+      currency: "CNY",
       agents: [],
     } as const;
 
@@ -350,8 +387,8 @@ describe('model access catalog contract', () => {
     expect(
       parseListModelsResponse({
         schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
-        accountTier: 'paid',
-        models: [{ ...embeddingModel, availability: 'available' }],
+        accountTier: "paid",
+        models: [{ ...embeddingModel, availability: "available" }],
       }).ok,
     ).toBe(true);
     expect(
@@ -363,36 +400,50 @@ describe('model access catalog contract', () => {
     expectReject(
       {
         schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
-        models: [{ ...embeddingModel, agents: ['codex'] }],
+        models: [{ ...embeddingModel, agents: ["codex"] }],
       },
-      'response.models[0].agents must be empty',
+      "response.models[0].agents must be empty",
+    );
+    expectReject(
+      {
+        schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
+        accountTier: "paid",
+        models: [{ ...embeddingModel, agents: ["codex"], availability: "available" }],
+      },
+      "response.models[0].agents must be empty",
     );
   });
 
-  it.each(['CNY', 'USD'] as const)('accepts the supported %s currency', (currency) => {
-    const result = parseListModelsResponse({
-      ...VALID_RESPONSE,
-      models: [{ ...VALID_RESPONSE.models[0], currency }],
-    });
-    expect(result.ok).toBe(true);
-  });
+  it.each(["CNY", "USD"] as const)(
+    "accepts the supported %s currency",
+    (currency) => {
+      const result = parseListModelsResponse({
+        ...VALID_RESPONSE,
+        models: [{ ...VALID_RESPONSE.models[0], currency }],
+      });
+      expect(result.ok).toBe(true);
+    },
+  );
 
-  it('accepts missing currency for legacy fallback and rejects unsupported explicit values', () => {
-    const { currency: _currency, ...withoutCurrency } = VALID_RESPONSE.models[0]!;
-    expect(parseListModelsResponse({ ...VALID_RESPONSE, models: [withoutCurrency] })).toEqual({
+  it("accepts missing currency for legacy fallback and rejects unsupported explicit values", () => {
+    const { currency: _currency, ...withoutCurrency } =
+      VALID_RESPONSE.models[0]!;
+    expect(
+      parseListModelsResponse({ ...VALID_RESPONSE, models: [withoutCurrency] }),
+    ).toEqual({
       ok: true,
       value: { ...VALID_RESPONSE, models: [withoutCurrency] },
     });
     expectReject(
       {
         ...VALID_RESPONSE,
-        models: [{ ...VALID_RESPONSE.models[0], currency: 'EUR' }],
+        models: [{ ...VALID_RESPONSE.models[0], currency: "EUR" }],
       },
-      'response.models[0].currency',
+      "response.models[0].currency",
     );
   });
 
-  it('accepts missing or empty agents, filters future kinds, and rejects malformed values', () => {
+  it("accepts missing or empty agents, filters future kinds, and rejects malformed values", () => {
     const {
       agents: _agents,
       newSessionDefault: _newSessionDefault,
@@ -401,21 +452,23 @@ describe('model access catalog contract', () => {
     } = VALID_RESPONSE.models[0]!;
 
     for (const model of [withoutAgents, { ...withoutAgents, agents: [] }]) {
-      expect(parseListModelsResponse({ ...VALID_RESPONSE, models: [model] }).ok).toBe(true);
+      expect(
+        parseListModelsResponse({ ...VALID_RESPONSE, models: [model] }).ok,
+      ).toBe(true);
     }
     expect(
       parseListModelsResponse({
         ...VALID_RESPONSE,
-        models: [{ ...withoutAgents, agents: ['future-agent'] }],
+        models: [{ ...withoutAgents, agents: ["future-agent"] }],
       }),
     ).toMatchObject({ ok: true, value: { models: [{ agents: [] }] } });
     expectReject(
       { ...VALID_RESPONSE, models: [{ ...withoutAgents, agents: [42] }] },
-      'response.models[0].agents',
+      "response.models[0].agents",
     );
   });
 
-  it('accepts null defaults from Model Access at the model and agent-override levels', () => {
+  it("accepts null defaults from Model Access at the model and agent-override levels", () => {
     expect(
       parseListModelsResponse({
         ...VALID_RESPONSE,
@@ -430,8 +483,11 @@ describe('model access catalog contract', () => {
     ).toBe(true);
   });
 
-  it('rejects unsupported schema versions and malformed nested pricing', () => {
-    expectReject({ ...VALID_RESPONSE, schemaVersion: 6 }, 'response.schemaVersion');
+  it("rejects unsupported schema versions and malformed nested pricing", () => {
+    expectReject(
+      { ...VALID_RESPONSE, schemaVersion: 6 },
+      "response.schemaVersion",
+    );
     expectReject(
       {
         ...VALID_RESPONSE,
@@ -442,91 +498,101 @@ describe('model access catalog contract', () => {
           },
         ],
       },
-      'response.models[0].tieredPricing[0].range',
+      "response.models[0].tieredPricing[0].range",
     );
   });
 
-  it('treats Pi wireProtocol as a forward-compatible last-priority hint while keeping Claude and Codex fixed', () => {
+  it("treats Pi wireProtocol as a forward-compatible last-priority hint while keeping Claude and Codex fixed", () => {
     const piModel = {
       ...VALID_V3_RESPONSE.models[0],
-      agents: ['claude-code', 'codex', 'pi'],
+      agents: ["claude-code", "codex", "pi"],
       perAgent: {
         ...VALID_V3_RESPONSE.models[0]!.perAgent,
-        pi: { wireProtocol: 'openai-responses' },
+        pi: { wireProtocol: "openai-responses" },
       },
     } as const;
     for (const wireProtocol of [
-      'anthropic-messages',
-      'openai-responses',
-      'openai-completions',
-      'google-generative-ai',
+      "anthropic-messages",
+      "openai-responses",
+      "openai-completions",
+      "google-generative-ai",
     ] as const) {
       expect(
         parseListModelsResponse({
           ...VALID_V3_RESPONSE,
-          models: [{
-            ...piModel,
-            perAgent: { ...piModel.perAgent, pi: { wireProtocol } },
-          }],
+          models: [
+            {
+              ...piModel,
+              perAgent: { ...piModel.perAgent, pi: { wireProtocol } },
+            },
+          ],
         }).ok,
       ).toBe(true);
     }
     expect(
       parseListModelsResponse({
         ...VALID_V3_RESPONSE,
-        models: [{
-          ...piModel,
-          perAgent: {
-            'claude-code': { wireProtocol: 'anthropic-messages' },
-            codex: { wireProtocol: 'openai-responses' },
+        models: [
+          {
+            ...piModel,
+            perAgent: {
+              "claude-code": { wireProtocol: "anthropic-messages" },
+              codex: { wireProtocol: "openai-responses" },
+            },
           },
-        }],
+        ],
       }).ok,
     ).toBe(true);
     expectReject(
       { ...VALID_V3_RESPONSE, models: [{ ...piModel, perAgent: {} }] },
-      'response.models[0].perAgent.claude-code.wireProtocol',
+      "response.models[0].perAgent.claude-code.wireProtocol",
     );
     expectReject(
       {
         ...VALID_V3_RESPONSE,
-        models: [{
-          ...piModel,
-          perAgent: {
-            ...piModel.perAgent,
-            codex: { wireProtocol: 'anthropic-messages' },
+        models: [
+          {
+            ...piModel,
+            perAgent: {
+              ...piModel.perAgent,
+              codex: { wireProtocol: "anthropic-messages" },
+            },
           },
-        }],
+        ],
       },
-      'response.models[0].perAgent.codex.wireProtocol must be openai-responses',
+      "response.models[0].perAgent.codex.wireProtocol must be openai-responses",
     );
     expect(
       parseListModelsResponse({
         ...VALID_V3_RESPONSE,
-        models: [{
-          ...piModel,
-          perAgent: {
-            ...piModel.perAgent,
-            pi: { wireProtocol: 'future-protocol' },
+        models: [
+          {
+            ...piModel,
+            perAgent: {
+              ...piModel.perAgent,
+              pi: { wireProtocol: "future-protocol" },
+            },
           },
-        }],
+        ],
       }).ok,
     ).toBe(true);
-    for (const wireProtocol of ['', 42, { api: 'openai-responses' }]) {
+    for (const wireProtocol of ["", 42, { api: "openai-responses" }]) {
       expectReject(
         {
           ...VALID_V3_RESPONSE,
-          models: [{
-            ...piModel,
-            perAgent: { ...piModel.perAgent, pi: { wireProtocol } },
-          }],
+          models: [
+            {
+              ...piModel,
+              perAgent: { ...piModel.perAgent, pi: { wireProtocol } },
+            },
+          ],
         },
-        'response.models[0].perAgent.pi.wireProtocol must be a non-empty string',
+        "response.models[0].perAgent.pi.wireProtocol must be a non-empty string",
       );
     }
   });
 
-  it('requires complete runtime metadata in v3 without changing v2', () => {
+  it("requires complete runtime metadata in v3 without changing v2", () => {
     const {
       name: _name,
       contextWindow: _contextWindow,
@@ -537,36 +603,38 @@ describe('model access catalog contract', () => {
         ...VALID_V3_RESPONSE,
         models: [{ ...incomplete, contextWindow: 200_000 }],
       },
-      'response.models[0].name',
+      "response.models[0].name",
     );
     expectReject(
       {
         ...VALID_V3_RESPONSE,
-        models: [{ ...incomplete, name: 'Example Chat Model' }],
+        models: [{ ...incomplete, name: "Example Chat Model" }],
       },
-      'response.models[0].contextWindow',
+      "response.models[0].contextWindow",
     );
     expect(
       parseListModelsResponse({
         ...VALID_RESPONSE,
-        models: [{ ...incomplete, perAgent: VALID_RESPONSE.models[0]!.perAgent }],
+        models: [
+          { ...incomplete, perAgent: VALID_RESPONSE.models[0]!.perAgent },
+        ],
       }).ok,
     ).toBe(true);
   });
 
-  it('rejects defaults that are absent from the declared effort list', () => {
+  it("rejects defaults that are absent from the declared effort list", () => {
     expectReject(
       {
         ...VALID_RESPONSE,
         models: [
           {
             ...VALID_RESPONSE.models[0],
-            efforts: ['low'],
-            defaultEffort: 'high',
+            efforts: ["low"],
+            defaultEffort: "high",
           },
         ],
       },
-      'response.models[0].defaultEffort',
+      "response.models[0].defaultEffort",
     );
     expectReject(
       {
@@ -574,11 +642,11 @@ describe('model access catalog contract', () => {
         models: [
           {
             ...VALID_RESPONSE.models[0],
-            perAgent: { codex: { efforts: ['low'], defaultEffort: 'high' } },
+            perAgent: { codex: { efforts: ["low"], defaultEffort: "high" } },
           },
         ],
       },
-      'response.models[0].perAgent.codex.defaultEffort',
+      "response.models[0].perAgent.codex.defaultEffort",
     );
     expectReject(
       {
@@ -586,23 +654,26 @@ describe('model access catalog contract', () => {
         models: [
           {
             ...VALID_RESPONSE.models[0],
-            efforts: ['low', 'high'],
-            defaultEffort: 'high',
-            perAgent: { codex: { efforts: ['low'] } },
+            efforts: ["low", "high"],
+            defaultEffort: "high",
+            perAgent: { codex: { efforts: ["low"] } },
           },
         ],
       },
-      'response.models[0].perAgent.codex.efforts',
+      "response.models[0].perAgent.codex.efforts",
     );
   });
 
-  it('rejects duplicate ids and overrides for unsupported agents', () => {
+  it("rejects duplicate ids and overrides for unsupported agents", () => {
     expectReject(
       {
         ...VALID_RESPONSE,
-        models: [{ ...VALID_RESPONSE.models[0] }, { ...VALID_RESPONSE.models[0] }],
+        models: [
+          { ...VALID_RESPONSE.models[0] },
+          { ...VALID_RESPONSE.models[0] },
+        ],
       },
-      'response.models[1].id',
+      "response.models[1].id",
     );
     expectReject(
       {
@@ -610,13 +681,13 @@ describe('model access catalog contract', () => {
         models: [
           {
             ...VALID_RESPONSE.models[0],
-            agents: ['claude-code'],
-            newSessionDefault: ['claude-code'],
+            agents: ["claude-code"],
+            newSessionDefault: ["claude-code"],
             perAgent: { codex: { supportsFastMode: true } },
           },
         ],
       },
-      'response.models[0].perAgent.codex',
+      "response.models[0].perAgent.codex",
     );
   });
 });
@@ -624,12 +695,12 @@ describe('model access catalog contract', () => {
 function expectRegistryReject(value: unknown, path: string): void {
   const result = parseModelRegistry(value);
   expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('unreachable');
+  if (result.ok) throw new Error("unreachable");
   expect(result.error).toContain(path);
 }
 
-describe('public model registry contract', () => {
-  it('round-trips canonical metadata, provider routes, and sourced reference prices', () => {
+describe("public model registry contract", () => {
+  it("round-trips canonical metadata, provider routes, and sourced reference prices", () => {
     const wire = JSON.parse(JSON.stringify(VALID_REGISTRY));
     expect(parseModelRegistry(wire)).toEqual({
       ok: true,
@@ -637,48 +708,59 @@ describe('public model registry contract', () => {
     });
   });
 
-  it('continues to parse legacy v1 registries, while v1 rejects the v2-only field', () => {
+  it("continues to parse legacy v1 registries, while v1 rejects the v2-only field", () => {
     const legacy = {
       ...VALID_REGISTRY,
       schemaVersion: MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
     };
-    expect(parseModelRegistry(JSON.parse(JSON.stringify(legacy))).ok).toBe(true);
+    expect(parseModelRegistry(JSON.parse(JSON.stringify(legacy))).ok).toBe(
+      true,
+    );
     expectRegistryReject(
       {
         ...legacy,
-        models: [{ ...legacy.models[0], newSessionDefault: ['claude-code'] }],
+        models: [{ ...legacy.models[0], newSessionDefault: ["claude-code"] }],
       },
-      'modelRegistry.models[0].newSessionDefault',
+      "modelRegistry.models[0].newSessionDefault",
     );
   });
 
-  it('accepts newSessionDefault as a subset of the entry route agents', () => {
+  it("accepts newSessionDefault as a subset of the entry route agents", () => {
     const entry = VALID_REGISTRY.models[0]!;
     const wire = {
       ...VALID_REGISTRY,
-      models: [{ ...entry, newSessionDefault: ['claude-code', 'codex'] }],
+      models: [{ ...entry, newSessionDefault: ["claude-code", "codex"] }],
     };
     const result = parseModelRegistry(JSON.parse(JSON.stringify(wire)));
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('unreachable');
-    expect(result.value.models[0]!.newSessionDefault).toEqual(['claude-code', 'codex']);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.value.models[0]!.newSessionDefault).toEqual([
+      "claude-code",
+      "codex",
+    ]);
   });
 
-  it('rejects a malformed newSessionDefault (empty / duplicate / unknown agent)', () => {
+  it("rejects a malformed newSessionDefault (empty / duplicate / unknown agent)", () => {
     const entry = VALID_REGISTRY.models[0]!;
     const withDefault = (v: unknown) => ({
       ...VALID_REGISTRY,
       models: [{ ...entry, newSessionDefault: v }],
     });
-    expectRegistryReject(withDefault([]), 'modelRegistry.models[0].newSessionDefault');
     expectRegistryReject(
-      withDefault(['claude-code', 'claude-code']),
-      'modelRegistry.models[0].newSessionDefault',
+      withDefault([]),
+      "modelRegistry.models[0].newSessionDefault",
     );
-    expectRegistryReject(withDefault(['bogus-agent']), 'modelRegistry.models[0].newSessionDefault');
+    expectRegistryReject(
+      withDefault(["claude-code", "claude-code"]),
+      "modelRegistry.models[0].newSessionDefault",
+    );
+    expectRegistryReject(
+      withDefault(["bogus-agent"]),
+      "modelRegistry.models[0].newSessionDefault",
+    );
   });
 
-  it('rejects newSessionDefault agents not backed by any route', () => {
+  it("rejects newSessionDefault agents not backed by any route", () => {
     const entry = VALID_REGISTRY.models[0]!;
     const route = entry.routes[0]!;
     const wire = {
@@ -686,40 +768,45 @@ describe('public model registry contract', () => {
       models: [
         {
           ...entry,
-          routes: [{ ...route, agents: ['claude-code'] }],
-          newSessionDefault: ['codex'],
+          routes: [{ ...route, agents: ["claude-code"] }],
+          newSessionDefault: ["codex"],
         },
       ],
     };
     expectRegistryReject(
       JSON.parse(JSON.stringify(wire)),
-      'modelRegistry.models[0].newSessionDefault',
+      "modelRegistry.models[0].newSessionDefault",
     );
   });
 
-  it('rejects newSessionDefault on retired registry entries', () => {
+  it("rejects newSessionDefault on retired registry entries", () => {
     const entry = VALID_REGISTRY.models[0]!;
     expectRegistryReject(
       {
         ...VALID_REGISTRY,
-        models: [{ ...entry, status: 'retired', newSessionDefault: ['claude-code'] }],
+        models: [
+          { ...entry, status: "retired", newSessionDefault: ["claude-code"] },
+        ],
       },
-      'modelRegistry.models[0].newSessionDefault',
+      "modelRegistry.models[0].newSessionDefault",
     );
   });
 
-  it('rejects client provenance and every other field outside the versioned schema', () => {
+  it("rejects client provenance and every other field outside the versioned schema", () => {
     const entry = VALID_REGISTRY.models[0]!;
     const route = entry.routes[0]!;
     const price = route.referencePrices![0]!;
     const cases: [unknown, string][] = [
-      [{ ...VALID_REGISTRY, contextWindowVerified: true }, 'modelRegistry.contextWindowVerified'],
+      [
+        { ...VALID_REGISTRY, contextWindowVerified: true },
+        "modelRegistry.contextWindowVerified",
+      ],
       [
         {
           ...VALID_REGISTRY,
           models: [{ ...entry, contextWindowExplicit: true }],
         },
-        'modelRegistry.models[0].contextWindowExplicit',
+        "modelRegistry.models[0].contextWindowExplicit",
       ],
       [
         {
@@ -727,18 +814,18 @@ describe('public model registry contract', () => {
           models: [
             {
               ...entry,
-              routes: [{ ...route, discoveredAt: '2026-07-31T00:00:00.000Z' }],
+              routes: [{ ...route, discoveredAt: "2026-07-31T00:00:00.000Z" }],
             },
           ],
         },
-        'modelRegistry.models[0].routes[0].discoveredAt',
+        "modelRegistry.models[0].routes[0].discoveredAt",
       ],
       [
         {
           ...VALID_REGISTRY,
           models: [{ ...entry, perAgent: { codex: { verified: true } } }],
         },
-        'modelRegistry.models[0].perAgent.codex.verified',
+        "modelRegistry.models[0].perAgent.codex.verified",
       ],
       [
         {
@@ -755,7 +842,7 @@ describe('public model registry contract', () => {
             },
           ],
         },
-        'modelRegistry.models[0].routes[0].referencePrices[0].userOverride',
+        "modelRegistry.models[0].routes[0].referencePrices[0].userOverride",
       ],
       [
         {
@@ -769,7 +856,7 @@ describe('public model registry contract', () => {
                   referencePrices: [
                     {
                       ...price,
-                      source: { ...price.source, internalNote: 'client-only' },
+                      source: { ...price.source, internalNote: "client-only" },
                     },
                   ],
                 },
@@ -777,21 +864,24 @@ describe('public model registry contract', () => {
             },
           ],
         },
-        'modelRegistry.models[0].routes[0].referencePrices[0].source.internalNote',
+        "modelRegistry.models[0].routes[0].referencePrices[0].source.internalNote",
       ],
     ];
 
     for (const [value, path] of cases) expectRegistryReject(value, path);
   });
 
-  it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
-    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 4 }, 'modelRegistry.schemaVersion');
+  it("rejects unsupported versions, duplicate canonical ids, and duplicate routes", () => {
+    expectRegistryReject(
+      { ...VALID_REGISTRY, schemaVersion: 99 },
+      "modelRegistry.schemaVersion",
+    );
     expectRegistryReject(
       {
         ...VALID_REGISTRY,
         models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]],
       },
-      'modelRegistry.models[1].id',
+      "modelRegistry.models[1].id",
     );
     expectRegistryReject(
       {
@@ -799,27 +889,33 @@ describe('public model registry contract', () => {
         models: [
           {
             ...VALID_REGISTRY.models[0],
-            routes: [VALID_REGISTRY.models[0]!.routes[0], VALID_REGISTRY.models[0]!.routes[0]],
+            routes: [
+              VALID_REGISTRY.models[0]!.routes[0],
+              VALID_REGISTRY.models[0]!.routes[0],
+            ],
           },
         ],
       },
-      'modelRegistry.models[0].routes[1]',
+      "modelRegistry.models[0].routes[1]",
     );
   });
 
-  it('requires a canonical, calendar-valid UTC timestamp', () => {
+  it("requires a canonical, calendar-valid UTC timestamp", () => {
     for (const updatedAt of [
-      '2026-07-31',
-      'July 31, 2026',
-      '2026-07-31T00:00:00Z',
-      '2026-02-29T00:00:00.000Z',
-      '2026-07-31T08:00:00.000+08:00',
+      "2026-07-31",
+      "July 31, 2026",
+      "2026-07-31T00:00:00Z",
+      "2026-02-29T00:00:00.000Z",
+      "2026-07-31T08:00:00.000+08:00",
     ]) {
-      expectRegistryReject({ ...VALID_REGISTRY, updatedAt }, 'modelRegistry.updatedAt');
+      expectRegistryReject(
+        { ...VALID_REGISTRY, updatedAt },
+        "modelRegistry.updatedAt",
+      );
     }
   });
 
-  it('rejects malformed price bands and untraceable price sources', () => {
+  it("rejects malformed price bands and untraceable price sources", () => {
     const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
     const basePrice = baseRoute.referencePrices![0]!;
     expectRegistryReject(
@@ -843,7 +939,7 @@ describe('public model registry contract', () => {
           },
         ],
       },
-      'maxInputTokens',
+      "maxInputTokens",
     );
     expectRegistryReject(
       {
@@ -859,7 +955,7 @@ describe('public model registry contract', () => {
                     ...basePrice,
                     source: {
                       ...basePrice.source,
-                      url: 'http://example.com/pricing',
+                      url: "http://example.com/pricing",
                     },
                   },
                 ],
@@ -868,11 +964,11 @@ describe('public model registry contract', () => {
           },
         ],
       },
-      'source.url',
+      "source.url",
     );
   });
 
-  it('allows scheduled prices and agent-specific metadata only on supported routes', () => {
+  it("allows scheduled prices and agent-specific metadata only on supported routes", () => {
     const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
     const basePrice = baseRoute.referencePrices![0]!;
     expect(
@@ -886,12 +982,12 @@ describe('public model registry contract', () => {
               {
                 ...baseRoute,
                 referencePrices: [
-                  { ...basePrice, effectiveUntil: '2026-09-01' },
+                  { ...basePrice, effectiveUntil: "2026-09-01" },
                   {
                     ...basePrice,
                     inputPerMtok: 2,
                     outputPerMtok: 10,
-                    effectiveFrom: '2026-09-01',
+                    effectiveFrom: "2026-09-01",
                   },
                 ],
               },
@@ -907,16 +1003,16 @@ describe('public model registry contract', () => {
         models: [
           {
             ...VALID_REGISTRY.models[0],
-            routes: [{ ...baseRoute, agents: ['claude-code'] }],
+            routes: [{ ...baseRoute, agents: ["claude-code"] }],
             perAgent: { codex: { contextWindow: 272_000 } },
           },
         ],
       },
-      'perAgent.codex',
+      "perAgent.codex",
     );
   });
 
-  it('carries a materialization-complete presence shape on the current v2 wire', () => {
+  it("carries a materialization-complete presence shape on the current v2 wire", () => {
     // The exact shape a policy-based client requires before deriving a
     // selectable entry (MODEL_REGISTRY.md "Presence, entitlement, and sale
     // availability"): explicit status + self-consistent capability set +
@@ -927,13 +1023,13 @@ describe('public model registry contract', () => {
       models: [
         {
           ...VALID_REGISTRY.models[0],
-          status: 'preview',
+          status: "preview",
           maxOutputTokens: 64_000,
           perAgent: {
             codex: {
               contextWindow: 272_000,
-              efforts: ['low', 'medium', 'high'],
-              defaultEffort: 'high',
+              efforts: ["low", "medium", "high"],
+              defaultEffort: "high",
             },
           },
         },
@@ -942,17 +1038,21 @@ describe('public model registry contract', () => {
     expect(parseModelRegistry(JSON.parse(JSON.stringify(wire))).ok).toBe(true);
   });
 
-  it.each(MODEL_REGISTRY_STATUSES)('accepts the %s lifecycle status', (status) => {
-    expect(
-      parseModelRegistry({
-        ...VALID_REGISTRY,
-        models: [{ ...VALID_REGISTRY.models[0], status }],
-      }).ok,
-    ).toBe(true);
-  });
+  it.each(MODEL_REGISTRY_STATUSES)(
+    "accepts the %s lifecycle status",
+    (status) => {
+      expect(
+        parseModelRegistry({
+          ...VALID_REGISTRY,
+          models: [{ ...VALID_REGISTRY.models[0], status }],
+        }).ok,
+      ).toBe(true);
+    },
+  );
 
-  it('accepts a fixed-effort entry: empty efforts with no default', () => {
-    const { defaultEffort: _defaultEffort, ...entry } = VALID_REGISTRY.models[0]!;
+  it("accepts a fixed-effort entry: empty efforts with no default", () => {
+    const { defaultEffort: _defaultEffort, ...entry } =
+      VALID_REGISTRY.models[0]!;
     expect(
       parseModelRegistry({
         ...VALID_REGISTRY,
@@ -961,13 +1061,15 @@ describe('public model registry contract', () => {
     ).toBe(true);
   });
 
-  it('canonicalizes object key order while preserving snapshot content changes', () => {
+  it("canonicalizes object key order while preserving snapshot content changes", () => {
     const reordered = {
       models: VALID_REGISTRY.models,
       updatedAt: VALID_REGISTRY.updatedAt,
       schemaVersion: VALID_REGISTRY.schemaVersion,
     };
-    expect(modelRegistryCanonicalJson(reordered)).toBe(modelRegistryCanonicalJson(VALID_REGISTRY));
+    expect(modelRegistryCanonicalJson(reordered)).toBe(
+      modelRegistryCanonicalJson(VALID_REGISTRY),
+    );
     expect(
       modelRegistryCanonicalJson({
         ...reordered,
@@ -977,16 +1079,18 @@ describe('public model registry contract', () => {
 
     const secondModel = {
       ...VALID_REGISTRY.models[0]!,
-      id: 'example/other-model',
+      id: "example/other-model",
       routes: [
         {
           ...VALID_REGISTRY.models[0]!.routes[0]!,
-          modelId: 'other-model',
+          modelId: "other-model",
         },
       ],
     };
     const orderedModels = [VALID_REGISTRY.models[0]!, secondModel];
-    expect(modelRegistryCanonicalJson({ ...VALID_REGISTRY, models: orderedModels })).not.toBe(
+    expect(
+      modelRegistryCanonicalJson({ ...VALID_REGISTRY, models: orderedModels }),
+    ).not.toBe(
       modelRegistryCanonicalJson({
         ...VALID_REGISTRY,
         models: [...orderedModels].reverse(),
@@ -994,17 +1098,17 @@ describe('public model registry contract', () => {
     );
   });
 
-  it('keeps availability and selectability out of the wire schema', () => {
+  it("keeps availability and selectability out of the wire schema", () => {
     // Presence is the only registry-owned signal; availability/selectability
     // markers are foreign fields at every level.
     const entry = VALID_REGISTRY.models[0]!;
     const route = entry.routes[0]!;
     const cases: [unknown, string][] = [
-      [{ ...entry, available: true }, 'modelRegistry.models[0].available'],
-      [{ ...entry, selectable: true }, 'modelRegistry.models[0].selectable'],
+      [{ ...entry, available: true }, "modelRegistry.models[0].available"],
+      [{ ...entry, selectable: true }, "modelRegistry.models[0].selectable"],
       [
         { ...entry, routes: [{ ...route, available: true }] },
-        'modelRegistry.models[0].routes[0].available',
+        "modelRegistry.models[0].routes[0].available",
       ],
     ];
     for (const [model, path] of cases) {
@@ -1012,19 +1116,19 @@ describe('public model registry contract', () => {
     }
   });
 
-  it('rejects client-derived agent harnesses on routes and per-agent overrides', () => {
+  it("rejects client-derived agent harnesses on routes and per-agent overrides", () => {
     // Projection harnesses (for example a client-side pi tab) never appear on
     // the wire; the closed agent enum keeps them client-owned.
     const entry = VALID_REGISTRY.models[0]!;
     const route = entry.routes[0]!;
     const cases: [unknown, string][] = [
       [
-        { ...entry, routes: [{ ...route, agents: ['claude-code', 'pi'] }] },
-        'modelRegistry.models[0].routes[0].agents',
+        { ...entry, routes: [{ ...route, agents: ["claude-code", "pi"] }] },
+        "modelRegistry.models[0].routes[0].agents",
       ],
       [
         { ...entry, perAgent: { pi: { contextWindow: 200_000 } } },
-        'modelRegistry.models[0].perAgent.pi',
+        "modelRegistry.models[0].perAgent.pi",
       ],
     ];
     for (const [model, path] of cases) {
@@ -1032,7 +1136,7 @@ describe('public model registry contract', () => {
     }
   });
 
-  it('rejects ambiguous overlapping reference prices for the same currency and variant', () => {
+  it("rejects ambiguous overlapping reference prices for the same currency and variant", () => {
     const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
     const basePrice = baseRoute.referencePrices![0]!;
     for (const overlappingPrice of [
@@ -1040,8 +1144,8 @@ describe('public model registry contract', () => {
       { ...basePrice, minInputTokens: 100_000, maxInputTokens: 300_000 },
       {
         ...basePrice,
-        effectiveFrom: '2026-07-15',
-        effectiveUntil: '2026-08-01',
+        effectiveFrom: "2026-07-15",
+        effectiveUntil: "2026-08-01",
       },
     ]) {
       expectRegistryReject(
@@ -1059,7 +1163,7 @@ describe('public model registry contract', () => {
             },
           ],
         },
-        'referencePrices[1] overlaps referencePrices[0]',
+        "referencePrices[1] overlaps referencePrices[0]",
       );
     }
   });

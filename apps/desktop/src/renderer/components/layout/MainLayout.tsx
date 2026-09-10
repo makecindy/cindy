@@ -101,7 +101,9 @@ import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
+  isAgentIslandVisibleSessionOwnedByBotRoute,
   resolveAgentIslandVisibleSessionFromRouteTarget,
+  resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
 
@@ -422,22 +424,23 @@ export function MainLayout() {
     }
   }, [sidebarPeek.peekState, isRailMode, handleRailModeChange]);
 
-  const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname);
-  const splitVisibleSessionIds = useMemo(() => {
-    const splitSessionIds = getSplitSessionIds(splitGroup.root);
-    return routeSessionId && splitSessionIds.length >= 2
-      ? [...new Set([routeSessionId, ...splitSessionIds])]
-      : [];
-  }, [routeSessionId, splitGroup.root]);
+  const visibleSessions = useMemo(
+    () => resolveAgentIslandVisibleSessionsFromPath(
+      location.pathname,
+      getSplitSessionIds(splitGroup.root),
+    ),
+    [location.pathname, splitGroup.root],
+  );
 
   const syncAgentIslandVisibleSession = useCallback(() => {
     if (!isAgentIslandSupported()) return;
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
+    if (isAgentIslandVisibleSessionOwnedByBotRoute(location.pathname)) return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
-      splitVisibleSessionIds.length >= 2 ? splitVisibleSessionIds : routeSessionId,
+      visibleSessions,
     );
-  }, [location.pathname, routeSessionId, splitVisibleSessionIds]);
+  }, [location.pathname, visibleSessions]);
 
   useEffect(() => {
     syncAgentIslandVisibleSession();
@@ -1390,6 +1393,7 @@ export function MainLayout() {
               onResetWidth={resetWidth}
               onOpenUpdateNotice={openNotice}
               onOpenVersionNotice={openVersionNotice}
+              onOpenStorage={() => navigate('/settings?tab=storage')}
               peekState={sidebarPeek.isPeekVisible ? sidebarPeek.peekState : null}
               peekDrawerProps={sidebarPeek.drawerProps}
             />

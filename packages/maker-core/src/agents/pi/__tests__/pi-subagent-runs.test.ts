@@ -1021,9 +1021,9 @@ describe('PI durable subagent run store', () => {
      * until a real signal reaches it, then ESRCH like any reaped process. The
      * default (never reaped) is the zombie/stubborn case.
      */
-    let sentSignals: Array<NodeJS.Signals | number> = [];
+    let sentSignals: Array<NodeJS.Signals | number | 'unknown'> = [];
     let sentKillPids: number[] = [];
-    const killSignals = (): Array<NodeJS.Signals | number> => sentSignals;
+    const killSignals = (): Array<NodeJS.Signals | number | 'unknown'> => sentSignals;
 
     function stubKill(options: { reapedByKill?: boolean } = {}): void {
       const real = process.kill.bind(process);

@@ -13,6 +13,16 @@ const state = vi.hoisted(() => ({
   binaryPath: '',
   ripgrepPath: '',
   userDataPath: '',
+  capToolchainThreads: true,
+}));
+
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+vi.mock('../agent-resource-settings-store.js', () => ({
+  readAgentResourceSettings: () => ({ capToolchainThreads: state.capToolchainThreads, processPriority: 'normal' }),
 }));
 
 vi.mock('electron', () => ({
@@ -118,5 +128,26 @@ describe('Desktop Pi auto-compact wiring', () => {
     const runtimeConfig = (agent as unknown as { deps: { runtimeConfig: AgentRuntimeConfig } })
       .deps.runtimeConfig;
     expect(runtimeConfig.autoCompactThresholdPct).toBeUndefined();
+  });
+
+  it('connects resource settings to Pi behavior flags and leaves remote machines alone', () => {
+    const agent = buildPiAgent({ logger });
+    const flags = (agent as unknown as { deps: { runtimeConfig: AgentRuntimeConfig } }).deps.runtimeConfig.behaviorFlags;
+    expect(typeof flags).toBe('function');
+    if (typeof flags !== 'function') throw new Error('behavior flags missing');
+    vi.stubEnv('VITEST_MAX_THREADS', '7');
+    vi.stubEnv('CARGO_BUILD_JOBS', undefined);
+    try {
+      state.capToolchainThreads = true;
+      const local = flags({ spawnMode: 'local' });
+      expect(Number(local.CARGO_BUILD_JOBS)).toBeGreaterThan(0);
+      expect(local).not.toHaveProperty('VITEST_MAX_THREADS');
+      expect(flags({ spawnMode: 'remote' })).toEqual({});
+      state.capToolchainThreads = false;
+      expect(flags({ spawnMode: 'local' })).toEqual({});
+    } finally {
+      state.capToolchainThreads = true;
+      vi.unstubAllEnvs();
+    }
   });
 });

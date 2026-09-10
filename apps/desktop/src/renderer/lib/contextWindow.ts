@@ -4,6 +4,11 @@ interface ResolveDisplayContextWindowOptions {
   sdkContextWindow: number;
   modelContextWindow?: number;
   verifiedContextWindow?: number | null;
+  /** Total capacity resolved from native CLI config/metadata, not its usable-window report. */
+  nativeContextWindow?: number | null;
+  nativeContextPending?: boolean;
+  /** Codex must not use provider metadata or a usable-window snapshot as its total. */
+  runtimeWindowAuthoritative?: boolean;
 }
 
 /**
@@ -17,7 +22,15 @@ export function resolveDisplayContextWindow({
   sdkContextWindow,
   modelContextWindow,
   verifiedContextWindow,
+  runtimeWindowAuthoritative = false,
+  nativeContextWindow,
+  nativeContextPending = false,
 }: ResolveDisplayContextWindowOptions): number {
+  if (runtimeWindowAuthoritative) {
+    if (nativeContextPending) return 0;
+    return Number.isFinite(nativeContextWindow) && (nativeContextWindow ?? 0) > 0
+      ? Math.floor(nativeContextWindow!) : 0;
+  }
   // Restored snapshots and SDK values share this slot. Only route-verified
   // metadata may supersede it, matching the host's runtime normalization.
   if (Number.isFinite(verifiedContextWindow) && (verifiedContextWindow ?? 0) > 0) {

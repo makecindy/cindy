@@ -142,6 +142,8 @@ export interface GroupSessionsOptions {
    * when every conversation inside it is pinned.
    */
   includePinnedInProjects?: boolean;
+  /** Resource catalogues include created project sessions even before their first message. */
+  includeDraftsInProjects?: boolean;
   /**
    * sessionId → 它属于哪个伙伴。
    *
@@ -499,7 +501,7 @@ export function groupSessions(
     const isAutoPlacedSession = s.source === 'scheduler' || s.source === 'plugin';
     if (
       dir == null ||
-      (!isAutoPlacedSession && !isOrcaLead && s.userSendAt == null && noPhysicalMessages)
+      (!options.includeDraftsInProjects && !isAutoPlacedSession && !isOrcaLead && s.userSendAt == null && noPhysicalMessages)
     ) {
       unclassified.push(s);
     } else {

@@ -564,7 +564,7 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     });
   });
 
-  it('v2 脏数据:非法 effort 条目过滤 / effortByModel 空槽丢弃 / 缺 lastModel 仍可查 effort', async () => {
+  it('v2 脏数据:非法 effort 条目过滤 / 保留无深度模型的 lastModel / 缺 lastModel 仍可查 effort', async () => {
     memStorage.setItem(
       'xdt:providerModelMemory:v2',
       JSON.stringify({
@@ -572,7 +572,7 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
           lastModel: 'claude-opus-4-8',
           effortByModel: { 'claude-opus-4-8': 'high', bad: 42 }, // bad 非 string → 过滤
         },
-        'claude-code:xd': { lastModel: 'x', effortByModel: {} }, // 空 effortByModel → 整槽丢弃
+        'claude-code:xd': { lastModel: 'x', effortByModel: {} }, // 无 effort 仍保留 lastModel，choice 仍须有 effort
         'codex:openai': { effortByModel: { 'gpt-5.5': 'medium' } }, // 无 lastModel:effort 可查,choice undefined
       }),
     );
@@ -703,4 +703,15 @@ describe('providerModelMemory —— clear:恢复推荐删键(不写默认快照
     expect(seen).not.toHaveBeenCalled();
     expect(memStorage.getItem(m.__STORAGE_KEY)).toBeNull();
   });
+});
+
+
+it('last-model-only history is evidence of an existing user configuration', async () => {
+  memStorage.setItem('xdt:providerModelMemory:v2', JSON.stringify({
+    'codex:xd': { lastModel: 'old-model', effortByModel: {} },
+  }));
+  vi.resetModules();
+  const memory = await loadModule();
+  expect(memory.hasProviderModelHistory()).toBe(true);
+  expect(memory.hasAnyProviderModelOverride()).toBe(false);
 });

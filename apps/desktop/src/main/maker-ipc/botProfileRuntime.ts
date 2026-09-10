@@ -22,6 +22,7 @@ import {
 } from '../localDb/schema.js';
 import { clearBotAttention, noteBotAttention } from './botAttentionService.js';
 import { createLogger } from '../logger.js';
+import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugins.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -99,6 +100,7 @@ export interface BotProfileRuntimeDeps {
     remoteHostId?: string;
   }) => Promise<BotMcpCatalogItem[]>;
   listToolsets?: (input: {
+    botId: string;
     agentKind: MakerSessionCreateOpts['agentKind'];
     workingDir: string;
     remoteHostId?: string;
@@ -274,7 +276,12 @@ export function buildBotProfilePrompt(input: {
  */
 export function buildBotProfileContextPrompt(displayName: string): string {
   const name = displayName.trim() || 'Cindy Bot';
-  return `Active Cindy Bot profile: ${name}.`;
+  return [
+    `Active Cindy Bot profile: ${name}.`,
+    'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Do not reverse who is the boss or invent a relationship from habitual forms of address. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
+    'The user is talking to this named teammate inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
+    'For changing this teammate’s model, direct the user to the teammate’s model settings in Cindy; connecting a model is managed in Cindy settings. Do not present terminal-only slash commands such as /login or /model as commands available in this chat, assume the user is in a Pi terminal, or claim access to settings you cannot operate. When the exact Cindy entry is unknown, say so rather than inventing steps. When the user asks about a native CLI, explain which instructions belong to that terminal. This distinction does not restrict native tools, Pi package management, extensions, or self-repair.',
+  ].join('\n');
 }
 
 /**
@@ -292,15 +299,23 @@ export function buildBotProfileContextPrompt(displayName: string): string {
  * 文本是常量,不含会话变量,因此 prompt 前缀保持稳定,不影响缓存率。
  */
 export function buildBotCapabilityContextPrompt(
-  options: { helperAvailable?: boolean } = {},
+  options: { helperAvailable?: boolean; cindyAvailable?: boolean } = {},
 ): string {
   const helperAvailable = options.helperAvailable !== false;
+  // cindy / ghost_* live on the local builtin gateway. SSH Claude/Codex only
+  // inject collab, memory and helper (REMOTE_ALLOWED_SERVER_NAMES); advertising
+  // plugins there would tell the model to call tools it cannot reach. Remote Pi
+  // tunnels cindy, so keep plugin guidance there.
+  const cindyAvailable = options.cindyAvailable !== false;
+  const pluginGuidance = cindyAvailable
+    ? ' Installed plugins are available on demand through `cindy` (`ghost_list`, `ghost_info`, `ghost_call`) under their existing permissions.'
+    : '';
   return [
     '## Cindy Bot Runtime',
     'You are running as a Cindy Bot with a durable Profile. This task is one active runtime of that Bot, not an ordinary standalone task.',
     ...(helperAvailable ? [
-      'Use direct Bot tools named in this prompt without inventorying Cindy. Only when the user asks for an explicitly mounted external capability and its exact tool is unknown, perform one scoped discovery for that capability; do not repeatedly list the whole tool surface.',
-          "A real Cindy background task is a standalone Session in the user's task list. Start it with `start_session_task` when the user explicitly asks for a task, Session, or background task, or when development and deliverable work needs independent execution and verification. Use `check_session_task`, `message_session_task`, and `stop_session_task` to control that same task when needed. Completion returns automatically.",
+      `Use direct Bot tools for your own memory, Skills and teammates. When work needs another capability, use \`find_bot_capabilities\` in the helper bots category to search existing Skills, MCP connections or built-in tools, then \`set_bot_capability\` to join it. References reuse Cindy installations and authorization; do not copy credentials or edit shared sources. New mounts take effect next turn in this same task.${pluginGuidance} Discover only what the work needs; do not repeatedly list the whole tool surface.`,
+          "A real Cindy background task is a standalone Session in the user's task list. Follow the workload split in the `start_session_task` guidance: handle short simple work yourself and proactively start independent tasks for coding and medium or large work. Do not wait for the user to ask for delegation. Use `check_session_task`, `message_session_task`, and `stop_session_task` to control that same task when needed. Completion returns automatically; you remain responsible for reviewing and presenting the result.",
           'Use `send_to_agent` only to send one bounded asynchronous message to a named teammate. It is not a task and has no progress or cancellation. Never use a teammate named Cindy as a substitute for `start_session_task`.',
           "A teammate message does not rewrite another Bot's identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and offer either a message or a tracked Session task, whichever matches the work.",
         ] : []),
@@ -454,7 +469,9 @@ export function resolveBotToolsetReferences(input: {
   unavailable: string[];
   disabled: string[];
 } {
-  const configurable = input.catalog.filter((item) => !item.essential);
+  // Host essentials (for example scheduler) are not necessarily Bot baseline
+  // tools. An explicit per-Bot selection must remain mountable.
+  const configurable = input.catalog.filter((item) => !item.essential || input.configured.includes(item.id));
   const available = new Set(
     configurable.filter((item) => item.available !== false).map((item) => item.id),
   );
@@ -545,7 +562,10 @@ export async function hydrateBotProfileRuntime(
           : 'inherit';
   const rawToolsets = readStringList(config.toolsets ?? config.tools);
   const legacyToolPlaceholders = new Set(['files', 'browser', 'mcp']);
+  // Explicit modern grants can legitimately contain only browser. Only legacy
+  // profiles without an allowlist mode used these names as display placeholders.
   const hasOnlyLegacyToolPlaceholders =
+    config.toolsetMode !== 'allowlist' &&
     rawToolsets.length > 0 && rawToolsets.every((item) => legacyToolPlaceholders.has(item));
   const configuredToolsets = hasOnlyLegacyToolPlaceholders ? [] : rawToolsets;
   const toolsetMode =
@@ -748,6 +768,7 @@ export async function hydrateBotProfileRuntime(
     runtimeToolsetMode = 'allowlist';
     try {
       toolsetCatalog = await deps.listToolsets({
+        botId: row.botId,
         agentKind: opts.agentKind,
         workingDir: opts.workingDir,
         remoteHostId: opts.remoteHostId,
@@ -771,13 +792,11 @@ export async function hydrateBotProfileRuntime(
   }
   const runtimeConfiguredToolsets =
     toolsetMode === 'inherit' ? [...resolvedToolsets] : [...configuredToolsets];
-  // 工具集 → 内置 MCP 服务器。显式挂载 docs 的伙伴,提示词会承诺文档能力
-  // (DOCS_GUIDANCE),对应服务器必须同轮进入 MCP allowlist —— 否则就是本文件
+  // 工具集与内置 MCP 共用宿主映射；已选择的能力必须同轮进入 MCP allowlist。
+  // 显式挂载 docs 时提示词会承诺文档能力，其他工具集同样需要真正挂载。
   // 开头记录的那类事故:「提示词说有,运行时够不到」。
-  const TOOLSET_MCP_SERVERS: Record<string, string> = { docs: 'cindy_docs' };
-  for (const toolsetId of resolvedToolsets) {
-    const serverName = TOOLSET_MCP_SERVERS[toolsetId];
-    if (!serverName || runtimeConfiguredMcpServers.includes(serverName)) continue;
+  for (const [serverName, toolsetId] of Object.entries(PROVIDER_NAME_TO_PLUGIN_ID)) {
+    if (toolsetId === 'collab' || !resolvedToolsets.includes(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
     if (mcpCatalog.some((item) => item.name === serverName && item.available !== false)) {
       runtimeConfiguredMcpServers.push(serverName);
     }
@@ -787,7 +806,11 @@ export async function hydrateBotProfileRuntime(
     displayName: profile.displayName,
     identitySource: identity,
   });
-  const helperAvailable = !opts.remoteHostId || opts.agentKind === 'pi';
+  const helperAvailable = !opts.remoteHostId || opts.agentKind === 'pi'
+    || toolsetCatalog.some((item) => item.id === 'xdt_helper' && item.available !== false);
+  // Local sessions always mount the cindy gateway. Remote Claude/Codex do not
+  // (REMOTE_ALLOWED_SERVER_NAMES). Remote Pi tunnels cindy via the MCP bridge.
+  const cindyAvailable = !opts.remoteHostId || opts.agentKind === 'pi';
   // 三层装配(见 botSystemPrompt.ts):身份与「你会做什么」进稳定段,会话控制等
   // 进上下文段,技能索引与记忆快照进易变段并排在最后。能力说明按**这个伙伴
   // 实际挂载到的 toolset** 注入 —— 挂了 docs 才讲怎么做文件,没挂的一个字不提。
@@ -798,6 +821,7 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
+    routinesEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
     botCreationEnabled: row.role === 'canonical' && helperAvailable,
     ownSkillsEnabled: ownSkillPluginRoot !== null,
     botModeEnabled: row.role === 'canonical',
@@ -859,7 +883,7 @@ export async function hydrateBotProfileRuntime(
       // Delegation children keep Cindy's normal Session prompt plus their
       // narrow task context.
       ...(row.role === 'canonical'
-        ? [buildBotCapabilityContextPrompt({ helperAvailable })]
+        ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable })]
         : []),
     ],
   };

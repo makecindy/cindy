@@ -45,6 +45,8 @@ vi.mock('../settings-store', () => ({
 import { __testing, runInvoke, wireInboundDispatch } from '../dispatch';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
+import { getDeviceLinkInvokeContext } from '../invoke-context';
+import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import * as subscriptions from '../subscriptions';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
@@ -78,6 +80,37 @@ beforeEach(() => {
     revokedControllers: [],
   };
   __testing.reset();
+});
+
+it('strips Desktop credential links from authorization history and live metadata pushes', () => {
+  const card = { v: 1, sessionId: 's1', createdAt: 1, target: { kind: 'plugin', id: 'p' },
+    snapshot: { kind: 'plugin_setup', requestId: 'r', revision: 1, ghost: { id: 'p', name: 'Plugin' },
+      steps: [{ id: 'step', groupId: 'group', groupMode: 'any_of', title: 'Key', description: '', phase: 'pending',
+        action: { id: 'inline', kind: 'inline_form', form: { fields: [{ id: 'value', type: 'secret', label: 'Key',
+          required: true, maxLength: 4096, externalLink: { url: 'https://example.com/keys' } }] } } }] } };
+  const row = { id: 'm', clientId: 'm', sessionId: 's1', role: 'assistant', content: 'Configure key', agentMeta: { botAuthorization: card } };
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', []);
+  const client = mkClient();
+  __testing.setActiveClient(client as never);
+  __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: row });
+  const push = client.sendPush.mock.calls.find((c) => c[1] === 'local-db:messages:created')![2];
+  expect(push.message.agentMeta.botAuthorization.snapshot.steps[0].action.kind).toBe('inline_form');
+  expect(JSON.stringify(push)).not.toContain('externalLink');
+  for (const channel of ['local-db:messages:list', 'local-db:messages:around']) {
+    __testing.sendInvokeResultSafe(client as never, 'mobile', channel, { ok: true, result: [row] }, channel);
+  }
+  for (const call of client.sendInvokeResult.mock.calls) {
+    expect(call[2].result[0].agentMeta.botAuthorization).toBeDefined();
+    expect(JSON.stringify(call[2])).not.toContain('externalLink');
+  }
+  for (const channel of ['local-db:messages:view', 'local-db:messages:work-details']) {
+    __testing.sendInvokeResultSafe(client as never, 'mobile', channel, { ok: true,
+      result: { messages: [row], items: [{ type: 'messages', key: 'auth', messages: [row] }] } }, channel);
+    const result = client.sendInvokeResult.mock.calls.at(-1)![2].result;
+    expect(result.messages[0].agentMeta.botAuthorization).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain('externalLink');
+  }
+  expect(row.agentMeta.botAuthorization.snapshot.steps[0].action.form.fields[0].externalLink.url).toBe('https://example.com/keys');
 });
 
 describe('negotiated mobile tool projection', () => {
@@ -117,6 +150,149 @@ describe('negotiated mobile tool projection', () => {
       .toHaveProperty('mobileToolInputProjection');
     expect(payload.resolvedContent).toBe(text);
     expect(row.content.input).toBe(input);
+  });
+});
+
+describe('history detail interest', () => {
+  it('sanitizes and bounds nested history prose without mutating the Host rows', () => {
+    const message = { id: 'prose', clientId: 'prose', role: 'assistant', createdAt: '2026-09-08T00:00:00Z',
+      content: 'x'.repeat(MAX_FRAME_BYTES * 2), agentMeta: { recoveryCheckpoint: { secret: 'local-only' }, turnCompleted: false } };
+    const page = { version: 1, items: [{ type: 'work', key: 'outer', summary: {}, children: [
+      { type: 'messages', key: 'prose', messages: [message] },
+    ] }], hasMore: false, nextCursor: null };
+    const client = mkClient();
+    client.sendInvokeResult.mockImplementation((dst, requestId, payload) => {
+      if (invokeResultFrameBytes(dst, requestId, payload) > MAX_FRAME_BYTES) throw tooLarge();
+    });
+    __testing.sendInvokeResultSafe(client as never, 'ctrl', 'nested-history', { ok: true, result: page }, 'local-db:messages:view');
+    const payload = client.sendInvokeResult.mock.calls.at(-1)![2];
+    expect(payload.ok).toBe(true);
+    expect(JSON.stringify(payload)).not.toContain('local-only');
+    expect(invokeResultFrameBytes('ctrl', 'nested-history', payload)).toBeLessThan(MAX_FRAME_BYTES);
+    expect(message.agentMeta.recoveryCheckpoint.secret).toBe('local-only');
+    expect(message.content.length).toBe(MAX_FRAME_BYTES * 2);
+  });
+
+  it.each(['local-db:messages:view', 'local-db:messages:view-intent'])('binds %s before asynchronous authorization', async (channel) => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'ordinary'; });
+    subscriptions.subscribe('ctrl', ['session:s1']);
+    subscriptions.prepareHistoryView('ctrl', 's1')!.update(['work']);
+    registry.register(channel, () => {
+      const view = getDeviceLinkInvokeContext()?.historyView;
+      if (channel.endsWith(':view')) view?.update(['stale']);
+      else view?.setExpanded(['new']);
+      return {};
+    });
+    const request = runInvoke('ctrl', { channel, args: ['s1'] });
+    subscriptions.clearHistoryViews('ctrl');
+    const current = subscriptions.prepareHistoryView('ctrl', 's1')!;
+    current.update(['new']);
+    finish();
+    expect(await request).toMatchObject({ ok: true });
+    expect(subscriptions.projectsHistoryDetails('ctrl', 's1')).toBe(true);
+    current.setExpanded(['new']);
+    expect(subscriptions.projectsHistoryDetails('ctrl', 's1')).toBe(false);
+  });
+  it('does not clear working history when link acceptance fails', () => {
+    const client = mkClient();
+    subscriptions.subscribe('ctrl', ['session:s1']);
+    subscriptions.prepareHistoryView('ctrl', 's1')!.update(['work']);
+    client.sendLinkAccept.mockImplementation(() => { throw new Error('backpressure'); });
+    __testing.handleLinkOpen(client as never, 'ctrl', 'failed-open', undefined);
+    expect(subscriptions.hasHistoryView('ctrl', 's1')).toBe(true);
+    __testing.reset();
+  });
+  it.each([false, true])('restores full pushes on a replacement link (offline first=%s)', (offline) => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    for (const peer of ['changed', 'untouched']) {
+      subscriptions.subscribe(peer, ['session:s1']);
+      subscriptions.prepareHistoryView(peer, 's1')!.update(['work']);
+    }
+    const old = subscriptions.prepareHistoryView('changed', 's1')!;
+    if (offline) subscriptions.clearController('changed');
+    __testing.handleLinkOpen(client as never, 'changed', 'new-link', undefined);
+    subscriptions.subscribe('changed', ['session:s1']);
+    old.update(['work']);
+    old.setExpanded(['work']);
+    client.sendPush.mockClear();
+    const payload = { sessionId: 's1', event: { type: 'thinking', data: { stage: 'delta', text: 'full detail' } } };
+    __testing.forwardPush('maker:event', payload);
+    expect(client.sendPush).toHaveBeenCalledWith('changed', 'maker:event', payload);
+    expect(client.sendPush.mock.calls.some(([peer]) => peer === 'untouched')).toBe(false);
+    subscriptions.prepareHistoryView('changed', 's1')!.update(['work']);
+    client.sendPush.mockClear();
+    __testing.forwardPush('maker:event', payload);
+    expect(client.sendPush.mock.calls.some(([peer]) => peer === 'changed')).toBe(false);
+  });
+  it.each([false, true])('invalidates a sampled pending view even when notice precedes its result: %s', async (finishBeforeNotice) => {
+    vi.useFakeTimers();
+    const page: HistoryViewPage<HistoryMessageSource> = { version: 1, items: [], hasMore: false, nextCursor: null };
+    let finish!: (value: typeof page) => void;
+    const read = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue(page);
+    const view = new HistoryViewController<HistoryMessageSource>({ page: read,
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined });
+    try {
+      const client = mkClient();
+      client.sendPush.mockImplementation((peer, channel) => {
+        if (peer === 'pending' && channel === 'maker:history-view-changed') view.invalidate();
+      });
+      __testing.setActiveClient(client as never);
+      for (const peer of ['pending', 'legacy']) subscriptions.subscribe(peer, ['session:s1']);
+      const captured = subscriptions.prepareHistoryView('pending', 's1')!;
+      const request = view.refresh();
+      const payload = { sessionId: 's1', event: { type: 'thinking', data: { stage: 'delta', blockId: 'b', text: 'new' } } };
+      for (let n = 0; n < 10; n++) __testing.forwardPush('maker:event', payload);
+      expect(client.sendPush.mock.calls.filter(([peer, channel]) => peer === 'pending' && channel === 'maker:event')).toHaveLength(10);
+      if (!finishBeforeNotice) {
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(read).toHaveBeenCalledTimes(1);
+      }
+      captured.update(['work']);
+      finish(page);
+      await request;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(client.sendPush.mock.calls.filter(([, channel]) => channel === 'maker:history-view-changed'))
+        .toEqual([['pending', 'maker:history-view-changed', { sessionId: 's1' }]]);
+      client.sendPush.mockClear();
+      __testing.forwardPush('maker:event', payload);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(client.sendPush.mock.calls).toEqual([['legacy', 'maker:event', payload]]);
+    } finally {
+      view.setActive(false);
+      __testing.reset();
+      vi.useRealTimers();
+    }
+  });
+  it.each(['first', 'second'])('sends full thinking to peers with %s streaming group expanded and coalesces folded summaries', async (expandedKey) => {
+    vi.useFakeTimers();
+    try {
+      const client = mkClient();
+      __testing.setActiveClient(client as never);
+      for (const peer of ['folded', 'expanded', 'legacy']) subscriptions.subscribe(peer, ['session:s1']);
+      for (const peer of ['folded', 'expanded']) subscriptions.prepareHistoryView(peer, 's1')!.update(['first', 'second']);
+      subscriptions.prepareHistoryView('expanded', 's1')!.setExpanded([expandedKey]);
+      const push = (stage: string) => ({ sessionId: 's1', event: { type: 'thinking', data: { stage, blockId: 'b', text: 'private detail' } } });
+      __testing.forwardPush('maker:event', push('start'));
+      for (let n = 0; n < 100; n++) __testing.forwardPush('maker:event', push('delta'));
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'folded')).toHaveLength(0);
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'expanded' && call[1] === 'maker:event')).toHaveLength(101);
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'legacy')).toHaveLength(101);
+      await vi.advanceTimersByTimeAsync(500);
+      const folded = client.sendPush.mock.calls.filter((call) => call[0] === 'folded');
+      expect(folded).toEqual([['folded', 'maker:history-view-changed', { sessionId: 's1' }]]);
+      for (let n = 0; n < 100; n++) __testing.forwardPush('maker:event', push('delta'));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(client.sendPush.mock.calls.filter((call) => call[0] === 'folded')).toHaveLength(1);
+    } finally {
+      __testing.reset();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -661,6 +837,38 @@ describe('remote companion Session visibility at the device-link boundary', () =
     setRemoteBotSessionLookup(async (id) => id === 's1' ? 'hidden' : 'ordinary');
     expect(await runInvoke('ctrl-1', { channel, args } as never)).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each(['hidden', 'missing'] as const)('rejects a private thread when the viewer Bot is %s, using Bot identity rather than the opaque thread ID', async (access) => {
+    const handler = vi.fn(() => ({ ok: true, thread: { messages: [{ content: 'private' }] } }));
+    registry.register('maker:bot-direct-message-thread:get', handler);
+    const lookup = vi.fn(async (id: string, kind?: 'session' | 'bot') =>
+      kind === 'bot' && id === 'viewer-bot' ? access : 'ordinary' as const);
+    setRemoteBotSessionLookup(lookup);
+    expect(await runInvoke('ctrl-1', { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] }))
+      .toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).not.toHaveBeenCalled();
+    expect(lookup).toHaveBeenCalledWith('viewer-bot', 'bot');
+  });
+
+  it('allows a visible private-thread viewer and rechecks that viewer before cached delivery', async () => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async (id, kind) => kind === 'bot' && id === 'viewer-bot'
+      ? hidden ? 'hidden' : 'visible' : 'ordinary');
+    const handler = vi.fn(() => ({ ok: true, thread: { id: 'opaque-thread', messages: [{ content: 'private' }] } }));
+    registry.register('maker:bot-direct-message-thread:get', handler);
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const frame = client.onFrame.mock.calls[0][0];
+    const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-thread', payload: { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] } };
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+    expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: true, result: { ok: true } });
+    hidden = true;
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { message: expect.stringContaining('[NOT_FOUND]') } });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('rechecks visibility after an in-flight read and filters active task discovery', async () => {

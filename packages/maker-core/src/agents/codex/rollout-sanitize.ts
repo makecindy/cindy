@@ -474,6 +474,22 @@ function parseForkSessionMeta(line: string): ForkSessionMeta | null {
   }
 }
 
+/** Read native identity without loading or rewriting the account's history. */
+export async function readCodexRolloutModelProvider(filePath: string, threadId: string): Promise<string | undefined> {
+  for await (const line of iterateRolloutLines(filePath)) {
+    const meta = parseForkSessionMeta(line);
+    if (!meta || meta.payload.id !== threadId) {
+      throw new Error('Codex rollout metadata does not match the requested thread');
+    }
+    const provider = meta.payload.model_provider;
+    if (provider != null && typeof provider !== 'string') {
+      throw new Error('Invalid Codex rollout model provider');
+    }
+    return provider ?? undefined;
+  }
+  throw new Error('Codex rollout metadata is missing');
+}
+
 function detachForkLineage(meta: ForkSessionMeta): string {
   const payload = { ...meta.payload };
   delete payload.forked_from_id;

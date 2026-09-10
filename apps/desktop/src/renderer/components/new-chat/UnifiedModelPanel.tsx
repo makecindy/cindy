@@ -120,6 +120,8 @@ export interface UnifiedModelPanelProps {
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
   interactionDisabled?: boolean;
+  /** Only local directories may read this desktop’s subscription accounts. */
+  localProviderUsage?: boolean;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -135,11 +137,8 @@ export interface UnifiedModelPanelProps {
   selectionPolicy?: 'personalized' | 'official';
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
-   *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图列
-   *     引擎匹配的收藏 + 所有候选含当前引擎的模型(默认/选过的在前,仅兼容的在后);
-   *   - 该视图里的模型行**显示和点选都钉在当前轨引擎**上(π 轨里点就是 Pi);
-   *     排序仍按「默认/选过的在前」,不把主场改写成当前引擎。浮层不提供 Harness 切换。
-   *   - 显式切到「全部 / 供应商」视图时,列表顶部出现一行克制的有损警示;
+   *   - 默认展示全部，已有任务把当前模型和同引擎模型提升到「推荐」;
+   *   - 在「全部 / 供应商」视图时，列表顶部显示有损切换警示;
    *   - 「全部」里选中一行若生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
    *     performAgentSwitch 那条既有事务链路),而不是普通的 onSelect。
    *
@@ -276,6 +275,7 @@ export function UnifiedModelPanel({
   effortLabelOf,
   listMaxHeight,
   interactionDisabled = false,
+  localProviderUsage = false,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -304,17 +304,14 @@ export function UnifiedModelPanel({
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
 
-  // 会话内默认停在「同引擎」视图(规格 §1.6:切引擎有损,默认给无损那一面)。
-  const [rail, setRail] = useState<UnifiedRailFilter>(() =>
-    sessionAgent ? { kind: 'engine', agent: sessionAgent } : { kind: 'all' },
-  );
-  // 会话引擎在外部变化(切换完成 / 换会话)时,把默认视图跟过去 —— 停在旧引擎的
-  // 「同引擎」视图上会把新引擎的模型全挡掉(与既有 browseVendor 重置同一动机)。
+  // 默认展示全部模型，避免当前引擎没有可用模型时把其它可选模型挡住。
+  const [rail, setRail] = useState<UnifiedRailFilter>({ kind: 'all' });
+  // 外部切换引擎后回到默认视图，避免继续按旧引擎过滤。
   const lastSessionAgentRef = useRef(sessionAgent);
   useEffect(() => {
     if (lastSessionAgentRef.current === sessionAgent) return;
     lastSessionAgentRef.current = sessionAgent;
-    setRail(sessionAgent ? { kind: 'engine', agent: sessionAgent } : { kind: 'all' });
+    setRail({ kind: 'all' });
   }, [sessionAgent]);
   const [flyAnchor, setFlyAnchor] = useState<UnifiedAnchor | null>(null);
   const [flyAnchorEl, setFlyAnchorEl] = useState<HTMLElement | null>(null);
@@ -383,8 +380,8 @@ export function UnifiedModelPanel({
   );
 
   const railItems = useMemo(
-    () => buildUnifiedRail(entries, sessionAgent, providerOrder),
-    [entries, sessionAgent, providerOrder],
+    () => buildUnifiedRail(entries, undefined, providerOrder),
+    [entries, providerOrder],
   );
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
@@ -392,7 +389,7 @@ export function UnifiedModelPanel({
     if (railItems.some((item) => railItemKey(item) === railItemKey(rail))) return;
     setRail({ kind: 'all' });
   }, [rail, railItems]);
-  const effectiveRail = rail;
+  const effectiveRail = query.trim() ? RAIL_ALL : rail;
 
   // ── 行配置合成 ────────────────────────────────────────────────────────────
   // 「正在用的引擎」的口径 = 上面推 keepModel 时用的那一个(liveEngineAgent),不另起一份。
@@ -462,9 +459,8 @@ export function UnifiedModelPanel({
       void memoryVersion;
       // 当前草稿 / 会话**实际在用**的模型行:引擎显示强制与事实一致(正在跑什么就画
       // 什么),不受推荐 / override / pinned 摆布 —— 2026-08-14 实测抓到草稿在 pi 上跑
-      // DeepSeek,行上却按推荐回落显示「Claude」。收藏被选中时不强制(live 的是那条收藏)。
+      // DeepSeek,行上却按推荐回落显示「Claude」。收藏配置被采用时，模型本体同样显示实际配置。
       const isSelectedModelRow =
-        !activeFavoriteUid &&
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
       const personalized = selectionPolicy === 'personalized';
@@ -562,7 +558,6 @@ export function UnifiedModelPanel({
       }
       void enginePrefsVersion;
       const isSelectedModelRow =
-        !activeFavoriteUid &&
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
       return resolveUnifiedRowConfig({
@@ -599,13 +594,14 @@ export function UnifiedModelPanel({
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
+        ...(scope === 'session' && liveEngineAgent
+          ? { recommendation: { agent: liveEngineAgent, ...selected } }
+          : {}),
       }),
-    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder, t],
+    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
   );
 
-  // 列表变化时把选中行对齐到**可视区中部**(Chris 2026-08-19 实测反馈,详见
-  // computeSelectedRowScrollTop 的头注:此前是「最小滚动进可视区」,首开那一帧列表极矮,
-  // 等价于把选中行顶到最上沿,收藏 1、2 条被顶出去)。
+  // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
   // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
   // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
   // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
@@ -734,16 +730,14 @@ export function UnifiedModelPanel({
 
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
-      if (anchor.kind === 'fav') return activeFavoriteUid === anchor.uid;
-      // 收藏锚点被选中时,模型行不同时打勾(锚点语义:选中的是那一条收藏)。
-      if (activeFavoriteUid) return false;
+      if (anchor.kind === 'fav') return false;
       // 会话 / 草稿存的是 wire id;按「行 id 或任一引擎 wire id 命中」解析(合并行契约)。
       return (
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === anchor.providerId)
       );
     },
-    [activeFavoriteUid, selected.modelId, selected.providerId],
+    [selected.modelId, selected.providerId],
   );
 
   /** ☆ 点亮 0.7s 后恢复(规格 §1.5:源头行不持有收藏态,只给一次动作反馈)。 */
@@ -868,6 +862,8 @@ export function UnifiedModelPanel({
   const sectionLabel = (section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
+      : section.kind === 'recommended'
+        ? t('newChat.modelSelector.unified.recommended')
       : section.group
         ? providerLabel(section.group.providerId)
         : '';
@@ -955,10 +951,14 @@ export function UnifiedModelPanel({
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
+    <div
+      className="flex min-h-0 min-w-0 shrink"
+      style={{ height: `${listMaxHeight ?? 428}px` }}
+    >
       <UnifiedModelRail
+        localProviderUsage={localProviderUsage}
         items={railItems}
-        active={rail}
+        active={effectiveRail}
         onSelect={setRail}
         providers={providers}
         providerLabel={providerLabel}
@@ -981,9 +981,8 @@ export function UnifiedModelPanel({
             // 底部的「连接来源」footer 是同级兄弟,始终留在列表下方、不盖住最后一行。
             'min-h-0',
           )}
-          // 缺省上限只是「内容很少时别把面板撑太高」的软顶,真正的高度由外层面板给;
-          // 二者相加才既不过高、也不会在窄窗口里滚不到底。
-          style={{ maxHeight: `${listMaxHeight ?? 428}px` }}
+          // Body height is independent of filtered results; min-h-0 still permits
+          // the popover's viewport constraint to shrink this scroll area.
           onScroll={() => {
             // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
             // 程序化对齐不取消在途的选中行定位。

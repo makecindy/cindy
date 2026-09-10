@@ -11,10 +11,19 @@
  */
 
 import { spawn } from 'node:child_process';
-import { BrowserWindow, webContents } from 'electron';
+import { app, BrowserWindow, webContents } from 'electron';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
+import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
+import { createMakeDoctorCommand } from '../cindy-make/doctorCommand.js';
+import { createMakeToolchainEnvironment } from '../cindy-make/toolchainEnvironment.js';
+import { prepareCindyMakeEnvironment } from '../cindy-make/prepare.js';
+import { searchCindyUpstream } from '../cindy-make/upstreamQuery.js';
+import { makeToolRoot } from '../cindy-make/toolInstaller.js';
+import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
 // type-only:不引入对 goal-host / learn-host 的运行时依赖(避免潜在 import 环),
 // 运行时实例由 bootstrap 经 deps.getGoalController / getLearnController 注入。
 import type { GoalController } from '../goal-host/controller.js';
@@ -32,7 +41,8 @@ const log = createLogger('desktop-commands');
  */
 export interface DesktopCommandTriggeredPayload {
   command:
-    'help' | 'clear' | 'cmd' | 'issue' | 'review' | 'jump-session' | 'goal' | 'workflows' | 'learn';
+    'help' | 'clear' | 'cmd' | 'issue' | 'review' | 'jump-session' | 'goal' | 'workflows' | 'learn' | 'cindy-make-doctor' | 'cindy-make';
+  doctorReport?: MakeDoctorReport;
   sessionId?: string;
   workingDir?: string;
   args?: string;
@@ -336,6 +346,38 @@ export function registerBuiltinDesktopCommands(
   registry: DesktopCommandRegistry,
   deps: BuiltinDesktopCommandDeps,
 ): void {
+  for (const name of ['cindy-make-doctor', 'cindy-make'] as const) registry.register(
+    createMakeDoctorCommand({
+      name,
+      description: () => t(name === 'cindy-make' ? 'cindyMake.description' : 'cindyMakeDoctor.description'),
+      environment: (ctx) => createMakeToolchainEnvironment(app.getPath('userData'), {
+        forceManagedTools: ctx.forceManagedTools === true,
+      }),
+      allowInstallTest: () => !app.isPackaged,
+      searchUpstream: async (request, signal) => {
+        const { outboundFetch } = await import('../maker-host/outbound-fetch.js');
+        return searchCindyUpstream(request, signal, { fetch: outboundFetch });
+      },
+      prepare: (runId, env, signal, publish) => prepareCindyMakeEnvironment(
+        runId, env, makeToolRoot(app.getPath('userData')), signal, publish,
+      ),
+      publish: (ctx, doctorReport) => {
+        const target = typeof ctx.senderWebContentsId === 'number'
+          ? webContents.fromId(ctx.senderWebContentsId)
+          : undefined;
+        // Local diagnostics are private to the invoking trusted window; never broadcast.
+        if (
+          !target || target.isDestroyed() ||
+          !isTrustedAppRendererWindow(BrowserWindow.fromWebContents(target))
+        ) return;
+        try {
+          target.send(MAKER_PUSH.DESKTOP_COMMAND_TRIGGERED, { command: name, doctorReport });
+        } catch {
+          /* Closing a view does not change the diagnostic result. */
+        }
+      },
+    }),
+  );
   registry.register({
     name: 'help',
     description: 'Show the help card with every available command and usage example.',

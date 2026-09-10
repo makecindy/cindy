@@ -97,7 +97,7 @@ describe('Server catalog updates with independent Cindy native protocols', () =>
     incoming.modelRegistry!.models[0].contextWindow = 300000;
     accept(incoming);
     const openai = getActiveCatalog().providers.find((provider) => provider.id === 'openai')!;
-    expect(openai.models.codex!.find((model) => model.id === 'gpt-6-astra')?.contextWindow).toBe(
+    expect(openai.models.codex!.find((model) => model.id === 'gpt-6-astra')?.contextWindowMax).toBe(
       300000,
     );
     // An explicit Pi override is independent of the Codex/root window.

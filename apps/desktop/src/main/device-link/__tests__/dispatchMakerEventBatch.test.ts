@@ -136,6 +136,45 @@ afterEach(() => {
 });
 
 describe('[1] 能力协商', () => {
+  it('coalesces task patches even for legacy list subscribers and cancels offline peers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    subscriptions.subscribe('mobile', ['sessions'], 'mobile');
+    for (let i = 0; i < 2026; i++) {
+      __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: String(i) } });
+    }
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { extraDirs: [] } });
+    handleControllerOffline('mobile');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([{ dst: 'legacy', channel: 'local-db:sessions:patched',
+      payload: { sessionId: 's1', patch: { title: '2025', extraDirs: [] } }, ownerStamp: undefined }]);
+  });
+
+  it('keeps engine switch and deletion barriers before subsequent events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: 'new' } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { agentKind: 'codex' } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { type: 'text', data: { text: 'new engine' } } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { status: 'deleted' } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent.map((item) => item.channel)).toEqual(['local-db:sessions:patched', 'maker:event', 'local-db:sessions:patched']);
+    expect(h.sent[0].payload).toEqual({ sessionId: 's1', patch: { title: 'new', agentKind: 'codex' } });
+  });
+
+  it('drops queued global metadata when legacy subscription narrows to one task', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('peer', ['*'], 'peer');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'other', patch: { title: 'private' } });
+    subscriptions.subscribe('peer', ['session:s1'], 'peer');
+    subscriptions.unsubscribe('peer', ['*']);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent).toEqual([]);
+  });
+
   it('声明能力的控制端:窗口内多条事件合并成一帧批,不再每事件一帧', () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -665,6 +704,112 @@ describe('running session recovery on slow links', () => {
     type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
   } };
 
+  it.each([
+    ['batch', 'queue'], ['batch', 'peer'], ['legacy', 'queue'], ['legacy', 'peer'],
+  ] as const)('restores %s streaming within 250ms after %s recovery without polling the snapshot while blocked', (mode, blocker) => {
+    const h = mkClient();
+    let blocked = true;
+    const canSendPush = vi.fn(() => blocker !== 'peer' || !blocked);
+    h.client.getReliableSendQueueDepth.mockImplementation(() => blocker === 'queue' && blocked ? 16 : 0);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', mode === 'batch'
+      ? capabilities : [CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1]);
+    let currentText = 'missing prefix';
+    const readSnapshot = vi.fn(() => ({ ...snapshot, event: {
+      ...snapshot.event, data: { ...snapshot.event.data, text: currentText },
+    } }));
+    setSessionTextSnapshotReader(readSnapshot);
+    __testing.forwardPush('maker:event', delta(currentText));
+    vi.advanceTimersByTime(WINDOW_MS);
+    currentText += ' plus latest text';
+    __testing.forwardPush('maker:event', delta(' plus latest text'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(logSpy.debug.mock.calls.filter(([line]) => line.startsWith('session sync repair queued'))).toHaveLength(1);
+    expect(logSpy.debug.mock.calls.some(([line]) => line.startsWith('session sync repair admitted'))).toBe(false);
+
+    blocked = false;
+    // Recovery must not depend on another token arriving: a thinking/tool gap
+    // after the last delta must still reveal the latest accumulated text.
+    vi.advanceTimersByTime(250);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    expect(h.sent[0].payload).toMatchObject({
+      resyncRequired: false, event: { data: { text: currentText, isFullText: true } },
+    });
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    __testing.forwardPush('maker:event', delta(' live again'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([
+      SESSION_SYNC_CHANNEL, mode === 'batch' ? MAKER_EVENT_BATCH_CHANNEL : 'maker:event',
+    ]);
+    vi.advanceTimersByTime(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    const repairLogs = logSpy.debug.mock.calls.map(([line]) => line).filter(line => line.startsWith('session sync repair'));
+    expect(repairLogs).toHaveLength(2);
+    expect(repairLogs[1]).toContain('resyncRequired=false');
+    expect(repairLogs.join('\n')).not.toContain(currentText);
+  });
+
+  it.each(['sync', 'async'] as const)('keeps failed snapshot admission paced at two seconds through the %s authorization path', async (authorization) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    if (authorization === 'async') setRemoteBotSessionLookup(async () => 'visible');
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    const readSnapshot = vi.fn(() => snapshot);
+    setSessionTextSnapshotReader(readSnapshot);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('missed'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'socket bytes full'); });
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'socket bytes full'); });
+    await vi.advanceTimersByTimeAsync(200);
+    // The repair flushes this later batch, which can re-arm the same timer.
+    // A failed admission must still keep the slower pacing in that case.
+    __testing.forwardPush('maker:event', delta('later suffix'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(h.sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not let a late failed admission delay a newer repair stage', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    const readSnapshot = vi.fn(() => snapshot);
+    setSessionTextSnapshotReader(readSnapshot);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('first'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('new stage'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+  });
+
   it('replays only the requested current block after old deltas and before new deltas', () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -814,6 +959,23 @@ describe('running session recovery on slow links', () => {
     h.client.getReliableSendQueueDepth.mockReturnValue(0);
     vi.advanceTimersByTime(4_000);
     expect(h.sent).toHaveLength(0);
+  });
+
+  it('holds deltas and snapshot repair while a known peer is down, then repairs before resuming', () => {
+    const h = mkClient();
+    const canSendPush = vi.fn(() => false);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    canSendPush.mockReturnValue(true);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    __testing.forwardPush('maker:event', delta('after repair'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
   });
 
   it('repairs text-only loss without repeatedly requesting a large unchanged history page', () => {

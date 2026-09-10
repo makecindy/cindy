@@ -1,3 +1,9 @@
+import { pickModelMetadata } from '@cindy/model-providers';
+import {
+  mergeDiscoveredRuntimeModels,
+  validModelMetadata,
+  type DiscoveredModel,
+} from '@cindy/model-providers';
 /**
  * custom-provider-store —— 用户自定义供应商**非凭证配置**的 localDb CRUD。
  *
@@ -86,7 +92,10 @@ function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
 
 function isReasoningEffortForAgent(agent: string, value: unknown): boolean {
   if (agent === 'pi') return isPiReasoningEffort(value);
-  return typeof value === 'string' && (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value)
+  );
 }
 
 function isPiModelApi(value: unknown): value is PiModelApi {
@@ -97,6 +106,7 @@ function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
+  if (model.reasoning === false) return { reasoning: false };
   if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
@@ -190,6 +200,11 @@ function isAllowedWireProtocol(agent: string, value: unknown): value is Provider
   );
 }
 
+/** ProviderPreset.id is an opaque, non-empty string in the catalog contract. */
+function isCatalogPresetId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (!rt || typeof rt !== 'object') return invalid(`runtime '${agent}' must be an object`);
   const r = rt as Record<string, unknown>;
@@ -227,6 +242,11 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (typeof mm.name !== 'string' || mm.name.trim().length === 0) {
       return invalid(`runtime '${agent}' model.name required`);
     }
+    for (const field of ['mode', 'modalities', 'officialDocs'] as const) {
+      if (mm[field] !== undefined && !validModelMetadata({ [field]: mm[field] })) return invalid(`runtime '${agent}' model.${field} invalid`);
+    }
+    if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
+      return invalid(`runtime '${agent}' discoveredMetadata invalid`);
     if (
       mm.contextWindow !== undefined &&
       (typeof mm.contextWindow !== 'number' ||
@@ -350,6 +370,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
   }
+  if (r.catalogPresetId !== undefined && !isCatalogPresetId(r.catalogPresetId))
+    return invalid(`runtime '${agent}' catalogPresetId invalid`);
   if (
     r.piCatalogProviderId !== undefined &&
     (agent !== 'pi' ||
@@ -365,6 +387,11 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
 function validateAuthSection(auth: unknown): ValidationResult {
   if (!auth || typeof auth !== 'object') return invalid('auth must be an object');
   const a = auth as Record<string, unknown>;
+  if (a.native !== undefined) {
+    return a.method === 'oauth' && ['codex', 'claude', 'xai'].includes(String(a.native)) && a.oauth === undefined
+      ? { ok: true }
+      : invalid('native subscription auth requires oauth method without a generic descriptor');
+  }
   if (a.method !== 'apiKey' && a.method !== 'oauth' && a.method !== 'none') {
     return invalid("auth.method must be 'apiKey' | 'oauth' | 'none'");
   }
@@ -512,6 +539,27 @@ export function validateCustomProviderConfig(
   }
   const rts = c.runtimes as Record<string, unknown>;
   const keys = Object.keys(rts);
+  const native = (c.auth as { native?: string } | undefined)?.native;
+  if (native === 'claude' || native === 'xai') {
+    const agent = native === 'claude' ? 'claude-code' : 'codex';
+    const route = rts[agent] as Record<string, unknown> | undefined;
+    const baseUrl = native === 'claude' ? 'https://api.anthropic.com' : 'https://api.x.ai/v1';
+    const wire = native === 'claude' ? 'anthropic-messages' : 'openai-responses';
+    if (keys.length !== 1 || !route || route.baseUrl !== baseUrl || route.wireProtocol !== wire
+      || route.headers || route.modelsUrl || route.requestPath
+      || !Array.isArray(route.models) || route.models.length !== 0) {
+      return invalid('native subscription accounts require their fixed runtime route and shared catalog');
+    }
+  }
+  if ((c.auth as { native?: string } | undefined)?.native === 'codex') {
+    const codex = rts.codex as Record<string, unknown> | undefined;
+    if (keys.length !== 1 || !codex || codex.baseUrl !== 'https://chatgpt.com/backend-api/codex'
+      || codex.headers || codex.modelsUrl || codex.requestPath
+      || codex.wireProtocol !== 'openai-responses'
+      || (Array.isArray(codex.models) && codex.models.some((model) => model?.route))) {
+      return invalid('native Codex accounts require the fixed Codex runtime route');
+    }
+  }
   if (keys.length === 0) return invalid('at least one runtime required');
   for (const k of keys) {
     if (!VALID_AGENTS.includes(k as AgentKind)) return invalid(`invalid runtime '${k}'`);
@@ -534,6 +582,9 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
+      ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
+      ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
+      ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.route
         ? {
@@ -546,7 +597,9 @@ function normalizeRuntime(
         : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+      ...(typeof m.supportsImageInput === 'boolean'
+        ? { supportsImageInput: m.supportsImageInput }
+        : {}),
       ...(m.reasoning === true && m.reasoningEfforts?.length
         ? {
             reasoning: true,
@@ -565,7 +618,11 @@ function normalizeRuntime(
       seen.add(m.id);
       return true;
     });
-  const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
+  const out: CustomProviderRuntimeConfig = {
+    baseUrl: rt.baseUrl.trim(),
+    models,
+    ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
+  };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
   if (agent === 'codex' && rt.supportsImageGeneration === true) {
     out.supportsImageGeneration = true;
@@ -587,7 +644,9 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
   }
   const out: CustomProviderConfig = { id: config.id, name: config.name.trim(), runtimes };
   // auth 规整：apiKey（默认形态）不落 auth 字段；none / oauth 显式落盘。
-  if (config.auth?.method === 'oauth' && config.auth.oauth) {
+  if (config.auth?.method === 'oauth' && config.auth.native) {
+    out.auth = { method: 'oauth', native: config.auth.native };
+  } else if (config.auth?.method === 'oauth' && config.auth.oauth) {
     const d = config.auth.oauth;
     let oauth: OAuthProviderDescriptor;
     if (d.flow === 'device-code') {
@@ -659,35 +718,17 @@ function invalidateEditedPiCatalogMarker(
 export function mergeDiscoveredModelsIntoConfig(
   config: CustomProviderConfig,
   agent: AgentKind,
-  discovered: { id: string; name: string; contextWindow?: number }[],
+  discovered: DiscoveredModel[],
 ): CustomProviderConfig | null {
   const rt = config.runtimes[agent];
   if (!rt) return null;
-  const existing = new Set(rt.models.map((m) => m.id));
-  const fresh = discovered.filter((m) => m.id && m.name && !existing.has(m.id));
-  if (fresh.length === 0) return null;
-  return {
-    ...config,
-    runtimes: {
-      ...config.runtimes,
-      [agent]: {
-        ...rt,
-        models: [
-          ...rt.models,
-          // 端点声明了上下文长度就随发现落盘,缺省则回落保守默认(#386)。
-          ...fresh.map((m) => ({
-            id: m.id,
-            name: m.name,
-            ...(typeof m.contextWindow === 'number' &&
-            Number.isFinite(m.contextWindow) &&
-            m.contextWindow > 0
-              ? { contextWindow: Math.floor(m.contextWindow) }
-              : {}),
-          })),
-        ],
-      },
-    },
-  };
+  const models = mergeDiscoveredRuntimeModels(rt.models, discovered);
+  return JSON.stringify(models) === JSON.stringify(rt.models)
+    ? null
+    : {
+        ...config,
+        runtimes: { ...config.runtimes, [agent]: { ...rt, models } },
+      };
 }
 
 /** 安全解析 auth 列 JSON（坏数据 / 结构不完整兜底为 undefined = API key 历史形态）。 */
@@ -740,21 +781,29 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
             return {
               id: String(m.id),
               name: String(m.name ?? ''),
+              ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),
+              ...(validModelMetadata(m.discoveredMetadata)
+                ? { discoveredMetadata: m.discoveredMetadata }
+                : {}),
+              ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
               ...(typeof m.contextWindow === 'number' &&
               Number.isFinite(m.contextWindow) &&
               m.contextWindow > 0
                 ? { contextWindow: m.contextWindow }
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(typeof m.supportsImageInput === 'boolean'
+                ? { supportsImageInput: m.supportsImageInput }
+                : {}),
               ...parseStoredReasoningCapability(agent, m),
               ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
             };
           })
       : [];
     const entry: CustomProviderRuntimeConfig = {
+      ...(isCatalogPresetId(r.catalogPresetId) ? { catalogPresetId: r.catalogPresetId } : {}),
       baseUrl,
       models,
     };
@@ -914,7 +963,8 @@ export async function updateCustomProviderIfUnchanged(
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
       updatedAt: nextUpdatedAt(now, existing.updatedAt),
     })
-    .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
+    .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)))
+    .run();
   return result.changes === 1;
 }
 

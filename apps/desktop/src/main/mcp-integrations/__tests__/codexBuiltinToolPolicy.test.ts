@@ -16,7 +16,7 @@ describe('frozen built-in tool policy', () => {
     expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'memory')).toBe(true);
   });
 
-  it('fails open only when no valid frozen policy exists', () => {
+  it('keeps ordinary tasks available when no frozen policy exists', () => {
     expect(isFrozenBuiltinPluginAllowed(undefined, 'collab')).toBe(true);
     expect(
       isFrozenBuiltinPluginAllowed(

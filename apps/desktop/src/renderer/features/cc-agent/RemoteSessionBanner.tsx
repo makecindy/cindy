@@ -18,11 +18,10 @@
  */
 
 import { useTranslation } from 'react-i18next';
-import { useEffect, useState } from 'react';
 import { RotateCw, Square } from 'lucide-react';
 
 interface Props {
-  status: 'reconnecting' | 'host-offline' | 'degraded' | 'suspect-stall' | 'syncing' | 'recovered';
+  status: 'reconnecting' | 'host-offline' | 'degraded' | 'suspect-stall';
   /**
    * 本机到 relay 的连接问题(鉴权失效/被顶号/超限/版本不符)。仅 reconnecting 态消费:
    * 有明确原因时把笼统的「重连中」替换成具体原因文案,避免无限重连横幅无法行动。
@@ -35,13 +34,6 @@ interface Props {
 
 export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Props) {
   const { t } = useTranslation();
-  const [hideRecovered, setHideRecovered] = useState(false);
-  useEffect(() => {
-    setHideRecovered(false);
-    if (status !== 'recovered') return;
-    const timer = setTimeout(() => setHideRecovered(true), 2_000);
-    return () => clearTimeout(timer);
-  }, [status]);
   const activeIssue = status === 'reconnecting' ? (issue ?? null) : null;
   const dotColor =
     status === 'host-offline' || activeIssue
@@ -55,16 +47,10 @@ export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Pro
         ? t('ccAgent.remoteSession.hostOffline')
         : status === 'degraded'
           ? t('ccAgent.remoteSession.degraded')
-          : status === 'syncing'
-            ? t('ccAgent.remoteSession.syncing')
-            : status === 'recovered'
-              ? t('ccAgent.remoteSession.recovered')
-              : t('ccAgent.remoteSession.suspectStall');
+          : t('ccAgent.remoteSession.suspectStall');
   const pulse =
     !activeIssue &&
-    (status === 'reconnecting' || status === 'degraded' || status === 'suspect-stall' || status === 'syncing');
-
-  if (status === 'recovered' && hideRecovered) return null;
+    (status === 'reconnecting' || status === 'degraded' || status === 'suspect-stall');
 
   return (
     <div className="flex select-none items-center gap-2 border-b border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-1.5">

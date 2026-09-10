@@ -16,7 +16,7 @@ import {
   type TurnContinuationState,
 } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
-import type { AgentKind } from './types/common.js';
+import type { AgentKind, UserMessage } from './types/common.js';
 
 function createLogger() {
   const logger = {
@@ -62,7 +62,7 @@ function createControllableHandle(opts?: {
     id: 'thread-1',
     agentKind: opts?.agentKind ?? 'codex',
     model: 'gpt-5.4',
-    async send(_message, sendOptions) {
+    async send(_message: UserMessage, sendOptions?: SendOptions) {
       lastSendOptions = sendOptions;
       sendCount += 1;
       if (opts?.sendError && (opts.sendErrorOnSend ?? 1) === sendCount) {

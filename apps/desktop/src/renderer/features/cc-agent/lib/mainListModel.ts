@@ -36,7 +36,7 @@ import {
   type AutomationScheduleSessionInfo,
   type SidebarSessionEntry,
 } from './automationSidebarGrouping';
-import { sessionActivityMs } from './dateSessionGrouping';
+import { sessionActivityMs, sessionCreatedMs } from './dateSessionGrouping';
 import type { BotGroupNode, ProjectNode } from './projectGrouping';
 
 export type MainListEntry =
@@ -189,11 +189,11 @@ export function getMainListEntrySessions(entry: MainListEntry): readonly Session
   return [entry.session];
 }
 
-function entryActivityMs(entry: MainListEntry): number {
+function entryTimeMs(entry: MainListEntry, sortBy: FilterSortBy = 'recency'): number {
   const sessions = getMainListEntrySessions(entry);
   let max = 0;
   for (const s of sessions) {
-    const ms = sessionActivityMs(s);
+    const ms = sortBy === 'created' ? sessionCreatedMs(s) : sessionActivityMs(s);
     if (ms > max) max = ms;
   }
   return max;
@@ -224,6 +224,7 @@ function entryPriorityRank(entry: MainListEntry, ctx: MainListPriorityContext): 
  * 组内(项目 / 对话组)会话排序的唯一入口。
  *   - priority:分档 + 同档 recency
  *   - recency:一律按最近活动倒序
+ *   - created:按创建时间倒序,消息和状态更新不改序
  * 自定义项目顺序只影响顶层项目行,组内仍走当前 sortBy。不得沿用 groupSessions 的
  * active-first 入参序——状态=全部时,刚归档的任务必须能排在陈旧活跃任务前面。
  */
@@ -240,6 +241,11 @@ export function sortSessionsForMainList(
           sessionPriorityRank(a, ctx) - sessionPriorityRank(b, ctx) ||
           sessionPriorityRecencyMs(b, ctx) - sessionPriorityRecencyMs(a, ctx),
       );
+  }
+  if (sortBy === 'created') {
+    return sessions.slice().sort((a, b) =>
+      sessionCreatedMs(b) - sessionCreatedMs(a) || a.id.localeCompare(b.id),
+    );
   }
   return sessions.slice().sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
 }
@@ -378,7 +384,11 @@ function compareEntriesBySortBy(
       entryPriorityRecencyMs(b, ctx) - entryPriorityRecencyMs(a, ctx)
     );
   }
-  return entryActivityMs(b) - entryActivityMs(a);
+  const timeDifference = entryTimeMs(b, sortBy) - entryTimeMs(a, sortBy);
+  if (timeDifference !== 0 || sortBy !== 'created') return timeDifference;
+  return (getMainListEntrySessions(a)[0]?.id ?? '').localeCompare(
+    getMainListEntrySessions(b)[0]?.id ?? '',
+  );
 }
 
 function sortMainListEntries(
@@ -508,7 +518,8 @@ export function splitEntriesByDevice(
     }))
     .sort(
       (a, b) =>
-        Math.max(...b.entries.map(entryActivityMs)) - Math.max(...a.entries.map(entryActivityMs)),
+        Math.max(...b.entries.map((entry) => entryTimeMs(entry, options.sortBy))) -
+        Math.max(...a.entries.map((entry) => entryTimeMs(entry, options.sortBy))),
     );
   result.push(...rest);
   return result;

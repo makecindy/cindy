@@ -22,9 +22,11 @@ import {
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
+import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { applyCodexPlanSnapshotOnDone, markCodexPlanTurnFailed } from '@cindy/maker-shared/message-render';
 import {
   buildSessionMessagePreviewIndex,
+  sessionRowMessagePreview,
   type RemoteSessionLiveActivity,
 } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
@@ -59,6 +61,8 @@ import {
   type SessionMessageWorkLease,
 } from '@/session/sessionMessageLifecycle';
 import { classifySessionRetention, type SessionRetentionKind } from '@/session/sessionRetention';
+import { clearRemoteHistoryViews, resetRemoteHistoryViews } from '@/session/remoteHistoryViews';
+import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
@@ -138,6 +142,7 @@ export interface RemoteSessionReconnectAttempt {
 interface SessionMessageSyncMarker {
   messageCount: number | null;
   updatedAt: string;
+  preview?: string | null;
 }
 
 export interface SetLatestMessageWindowOptions {
@@ -689,7 +694,7 @@ const messageIdentityIndexes = new WeakMap<
 >();
 const messagePreviewCache = new WeakMap<
   readonly RemoteMessage[],
-  { preview: string | undefined }
+  { preview: string | undefined; liveSession?: RemoteSession }
 >();
 const EMPTY_MESSAGE_STRUCTURE_TOKEN = Object.freeze({ kind: 'empty-message-structure' });
 const emptySessionMessageStructureTokens = new Map<string, object>();
@@ -1027,6 +1032,8 @@ function invalidateSessionMessageWindowState(
 }
 
 function removeSessionRuntimeState(sessionId: string): void {
+  void clearHistoryDisk(undefined, sessionId);
+  clearRemoteHistoryViews(undefined, sessionId);
   invalidateSessionMessageWindowState(sessionId, false);
   emptySessionMessageStructureTokens.delete(sessionId);
   deletePendingInteractionState(sessionId);
@@ -1157,6 +1164,7 @@ function releaseSessionDetailProjections(sessionId: string): boolean {
 }
 
 function reclaimScheduleRuntimeMaps(sessionId: string): boolean {
+  clearRemoteHistoryViews(undefined, sessionId);
   let changed = invalidateSessionMessageWindowState(sessionId, false);
   changed = releaseSessionDetailProjections(sessionId) || changed;
   return changed;
@@ -1203,6 +1211,7 @@ function enforceRegularMessageBudget(): boolean {
     // 标志来自消息数组缓存与 pending identity，不再为每次流式文本重复扫描整窗。
     if (candidate.hasProtectedRows) continue;
     if (!messages.delete(candidate.sessionId)) continue;
+    clearRemoteHistoryViews(undefined, candidate.sessionId);
     pendingMessagePreviewSessionIds.add(candidate.sessionId);
     forgetWindowCoverage(candidate.sessionId);
     sessionLiveStreamAcked.delete(candidate.sessionId);
@@ -1477,6 +1486,7 @@ function recomputeSessions(): void {
   for (const { session, physicalDeviceId } of byId.values()) {
     const prev = prevById.get(session.id);
     const projected = applyPendingTitlePreview(session);
+    if (!prev || !remoteSessionEqual(prev, projected)) pendingMessagePreviewSessionIds.add(session.id);
     next.push(prev && remoteSessionEqual(prev, projected) ? prev : projected);
     sessionDeviceIndex.set(session.id, physicalDeviceId);
   }
@@ -2438,16 +2448,35 @@ function applyRemoteTextEvent(
   persistId?: string,
   deviceId?: string,
 ): boolean {
+  const previous = messages.get(sessionId);
+  const changed = mergeRemoteTextEvent(sessionId, event, persistId, deviceId);
+  const list = messages.get(sessionId);
+  if (list && list !== previous) {
+    // Cache provenance with the extracted text, not with a lingering streaming
+    // pointer. Any later session metadata makes this live preview yield to Host.
+    messagePreviewCache.set(list, {
+      preview: buildSessionMessagePreviewIndex([sessionId], () => list).get(sessionId),
+      liveSession: sessionById(sessionId),
+    });
+  }
+  return changed;
+}
+
+function mergeRemoteTextEvent(
+  sessionId: string,
+  event: Record<string, unknown>,
+  persistId?: string,
+  deviceId?: string,
+): boolean {
   const data = isRecord(event.data) ? event.data : null;
   const text = typeof data?.text === 'string' ? data.text : '';
   const isFinal = data?.isFinal === true;
   // Legacy hosts already send isFullText on final events. Keep their existing
   // reconciliation semantics; only the new in-flight snapshot replaces text.
-  const isFullText = data?.isFullText === true && !isFinal;
-  const snapshotCreatedAt = isFullText && !isFinal && typeof data?.createdAt === 'string'
-    && Number.isFinite(Date.parse(data.createdAt))
-    ? new Date(data.createdAt).toISOString()
-    : undefined;
+  const snapshot = readRemoteTextSnapshot(event);
+  if (snapshot?.truncated) return false;
+  const isFullText = snapshot !== undefined;
+  const snapshotCreatedAt = snapshot?.createdAt;
   if (!text) return false;
 
   const authoritativeDeviceId = authoritativeSessionDeviceId(sessionId);
@@ -2593,9 +2622,7 @@ function applyRemoteTextEvent(
   }
 
   const currentText = existing ? contentToPreview(existing.content) : '';
-  const nextText = isFullText && !hasDeviceLinkTruncationMarker(event) && !hasDeviceLinkTruncationMarker(data)
-    ? text
-    : isFinal
+  const nextText = isFinal
     ? (finalTextWasTruncated && existing
       ? currentText
       : existing && currentText
@@ -2605,7 +2632,8 @@ function applyRemoteTextEvent(
             ? currentText
             : `${currentText}${text}`)
         : text)
-    : currentText + text;
+    : reconcileRemoteText(currentText, text, { snapshot: isFullText, durable: matchedExistingIsPersisted,
+      truncated: hasDeviceLinkTruncationMarker(event) || hasDeviceLinkTruncationMarker(data) });
   const nextMeta = isFinal
     ? (isRecord(event.agentMeta)
       ? { ...(existing?.agentMeta ?? {}), ...event.agentMeta }
@@ -2689,10 +2717,7 @@ function applyRemoteTextEvent(
 }
 
 function isRemoteTextDeltaEvent(event: Record<string, unknown>): boolean {
-  if (readString(event, 'type') !== 'text') return false;
-  const data = isRecord(event.data) ? event.data : null;
-  return typeof data?.text === 'string' && data.text.length > 0 && data.isFinal === false
-    && data.isFullText !== true;
+  return isRemoteTextDelta(event);
 }
 
 function enqueueRemoteTextDelta(
@@ -2836,6 +2861,8 @@ function finalizeRemoteStreamingMessageByClientId(
     return { ...message, agentMeta: clearStreamingMeta(message.agentMeta) };
   });
   if (!changed) return false;
+  const preview = messagePreviewCache.get(existing);
+  if (preview) messagePreviewCache.set(next, preview);
   messages.set(sessionId, next);
   bumpMessageVersion(sessionId);
   return true;
@@ -2861,6 +2888,8 @@ function finalizeRemoteStreamingMessages(
     return { ...message, agentMeta: clearStreamingMeta(mergedMeta) };
   });
   if (!changed) return false;
+  const preview = messagePreviewCache.get(existing);
+  if (preview) messagePreviewCache.set(next, preview);
   messages.set(sessionId, next);
   bumpMessageVersion(sessionId);
   return true;
@@ -3015,6 +3044,8 @@ export const remoteSessionStore = {
    * 清内存与磁盘预览并登记一次刷新；页面可见时立即 load，隐藏时下次打开再拉。
    */
   invalidateSessionMessageWindow(sessionId: string, deviceId?: string): void {
+    void clearHistoryDisk(deviceId, sessionId);
+    resetRemoteHistoryViews(deviceId, sessionId);
     const changed = invalidateSessionMessageWindowState(sessionId, true);
     clearSessionMessageCache(sessionId, deviceId);
     if (changed) {
@@ -3230,6 +3261,8 @@ export const remoteSessionStore = {
     }
     let shouldReseedAfterPatch = false;
     if (patch.status === 'deleted' || patch.status === 'archived') {
+      void clearHistoryDisk(deviceId, sessionId);
+      clearRemoteHistoryViews(deviceId, sessionId);
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       deleteSessionLiveActivity(sessionId);
       dropPendingTitlePreview(sessionId);
@@ -3307,8 +3340,8 @@ export const remoteSessionStore = {
     sessionId: string,
     list: readonly RemoteMessage[],
     options: SetLatestMessageWindowOptions = {},
-  ): void {
-    if (!messageWriteAllowed(sessionId, options.authority)) return;
+  ): boolean {
+    if (!messageWriteAllowed(sessionId, options.authority)) return false;
     const textFlushed = flushPendingTextDelta(sessionId);
     const latestWindow = normalizeWindowForRetention(sessionId, normalizeMessages(list));
     const projectionSettled = settleInputProjectionFromMessages(sessionId, latestWindow);
@@ -3321,7 +3354,7 @@ export const remoteSessionStore = {
       // while the persistence push is still in flight.
       if (hasLiveAssistantMessage(sessionId)) {
         if (textFlushed || projectionSettled) emit();
-        return;
+        return false;
       }
       const preserved = existing.filter((item) => messageKey(item).startsWith('mobile-system-'));
       const next = preserved.length > 0 ? preserved : [];
@@ -3336,7 +3369,7 @@ export const remoteSessionStore = {
       } else if (textFlushed || projectionSettled) {
         emit();
       }
-      return;
+      return true;
     }
 
     const latestOldestCreatedAt = latestWindow[0].createdAt;
@@ -3348,7 +3381,7 @@ export const remoteSessionStore = {
       // retained newer rows, then trusting live pushes, would certify the gap.
       // Rewind/clear invalidates coverage explicitly, so it does not use this path.
       if (textFlushed || projectionSettled) emit();
-      return;
+      return false;
     }
     // A triggering user row must be inserted before its live assistant reply is
     // tied to the same host timestamp. Other authoritative tail rows keep the
@@ -3498,7 +3531,7 @@ export const remoteSessionStore = {
         );
       if (liveRowsReanchoredBeforeMerge || liveRowsReanchoredAfterMerge) bumpMessageVersion(sessionId);
       if (textFlushed || liveRowsReanchoredBeforeMerge || liveRowsReanchoredAfterMerge) emit();
-      return;
+      return true;
     }
     messages.set(sessionId, next);
     if (reanchorAfterMerge) {
@@ -3516,11 +3549,16 @@ export const remoteSessionStore = {
     applyMessageWriteRetention(sessionId);
     bumpMessageVersion(sessionId);
     emit();
+    return true;
   },
 
-  markSessionMessagesSynced(sessionId: string, session: Pick<RemoteSession, '_count' | 'updatedAt'>): void {
+  markSessionMessagesSynced(sessionId: string, session: Pick<RemoteSession, '_count' | 'updatedAt' | 'preview'>): void {
     if (!sessionId) return;
+    if (this.isSessionMessageWindowSynced(sessionId, session)
+      && sessionMessageSyncMarkers.get(sessionId)?.preview === session.preview) return;
     sessionMessageSyncMarkers.set(sessionId, buildSessionMessageSyncMarker(session));
+    bumpMessageVersion(sessionId);
+    emit();
   },
 
   isSessionMessageWindowSynced(sessionId: string, session: Pick<RemoteSession, '_count' | 'updatedAt'>): boolean {
@@ -3540,7 +3578,10 @@ export const remoteSessionStore = {
     pendingRefreshSessions.delete(sessionId);
     // A history read already in flight when the dirty push arrived may have
     // reinstalled its older marker. The queued repair must still read history.
-    sessionMessageSyncMarkers.delete(sessionId);
+    if (sessionMessageSyncMarkers.delete(sessionId)) {
+      bumpMessageVersion(sessionId);
+      emit();
+    }
     return true;
   },
 
@@ -3691,6 +3732,7 @@ export const remoteSessionStore = {
   removeMessages(sessionId: string, clientIds: readonly string[], deviceId?: string): void {
     const deletedClientIds = new Set(clientIds.filter(Boolean));
     if (!sessionId || deletedClientIds.size === 0) return;
+    void clearHistoryDisk(deviceId, sessionId);
     const tracked = new Set(inputProjections.get(sessionId)?.pendingQueue.map((item) => item.clientId) ?? []);
     for (const [clientId, epoch] of inputProjectionRemoteQueuedEvidence.get(sessionId) ?? []) if (epoch > 0) tracked.add(clientId);
     const settled = new Set([...deletedClientIds].filter((clientId) => tracked.has(clientId)));
@@ -3702,7 +3744,7 @@ export const remoteSessionStore = {
     const next = existing.filter((message) => (
       !deletedClientIds.has(message.clientId) && !deletedClientIds.has(message.id)
     ));
-    sessionMessageSyncMarkers.delete(sessionId);
+    const syncMarkerChanged = sessionMessageSyncMarkers.delete(sessionId);
     // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
     // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
     forgetWindowCoverage(sessionId);
@@ -3753,7 +3795,8 @@ export const remoteSessionStore = {
     if (messagesChanged) {
       applyMessageWriteRetention(sessionId);
     }
-    if (!messagesChanged && !tasksChanged && !projectionSettled) return;
+    resetRemoteHistoryViews(deviceId, sessionId);
+    if (!messagesChanged && !tasksChanged && !projectionSettled && !syncMarkerChanged) return;
     bumpMessageVersion(sessionId);
     emit();
   },
@@ -4114,17 +4157,17 @@ export const remoteSessionStore = {
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
-    if (channel === SESSION_SYNC_CHANNEL && isRecord(payload)) {
-      const sessionId = readString(payload, 'sessionId');
-      if (!sessionId) return;
-      if (isRecord(payload.event)) this.applyRemotePush(deviceId, 'maker:event', payload);
-      if (payload.resyncRequired === true) {
-        sessionMessageSyncMarkers.delete(sessionId);
-        forgetWindowCoverage(sessionId);
-        pendingRefreshSessions.add(sessionId);
-        bumpMessageVersion(sessionId);
-        emit();
-      }
+    if (channel === SESSION_SYNC_CHANNEL) {
+      consumeRemoteSessionSync(payload, {
+        applyEvent: (event) => this.applyRemotePush(deviceId, 'maker:event', event),
+        invalidateHistory: (sessionId) => {
+          sessionMessageSyncMarkers.delete(sessionId);
+          forgetWindowCoverage(sessionId);
+          pendingRefreshSessions.add(sessionId);
+          bumpMessageVersion(sessionId);
+          emit();
+        },
+      });
       return;
     }
     if (channel === SESSION_ACTIVITY_CHANNEL) {
@@ -4777,7 +4820,10 @@ export const remoteSessionStore = {
     }
     for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
       if (indexedDeviceId !== deviceId) continue;
-      changed = sessionMessageSyncMarkers.delete(sessionId) || changed;
+      if (sessionMessageSyncMarkers.delete(sessionId)) {
+        bumpMessageVersion(sessionId);
+        changed = true;
+      }
       changed = livePlanSnapshots.delete(sessionId) || changed;
       changed = pendingRefreshSessions.delete(sessionId) || changed;
       changed = deletePendingInteractionState(sessionId) || changed;
@@ -4809,6 +4855,8 @@ export const remoteSessionStore = {
   },
 
   removeDevice(deviceId: string): void {
+    void clearHistoryDisk(deviceId);
+    clearRemoteHistoryViews(deviceId);
     bumpDeviceSessionListMutationEpoch(deviceId);
     const hadShard = shards.delete(deviceId);
     const hadWorktreePreference = newMakerWorktreePreferences.delete(deviceId);
@@ -4886,6 +4934,7 @@ export const remoteSessionStore = {
   },
 
   clear(): void {
+    clearRemoteHistoryViews();
     deviceSessionListMutationEpochFloor = ++nextDeviceSessionListMutationEpoch;
     deviceSessionListMutationEpochs.clear();
     shards.clear();
@@ -5007,6 +5056,27 @@ export const remoteSessionStore = {
     const preview = buildSessionMessagePreviewIndex([sessionId], () => list).get(sessionId);
     messagePreviewCache.set(list, { preview });
     return preview;
+  },
+
+  /** Lists must not let an old message mirror hide fresh history-view metadata. */
+  getSessionListMessagePreview(sessionId: string, session = sessionById(sessionId)): string | undefined {
+    const loaded = this.getSessionMessagePreview(sessionId);
+    if (!session || (this.isSessionMessageWindowSynced(sessionId, session)
+      && sessionMessageSyncMarkers.get(sessionId)?.preview === session.preview)) return loaded;
+    // Only text received against the current metadata may outrun its preview.
+    // A missed done event must not let an old stream win after foreground refresh.
+    const cached = messagePreviewCache.get(messages.get(sessionId) ?? emptyMessages);
+    if (cached?.liveSession === session) return loaded;
+    return sessionRowMessagePreview(session) ?? (typeof session.preview === 'string' ? '' : loaded);
+  },
+
+  getSessionListMessagePreviewIndex(sessions: readonly RemoteSession[]): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const session of sessions) {
+      const preview = this.getSessionListMessagePreview(session.id, session);
+      if (preview) index.set(session.id, preview);
+    }
+    return index;
   },
 
   getMessageVersion(): number {
@@ -5352,10 +5422,11 @@ function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus):
   return true;
 }
 
-function buildSessionMessageSyncMarker(session: Pick<RemoteSession, '_count' | 'updatedAt'>): SessionMessageSyncMarker {
+function buildSessionMessageSyncMarker(session: Pick<RemoteSession, '_count' | 'updatedAt' | 'preview'>): SessionMessageSyncMarker {
   const count = session._count?.messages;
   return {
     updatedAt: session.updatedAt,
+    preview: session.preview,
     messageCount: typeof count === 'number' && Number.isFinite(count) ? count : null,
   };
 }
@@ -5586,7 +5657,7 @@ export function useRemoteSessionMessagePreview(sessionId: string): string | unde
   );
   return usePausableRemoteSessionStoreSnapshot(
     `message-preview:${sessionId}`,
-    useCallback(() => remoteSessionStore.getSessionMessagePreview(sessionId), [sessionId]),
+    useCallback(() => remoteSessionStore.getSessionListMessagePreview(sessionId), [sessionId]),
     subscribe,
   );
 }

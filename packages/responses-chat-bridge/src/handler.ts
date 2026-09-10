@@ -1,6 +1,11 @@
 import type { ServerResponse } from 'node:http';
 
 import { ChatSseTranslator } from './chat-sse-translator.js';
+import {
+  overrideHeadersCaseInsensitive,
+  resolveConversationSessionHeaders,
+  withChatBridgeUserAgent,
+} from './session-header.js';
 import { coalesceLeadingSystemMessages, translateResponsesRequestWithContext } from './translate-request.js';
 import {
   UnsupportedResponsesFeatureError,
@@ -185,7 +190,7 @@ export function createResponsesChatHandler(
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   return {
-    async handle({ parsedBody, res }): Promise<void> {
+    async handle({ parsedBody, res, requestHeaders }): Promise<void> {
       if (!isPlainObject(parsedBody) || typeof parsedBody.model !== 'string') {
         writeJson(res, 400, responsesError(400, 'invalid_request', 'invalid Responses request body'));
         return;
@@ -260,10 +265,16 @@ export function createResponsesChatHandler(
       let upstream: Response;
       let upstreamErrorText: string | undefined;
       try {
+        // 出站头 = 供应商凭证/自定义头(缺 UA 时补 bridge 标识)+ 稳定会话头 + 协议头。
+        // 会话头按每个对话从入站 thread-id 映射,优先于供应商静态配置里同名的固定值
+        // (整机共用一个 ID 达不到上游「每个对话稳定」的要求,见 #4073);其余入站头不出网。
+        // 覆盖按头名大小写不敏感进行,否则 `X-OpenCode-Session` 与 `x-opencode-session`
+        // 会被 fetch 合并成一个非法复合值。
+        const sessionHeaders = resolveConversationSessionHeaders(requestHeaders);
         const send = (): Promise<Response> => fetchImpl(upstreamUrl, {
           method: 'POST',
           headers: {
-            ...providerHeaders,
+            ...overrideHeadersCaseInsensitive(withChatBridgeUserAgent(providerHeaders), sessionHeaders),
             'content-type': 'application/json',
             accept: 'text/event-stream',
           },

@@ -2327,11 +2327,11 @@ export class AgentIslandService {
     }
 
     const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
+    if (focusChanged) this.publish();
     // Reuse the primary-window handoff: it retains navigation while the
     // renderer reloads and restores macOS app focus. A one-shot notification
     // sent during loading is lost before MainLayout can acknowledge the task.
     openMainWindowSession(nextSessionId);
-    if (focusChanged) this.publish();
   }
 
   private dispatchMainWindowCommand(
@@ -2419,6 +2419,7 @@ function buildAgentIslandStrings(): AgentIslandStrings {
     needsInput: t('agentIsland.native.needsInput'),
     completed: t('agentIsland.native.completed'),
     error: t('agentIsland.native.error'),
+    outputLimit: t('logic.errors.outputLimit'),
     input: t('agentIsland.native.input'),
     done: t('agentIsland.native.done'),
     running: t('agentIsland.native.running'),

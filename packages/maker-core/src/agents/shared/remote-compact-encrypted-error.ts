@@ -10,6 +10,10 @@
  */
 export function isRemoteCompactEncryptedContentError(message: string): boolean {
   if (!message) return false;
+  // Proxy evidence: upstream rejected a body whose only opaque payload is the
+  // retained compaction block, after reasoning cleanup. A provider change alone
+  // (or a bare invalid_encrypted_content) is insufficient to infer this failure.
+  if (/\bCINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE\b/.test(message)) return true;
   return (
     /invalid_encrypted_content/i.test(message) &&
     /remote compact/i.test(message)

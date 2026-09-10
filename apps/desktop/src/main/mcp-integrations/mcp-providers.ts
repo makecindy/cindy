@@ -1,3 +1,6 @@
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
+import { routineTools } from '../routines/service.js';
 import { join as pathJoin } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 
@@ -16,6 +19,7 @@ import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
+  type CindyGhostsHostDeps,
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
@@ -76,6 +80,8 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 
 export interface DesktopMcpProvidersDeps {
+  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
+  createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
@@ -557,6 +563,32 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
         },
       },
+      botRoutines: {
+        service: routineTools,
+        resolveBotId: async (callerSessionId) => {
+          const scope = activeOwnerScopeKey();
+          if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+            throw new Error('Routine account is no longer active');
+          }
+          const dbClient = tryGetDbClient();
+          if (!dbClient) throw new Error('localDb not ready');
+          const [owned] = await dbClient.drizzle
+            .select({ botId: botSessionLinks.botId })
+            .from(botSessionLinks)
+            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+            .where(and(
+              eq(botSessionLinks.sessionId, callerSessionId),
+              eq(sessions.source, 'bot'),
+              eq(botSessionLinks.role, 'canonical'),
+            ))
+            .limit(1);
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
+            throw new Error('Routine account is no longer active');
+          }
+          if (!owned) throw new Error('当前调用未绑定伙伴主任务');
+          return owned.botId;
+        },
+      },
       botProfiles: {
         create: async ({ callerSessionId, name, description, identitySource, welcomeMessage }) => {
           const dbClient = tryGetDbClient();
@@ -599,6 +631,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
+      botCapabilities: deps.botCapabilities,
       botSkills: {
         save: (params) => saveBotSkillForSession(params),
         list: (params) => listBotSkillsForSession(params),
@@ -741,6 +774,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getCindyGhostsMcpDeps(ctx, {
           getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          createMediaDownloadContext: deps.createMediaDownloadContext,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),

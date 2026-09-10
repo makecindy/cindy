@@ -1,5 +1,8 @@
 import {
   CodexResumePreparationBlockedError,
+  AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
+  INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
   type MainOwnedSendContext,
@@ -34,10 +37,15 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import { currentAutoReviewResourceIntent, readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
 type CreateOpts = MakerSessionCreateOpts;
 
 export interface BootstrapDirectoryGrantDeps {
+  /** Host-only: a temporary workspace must not turn unavailable grants into revocations. */
+  preservePersistedGrants?: boolean;
+  statDirectory?: (dir: string) => Promise<{ isDirectory(): boolean }>;
+  realpathDirectory?: (dir: string) => Promise<string>;
   readPersistedWritableDirs(sessionId: string): Promise<string[]>;
   persistExistingSession(
     sessionId: string,
@@ -65,10 +73,10 @@ export async function prepareDirectoryGrantsForBootstrap(
     typeof opts.id === 'string' && opts.id
       ? await deps.readPersistedWritableDirs(opts.id)
       : [];
-  const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir);
-  const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir);
+  const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir, deps.statDirectory);
+  const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir, deps.statDirectory);
   const extraDirs = extraValidation.valid;
-  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs);
+  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs, deps.realpathDirectory);
 
   if (opts.extraDirs !== undefined || extraDirs.length > 0) opts.extraDirs = extraDirs;
   if (opts.writableDirs !== undefined || writableDirs.length > 0) opts.writableDirs = writableDirs;
@@ -76,7 +84,7 @@ export async function prepareDirectoryGrantsForBootstrap(
   const changed =
     !sameDirectoryList(requestedExtraDirs, extraDirs) ||
     !sameDirectoryList(requestedWritableDirs, writableDirs);
-  if (!changed || opts.remoteHostId || typeof opts.id !== 'string' || !opts.id) return;
+  if (!changed || deps.preservePersistedGrants || opts.remoteHostId || typeof opts.id !== 'string' || !opts.id) return;
 
   await deps.persistExistingSession(opts.id, { extraDirs, writableDirs });
 }
@@ -136,6 +144,16 @@ export function stampTrustedDesktopQueuedOrigin(
   preserveSemanticOrigin = false,
 ): AgentInputQueuedMessage {
   const explicitUserItem = withoutDesktopAuthorization(item, preserveSemanticOrigin);
+  // This function is called only after trusted input IPC validation, including queue edits.
+  // Preserve the user's text independently of any later plugin rewrite, without granting
+  // mobile inputs the separate Pi desktop-command privilege.
+  delete explicitUserItem.autoReviewUserText;
+  const ordinary = !item.autoResume && item.originalSyntheticTrigger === undefined
+    && (!item.origin || (item.origin as { kind: string }).kind === 'desktop');
+  // Keep the complete input until the shared atomic history budget is applied.
+  // Pre-compacting a revocation would leave older grants beside an omission marker.
+  if (ordinary) explicitUserItem.autoReviewUserText =
+    readAutoReviewUserText(item.persistedContent) ?? currentAutoReviewResourceIntent(item.persistedContent, item.text);
   if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem;
   const receipt: TrustedDesktopPiCommandSnapshot = {
     version: 1,
@@ -192,6 +210,10 @@ export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage):
 }
 
 type MakerSendOptions = {
+  readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+  /** Main-only continuation: a restored intent is not an authored user turn. */
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
   userName?: string;
@@ -277,6 +299,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
+  hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
   id: string;
   agentKind: AgentKind;
   workDir: string;
@@ -297,7 +320,10 @@ export interface MakerSendTransactionLog {
 export interface MakerSendTransactionDeps {
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
+  preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
+  /** The same clear/rewind-filtered transcript used for native context handoffs. */
+  readAutoReviewHistory?(sessionId: string): Promise<AutoReviewHistoryMessage[]>;
   ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
@@ -309,6 +335,7 @@ export interface MakerSendTransactionDeps {
     remoteHostId?: string | null,
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean>;
+  resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
   /**
    * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create /
    * rehydrate 在 caller 传入的 workingDir 校验失败时用它兜底——输入队列崩溃
@@ -412,6 +439,9 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
+  readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
+  consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
   /**
    * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
    * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
@@ -569,7 +599,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function loadExtraDirsIfNeeded(
     sessionId: string,
     opts: CreateOpts,
-    source: 'lazy-create' | 'active-orca-rehydrate',
+    source: 'lazy-create' | 'active-session-rehydrate',
   ): Promise<void> {
     if (opts.extraDirs === undefined) {
       try {
@@ -624,7 +654,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           createOpts.agentKind,
           createOpts.remoteHostId,
         );
-    if (ok) return true;
+    if (ok) {
+      if (!createOpts.remoteHostId && createOpts.workingDir) {
+        createOpts.workingDir = deps.resolveRecoveredWorkingDir?.(sessionId, createOpts.workingDir) ?? createOpts.workingDir;
+      }
+      return true;
+    }
     if (!fallbackDir) return false;
     const okDb = await deps.checkWorkDirExists(
       sessionId,
@@ -638,14 +673,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       staleWorkingDir: createOpts.workingDir,
       workingDir: fallbackDir,
     });
-    createOpts.workingDir = fallbackDir;
+    createOpts.workingDir = createOpts.remoteHostId ? fallbackDir :
+      deps.resolveRecoveredWorkingDir?.(sessionId, fallbackDir) ?? fallbackDir;
     return true;
   }
 
-  async function rehydrateActiveOrcaSession(
+  async function rehydrateActiveSession(
     sessionId: string,
     createOpts: CreateOpts,
     fromDeviceLinkClient: boolean,
+    reason: 'orca' | 'workdir' = 'orca',
   ): Promise<ResolveSessionResult> {
     const okRehydrate = await ensureWorkDirWithDbFallback(sessionId, createOpts);
     if (!okRehydrate) {
@@ -659,14 +696,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ),
       };
     }
-    await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-orca-rehydrate');
+    await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-session-rehydrate');
     try {
+      if (reason === 'workdir') {
+        await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
+      }
       // 关旧 runtime 前先按 DB 权威口径对账执行字段(与 lazy-create 同源):caller /
       // 队列的 createOpts 快照常不带 resumeSessionId(或带旧引擎的陈旧值),直接
       // close+bootstrap 会启动一个没有旧 transcript 的全新原生会话(#2882:Pi 会话
       // 中途 start_team 后丢失全部对话历史)。DB 读失败时 reconcile 抛错 → 落入下方
       // REHYDRATE_FAILED,此时尚未 closeSession,旧 runtime 不受损。
       await deps.reconcileCreateOptsWithDb?.(sessionId, createOpts);
+      if (reason === 'workdir') await deps.preflightBotRuntimeResources(createOpts);
       // A newly created device-link Codex Lead has a real sdk_session_id as soon as
       // thread/start returns, but that id is not resumable until a provider turn
       // is accepted. The live Session is the only trustworthy local evidence at
@@ -687,15 +728,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);
-        // close 后重新 bootstrap，避免旧 SDK handle 缺 Orca MCP vendorOptions。
+        // Rebuild the SDK handle with the repaired cwd and current MCP options.
         const {
           session: newSess,
           didInjectOrcaInstructions,
           didInjectProjectContext,
         } = await deps.bootstrapSession(createOpts);
         await deps.markOrcaRoleIfNeeded(newSess.id, createOpts.orcaRole);
-        deps.log.info('send: rehydrate active Orca session with MCP vendorOptions', {
+        deps.log.info('send: rehydrate active session', {
           sessionId,
+          reason,
           agentKind: createOpts.agentKind,
           usedOrcaInstructions: didInjectOrcaInstructions,
           usedProjectContext: didInjectProjectContext,
@@ -853,13 +895,52 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
       if (sess) {
+        // Startup migration or a directory relocation may repair SQLite while a
+        // live SDK still owns the old cwd. Only use that persisted replacement;
+        // recreating an arbitrary project as an empty folder would lose its context.
+        const dbDir = !sess.remoteHostId
+          ? await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null)
+          : null;
+        const fallbackDir = dbDir && dbDir !== sess.workDir ? dbDir : null;
         const ok = await deps.checkWorkDirExists(
           sessionId,
           sess.workDir,
           sess.agentKind,
           sess.remoteHostId,
+          ...(fallbackDir ? [{ suppressMissingBroadcast: true }] : []),
         );
-        if (!ok) {
+        // Claude/Pi keep a process whose cwd can still reference the deleted inode.
+        // The pending note also covers recovery performed by an earlier preflight.
+        const recoveredDir = !sess.remoteHostId
+          ? deps.resolveRecoveredWorkingDir?.(sessionId, sess.workDir) ?? sess.workDir
+          : sess.workDir;
+        const needsCwdRefresh = ok && !sess.remoteHostId && (
+          recoveredDir !== sess.workDir ||
+          ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir)));
+        if ((!ok && fallbackDir) || needsCwdRefresh) {
+          const supplied = (createOpts as CreateOpts | undefined) ??
+            await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+          const startupPreferences = sess.hostStartupPreferences ?? {};
+          const preferences = Object.fromEntries(Object.entries(startupPreferences)
+            .filter(([key]) => supplied[key as keyof typeof startupPreferences] === undefined));
+          const co = deps.buildCreateOptsWithStderr({
+            ...supplied,
+            ...preferences,
+            id: sessionId,
+            workingDir: needsCwdRefresh ? recoveredDir : fallbackDir!,
+            agentKind: sess.agentKind,
+            remoteHostId: sess.remoteHostId ?? undefined,
+          });
+          const recovered = await rehydrateActiveSession(
+            sessionId,
+            co,
+            requestedSendOpts.fromDeviceLinkClient === true,
+            'workdir',
+          );
+          if (recovered.kind === 'failure') return recovered.result;
+          sess = recovered.session;
+        } else if (!ok) {
           return toCompatibleMakerSendResult(
             createHostSendFailure(
               'WORKDIR_MISSING',
@@ -880,7 +961,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 sessionId,
               });
             } else {
-              const rehydrated = await rehydrateActiveOrcaSession(
+              const rehydrated = await rehydrateActiveSession(
                 sessionId,
                 co,
                 requestedSendOpts.fromDeviceLinkClient === true,
@@ -988,10 +1069,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
+      const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir) ?? null
+        : null;
+      const withRecoveryNote = workdirRecoveryNote
+        ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote)
+        : normalized;
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
       const withHandoff = pendingHandoff
-        ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
-        : normalized;
+        ? prependHandoffToUserMessage(withRecoveryNote as HandoffWireMessage, pendingHandoff)
+        : withRecoveryNote;
       // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
       // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
       // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
@@ -1096,6 +1183,28 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? { origin: { kind: 'desktop' as const }, rawChannelText: trustedDesktopQueueReceipt.text }
           : undefined;
       const mainOwnedSendContext = so[MAIN_OWNED_SEND_CONTEXT] ?? directDesktopContext;
+      // Capture before handoff, reconciliation and mobile notes. Identity-bearing channels
+      // still use MAIN_OWNED_SEND_CONTEXT.rawChannelText in core; do not mint owner identity.
+      const trustedUserText = typeof so[AUTO_REVIEW_SOURCE_CONTENT] === 'string'
+        ? so[AUTO_REVIEW_SOURCE_CONTENT] as string
+        : mainOwnedSendContext?.origin.kind === 'desktop' ? mainOwnedSendContext.rawChannelText : undefined;
+      const autoReviewSourceContent = so[AUTO_REVIEW_SOURCE_CONTENT]
+        ?? (typeof normalized === 'string' ? normalized : normalized.content) as UserMessage['content'];
+      let restoredAutoReviewIntent = so[AUTO_REVIEW_USER_INTENT];
+      if (restoredAutoReviewIntent === undefined && isOrdinaryUserTurn && trustedUserText !== undefined
+        && (!mainOwnedSendContext || mainOwnedSendContext.origin.kind === 'desktop')) {
+        let history: AutoReviewHistoryMessage[] = [];
+        try {
+          history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
+        } catch {
+          deps.log.warn('auto-review user history unavailable', { sessionId });
+        }
+        restoredAutoReviewIntent = restoreAutoReviewUserIntent(history, {
+          clientId: persistUserMessage?.clientId ?? '',
+          content: persistUserMessage?.content ?? { text: trustedUserText },
+          authoredText: trustedUserText,
+        });
+      }
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);
       const topLevelInputGeneration = normalizeExpectedInputGeneration(so.expectedInputGeneration);
       if (
@@ -1188,6 +1297,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? Math.max(0, Date.now() - 1)
           : null;
         const sendResult = await sess.send(outgoing as never, {
+          [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
+          ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
+            ? { [INHERITED_CAPABILITY_SELECTION]: so[INHERITED_CAPABILITY_SELECTION] }
+            : {}),
+          ...(restoredAutoReviewIntent !== undefined
+            ? { [AUTO_REVIEW_USER_INTENT]: restoredAutoReviewIntent }
+            : {}),
           logTitle: meta?.title,
           messageUuid: so.messageUuid,
           userName: so.userName,
@@ -1257,6 +1373,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       content: persistUserMessage.content,
                       agentMeta: {
                         uuid: so.messageUuid,
+                        ...(trustedUserText !== undefined ? { autoReviewUserText: trustedUserText } : {}),
                         sdkSessionId: persistUserMessage.sdkSessionId,
                         ...(persistUserMessage.delivery
                           ? { delivery: persistUserMessage.delivery }
@@ -1344,6 +1461,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (pendingHandoff && sendResult.accepted) {
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
+        }
+        if (workdirRecoveryNote && sendResult.accepted) {
+          deps.consumeWorkingDirectoryRecoveryNote?.(sessionId, workdirRecoveryNote);
         }
         if (planReconcile?.sealedTurnId && sendResult.accepted) {
           try {

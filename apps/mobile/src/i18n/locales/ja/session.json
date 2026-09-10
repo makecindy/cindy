@@ -1,4 +1,8 @@
 {
+  "failedScheduleNotice": {
+    "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。",
+    "dismissTitle": "過去の失敗通知を閉じる"
+  },
   "common": {
     "cancel": "キャンセル",
     "delete": "削除",
@@ -174,6 +178,7 @@
     "composerSessionNotSynced": "このセッションはまだ同期が完了していません。",
     "composerCreating": "セッションを作成中です。最初のメッセージ送信後に続けて送信できます。",
     "nextAgentSwitch": "次から {{agent}} · {{model}} に切り替え",
+    "nextModelSelection": "次のメッセージ · {{model}}",
     "createFailedTitle": "セッションの作成に失敗しました",
     "createFailedDefault": "セッションの作成に失敗しました。",
     "createFailedNotice": "セッションの作成に失敗しました：{{message}}",
@@ -464,6 +469,7 @@
     "continueTask": "タスクを続ける",
     "retry": "再試行",
     "ignore": "無視",
+    "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。次のメッセージを送信して続行できます。",
     "toolUseLoopDetected": "モデルがツール呼び出しを繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",
     "toolUseLoopDetectedWithCount": "モデルが無効なツール呼び出しを繰り返したため、無限ループを防ぐために {{count}} 回の失敗後にこのターンを停止しました。新しいメッセージを送信して続行できます。",
     "toolUseLoopDetectedConsecutiveWithCount": "モデルが同じツール呼び出しを {{count}} 回繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",

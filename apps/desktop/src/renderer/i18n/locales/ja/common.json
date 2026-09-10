@@ -1,4 +1,67 @@
 {
+  "remoteDesktop": {
+    "windowsTitle": "ロック画面の操作",
+    "windowsready": "現在の Cindy で有効です。Cindy を再起動すると管理者の再承認が必要です。",
+    "windowsmissing": "ロック画面と管理者の確認画面を操作するには管理者の承認が必要です。",
+    "windowsinstallRequired": "Cindy を Program Files に全ユーザー向けにインストールしてください。",
+    "windowsunavailable": "システムサービスを利用できません。Cindy を再インストールしてください。",
+    "windowsEnable": "承認して有効化",
+    "windowsDisable": "サービスを削除",
+    "windowsError": "承認が完了していません。このコンピューターで再試行してください。",
+    "permissionsTitle": "リモートデスクトップの権限",
+    "permissionsIntro": "画面の表示には画面収録、操作にはアクセシビリティの権限も必要です。コンピューターで許可すると、状態が自動更新されます。",
+    "permissionsReady": "システム権限の準備ができました。再接続できます。",
+    "screenRecording": "画面収録",
+    "accessibility": "アクセシビリティ",
+    "screenRecordingHelp": "システム設定を開き、この Cindy の画面収録を許可してください。再起動を求められた場合は、Cindy を開き直してから接続してください。",
+    "accessibilityHelp": "設定を開き、システムの許可ダイアログに表示されたアプリのアクセシビリティを有効にしてください。戻ると実際の入力権限を自動確認します。",
+    "permissionChecking": "確認中…",
+    "permissionGranted": "許可済み",
+    "permissionUnknown": "未確認",
+    "permissionMissing": "未許可",
+    "openPermissionSettings": "権限を許可",
+    "recheckPermissions": "再確認",
+    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターのリモート操作設定で再試行してください。",
+    "permissionCheckFailed": "権限を確認できません。コンピューターがオンラインか確認して再試行してください。",
+    "openGuideOnComputer": "コンピューターでガイドを開く",
+    "permissionGuideOpened": "コンピューターに権限ガイドを表示しました。そちらで続けてください。",
+    "reconnectAfterPermissions": "確認して再接続",
+    "closePermissionGuide": "閉じる",
+    "title": "リモートデスクトップ",
+    "allow": "リモートデスクトップを許可",
+    "allowHint": "同じアカウントのデバイスから、このコンピューターの全アプリの表示と操作を許可します。上のデバイス操作も有効にしてください。",
+    "permissionHint": "コンピューターのシステム設定で画面収録とアクセシビリティを許可し、再接続してください。",
+    "beingControlled": "デスクトップが操作されています",
+    "beingViewed": "デスクトップが表示されています",
+    "disconnect": "切断",
+    "back": "戻る",
+    "connect": "接続",
+    "connecting": "接続中…",
+    "disconnected": "切断済み",
+    "compatibility": "互換モード · 低フレームレート",
+    "live": "ライブ映像",
+    "controlling": "操作中",
+    "viewOnly": "表示のみ",
+    "upgrade": "コンピューター側の Cindy を更新してください。",
+    "disabled": "コンピューターの設定 → リモート操作でリモートデスクトップを有効にしてください。",
+    "busy": "デスクトップ操作中です。他のデバイスの操作を解除するか、Agent の操作終了を待ってください。",
+    "connectionError": "接続が終了しました。コンピューターがオンラインか確認し、再接続してください。",
+    "releaseControl": "操作を解除",
+    "takeControl": "操作を開始",
+    "pointer": "トラックパッド",
+    "touch": "タッチ",
+    "pan": "画面を移動",
+    "keyboard": "キーボード",
+    "rightClick": "右クリック",
+    "fit": "全体表示",
+    "display": "ディスプレイ",
+    "gestureHint": "ピンチで拡大縮小。2本指でスクロール、画面移動モードではパン。長押しして移動するとドラッグします。",
+    "textPlaceholder": "コンピューターに文字を入力",
+    "sendText": "文字を送信",
+    "keys": "キー",
+    "showDesktop": "デスクトップ",
+    "allWindows": "すべてのウィンドウ"
+  },
   "ipcError": {
     "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
     "PRECONDITION_FAILED": "現在の状態ではこの操作を実行できません。しばらくしてから再試行してください。",
@@ -115,6 +178,7 @@
       "restoreFailed": "デフォルト設定に戻せませんでした"
     },
     "tabs": {
+      "storage": "ストレージ",
       "general": "一般",
       "billing": "使用量と請求",
       "usage": "使用履歴",
@@ -136,7 +200,8 @@
       "help": "ヘルプ",
       "about": "情報",
       "imBot": "IM ボット",
-      "ghosts": "プラグイン"
+      "ghosts": "プラグイン",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "ユーザー",
@@ -856,10 +921,25 @@
         "unknown": "不明"
       },
       "storage": {
+        "mediaSectionTitle": "メディアファイル",
+        "databaseSectionTitle": "データベース",
+        "overviewTitle": "ローカルストレージ",
+        "overviewDescription": "データベースとメディアキャッシュはこのコンピューターに保存されます。Cindy は履歴を自動削除しません。",
+        "mediaSectionHint": "個別に管理し、削除前に内容を確認してください",
+        "databaseUsage": "使用量 {{size}}",
+        "databaseWarningNote": "まずスキャンしてから、削除する項目を選択してください。スキャンだけでは削除されません。",
+        "dbSizeWarningThresholdLabel": "データベース通知のしきい値",
+        "dbSizeWarningThresholdDescription": "データベースがこのサイズ（G）を超えたらクリーンアップを通知する",
+        "dbSizeWarningThresholdInvalid": "通知のしきい値を 1～1024 G の範囲で入力してください。",
+        "dbSizeWarningSaveFailed": "データベースの通知設定を保存できませんでした。もう一度お試しください。",
+        "dbSizeWarningDisableLabel": "今後通知しない",
+        "dbSizeWarningDisableDescription": "有効にするとデータベース容量の通知を非表示にします。",
+        "unknown": "不明",
         "title": "ストレージ",
         "usageLabel": "メディア使用容量",
-        "usageValue": "{{size}}({{count}} ファイル、うちキャッシュ {{cacheSize}})",
-        "statsFailed": "統計は一時的に利用できません",
+        "usageValue": "{{size}}（{{count}} ファイル、キャッシュ {{cacheSize}}）",
+        "statsFailed": "統計を一時的に利用できません",
+        "refreshStatsButton": "ストレージ使用量を更新",
         "legacyUsage": "旧バージョンのデータ(読み取り専用、クリーンアップ対象外): {{size}}",
         "legacyImagesLabel": "画像キャッシュディレクトリ",
         "legacyImagesDescription": "Cindy はこのディレクトリを自動でスキャンまたはクリーンアップしません。ファイルを削除するとメッセージ履歴の画像が表示できなくなる場合があるため、内容を確認してから操作してください。",
@@ -1213,8 +1293,7 @@
             "manual": "手動"
           },
           "toast": {
-            "title": "辞書に自動追加しました",
-            "titleMultiple": "{{count}} 件を辞書に自動追加しました",
+            "title": "辞書に追加しました",
             "termsSummary": "{{terms}} ほか合計 {{count}} 件",
             "automaticAdded": "辞書に自動追加しました：{{term}}",
             "automaticAddedMultiple": "辞書に自動追加しました：{{term}} ほか {{count}} 件",
@@ -1414,6 +1493,10 @@
       },
       "pill": {
         "connected": "接続済み",
+        "configured": "設定済み",
+        "disconnected": "未接続",
+        "connecting": "接続中…",
+        "rename": "名前を変更",
         "suspended": "無効"
       },
       "button": {
@@ -1439,7 +1522,17 @@
         "connect": "ChatGPT にログイン",
         "useCodexCli": "現在の Codex CLI アカウントを使用",
         "reconnect": "ChatGPT に再接続",
-        "cancelConnect": "接続をキャンセル"
+        "cancelConnect": "接続をキャンセル",
+        "accountSource": {
+          "local": "ローカル Codex アカウント",
+          "oauth": "個別にログインしたアカウント",
+          "unknown": "既存の OpenAI 接続"
+        },
+        "useLocalAccount": "ローカル Codex アカウントを使う",
+        "addIndependentAccount": "別のアカウントにログイン",
+        "accountSourcesDescription": "既存のローカル Codex 接続を使うか、別のアカウントにログインします。どちらも同じ機能を利用できます。",
+        "independentAccountDescription": "別途保存する ChatGPT アカウントにログインするか、API キーで接続します。",
+        "localUnavailable": "再利用できるローカル接続がありません。既存の接続のアカウントは変更されません。"
       },
       "xai": {
         "title": "xAI",
@@ -1448,7 +1541,7 @@
         "billingLabel": "SuperGrok サブスク直結",
         "asset": {
           "weeklyTitle": "週間上限",
-          "weeklyUsed": "{{percent}}% 使用済み",
+          "weeklyRemaining": "残り {{percent}}%",
           "resetsAt": "{{at}} にリセット",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Grok の使用量ページを開く"
@@ -1536,6 +1629,7 @@
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "表示名",
           "modelContextWindowPlaceholder": "コンテキスト(tokens)",
+          "modelType": "モデルの種類",
           "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
           "modelSupportsImageInput": "画像入力に対応",
           "modelSupportsImageInputHelp": "モデルが実際に画像入力へ対応している場合のみ有効にしてください。保存後、新しい Pi タスクで反映されます。",
@@ -1732,7 +1826,7 @@
         "subscription": "サブスク",
         "subscriptionProduct": "{{product}} サブスク",
         "noResults": "一致するモデルがありません",
-        "capabilityNote": "{{agent}} では利用不可",
+        "capabilityNote": "{{agent}} は未設定",
         "refreshAria": "モデル一覧を更新(追加のみ)",
         "refreshBuiltinAria": "モデル一覧を更新",
         "refreshingAria": "モデル一覧を更新中…",
@@ -1800,7 +1894,7 @@
           "defaultEffort": "既定の推論強度",
           "defaultEffortHint": "新しいタスクの初期推論強度です。タスク内でも変更できます。",
           "contextLimit": "コンテキスト上限",
-          "contextLimitHint": "整数 K で編集し、表示時は切り捨てます。編集するまで正確な設定を保持します。保存後は新規または再度開いたタスクに適用されます。",
+          "contextLimitHint": "このモデルのすべての利用可能なエンジンに適用されます。整数 K（1 K = 1,000 tokens）で編集します。未編集の値は精度を保持します。保存した変更は以降の実行に適用され、生成中の応答を中断しません。実際に利用できる長さはモデルサービスの制限に従います。",
           "contextLimitAria": "コンテキスト上限（千 tokens）",
           "contextLimitRoute": "現在 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
@@ -1808,6 +1902,7 @@
           "engines": "エンジン対応",
           "enginesHint": "互換モードはリクエストを変換します。初期状態ではオフですが、必要に応じて有効にできます。",
           "engineUnsupported": "非対応",
+          "engineNotConfigured": "未設定",
           "engineNoFast": "Fast なし",
           "vision": {
             "vision": "対応",
@@ -1848,14 +1943,14 @@
             "matching": "ネイティブ対応",
             "unknown": "プロトコル未確認"
           },
-          "codexContextDefault": "Codex の既定コンテキストは 272K",
-          "codexContextHint": "Codex の既定コンテキストは 272K で、上限に達する前に自動圧縮します。ここでの変更は他のエンジンにのみ適用されます。拡張には Codex の個別設定が必要で、通常の利用には推奨しません。",
-          "codexContextAdvanced": "拡張には Codex の個別設定が必要で、通常の利用には推奨しません。",
           "lifecycle": {
             "alpha": "試用版",
             "deprecated": "非推奨",
             "retired": "提供終了"
-          }
+          },
+          "codexContextUnknown": "CLI 設定を取得できません",
+          "codexContextValues": "総容量 {{total}} · 使用可能 {{usable}} · 自動圧縮 {{compact}} tokens",
+          "contextLimitGptHint": "GPT は既定で最大 272K を使用します。ここで 1M に変更できます。Codex はウィンドウと自動圧縮のしきい値を同時に適用し、5% の余裕を確保します。実際の容量はモデルサービスに依存します。"
         },
         "kindFilter": {
           "all": "すべて",
@@ -2010,8 +2105,8 @@
         "hostProfileApple": "Apple シリコン · 統合メモリ 約 {{memory}} GB",
         "hostProfileGeneric": "メモリ 約 {{memory}} GB",
         "hostProfileUnknown": "このコンピュータのメモリをまだ確認できません",
-        "bestForYou": "あなたに最適",
-        "alsoCoding": "コーディングにも",
+        "bestForYou": "能力で推奨",
+        "alsoCoding": "速度の候補",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2028,41 +2123,12 @@
         "noSearchResults": "一致するモデルがありません",
         "alreadyInstalled": "インストール済み",
         "searchResults": "検索結果",
-        "moreModels": "その他のよく使うモデル",
-        "memoryWarning": "このコンピュータのメモリが不足しています（{{need}} GB 必要、現在約 {{have}} GB）",
+        "moreModels": "その他の候補モデル",
+        "memoryWarning": "推定メモリ目安未満（{{need}} GB、本機は約 {{have}} GB）",
         "manualDownload": "手動ダウンロード",
         "manualDownloadPlaceholder": "Ollama のライブラリ名、または Hugging Face の URL",
         "invalidLibraryName": "Ollama のライブラリ名を入力するか、huggingface.co のモデルページ URL を貼り付けてください",
         "advancedExactName": "上級：正確なライブラリ名",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。"
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。"
-          },
-          "gemma4-e2b": {
-            "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。"
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。"
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。"
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。"
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。"
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。"
-          },
-          "glm-47-flash": {
-            "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。"
-          }
-        },
         "onboardingTitle": "先に Ollama ランタイムをインストール",
         "onboardingBody": "Ollama をインストールすれば、Ollama アプリを開かなくても Cindy 内でローカルモデルをダウンロードして使えます。Ollama は無料のオープンソース製サードパーティランタイムです。",
         "installInCindy": "Cindy 内でインストール",
@@ -2131,8 +2197,8 @@
         "cancelDownload": "未完了のダウンロードを削除",
         "notRecommended": "この Mac は Qwen3.8 27B に必要な 32 GB メモリに達していません。正確なライブラリ名を入力して自分でダウンロードできます。",
         "sizeHint": "約 {{size}} · 統合メモリ {{memory}} GB が必要",
-        "sizeHintApple": "約 {{size}} · 統合メモリ {{memory}} GB が必要",
-        "sizeHintGeneric": "約 {{size}} · メモリ {{memory}} GB が必要",
+        "sizeHintApple": "ダウンロード {{size}} · 統合メモリの目安 {{memory}} GB",
+        "sizeHintGeneric": "ダウンロード {{size}} · メモリの目安 {{memory}} GB",
         "deleteFromCindy": "Cindy から削除",
         "deleteConfirmTitle": "Cindy から Ollama を削除しますか？",
         "deleteConfirmBody": "Cindy 側の接続だけを削除します。Ollama にダウンロード済みのモデルはディスクに残り、サービスも停止しません。",
@@ -2141,7 +2207,8 @@
         "deleteModelConfirmBody": "このパソコンからダウンロード済みのモデルファイルを削除し、Cindy からも取り除きます。必要ならあとから再ダウンロードできます。",
         "deleteModelConfirm": "削除",
         "deleteModelDone": "{{name}} を削除しました",
-        "deleteModelFailed": "削除できませんでした。Ollama が起動していることを確認して、もう一度お試しください。"
+        "deleteModelFailed": "削除できませんでした。Ollama が起動していることを確認して、もう一度お試しください。",
+        "noRecommendation": "このコンピュータのメモリに適合し、十分な根拠のある推奨モデルはまだありません。下の候補から選べます。"
       },
       "xdSignin": {
         "badge": "おすすめ",
@@ -2171,27 +2238,15 @@
           "cancel": "キャンセル"
         }
       },
-      "imagesKey": {
-        "label": "画像生成 API key",
-        "placeholder": "OpenAI プラットフォーム API key を貼り付け",
-        "save": "保存",
-        "clear": "クリア",
-        "toast": {
-          "saved": "画像生成 API key を保存しました",
-          "saveFailed": "画像生成 API key の保存に失敗しました。もう一度お試しください",
-          "cleared": "画像生成 API key をクリアしました",
-          "clearFailed": "画像生成 API key のクリアに失敗しました"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 使用済み",
+        "percentRemaining": "残り {{percent}}%",
         "resetsAt": "{{at}} にリセット",
         "claudePlanFallback": "Claude サブスクリプション",
-        "claudeWeekly": "7 日ウィンドウ {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7日間の残り {{percent}}%",
+        "scopedModel": "{{model}} 残り {{percent}}%",
         "openClaudeUsage": "使用量ページを開く",
         "codexPlanFallback": "ChatGPT サブスクリプション",
-        "codexSecondary": "副ウィンドウ {{percent}}%",
+        "codexSecondary": "第2ウィンドウの残り {{percent}}%",
         "codexResetCredits": "上限リセット券 {{count}} 枚"
       }
     },
@@ -2842,7 +2897,7 @@
     },
     "compaction": {
       "title": "コンテキスト圧縮",
-      "description": "Claude Code と Pi がコンテキストを自動圧縮するタイミングを制御します。Codex は独自にコンテキスト圧縮を管理します。",
+      "description": "Claude Code と Pi の圧縮率をここで調整します。Codex はモデルのコンテキスト設定からしきい値を決定します。リモート圧縮に失敗すると要約による圧縮に自動で切り替え、現在のタスクで継続します。",
       "card": {
         "label": "圧縮トリガーしきい値",
         "badge": "Claude Code",
@@ -3109,12 +3164,29 @@
       "runtimeUnknown": "{{packageName}} には Pi {{range}} が必要ですが、現在の Cindy の Pi バージョンが要件を満たすか確認できませんでした。",
       "warning": {
         "no-resources": "この拡張機能には Pi リソースが見つかりません。",
+        "analysisIncomplete": "Pi の操作は完了しましたが、Cindy の後続分析または補助ビルドは完了しませんでした。",
         "inspection-failed": "Cindy はインストール済み内容を検査できませんでしたが、それを理由に無効化しません。Pi がネイティブに処理します。",
         "inspection-limit": "Cindy は詳細分析の上限で表示を停止しました。パッケージは Pi のネイティブローダーで引き続き利用できます。",
         "unsupported-filter": "Cindy はこの Pi リソースフィルターをまだ表示できません。パッケージとフィルターは Pi がネイティブに処理します。",
         "unsafe-source": "保存済みソースには認証情報または非公開 URL パラメーターが含まれています。Cindy はこの画面で機密項目だけを隠し、Pi のパッケージ動作はブロックしません。"
       },
+      "recovery": {
+        "check-credentials": "ソースの認証情報を確認してください。",
+        "check-permissions": "ファイルとディレクトリの権限を確認してください。",
+        "check-network": "ネットワーク接続を確認してください。",
+        "check-source": "パッケージ名またはリポジトリアドレスを確認してください。",
+        "check-version": "指定したパッケージのバージョンを確認してください。",
+        "check-runtime": "Pi の実行環境が利用可能か確認してください。",
+        "free-disk-space": "ディスクの空き容量を増やしてください。",
+        "check-build-dependencies": "拡張機能のビルド依存関係を確認してください。",
+        "refresh-package-state": "拡張機能一覧を更新して現在の状態を確認してください。",
+        "inspect-state-before-retry": "拡張機能の現在の状態を確認してから、未完了の手順を再試行してください。"
+      },
       "failure": {
+        "commandFailed": "Pi のネイティブパッケージコマンドが失敗しました。",
+        "commandNotStarted": "Pi のネイティブパッケージコマンドを開始できませんでした。",
+        "commandTimedOut": "Pi のネイティブパッケージコマンドがタイムアウトしました。",
+        "commandUnknown": "Pi のネイティブパッケージコマンドの結果を確認できませんでした。",
         "sourceUnavailable": "ソースにアクセスできません。ネットワークまたは URL を確認するか、別のソースをお試しください。",
         "packageNotFound": "パッケージが見つかりません。パッケージ名またはリポジトリ URL を確認してください。",
         "versionNotFound": "そのバージョンが見つかりません。利用可能なバージョンを選んで再試行してください。",
@@ -4982,7 +5054,8 @@
         "nodeChildSpawn": "Node プログラムは、パッケージ内で申告済みのサブプロセスの起動をホストに依頼できます",
         "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
         "skill": "AI アシスタントにスキル「{{name}}」を追加します",
-        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。"
+        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
+        "routineEvents": "ルーティンイベント"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -5080,6 +5153,8 @@
         "sidebarEntryTitle": "サイドバー項目",
         "showInSidebar": "サイドバーに表示",
         "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
+        "iosSimulatorAutoOpenTitle": "内蔵シミュレータパネルを自動的に開く",
+        "iosSimulatorAutoOpenDescription": "シミュレータの起動時または App の起動後に、右側へシミュレータ画面を自動表示します。オフでも手動で開くことができ、ほかの機能には影響しません。",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
         "viewAllTools": "さらに表示",
@@ -5478,6 +5553,19 @@
       "hint": "リモート IM では、承認が必要な操作の確認フローを維持します。",
       "fullAccessDisabled": "安全に確認できない操作が直接実行されないよう、リモート IM では Full Access を利用できません。",
       "permissionModeDisabled": "リモート IM は Cindy Desktop の確認ポリシーを使用するため、この権限モードは利用できません。"
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "ツールフォルダを開く",
+      "description": "下のカードで本機の環境を確認し、不足するポータブルツールをインストールできます。ネイティブなコンパイラが不足している場合は公式の案内を表示します。",
+      "checking": "環境を確認中…",
+      "forceManaged": {
+        "title": "インストールテスト：システムのツールを無視",
+        "description": "開発版のみ。ポータブルツールは Cindy 管理のコピーを確認し、Windows のコンパイラが不足した状態を再現します。切り替えは再確認のみで、インストールは開始しません。",
+        "ariaLabel": "インストールテスト：システムのツールを無視",
+        "enabledHint": "下のカードから Windows ツールのダウンロードとインストールをテストできます。インストール済みの Cindy 管理ツールは再利用します。切り替えは即時反映され、再読み込みや再起動でオフになります。システムのツールは変更しません。",
+        "reportHint": "インストールテストがオンです。ポータブルツールは Cindy 管理のコピーを使用します。公式の案内をテストするため、Windows のコンパイラを不足として表示します。実際の状態を確認するにはスイッチをオフにしてください。"
+      }
     }
   },
   "remoteDevice": {
@@ -5875,6 +5963,8 @@
     "modelWeeklyLabel": "{{model}} 週間",
     "usedPercent": "使用済み {{percent}}%",
     "remainingPercent": "残り {{percent}}%",
+    "resetIn": "{{duration}}後にリセット",
+    "resetPending": "リセット情報の更新待ち",
     "resetAt": "{{at}} にリセット",
     "noWindows": "クォータ期間のデータはありません",
     "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
@@ -6961,6 +7051,12 @@
       "binary-missing": "コンポーネントを利用できません"
     },
     "ariaLabel": "サイドバーナビゲーション",
+    "databaseSizeWarning": {
+      "title": "データベースの使用容量が大きくなっています",
+      "description": "データベースは約 {{size}} で、{{threshold}} G を超えています。ストレージでのクリーンアップをおすすめします。",
+      "openSettings": "ストレージを開く",
+      "disable": "今後通知しない"
+    },
     "horizontalTabbarAria": "メインビュー切り替え",
     "tabs": {
       "projects": "プロジェクト",
@@ -7177,6 +7273,8 @@
       "composerPlaceholderLatin": "{{name}} に話しかける…"
     },
     "globalSettings": {
+      "restoreHint": "復元後はクライアントの既定のモデル設定に従います。各パートナーのカスタムモデルは変更されません。",
+      "restoreFailed": "既定値を復元できませんでした。もう一度お試しください。",
       "title": "パートナー",
       "description": "パートナー全体に共通する設定です。個々のパートナーの設定は、その子のページにあります。",
       "rosterNote": "あらかじめ用意された顔ぶれは、バージョンごとに増えていきます。"
@@ -7255,6 +7353,16 @@
       "thisDevice": "このコンピュータ",
       "offlineDescription": "{{name}} はオフラインです。{{device}} が再接続すると続けられます。",
       "preparing": "準備ができるのを待っています…"
+    },
+    "capabilities": {
+      "title": "機能",
+      "search": "機能を検索",
+      "loading": "読み込み中…",
+      "skill": "スキル",
+      "mcp": "MCP",
+      "toolset": "組み込みツール",
+      "unavailable": "利用不可",
+      "empty": "一致する機能はありません"
     }
   },
   "common": {
@@ -7437,6 +7545,7 @@
       "stop": "生成を停止"
     },
     "pluginSetup": {
+      "reopen": "もう一度開く",
       "title": "{{name}} の設定",
       "assessmentReadFailed": "プラグインの設定状態を読み取れませんでした。",
       "setupIncomplete": "プラグインの設定が完了していません。",
@@ -7625,6 +7734,7 @@
         "china": "中国",
         "image": "画像",
         "video": "動画",
+        "audio": "音声生成",
         "tts": "音声合成",
         "stt": "音声認識",
         "realtime": "リアルタイム音声",
@@ -7650,7 +7760,7 @@
         "reconnect": "再接続",
         "manage": "接続先を管理",
         "railLabel": "ソース",
-        "connect": "モデルを追加",
+        "connect": "モデル設定",
         "connectCta": "ソースを接続 →",
         "viaSource": "ソース：{{source}}",
         "emptyTitle": "利用可能なソースがありません",
@@ -7728,7 +7838,7 @@
           },
           "bypassPermissions": {
             "label": "フルアクセス",
-            "description": "通常のツールは確認なしで実行しますが、Pi 拡張のインストール、更新、アンインストールには引き続き確認が必要です。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+            "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
           }
         }
       }
@@ -7991,12 +8101,27 @@
       "cancelEdit": "編集をキャンセル",
       "saveEdit": "テキストを保存"
     },
+    "mediaDownload": {
+      "title": "生成されたメディアをダウンロードしますか？",
+      "description": "メディアが生成されました。以下のアドレスからダウンロードする必要があります。",
+      "scope": "今回のダウンロードのみ許可します。",
+      "source": "このアドレスは Cindy が確認済みのダウンロード元に含まれていないため、確認が必要です。",
+      "http": "このアドレスは暗号化されていない HTTP を使用します。ネットワーク上の第三者が内容を読み取ったり変更したりする可能性があります。",
+      "port": "このアドレスは標準以外のネットワークポートを使用します。このポートへのアクセスを確認してください。",
+      "credentials": "このダウンロードアドレスにはログイン情報が含まれています。許可すると、その情報はこのアドレスにのみ送信されます。",
+      "network": "このアドレスは、このデバイス、ローカルネットワーク、または予約済みネットワークを指しています。アクセスすると、デバイスの内部サービスに接続する可能性があります。",
+      "allow": "今回のダウンロードを許可",
+      "defer": "今はダウンロードしない"
+    },
     "permissionPrompt": {
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
       "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。",
-      "ruleSeparator": "、"
+      "ruleSeparator": "、",
+      "submitting": "確認を送信中…",
+      "submissionFailed": "確認結果を受信できませんでした。接続を確認し、確認画面がまだ表示されている場合はもう一度クリックしてください。",
+      "requestEnded": "この権限リクエストは終了したか、すでに処理されています。最新の状態をご確認ください。"
     },
     "deviceSwitcher": {
       "label": "デバイス",
@@ -8471,7 +8596,10 @@
       "copyContent": "内容をコピー",
       "openInExplorer": "ファイルマネージャーで開く",
       "close": "閉じる",
-      "editIndex": "編集 {{index}}/{{total}}"
+      "editIndex": "編集 {{index}}/{{total}}",
+      "omittedDiffSegments": "プレビューでは追加の差分 {{count}} 件を省略しています",
+      "diffPreviewTruncated": "プレビューでは一部の差分行を非表示にしています",
+      "diffPreviewLoading": "差分プレビューを準備しています…"
     },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",
@@ -8691,7 +8819,7 @@
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
-        "labelStrip": "大きな画像を除いて続行しました",
+        "labelStrip": "履歴の画像を整理しました",
         "toggleHint": "引き継ぎ内容を表示",
         "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
         "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
@@ -8870,7 +8998,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
       "LOCAL_OLLAMA_NOT_READY": "ローカル Ollama の準備ができていません。設定 → モデルプロバイダー → Ollama を開いてください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
+      "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。"
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
@@ -9012,8 +9143,6 @@
       "runningTool": "{{tool}} を実行中…"
     },
     "remoteSession": {
-      "syncing": "同期中…",
-      "recovered": "復旧しました",
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
       "degraded": "被制御デバイスとの接続が不安定です。自動的に再試行中…",
@@ -9093,7 +9222,8 @@
       "projectContextLoaded": "プロジェクトナレッジベースを読み込みました",
       "contextRing": {
         "compactHint": "クリックでコンテキストを圧縮",
-        "codexAutoHint": "Codex はサーバー側で自動圧縮されるため、手動での圧縮はできません",
+        "codexPendingHint": "次回の送信時に設定が適用されます。現在の使用量はまだ取得されていません。",
+        "codexAutoHint": "コンテキストと自動圧縮は Codex CLI が管理します。ここは読み取り専用です。",
         "confirmTitle": "コンテキストを圧縮しますか?",
         "confirmDescription": "現在の使用量: {{used}} / {{total}}({{pct}}%)。コンテキストを静かに圧縮し、Agent が会話履歴を要約してコンテキスト領域を解放します。",
         "confirmAction": "圧縮",
@@ -9248,6 +9378,8 @@
         "all": "すべて"
       },
       "filterSortBy": {
+        "created": "作成日時",
+        "activity": "最近のアクティビティ",
         "recency": "時間順",
         "manual": "手動",
         "priority": "優先度"
@@ -9263,7 +9395,7 @@
       "filterTaskSortHeading": "セッション順",
       "filterProjectOrderHeading": "プロジェクト順",
       "filterProjectOrder": {
-        "activity": "最近のアクティビティ順",
+        "activity": "セッションの並び順に従う",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
@@ -10641,6 +10773,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
@@ -10799,10 +10932,10 @@
         "market": "Market に戻る",
         "skillhub": "SkillHub に戻る"
       },
-      "uninstall": "アンインストール",
+      "uninstall": "スキルをアンインストール",
       "uninstallDialog": {
-        "title": "{{name}} をアンインストールしますか?",
-        "description": "ローカルフォルダを削除します\n{{path}}\nこの操作は取り消せません。",
+        "title": "「{{name}}」をアンインストールしますか？",
+        "description": "ローカルファイルと編集内容をゴミ箱に移動します。復元できます。\n\nこのスキルを共有する他の Agent にも影響します。公開済みバージョンや別の場所のインストールには影響しません。",
         "confirm": "アンインストール",
         "cancel": "キャンセル"
       },
@@ -11097,6 +11230,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "審査で却下されました",
+      "rejectedDesc": "このバージョンは審査に通りませんでした。以下の指摘を修正して、再度公開してください。",
+      "rejectionReasonUnavailable": "このバージョンは審査に通りませんでしたが、具体的な理由は提供されていません。詳細は審査担当者にお問い合わせください。",
+      "rejectionReason": "却下理由",
       "dismiss": "了解",
       "passedTitle": "セキュリティスキャン通過",
       "passedDesc": "このバージョンはすべてのセキュリティチェックに合格し、マーケットに公開されました。",
@@ -11201,6 +11338,27 @@
     "marketEdit": {
       "saved": "マーケット表示情報を保存しました",
       "displayNameRequired": "表示名を入力してください"
+    },
+    "management": {
+      "disabled": "無効",
+      "enabledLabel": "スキル「{{name}}」を有効にする",
+      "moreLabel": "スキル「{{name}}」を管理",
+      "activationHint": "Cindy 内のスキルの読み込みにのみ適用されます。Agent の起動または再起動後に反映されます。",
+      "enabledToast": "スキル「{{name}}」を有効にしました。Agent の起動または再起動後に反映されます",
+      "disabledToast": "スキル「{{name}}」を無効にしました。Agent の起動または再起動後に反映されます",
+      "toggleFailed": "スキルの設定を保存できませんでした。もう一度お試しください",
+      "uninstallFailed": "スキルをゴミ箱に移動できませんでした。ファイルのアクセス権を確認して再試行してください",
+      "refreshRequired": "スキルの変更中、または読み込み元が変更されています。一覧を更新して再試行してください",
+      "globalScope": "インストール先: グローバルスキル",
+      "projectScope": "プロジェクト: {{project}}",
+      "trashDescription": "ローカルファイルと編集内容をゴミ箱に移動します。復元できます。",
+      "unlinkDescription": "ローカルのスキル登録のみを削除します。元のファイルと編集内容は保持されます。",
+      "sharedImpact": "このスキルを共有する他の Agent にも影響します。公開済みバージョンや別の場所のインストールには影響しません。",
+      "managedElsewhere": "このスキルは別のパッケージまたは共有ディレクトリで管理されています。提供元で削除してください",
+      "managedByPlugin": "このスキルはプラグインが提供しています。提供元のプラグインページで管理してください。",
+      "cleanupIncomplete": "「{{name}}」のアンインストール後のクリーンアップが未完了です。再試行するか、後でスキルを開き直して続行してください。完了するまで再インストールはできません。",
+      "retryCleanup": "整理を再試行",
+      "cleanupComplete": "整理が完了しました"
     }
   },
   "makerExperimental": {
@@ -11295,11 +11453,12 @@
       "qrExpired": "QR コードが期限切れです。最初からやり直してください",
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
+      "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。次のメッセージを送信して続行できます。",
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy は内蔵 iOS シミュレータを迂回するシェルコマンドをブロックしました。デバイスの操作、アプリの起動、画面操作、スクリーンショット、診断には iOS シミュレータツールを使用してください。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
-      "codexHistoryOversized": "履歴に過大な画像があり、リモート圧縮を完了できません。Cindy がそれらの画像を省略し、このタスクのまま続けます。",
+      "codexHistoryOversized": "画像履歴の自動復旧と続行が完了しませんでした。「続けて」と送信して、このタスクを再開してください。",
       "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",
       "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
       "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",
@@ -12004,5 +12163,205 @@
     "realtime": "リアルタイムの音声でのやり取りに。",
     "embedding": "意味の近い内容を探すために。",
     "compression": "長い内容を短くまとめるために。"
+  },
+  "routines": {
+    "title": "ルーティン",
+    "add": "ルーティンを追加",
+    "back": "ルーティンに戻る",
+    "error": "ルーティンを更新できませんでした。設定を確認して再試行してください。",
+    "empty": "ルーティンを追加して、実行する内容とタイミングを指定します。",
+    "enabled": "有効",
+    "paused": "一時停止中",
+    "runNow": "今すぐ実行",
+    "running": "実行中…",
+    "name": "名前",
+    "instructions": "指示",
+    "when": "実行タイミング",
+    "addTrigger": "トリガーを追加",
+    "removeTrigger": "トリガーを削除",
+    "schedule": "スケジュール",
+    "hourly": "毎時",
+    "daily": "毎日",
+    "weekdays": "平日",
+    "weekly": "毎週",
+    "monthly": "毎月",
+    "interval": "間隔",
+    "advanced": "詳細設定…",
+    "everyMinutes": "{{count}} 分ごと",
+    "minutes": "分",
+    "expression": "Cron 式",
+    "timezone": "タイムゾーン",
+    "delete": "ルーティンを削除",
+    "save": "ルーティンを保存",
+    "deleteConfirm": "このルーティンを削除し、待機中の実行をキャンセルしますか？",
+    "keep": "ルーティンを残す",
+    "history": "実行履歴",
+    "noRuns": "このルーティンはまだ実行されていません。",
+    "field": "フィールド",
+    "operator": "条件",
+    "value": "値",
+    "addFilter": "条件を追加",
+    "removeFilter": "条件を削除",
+    "pluginCapability": "宣言されたイベントを発行し、設定済みのルーティンのみを実行します。",
+    "time": "時刻",
+    "day": "日",
+    "weekday": "曜日",
+    "status": {
+      "queued": "待機中",
+      "running": "実行中",
+      "success": "完了",
+      "failed": "失敗",
+      "interrupted": "中断",
+      "cancelled": "キャンセル済み"
+    },
+    "sourceStatus": {
+      "listening": "受信中",
+      "disconnected": "未接続",
+      "error": "接続元を確認してください"
+    },
+    "operators": {
+      "equals": "一致",
+      "contains": "含む",
+      "not-equals": "一致しない"
+    }
+  },
+  "cindyMakeDoctor": {
+    "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",
+    "title": "Cindy Make · 環境チェック",
+    "scope": "このコンピューターのツールを確認",
+    "limits": "確認のみを行い、インストールやソースの取得はしません。ビルド時にはソースとプロジェクトの依存関係を別途確認します。",
+    "running": "確認中",
+    "passed": "基本チェック完了",
+    "needsAttention": "対応が必要な項目があります",
+    "cancelled": "チェックを停止しました",
+    "failed": "チェックが完了しませんでした。再試行してください。",
+    "details": "詳細を表示",
+    "hideDetails": "詳細を閉じる",
+    "stop": "チェックを停止",
+    "recheck": "再チェック",
+    "timeout": "チェックがタイムアウトしました。ツールが起動できることを確認して再試行してください。",
+    "commandUnavailable": "コマンド一覧が未準備か、実行中のバージョンがこのコマンドに対応していません。後で再試行するか Cindy を更新してください。",
+    "usage": "環境チェックに引数や添付ファイルは不要です。/cindy-make-doctor だけを送信してください。",
+    "localOnly": "現在はローカル Desktop で /cindy-make-doctor を使用してください。SSH とデバイス接続にはまだ対応していません。",
+    "checks": {
+      "platform": "システムとアーキテクチャ",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "ネイティブビルドツール",
+      "storage": "ストレージと権限"
+    },
+    "checkStatus": {
+      "pending": "未確認",
+      "checking": "確認中",
+      "passed": "確認済み",
+      "missing": "見つかりません",
+      "incompatible": "非対応バージョン",
+      "failed": "確認できません",
+      "warning": "要確認",
+      "cancelled": "停止",
+      "downloading": "ダウンロード中",
+      "installing": "インストール中"
+    },
+    "requirements": {
+      "platform": "Windows x64、macOS x64/arm64、Linux x64/arm64 に対応しています。対応する OS 上でビルドします。",
+      "git": "動作する Git 2.x 以降が必要です。GitHub アカウントは不要です。",
+      "gitLfs": "ソースの大容量ファイル取得には Git LFS が必要です。",
+      "node": "Node.js ≥ 22.12 が必要です。",
+      "pnpm": "pnpm ≥ 10.7 かつ < 11 が必要です。推奨は 10.33.2 です。チェック中の自動ダウンロードは無効です。",
+      "python": "Python 3.{{pythonMinor}} 以降の Python 3 が必要です。",
+      "native": "この OS の C/C++ ビルドツールが必要です。",
+      "nativeWin": "Visual Studio C++ Build Tools、MSBuild、Windows 10/11 SDK が必要です。",
+      "nativeMac": "Xcode Command Line Tools、macOS SDK、make が必要です。",
+      "nativeLinux": "g++ と make が必要です（通常は build-essential に含まれます）。",
+      "storage": "Cindy データディレクトリの書き込み権限を確認します。空き容量：{{freeGiB}} GiB。10 GiB 以上を推奨しますが、必要容量はビルドにより異なります。"
+    }
+  },
+  "cindyMake": {
+    "description": "ローカルのツールを確認・準備して個人版 Cindy を作成します。使い方: /cindy-make [変更内容]",
+    "localOnly": "/cindy-make は現在、ローカルのデスクトップセッションでのみ使用できます。このデバイスに切り替えてください。",
+    "usage": "/cindy-make または /cindy-make 要望 を使用してください。環境チェックは添付ファイル、参照、コメントにまだ対応していません。入力内容は保持されます。",
+    "request": "変更の要望",
+    "prepare": {
+      "scope": "互換性のあるツールを再利用し、不足するポータブルツールを自動でインストール",
+      "limits": "ツールは Cindy のデータフォルダーに保存され、グローバルのツールや PATH は変更されません。システムのビルドツールは OS のインストーラーで導入してください。ソースの取得やビルドはまだ行いません。",
+      "running": "ツールを準備中",
+      "passed": "基本環境の準備完了",
+      "needsAttention": "対応が必要な項目があります",
+      "cancelled": "準備を停止しました",
+      "failed": "準備が完了しませんでした。再試行してください。",
+      "stop": "停止",
+      "retry": "準備を再試行",
+      "source": {
+        "system": "既存のツール",
+        "managed": "Cindy が管理"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "インストールガイド",
+      "install": "不足している環境をインストール",
+      "errors": {
+        "downloadFailed": "ダウンロードに失敗しました。接続を確認して再試行してください。",
+        "checksum": "整合性チェックに失敗したため、インストールしませんでした。再試行してください。",
+        "installFailed": "ツールをインストールまたは起動できません。空き容量と OS の互換性を確認するか、互換性のあるツールを手動でインストールしてから再試行してください。",
+        "busy": "別の環境準備が実行中です。完了後に再試行してください。"
+      },
+      "guidance": {
+        "windows": "Visual Studio Build Tools をインストールし、「C++ によるデスクトップ開発」、MSBuild、Windows 10/11 SDK を選択してから再試行してください。",
+        "mac": "以下のコマンドで Xcode Command Line Tools（Git と macOS SDK を含む）をインストールしてから再試行してください。",
+        "linux": "ディストリビューションのパッケージマネージャーで Git と C/C++ ビルドツールをインストールしてください。以下から対応するコマンドを選び、完了後に再試行してください。"
+      }
+    },
+    "upstream": {
+      "pending": "すべての環境チェックに合格すると、上流の検索を自動で開始します。",
+      "needsRequest": "変更内容の入力待ち",
+      "needRequest": "変更したい機能名や具体的なエラーを入力して、関連する上流の内容を検索します。",
+      "placeholder": "例：メッセージ表示のちらつきを修正",
+      "search": "上流を検索",
+      "searching": "上流の Issue と PR を検索中…",
+      "found": "関連する可能性のある上流の内容が見つかりました",
+      "notFound": "一致する上流の内容は見つかりませんでした",
+      "failed": "上流の検索に失敗しました",
+      "cancelled": "上流の検索を停止しました",
+      "terms": "検索語：{{terms}}",
+      "author": "作成者：{{author}}",
+      "updated": "更新日：{{date}}",
+      "notFoundHint": "これらの検索語に一致する公開 Issue や PR はありませんでした。表現を変えると別の結果が見つかる場合があります。",
+      "resultHint": "リンクを開いて関連性を確認してください。現在オープン中の Issue と PR のみ表示しています。",
+      "wait": "上流を待つ",
+      "personal": "個人版の作成を続ける",
+      "retry": "環境を再確認して検索",
+      "expand": "上流の結果を表示",
+      "collapse": "上流の結果を隠す",
+      "count": "関連する可能性のあるオープン Issue／PR が {{count}} 件見つかりました",
+      "kind": {
+        "issue": "Issue",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "オープン",
+        "closed": "クローズ済み",
+        "merged": "マージ済み",
+        "unknown": "クローズ済み · マージ状態は未確認"
+      },
+      "choice": {
+        "wait": "上流を待つことを選択しました",
+        "personal": "個人版の作成を選択しました"
+      },
+      "decisionHint": {
+        "wait": "このフローは停止しました。通知の購読や自動更新は設定していません。",
+        "personal": "選択をこのカードに記録しました。ソースの準備とビルドはまだ未対応です。ソースの取得や変更は行っていません。"
+      },
+      "failure": {
+        "network": "GitHub に接続できません。接続を確認して再試行してください。",
+        "rateLimit": "GitHub のリクエスト制限に達しました。しばらくしてから再試行してください。",
+        "timeout": "検索がタイムアウトしました。再試行してください。",
+        "invalidResponse": "GitHub の結果が不完全か読み取れません。再試行してください。"
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · 環境の準備",
+    "stepUpstream": "2 · 上流の検索"
   }
 }

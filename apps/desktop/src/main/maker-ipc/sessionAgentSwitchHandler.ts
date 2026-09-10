@@ -1,5 +1,5 @@
 /**
- * session-agent-switch:同一会话在 Claude Code / Codex 引擎间切换的 IPC handler。
+ * session-agent-switch:同一会话的引擎／模型选择与发送时应用。
  *
  * 意图制(2026-07-20):外部调用(IPC)只登记切换意图并返回 deferred——用户在
  * 选择器里反复改选零成本;renderer 乐观呈现意图。真切换在下一条消息发送时刻由
@@ -108,6 +108,12 @@ export interface AgentSwitchSessionRow {
 }
 
 export interface MakerSessionAgentSwitchHandlerDeps {
+  /** Same-engine choices use SET_MODEL validation; only the send boundary applies them. Caller owns the session lock. */
+  selectSameAgentModel?(
+    sessionId: string,
+    intent: PendingAgentSwitchIntent,
+    applyNow: boolean,
+  ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   /**
@@ -234,6 +240,8 @@ export interface SessionAgentSwitchResult {
 
 /** 登记的切换意图(下一条消息发送时刻执行;effort/fastMode 由 renderer 按目标引擎解析好带入)。 */
 export interface PendingAgentSwitchIntent {
+  /** SET_MODEL intent: apply the route without a cross-engine handoff. */
+  sameAgentSelection?: boolean;
   targetAgentKind: AgentKind;
   model: string;
   providerId: string | null | undefined;
@@ -264,8 +272,8 @@ export interface PublicAgentSwitchIntent {
 
 /**
  * pending 切换意图注册表(内存;重启丢失可接受——与凭证 deferred 同级的轻量意图,
- * 用户重开后重新选择即可)。同 session 重复登记 = 覆盖(用户改主意);SET_MODEL /
- * 同引擎 no-op 切换会清除(用户选回当前引擎)。
+ * 用户重开后重新选择即可)。同 session 重复登记 = 覆盖(用户改主意)；同引擎
+ * 模型选择同样暂存，实际发送才应用，不提前改变原生线程或持久路由。
  */
 export interface PendingAgentSwitchRegistry {
   set(sessionId: string, intent: PendingAgentSwitchIntent): void;
@@ -412,6 +420,26 @@ export async function performSessionAgentSwitch(
   const fromDbKind: DbAgentKind = normalizeDbAgentKind(row.agentKind);
   const toDbKind: DbAgentKind = makerToDbAgentKind(targetAgentKind);
   if (fromDbKind === toDbKind) {
+    // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
+    // callers retain the existing same-engine no-op; send consumes staged choices below.
+    if (deps.selectSameAgentModel && !params.applyNow) {
+      const result = await deps.selectSameAgentModel(sessionId, {
+        targetAgentKind,
+        model,
+        providerId: normalizedProviderId,
+        ...(typeof params.effort === 'string' ? { effort: params.effort } : {}),
+        ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+        sameAgentSelection: true,
+      }, false);
+      return {
+        switched: false,
+        agentKind: targetAgentKind,
+        model,
+        engineReady: true,
+        deferred: result.deferred,
+        ...(result.superseded ? { sameEngineSuperseded: true } : {}),
+      };
+    }
     // 同引擎 = 纯模型切换,调用方应走 SET_MODEL;这里按 no-op 成功返回。
     // 顺带清 pending:用户先登记了跨引擎切换、又选回当前引擎 = 改主意取消。
     let sameEngineRevision: number | undefined;
@@ -725,6 +753,22 @@ export function applyPendingAgentSwitchIfIdle(
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return;
     try {
+      if (intent.sameAgentSelection) {
+        if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
+        const result = await deps.selectSameAgentModel(sessionId, intent, true);
+        if (result.deferred || result.superseded) {
+          throw new Error('model selection could not be applied before send');
+        }
+        if (deps.pendingSwitches?.get(sessionId) === intent) {
+          deps.pendingSwitches.clear(sessionId);
+          deps.onPendingSwitchChanged?.(sessionId, null);
+        }
+        throwIfAgentSwitchAborted(opts?.signal);
+        if (opts?.bootstrapAfterSwitch && !deps.getLiveSession(sessionId)) {
+          await deps.bootstrapSwitchedSession(sessionId);
+        }
+        return;
+      }
       if (intent.resumeFallbackRecovery) {
         const recovery = intent.resumeFallbackRecovery;
         throwIfAgentSwitchAborted(opts?.signal);
@@ -778,6 +822,8 @@ export function applyPendingAgentSwitchIfIdle(
         targetAgentKind: intent.targetAgentKind,
         err: err instanceof Error ? err.message : String(err),
       });
+      // Never send on the old model after the user's selected route failed preparation.
+      if (intent.sameAgentSelection) throw err;
     }
   })().finally(() => {
     if (pendingAgentSwitchApplyInFlight.get(sessionId) === run) {

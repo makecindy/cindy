@@ -329,6 +329,29 @@ describe('CustomProviderDialog preset locale ownership', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('saves an explicit media type through the existing model form', async () => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+    fireEvent.click(await findReadyPresetTrigger());
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.providers.custom.fields.modelType' }),
+      { button: 0, ctrlKey: false },
+    );
+    const speechItem = await screen.findByRole('menuitemradio', { name: 'newChat.modelSelector.category.tts' });
+    fireEvent.keyDown(speechItem, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menuitemradio', { name: 'newChat.modelSelector.category.tts' })).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'settings.providers.custom.fields.modelType' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'newChat.modelSelector.category.tts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(
+      vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models[0],
+    ).toMatchObject({ id: 'local-model', mode: 'audio_speech' });
+  });
+
   it('keeps an existing model route through fetch picker confirmation and save', async () => {
     i18nState.language = 'zh-TW';
     renderDialog();
@@ -355,6 +378,8 @@ describe('CustomProviderDialog preset locale ownership', () => {
 
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models[0]).toEqual({
+      discoveredMetadata: {},
+      nameExplicit: false,
       id: 'local-model',
       name: 'Local Model',
       route: {

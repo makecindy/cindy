@@ -63,6 +63,8 @@ export interface AgentSkillCommand {
   /** Whether the skill came from a user-global or project-local directory. */
   source: SlashCommandSource;
   path?: string;
+  /** Package resources need their owning package's management surface. */
+  origin?: 'package';
   scope?: 'global' | 'project' | 'user' | 'repo' | 'system' | 'admin';
   enabled?: boolean;
   /** Pi discovery/runtime state; omitted for engines without a runtime truth layer. */

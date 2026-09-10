@@ -90,6 +90,28 @@ export interface CcRemoteHttpMcpServerConfig {
   headers: Record<string, string>;
 }
 
+/** Query startup may degrade optional MCPs, but a Bot must have its task tools. */
+export async function prepareCcRemoteQueryMcp(
+  args: Parameters<typeof buildCcRemoteHttpMcpServers>[0],
+  deps: CcRemoteHttpMcpDeps & { onOptionalInjectionError?: (error: unknown) => void },
+): Promise<Awaited<ReturnType<typeof buildCcRemoteHttpMcpServers>>> {
+  let injected: Awaited<ReturnType<typeof buildCcRemoteHttpMcpServers>> | undefined;
+  try {
+    injected = await buildCcRemoteHttpMcpServers(args, deps);
+    if (args.botSession && !injected.servers.cindy_helper) {
+      throw new Error('Remote Claude Code Bot tools are not ready: cindy_helper was not injected.');
+    }
+    return injected;
+  } catch (error) {
+    // A partial injection can register memory/collab without the required helper.
+    // Do not leave that context behind when no query will own its cleanup.
+    try { injected?.cleanup(); } catch { /* Preserve the startup failure. */ }
+    if (args.botSession) throw error;
+    deps.onOptionalInjectionError?.(error);
+    return { servers: {}, cleanup: () => {} };
+  }
+}
+
 /**
  * 为远端 cc query 构建 http 形态的 MCP server 配置。返回的 cleanup 必须在
  * query close 时调用,注销 session ctx (detach 不清,重建时重新注册覆盖)。
@@ -108,6 +130,8 @@ export async function buildCcRemoteHttpMcpServers(
     /** 当前 Maker Session 实例代号；作为 opaque bridge route identity 下发。 */
     sessionInstanceId?: string;
     workingDir: string;
+    /** Host-owned Bot classification; helper also rechecks the live surface. */
+    botSession?: boolean;
     /** session 自己的 vendorOptions (maker-core startSession 透传); 优先于 DB 合成。 */
     vendorOptions?: Record<string, unknown>;
     /**
@@ -184,6 +208,8 @@ export async function buildCcRemoteHttpMcpServers(
     collabEnabled:
       (deps.isCollabEnabled?.() ?? true) && isFrozenBuiltinPluginAllowed(vendorOptions, 'collab'),
     memoryEnabled: args.makerMemoryEnabled === true,
+    botHelperEnabled: args.botSession === true && !!args.sessionInstanceId
+      && isFrozenBuiltinPluginAllowed(vendorOptions, 'xdt_helper'),
   });
   if (names.length === 0) {
     // 无注入也是一代 (collab 禁用 / 白名单空):指纹常量 'disabled',

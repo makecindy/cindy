@@ -17,8 +17,10 @@ export function useUpdateStatus() {
   const [progress, setProgress] = useState<number | undefined>();
 
   useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.getUpdateStatus || !api.onUpdateStatus) return undefined;
     // Query initial status — catches 'ready' set before this hook mounted
-    window.electronAPI.getUpdateStatus().then((initial) => {
+    api.getUpdateStatus().then((initial) => {
       if (initial && typeof initial.status === 'string') {
         setStatus(initial.status as UpdateStatusPayload['status']);
         if (initial.version) setVersion(initial.version);
@@ -27,7 +29,7 @@ export function useUpdateStatus() {
     }).catch(() => {});
 
     // Subscribe to future status changes
-    const unsubscribe = window.electronAPI.onUpdateStatus((payload) => {
+    const unsubscribe = api.onUpdateStatus((payload) => {
       if (payload && typeof payload.status === 'string') {
         setStatus(payload.status);
         if (payload.version) {

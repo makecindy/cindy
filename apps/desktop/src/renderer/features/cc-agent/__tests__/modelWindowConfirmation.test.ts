@@ -39,6 +39,26 @@ describe('Claude subscription model-window confirmation', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  it('lets the recovery send consume an explicitly staged selection without confirming it early', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      deferred: true,
+      superseded: false,
+      pendingUntilSend: true,
+    });
+    const confirm = vi.fn();
+
+    await expect(setModelWithWindowConfirmation({ invoke, confirm })).resolves.toBe('pending');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('rejects a superseded staged selection before recovery can send', async () => {
+    await expect(setModelWithWindowConfirmation({
+      invoke: async () => ({ deferred: true, superseded: true, pendingUntilSend: true }),
+      confirm: vi.fn(),
+    })).rejects.toThrow('did not return an applied result');
+  });
+
   it('does not retry or apply when the first 1M to 200K pressure is cancelled', async () => {
     const invoke = vi.fn().mockResolvedValue(pressure);
     const confirm = vi.fn().mockResolvedValue(false);

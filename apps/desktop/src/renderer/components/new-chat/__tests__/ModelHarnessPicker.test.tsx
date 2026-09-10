@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { unifiedModelEntries, type ProviderView } from '@cindy/model-providers';
 import dictionary from '../../../i18n/locales/zh-CN/common.json';
@@ -9,11 +9,10 @@ import { ModelConfigFlyout } from '../ModelConfigFlyout';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) =>
-      key
-        .split('.')
-        .reduce<unknown>((value, part) => (value as Record<string, unknown>)?.[part], dictionary) ??
-      key,
+    t: (key: string, args?: Record<string, unknown>) => {
+      const value = key.split('.').reduce<unknown>((value, part) => (value as Record<string, unknown>)?.[part], dictionary) ?? key;
+      return typeof value === 'string' ? value.replace(/{{(\w+)}}/g, (_, name) => String(args?.[name] ?? '')) : value;
+    },
   }),
 }));
 afterEach(cleanup);
@@ -49,6 +48,34 @@ function entry() {
 }
 
 describe('model harness choices', () => {
+  it.each(['cc', 'codex', 'pi'] as const)('shows the saved budget and refreshed default for %s', async (engine) => {
+    let changed: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const getModelContextLimit = vi.fn().mockResolvedValue({ limit: 1_000, isCustomized: true,
+      codexContext: { contextWindow: 1_000 } });
+    Object.assign(window, { electronAPI: { maker: { getModelContextLimit,
+      onProvidersChanged: (listener: () => void) => { changed = listener; return unsubscribe; },
+    } } });
+    const model = entry();
+    const agent = engine === 'cc' ? 'claude-code' : engine;
+    const capability = model.capabilities[agent]!;
+    const rendered = render(<ModelConfigFlyout entry={model}
+      config={{ engine, agent, capability, efforts: [], effort: null, fast: false, fastCapable: false,
+        customized: false, wireModelId: capability.wireModelId }} state="recommended" sourceLabel="Cindy AI" price={null}
+      effortLabelOf={(_, effort) => effort} onEngineChange={vi.fn()} onEffortChange={vi.fn()}
+      onFastChange={vi.fn()} onResetToRecommended={vi.fn()} onAddFavorite={vi.fn()} onRemoveFavorite={vi.fn()} />);
+    expect(await screen.findByText('Cindy AI · 1K 上下文')).toBeTruthy();
+    expect(getModelContextLimit).toHaveBeenCalledWith({ providerId: 'xd', agent, modelId: capability.wireModelId });
+    getModelContextLimit.mockResolvedValue({ limit: null, isCustomized: false,
+      codexContext: { contextWindow: 1_048_576 } });
+    await act(async () => { changed?.(); });
+    expect(screen.queryByText('Cindy AI · 1K 上下文')).toBeNull();
+    expect(screen.getByText(/Cindy AI · 1M 上下文/)).toBeTruthy();
+    rendered.unmount();
+    expect(unsubscribe).toHaveBeenCalled();
+    Reflect.deleteProperty(window, 'electronAPI');
+  });
+
   it('shows native/compatibility facts and recommends Pi without changing selection on open', () => {
     const onChange = vi.fn();
     const model = entry();
@@ -64,7 +91,7 @@ describe('model harness choices', () => {
     expect(screen.getByRole('button', { name: /Codex · Responses · 兼容模式/ })).toBeTruthy();
     expect(container.querySelectorAll('[data-engine-capsule]')).toHaveLength(3);
     expect(screen.queryByText('原生支持')).toBeNull();
-    expect(screen.getAllByText('兼容模式')).toHaveLength(1);
+    expect(screen.getAllByText('兼容模式')).toHaveLength(2);
     expect(screen.queryByText('推荐 Pi')).toBeNull();
     expect(screen.queryByText('兼容')).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
@@ -90,7 +117,7 @@ describe('model harness choices', () => {
   it('opens the compatibility explanation without selecting its harness', async () => {
     const onChange = vi.fn();
     render(<ModelHarnessPicker entry={entry()} value="pi" onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: '兼容模式' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '兼容模式' })[0]!);
     expect((await screen.findByRole('tooltip')).textContent).toContain('建议有经验的用户使用');
     expect(onChange).not.toHaveBeenCalled();
   });

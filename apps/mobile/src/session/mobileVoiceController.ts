@@ -200,6 +200,7 @@ export function createMobileVoiceControllerSession(
   let asrStartError: unknown = null;
   let audioFailureError: Error | null = null;
   let voiceInsertion: MobileVoiceDraftInsertion | null = null;
+  let voiceInsertionReplacementRange: { start: number; end: number } | null = null;
   let publishedVoiceInsertion: MobileVoiceDraftInsertion | null = null;
   let voiceInsertionSegmentIds: string[] = [];
   let voiceInsertionTouched = false;
@@ -232,8 +233,12 @@ export function createMobileVoiceControllerSession(
     pendingDraftToPublish = null;
     // The first insertion can change selected atoms even when its text is identical.
     if (lastPublishedDraft === draft && (!voiceInsertion || publishedVoiceInsertion)) return;
-    const replacement = publishedVoiceInsertion && voiceInsertion
-      ? { ...publishedVoiceInsertion, text: voiceInsertion.text }
+    const replacement = voiceInsertion
+      ? publishedVoiceInsertion
+        ? { ...publishedVoiceInsertion, text: voiceInsertion.text }
+        : voiceInsertionReplacementRange
+          ? { ...voiceInsertionReplacementRange, text: voiceInsertion.text }
+          : undefined
       : undefined;
     lastPublishedDraft = draft;
     publishedVoiceInsertion = voiceInsertion ? { ...voiceInsertion } : null;
@@ -344,6 +349,11 @@ export function createMobileVoiceControllerSession(
       : appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
     if (!result.insertion) return undefined;
     voiceInsertion = result.insertion;
+    voiceInsertionReplacementRange = options.initialSelection && currentDraft === baseDraft
+      ? 'atomRange' in options.initialSelection
+        ? null
+        : { start: options.initialSelection.start, end: options.initialSelection.end }
+      : { start: result.insertion.start, end: result.insertion.start };
     voiceInsertionSegmentIds = segmentIds;
     latestDraft = result.draft;
     publishDraftChange(latestDraft, mode);

@@ -1,3 +1,4 @@
+import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 import { describe, expect, it } from "vitest";
 
 import modelRegistryJson from "../../catalog/model-registry.json" with { type: "json" };
@@ -23,7 +24,11 @@ import type {
  * maxInputTokens) —— max 为排他上界(`inputTokens >= max` 不命中)。
  */
 
-const registry = modelRegistryJson as unknown as ModelRegistry;
+const rawRegistry = modelRegistryJson as unknown as ModelRegistry;
+const registry = {
+  ...rawRegistry,
+  models: expandedRegistryEntries(rawRegistry),
+};
 
 function effectiveWindow(
   entry: ModelRegistryEntry,
@@ -117,6 +122,7 @@ describe("model registry data consistency", () => {
     // These existing Server prices also value historical/explicit long-window
     // usage. Their public API bands must not enlarge today's subscription window.
     const subscriptionApiReferences = new Set([
+      "openai/gpt-6-astra",
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-terra",
       "openai/gpt-5.6-luna",

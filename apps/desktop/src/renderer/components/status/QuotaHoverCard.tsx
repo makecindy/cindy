@@ -10,7 +10,12 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
-import { formatQuotaResetAt, type UsageCardAccount, type UsageCardWindow } from './usageCardModel';
+import {
+  formatQuotaResetCountdown,
+  formatQuotaResetAt,
+  type UsageCardAccount,
+  type UsageCardWindow,
+} from './usageCardModel';
 import { QuotaBar, quotaSeverity, type QuotaSeverity } from './QuotaBar';
 
 export interface QuotaHoverCardTurnUsage {
@@ -40,6 +45,8 @@ export interface QuotaHoverCardSessionUsage {
 }
 
 export interface QuotaHoverCardProps {
+  /** Embedded settings surface shares content without a second card frame. */
+  variant?: 'popover' | 'embedded';
   account: UsageCardAccount;
   sessionUsage?: QuotaHoverCardSessionUsage | null;
   turnUsage?: QuotaHoverCardTurnUsage | null;
@@ -106,10 +113,11 @@ function formatPaceLine(pace: QuotaPace, t: TFunction): string {
 function WindowBlock({
   title,
   window,
-  showRemaining = false,
+  showRemaining = true,
   paceWindowMinutes,
   detail,
   breakdown,
+  showAbsoluteReset = false,
   nowMs,
   paceNowMs,
   locale,
@@ -121,6 +129,7 @@ function WindowBlock({
   paceWindowMinutes?: number;
   detail?: string;
   breakdown?: UsageCardWindow['breakdown'];
+  showAbsoluteReset?: boolean;
   nowMs: number;
   paceNowMs: number | null;
   locale: string | undefined;
@@ -139,6 +148,7 @@ function WindowBlock({
         ? t('quotaCard.usageWarning')
         : null;
   const resetAt = formatQuotaResetAt(window.resetsAt, nowMs, locale);
+  const resetCountdown = formatQuotaResetCountdown(window.resetsAt, nowMs, t);
   // 窗口已过重置点，旧观测的节奏失真，待新快照。
   const resetPassed =
     typeof window.resetsAt === 'number' &&
@@ -180,9 +190,12 @@ function WindowBlock({
       />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
         <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
-        {resetAt !== null ? (
-          <span className="text-12 text-[var(--text-secondary)]">
-            {t('quotaCard.resetAt', { at: resetAt })}
+        {resetCountdown !== null ? (
+          <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
+            <span>{resetCountdown}</span>
+            {showAbsoluteReset && resetAt !== null && (
+              <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
+            )}
           </span>
         ) : null}
       </div>
@@ -387,6 +400,7 @@ function SessionUsageSection({
 
 /** 套餐、配额、任务合计与本轮明细按同一信息层级渲染；供应商差异只来自 account。 */
 export function QuotaHoverCard({
+  variant = 'popover',
   account,
   sessionUsage = null,
   turnUsage = null,
@@ -409,8 +423,13 @@ export function QuotaHoverCard({
   return (
     <div
       data-testid="quota-hover-card"
-      className="flex max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] w-[340px] max-w-[calc(100vw-16px)] select-none flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] pb-2 text-13 leading-5 text-[var(--text-primary)]"
-      style={{ boxShadow: 'var(--shadow-menu)' }}
+      className={cn(
+        'flex select-none flex-col pb-2 text-13 leading-5 text-[var(--text-primary)]',
+        variant === 'embedded'
+          ? 'w-full min-w-0'
+          : 'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] w-[340px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+      )}
+      style={variant === 'popover' ? { boxShadow: 'var(--shadow-menu)' } : undefined}
     >
       <div
         data-testid="quota-hover-card-scroll-content"
@@ -439,6 +458,7 @@ export function QuotaHoverCard({
           <WindowBlock
             key={key}
             {...displayWindow}
+            showAbsoluteReset={variant === 'embedded'}
             nowMs={nowMs}
             paceNowMs={paceNowMs}
             locale={locale}

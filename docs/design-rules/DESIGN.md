@@ -10,15 +10,15 @@ Cindy's interface is radical minimalism applied to an AI-agent workbench — a q
 
 The default theme lives almost entirely in grayscale. Chromatic color is reserved for a small, explicitly sanctioned set of semantic signals (status, diff, focus — see §2); everything else is shades between near-black and near-white. Long working sessions stay calm, and color means something whenever it does appear.
 
-What makes this system distinctive is the combination of a single geometric sans-serif (Inter) with a pill-first geometry (9999px radius on interactive elements). The clean letterforms + rounded buttons + rounded containers create a cohesive "softness language" that makes a developer-oriented tool feel approachable and friendly rather than intimidating. This is minimalism with warmth — not cold Swiss-style grid minimalism, but the kind where the edges are literally softened.
+What makes this system distinctive is the combination of a single geometric sans-serif (Inter) with a pill-first geometry (ordinary action frames default to pills; registered shapes and contained content are assigned separately under §5). The clean letterforms + rounded buttons + rounded containers create a cohesive "softness language" that makes a developer-oriented tool feel approachable and friendly rather than intimidating. This is minimalism with warmth — not cold Swiss-style grid minimalism, but the kind where the edges are literally softened.
 
 **Key Characteristics:**
 
 - Near-monochrome default theme; chromatic color only via the sanctioned semantic set (§2), always consumed through tokens (§10)
 - Inter as the single sans family, carrying both display headlines and body text
-- Tight border-radius system: 4px (keyboard keycaps) / 8px (inner controls) / 12px (containers) / 9999px (pill)
+- Tight border-radius system (§5): 0px / 2px (registered data marks) / 4px (keyboard keycaps) / 8px (inner controls) / 12px (containers) / 9999px (pill frames)
 - Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
-- Pill-shaped geometry on interactive elements (buttons, tabs, single-line inputs, tags); visible keyboard shortcut frames use the registered 4px keycap exception (§5), and textareas use the 8px inner-control radius (§5)
+- Ordinary action frames default to pills; registered shapes (keycaps and data marks) and contained content are handled as separate visible layers. Apply §5 Step 1 before the Step 2 control tiers, including the inner-control tier for textareas.
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
@@ -90,7 +90,8 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
 > - **Toast Info / Success / Warning / Error** — `#417CDD` / `#2AAE5B` / `#F3A115` / `#D91F37`(finalized 2026-07-17; Toast exemption lifted) — used ONLY on the 16×16 lucide icon inside Toast pill notifications. The pill body (background, text, border, close icon) remains strictly grayscale. Info blue #417CDD equals the focus-ring / Auto Approval value (originally #3B82F6, added 2026-07-14, now finalized); success/warning/error equal the global status colors (done green / status error / warning foreground).
-> - **Resource Usage Process Categories** — the Resource Usage table may color only its 14px process-type glyphs so dense rows can be scanned by category (user-requested 2026-08-06). The six category pairs are task Agent blue `#2563EB / #60A5FA`, Agent service purple `#7C3AED / #A78BFA`, main-process pink `#DB2777 / #F472B6`, renderer cyan `#0891B2 / #22D3EE`, GPU amber `#D97706 / #F59E0B`, and utility green `#059669 / #34D399` (Light / Dark). These colors encode process category, **not health or status**; row backgrounds, labels, metrics, selection and actions remain on the neutral system. Scope is strictly `resource-usage` process glyphs and must not be generalized to other tables or process UI. Tokens: `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon`.
+> - **Usage History category color (owner-approved 2026-09-08, extended 2026-09-09).** The registered usage heatmap uses a blue intensity scale. Daily token bars and their corresponding model-table swatches/share marks use `--usage-model-1` … `--usage-model-5` as the seed palette; additional models receive theme-derived hues without a top-five cutoff. All model identities in the full history are included, even when absent from the last 30 days. Agent/harness swatches, share marks and the stacked share strip reuse the existing engine identity tokens: `--engine-badge-cc` (terracotta orange), `--engine-badge-codex` (blue), and `--usage-model-1` (owner-chosen teal for pi, to distinguish it from Codex blue). Claude/Codex retain their cross-mode fixed-value contract; pi follows the existing Light/Dark teal values. `--usage-heatmap-high` supplies the high end of the heatmap. The heatmap retains its process-blue alias; category colors do not inherit process/status semantics. Task marks, text and control frames stay neutral. See [the component specification](./usage-history-charts.md); colors.ts remains the seed-value source, with runtime derivation under governance §3.4.
+> - **Resource Usage Process Categories** — the Resource Usage table may color only its 14px process-type glyphs so dense rows can be scanned by category (user-requested 2026-08-06). The six category pairs are task Agent blue `#2563EB / #60A5FA`, Agent service purple `#7C3AED / #A78BFA`, main-process pink `#DB2777 / #F472B6`, renderer cyan `#0891B2 / #22D3EE`, GPU amber `#D97706 / #F59E0B`, and utility green `#059669 / #34D399` (Light / Dark). These colors encode process category, **not health or status**; row backgrounds, labels, metrics, selection and actions remain on the neutral system. Direct use is confined to `resource-usage` process glyphs; the explicitly registered Usage History heatmap alias above may also reference the task-blue value. No other table or process UI inherits this permission. Tokens: `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon`.
 > - **Bot Avatar Hues** — the Bots feature may fill a Bot's round avatar with one of nine registered tints so a list of persistent assistants can be told apart at a glance (registered 2026-08-17). The hue encodes **which Bot this is** — an identity cue like the file-type badges above, never health, status, or channel. Light mode uses soft tints, Dark mode the matching deep tints; the emoji and the initial-letter fallback (always `--text-primary`) stay legible in both. Tokens: `--bot-avatar-red-bg` / `-orange-` / `-amber-` / `-green-` / `-teal-` / `-blue-` / `-violet-` / `-pink-` / `-graphite-bg` (the last is the neutral step, and is where legacy `graphite` avatar data lands). Scope is strictly the Bot avatar fill in `features/bots` — do not reuse these tints for status dots, badges, row backgrounds, or any other surface. External theme import never touches them (the import template is allow-list only), so Bot identity colors do not drift between themes.
 > - **Bot Unread Badge** — the Bots sidebar may paint its unread pill and its pending-todo dot in information blue `#417CDD` with white text (registered 2026-08-19). The color encodes **IM unread semantics** ("how much have I not seen"), the one signal every chat list has taught users to read by color alone; it is not a CTA and not a health/status tone. The pill was previously the inverse-CTA fill, which on the selected row's light-gray pill turned into two high-contrast marks competing for the same glance. Same value both modes — an unread count means the same thing in Light and Dark, and the value is already the registered focus-ring / Auto Approval / Toast-info blue. The foreground is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. Tokens: `--bot-unread-bg` / `--bot-unread-fg`. Scope is strictly the teammate-list unread badge and the pending-todo dot in `features/bots/BotsSidebar.tsx` — do not reuse it for other badges, status dots, row backgrounds, or any other surface.
 > - **ConfirmDialog Danger** — `#EF4444` used ONLY on the confirm button background in the Danger variant. The cancel button and rest of the dialog remain grayscale.
@@ -253,6 +254,20 @@ card/container
   hover     --surface-hover       #e5e5e5 / #3c3c3a
 ```
 
+### Provider detail header
+
+All provider connections share one header pattern, independent of builtin/custom storage or login source.
+Model counts belong in the provider list, not the detail header. The fixed slots are: brand mark; connection display name and access type; account/source
+subtitle; connection status, at most one primary action and one overflow menu. Editing and deletion
+belong in that shared menu, not additional provider-specific icon buttons. Identity text is not an
+implicit expand/collapse target. At narrow widths, wrap the action group without clipping controls.
+Use existing Button, menu and themed settings styles; radii and hit targets follow §5, icon-only
+controls follow §14.6, and both Light/Dark follow §10. Account usage sits below the header identity
+row with the existing layer separation, not a nested card. Provider-specific authentication and
+recovery content may fill the explanation slot without replacing the header layout.
+Identity, state, action semantics and pending implementation are defined in
+[供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
+
 ### Inputs & Forms
 
 ```
@@ -263,17 +278,23 @@ input/text
   radius      9999px (pill — single-line inputs)
   height      32px (sm) / 36px (md) / 40px (lg)  (DS-4 G1; three sizes, shared 4px step with buttons)
   focus       --focus-ring-soft   rgba(65,124,221,0.5)   (50% of #417CDD; opaque border variant = --focus-ring)
-              ⚠ known implementation deviation: components/ui/input.tsx ships the opaque --focus-ring, inherited from the SettingsTextInput convergence. DS-4 did NOT amend this spec value; the gap is registered in design-governance.md §10 pending a designer ruling.
+              DS-6: approved soft ring; settings retain their local focus-border alias; error styling takes priority. Light/Dark and legacy-theme readability must be verified.
   placeholder --text-placeholder  #c4c4c4 / #525252
   error       --error-border / --error-fg
   impl        components/ui/input.tsx
   disabled    60% opacity + ordinary pointer  (new in DS-4; the pre-DS-4 SettingsTextInput had no disabled styling and none of its 6 consumers passed it)
-  ivory       surface="ivory" → --settings-input-bg (--surface-card-ivory). Registered debt (DS-4 G6, 2026-09-03) — colors.ts undocumented drift for white-panel dialogs; do not make it the default. Close as a separate issue.
+  ivory       surface="ivory" → --settings-input-bg (--surface-card-ivory). Explicit white-panel / nested-card surface (DS-6 decision); elevated remains the default. Preserve local theme overrides.
 ```
 
-- **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 three-tier scale; single rule, no nesting condition). Implementation: `components/ui/input.tsx` `Textarea`.
+- **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 radius scale; single rule, no nesting condition). Implementation: `components/ui/input.tsx` `Textarea`.
 - **Existing settings inputs retain their local theme contract** through `SettingsTextInput`, a thin wrapper over `ui/input`. It supplies the historical `settings-input-text`, `settings-input-border`, `settings-input-border-focus`, and `settings-input-placeholder` aliases via `inputClassName`. Their defaults still resolve to Tier-1; explicit local overrides stay local. Generic `Input` keeps the Tier-1 defaults above. Standard error-state border/ring takes precedence over wrapper styles. Do not promote these legacy overrides into global semantic slots or rewrite user theme files. Existing placeholder load-time normalization remains unchanged.
 - Placeholders must **read as clearly empty** — Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 Dark / ≈2.6:1 Light) and reads as real input; forbidden. **Every input surface's placeholder (chat / ask / settings / plan-action-fb) resolves to `--text-placeholder`** (2026-06 G3, archived in `design-decision-log.md`); non-default themes express their own placeholder color by overriding `text-placeholder`.
+
+**DS-6 form usage (approved 2026-09-08)**: use `FormField` for a real field's label, hint and inline validation error; pass its render-function props to `Input` / `SettingsTextInput`. `required` supplies assistive semantics only, never adds browser validation or changes the business rules. Reserve feedback space on fields that can fail and focus/scroll to the first invalid field; dynamic rows keep stable IDs when siblings are added or removed. Service failures remain Toasts. No new Textarea consumer is required.
+
+`Button loading` retains its accessible label and dimensions, exposes `aria-busy`, disables activation, and reuses `Spinner` (static under reduced motion). The form owns the request and a synchronous duplicate-submit guard: actual saving blocks Cancel/Esc/scrim; success closes through the original callback, failure restores editing. Independent connection tests/model fetching remain independent. No change to cancellation, settlement, configuration, secrets or payload contracts.
+
+Ordinary confirmations opt into standard buttons with `presentation="standard"` on the shared `ConfirmDialog` / provider. DS-6 selects only custom-provider and custom-MCP deletion. Standard confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Unselected callers, Permission, Full Access and plugin authorization keep their existing presentation.
 
 ### Select & Dropdown
 
@@ -288,11 +309,12 @@ input/text
 Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialog.tsx` (the shared confirm dialog); new dialogs reuse its structure — do not invent a parallel one.
 
 - **Overlay**: the full-screen scrim uses the `--overlay-modal` token (ConfirmDialog's current `neutral-900/40` hardcoded pair is legacy — **new dialogs always use the token**; do not copy the legacy pair).
-- **Container**: a container — 12px radius (`rounded-xl`), `--confirm-bg`, `--confirm-shadow`, 16px padding (`p-4`), centered. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`).
+- **Tooltips opened inside the modal** (2026-09-08, DS-6 review fix): the shared `Tip` portals its content to `document.body` on the default `z-[60]` layer — **below** the `z-[10000]` modal overlay, so an unraised tooltip is covered by its own dialog. Any `Tip` whose trigger lives inside a modal must raise its content above the host dialog: pass `contentClassName="z-[10001]"` to `Tip`, and `secretTipContentClassName="z-[10001]"` on `Input` for the password reveal button (both DS-6 forms do). This mirrors the existing `z-[10001]` popover/dropdown convention inside `z-[10000]` dialogs.
+- **Container**: a container — 12px radius (`rounded-xl`), `--confirm-bg`, `--confirm-shadow`, 16px padding (`p-4`), centered. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
 - **Title / description**: `--confirm-title` / `--confirm-desc`, medium weight.
-- **Buttons**: pill (9999px); primary = solid CTA (`--confirm-btn-primary-*`), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
-- **Focus on open**: lands on the dialog's **primary input or primary button**, never defaults to Cancel (see §14.2 + ConfirmDialog's `autoFocusConfirm` / `onOpenAutoFocus`).
-- **Closing affordance** (made explicit 2026-07-30, scope clarified 2026-07-31): **dismissible** dialogs (wizards, catalogs, forms — anything a user may abandon freely) close via the footer Cancel button, Esc, and a scrim click, and carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation, not a convenience. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) intentionally do **not** close on scrim click (a deliberate mis-tap guard) — that behavior stays. Known legacy debt: CustomProviderDialog still ships a top-right × predating this rule — migrate it the next time that dialog is touched; do not copy the pattern into new dialogs.
+- **Buttons**: pill (9999px); primary = inverse neutral (`--confirm-btn-primary-*`, not an automatic CTA assignment), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
+- **Focus on open**: dismissible forms focus their primary input. Ordinary AlertDialog confirmation retains Cancel by default; explicit `autoFocusConfirm` focuses the primary action, while a required typed confirmation takes precedence. Preserve primary → optional third → Cancel DOM order (DS-6 decision).
+- **Closing affordance** (made explicit 2026-07-30, scope clarified 2026-07-31): **dismissible** dialogs (wizards, catalogs, forms — anything a user may abandon freely) close via the footer Cancel button, Esc, and a scrim click, and carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation, not a convenience. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) intentionally do **not** close on scrim click (a deliberate mis-tap guard) — that behavior stays. The provider form has no ×. Its existing image-generation interruption confirmation is a separate business layer and retains its current dismissal contract.
 - **Multi-step dialogs / wizards** (registered 2026-07-30, first consumer: Add-Provider wizard): the step indicator lives in the header row (round numbered chips — current step solid `--accent-cta-bg` with `--surface-on-card` text, completed steps ✓ on `--surface-chip`, upcoming outlined `--border-default`). Footer: **back navigation ("← 上一步") is a left-aligned bare text button** (`--text-secondary`, 13px/500, no background — the §5 bare-text-button exemption, no radius) — navigation is not a commit action and must not sit inside the right-aligned pill group; commit actions (取消 / 下一步 / 完成) remain right-aligned pills per the button rule above. Catalog/list steps put the scrollable region between **two full-width 1px `--border-default` hairlines**, with permanent entries (e.g. 自定义端点) pinned below the scroll region, always visible. Width matches the custom-provider form dialog (600px, `min(600px, 100vw-32px)`) so the two provider dialogs read as one family; height is capped at `min(640px, 85vh)` — on large displays a catalog dialog must not stretch toward full-screen height (2026-07-30 ruling).
 
 ### Tabs
@@ -303,13 +325,32 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - Active: Light Gray bg (`--surface-chip`); Inactive: transparent
 - All pill-shaped (9999px)
 
+### Settings segmented controls
+
+- Use `components/settings/SettingsSegmentedControl.tsx` for a compact, mutually exclusive setting on a settings card. This is a radio group, not navigation between tab panels.
+- Use the original browser automation target treatment (user preference, 2026-09-07): a borderless pill track with `--surface-chip`, 32px height, 3px padding and 2px gap. Options: 28px height, 12px text with line-height 1, 12px horizontal padding and a reserved 1px border.
+- Selected: `--surface-elevated`, `--settings-section-title`, weight 500, and a 1px `--border-default` outline. The outline and raised fill distinguish selection from the track; `--surface-chip` is only the track, never the selected fill.
+- Unselected: transparent fill/border, `--text-secondary`, weight 400; enabled hover uses `--text-primary`. Disabled options retain the selected mark at 50% opacity and cannot change value or gain hover feedback. Keyboard focus uses `--focus-ring`.
+- Use `radiogroup` / `radio` / `aria-checked`. Tab enters at the selected option (or first option when no preset matches); arrows move focus and selection, wrap at the ends, and respect RTL. Home/End select the first/last option. Space/Enter activate the focused option.
+
+### Usage data graphics
+
+- `UsageHeatmap` and `UsageTokenBars` encode dates and quantities, including when clicking a mark filters by date. **Clickable data marks keep their data geometry; they are not ordinary pill buttons.** Their corner treatment is the registered data-mark members `usage-heatmap-day` and `usage-token-bar` (§5) — **the registration covers the coloured mark itself, not its hit region, legend, container or tooltip** — and is limited to these usage charts. For the heatmap, the transparent date hit target overlays the cell and shares its 12×12 footprint. For the token bars, the hit target may extend beyond a low or zero bar — the implementation gives it at least 24px of height — while the bar itself keeps its data height. In both charts the hit target's corner treatment is an implementation choice (currently the mark's 2px) and is not fixed by the registration; focus and selection indicators are independent of the registration and follow §5's interaction rules.
+- Heatmap: 12×12px square cells, 2px radius and 3px gaps in both read-only and clickable views. Reserve a 3px outer gutter so edge cells retain their focus/selected outlines. Preserve month alignment, the complete requested history window and the existing four-level neutral intensity scale.
+- Token bars: 30 equal-width slim columns fitted to the plot, 3px gaps, 2px outer radius, shared baseline and proportional stacked segments. Do not enforce a 24px minimum column width or clip the latest days behind horizontal scrolling. A low/zero bar may have a taller transparent hit target without inflating its data height.
+- Preserve native date/value tooltips, accessible date/value labels, keyboard activation and visible focus/selected outlines. Charts stay on the semantic gray palette except for the owner-approved Usage History chart colors registered in §2 (2026-09-08); this remains a geometry exception, not permission to introduce further category colors or apply chart radii to other buttons.
+
+### Usage History Charts
+
+The usage heatmap, daily-token bars and their separate interaction indicators follow [the Usage History component specification](./usage-history-charts.md). Their 2px data-mark geometry is set by the §5 registered data-mark members (`usage-heatmap-day` / `usage-token-bar`); the bounded hover/focus/selection emphasis is registered with those members in §5 (interaction constraints), and the extensible model palette, fixed Agent/harness colors and heatmap blue are the §2 Usage History color registration. Date filtering enters through the charts themselves (cell / bar hit targets) plus the range selector on the page — the formerly drafted single-day date form is not part of this entry, and the component spec records the unresolved target-size ruling separately.
+
 ## 5. Layout Principles
 
 ### Spacing System
 
 - Base unit: 8px
 - Scale: 4px, 6px, 8px, 10px, 12px, 14px, 16px, 20px, 24px, 32px, 40px, 48px
-- Button padding: 10px 24px (consistent across all buttons; bare text buttons follow their component entry, not this padding)
+- Ordinary action-frame padding: 10px 24px per the §4 button entries. Registered keycaps, data marks and bare-text buttons follow their component treatments; a `<button>` tag alone does not assign this padding to a visible layer or hit region (§5 Border Radius Scale).
 - Container padding: dialogs 16px (`p-4`, see §4 Dialog & Modal); dropdown panels 6–8px (see §4 Select & Dropdown)
 
 ### Layout Structure (App)
@@ -326,16 +367,85 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 ### Border Radius Scale
 
-Three tiers — **these three only** (wording hardened 2026-08-29, designer ruling — see `design-decision-log.md` 08-29). **Tier assignment is a single decision tree in this §5 section; §4 component entries, the §7 Do/Don't lists and the §9 iteration guide restate it for convenience — when wording drifts, this section wins:**
+*(rewritten 2026-09-07 — owner-authorized rule decision, see `design-decision-log.md` 09-07. Supersedes the 08-29 three-tier wording and folds in the 07-28 micro-cell exception and the 09-06 keycap ruling.)*
 
-- **Pill (9999px)**: **every button is a pill — the only exemption is registered bare text buttons.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges — including buttons with transparent or outlined fills (dialog secondary/cancel are pills with a transparent fill; a control's fill style never changes its tier). The exemption is exactly **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no shape to round — text, not a button-shaped control — so they carry no radius at all. Register any new bare-text-button usage in the component entry that introduces it.
-- **Container (12px)**: the box that holds content — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
-- **Keyboard keycap (4px)**: every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut, uses a 4px outer radius (`rounded-[4px]`). Keep its border, fill, padding, and text colors appropriate to the surrounding control; the radius is the shared cross-surface rule. This is the sole 4px exception and keeps keyboard hints visually distinct from pill buttons and containers.
-- **Inner control (8px)**: multi-line inputs (textarea) — **always 8px, whether the textarea sits inside a visible container or is the outermost control of a form area** — plus selected/hover row highlights in dropdowns/menus and small in-block cells nested inside a container. Implemented as Tailwind `rounded-lg` (8px).
+**What this section assigns a radius to is a *visible layer* — one specific frame, surface, or clipping outline — not a DOM tag and not a whole component.** A single control routinely carries several: a "运行 ⌘Enter" button has a pill action frame, a 4px keycap inside it, and a hit-testing responsibility that needs no frame of its own. Assign each layer on its own. **A parent's radius is not the assignment rule for a contained layer.** A container may retain its approved content-clipping treatment, but an interaction wrapper must not use its own geometry to replace a contained mark's registered geometry.
 
-_No 6px / 10px, and no arbitrary radii. **4px is reserved for keyboard keycaps** as defined above; other new components must not introduce it. Existing non-keycap `rounded-[4px]` usages remain registered debt. Bare `rounded` and `rounded-sm` are not substitutes for the keycap rule. Do not add tiers, and **"it looks small" is never a reason to move an element down a tier** — an element's tier follows what it IS (button / box / textarea — always 8px / nested non-button), not its size or nesting. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container; a pill there becomes a lozenge, 12px looks bloated._
+**Assignment is a two-step decision tree. Step 1 wins over Step 2.**
 
-> **Narrow exception — status micro-cells (2px)** (registered 2026-07-28): non-interactive status squares of 8×8px or smaller keep a 2px radius — the workflow agent status strip's cells (background-tasks panel detail + workflow chat card) and the equivalent per-category square in SystemCard. At that size any tier radius rounds the square into a dot and destroys the "block strip" read that lets a large agent fleet be scanned at a glance. Scope is exactly this: **non-interactive, ≤8px, status-only**. Do NOT generalize to buttons, tags, rows, badges or containers — those still pick a tier.
+**This section is the authoritative source for radius assignment.** Component entries and the summaries in §§1, 4, 7 and 9 reference it; they do not introduce competing assignment rules. The decision log records decisions and history, not a second current-value table.
+
+#### Step 1 — Registered shapes
+
+**A layer uses a registered shape only when an approved entry below covers that specific visible layer and use.** The entry supplies its corner treatment. Semantic arguments support an application for registration; they do not establish membership. Adding or widening an entry requires adjudication under the design-governance process and a decision-log record. **Neither an author nor a reviewer may create membership merely by interpreting this section.**
+
+| Category | Scope | Corner radius |
+| --- | --- | --- |
+| **Keyboard keycap** | Every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut. Border, fill, padding and text colors stay appropriate to the surrounding surface; the radius is the shared cross-surface rule. *(Registered 2026-09-06, #4001.)* | 4px |
+| **Data mark** | A visible layer inside a chart or visualization whose shape belongs to the data rather than to the control. Members below. *(Registered 2026-09-07.)* | 0px or 2px, pinned per member |
+
+**Overlap.** A keyboard shortcut frame retains its registered 4px treatment when another channel, such as colour, also encodes data. Data encoding alone does not override the keycap entry. Other overlaps must be resolved explicitly in the registration; listing order alone does not grant precedence.
+
+**Registered data-mark members.** The value is fixed per member, never chosen at the call site:
+
+| Member ID | Covered visible layer | Corner radius |
+| --- | --- | --- |
+| `usage-heatmap-day` | The coloured cell representing one day's usage in `UsageHeatmap`. Excludes the hit region, legend, outer container and tooltip. | 2px, all four corners |
+| `usage-token-bar` | The coloured bar representing one day's token volume in `UsageTokenBars`. Excludes the hit region, outer container and tooltip. Its own clipping may follow the same treatment. Top-only rounding or square baseline corners are not variants of this registration. | 2px, all four corners |
+| `workflow-status-cell` | The coloured micro-cell in the agent status strip (background-tasks panel detail + workflow chat card). | 2px, all four corners |
+| `system-category-square` | The registered per-category status square in SystemCard. | 2px, all four corners |
+
+*A member ID identifies an approved visual role, not a filename or an entire component subtree. Reuse within its stated scope and semantics-preserving refactors do not require a new radius ruling; keep implementation references current. A new role, wider scope or changed geometry requires adjudication. Component entries reference the member ID and record other dimensions and interaction details instead of maintaining a second radius value.*
+
+*The last two members absorb the narrow "status micro-cells (2px)" exception registered 2026-07-28. Their value and their components are unchanged; what changes is the basis — they are classified by the role their shape plays, not by being ≤8px and non-interactive. See the decision log for the two scope changes this entails. The first two members likewise carry the usage-chart geometry that #4064 phrased as a separate "usage data marks (2px)" exception; that parallel wording was folded into these registrations when this section merged, and §4 Usage data graphics is the component entry that records their dimensions.*
+
+**Evidence required to register a new data mark** — what an adjudication request must establish. **Not** a self-service test that admits a layer automatically:
+
+1. a stable mapping from a data field to a visual channel of that layer (position, size, area, colour intensity, **or categorical colour**);
+2. which visible layers belong to the data and which belong to the control, stated separately;
+3. that the classification does not depend on the current number of data points, the label text, the presence of a click handler, or the rendering technology (DOM / SVG / canvas).
+
+Ordinary input options, control selected-states and action frames do **not** enter merely by carrying data. Mixed objects are resolved in the component entry.
+
+#### Content and unresolved shapes
+
+**Pixels and intrinsic geometry within images, icons and other assets are not control frames.** Existing approved content and cropping treatments follow their owning component specifications; any surrounding action frame is assigned separately. Replacing an asset within such a treatment does not register a new shape.
+
+A new content-owned outline or mixed object not covered by an existing specification **must be submitted for adjudication**. Reviewers report unresolved classification and request the missing decision; they must **neither force the object into the pill tier solely because it is clickable nor approve an unregistered exception**.
+
+#### Step 2 — Control tiers
+
+Ordinary control frames, containers and inner-control surfaces not covered by Step 1 use the following three tiers.
+
+- **Pill (9999px)** — control frames: buttons, tabs, single-line inputs, tags, badges. **A control's fill style never changes its tier** — transparent and outlined fills are still pills (dialog secondary/cancel are pills with a transparent fill).
+- **Container (12px)** — the box that holds content: code blocks, cards, panels, dialogs. Tailwind `rounded-xl`.
+- **Inner control (8px)** — multi-line inputs (textarea), **always 8px** whether nested in a visible container or standing alone in a form; plus selected/hover row highlights in dropdowns/menus, and small in-block cells nested inside a container. Tailwind `rounded-lg`.
+
+**A layer with no frame or surface to round needs no corner-radius assignment.** This does not authorize a control to discard its prescribed frame treatment merely by omitting a fill or border. A transient hover or pressed surface on an ordinary control remains that control's frame and takes its assigned tier.
+
+**A focus or selection indicator is a separate visual treatment.** Its appearance alone does not create a new ordinary control frame or reclassify the associated layer. Registered bare-text buttons (wizard back-navigation "← 上一步", the §16.3 login text-button category) remain frameless and retain their visible focus treatment; new bare-text-button usages must still be registered in the introducing component entry.
+
+Evaluate the approved component treatment across its states, including shared styles and pseudo-elements. **The absence of a local background or border class is not evidence of frameless status.**
+
+#### Interaction constraints — apply after assignment
+
+Making something clickable never moves a layer between Step 1 and Step 2.
+
+- **Hit testing and mark geometry are independent responsibilities; they may share a DOM element or drawing primitive. No additional wrapper is required.** Hit-target geometry must not replace, clip or distort the mark's registered visible geometry or its data mapping. The mark's own registered clipping remains permitted. Resetting an existing radius with `rounded-none` is permitted when needed to achieve this result; **the presence or absence of a particular class is not the compliance test**.
+- **Focus and selection indicators use the associated component's approved interaction treatment.** For registered marks, the component entry identifies the indicator geometry; it must not be inferred by reclassifying the mark as a pill control. An indicator may be drawn on the existing element, a pseudo-element, an overlay or the drawing surface. It must remain distinguishable without changing the mark's registered geometry or data encoding.
+- **On a data-bearing layer, hover must not alter the visual mapping that encodes the data.** Use a distinguishable indicator on a separate visual layer when the relevant channel is already occupied.
+- **For the same data and display configuration, a registered mark's geometry and corner treatment must not change solely because interaction is enabled or disabled.** Independent hover, focus and selection indicators are allowed.
+- **Hit-target sizing.** Registered data-mark status does not itself provide an exception from pointer-target requirements. For the usage heatmap and daily-token chart, dense date targets may be retained through the **Equivalent** route of WCAG 2.2 SC 2.5.8 only when the Usage History view also provides a date-selection control that satisfies that criterion and reaches every selectable date with the same filtering result. Relative presets alone are not equivalent to arbitrary single-day selection. **This control was ruled to ship in the same change as the dense restoration; that sequencing was overtaken when #4064 restored the dense targets first.** Until the control ships, the usage charts' dense targets are a registered, non-compliant transition — the Equivalent route is not yet available to them, the control is tracked as owed in the design inventory, and this transition is not precedent for reducing any other target. Overlapping targets for different dates are not an acceptable enlargement technique. These members have no category-wide Essential exemption. Keyboard access and visible focus remain required independently.
+- **Registered interaction emphasis — Usage History charts (owner-approved 2026-09-08).** For the two registered data-mark members `usage-heatmap-day` and `usage-token-bar`, the component's approved interaction treatment additionally includes a bounded emphasis: the non-hit-testing visible layer may expand by 2px (heatmap cell width/height, bar width), which fits inside the 3px grid gaps and changes neither the grid pitch, the resting geometry, nor any data encoding; bar height, baseline, categorical colour tokens, heatmap intensity and hit regions do not change. The 09-08 reference refinement permits only the token chart to fade non-selected bars while an in-window date is selected or the recent-seven-day range is highlighted; the heatmap uses its registered neutral selection outline, bars stay without a pointer-selection outline, and keyboard focus stays independently visible. All four corner radii remain 2px throughout. The exact geometry and curve are specified in the component entry ([usage-history-charts.md](./usage-history-charts.md)); §14.4 carries the matching motion registration. No other member may borrow this emphasis.
+
+#### Scope and inventory
+
+*Do not invent radii. **"It looks small" is never a reason to move a layer down a tier** — within Step 2 a layer's tier follows what it IS (control frame / box / textarea), not its size or nesting. **This sentence governs Step 2 only**; it is not an argument that every clickable layer is a control. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container; a pill there becomes a lozenge, 12px looks bloated.*
+
+*New tiers and new registered shapes both enter only through adjudication — neither is added by a reviewer's reading of this section.*
+
+*Governed corner-radius values are **0px and 2px** for registered data marks, **4px** for keycaps, **8px** for inner controls, **12px** for containers, and **9999px** for pill frames. No 3px / 6px / 10px, and no arbitrary values. A layer with no frame to round needs no assignment; "no assignment" is not an additional radius value. **Intrinsic content and mark geometry remain outside this corner-radius inventory** — a scatter dot's circle, a pie sector's arc, a map outline are shapes of the mark itself. Existing non-keycap `rounded-[4px]` usages remain registered debt; bare `rounded` and `rounded-sm` substitute for nothing.*
+
 
 ## 6. Depth & Elevation
 
@@ -352,20 +462,20 @@ _No 6px / 10px, and no arbitrary radii. **4px is reserved for keyboard keycaps**
 ### Do
 
 - Use Surface (`#f8f8f6` Light / `#1f1f1e` Dark) as the page background — every page starts here
-- Use pill-shaped (9999px) radius on interactive elements — buttons, tabs, single-line inputs, tags. Visible keyboard shortcut frames use the registered 4px keycap exception (§5).
-- Use 12px radius on all non-interactive containers — code blocks, cards, panels
-- Use 8px radius for multi-line inputs (textarea, always) and non-button inner controls — dropdown/menu row highlights, in-block cells (see §5)
+- Assign each visible layer using §5: check Step 1 registered shapes (keyboard keycaps and data-mark members) first; ordinary control frames then take the Step 2 pill tier.
+- Use the §5 Step 2 container tier for content boxes — code blocks, cards, panels; assign contained layers separately.
+- Use the §5 Step 2 inner-control tier for multi-line inputs (textarea, always), dropdown/menu row highlights and in-block cells not covered by Step 1.
 - Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
 - Use Inter at weight 400 / 500 for display headings (per the §3 Hierarchy rows) — hierarchy comes from size + weight, not typeface switching
 - Maintain zero shadows — depth comes from borders and background shifts only
 - Keep content density low — each section should present one clear idea
 - Use monospace for terminal commands and code — it's primary content, not decoration
-- Keep all buttons at 10px 24px padding with pill shape — consistency is absolute (registered bare text buttons are the §5 exemption: no background, no radius, no pill padding)
+- Keep ordinary action frames on their §4 component treatment and §5 assigned tier, including transient hover / pressed surfaces. Focus and selection indicators are separate treatments: their appearance alone creates no ordinary control frame and does not reclassify the associated layer. Registered bare-text buttons remain frameless with visible focus; evaluate approved states, shared styles and pseudo-elements, not only local background or border classes.
 
 ### Don't
 
 - Don't introduce any chromatic color outside the sanctioned semantic set in §2 — no brand blue, no accent green, no warm tones beyond the registered exceptions
-- Don't invent arbitrary radii — use the registered values: 4px (keyboard keycaps), 8px (inner controls), 12px (containers), 9999px (pill).
+- Don't invent arbitrary radii — §5 governs the inventory: 0px / 2px for registered data marks (pinned per member), 4px for keycaps, 8px for inner controls, 12px for containers and 9999px for pill frames. No 3px / 6px / 10px or arbitrary values. Frameless layers need no assignment; intrinsic content and mark geometry remain outside this corner-radius inventory. Existing non-keycap `rounded-[4px]` usages remain registered debt; bare `rounded` and `rounded-sm` substitute for nothing.
 - Don't add shadows to any element — the flat aesthetic is intentional
 - Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in the §3 registry (that table is the single source of truth; it currently covers markdown content, hljs theme ports, login / Splash brand canvas, third-party viewers under `vendor/`, and imperative third-party APIs). Don't re-enumerate the domains here — read §3. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16
@@ -383,7 +493,7 @@ Cindy Desktop is an Electron app: layout responds to window resizing, not page b
 - Minimum window size: **800 × 600** for the main window and secondary session windows (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts` / `secondary-windows.ts`). The detached right-sidebar window has its own smaller floor of **360 × 480** (`right-sidebar-window/window.ts`) — layouts hosted there must stay legible down to that width
 - The sidebar is collapsible; region dividers and paddings hold as the window narrows, and content reflows fluidly
 - Chat stream and composer reflow with the window; code blocks keep horizontal scroll instead of wrapping
-- Control sizes and paddings follow §4 at every window size — targets never shrink below their specified geometry
+- Ordinary control sizes and paddings follow their §4 component treatments at every window size. Registered shapes and their hit regions follow their owning component treatments and §5 Interaction constraints; the usage charts' dense date targets use the Equivalent route only under the conditions stated there. Window resizing does not waive the applicable target requirements or authorize changing a mark's registered geometry.
 
 ### Mobile
 
@@ -408,14 +518,14 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 - "Design a code block with a 12px border-radius, 1px solid Board (#d7d7d4 Light / #3c3c3a Dark) border on Card background. Use JetBrains Mono for the code. No shadow."
 - "Build a tab bar with pill-shaped tabs (9999px radius). Active tab: Light Gray (#e5e5e5) background, Near Black (#262626) text. Inactive: transparent background, Stone (#737373) text."
 - "Build a chat composer: a Card-colored (--surface-elevated) 12px-radius container; inside, pill control chips (9999px) that are borderless at rest and gain a --border-default outline on hover."
-- "Design a confirm dialog: 12px-radius container, max-width 400px, pill buttons — solid CTA on the right, outlined secondary beside it; focus lands on the primary button."
+- "Design a confirm dialog: 12px-radius container, max-width 400px, pill buttons — inverse neutral primary, optional outlined third action, then outlined Cancel; Cancel receives initial focus unless the caller explicitly selects primary focus or requires typed confirmation."
 - "Create a dropdown: pill trigger; panel width bound to the trigger; 12px-radius Card panel with 1px Board border; option rows highlighted with 8px inner radius via --model-item-hover."
 
 ### Iteration Guide
 
 1. Focus on ONE component at a time
 2. Keep all values grayscale — "Stone (#737373)" not "use a light color"
-3. Always specify radius from the defined tiers — pill (9999px) / container (12px) / inner control (8px — textareas always, dropdown rows & non-button inner cells) / keyboard keycap (4px). Nothing else.
+3. Assign the specific visible layer through §5: check Step 1 registered shapes first (keycaps or an approved data-mark member), then use Step 2 for ordinary control frames, containers and inner-control surfaces. Keep contained content, hit testing and focus / selection indicators separate as §5 requires; submit unresolved shapes for adjudication.
 4. Shadows are always zero — never add them
 5. Weight is 400/500 for everyday chrome, 600 for rationed emphasis — 700 never appears in new UI (registered exemption domains in §3 only)
 6. If something feels too decorated, remove it — less is always more
@@ -517,6 +627,7 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--file-badge-pdf/-doc/-sheet/-slide/-code` + `--file-badge-fg`                                                                                               | `#B23A26` / `#2C5CA8` / `#2E7D4F` / `#A25A12` / `#5B49A8`, fg `#FFFFFF` | same                                                                  | File-type badges on the self-drawn attachment icon (2026-07-27). Bound to _what the file is_, not to the theme, so both modes share one value. Each accent is picked for ≥4.5:1 against `--file-badge-fg` (5.96 / 6.56 / 5.05 / 5.24 / 7.09) — the badge label renders at 10px (Micro Label floor, §3), so AA small-text applies. `--file-badge-fg` is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. |
 | `--bot-avatar-red-bg` … `--bot-avatar-graphite-bg` (9 tokens)                                                                                                 | soft tints (`#f7ded9` … `#e5e5e5`)                                      | deep tints (`#4a2e2a` … `#3c3c3a`)                                    | Bot avatar fills in `features/bots` only (2026-08-17). Identity cue ("which Bot"), not status; emoji / initial-letter fallback reads `--text-primary` in both modes. Not part of the external-theme import allow-list, so the hues stay stable across themes.                                                                                                                                                                                    |
 | `--bot-unread-bg` / `--bot-unread-fg`                                                                                                                         | `#417CDD` / `#FFFFFF`                                                   | same                                                                  | Teammate-list unread badge + pending-todo dot in `features/bots/BotsSidebar.tsx` only (2026-08-19). IM unread semantics, not a CTA and not status; theme-invariant because "unread" means the same thing in both modes. Value is the registered focus-ring / Auto Approval / Toast-info blue; the fg is a standalone white because `--accent-pure-cta-fg` flips to black in Dark. Must not leak to other badges, dots or surfaces.               |
+| `--usage-heatmap-high`, `--usage-model-1` … `--usage-model-5` | Heatmap blue alias + reference-refined model palette; see colors.ts | Corresponding Dark palette; see colors.ts | Usage History heatmap, token bars and matching model-table marks only (2026-09-08). Category/intensity, never status. Only these newly introduced model-role defaults are refined; process tokens and user theme overrides do not change. |
 | `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon` | `#2563EB` / `#7C3AED` / `#DB2777` / `#0891B2` / `#D97706` / `#059669`   | `#60A5FA` / `#A78BFA` / `#F472B6` / `#22D3EE` / `#F59E0B` / `#34D399` | Resource Usage 14px process-category glyphs only (2026-08-06). Category cue, not status; all surrounding UI stays neutral. Protected from automatic external-theme import so category identity does not drift.                                                                                                                                                                                                                                   |
 
 Mobile's `betaChannelBadgeBackground/Foreground` remain the cross-theme fixed pair `#DF0C27` /
@@ -652,11 +763,11 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 
 ### 14.4 Motion & Transitions
 
-> Expanded 2026-07. Cindy's motion character extends the paper-like restraint of §1 / §7: **nothing flies or bounces — things only fade, nudge, and resize smoothly**. Functional state transitions are allowed; decorative motion is forbidden. This section pins "functional" into executable tiers and prototypes so components stop inventing their own durations and curves.
+> Expanded 2026-07. Cindy's motion character extends the paper-like restraint of §1 / §7: **ordinary UI fades, nudges, and resizes smoothly; overshoot is limited to the explicitly registered Done and Usage History chart responses below**. Functional state transitions are allowed; decorative motion is forbidden. This section pins "functional" into executable tiers and prototypes so components stop inventing their own durations and curves.
 
 #### Motion tokens (the only tier source)
 
-Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
+Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 radius scale. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
 
 | Token                | Value                           | Use                                                                                |
 | -------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
@@ -696,8 +807,8 @@ long duration to leak into any other hover or transition.
 | Heavy overlay (modal / confirm)             | In: 250ms fade + scale 0.95→1; out: 150ms                                                                                                                                                                                                                                                    | `components/ui/confirm-dialog.tsx`              |
 | Expand / collapse                           | base/ease-move, grid `0fr↔1fr` height + opacity                                                                                                                                                                                                                                              | `features/cc-agent/sidebar/SectionCollapse.tsx` |
 | List reorder                                | FLIP, transform translation                                                                                                                                                                                                                                                                  | `components/ui/toast/ToastContainer.tsx`        |
-| Press                                       | `active:scale-[0.98]` (all interactive pills/buttons)                                                                                                                                                                                                                                        | ConfirmDialog buttons                           |
-| Done                                        | **the app's only sanctioned overshoot** (`status-done-pop`)                                                                                                                                                                                                                                  | `globals.css`                                   |
+| Press                                       | `active:scale-[0.98]` for ordinary pill action frames. Registered shapes follow their component interaction treatment and §5 constraints; a button tag does not authorize scaling a contained data mark or its data mapping.                                                                                                                                  | ConfirmDialog buttons                           |
+| Done                                        | registered completion overshoot (`status-done-pop`); chart response has its own narrow registration below                                                                                                                                                                                                                                  | `globals.css`                                   |
 | Running                                     | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7)                                                                                                                                                                                              | `session-breathing`                             |
 | Loading spinner                             | `animate-spinner` (`--motion-spinner-cycle`, linear full turn); HTML wrapper only, static under reduced motion                                                                                                                                                                               | `tailwind.config.ts`                            |
 | Hover / state colors                        | `transition-colors`, ≤ fast (150ms)                                                                                                                                                                                                                                                          | App-wide status quo                             |
@@ -711,8 +822,12 @@ _Reference-implementation paths in this table are relative to `apps/desktop/src/
 - Non-compositor properties (height/grid …) are allowed only in **one-shot transient animations** (user-triggered, with a definite end) — never persistent.
 - Every new `@keyframes` / `animate-*` class must be registered in the `prefers-reduced-motion` whitelist in `globals.css` (the global `* { transition: none }` does not catch keyframes).
 - Real-time direct-manipulation interactions (resizer drag, drag-follow) get **no easing** — following the hand IS the feedback.
-- Forbidden: pointless displacement, bouncing, parallax, looping decoration, `transition-all`, and typewriter per-character animation on streamed text (streaming already is the motion). Interactions stay fast and direct. (Per-**word** opacity fade-in on streamed text is **not** the typewriter — see the sanctioned stream-word-fade class below: the word is fully laid out and only its opacity ramps; ruled distinct on 2026-08-07.)
+- Forbidden: pointless displacement, unregistered bouncing, parallax, looping decoration, `transition-all`, and typewriter per-character animation on streamed text (streaming already is the motion). Interactions stay fast and direct. (Per-**word** opacity fade-in on streamed text is **not** the typewriter — see the sanctioned stream-word-fade class below: the word is fully laid out and only its opacity ramps; ruled distinct on 2026-08-07.)
 - **Cadenced running shimmer (2026-08-07)**: the running status bar's breathing (`status-bar-shimmer`) is **event-driven, not an infinite loop** — one 1.5s dip (1 → 0.45 → 1, `steps(18)`) plays per real sign of progress (status text change / token count advance; re-triggered via keyed remount in `RunningStatusBar`, back-to-back plays merge through an animation-end pending flag). Silence (long thinking, tool wait) holds steady full opacity. Semantics: _breathing = producing_, not _heartbeat = alive_. New loading/working indicators should prefer this cadenced pattern over a new infinite loop.
+
+#### Registered response: Usage History chart emphasis (2026-09-08)
+
+Only the two registered chart members inside Usage History may enlarge their non-hit-testing visible layer on hover, keyboard focus or selection. Enter uses `--motion-base` and the component-scoped `--usage-mark-ease`; leave uses `--motion-fast` / `--motion-ease-out`. The local curve has one small overshoot; no looping, replay on unrelated rerenders, or whole-chart motion. Selection holds the enlarged state after pointer leave. The bounded width/height transition is a one-shot non-compositor exception already allowed by the red lines; the exact local geometry/curve is specified in [usage-history-charts.md](./usage-history-charts.md). Corners remain 2px, bar height/baseline, categorical color tokens and heatmap intensity stay fixed, and targets do not grow or overlap. The token-chart-only selection fade follows the component entry; the heatmap selection outline and recent-week bar emphasis follow the latest component ruling, while keyboard focus retains its separate indicator. Reduced motion removes the transition while retaining immediate, visible focus/selection feedback. No other component may borrow this response.
 
 #### Exception category: container transform (chip lifts off and grows)
 
@@ -1270,7 +1385,9 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Iconography
 
 - Session leading agent icons follow runtime identity: the Claude Code official pixel face / the Codex CLI `>_` multi-petal mark; desktop (`VendorIcon`) and mobile (`MobileVendorIcon`) share source assets (finalized 2026-07-20). Agent identity marks must not be mixed with Anthropic / OpenAI provider or model brand marks; `BrandArrow` is reserved for brand decoration.
-- Model selection renders by model brand. Brand icons already replaced on desktop are reused on mobile from the same source; everything else uses semantically equivalent lucide glyphs.
+- Model selection renders by model brand. Brand icons already replaced on desktop are reused on mobile from the same source.
+- **Cross-platform action icons must match exactly (2026-09-08 owner ruling):** the same action on desktop and mobile uses the same source glyph and stroke geometry. For Lucide icons, use the same named glyph from `lucide-react` / `lucide-react-native`; a semantically similar SF Symbol or another icon family is not an equivalent replacement. Platform-appropriate size and semantic Light/Dark colors may differ, but the icon artwork must remain identical. This applies to native menus as well as custom components. Message menu baseline: `MessageSquarePlus` (add to chat), `Link2` (copy message link), `Undo2` (rewind), `Trash2` (delete message). If a native component cannot display the shared artwork, resolve the rendering approach explicitly instead of silently substituting a system symbol.
+- **Mobile action-menu icon sizing (2026-09-08 owner ruling):** message, session, and file action menus use `iconSize.lg` (18 pt) and `iconStroke.regular` (2 in Lucide's 24-unit viewBox). Native menu assets follow the same logical size: 18 / 36 / 54 px at 1x / 2x / 3x; a 24-unit SVG viewBox does not imply a 24 pt display size. Keep the shared glyph geometry and scale the whole artwork. Existing compact filter/navigation menus may retain `iconSize.md` (16); `iconSize.action` (20) is the toolbar/lightbox tier, not the action-menu default. Preserve native menu row layout and touch targets when sizing the glyph.
 - Send semantics use the filled paper plane `Send`, colored by the neutral-inverse CTA tokens; never a red send button or icon for ordinary send.
 
 #### Type & layout
@@ -1512,7 +1629,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 | `account-selection`                               | 服务端返回 ≥2 membership，用户选一个                                                                                                                                                                                 | account row + `LoginTitleBlock`（`chooseAccount`）                                                                                                                                                                                                                                                                                                                          |
 | `binding`                                         | 身份未绑 membership，补绑 phone / email（`codeRequested` 两子态；**无重发钮**，桌面 harness 锁定）                                                                                                                   | `LoginInput` / `LoginSkinPhoneInput` → `LoginInput`(center) + `LoginPrimaryButton`                                                                                                                                                                                                                                                                                          |
 | `account-deletion`（状态浮层）                    | 账号删除**状态展示**（发起流程在 Settings 的 `AccountDeletionSection`；登录页仅在存在删除回执时以**根层浮层气泡**展示 status，非主状态机 step；详见下方「注销状态浮层气泡」）                                        | `AccountDeletionStatusPanel`（**登录皮容器外**的根层浮层，非面板内）                                                                                                                                                                                                                                                                                                        |
-| `browser-redirect`                                | 社交 / SSO 跳浏览器验证，等待回调                                                                                                                                                                                    | `LoginLoadingRing` + `LoginPrimaryButton`（取消）+ `LoginTitleBlock`                                                                                                                                                                                                                                                                                                        |
+| `browser-redirect`                                | 社交 / SSO 跳浏览器验证，等待回调                                                                                                                                                                                    | `LoginLoadingRing` + Desktop `LoginBackButton`（`cancel-browser`；Mobile 保留原取消入口）+ `LoginTitleBlock`                                                                                                                                                                                                                                                                      |
 | `completed` / `error`                             | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进未登录状态，与面板内入口同口径**过协议门**——2026-07-29 拍板）                          | 成功无面板（进主界面）；error = `LoginBackButton`（仅桌面，复用 reset；普通登录与添加账号均重新加载登录入口）+ `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer「跳过登录」按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
 
 **~~配置错误屏同样承载「跳过登录」逃生入口（移动端）~~〔已作废 2026-07-28：手机端整体剥离，配置错误屏无该入口〕**：`getMobileConfigIssues()` 命中（如 auth base URL 非法）时面板切到 config 提示态，该面板内仍渲染同一个 `LoginSkipLoginLink`（同槽 @(0,430)、同 handler、同 in-flight 门）——跳过登录不发任何网络请求，配置坏掉时恰恰最需要这个入口。

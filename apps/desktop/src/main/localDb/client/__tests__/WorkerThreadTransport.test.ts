@@ -13,6 +13,37 @@ import {
 import { WorkerThreadTransport } from '../WorkerThreadTransport.js';
 
 describe('WorkerThreadTransport', () => {
+  it('supports worktree reference reads in the inline worker fallback', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-worker-refs-'));
+    const drizzleDir = path.join(dir, 'drizzle');
+    const dbPath = path.join(dir, 'xdt-inline.db');
+    let transport: WorkerThreadTransport | undefined;
+    try {
+      fs.mkdirSync(drizzleDir);
+      fs.writeFileSync(path.join(drizzleDir, '0000_init.sql'), 'CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);', 'utf8');
+      createMigratedSmokeDb(dbPath);
+      const Database = (await import('better-sqlite3')).default;
+      const db = new Database(dbPath);
+      db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, working_dir TEXT, worktree_path TEXT, source TEXT, remote_host_id TEXT)');
+      db.prepare('INSERT INTO sessions (id, status, working_dir, worktree_path, source, remote_host_id) VALUES (?, ?, ?, ?, ?, NULL)')
+        .run('session-one', 'archived', 'C:/repo/.cindy-worktrees/one', 'C:/repo/.cindy-worktrees/one', 'desktop');
+      db.close();
+      transport = new WorkerThreadTransport({
+        useInlineWorker: true,
+        dbPath,
+        drizzleDir,
+        betterSqliteModulePath: require.resolve('better-sqlite3'),
+      });
+      await expect(transport.send('worktreeReferences')).resolves.toEqual([{
+        id: 'session-one', status: 'archived', source: 'desktop',
+        workingDir: 'C:/repo/.cindy-worktrees/one', worktreePath: 'C:/repo/.cindy-worktrees/one', currentDatabase: true,
+      }]);
+    } finally {
+      if (transport) await transport.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('round-trips RPC messages', async () => {
     const transport = new WorkerThreadTransport({ useInlineWorker: true });
     try {

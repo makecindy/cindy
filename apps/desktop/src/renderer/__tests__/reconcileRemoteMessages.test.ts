@@ -507,12 +507,24 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getLastInboundEventAt(s)).toEqual(expect.any(Number));
   });
 
-  it('远程会话:对账找不到重叠时替换为权威最新窗口,避免跨断层合并', async () => {
+  it.each(['idle', 'force', 'session-sync'] as const)('远程会话:对账找不到重叠时替换为权威最新窗口,避免跨断层合并 (%s)', async (recovery) => {
     const s = sid();
+    makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [
       dbMessage(s, 'old-cache', 'old cached text', '2026-06-15T00:00:00.000Z'),
       dbMessage(s, 'cached-future', 'controller clock ahead text', '2026-06-16T00:00:00.000Z'),
     ]);
+    if (recovery !== 'idle') {
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:event',
+        payload: {
+          sessionId: s,
+          event: { type: 'status', source: 'claude-code', data: { status: 'thinking', isRunning: true } },
+        },
+      });
+      expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+    }
     markSessionAutomaticHistoryLoadCompleted(s);
     const completionAttemptsAtRebuildNotification: number[] = [];
     const unsubscribe = makerChatStore.subscribe(s, () => {
@@ -533,11 +545,23 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     );
     remoteListResolver = (args) => pageMessages(remoteHistory, args);
 
-    makerChatStore.reconcileRemoteMessages(s);
+    invoke.mockClear();
+    if (recovery === 'session-sync') {
+      // A legacy Host has no HistoryView or in-flight text snapshot. This
+      // ingress combines force + repair while the controller is still streaming.
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:session-sync',
+        payload: { sessionId: s, resyncRequired: true },
+      });
+    } else {
+      await makerChatStore.reconcileRemoteMessages(s, { force: recovery === 'force' });
+    }
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
     unsubscribe();
 
     const snapshot = makerChatStore.getSnapshot(s);
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:list')).toHaveLength(10);
     expect(snapshot.messages).toHaveLength(500);
     expect(snapshot.messages.map((m) => m.clientId)).not.toContain('client-old-cache');
     expect(snapshot.messages.map((m) => m.clientId)).not.toContain('client-cached-future');
@@ -545,6 +569,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(snapshot.messages.at(-1)?.clientId).toBe('client-new-549');
     expect(snapshot.oldestMessageId).toBe('new-50');
     expect(snapshot.hasMoreMessages).toBe(true);
+    expect(snapshot.historyWindowIslands).toHaveLength(0);
     expect(restoreSessionAutomaticHistoryLoadAttempts(s, 5)).toBe(0);
     expect(completionAttemptsAtRebuildNotification).toContain(0);
   });
@@ -1189,7 +1214,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('long-thinking');
     expect(ids).toContain('client-auth-b');
     // 关键:按落库时间线它在权威范围之外 → 按孤岛处理。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:同毫秒但没有 rowid 的 live push 保守按脱离处理', async () => {
@@ -1223,7 +1248,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
       'client-same-ms-no-rowid',
     );
     // 关键:排不出先后 → 按孤岛处理,而不是当成连续。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:同毫秒、rowid 更小的范围内晚到行不被误判成脱离', async () => {
@@ -1256,9 +1281,11 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     ]);
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
 
-    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain('client-inside');
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain(
+      'client-inside',
+    );
     // 关键:范围内 → 不记孤岛。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
   });
 
   it('远程会话:加性提交不能替一次无关的 rewind 背书,rewind 掉的尾部不得被补回', async () => {
@@ -1338,7 +1365,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('client-same-ms-later');
     expect(ids).toContain('client-auth-1');
     // 关键:同毫秒但 rowid 更大 → 落在权威范围之外 → 按孤岛处理。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:权威重建保留了比权威窗口更新的晚到行时也记孤岛(推送有损)', async () => {
@@ -1370,7 +1397,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('client-last-of-burst');
     expect(ids).toContain('client-auth-1');
     // 关键:范围外的晚到行按孤岛处理,下一次跳转会尝试补连续。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:purge 清掉对账次序簿,但旧代际的对账仍被代际守卫拦下', async () => {
@@ -1402,7 +1429,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     const s = sid();
     makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
 
     const pendingList = deferred<Message[]>();
     remoteListResolver = () => pendingList.promise;
@@ -1426,7 +1453,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(ids).toContain('client-far-older');
     expect(ids).toContain('client-auth-1');
     // 关键:保留了脱离新窗口的行 → 标记必须点亮,后续跳转才会尝试补连续。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
   });
 
   it('远程会话:分页期间转入 streaming 时,不 bump 代际也不抢别人的分页锁', async () => {
@@ -1483,6 +1510,244 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).isLoadingMore).toBe(false);
   });
 
+  it('远程会话:streaming 期间的修复对账只追加缺失持久化消息', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: {
+          type: 'status',
+          source: 'claude-code',
+          data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 },
+        },
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'repaired', 'message whose push was lost', '2026-06-15T00:00:02.000Z'),
+    ];
+    await makerChatStore.reconcileRemoteMessages(s, { repair: true });
+
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual([
+      'client-seed',
+      'client-repaired',
+    ]);
+    expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+  });
+
+  it.each(['direct', 'queued', 'queued-sealed'])('远程会话:session-sync 修复旧行且只保护当前快照 (%s)', async (mode) => {
+    const queued = mode !== 'direct';
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: {
+          type: 'status',
+          source: 'claude-code',
+          data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 },
+        },
+      },
+    });
+
+    remotePush?.({
+      deviceId: DEVICE_ID, channel: 'maker:event', payload: { sessionId: s, event: {
+        type: 'thinking', data: { stage: 'start', blockId: 'client-previous-thought', startedAt: 1781481601000 },
+      } },
+    });
+    remotePush?.({
+      deviceId: DEVICE_ID, channel: 'maker:event', payload: { sessionId: s, event: {
+        type: 'thinking', data: { stage: 'delta', blockId: 'client-previous-thought', text: 'stale thought' },
+      } },
+    });
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.clientId === 'client-previous-thought'))
+      .toMatchObject({ content: 'stale thought', isStreaming: true });
+
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      { ...dbMessage(s, 'previous-thought', '', '2026-06-15T00:00:01.000Z', 'thinking'),
+        content: { kind: 'thinking', text: 'sealed thought', durationMs: 500 } },
+      dbMessage(s, 'recovered-assistant', 'assistant row recovered from the host', '2026-06-15T00:00:02.000Z'),
+      { ...dbMessage(s, 'in-flight-assistant', 'older persisted text', '2026-06-15T00:00:03.000Z'), clientId: 'in-flight-assistant' },
+    ];
+
+    const firstRead = deferred<Message[]>();
+    let pending: Promise<boolean> | undefined;
+    if (queued) {
+      remoteListResolver = () => firstRead.promise;
+      pending = makerChatStore.reconcileRemoteMessages(s, { repair: true });
+      await flush();
+    }
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:session-sync',
+      payload: {
+        sessionId: s,
+        persistId: 'in-flight-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'current in-flight text', isFinal: false, isFullText: true },
+        },
+        resyncRequired: true,
+      },
+    });
+    if (mode === 'queued-sealed') {
+      remoteList = remoteList.map(row => row.clientId === 'in-flight-assistant'
+        ? { ...row, content: 'sealed current text' } : row);
+      remotePush?.({ deviceId: DEVICE_ID, channel: 'maker:session-sync', payload: { sessionId: s, resyncRequired: true } });
+    }
+    if (queued) {
+      remoteListResolver = null;
+      firstRead.resolve(remoteList);
+      await pending;
+    }
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toContain(
+      'client-recovered-assistant',
+    );
+    expect(makerChatStore.getSnapshot(s).messages.find((m) => m.clientId === 'in-flight-assistant'))
+      .toMatchObject(mode === 'queued-sealed'
+        ? { content: 'sealed current text', isStreaming: false }
+        : { content: 'current in-flight text', isStreaming: true });
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.clientId === 'client-previous-thought'))
+      .toMatchObject({ content: 'sealed thought', isStreaming: false, thinkingDurationMs: 500 });
+  });
+
+  it('远程会话:resyncRequired 强制对账可替换 streaming 中已封存消息的旧正文', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: {
+          type: 'status', source: 'claude-code',
+          data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 },
+        },
+      },
+    });
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        persistId: 'streaming-assistant',
+        event: {
+          type: 'text', source: 'claude-code',
+          data: { text: 'stale streaming text', isFinal: false },
+        },
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'streaming-assistant', 'authoritative sealed text', '2026-06-15T00:00:02.000Z'),
+    ];
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:session-sync',
+      payload: { sessionId: s, resyncRequired: true },
+    });
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+
+    expect(makerChatStore.getSnapshot(s).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'client-seed', content: 'seed row', isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'client-streaming-assistant', content: 'authoritative sealed text', isStreaming: false,
+      }),
+    ]);
+  });
+
+  it('远程会话:单飞期间 force 触发会压过先到的 repair', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s,
+        event: { type: 'status', source: 'claude-code', data: { status: 'thinking', isRunning: true, tokenUsage: 0, contextTokens: 0, contextWindow: 0 } },
+      },
+    });
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:event',
+      payload: {
+        sessionId: s, persistId: 'sealed-assistant',
+        event: { type: 'text', source: 'claude-code', data: { text: 'stale', isFinal: false } },
+      },
+    });
+    const firstRead = deferred<Message[]>();
+    remoteListResolver = () => firstRead.promise;
+    const repair = makerChatStore.reconcileRemoteMessages(s, { repair: true });
+    await flush();
+    remoteListResolver = null;
+    remoteList = [
+      dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
+      dbMessage(s, 'sealed-assistant', 'sealed authoritative text', '2026-06-15T00:00:02.000Z'),
+    ];
+    const forced = makerChatStore.reconcileRemoteMessages(s, { force: true });
+    firstRead.resolve(remoteList);
+    await repair;
+    await forced;
+    await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
+    expect(makerChatStore.getSnapshot(s).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'client-sealed-assistant', content: 'sealed authoritative text', isStreaming: false }),
+    ]));
+  });
+
+  it('远程会话:普通 streaming text delta 不周期性触发历史修复', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = sid();
+      makerChatStore.initGlobalListeners();
+      await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
+      invoke.mockClear();
+
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:event',
+        payload: {
+          sessionId: s,
+          persistId: 'streaming-assistant',
+          event: {
+            type: 'text', source: 'claude-code',
+            data: { text: 'delta', isFinal: false },
+          },
+        },
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect(invoke).not.toHaveBeenCalledWith(
+        DEVICE_ID,
+        'local-db:messages:list',
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('远程会话:权威重建没保留任何晚到的行时,孤岛标记清零', async () => {
     // review #676(codex P1):这种情况下新窗口**完全**由本次从最新连续翻回来的页组成,按构造
     // 没有孤岛。留着标记的代价不是"多做一次补齐":标记只由整窗重建清零,而窗口内的目标比重建
@@ -1492,7 +1757,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 先制造孤岛状态。
     remoteAround = [dbMessage(s, 'island', 'island row', '2026-06-01T00:00:00.000Z')];
     await makerChatStore.loadAroundMessageClientId(s, 'client-island', { radius: 60 });
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBeGreaterThan(0);
 
     // 无重叠对账 → 权威重建,期间没有任何 remote push 进来。
     remoteListResolver = () => [
@@ -1501,20 +1766,34 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     makerChatStore.reconcileRemoteMessages(s);
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
 
-    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual(['client-auth-1']);
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual([
+      'client-auth-1',
+    ]);
     // 关键:窗口是完整重建出来的,标记必须清零。
-    expect(makerChatStore.getSnapshot(s).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(s).historyWindowIslands.length).toBe(0);
   });
 
-  it('远程会话:权威重建作废在飞行中的跳转补齐,并释放分页锁', async () => {
+  it.each([false, true])('远程会话:权威重建作废在飞行中的跳转补齐,并释放分页锁 (force=%s)', async (force) => {
     // review #676(codex P1):无重叠分支换掉整片窗口 + 改写 oldestMessageId,却不 bump
     // 代际。此时一个在飞行中的搜索跳转补齐会带着**重建前**的游标返回,把脱离上下文的旧
     // 历史接到新窗口上;若那一页里有跳转目标,补齐还会判 covered、连孤岛标记都不留,
     // 退化成本 PR 要修的静默空洞。
     const s = sid();
+    makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [
       dbMessage(s, 'stale-tail', 'stale cached tail', '2026-06-15T00:00:00.000Z'),
     ]);
+    if (force) {
+      remotePush?.({
+        deviceId: DEVICE_ID,
+        channel: 'maker:event',
+        payload: {
+          sessionId: s,
+          event: { type: 'status', source: 'claude-code', data: { status: 'thinking', isRunning: true } },
+        },
+      });
+      expect(makerChatStore.getSnapshot(s).isStreaming).toBe(true);
+    }
 
     const target = dbMessage(s, 'jump-target', 'jump target', '2026-06-10T00:00:00.000Z');
     // 跳转补齐用 limit=100 翻页(JUMP_BACKFILL_PAGE_SIZE),对账用 limit=50 —— 按 limit
@@ -1533,7 +1812,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(makerChatStore.getSnapshot(s).isLoadingMore).toBe(true);
 
     // 对账落地:与已有窗口没有重叠 → 权威重建。
-    makerChatStore.reconcileRemoteMessages(s);
+    await makerChatStore.reconcileRemoteMessages(s, { force });
     await flushMany(REMOTE_RECONCILE_FLUSH_TICKS);
     expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual(['client-auth-1']);
     // 锁归本次重置释放:被作废的补齐不会代清。

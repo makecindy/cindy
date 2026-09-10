@@ -3,11 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import nativeFallbackPrompt from '../codex-native-fallback-prompt.md?raw';
 
 import {
-  bundledCodexCatalogHasModel,
   extractBundledCodexModelCatalog,
   prepareCodexCustomContextCatalog,
+  patchCodexModelMaxContextWindow,
+  nativeCodexFallbackModel,
 } from '../codex-custom-context-catalog.js';
 
 const tempRoots: string[] = [];
@@ -108,19 +110,6 @@ describe('Codex custom context model catalog', () => {
     ]);
   });
 
-  it('preflights catalog membership without synthesizing unknown model metadata', async () => {
-    const { binaryPath } = await createFixtureBinary({
-      models: [{ slug: 'gpt-5.6-sol', context_window: 272_000, max_context_window: 272_000 }],
-    });
-
-    await expect(bundledCodexCatalogHasModel(binaryPath, 'gpt-5.6-sol', {
-      scanChunkBytes: 64,
-    })).resolves.toBe(true);
-    await expect(bundledCodexCatalogHasModel(binaryPath, 'MiniMax-M3', {
-      scanChunkBytes: 64,
-    })).resolves.toBe(false);
-  });
-
   it('patches an in-memory smart catalog while preserving routed models and the exact bundled root descriptor', async () => {
     const bundledRoot = {
       slug: 'gpt-5.6-sol',
@@ -161,7 +150,7 @@ describe('Codex custom context model catalog', () => {
     });
   });
 
-  it('fails closed when the exact real model slug is absent', async () => {
+  it('fails visibly if an unknown model fallback cannot be verified against this binary', async () => {
     const { root, binaryPath } = await createFixtureBinary({
       models: [{ slug: 'gpt-5.4', context_window: 272_000, max_context_window: 272_000 }],
     });
@@ -172,7 +161,54 @@ describe('Codex custom context model catalog', () => {
       modelId: 'gpt-5.6-sol',
       contextWindow: 700_000,
       scanChunkBytes: 64,
-    })).rejects.toThrow('exactly one model named "gpt-5.6-sol"');
+    })).rejects.toThrow('native fallback metadata changed');
+  });
+
+  it('uses a newly discovered GPT model absent from the installed binary', async () => {
+    const { root, binaryPath } = await createFixtureBinary({ models: [{ slug: 'gpt-5.4' }] });
+    const native = { slug: 'gpt-6-astra', context_window: 272_000, max_context_window: 872_000,
+      model_messages: { instructions_template: 'latest native prompt' }, comp_hash: 'native-compaction-id' };
+    await fs.writeFile(path.join(root, 'models_cache.json'), JSON.stringify({ models: [native] }));
+    const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
+      modelId: 'codex/gpt-6-astra', contextWindow: 1_000_000, scanChunkBytes: 64 });
+    const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
+    expect(catalog.models).toContainEqual({ ...native, slug: 'codex/gpt-6-astra', max_context_window: 1_000_000 });
+    expect(catalog.models).toContainEqual(native);
+  });
+
+  it.each(['\n', '\r\n'] as const)('preserves verified native unknown-model behavior with %j line endings', async (lineEnding) => {
+    const { root, binaryPath } = await createFixtureBinary({ models: [{ slug: 'gpt-5.4' }] }, lineEnding);
+    const instructions = nativeFallbackPrompt.replace(/\r?\n/g, lineEnding);
+    await fs.appendFile(binaryPath, instructions);
+    const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
+      modelId: 'glm-5.3', contextWindow: 500_000, scanChunkBytes: 64 });
+    const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
+    expect(catalog.models[1]).toEqual({ ...nativeCodexFallbackModel('glm-5.3', instructions), max_context_window: 500_000 });
+  });
+
+  it('keeps user-owned catalog instructions untouched', async () => {
+    const { root, binaryPath } = await createFixtureBinary({ models: [{ slug: 'gpt-5.4' }] });
+    const native = { slug: 'glm', base_instructions: '## Planning\nYou have access to an `update_plan` tool\nUser-owned text.\n' };
+    await fs.writeFile(path.join(root, 'custom.json'), JSON.stringify({ models: [native] }));
+    await fs.writeFile(path.join(root, 'config.toml'), 'model_catalog_json = "custom.json"');
+    const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
+      modelId: 'glm', contextWindow: 500_000, scanChunkBytes: 64 });
+    const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
+    expect(catalog.models[0]).toEqual({ ...native, max_context_window: 500_000 });
+  });
+
+  it('keeps wire aliases independent and preserves native instructions and tools', () => {
+    const native = { slug: 'gpt-6-astra', context_window: 272_000, max_context_window: 872_000,
+      model_messages: { instructions_template: 'native prompt' }, shell_type: 'unified_exec', comp_hash: 'opaque' };
+    const result = patchCodexModelMaxContextWindow({ models: [native] }, 'codex/gpt-6-astra', 1_000_000);
+    expect(result.models[0]).toEqual(native);
+    expect(result.models[1]).toEqual({ ...native, slug: 'codex/gpt-6-astra', max_context_window: 1_000_000 });
+  });
+
+  it('uses native unknown-model defaults for GLM instead of cloning GPT behavior', () => {
+    const result = patchCodexModelMaxContextWindow({ models: [{ slug: 'gpt-5.4', multi_agent_version: 'v2' }] }, 'glm-5.3', 500_000);
+    expect(result.models[1]).toEqual({ ...nativeCodexFallbackModel('glm-5.3'), max_context_window: 500_000 });
+    expect(result.models[1].multi_agent_version).toBeUndefined();
   });
 
   it('reuses one immutable catalog across concurrent session starts', async () => {

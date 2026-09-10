@@ -15,9 +15,19 @@ function sessionIds(value: unknown): string[] {
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
 }
 
-/** The first positional ID and explicit Session fields are checked against the host DB. */
+/** Resolve channel-specific Bot IDs before checking generic Session references. */
 export async function assertRemoteBotInvocationAllowed(args: unknown[], channel = ''): Promise<void> {
   if (!lookup) return;
+  if (channel === 'maker:bot-direct-message-thread:get') {
+    // The first argument is an opaque thread ID, not a Session. The local service
+    // still checks membership; remote access additionally requires a visible viewer.
+    // Dispatch calls this again for in-flight, cached and queued reply delivery.
+    const viewerBotId = args[1];
+    if (typeof viewerBotId !== 'string' || await lookup(viewerBotId, 'bot') !== 'visible') {
+      throw new Error('[NOT_FOUND] Resource does not exist');
+    }
+    return;
+  }
   const ids = new Set(args.flatMap((arg, index) => [
     ...(index === 0 && typeof arg === 'string' ? [arg] : []), ...sessionIds(arg),
   ]));

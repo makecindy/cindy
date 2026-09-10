@@ -296,7 +296,7 @@ export class SkillhubMarketService {
     };
   }
 
-  async listCategories(scope: SkillhubCatalogScope = 'market') {
+  async listCategories(scope: SkillhubCatalogScope = 'market', includeEmpty = true) {
     const items = await this.fetch<Array<{
       slug: string;
       name: string;
@@ -309,7 +309,9 @@ export class SkillhubMarketService {
         skillCount?: number;
         mySkillCount?: number;
       }>;
-    }>>(`/api/skills-hub/categories?scope=${scope}`);
+    }>>(`/api/skills-hub/categories?scope=${scope}${includeEmpty ? '' : '&includeEmpty=false'}`);
+    // Filtering belongs to the server: legacy counts may be absent, and older servers'
+    // team responses may contain public-market counts rather than team counts.
     const categories = flattenHubCategories(items ?? []);
     const totalCount = categories.reduce((s, c) => s + c.count, 0);
     const myTotalCount = categories.reduce((s, c) => s + c.myCount, 0);
@@ -332,7 +334,7 @@ export class SkillhubMarketService {
 
   async getScanStatus({ slug, version, catalogScope }: { slug: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
     const path = `/api/skills-hub/skills/${encodeURIComponent(slug)}/scan${version ? `?version=${encodeURIComponent(version)}` : ''}`;
-    const result = await this.fetch<{ status: string; gates?: unknown[]; scorecard?: unknown }>(
+    const result = await this.fetch<{ status: string; rejectionReason?: string; gates?: unknown[]; scorecard?: unknown }>(
       withSkillhubCatalogScope(path, catalogScope),
       { cache: 'no-store', headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     );

@@ -264,6 +264,30 @@ describe('updateInstall', () => {
 });
 
 describe('removeInstall', () => {
+  it('checks the old snapshot and mutation context after queued registry writes', async () => {
+    const old = makeEntry();
+    await addInstall('my-skill', globalPath, old);
+    const replacement = makeEntry({ version: 'new', folderHash: 'new-hash' });
+    const update = addInstall('my-skill', globalPath, replacement);
+    const remove = removeInstall('my-skill', globalPath, {
+      expected: old, canMutate: () => true, shouldRemove: () => true,
+    });
+    await Promise.all([update, remove]);
+    expect((await getInstall('my-skill', globalPath))?.version).toBe('new');
+    const current = (await getInstall('my-skill', globalPath))!;
+    await expect(removeInstall('my-skill', globalPath, {
+      expected: current, canMutate: () => false, shouldRemove: () => true,
+    })).rejects.toThrow('context changed');
+    await removeInstall('my-skill', globalPath, {
+      expected: current, canMutate: () => true, shouldRemove: () => false,
+    });
+    expect(await getInstall('my-skill', globalPath)).toEqual(current);
+    await removeInstall('my-skill', globalPath, {
+      expected: current, canMutate: () => true, shouldRemove: () => true,
+    });
+    expect(await getInstall('my-skill', globalPath)).toBeNull();
+  });
+
   it('删掉一条 entry，其他留存', async () => {
     const projectPath = path.join('/projects/foo', '.claude', 'skills', 'my-skill');
     await addInstall('my-skill', globalPath, makeEntry());

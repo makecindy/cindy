@@ -10,7 +10,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import {
   chmodSync,
   existsSync,
@@ -337,6 +337,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   let agentHome = '';
   const seenRequests: Array<{
     url: string;
+    headers: IncomingHttpHeaders;
     auth: string | undefined;
     sessionId: string | undefined;
     providerId: string | undefined;
@@ -353,6 +354,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       req.on('end', () => {
         seenRequests.push({
           url: req.url ?? '',
+          headers: req.headers,
           auth: (req.headers['x-api-key'] as string | undefined) ?? (req.headers.authorization as string | undefined),
           sessionId: req.headers['x-cindy-pi-session-id'] as string | undefined,
           providerId: req.headers['x-cindy-pi-provider-id'] as string | undefined,
@@ -428,6 +430,105 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
+
+  it('applies configured windows on creation and same-history resume, then restores the default',
+    { timeout: 60_000 }, async () => {
+      let limit: number | null = 80_000;
+      const deps = buildDeps();
+      deps.resolveModelContextLimit = (provider, model) =>
+        provider === 'xd' && model === 'pi-test-model' ? limit : null;
+      deps.runtimeConfig.piAutoCompactThresholdPct = 90;
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-context-resume-'));
+      let handle: AgentSessionHandle | undefined;
+      let nativeId: string | undefined;
+      try {
+        for (const next of [80_000, 140_000, 60_000, null]) {
+          limit = next;
+          handle = await agent.startSession({
+            sessionId: 'context-window-resume', workingDir, model: 'pi-test-model',
+            providerId: 'xd', ...(nativeId ? { resumeSessionId: nativeId } : {}),
+          });
+          expect(handle.getUsageSnapshot().contextWindow).toBe(next ?? 200_000);
+          if (nativeId) expect(handle.id).toBe(nativeId);
+          nativeId = handle.id;
+          const before = seenRequests.length;
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'remember CONTEXT_HISTORY_CANARY' });
+          await done;
+          expect(events.some((event) => event.type === 'text')).toBe(true);
+          expect(seenRequests.slice(before).some((request) => request.body.includes('CONTEXT_HISTORY_CANARY'))).toBe(true);
+          if (next !== 80_000) {
+            const body = JSON.parse(seenRequests[before]!.body);
+            expect(body.messages.filter((message: { role: string }) => message.role === 'user').length).toBeGreaterThan(1);
+          }
+          await handle.close();
+          handle = undefined;
+        }
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    });
+
+  it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
+    'loads global %s with native precedence and keeps the prompt stable across turns',
+    { timeout: 60_000 },
+    async (winner) => {
+      const root = mkdtempSync(path.join(tmpdir(), 'pi-global-int-'));
+      const userHome = path.join(root, 'native-user');
+      const workingDir = path.join(root, 'workspace');
+      mkdirSync(userHome);
+      mkdirSync(workingDir);
+      const candidates = ['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'];
+      for (const name of candidates.slice(0, candidates.indexOf(winner) + 1)) {
+        writeFileSync(path.join(userHome, name), `GLOBAL_CANARY_${name}`);
+      }
+      writeFileSync(path.join(userHome, 'SYSTEM.md'), 'MUST_NOT_REPLACE_PI_SYSTEM');
+      writeFileSync(path.join(workingDir, 'AGENTS.md'), 'PROJECT_CONTEXT_CANARY');
+      const agent = new PiAgent({ ...buildDeps(), resolvePiGlobalContextHome: () => userHome });
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await agent.startSession({ sessionId: `global-${winner}`, workingDir, model: 'pi-test-model' });
+        const systems: unknown[] = [];
+        for (let turn = 0; turn < 2; turn++) {
+          const requestStart = seenRequests.length;
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: `ping ${turn}` });
+          await done;
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+          const request = seenRequests.slice(requestStart).find((entry) => entry.url.includes('/messages'))!;
+          expect(request, JSON.stringify(events)).toBeDefined();
+          const system = JSON.parse(request.body).system;
+          const text = JSON.stringify(system);
+          expect(text).toContain(`GLOBAL_CANARY_${winner}`);
+          for (const loser of candidates.filter((name) => name !== winner)) {
+            expect(text).not.toContain(`GLOBAL_CANARY_${loser}`);
+          }
+          expect(text).toContain('PROJECT_CONTEXT_CANARY');
+          expect(text).not.toContain('MUST_NOT_REPLACE_PI_SYSTEM');
+          systems.push(system);
+          writeFileSync(path.join(userHome, winner), 'CHANGED_AFTER_START');
+        }
+        expect(systems[1]).toEqual(systems[0]);
+      } finally {
+        await handle?.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it(
     'startSession → send → streams text and settles → usage/cost tracked → close',
@@ -733,7 +834,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'uses PI native Anthropic Messages for a host Claude subscription model',
+    'uses PI native OAuth identity and fallback betas for a host Claude subscription model',
     { timeout: 60_000 },
     async () => {
       const deps = buildDeps();
@@ -757,14 +858,15 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           name: 'Anthropic',
           baseUrl: endpoint,
           inheritModels: true,
+          apiKeyEnvVar: 'CINDY_PI_ANTHROPIC_PROXY_KEY',
           headers: {
             'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
             'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
             'x-cindy-pi-provider-id': 'anthropic',
           },
-          models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
+          models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5', contextWindow: 80_000 }],
         }],
-        env: {},
+        env: { CINDY_PI_ANTHROPIC_PROXY_KEY: 'sk-ant-oat01' },
       });
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-native-anthropic-cwd-'));
       let handle: AgentSessionHandle | null = null;
@@ -778,6 +880,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           providerId: 'anthropic',
           effort: 'high',
         });
+        expect(handle.getUsageSnapshot().contextWindow).toBe(80_000);
         const collected = (async () => {
           for await (const event of handle!.events()) {
             if (event.type === 'done') break;
@@ -793,6 +896,19 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             providerId: 'anthropic',
           }),
         ]));
+        const request = seenRequests.slice(requestsBefore).find((item) => item.providerId === 'anthropic')!;
+        expect(request.headers.authorization).toBe('Bearer sk-ant-oat01');
+        expect(request.headers['x-api-key']).toBeUndefined();
+        expect(request.headers['user-agent']).toMatch(/^claude-cli\//);
+        expect(String(request.headers['anthropic-beta']).split(',')).toEqual(expect.arrayContaining([
+          'claude-code-20250219', 'oauth-2025-04-20', 'server-side-fallback-2026-07-01',
+        ]));
+        expect(JSON.parse(request.body)).toMatchObject({
+          system: expect.arrayContaining([
+            expect.objectContaining({ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." }),
+          ]),
+          fallbacks: expect.arrayContaining([expect.objectContaining({ model: expect.any(String) })]),
+        });
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -2384,6 +2500,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         symlinkSync('../secrets/.env', postCdLink);
         symlinkSync(ordinaryPath, path.join(workingDir, 'link'));
         symlinkSync(ordinaryPath, path.join(stackOtherDir, 'link'));
+        mkdirSync(path.dirname(path.join(workingDir, escapedLinkName)), { recursive: true });
         symlinkSync(secretPath, path.join(workingDir, escapedLinkName));
         symlinkSync(secretPath, path.join(workingDir, cdRedirectLinkName));
         symlinkSync(ordinaryPath, path.join(subDir, cdRedirectLinkName));
@@ -2904,6 +3021,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       // 端到端:父会话调 subagent → Cindy 自有扩展 spawn 真 pi 子进程 → 子进程走同一
       // fake gateway → 结论回父模型;进度经工具原生 onUpdate 翻成 agent_task_update。
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-'));
+      const nativeHome = path.join(workingDir, 'native-pi-home');
+      mkdirSync(nativeHome);
+      const globalFile = path.join(nativeHome, 'AGENTS.override.md');
+      writeFileSync(globalFile, 'SUBAGENT_GLOBAL_CONTEXT_SNAPSHOT');
+      const requestStart = seenRequests.length;
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
@@ -2913,7 +3035,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           anthropicStreamBody('parent turn finished'),
         );
 
-        const agent = new PiAgent(buildDeps());
+        const agent = new PiAgent({ ...buildDeps(), resolvePiGlobalContextHome: () => nativeHome });
         const resolverTools: string[] = [];
         let handle: AgentSessionHandle | null = null;
         const events: AgentEvent[] = [];
@@ -2924,6 +3046,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             model: 'pi-test-model',
             permissionMode: 'ask',
           });
+          writeFileSync(globalFile, 'GLOBAL_CHANGED_AFTER_PARENT_START');
           handle.setInteractionResolver?.(async (req) => {
             resolverTools.push((req as { toolName?: string }).toolName ?? '?');
             return {
@@ -2946,6 +3069,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         // Ask 档仍逐次由用户确认 spawn；Auto 档另有回归证明 spawn 本身静默放行。
         expect(resolverTools).toEqual(['subagent']);
+        const requests = seenRequests.slice(requestStart);
+        // Gateway attribution deliberately retains the parent session id.
+        const childRequests = requests.filter((request) =>
+          JSON.stringify(JSON.parse(request.body).system).includes('You are a scout subagent.'),
+        );
+        expect(childRequests.length).toBeGreaterThan(0);
+        for (const request of requests) {
+          const system = JSON.stringify(JSON.parse(request.body).system);
+          expect(system).toContain('SUBAGENT_GLOBAL_CONTEXT_SNAPSHOT');
+          expect(system).not.toContain('GLOBAL_CHANGED_AFTER_PARENT_START');
+        }
 
         // 卡片走的是与 Claude / Codex 同一条 agent_task_update 通道。
         const cardUpdates = events

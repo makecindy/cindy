@@ -244,7 +244,7 @@ async function startSession(
         canUseTool?: CanUseToolFn;
       hooks?: Record<
           string,
-          Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>
+          Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<unknown>> }>
         >;
         env?: Record<string, string>;
       }
@@ -1384,6 +1384,50 @@ describe('remote sessions share the same permission semantics', () => {
       workingDir,
     };
   }
+
+  it.each(['http', 'sse'] as const)('forwards a selected custom %s MCP to a remote Bot without the host bridge', async (transport) => {
+    process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
+    const workingDir = await makeTempDir();
+    const deps = createDeps();
+    const selected = { type: transport, url: 'https://mcp.example.test/service' };
+    deps.mcpProviders = [
+      { name: 'custom-selected', toClaudeSdkConfig: () => selected },
+      { name: 'custom-unselected', toClaudeSdkConfig: () => selected },
+      { name: 'in-process', toClaudeSdkConfig: () => ({ type: 'sdk', name: 'in-process', instance: {} }) },
+    ];
+    let remoteStartParams: Record<string, unknown> | undefined;
+    deps.remoteCcQueryFactory = async ({ startParams }) => {
+      remoteStartParams = startParams as unknown as Record<string, unknown>;
+      return createFakeQuery() as never;
+    };
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'remote-bot-custom-mcp',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+      botRuntimeProfile: {
+        botId: 'bot-1', profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: {
+          mode: 'allowlist', configured: ['custom-selected', 'in-process'],
+          catalog: [
+            { name: 'custom-selected', source: 'custom', available: true },
+            { name: 'custom-unselected', source: 'custom', available: true },
+            { name: 'in-process', source: 'builtin', available: true },
+          ],
+        },
+      },
+    });
+    try {
+      // This is the actual serialized input handed to the remote factory:
+      // the shared bridge is not involved in forwarding HTTP/SSE providers.
+      expect(remoteStartParams?.mcpServers).toEqual({ 'custom-selected': selected });
+    } finally {
+      await handle.close();
+    }
+  });
 
   it('passes the runtime session instance id into the remote Claude factory', async () => {
     const { handle, remoteIdentity } = await startRemoteSession(() => 'auto-approve');

@@ -451,12 +451,12 @@ export interface MobileAutoLoadEarlierDecisionInput {
   atEnd: boolean;
   /** 列表当前也贴在内容开头；与 atEnd 同时成立才说明内容未撑满视口。 */
   atStart: boolean;
-  /** 当前首个渲染项 key(prepend 落地后必变,作为「上次尝试有进展」的信号)。 */
-  firstItemKey: string | null;
+  /** 当前最旧的历史游标；调用方没有游标时退回首个渲染项 key。 */
+  progressKey: string | null;
   /** 冷开补齐预算尚有余额；仍需 atStart + atEnd 确认视口未填满。 */
   initialAutoFillAllowed: boolean;
-  /** 上一次自动触发时的首项 key;相同说明上次尝试无进展(失败/重复页),不再自动重试。 */
-  lastAttemptedFirstItemKey: string | null;
+  /** 上一次自动触发时的历史游标;相同说明上次尝试无进展(失败/重复页),不再自动重试。 */
+  lastAttemptedProgressKey: string | null;
   /** 列表处于近顶预取区(LegendList getState().isNearStart,阈值 = onStartReachedThreshold × 视口)。 */
   nearStart: boolean;
   /** 用户产生过真实上翻意图(拖动 / 上跳导航);冷开初始布局不算。 */
@@ -480,7 +480,7 @@ export interface MobileAutoLoadEarlierDecisionInput {
  * 防失控:
  * - 用户浏览态 atEnd 时不触发:贴底跟流不因自动预取被关掉 end-pin；只有冷开有界补齐
  *   允许短窗口同时 nearStart + atEnd 时拉取；
- * - firstItemKey 去重:一次尝试后必须看到首项变化(真有 prepend)才允许下一次,
+ * - progressKey 去重:一次尝试后必须看到历史游标变化(真有 prepend)才允许下一次,
  *   加载失败或拉回重复页(host cursor 未命中返回最新页)不会无限重试;用户重新拖动时清除,
  *   保证手势永远能重新驱动一次尝试。
  */
@@ -495,8 +495,8 @@ export function shouldAutoLoadEarlier(input: MobileAutoLoadEarlierDecisionInput)
   // request the previous page; only suppress user-driven prefetch when a longer list is still
   // pinned at the latest edge without also being at the history edge.
   if (input.atEnd && input.userScrolledForOlder && !input.atStart) return false;
-  if (!input.firstItemKey) return false;
-  return input.lastAttemptedFirstItemKey !== input.firstItemKey;
+  if (!input.progressKey) return false;
+  return input.lastAttemptedProgressKey !== input.progressKey;
 }
 
 export interface MobilePreviousUserJumpTarget {

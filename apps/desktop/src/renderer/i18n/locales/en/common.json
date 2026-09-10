@@ -1,4 +1,67 @@
 {
+  "remoteDesktop": {
+    "windowsTitle": "Lock screen control",
+    "windowsready": "Enabled for this Cindy process. Restarting Cindy requires administrator authorization again.",
+    "windowsmissing": "Allow control of the lock screen and administrator prompts. Administrator authorization is required.",
+    "windowsinstallRequired": "Install Cindy for all users in Program Files to enable this feature.",
+    "windowsunavailable": "The system service is unavailable. Reinstall Cindy and try again.",
+    "windowsEnable": "Authorize",
+    "windowsDisable": "Remove service",
+    "windowsError": "Authorization was not completed. Try again on this computer.",
+    "permissionsTitle": "Remote desktop permissions",
+    "permissionsIntro": "Screen recording lets you view the desktop. Accessibility also enables control. Complete authorization on the computer; status updates automatically.",
+    "permissionsReady": "System permissions are ready. You can reconnect.",
+    "screenRecording": "Screen recording",
+    "accessibility": "Accessibility",
+    "screenRecordingHelp": "Open System Settings and enable screen recording for this Cindy app. If macOS asks you to restart, reopen Cindy before connecting.",
+    "accessibilityHelp": "Open settings and enable accessibility for the app identified by the system prompt. The actual input permission is checked automatically when you return.",
+    "permissionChecking": "Checking…",
+    "permissionGranted": "Granted",
+    "permissionUnknown": "Unconfirmed",
+    "permissionMissing": "Not granted",
+    "openPermissionSettings": "Grant permission",
+    "recheckPermissions": "Check again",
+    "permissionActionFailed": "Could not open the permission guide. Try again in Remote control settings on the computer.",
+    "permissionCheckFailed": "Could not check permissions. Make sure the computer is online and try again.",
+    "openGuideOnComputer": "Open guide on computer",
+    "permissionGuideOpened": "The permission guide is open on the computer. Continue there.",
+    "reconnectAfterPermissions": "Check and reconnect",
+    "closePermissionGuide": "Close",
+    "title": "Remote desktop",
+    "allow": "Allow remote desktop",
+    "allowHint": "Allow your signed-in devices to view and operate all apps on this computer. Also enable device control above.",
+    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect.",
+    "beingControlled": "Your desktop is being controlled",
+    "beingViewed": "Your desktop is being viewed",
+    "disconnect": "Disconnect",
+    "back": "Back",
+    "connect": "Connect",
+    "connecting": "Connecting…",
+    "disconnected": "Disconnected",
+    "compatibility": "Compatibility mode · lower frame rate",
+    "live": "Live",
+    "controlling": "Controlling",
+    "viewOnly": "View only",
+    "upgrade": "Update Cindy on the computer to use remote desktop.",
+    "disabled": "On the computer, enable remote desktop in Settings → Remote control.",
+    "busy": "Desktop input is busy. Release control on the other device or wait for the Agent action to finish.",
+    "connectionError": "Connection ended. Check that the computer is online, then reconnect.",
+    "releaseControl": "Release control",
+    "takeControl": "Take control",
+    "pointer": "Trackpad",
+    "touch": "Touch",
+    "pan": "Move view",
+    "keyboard": "Keyboard",
+    "rightClick": "Right click",
+    "fit": "Fit",
+    "display": "Display",
+    "gestureHint": "Pinch to zoom. Two fingers scroll; Move view pans. Hold, then move to drag.",
+    "textPlaceholder": "Type on the computer",
+    "sendText": "Send text",
+    "keys": "Keys",
+    "showDesktop": "Desktop",
+    "allWindows": "All windows"
+  },
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
@@ -115,6 +178,7 @@
       "restoreFailed": "Failed to restore default settings"
     },
     "tabs": {
+      "storage": "Storage",
       "general": "General",
       "billing": "Usage and billing",
       "usage": "Usage history",
@@ -136,7 +200,8 @@
       "help": "Help",
       "about": "About",
       "imBot": "IM bots",
-      "ghosts": "Plugins"
+      "ghosts": "Plugins",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "User",
@@ -856,10 +921,25 @@
         "unknown": "Unknown"
       },
       "storage": {
+        "mediaSectionTitle": "Media files",
+        "databaseSectionTitle": "Database",
+        "overviewTitle": "Local storage overview",
+        "overviewDescription": "Your database and media cache stay on this computer. Cindy does not delete your history automatically.",
+        "mediaSectionHint": "Manage separately; review items before clearing",
+        "databaseUsage": "Using {{size}}",
+        "databaseWarningNote": "Scan first, then choose what to clean. Scanning does not delete files immediately.",
+        "dbSizeWarningThresholdLabel": "Database reminder threshold",
+        "dbSizeWarningThresholdDescription": "Remind me to clean up when the database exceeds this size (G)",
+        "dbSizeWarningThresholdInvalid": "Enter a threshold between 1 and 1024 G.",
+        "dbSizeWarningSaveFailed": "Could not save database reminder settings. Try again.",
+        "dbSizeWarningDisableLabel": "Do not remind me again",
+        "dbSizeWarningDisableDescription": "When enabled, database space reminders are hidden.",
+        "unknown": "Unknown",
         "title": "Storage",
         "usageLabel": "Media storage used",
         "usageValue": "{{size}} ({{count}} files, {{cacheSize}} cache)",
         "statsFailed": "Stats temporarily unavailable",
+        "refreshStatsButton": "Refresh storage usage",
         "legacyUsage": "Legacy data (read-only, not part of cleanup): {{size}}",
         "legacyImagesLabel": "Image cache directory",
         "legacyImagesDescription": "Cindy does not scan or clean this directory automatically. Deleting files may make images in message history unavailable; review them before deleting.",
@@ -1214,7 +1294,6 @@
           },
           "toast": {
             "title": "Added to dictionary",
-            "titleMultiple": "Added {{count}} terms",
             "termsSummary": "{{terms}} and {{count}} terms total",
             "automaticAdded": "Auto-added to dictionary: {{term}}",
             "automaticAddedMultiple": "Auto-added {{count}} terms, including {{term}}",
@@ -1414,6 +1493,10 @@
       },
       "pill": {
         "connected": "Connected",
+        "configured": "Configured",
+        "disconnected": "Not connected",
+        "connecting": "Connecting…",
+        "rename": "Rename",
         "suspended": "Disabled"
       },
       "button": {
@@ -1439,7 +1522,17 @@
         "connect": "Sign In to ChatGPT",
         "useCodexCli": "Use Current Codex CLI Account",
         "reconnect": "Reconnect ChatGPT",
-        "cancelConnect": "Cancel Connection"
+        "cancelConnect": "Cancel Connection",
+        "accountSource": {
+          "local": "Local Codex account",
+          "oauth": "Independently signed-in account",
+          "unknown": "Existing OpenAI connection"
+        },
+        "useLocalAccount": "Use local Codex account",
+        "addIndependentAccount": "Sign in to a separate account",
+        "accountSourcesDescription": "Use your existing local Codex connection or sign in to a separately saved account. Both support the same features.",
+        "independentAccountDescription": "Sign in to a separately saved ChatGPT account, or connect with an API key.",
+        "localUnavailable": "No local connection is available to reuse. Existing provider accounts will not be replaced."
       },
       "xai": {
         "title": "xAI",
@@ -1448,7 +1541,7 @@
         "billingLabel": "SuperGrok subscription (direct)",
         "asset": {
           "weeklyTitle": "Weekly limit",
-          "weeklyUsed": "{{percent}}% used",
+          "weeklyRemaining": "{{percent}}% remaining",
           "resetsAt": "Resets {{at}}",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Open Grok usage"
@@ -1536,6 +1629,7 @@
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "Display name",
           "modelContextWindowPlaceholder": "Context (tokens)",
+          "modelType": "Model type",
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
@@ -1733,7 +1827,7 @@
         "subscription": "Subscription",
         "subscriptionProduct": "{{product}} Subscription",
         "noResults": "No matching models",
-        "capabilityNote": "Not available in {{agent}}",
+        "capabilityNote": "Not configured for {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
@@ -1801,7 +1895,7 @@
           "defaultEffort": "Default reasoning effort",
           "defaultEffortHint": "The initial effort for new tasks. You can still adjust it within a task.",
           "contextLimit": "Context limit",
-          "contextLimitHint": "Edit in whole K, rounded down for display. Exact configuration is preserved until edited. Saved changes apply to new or reopened tasks.",
+          "contextLimitHint": "Applies to all available engines for this model. Edit in whole K (1 K = 1,000 tokens); untouched values retain their precision. Saved changes apply to subsequent runs without interrupting a response. Actual capacity remains subject to the model service’s limits.",
           "contextLimitAria": "Context limit (thousands of tokens)",
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
@@ -1809,6 +1903,7 @@
           "engines": "Engine support",
           "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
           "engineUnsupported": "Not supported",
+          "engineNotConfigured": "Not configured",
           "engineNoFast": "No Fast",
           "vision": {
             "vision": "Supported",
@@ -1849,14 +1944,14 @@
             "matching": "Native support",
             "unknown": "Protocol unconfirmed"
           },
-          "codexContextDefault": "Codex defaults to 272K context",
-          "codexContextHint": "Codex defaults to 272K context and compacts before reaching that limit. Changes here apply only to other engines. Larger windows require separate Codex configuration and are not recommended for everyday use.",
-          "codexContextAdvanced": "Larger windows require separate Codex configuration and are not recommended for everyday use.",
           "lifecycle": {
             "alpha": "Early access",
             "deprecated": "No longer recommended",
             "retired": "Retired"
-          }
+          },
+          "codexContextUnknown": "CLI configuration unavailable",
+          "codexContextValues": "Total {{total}} · Usable {{usable}} · Auto-compact {{compact}} tokens",
+          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service."
         },
         "kindFilter": {
           "all": "All",
@@ -1991,7 +2086,7 @@
         "back": "← Back",
         "finish": "Finish",
         "cancel": "Cancel",
-        "useApiKey": "Use an API key instead",
+        "useApiKey": "API key connection",
         "metaOAuthOrApi": "Subscription (OAuth) · API key",
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
@@ -2011,8 +2106,8 @@
         "hostProfileApple": "Apple silicon · about {{memory}} GB unified memory",
         "hostProfileGeneric": "About {{memory}} GB memory",
         "hostProfileUnknown": "This computer’s memory isn’t available yet",
-        "bestForYou": "Best for you",
-        "alsoCoding": "Also good for coding",
+        "bestForYou": "Capability pick",
+        "alsoCoding": "Speed alternative",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2029,41 +2124,12 @@
         "noSearchResults": "No matching models",
         "alreadyInstalled": "Installed",
         "searchResults": "Search results",
-        "moreModels": "More local models",
-        "memoryWarning": "Not enough memory on this computer (needs {{need}} GB, about {{have}} GB available)",
+        "moreModels": "Other candidate models",
+        "memoryWarning": "Below the estimated memory threshold ({{need}} GB; this computer has about {{have}} GB)",
         "manualDownload": "Manual download",
         "manualDownloadPlaceholder": "Ollama library name or Hugging Face URL",
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines."
-          },
-          "gemma4-e2b": {
-            "blurb": "Smallest Gemma 4. Light machines, with vision."
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 small. Light daily use, with vision."
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 mid-size. Steadier chat and multimodal."
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory."
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
-          },
-          "glm-47-flash": {
-            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
-          }
-        },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
         "installInCindy": "Install in Cindy",
@@ -2132,8 +2198,8 @@
         "cancelDownload": "Delete Incomplete Download",
         "notRecommended": "This Mac doesn’t meet the 32 GB memory bar for Qwen3.8 27B. You can still enter an exact library name.",
         "sizeHint": "About {{size}} · needs {{memory}} GB unified memory",
-        "sizeHintApple": "About {{size}} · needs {{memory}} GB unified memory",
-        "sizeHintGeneric": "About {{size}} · needs {{memory}} GB memory",
+        "sizeHintApple": "Download {{size}} · estimated {{memory}} GB unified memory",
+        "sizeHintGeneric": "Download {{size}} · estimated {{memory}} GB memory",
         "deleteFromCindy": "Remove from Cindy",
         "deleteConfirmTitle": "Remove Ollama from Cindy?",
         "deleteConfirmBody": "This only removes the Cindy connection. Models already downloaded in Ollama stay on disk, and the service keeps running.",
@@ -2142,7 +2208,8 @@
         "deleteModelConfirmBody": "This deletes the downloaded model files from this computer and removes them from Cindy. You can download the model again later.",
         "deleteModelConfirm": "Delete",
         "deleteModelDone": "Deleted {{name}}",
-        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again."
+        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again.",
+        "noRecommendation": "No recommendation with sufficient evidence fits this computer yet. You can choose a candidate below."
       },
       "xdSignin": {
         "badge": "Recommended",
@@ -2172,27 +2239,15 @@
           "cancel": "Cancel"
         }
       },
-      "imagesKey": {
-        "label": "Image generation API key",
-        "placeholder": "Paste OpenAI platform API key",
-        "save": "Save",
-        "clear": "Clear",
-        "toast": {
-          "saved": "Image generation API key saved",
-          "saveFailed": "Failed to save image generation API key. Please try again.",
-          "cleared": "Image generation API key cleared",
-          "clearFailed": "Failed to clear image generation API key"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% used",
+        "percentRemaining": "{{percent}}% remaining",
         "resetsAt": "Resets {{at}}",
         "claudePlanFallback": "Claude subscription",
-        "claudeWeekly": "7-day window {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7-day window: {{percent}}% remaining",
+        "scopedModel": "{{model}}: {{percent}}% remaining",
         "openClaudeUsage": "Open usage page",
         "codexPlanFallback": "ChatGPT subscription",
-        "codexSecondary": "Secondary window {{percent}}%",
+        "codexSecondary": "Secondary window: {{percent}}% remaining",
         "codexResetCredits": "{{count}} limit reset credits"
       }
     },
@@ -2843,7 +2898,7 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code and Pi automatically compact context. Codex manages context compaction separately.",
+      "description": "Adjust Claude Code and Pi compaction ratios here. Codex derives its threshold from the model context setting. If remote compaction fails, it automatically switches to summary compaction and keeps using it for the current task.",
       "card": {
         "label": "Compaction trigger threshold",
         "badge": "Claude Code",
@@ -3110,12 +3165,29 @@
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
+        "analysisIncomplete": "Pi completed the operation, but Cindy could not finish its follow-up analysis or optional build.",
         "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
         "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
         "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
         "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
       },
+      "recovery": {
+        "check-credentials": "Check the source credentials.",
+        "check-permissions": "Check file and directory permissions.",
+        "check-network": "Check the network connection.",
+        "check-source": "Check the package name or repository address.",
+        "check-version": "Check the requested package version.",
+        "check-runtime": "Check that the Pi runtime is available.",
+        "free-disk-space": "Free up disk space.",
+        "check-build-dependencies": "Check the extension’s build dependencies.",
+        "refresh-package-state": "Refresh the extension list to check its current state.",
+        "inspect-state-before-retry": "Check the current extension state before retrying unfinished steps."
+      },
       "failure": {
+        "commandFailed": "The native Pi package command failed.",
+        "commandNotStarted": "The native Pi package command could not start.",
+        "commandTimedOut": "The native Pi package command timed out.",
+        "commandUnknown": "The result of the native Pi package command could not be confirmed.",
         "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
         "packageNotFound": "The package was not found. Check the package name or repository URL.",
         "versionNotFound": "That version was not found. Choose an available version and try again.",
@@ -4983,7 +5055,8 @@
         "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
         "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
         "skill": "Adds the skill \"{{name}}\" to your AI assistants",
-        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust."
+        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
+        "routineEvents": "Routine Events"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -5081,6 +5154,8 @@
         "sidebarEntryTitle": "Sidebar entry",
         "showInSidebar": "Show in sidebar",
         "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
+        "iosSimulatorAutoOpenTitle": "Open the embedded Simulator panel automatically",
+        "iosSimulatorAutoOpenDescription": "Show the Simulator in the right sidebar after starting it or launching an app. When off, you can still open it manually; all other features are unchanged.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
         "viewAllTools": "See All",
@@ -5480,6 +5555,19 @@
       "hint": "Remote IM keeps confirmation enabled for actions that need approval.",
       "fullAccessDisabled": "Full Access is unavailable for remote IM because actions that cannot be safely confirmed must not run directly.",
       "permissionModeDisabled": "This permission mode is unavailable because remote IM uses Cindy Desktop's confirmation policy."
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "Open tools folder",
+      "description": "The card below checks this computer and lets you install missing portable tools. Native compiler prerequisites show an official installation guide.",
+      "checking": "Checking environment…",
+      "forceManaged": {
+        "title": "Test Installation: Ignore System Tools",
+        "description": "Development builds only. Check portable tools in Cindy-managed copies and simulate missing Windows compiler tools. This switch only rechecks the environment; it does not start installation.",
+        "ariaLabel": "Test Installation: Ignore System Tools",
+        "enabledHint": "The card below can test downloading and installing missing Windows tools. Existing Cindy-managed tools are reused. This takes effect immediately and resets on reload or restart; system tools stay unchanged.",
+        "reportHint": "Installation test is on: portable tools use Cindy-managed copies. Windows compiler tools are shown as missing to test the official installation guide; turn off the switch to check their real status."
+      }
     }
   },
   "remoteDevice": {
@@ -5877,6 +5965,8 @@
     "modelWeeklyLabel": "{{model}} weekly",
     "usedPercent": "Used {{percent}}%",
     "remainingPercent": "Remaining {{percent}}%",
+    "resetIn": "Resets in {{duration}}",
+    "resetPending": "Awaiting reset update",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",
     "limitRejected": "Plan limit reached; requests may be rejected",
@@ -6963,6 +7053,12 @@
       "binary-missing": "Component unavailable"
     },
     "ariaLabel": "Sidebar navigation",
+    "databaseSizeWarning": {
+      "title": "Database is using a lot of space",
+      "description": "The database is about {{size}}, above {{threshold}} G. Consider cleaning it up in Storage.",
+      "openSettings": "Open Storage",
+      "disable": "Do not remind me"
+    },
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
       "projects": "Projects",
@@ -7179,6 +7275,8 @@
       "composerPlaceholderLatin": "Say something to {{name}}…"
     },
     "globalSettings": {
+      "restoreHint": "Restoring defaults follows the client’s default model settings. Individual teammates’ custom models stay unchanged.",
+      "restoreFailed": "Could not restore defaults. Try again.",
       "title": "Teammates",
       "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
       "rosterNote": "The shipped roster grows with each release."
@@ -7257,6 +7355,16 @@
       "thisDevice": "This computer",
       "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
       "preparing": "Waiting for this teammate to get ready…"
+    },
+    "capabilities": {
+      "title": "Capabilities",
+      "search": "Search capabilities",
+      "loading": "Loading…",
+      "skill": "Skills",
+      "mcp": "MCP",
+      "toolset": "Built-in tools",
+      "unavailable": "Unavailable",
+      "empty": "No matching capabilities"
     }
   },
   "common": {
@@ -7439,6 +7547,7 @@
       "stop": "Stop generating"
     },
     "pluginSetup": {
+      "reopen": "Reopen",
       "title": "{{name}} Settings",
       "assessmentReadFailed": "Couldn't read the plugin setup status.",
       "setupIncomplete": "Plugin setup is not complete.",
@@ -7627,6 +7736,7 @@
         "china": "China",
         "image": "Image",
         "video": "Video",
+        "audio": "Audio Generation",
         "tts": "Text to Speech",
         "stt": "Speech to Text",
         "realtime": "Realtime Audio",
@@ -7652,7 +7762,7 @@
         "reconnect": "Reconnect",
         "manage": "Manage source",
         "railLabel": "Source",
-        "connect": "Add a model",
+        "connect": "Configure models",
         "connectCta": "Connect a source →",
         "viaSource": "Source: {{source}}",
         "emptyTitle": "No available source",
@@ -7730,7 +7840,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
+            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -7993,12 +8103,27 @@
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
     },
+    "mediaDownload": {
+      "title": "Download the generated media?",
+      "description": "The media has been generated and needs to be downloaded from the address below.",
+      "scope": "Allow this download only.",
+      "source": "This address is not among the download sources confirmed by Cindy, so your confirmation is needed.",
+      "http": "This address uses unencrypted HTTP. Others on the network may read or alter the download.",
+      "port": "This address uses a non-default network port. Confirm access to that port.",
+      "credentials": "This download address includes login details. If allowed, those details will be sent only to this address.",
+      "network": "This address points to this device, a local network, or a reserved network. Access may reach internal services on the device.",
+      "allow": "Allow this download",
+      "defer": "Not now"
+    },
     "permissionPrompt": {
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
       "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
-      "ruleSeparator": ", "
+      "ruleSeparator": ", ",
+      "submitting": "Submitting your decision…",
+      "submissionFailed": "No confirmation was received. Check your connection and try again if the prompt is still open.",
+      "requestEnded": "This permission request has ended or was already handled. Check the latest status."
     },
     "deviceSwitcher": {
       "label": "Device",
@@ -8477,7 +8602,10 @@
       "copyContent": "Copy content",
       "openInExplorer": "Open in file manager",
       "close": "Close",
-      "editIndex": "Edit {{index}}/{{total}}"
+      "editIndex": "Edit {{index}}/{{total}}",
+      "omittedDiffSegments": "{{count}} additional diff segments omitted from preview",
+      "diffPreviewTruncated": "Some diff lines are hidden in this preview",
+      "diffPreviewLoading": "Preparing diff preview…"
     },
     "textLightbox": {
       "unreadable": "Unable to read this file",
@@ -8697,7 +8825,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
-        "labelStrip": "Oversized images removed, continuing",
+        "labelStrip": "Historical images reorganized",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -8876,7 +9004,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
+      "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received."
     },
     "generatedFiles": {
       "title": "Files created this message",
@@ -9027,8 +9158,6 @@
       "runningTool": "{{tool}} running…"
     },
     "remoteSession": {
-      "syncing": "Syncing…",
-      "recovered": "Restored",
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
       "degraded": "Connection to the controlled device is unstable — retrying automatically…",
@@ -9108,7 +9237,8 @@
       "projectContextLoaded": "Project Knowledge Base loaded",
       "contextRing": {
         "compactHint": "Click to compact context",
-        "codexAutoHint": "Codex compacts automatically on the server side; manual compaction is not supported",
+        "codexPendingHint": "Settings apply on the next send. Current usage is not yet available.",
+        "codexAutoHint": "Codex CLI manages context and automatic compaction. This control is read-only.",
         "confirmTitle": "Compact context?",
         "confirmDescription": "Current usage: {{used}} / {{total}} ({{pct}}%). This silently compacts context — the agent summarizes chat history to free up context space.",
         "confirmAction": "Compact",
@@ -9263,6 +9393,8 @@
         "all": "All"
       },
       "filterSortBy": {
+        "created": "Created Time",
+        "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
         "priority": "Priority"
@@ -9278,7 +9410,7 @@
       "filterTaskSortHeading": "Session sort",
       "filterProjectOrderHeading": "Project order",
       "filterProjectOrder": {
-        "activity": "By recent activity",
+        "activity": "Follow Session Sorting",
         "custom": "Manual"
       },
       "filterProjectOrderTip": {
@@ -10657,6 +10789,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "View skill details",
     "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
   },
   "skillhub": {
@@ -10815,11 +10948,11 @@
         "market": "Back to Market",
         "skillhub": "Back to SkillHub"
       },
-      "uninstall": "Uninstall",
+      "uninstall": "Uninstall Skill",
       "uninstallDialog": {
-        "title": "Uninstall {{name}}?",
-        "description": "Will remove the local folder\n{{path}}\nThis cannot be undone.",
-        "confirm": "Confirm uninstall",
+        "title": "Uninstall “{{name}}”?",
+        "description": "Local files and edits will move to the trash and can be restored.\n\nOther Agents sharing this skill will also be affected. Published versions and installations elsewhere are unaffected.",
+        "confirm": "Uninstall",
         "cancel": "Cancel"
       },
       "uninstalledToast": "{{name}} uninstalled",
@@ -11113,6 +11246,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "Review Rejected",
+      "rejectedDesc": "This version did not pass review. Address the feedback below and publish again.",
+      "rejectionReasonUnavailable": "This version did not pass review, but no specific reason is available. Contact the reviewer for details.",
+      "rejectionReason": "Rejection Reason",
       "dismiss": "Got it",
       "passedTitle": "Security Scan Passed",
       "passedDesc": "This version has passed all security checks and is now live on the market.",
@@ -11217,6 +11354,27 @@
     "marketEdit": {
       "saved": "Market info saved",
       "displayNameRequired": "Display name is required"
+    },
+    "management": {
+      "disabled": "Disabled",
+      "enabledLabel": "Enable Skill “{{name}}”",
+      "moreLabel": "Manage Skill “{{name}}”",
+      "activationHint": "Controls Skill loading in Cindy only. Takes effect when starting or restarting an Agent.",
+      "enabledToast": "Skill “{{name}}” enabled. Start or restart the Agent to apply.",
+      "disabledToast": "Skill “{{name}}” disabled. Start or restart the Agent to apply.",
+      "toggleFailed": "Could not save the Skill setting. Try again.",
+      "uninstallFailed": "Could not move the Skill to the trash. Check file permissions and try again.",
+      "refreshRequired": "The Skill is being changed or its source has changed. Refresh the list and try again.",
+      "globalScope": "Installation: global Skill",
+      "projectScope": "Project: {{project}}",
+      "trashDescription": "Local files and edits will move to the trash and can be restored.",
+      "unlinkDescription": "Only the local skill entry will be removed. Original files and edits will be kept.",
+      "sharedImpact": "Other Agents sharing this skill will also be affected. Published versions and installations elsewhere are unaffected.",
+      "managedElsewhere": "This Skill belongs to another package or shared directory. Remove it at its source.",
+      "managedByPlugin": "This skill is provided by a plugin. Manage it on that plugin’s page.",
+      "cleanupIncomplete": "Uninstall cleanup for “{{name}}” is unfinished. Retry now or reopen Skills later to continue. Reinstallation is paused until cleanup completes.",
+      "retryCleanup": "Retry cleanup",
+      "cleanupComplete": "Cleanup completed"
     }
   },
   "makerExperimental": {
@@ -11311,11 +11469,12 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
+      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
-      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversized": "Automatic image history recovery and continuation could not finish. Send “Continue” to resume this task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
@@ -12021,5 +12180,205 @@
     "realtime": "For real-time voice conversations.",
     "embedding": "For finding related content by meaning.",
     "compression": "For condensing lengthy content."
+  },
+  "routines": {
+    "title": "Routines",
+    "add": "Add Routine",
+    "back": "Back to Routines",
+    "error": "Could not update routines. Check the settings and try again.",
+    "empty": "Add a routine to tell this teammate what to do and when.",
+    "enabled": "Enabled",
+    "paused": "Paused",
+    "runNow": "Run Now",
+    "running": "Running…",
+    "name": "Name",
+    "instructions": "Instructions",
+    "when": "When to Run",
+    "addTrigger": "Add Trigger",
+    "removeTrigger": "Remove Trigger",
+    "schedule": "Schedule",
+    "hourly": "Hourly",
+    "daily": "Daily",
+    "weekdays": "Weekdays",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
+    "interval": "Interval",
+    "advanced": "Advanced…",
+    "everyMinutes": "Every {{count}} Minutes",
+    "minutes": "Minutes",
+    "expression": "Cron Expression",
+    "timezone": "Time Zone",
+    "delete": "Delete Routine",
+    "save": "Save Routine",
+    "deleteConfirm": "Delete this routine and cancel its pending runs?",
+    "keep": "Keep Routine",
+    "history": "Run History",
+    "noRuns": "This routine has not run yet.",
+    "field": "Field",
+    "operator": "Condition",
+    "value": "Value",
+    "addFilter": "Add Condition",
+    "removeFilter": "Remove Condition",
+    "pluginCapability": "Publishes declared events to your routines. Only routines you configure can run.",
+    "time": "Time",
+    "day": "Day",
+    "weekday": "Weekday",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "success": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "cancelled": "Cancelled"
+    },
+    "sourceStatus": {
+      "listening": "Listening",
+      "disconnected": "Not Listening",
+      "error": "Source Needs Attention"
+    },
+    "operators": {
+      "equals": "Equals",
+      "contains": "Contains",
+      "not-equals": "Does Not Equal"
+    }
+  },
+  "cindyMakeDoctor": {
+    "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",
+    "title": "Cindy Make · Environment",
+    "scope": "Check tools on this computer",
+    "limits": "Checks only; no installation or source checkout. Source and project dependencies still need checking when building.",
+    "running": "Checking",
+    "passed": "Basic checks passed",
+    "needsAttention": "Some items need attention",
+    "cancelled": "Check stopped",
+    "failed": "Check incomplete. Please retry.",
+    "details": "Show details",
+    "hideDetails": "Hide details",
+    "stop": "Stop check",
+    "recheck": "Check again",
+    "timeout": "The check timed out. Make sure the tool can start, then retry.",
+    "commandUnavailable": "The command list is not ready, or this running version does not include the command. Retry later or update Cindy.",
+    "usage": "Environment checks take no arguments or attachments. Send /cindy-make-doctor on its own.",
+    "localOnly": "Use /cindy-make-doctor on a local Desktop. SSH and device-link are not supported yet.",
+    "checks": {
+      "platform": "System and architecture",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "Native build tools",
+      "storage": "Storage and permissions"
+    },
+    "checkStatus": {
+      "pending": "Pending",
+      "checking": "Checking",
+      "passed": "Passed",
+      "missing": "Not found",
+      "incompatible": "Incompatible",
+      "failed": "Not verified",
+      "warning": "Attention needed",
+      "cancelled": "Stopped",
+      "downloading": "Downloading",
+      "installing": "Installing"
+    },
+    "requirements": {
+      "platform": "Windows x64, macOS x64/arm64, and Linux x64/arm64 are supported. Build on the corresponding OS.",
+      "git": "Requires working Git 2.x or newer. No GitHub account is needed.",
+      "gitLfs": "Requires Git LFS to retrieve large files in the source.",
+      "node": "Requires Node.js ≥ 22.12.",
+      "pnpm": "Requires pnpm ≥ 10.7 and < 11; 10.33.2 is recommended. Automatic downloads are disabled for this check.",
+      "python": "Requires Python 3.{{pythonMinor}} or a newer Python 3.",
+      "native": "Requires C/C++ build tools for this OS.",
+      "nativeWin": "Requires Visual Studio C++ Build Tools, MSBuild, and Windows 10/11 SDK.",
+      "nativeMac": "Requires Xcode Command Line Tools, macOS SDK, and make.",
+      "nativeLinux": "Requires g++ and make (typically provided by build-essential).",
+      "storage": "Checks write access to Cindy's data directory; {{freeGiB}} GiB available. At least 10 GiB is recommended; actual build size varies."
+    }
+  },
+  "cindyMake": {
+    "description": "Check and prepare local tools for a personal Cindy build. Usage: /cindy-make [request]",
+    "localOnly": "/cindy-make currently supports local desktop sessions only. Switch to this device to use it.",
+    "usage": "Use /cindy-make or /cindy-make request. Environment checks do not yet accept attachments, references or comments. Your input is preserved.",
+    "request": "Requested changes",
+    "prepare": {
+      "scope": "Reuse compatible tools; automatically install missing portable tools",
+      "limits": "Tools stay in Cindy's data directory; global tools and PATH are unchanged. System build tools require your OS installer. No source checkout or build yet.",
+      "running": "Preparing tools",
+      "passed": "Basic environment ready",
+      "needsAttention": "Some items need attention",
+      "cancelled": "Preparation stopped",
+      "failed": "Preparation incomplete. Please retry.",
+      "stop": "Stop",
+      "retry": "Retry preparation",
+      "source": {
+        "system": "Existing",
+        "managed": "Managed by Cindy"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "Installation guide",
+      "install": "Install missing tools",
+      "errors": {
+        "downloadFailed": "Download failed. Check your connection and retry.",
+        "checksum": "Integrity check failed. Nothing was installed. Please retry.",
+        "installFailed": "The tool could not be installed or started. Check free space and OS compatibility, or install a compatible tool manually, then retry.",
+        "busy": "Another preparation is running. Wait for it to finish, then retry."
+      },
+      "guidance": {
+        "windows": "Install Visual Studio Build Tools with Desktop development with C++, MSBuild and Windows 10/11 SDK, then retry.",
+        "mac": "Install Xcode Command Line Tools (includes Git and macOS SDK) using the command below, then retry.",
+        "linux": "Install Git and C/C++ build tools with your distribution package manager. Choose the matching command below, then retry."
+      }
+    },
+    "upstream": {
+      "pending": "Upstream search starts automatically once every environment check passes.",
+      "needsRequest": "A change request is needed",
+      "needRequest": "Describe the change, including a feature name or error, to search upstream.",
+      "placeholder": "For example: fix message stream flickering",
+      "search": "Search upstream",
+      "searching": "Searching upstream Issues and PRs…",
+      "found": "Found potentially related upstream work",
+      "notFound": "No matching upstream work found",
+      "failed": "Upstream search failed",
+      "cancelled": "Upstream search stopped",
+      "terms": "Keywords: {{terms}}",
+      "author": "by {{author}}",
+      "updated": "updated {{date}}",
+      "notFoundHint": "No public Issue or PR matched these keywords. Different wording may return other results.",
+      "resultHint": "Review the links to judge relevance. Results include only currently open Issues and PRs.",
+      "wait": "Wait for upstream",
+      "personal": "Continue with a personal version",
+      "retry": "Recheck and search again",
+      "expand": "Show upstream results",
+      "collapse": "Hide upstream results",
+      "count": "Found {{count}} potentially related open Issues or PRs",
+      "kind": {
+        "issue": "Issue",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "Open",
+        "closed": "Closed",
+        "merged": "Merged",
+        "unknown": "Closed · merge status unverified"
+      },
+      "choice": {
+        "wait": "Chose to wait for upstream",
+        "personal": "Chose a personal version"
+      },
+      "decisionHint": {
+        "wait": "This workflow has stopped. No subscription or automatic update was created.",
+        "personal": "Your choice is recorded in this card. Source preparation and building are not connected yet; no source has been downloaded or changed."
+      },
+      "failure": {
+        "network": "Could not reach GitHub. Check your connection and retry.",
+        "rateLimit": "GitHub is limiting requests. Wait a moment and retry.",
+        "timeout": "The search timed out. Please retry.",
+        "invalidResponse": "GitHub returned an incomplete or unreadable result. Please retry."
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · Prepare environment",
+    "stepUpstream": "2 · Check upstream"
   }
 }

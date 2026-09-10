@@ -1,4 +1,67 @@
 {
+  "remoteDesktop": {
+    "windowsTitle": "잠금 화면 제어",
+    "windowsready": "현재 Cindy 실행에 허용되었습니다. Cindy를 다시 시작하면 관리자 승인이 다시 필요합니다.",
+    "windowsmissing": "잠금 화면과 관리자 확인 창을 제어하려면 관리자 승인이 필요합니다.",
+    "windowsinstallRequired": "Cindy를 Program Files에 모든 사용자용으로 설치하세요.",
+    "windowsunavailable": "시스템 서비스를 사용할 수 없습니다. Cindy를 다시 설치하세요.",
+    "windowsEnable": "승인 후 활성화",
+    "windowsDisable": "서비스 제거",
+    "windowsError": "승인이 완료되지 않았습니다. 이 컴퓨터에서 다시 시도하세요.",
+    "permissionsTitle": "원격 데스크톱 권한",
+    "permissionsIntro": "데스크톱을 보려면 화면 기록 권한이, 조작하려면 손쉬운 사용 권한도 필요합니다. 컴퓨터에서 허용하면 상태가 자동으로 갱신됩니다.",
+    "permissionsReady": "시스템 권한이 준비되었습니다. 다시 연결할 수 있습니다.",
+    "screenRecording": "화면 기록",
+    "accessibility": "손쉬운 사용",
+    "screenRecordingHelp": "시스템 설정을 열고 현재 Cindy 앱의 화면 기록을 허용하세요. 재시작을 요청하면 Cindy를 다시 연 후 연결하세요.",
+    "accessibilityHelp": "설정을 열고 시스템 권한 안내에 표시된 앱의 손쉬운 사용을 허용하세요. 돌아오면 실제 입력 권한을 자동 확인합니다.",
+    "permissionChecking": "확인 중…",
+    "permissionGranted": "허용됨",
+    "permissionUnknown": "확인되지 않음",
+    "permissionMissing": "허용되지 않음",
+    "openPermissionSettings": "권한 허용",
+    "recheckPermissions": "다시 확인",
+    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 원격 제어 설정에서 다시 시도하세요.",
+    "permissionCheckFailed": "권한을 확인하지 못했습니다. 컴퓨터가 온라인인지 확인하고 다시 시도하세요.",
+    "openGuideOnComputer": "컴퓨터에서 권한 안내 열기",
+    "permissionGuideOpened": "컴퓨터에 권한 안내를 표시했습니다. 컴퓨터에서 계속하세요.",
+    "reconnectAfterPermissions": "확인 후 다시 연결",
+    "closePermissionGuide": "닫기",
+    "title": "원격 데스크톱",
+    "allow": "원격 데스크톱 허용",
+    "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
+    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
+    "beingControlled": "데스크톱을 원격으로 제어 중",
+    "beingViewed": "데스크톱을 원격으로 보는 중",
+    "disconnect": "연결 끊기",
+    "back": "뒤로",
+    "connect": "연결",
+    "connecting": "연결 중…",
+    "disconnected": "연결 끊김",
+    "compatibility": "호환 모드 · 낮은 프레임 속도",
+    "live": "실시간 화면",
+    "controlling": "제어 중",
+    "viewOnly": "보기 전용",
+    "upgrade": "컴퓨터의 Cindy를 업데이트하세요.",
+    "disabled": "컴퓨터의 설정 → 원격 제어에서 원격 데스크톱을 켜주세요.",
+    "busy": "데스크톱 입력을 사용 중입니다. 다른 기기의 제어를 해제하거나 Agent 작업이 끝날 때까지 기다리세요.",
+    "connectionError": "연결이 종료되었습니다. 컴퓨터가 온라인인지 확인하고 다시 연결하세요.",
+    "releaseControl": "제어 해제",
+    "takeControl": "제어 시작",
+    "pointer": "트랙패드",
+    "touch": "터치",
+    "pan": "화면 이동",
+    "keyboard": "키보드",
+    "rightClick": "오른쪽 클릭",
+    "fit": "화면 맞춤",
+    "display": "디스플레이",
+    "gestureHint": "두 손가락으로 확대/축소 및 스크롤합니다. 화면 이동 모드에서는 이동합니다. 길게 누른 후 움직이면 드래그합니다.",
+    "textPlaceholder": "컴퓨터에 텍스트 입력",
+    "sendText": "텍스트 전송",
+    "keys": "키",
+    "showDesktop": "데스크톱",
+    "allWindows": "모든 창"
+  },
   "ipcError": {
     "INVALID_PARAMS": "매개변수가 잘못되었습니다. 확인 후 다시 시도하세요.",
     "PRECONDITION_FAILED": "현재 상태에서는 이 작업을 수행할 수 없습니다. 잠시 후 다시 시도하세요.",
@@ -115,6 +178,7 @@
       "restoreFailed": "기본 설정으로 복원하지 못했습니다"
     },
     "tabs": {
+      "storage": "저장 공간",
       "general": "일반",
       "billing": "사용량 및 결제",
       "usage": "사용 기록",
@@ -136,7 +200,8 @@
       "help": "도움말",
       "about": "정보",
       "imBot": "IM 봇",
-      "ghosts": "플러그인"
+      "ghosts": "플러그인",
+      "cindyMake": "Cindy Make"
     },
     "sections": {
       "user": "사용자",
@@ -856,10 +921,25 @@
         "unknown": "알 수 없음"
       },
       "storage": {
+        "mediaSectionTitle": "미디어 파일",
+        "databaseSectionTitle": "데이터베이스",
+        "overviewTitle": "로컬 저장 공간",
+        "overviewDescription": "데이터베이스와 미디어 캐시는 이 컴퓨터에 저장됩니다. Cindy는 기록을 자동으로 삭제하지 않습니다.",
+        "mediaSectionHint": "별도로 관리하며 삭제하기 전에 내용을 확인하세요",
+        "databaseUsage": "사용량 {{size}}",
+        "databaseWarningNote": "먼저 검사한 다음 정리할 항목을 선택하세요. 검사만으로는 파일이 삭제되지 않습니다.",
+        "dbSizeWarningThresholdLabel": "데이터베이스 알림 기준",
+        "dbSizeWarningThresholdDescription": "데이터베이스가 이 크기(G)를 초과하면 정리 알림",
+        "dbSizeWarningThresholdInvalid": "알림 기준값을 1~1024 G 범위로 입력하세요.",
+        "dbSizeWarningSaveFailed": "데이터베이스 알림 설정을 저장하지 못했습니다. 다시 시도하세요.",
+        "dbSizeWarningDisableLabel": "다시 알리지 않기",
+        "dbSizeWarningDisableDescription": "사용하면 데이터베이스 공간 알림이 숨겨집니다.",
+        "unknown": "알 수 없음",
         "title": "저장 공간",
         "usageLabel": "미디어 사용량",
-        "usageValue": "{{size}}({{count}}개 파일, 캐시 {{cacheSize}} 포함)",
+        "usageValue": "{{size}} ({{count}}개 파일, 캐시 {{cacheSize}})",
         "statsFailed": "통계를 일시적으로 사용할 수 없습니다",
+        "refreshStatsButton": "저장 공간 사용량 새로 고침",
         "legacyUsage": "이전 버전 데이터(읽기 전용, 정리 대상 아님): {{size}}",
         "legacyImagesLabel": "이미지 캐시 디렉터리",
         "legacyImagesDescription": "Cindy는 이 디렉터리를 자동으로 검사하거나 정리하지 않습니다. 파일을 삭제하면 메시지 기록의 이미지가 표시되지 않을 수 있으므로 확인 후 작업해 주세요.",
@@ -1213,8 +1293,7 @@
             "manual": "수동"
           },
           "toast": {
-            "title": "사전에 자동 추가됨",
-            "titleMultiple": "{{count}}개 단어가 사전에 자동 추가됨",
+            "title": "사전에 추가됨",
             "termsSummary": "{{terms}} 외 총 {{count}}개",
             "automaticAdded": "사전에 자동 추가됨: {{term}}",
             "automaticAddedMultiple": "사전에 자동 추가됨: {{term}} 외 {{count}}개",
@@ -1414,6 +1493,10 @@
       },
       "pill": {
         "connected": "연결됨",
+        "configured": "설정됨",
+        "disconnected": "연결되지 않음",
+        "connecting": "연결 중…",
+        "rename": "이름 변경",
         "suspended": "비활성화됨"
       },
       "button": {
@@ -1439,7 +1522,17 @@
         "connect": "ChatGPT 로그인",
         "useCodexCli": "현재 Codex CLI 계정 사용",
         "reconnect": "ChatGPT 다시 연결",
-        "cancelConnect": "연결 취소"
+        "cancelConnect": "연결 취소",
+        "accountSource": {
+          "local": "로컬 Codex 계정",
+          "oauth": "별도로 로그인한 계정",
+          "unknown": "기존 OpenAI 연결"
+        },
+        "useLocalAccount": "로컬 Codex 계정 사용",
+        "addIndependentAccount": "별도 계정으로 로그인",
+        "accountSourcesDescription": "기존 로컬 Codex 연결을 사용하거나 별도로 저장되는 계정에 로그인하세요. 두 방식 모두 같은 기능을 지원합니다.",
+        "independentAccountDescription": "별도로 저장되는 ChatGPT 계정에 로그인하거나 API 키로 연결하세요.",
+        "localUnavailable": "재사용할 수 있는 로컬 연결이 없습니다. 기존 제공자의 계정은 변경되지 않습니다."
       },
       "xai": {
         "title": "xAI",
@@ -1448,7 +1541,7 @@
         "billingLabel": "SuperGrok 구독 직접 연결",
         "asset": {
           "weeklyTitle": "주간 한도",
-          "weeklyUsed": "{{percent}}% 사용됨",
+          "weeklyRemaining": "{{percent}}% 남음",
           "resetsAt": "{{at}} 초기화",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Grok 사용량 페이지 열기"
@@ -1536,6 +1629,7 @@
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "표시 이름",
           "modelContextWindowPlaceholder": "컨텍스트(tokens)",
+          "modelType": "모델 유형",
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
@@ -1732,7 +1826,7 @@
         "subscription": "구독",
         "subscriptionProduct": "{{product}} 구독",
         "noResults": "일치하는 모델 없음",
-        "capabilityNote": "{{agent}}에서는 사용 불가",
+        "capabilityNote": "{{agent}} 설정되지 않음",
         "refreshAria": "모델 목록 새로고침(추가만)",
         "refreshBuiltinAria": "모델 목록 새로고침",
         "refreshingAria": "모델 목록 새로고침 중…",
@@ -1800,7 +1894,7 @@
           "defaultEffort": "기본 추론 강도",
           "defaultEffortHint": "새 작업의 초기 추론 강도입니다. 작업 안에서도 변경할 수 있습니다.",
           "contextLimit": "컨텍스트 상한",
-          "contextLimitHint": "정수 K로 편집하며 표시는 내림합니다. 편집 전까지 정확한 설정을 유지합니다. 저장하면 새 작업이나 다시 연 작업에 적용됩니다.",
+          "contextLimitHint": "이 모델의 모든 사용 가능한 엔진에 적용됩니다. 정수 K 단위로 편집합니다(1 K = 1,000 tokens). 수정하지 않은 값은 정밀도를 유지합니다. 저장한 변경 사항은 이후 실행에 적용되며 생성 중인 응답을 중단하지 않습니다. 실제로 사용할 수 있는 길이는 모델 서비스의 제한을 따릅니다.",
           "contextLimitAria": "컨텍스트 상한(천 tokens)",
           "contextLimitRoute": "현재 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
@@ -1808,6 +1902,7 @@
           "engines": "엔진 지원",
           "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
           "engineUnsupported": "지원 안 함",
+          "engineNotConfigured": "설정되지 않음",
           "engineNoFast": "Fast 없음",
           "vision": {
             "vision": "지원",
@@ -1848,14 +1943,14 @@
             "matching": "기본 지원",
             "unknown": "프로토콜 미확인"
           },
-          "codexContextDefault": "Codex 기본 컨텍스트 272K",
-          "codexContextHint": "Codex는 기본적으로 272K 컨텍스트를 사용하며 한도에 도달하기 전에 자동 압축합니다. 여기서 변경한 값은 다른 엔진에만 적용됩니다. 더 큰 창은 Codex를 별도로 설정해야 하며 일상적인 사용에는 권장하지 않습니다.",
-          "codexContextAdvanced": "더 큰 창은 Codex를 별도로 설정해야 하며 일상적인 사용에는 권장하지 않습니다.",
           "lifecycle": {
             "alpha": "체험판",
             "deprecated": "더 이상 권장하지 않음",
             "retired": "제공 종료"
-          }
+          },
+          "codexContextUnknown": "CLI 설정을 읽을 수 없음",
+          "codexContextValues": "전체 {{total}} · 사용 가능 {{usable}} · 자동 압축 {{compact}} tokens",
+          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다."
         },
         "kindFilter": {
           "all": "전체",
@@ -2010,8 +2105,8 @@
         "hostProfileApple": "Apple 칩 · 통합 메모리 약 {{memory}}GB",
         "hostProfileGeneric": "메모리 약 {{memory}}GB",
         "hostProfileUnknown": "이 컴퓨터의 메모리를 아직 확인할 수 없습니다",
-        "bestForYou": "가장 잘 맞음",
-        "alsoCoding": "코딩에도 좋음",
+        "bestForYou": "성능 추천",
+        "alsoCoding": "속도 대안",
         "packaging": {
           "mxfp8": "MXFP8",
           "mlx": "MLX",
@@ -2028,41 +2123,12 @@
         "noSearchResults": "일치하는 모델이 없습니다",
         "alreadyInstalled": "설치됨",
         "searchResults": "검색 결과",
-        "moreModels": "자주 쓰는 모델 더 보기",
-        "memoryWarning": "이 컴퓨터의 메모리가 부족합니다({{need}} GB 필요, 현재 약 {{have}} GB)",
+        "moreModels": "다른 후보 모델",
+        "memoryWarning": "추정 메모리 기준 미만({{need}} GB, 이 기기 약 {{have}} GB)",
         "manualDownload": "수동 다운로드",
         "manualDownloadPlaceholder": "Ollama 라이브러리 이름 또는 Hugging Face URL",
         "invalidLibraryName": "Ollama 라이브러리 이름을 입력하거나 huggingface.co 모델 페이지 URL을 붙여넣으세요",
         "advancedExactName": "고급: 정확한 라이브러리 이름",
-        "models": {
-          "qwen38-27b": {
-            "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다."
-          },
-          "gpt-oss-20b": {
-            "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택."
-          },
-          "gemma4-e2b": {
-            "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다."
-          },
-          "gemma4-e4b": {
-            "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다."
-          },
-          "gemma4-12b": {
-            "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다."
-          },
-          "gemma4-31b": {
-            "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다."
-          },
-          "gemma4-26b": {
-            "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다."
-          },
-          "ornith15-35b": {
-            "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안."
-          },
-          "glm-47-flash": {
-            "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음."
-          }
-        },
         "onboardingTitle": "먼저 Ollama 런타임을 설치하세요",
         "onboardingBody": "Ollama를 설치하면 Ollama 앱을 열지 않고도 Cindy에서 로컬 모델을 다운로드하고 사용할 수 있습니다. Ollama는 무료 오픈소스 서드파티 런타임입니다.",
         "installInCindy": "Cindy에서 설치",
@@ -2131,8 +2197,8 @@
         "cancelDownload": "미완료 다운로드 삭제",
         "notRecommended": "이 Mac은 Qwen3.8 27B에 필요한 32GB 메모리 기준에 미달합니다. 정확한 라이브러리 이름을 입력해 직접 다운로드할 수 있습니다.",
         "sizeHint": "약 {{size}} · 통합 메모리 {{memory}}GB 필요",
-        "sizeHintApple": "약 {{size}} · 통합 메모리 {{memory}}GB 필요",
-        "sizeHintGeneric": "약 {{size}} · 메모리 {{memory}}GB 필요",
+        "sizeHintApple": "다운로드 {{size}} · 예상 통합 메모리 {{memory}} GB",
+        "sizeHintGeneric": "다운로드 {{size}} · 예상 메모리 {{memory}} GB",
         "deleteFromCindy": "Cindy에서 제거",
         "deleteConfirmTitle": "Cindy에서 Ollama를 제거할까요?",
         "deleteConfirmBody": "Cindy 연결만 제거합니다. Ollama에 이미 받은 모델은 디스크에 남고 서비스도 멈추지 않습니다.",
@@ -2141,7 +2207,8 @@
         "deleteModelConfirmBody": "이 컴퓨터에서 받은 모델 파일을 삭제하고 Cindy에서도 제거합니다. 필요하면 나중에 다시 받을 수 있습니다.",
         "deleteModelConfirm": "삭제",
         "deleteModelDone": "{{name}}을(를) 삭제했습니다",
-        "deleteModelFailed": "삭제하지 못했습니다. Ollama가 실행 중인지 확인한 뒤 다시 시도해 주세요."
+        "deleteModelFailed": "삭제하지 못했습니다. Ollama가 실행 중인지 확인한 뒤 다시 시도해 주세요.",
+        "noRecommendation": "아직 이 컴퓨터의 메모리에 맞고 근거가 충분한 추천 모델이 없습니다. 아래에서 후보를 직접 선택할 수 있습니다."
       },
       "xdSignin": {
         "badge": "추천",
@@ -2171,27 +2238,15 @@
           "cancel": "취소"
         }
       },
-      "imagesKey": {
-        "label": "이미지 생성 API key",
-        "placeholder": "OpenAI 플랫폼 API key 붙여넣기",
-        "save": "저장",
-        "clear": "지우기",
-        "toast": {
-          "saved": "이미지 생성 API key를 저장했습니다",
-          "saveFailed": "이미지 생성 API key 저장에 실패했습니다. 다시 시도해 주세요",
-          "cleared": "이미지 생성 API key를 지웠습니다",
-          "clearFailed": "이미지 생성 API key 지우기에 실패했습니다"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 사용",
+        "percentRemaining": "{{percent}}% 남음",
         "resetsAt": "{{at}} 초기화",
         "claudePlanFallback": "Claude 구독",
-        "claudeWeekly": "7일 창 {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7일 한도 {{percent}}% 남음",
+        "scopedModel": "{{model}} {{percent}}% 남음",
         "openClaudeUsage": "사용량 페이지 열기",
         "codexPlanFallback": "ChatGPT 구독",
-        "codexSecondary": "보조 창 {{percent}}%",
+        "codexSecondary": "보조 한도 {{percent}}% 남음",
         "codexResetCredits": "한도 초기화 크레딧 {{count}}장"
       }
     },
@@ -2842,7 +2897,7 @@
     },
     "compaction": {
       "title": "컨텍스트 압축",
-      "description": "Claude Code와 Pi가 컨텍스트를 자동 압축할 시점을 제어합니다. Codex는 별도로 컨텍스트 압축을 관리합니다.",
+      "description": "여기서 Claude Code와 Pi의 압축 비율을 조정합니다. Codex는 모델 컨텍스트 설정에 따라 임계값을 정합니다. 원격 압축이 실패하면 요약 압축으로 자동 전환하고 현재 작업에서 계속 사용합니다.",
       "card": {
         "label": "압축 트리거 임계값",
         "badge": "Claude Code",
@@ -3109,12 +3164,29 @@
       "runtimeUnknown": "{{packageName}}에는 Pi {{range}}가 필요하지만 현재 Cindy의 Pi 버전이 요구 사항을 충족하는지 확인할 수 없습니다.",
       "warning": {
         "no-resources": "이 확장에서 Pi 리소스를 찾지 못했습니다.",
+        "analysisIncomplete": "Pi 작업은 완료되었지만 Cindy의 후속 분석 또는 보조 빌드는 완료되지 않았습니다.",
         "inspection-failed": "Cindy가 설치된 내용을 검사하지 못했지만 이 때문에 비활성화하지 않습니다. Pi가 기본 방식으로 처리합니다.",
         "inspection-limit": "Cindy가 상세 분석 한도에서 추가 표시를 중단했습니다. 패키지는 Pi 기본 로더를 통해 계속 사용할 수 있습니다.",
         "unsupported-filter": "Cindy가 아직 이 Pi 리소스 필터를 표시할 수 없습니다. 패키지와 필터는 Pi가 기본 방식으로 처리합니다.",
         "unsafe-source": "저장된 소스에 자격 증명 또는 비공개 URL 매개변수가 포함되어 있습니다. Cindy는 이 화면에서 민감한 필드만 숨기며 Pi의 패키지 동작은 차단하지 않습니다."
       },
+      "recovery": {
+        "check-credentials": "소스의 인증 정보를 확인하세요.",
+        "check-permissions": "파일과 디렉터리 권한을 확인하세요.",
+        "check-network": "네트워크 연결을 확인하세요.",
+        "check-source": "패키지 이름 또는 저장소 주소를 확인하세요.",
+        "check-version": "요청한 패키지 버전을 확인하세요.",
+        "check-runtime": "Pi 실행 환경을 사용할 수 있는지 확인하세요.",
+        "free-disk-space": "디스크 공간을 확보하세요.",
+        "check-build-dependencies": "확장의 빌드 의존성을 확인하세요.",
+        "refresh-package-state": "확장 목록을 새로 고쳐 현재 상태를 확인하세요.",
+        "inspect-state-before-retry": "확장의 현재 상태를 확인한 후 완료되지 않은 단계를 다시 시도하세요."
+      },
       "failure": {
+        "commandFailed": "Pi 기본 패키지 명령이 실패했습니다.",
+        "commandNotStarted": "Pi 기본 패키지 명령을 시작하지 못했습니다.",
+        "commandTimedOut": "Pi 기본 패키지 명령의 시간이 초과되었습니다.",
+        "commandUnknown": "Pi 기본 패키지 명령의 결과를 확인할 수 없습니다.",
         "sourceUnavailable": "소스에 접근할 수 없습니다. 네트워크나 URL을 확인하거나 다른 소스로 다시 시도하세요.",
         "packageNotFound": "패키지를 찾지 못했습니다. 패키지 이름이나 저장소 URL을 확인하세요.",
         "versionNotFound": "해당 버전을 찾지 못했습니다. 사용 가능한 버전을 선택해 다시 시도하세요.",
@@ -4982,7 +5054,8 @@
         "nodeChildSpawn": "Node 프로그램이 패키지에 신고된 하위 프로세스 시작을 호스트에 요청할 수 있습니다",
         "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
-        "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요."
+        "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
+        "routineEvents": "루틴 이벤트"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -5080,6 +5153,8 @@
         "sidebarEntryTitle": "사이드바 항목",
         "showInSidebar": "사이드바에 표시",
         "sidebarEntryDescription": "켜면 사이드바에 “{{title}}” 항목이 표시됩니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
+        "iosSimulatorAutoOpenTitle": "내장 시뮬레이터 패널 자동 열기",
+        "iosSimulatorAutoOpenDescription": "시뮬레이터를 시작하거나 App을 실행한 뒤 오른쪽에 시뮬레이터 화면을 자동으로 표시합니다. 꺼도 수동으로 열 수 있으며 다른 기능에는 영향을 주지 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
         "viewAllTools": "더 보기",
@@ -5478,6 +5553,19 @@
       "hint": "원격 IM은 승인이 필요한 작업의 확인 절차를 유지합니다.",
       "fullAccessDisabled": "안전하게 확인할 수 없는 작업이 직접 실행되지 않도록 원격 IM에서는 Full Access를 사용할 수 없습니다.",
       "permissionModeDisabled": "원격 IM은 Cindy Desktop의 확인 정책을 사용하므로 이 권한 모드를 사용할 수 없습니다."
+    },
+    "cindyMake": {
+      "title": "Cindy Make",
+      "openToolsDir": "도구 폴더 열기",
+      "description": "아래 카드에서 이 컴퓨터의 환경을 확인하고 필요한 휴대용 도구를 설치할 수 있습니다. 네이티브 컴파일 도구가 없으면 공식 설치 안내를 표시합니다.",
+      "checking": "환경 확인 중…",
+      "forceManaged": {
+        "title": "설치 테스트: 시스템 도구 무시",
+        "description": "개발 버전 전용입니다. 휴대용 도구는 Cindy 관리 복사본만 확인하고 Windows 컴파일 도구가 없는 상태를 재현합니다. 스위치를 바꾸면 다시 확인만 하며 설치는 시작하지 않습니다.",
+        "ariaLabel": "설치 테스트: 시스템 도구 무시",
+        "enabledHint": "아래 카드에서 Windows 도구의 다운로드와 설치를 테스트할 수 있습니다. 이미 설치된 Cindy 관리 도구는 재사용합니다. 즉시 적용되며 새로고침이나 재시작 시 꺼집니다. 시스템 도구는 변경하지 않습니다.",
+        "reportHint": "설치 테스트가 켜져 있습니다. 휴대용 도구는 Cindy 관리 복사본을 사용합니다. 공식 설치 안내를 테스트하도록 Windows 컴파일 도구를 없음으로 표시합니다. 실제 상태를 확인하려면 스위치를 끄세요."
+      }
     }
   },
   "remoteDevice": {
@@ -5875,6 +5963,8 @@
     "modelWeeklyLabel": "{{model}} 주간",
     "usedPercent": "사용 {{percent}}%",
     "remainingPercent": "남은 {{percent}}%",
+    "resetIn": "{{duration}} 후 초기화",
+    "resetPending": "초기화 정보 업데이트 대기 중",
     "resetAt": "{{at}} 재설정",
     "noWindows": "할당량 구간 데이터가 없습니다",
     "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
@@ -6961,6 +7051,12 @@
       "binary-missing": "구성 요소를 사용할 수 없음"
     },
     "ariaLabel": "사이드바 네비게이션",
+    "databaseSizeWarning": {
+      "title": "데이터베이스가 많은 공간을 사용 중입니다",
+      "description": "데이터베이스는 약 {{size}}이며 {{threshold}} G를 초과했습니다. 저장 공간에서 정리하는 것이 좋습니다.",
+      "openSettings": "저장 공간 열기",
+      "disable": "다시 알리지 않기"
+    },
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
       "projects": "프로젝트",
@@ -7177,6 +7273,8 @@
       "composerPlaceholderLatin": "{{name}} 에게 말 걸기…"
     },
     "globalSettings": {
+      "restoreHint": "기본값으로 복원하면 클라이언트의 기본 모델 설정을 따릅니다. 개별 파트너의 사용자 지정 모델은 유지됩니다.",
+      "restoreFailed": "기본값을 복원하지 못했습니다. 다시 시도해 주세요.",
       "title": "파트너",
       "description": "파트너 전체에 적용되는 설정입니다. 개별 파트너 설정은 각자의 페이지에 있어요.",
       "rosterNote": "기본 제공되는 구성원은 버전마다 늘어납니다."
@@ -7255,6 +7353,16 @@
       "thisDevice": "이 컴퓨터",
       "offlineDescription": "{{name}} 님이 오프라인입니다. {{device}}에 다시 연결하면 계속할 수 있어요.",
       "preparing": "준비가 끝나기를 기다리고 있어요…"
+    },
+    "capabilities": {
+      "title": "기능",
+      "search": "기능 검색",
+      "loading": "불러오는 중…",
+      "skill": "스킬",
+      "mcp": "MCP",
+      "toolset": "기본 제공 도구",
+      "unavailable": "사용 불가",
+      "empty": "일치하는 기능이 없습니다"
     }
   },
   "common": {
@@ -7437,6 +7545,7 @@
       "stop": "생성 중지"
     },
     "pluginSetup": {
+      "reopen": "다시 열기",
       "title": "{{name}} 설정",
       "assessmentReadFailed": "플러그인 설정 상태를 읽을 수 없습니다.",
       "setupIncomplete": "플러그인 설정이 완료되지 않았습니다.",
@@ -7625,6 +7734,7 @@
         "china": "중국",
         "image": "이미지",
         "video": "비디오",
+        "audio": "오디오 생성",
         "tts": "음성 합성",
         "stt": "음성 인식",
         "realtime": "실시간 음성",
@@ -7650,7 +7760,7 @@
         "reconnect": "다시 연결",
         "manage": "제공자 관리",
         "railLabel": "소스",
-        "connect": "모델 추가",
+        "connect": "모델 설정",
         "connectCta": "소스 연결 →",
         "viaSource": "소스: {{source}}",
         "emptyTitle": "사용 가능한 소스 없음",
@@ -7728,7 +7838,7 @@
           },
           "bypassPermissions": {
             "label": "전체 접근",
-            "description": "일반 도구는 확인 없이 실행하지만 Pi 확장 설치, 업데이트 또는 제거에는 계속 확인이 필요합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+            "description": "추가 확인 없이 모든 파일 편집과 네트워크 명령 실행을 허용합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
           }
         }
       }
@@ -7991,12 +8101,27 @@
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
     },
+    "mediaDownload": {
+      "title": "생성된 미디어를 다운로드할까요?",
+      "description": "미디어가 생성되었습니다. 아래 주소에서 다운로드해야 합니다.",
+      "scope": "이번 다운로드만 허용합니다.",
+      "source": "이 주소는 Cindy가 확인한 다운로드 출처에 포함되어 있지 않아 확인이 필요합니다.",
+      "http": "이 주소는 암호화되지 않은 HTTP를 사용합니다. 네트워크의 다른 사람이 다운로드 내용을 읽거나 변경할 수 있습니다.",
+      "port": "이 주소는 기본 네트워크 포트가 아닌 포트를 사용합니다. 해당 포트에 대한 접근을 확인해 주세요.",
+      "credentials": "이 다운로드 주소에는 로그인 정보가 포함되어 있습니다. 허용하면 해당 정보는 이 주소에만 전송됩니다.",
+      "network": "이 주소는 이 기기, 로컬 네트워크 또는 예약된 네트워크를 가리킵니다. 접근하면 기기의 내부 서비스에 연결될 수 있습니다.",
+      "allow": "이번 다운로드 허용",
+      "defer": "나중에 다운로드"
+    },
     "permissionPrompt": {
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
       "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
-      "ruleSeparator": ", "
+      "ruleSeparator": ", ",
+      "submitting": "확인을 제출하는 중…",
+      "submissionFailed": "확인 결과를 받지 못했습니다. 연결을 확인하고 확인 창이 남아 있으면 다시 클릭하세요.",
+      "requestEnded": "이 권한 요청은 종료되었거나 이미 처리되었습니다. 최신 상태를 확인하세요."
     },
     "deviceSwitcher": {
       "label": "기기",
@@ -8471,7 +8596,10 @@
       "copyContent": "내용 복사",
       "openInExplorer": "파일 관리자에서 열기",
       "close": "닫기",
-      "editIndex": "편집 {{index}}/{{total}}"
+      "editIndex": "편집 {{index}}/{{total}}",
+      "omittedDiffSegments": "미리보기에서 추가 diff 세그먼트 {{count}}개를 생략했습니다",
+      "diffPreviewTruncated": "미리보기에서 일부 diff 줄을 숨겼습니다",
+      "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
     },
     "textLightbox": {
       "unreadable": "이 파일을 읽을 수 없습니다",
@@ -8691,7 +8819,7 @@
       "contextRebuild": {
         "labelOverflow": "컨텍스트를 정리하고 계속합니다",
         "labelTimeout": "직전 응답이 없어 정리한 뒤 계속합니다",
-        "labelStrip": "큰 이미지를 빼고 계속합니다",
+        "labelStrip": "기록의 이미지를 정리했습니다",
         "toggleHint": "인계 내용 보기",
         "handoffTitle": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "handoffTitleEnglishSource": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
@@ -8870,7 +8998,10 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "이 모델 제공자는 로컬 전용 서비스(예: Ollama)라서 SSH 원격 작업에서 접근할 수 없습니다. Cindy AI 게이트웨이로 전환하거나 원격 호스트에서 접근 가능한 제공자를 선택하세요.",
       "LOCAL_OLLAMA_NOT_READY": "로컬 Ollama가 아직 준비되지 않았습니다. 설정 → 모델 제공자 → Ollama를 여세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요.",
+      "MCP_APPROVAL_AUTO_BLOCKED": "자동 승인 검토가 이 도구 호출을 차단했습니다. 직접 거부한 기록은 없습니다.",
+      "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "권한 확인 시간이 초과되어 유효한 확인 결과를 받지 못했습니다. 시간 초과만으로는 버튼을 클릭했는지 알 수 없습니다.",
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "권한 확인을 완료하지 못했습니다. 직접 거부한 기록은 없습니다."
     },
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
@@ -9012,8 +9143,6 @@
       "runningTool": "{{tool}} 실행 중…"
     },
     "remoteSession": {
-      "syncing": "동기화 중…",
-      "recovered": "복구됨",
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
       "degraded": "제어 대상 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",
@@ -9093,7 +9222,8 @@
       "projectContextLoaded": "프로젝트 지식베이스 로드됨",
       "contextRing": {
         "compactHint": "클릭하여 컨텍스트 압축",
-        "codexAutoHint": "Codex는 서버 측에서 자동으로 압축되며 수동 압축은 지원되지 않습니다",
+        "codexPendingHint": "다음 전송 시 설정이 적용됩니다. 현재 사용량은 아직 확인되지 않았습니다.",
+        "codexAutoHint": "Codex CLI가 컨텍스트와 자동 압축을 관리합니다. 여기서는 읽기만 가능합니다.",
         "confirmTitle": "컨텍스트를 압축할까요?",
         "confirmDescription": "현재 사용량: {{used}} / {{total}}({{pct}}%). 컨텍스트를 조용히 압축하여 Agent가 대화 기록을 요약하고 컨텍스트 공간을 확보합니다.",
         "confirmAction": "압축",
@@ -9248,6 +9378,8 @@
         "all": "전체"
       },
       "filterSortBy": {
+        "created": "생성 시간",
+        "activity": "최근 활동",
         "recency": "시간순",
         "manual": "수동",
         "priority": "우선순위"
@@ -9263,7 +9395,7 @@
       "filterTaskSortHeading": "세션 정렬",
       "filterProjectOrderHeading": "프로젝트 순서",
       "filterProjectOrder": {
-        "activity": "최근 활동순",
+        "activity": "세션 정렬 따르기",
         "custom": "수동"
       },
       "filterProjectOrderTip": {
@@ -10641,6 +10773,7 @@
     }
   },
   "commandPalette": {
+    "viewSkillDetails": "스킬 상세 보기",
     "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
@@ -10799,11 +10932,11 @@
         "market": "Market 으로 돌아가기",
         "skillhub": "SkillHub 로 돌아가기"
       },
-      "uninstall": "제거",
+      "uninstall": "스킬 제거",
       "uninstallDialog": {
-        "title": "{{name}} 을 제거하시겠습니까?",
-        "description": "로컬 폴더를 삭제합니다\n{{path}}\n이 작업은 되돌릴 수 없습니다.",
-        "confirm": "제거 확인",
+        "title": "“{{name}}”을 제거하시겠습니까?",
+        "description": "로컬 파일과 수정 내용을 휴지통으로 옮깁니다. 복원할 수 있습니다.\n\n이 스킬을 공유하는 다른 Agent도 영향을 받습니다. 게시된 버전과 다른 위치에 설치된 스킬에는 영향을 주지 않습니다.",
+        "confirm": "제거",
         "cancel": "취소"
       },
       "uninstalledToast": "{{name}} 이 제거되었습니다",
@@ -11097,6 +11230,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "심사 거절",
+      "rejectedDesc": "이 버전은 심사를 통과하지 못했습니다. 아래 피드백에 따라 수정한 후 다시 게시하세요.",
+      "rejectionReasonUnavailable": "이 버전은 심사를 통과하지 못했지만 구체적인 사유가 제공되지 않았습니다. 자세한 내용은 심사 담당자에게 문의하세요.",
+      "rejectionReason": "거절 사유",
       "dismiss": "확인",
       "passedTitle": "보안 스캔 통과",
       "passedDesc": "이 버전은 모든 보안 검사를 통과하여 마켓에 게시되었습니다.",
@@ -11201,6 +11338,27 @@
     "marketEdit": {
       "saved": "마켓 표시 정보가 저장되었습니다",
       "displayNameRequired": "표시 이름을 입력하세요"
+    },
+    "management": {
+      "disabled": "비활성화됨",
+      "enabledLabel": "스킬 “{{name}}” 활성화",
+      "moreLabel": "스킬 “{{name}}” 관리",
+      "activationHint": "Cindy 내 스킬 로드에만 적용됩니다. Agent를 시작하거나 다시 시작하면 반영됩니다.",
+      "enabledToast": "스킬 “{{name}}”이 활성화되었습니다. Agent를 시작하거나 다시 시작하면 반영됩니다",
+      "disabledToast": "스킬 “{{name}}”이 비활성화되었습니다. Agent를 시작하거나 다시 시작하면 반영됩니다",
+      "toggleFailed": "스킬 설정을 저장하지 못했습니다. 다시 시도하세요",
+      "uninstallFailed": "스킬을 휴지통으로 옮기지 못했습니다. 파일 권한을 확인한 후 다시 시도하세요",
+      "refreshRequired": "스킬이 변경 중이거나 원본 위치가 변경되었습니다. 목록을 새로 고친 후 다시 시도하세요",
+      "globalScope": "설치 위치: 전역 스킬",
+      "projectScope": "프로젝트: {{project}}",
+      "trashDescription": "로컬 파일과 수정 내용을 휴지통으로 옮깁니다. 복원할 수 있습니다.",
+      "unlinkDescription": "로컬 스킬 등록만 제거합니다. 원본 파일과 수정 내용은 유지됩니다.",
+      "sharedImpact": "이 스킬을 공유하는 다른 Agent도 영향을 받습니다. 게시된 버전과 다른 위치에 설치된 스킬에는 영향을 주지 않습니다.",
+      "managedElsewhere": "이 스킬은 다른 패키지 또는 공유 디렉터리에서 관리됩니다. 원본 위치에서 제거하세요",
+      "managedByPlugin": "이 스킬은 플러그인이 제공합니다. 해당 플러그인 페이지에서 관리하세요.",
+      "cleanupIncomplete": "“{{name}}”의 제거 정리가 완료되지 않았습니다. 다시 시도하거나 나중에 스킬을 다시 열어 계속하세요. 정리가 완료될 때까지 재설치할 수 없습니다.",
+      "retryCleanup": "정리 다시 시도",
+      "cleanupComplete": "정리 완료"
     }
   },
   "makerExperimental": {
@@ -11295,11 +11453,12 @@
       "qrExpired": "QR 코드가 만료됨. 다시 시작하세요",
       "registrationFailed": "생성 실패. 잠시 후 다시 시도하세요",
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
+      "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 다음 메시지를 보내 계속할 수 있습니다.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
       "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
-      "codexHistoryOversized": "기록에 과대한 이미지가 있어 원격 압축을 끝낼 수 없습니다. Cindy가 해당 이미지를 생략하고 이 작업에서 계속합니다.",
+      "codexHistoryOversized": "이미지 기록의 자동 복구 및 계속 진행을 완료하지 못했습니다. ‘계속’을 보내 이 작업을 재개하세요.",
       "codexHistoryOversizedRemote": "기록에 과대한 이미지가 있어 원격 압축을 끝낼 수 없습니다. Codex를 실행 중인 기기에서 이 작업을 연 뒤 다시 보내세요. Cindy가 이미지를 생략하고 계속합니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
@@ -12004,5 +12163,205 @@
     "realtime": "실시간 음성 대화에 적합합니다.",
     "embedding": "의미가 비슷한 콘텐츠를 찾습니다.",
     "compression": "긴 내용을 간결하게 줄입니다."
+  },
+  "routines": {
+    "title": "루틴",
+    "add": "루틴 추가",
+    "back": "루틴으로 돌아가기",
+    "error": "루틴을 업데이트하지 못했습니다. 설정을 확인하고 다시 시도하세요.",
+    "empty": "루틴을 추가하여 팀원이 할 일과 실행 시점을 지정하세요.",
+    "enabled": "활성화됨",
+    "paused": "일시 중지됨",
+    "runNow": "지금 실행",
+    "running": "실행 중…",
+    "name": "이름",
+    "instructions": "지침",
+    "when": "실행 시점",
+    "addTrigger": "트리거 추가",
+    "removeTrigger": "트리거 제거",
+    "schedule": "일정",
+    "hourly": "매시간",
+    "daily": "매일",
+    "weekdays": "평일",
+    "weekly": "매주",
+    "monthly": "매월",
+    "interval": "간격",
+    "advanced": "고급…",
+    "everyMinutes": "{{count}}분마다",
+    "minutes": "분",
+    "expression": "Cron 표현식",
+    "timezone": "시간대",
+    "delete": "루틴 삭제",
+    "save": "루틴 저장",
+    "deleteConfirm": "이 루틴을 삭제하고 대기 중인 실행을 취소할까요?",
+    "keep": "루틴 유지",
+    "history": "실행 기록",
+    "noRuns": "이 루틴은 아직 실행되지 않았습니다.",
+    "field": "필드",
+    "operator": "조건",
+    "value": "값",
+    "addFilter": "조건 추가",
+    "removeFilter": "조건 제거",
+    "pluginCapability": "선언된 이벤트를 발행하여 직접 설정한 루틴만 실행합니다.",
+    "time": "시간",
+    "day": "날짜",
+    "weekday": "요일",
+    "status": {
+      "queued": "대기 중",
+      "running": "실행 중",
+      "success": "완료됨",
+      "failed": "실패함",
+      "interrupted": "중단됨",
+      "cancelled": "취소됨"
+    },
+    "sourceStatus": {
+      "listening": "수신 중",
+      "disconnected": "수신 중지됨",
+      "error": "연결 소스 확인 필요"
+    },
+    "operators": {
+      "equals": "같음",
+      "contains": "포함",
+      "not-equals": "같지 않음"
+    }
+  },
+  "cindyMakeDoctor": {
+    "description": "Cindy 빌드에 필요한 로컬 환경을 확인합니다. 사용법: /cindy-make-doctor",
+    "title": "Cindy Make · 환경 검사",
+    "scope": "이 컴퓨터의 도구 확인",
+    "limits": "검사만 수행하며 설치하거나 소스를 가져오지 않습니다. 빌드할 때 소스와 프로젝트 의존성을 별도로 확인해야 합니다.",
+    "running": "검사 중",
+    "passed": "기본 검사 통과",
+    "needsAttention": "조치가 필요한 항목이 있습니다",
+    "cancelled": "검사 중지됨",
+    "failed": "검사를 완료하지 못했습니다. 다시 시도하세요.",
+    "details": "검사 상세 보기",
+    "hideDetails": "검사 상세 접기",
+    "stop": "검사 중지",
+    "recheck": "다시 검사",
+    "timeout": "검사 시간이 초과되었습니다. 도구가 실행되는지 확인한 뒤 다시 시도하세요.",
+    "commandUnavailable": "명령 목록이 준비되지 않았거나 실행 중인 버전이 이 명령을 지원하지 않습니다. 나중에 다시 시도하거나 Cindy를 업데이트하세요.",
+    "usage": "환경 검사에는 인수나 첨부 파일이 필요하지 않습니다. /cindy-make-doctor 만 보내세요.",
+    "localOnly": "현재는 로컬 Desktop에서 /cindy-make-doctor를 사용하세요. SSH 및 기기 연결은 아직 지원하지 않습니다.",
+    "checks": {
+      "platform": "시스템 및 아키텍처",
+      "git": "Git",
+      "gitLfs": "Git LFS",
+      "node": "Node.js",
+      "pnpm": "pnpm",
+      "python": "Python",
+      "native": "네이티브 빌드 도구",
+      "storage": "저장 공간 및 권한"
+    },
+    "checkStatus": {
+      "pending": "대기 중",
+      "checking": "검사 중",
+      "passed": "통과",
+      "missing": "찾을 수 없음",
+      "incompatible": "호환되지 않음",
+      "failed": "확인하지 못함",
+      "warning": "확인 필요",
+      "cancelled": "중지됨",
+      "downloading": "다운로드 중",
+      "installing": "설치 중"
+    },
+    "requirements": {
+      "platform": "Windows x64, macOS x64/arm64, Linux x64/arm64를 지원합니다. 해당 OS에서 빌드하세요.",
+      "git": "실행 가능한 Git 2.x 이상이 필요합니다. GitHub 계정은 필요하지 않습니다.",
+      "gitLfs": "소스의 대용량 파일을 가져오려면 Git LFS가 필요합니다.",
+      "node": "Node.js ≥ 22.12가 필요합니다.",
+      "pnpm": "pnpm ≥ 10.7 및 < 11이 필요하며 10.33.2를 권장합니다. 검사 중 자동 다운로드는 비활성화됩니다.",
+      "python": "Python 3.{{pythonMinor}} 이상의 Python 3이 필요합니다.",
+      "native": "이 OS의 C/C++ 빌드 도구가 필요합니다.",
+      "nativeWin": "Visual Studio C++ Build Tools, MSBuild 및 Windows 10/11 SDK가 필요합니다.",
+      "nativeMac": "Xcode Command Line Tools, macOS SDK 및 make가 필요합니다.",
+      "nativeLinux": "g++ 및 make가 필요합니다(일반적으로 build-essential에 포함).",
+      "storage": "Cindy 데이터 폴더의 쓰기 권한을 확인합니다. 사용 가능: {{freeGiB}} GiB. 최소 10 GiB를 권장하며 실제 사용량은 빌드에 따라 다릅니다."
+    }
+  },
+  "cindyMake": {
+    "description": "로컬 도구를 확인하고 준비하여 개인 버전 Cindy 제작을 시작합니다. 사용법: /cindy-make [변경 요청]",
+    "localOnly": "/cindy-make는 현재 로컬 데스크톱 세션에서만 사용할 수 있습니다. 이 기기로 전환해 주세요.",
+    "usage": "/cindy-make 또는 /cindy-make 요청 을 사용하세요. 환경 검사는 아직 첨부 파일, 참조, 댓글을 지원하지 않습니다. 입력 내용은 유지됩니다.",
+    "request": "변경 요청",
+    "prepare": {
+      "scope": "호환되는 도구를 재사용하고 부족한 포터블 도구를 자동으로 설치",
+      "limits": "도구는 Cindy 데이터 폴더에 저장되며 전역 도구와 PATH는 변경되지 않습니다. 시스템 빌드 도구는 OS 설치 프로그램으로 설치해야 합니다. 아직 소스 다운로드나 빌드는 진행하지 않습니다.",
+      "running": "도구 준비 중",
+      "passed": "기본 환경 준비 완료",
+      "needsAttention": "확인이 필요한 항목이 있습니다",
+      "cancelled": "준비 중지됨",
+      "failed": "준비가 완료되지 않았습니다. 다시 시도하세요.",
+      "stop": "중지",
+      "retry": "준비 재시도",
+      "source": {
+        "system": "기존 도구",
+        "managed": "Cindy에서 관리"
+      },
+      "downloadProgress": "{{loaded}} / {{total}} MiB",
+      "installGuide": "설치 가이드",
+      "install": "누락된 환경 설치",
+      "errors": {
+        "downloadFailed": "다운로드에 실패했습니다. 연결을 확인하고 다시 시도하세요.",
+        "checksum": "무결성 검사에 실패하여 설치하지 않았습니다. 다시 시도하세요.",
+        "installFailed": "도구를 설치하거나 시작할 수 없습니다. 여유 공간과 OS 호환성을 확인하거나 호환되는 도구를 수동으로 설치한 후 다시 시도하세요.",
+        "busy": "다른 환경 준비가 진행 중입니다. 완료 후 다시 시도하세요."
+      },
+      "guidance": {
+        "windows": "Visual Studio Build Tools에서 “C++를 사용한 데스크톱 개발”, MSBuild, Windows 10/11 SDK를 선택하여 설치한 후 다시 시도하세요.",
+        "mac": "아래 명령으로 Xcode Command Line Tools(Git 및 macOS SDK 포함)를 설치한 후 다시 시도하세요.",
+        "linux": "배포판의 패키지 관리자로 Git 및 C/C++ 빌드 도구를 설치하세요. 아래에서 배포판에 맞는 명령을 선택한 후 완료되면 다시 시도하세요."
+      }
+    },
+    "upstream": {
+      "pending": "모든 환경 검사를 통과하면 업스트림 검색을 자동으로 시작합니다.",
+      "needsRequest": "변경 요청 입력 대기 중",
+      "needRequest": "변경할 기능 이름이나 구체적인 오류를 입력해 관련 업스트림 작업을 검색하세요.",
+      "placeholder": "예: 메시지 스트림 깜박임 수정",
+      "search": "업스트림 검색",
+      "searching": "업스트림 이슈와 PR 검색 중…",
+      "found": "관련 가능성이 있는 업스트림 작업을 찾았습니다",
+      "notFound": "일치하는 업스트림 작업을 찾지 못했습니다",
+      "failed": "업스트림 검색 실패",
+      "cancelled": "업스트림 검색 중지됨",
+      "terms": "검색어: {{terms}}",
+      "author": "작성자: {{author}}",
+      "updated": "업데이트: {{date}}",
+      "notFoundHint": "이 검색어와 일치하는 공개 이슈 또는 PR이 없습니다. 다른 표현으로 검색하면 다른 결과가 나올 수 있습니다.",
+      "resultHint": "링크를 열어 관련성을 확인하세요. 현재 열린 Issue와 PR만 표시됩니다.",
+      "wait": "업스트림 기다리기",
+      "personal": "개인 버전 제작 계속",
+      "retry": "환경 재확인 및 검색",
+      "expand": "업스트림 결과 보기",
+      "collapse": "업스트림 결과 숨기기",
+      "count": "관련 가능성이 있는 열린 Issue 또는 PR {{count}}개를 찾았습니다",
+      "kind": {
+        "issue": "이슈",
+        "pr": "PR"
+      },
+      "state": {
+        "open": "열림",
+        "closed": "닫힘",
+        "merged": "병합됨",
+        "unknown": "닫힘 · 병합 상태 미확인"
+      },
+      "choice": {
+        "wait": "업스트림 기다리기를 선택했습니다",
+        "personal": "개인 버전 제작을 선택했습니다"
+      },
+      "decisionHint": {
+        "wait": "이 과정은 중지되었습니다. 알림 구독이나 자동 업데이트는 설정되지 않았습니다.",
+        "personal": "선택을 이 카드에 기록했습니다. 소스 준비와 빌드는 아직 연결되지 않았으며 소스를 다운로드하거나 수정하지 않았습니다."
+      },
+      "failure": {
+        "network": "GitHub에 연결할 수 없습니다. 네트워크를 확인하고 다시 시도하세요.",
+        "rateLimit": "GitHub 요청 제한에 도달했습니다. 잠시 후 다시 시도하세요.",
+        "timeout": "검색 시간이 초과되었습니다. 다시 시도하세요.",
+        "invalidResponse": "GitHub 결과가 불완전하거나 읽을 수 없습니다. 다시 시도하세요."
+      }
+    },
+    "title": "Cindy Make",
+    "stepEnvironment": "1 · 환경 준비",
+    "stepUpstream": "2 · 업스트림 검색"
   }
 }

@@ -43,16 +43,25 @@ describe('Bot Profile runtime prompt', () => {
   });
 
   it('keeps the active profile marker separate from SOUL', () => {
-    expect(buildBotProfileContextPrompt('Kitchen helper')).toBe(
-      'Active Cindy Bot profile: Kitchen helper.',
-    );
+    const context = buildBotProfileContextPrompt('Kitchen helper');
+    expect(context).toMatch(/^Active Cindy Bot profile: Kitchen helper\./);
+    expect(context).toContain('current SOUL and user profile');
+    expect(context).toContain('execution engines, not your personal identity');
+    expect(context).toContain('context compaction, restarts, and model changes');
+    expect(context).toContain('teammate’s model settings in Cindy');
+    expect(context).toContain('Do not present terminal-only slash commands');
   });
 
   it('uses direct Bot tools and avoids whole-surface discovery loops', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt).toContain('You are running as a Cindy Bot');
     expect(prompt).toContain('Use direct Bot tools');
+    expect(prompt).toContain('`find_bot_capabilities`');
+    expect(prompt).toContain('`set_bot_capability`');
+    expect(prompt).toContain('`cindy` (`ghost_list`, `ghost_info`, `ghost_call`)');
+    expect(prompt).toContain('New mounts take effect next turn in this same task');
     expect(prompt).toContain('`start_session_task`');
+    expect(prompt).toContain('proactively start independent tasks for coding and medium or large work');
     expect(prompt).toContain('`check_session_task`');
     expect(prompt).toContain('`message_session_task`');
     expect(prompt).toContain('`stop_session_task`');
@@ -74,6 +83,18 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).not.toContain('discover other available Bots');
     expect(prompt).not.toContain('`start_session_task`');
     expect(prompt).not.toContain('`save_bot_skill`');
+    expect(prompt).not.toContain('ghost_list');
+  });
+
+  it('keeps helper capability tools when cindy is not on the remote tool surface', () => {
+    const prompt = buildBotCapabilityContextPrompt({ helperAvailable: true, cindyAvailable: false });
+    expect(prompt).toContain('`find_bot_capabilities`');
+    expect(prompt).toContain('`set_bot_capability`');
+    expect(prompt).toContain('`start_session_task`');
+    expect(prompt).toContain('do not repeatedly list the whole tool surface');
+    expect(prompt).not.toContain('ghost_list');
+    expect(prompt).not.toContain('ghost_info');
+    expect(prompt).not.toContain('ghost_call');
   });
 
   it('keeps learned Skills deliberate instead of writing a diary of every turn', () => {

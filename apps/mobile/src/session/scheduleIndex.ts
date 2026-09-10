@@ -1,7 +1,8 @@
 import { isDeviceUnresponsiveRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { createMobileMakerTransport, type MobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
-import { isTransientRemoteError } from '@/device-link/remoteRetry';
+import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { normalizeScheduleList, normalizeScheduleRuns } from '@/scheduler/scheduleModel';
 import type { RemoteScheduleRun } from '@/scheduler/types';
 import { buildSessionScheduleIndex, type RemoteSessionScheduleInfo } from '@/session/sessionList';
@@ -23,6 +24,15 @@ export async function loadSessionScheduleIndex(
   options: LoadSessionScheduleIndexOptions = {},
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   const schedules = normalizeScheduleList(await maker.schedule.list());
+  if (maker.schedule.listSidebarIndexRuns) {
+    try {
+      return buildLightweightSessionScheduleIndex(await maker.schedule.listSidebarIndexRuns(), schedules);
+    } catch (error) {
+      if (!hasRemoteErrorMarker(error, 'CHANNEL_NOT_ALLOWED')
+        && !hasRemoteErrorMarker(error, 'UNSUPPORTED_CAPABILITY')
+        && !isHistoryViewUnavailable(error)) throw error;
+    }
+  }
   // listRuns 逐个串行而非 Promise.all 全并发:device-link 是无优先级的单 WS 管道,
   // N 个背景 listRuns 一齐压上去会把会话打开的关键读(messages / getSession / projection)
   // 挤到队尾(2026-07 实测:并发轮次叠加时 list-runs 均值 8.8s、messages:list 被拖到 6s+)。
@@ -70,6 +80,8 @@ export const SCHEDULE_INDEX_FAILURE_TTL_MS = 30_000;
 interface ScheduleIndexThrottleEntry {
   at: number;
   promise: Promise<Map<string, RemoteSessionScheduleInfo>>;
+  pending: boolean;
+  invalidated: boolean;
   /** 该轮加载失败的时刻;非 null 表示条目处于负缓存态。 */
   failedAt: number | null;
   /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
@@ -127,6 +139,17 @@ export function loadSessionScheduleIndexThrottled(
   const ttlMs = options.ttlMs ?? SCHEDULE_INDEX_THROTTLE_TTL_MS;
   const failureTtlMs = options.failureTtlMs ?? SCHEDULE_INDEX_FAILURE_TTL_MS;
   const existing = scheduleIndexThrottleEntries.get(key);
+  if (existing?.pending) {
+    if (options.force) existing.invalidated = true;
+    // Invalidation can happen after this caller joined (including a blurred
+    // initiator cancelling its retry). Recheck on settle so visible waiters
+    // re-enter the existing cache with their own load/canStart, still single-flight.
+    const reload = () => loadSessionScheduleIndexThrottled(key, load, { ...options, force: false });
+    return existing.promise.then(
+      (value) => existing.invalidated ? reload() : value,
+      (error) => { if (existing.invalidated) return reload(); throw error; },
+    );
+  }
   if (!options.force && existing) {
     // 熔断恢复旁路(review P1):DEVICE_UNRESPONSIVE 负缓存的存在意义是「open
     // 期间别再压请求」,设备一旦恢复(移出 unresponsive 集合)就立刻失效——
@@ -146,6 +169,8 @@ export function loadSessionScheduleIndexThrottled(
   const entry: ScheduleIndexThrottleEntry = {
     at: now(),
     promise,
+    pending: true,
+    invalidated: false,
     failedAt: null,
     failedUnresponsive: false,
     failedTransient: false,
@@ -154,12 +179,22 @@ export function loadSessionScheduleIndexThrottled(
   scheduleIndexThrottleEntries.set(key, entry);
   promise.then(
     () => {
+      entry.pending = false;
+      if (entry.invalidated) {
+        if (scheduleIndexThrottleEntries.get(key) === entry) scheduleIndexThrottleEntries.delete(key);
+        return;
+      }
       // TTL 语义是「完成后 TTL 内复用」:一轮 load 本身耗时较长(1+N 串行)时,
       // 若从启动时刻起算,可复用窗口会被吃掉大半甚至直接过期(review 反馈)。
       // 成功落定时把基准挪到 resolve 时刻;在途期间的复用由单飞(同一 promise)保证。
       if (scheduleIndexThrottleEntries.get(key) === entry) entry.at = now();
     },
     (error) => {
+      entry.pending = false;
+      if (entry.invalidated) {
+        if (scheduleIndexThrottleEntries.get(key) === entry) scheduleIndexThrottleEntries.delete(key);
+        return;
+      }
       if (scheduleIndexThrottleEntries.get(key) === entry) {
         entry.failedAt = now();
         // 末项竞态下抛出的是原始 INVOKE_TIMEOUT(见 loadSessionScheduleIndex
@@ -179,26 +214,17 @@ export function loadSessionScheduleIndexThrottled(
 }
 
 /**
- * 重连恢复钩子(review P1):普通断线(NOT_CONNECTED 等瞬态失败)产生的负缓存
- * 在链路恢复后立即失效——否则 30s 失败 TTL 内重连触发的 reseed 会吃到旧的
- * rejected promise,设备详情页把索引替换成空集、首页保留陈旧数据,且没有任何
- * 定时器在 TTL 过期后补拉。由 DeviceLinkContext 在每轮 rehydrate(只在 online
- * 时运行,重连必经)的共享生命周期入口调用;单 peer 恢复使用下方逐设备版本，
- * 熔断类负缓存不受影响(走各自的恢复旁路)。
+ * Relay 重连或回前台可能漏过 completed/read 推送,成功缓存也必须重新对账。
+ * 由共享恢复入口统一失效,在途扫描仍先结束再合并重拉。普通本机断线负缓存
+ * 同时清除;设备离线、熔断和请求超时的负缓存继续走各自的恢复旁路。
  */
-export function invalidateTransientScheduleIndexFailures(): void {
-  for (const [key, entry] of scheduleIndexThrottleEntries) {
-    if (entry.failedAt !== null && entry.failedTransient) {
-      scheduleIndexThrottleEntries.delete(key);
+export function invalidateScheduleIndexesAfterLinkRecovery(deviceId?: string): void {
+  const keys = deviceId === undefined ? scheduleIndexThrottleEntries.keys() : [deviceId];
+  for (const key of keys) {
+    const entry = scheduleIndexThrottleEntries.get(key);
+    if (entry && (entry.failedAt === null || entry.failedTransient)) {
+      invalidateScheduleIndexForDevice(key);
     }
-  }
-}
-
-/** Per-peer variant used by independent Mobile recovery lifecycles. */
-export function invalidateTransientScheduleIndexFailureFor(deviceId: string): void {
-  const entry = scheduleIndexThrottleEntries.get(deviceId);
-  if (entry?.failedAt !== null && entry?.failedTransient) {
-    scheduleIndexThrottleEntries.delete(deviceId);
   }
 }
 
@@ -217,7 +243,9 @@ export function invalidateOfflineScheduleIndexFailureFor(deviceId: string): void
 
 export function invalidateScheduleIndexForDevice(deviceId: string): void {
   if (!deviceId) return;
-  scheduleIndexThrottleEntries.delete(deviceId);
+  const entry = scheduleIndexThrottleEntries.get(deviceId);
+  if (entry?.pending) entry.invalidated = true;
+  else scheduleIndexThrottleEntries.delete(deviceId);
   scheduleIndexInvalidationVersions.set(
     deviceId,
     (scheduleIndexInvalidationVersions.get(deviceId) ?? 0) + 1,
@@ -235,7 +263,7 @@ export function getScheduleIndexInvalidationVersion(deviceId: string): number {
 }
 
 /** Test-only: clear cache and invalidation generations. */
-export function resetScheduleIndexThrottleForTesting(): void {
+export function clearSessionScheduleIndexCache(): void {
   scheduleIndexThrottleEntries.clear();
   scheduleIndexInvalidationVersions.clear();
 }
@@ -243,9 +271,33 @@ export function resetScheduleIndexThrottleForTesting(): void {
 export function loadDeviceSessionScheduleIndex(
   deviceId: string,
   invoke: RemoteInvoke,
+  canStart?: () => boolean,
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
-  return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }), {
-    isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+  return loadSharedSessionScheduleIndex(deviceId, createMobileMakerTransport({ deviceId, invoke }), canStart);
+}
+
+/** Every screen shares the strict load and its bounded retry, before negative caching. */
+export async function loadSharedSessionScheduleIndex(
+  deviceId: string,
+  maker: Pick<MobileMakerTransport, 'schedule'>,
+  canStart: () => boolean = () => true,
+): Promise<Map<string, RemoteSessionScheduleInfo>> {
+  return loadSessionScheduleIndexThrottled(deviceId, () => {
+    // Check again when an invalidated in-flight scan finishes. Throw before
+    // creating an entry so an abandoned waiter cannot poison active consumers.
+    if (!canStart()) throw new Error('Schedule index consumer inactive');
+    return withTransientRemoteRetry(() => {
+      if (!canStart()) {
+        // Cancellation is not a device failure: discard this pending entry on
+        // settle so the next visible consumer can start immediately.
+        invalidateScheduleIndexForDevice(deviceId);
+        throw new Error('Schedule index consumer inactive');
+      }
+      return loadSessionScheduleIndex(maker, {
+        throwOnTransientRunListError: true,
+        isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+      });
+    });
   });
 }
 
@@ -294,6 +346,9 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
   return a.scheduleId === b.scheduleId
     && a.scheduleName === b.scheduleName
     && a.unreadCount === b.unreadCount
+    && !!a.hasUnreadFailedRun === !!b.hasUnreadFailedRun
+    && a.latestFailedRun?.runId === b.latestFailedRun?.runId
+    && a.latestFailedRun?.firedAt === b.latestFailedRun?.firedAt
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt
     && a.scheduleStatus === b.scheduleStatus
@@ -305,4 +360,42 @@ function stringListsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   return a.every((item, index) => item === b[index]);
+}
+
+export const resetScheduleIndexThrottleForTesting = clearSessionScheduleIndexCache;
+
+/** Existing lightweight host query; never starts the schedule list + per-run scan. */
+export async function loadLightweightSessionScheduleIndex(deviceId: string, invoke: RemoteInvoke): Promise<Map<string, RemoteSessionScheduleInfo>> {
+  const raw = await invoke<LightweightScheduleSnapshot>(deviceId, 'maker:schedule:list-sidebar-index-runs', []);
+  return buildLightweightSessionScheduleIndex(raw);
+}
+
+type LightweightScheduleSnapshot = { runs?: unknown[]; inflightPolicies?: unknown[] };
+
+function buildLightweightSessionScheduleIndex(raw: LightweightScheduleSnapshot, authoritativeSchedules?: ReturnType<typeof normalizeScheduleList>): Map<string, RemoteSessionScheduleInfo> {
+  if (!raw || !Array.isArray(raw.runs)) throw new Error('Invalid schedule index');
+  const inflightSessions = new Map<string, string>();
+  for (const value of raw.inflightPolicies ?? []) {
+    if (!value || typeof value !== 'object') continue;
+    const policy = value as Record<string, unknown>;
+    if (typeof policy.runId === 'string' && typeof policy.sessionId === 'string') {
+      inflightSessions.set(policy.runId, policy.sessionId);
+    }
+  }
+  const schedules = new Map<string, import('@/scheduler/types').RemoteSchedule>();
+  const runs = new Map<string, RemoteScheduleRun[]>();
+  for (const value of raw.runs) {
+    if (!value || typeof value !== 'object') throw new Error('Invalid schedule index row');
+    const row = value as Record<string, unknown>;
+    if (typeof row.scheduleId !== 'string' || typeof row.runId !== 'string' || typeof row.scheduleName !== 'string') throw new Error('Invalid schedule index row');
+    const schedule = normalizeScheduleList([{ id: row.scheduleId, name: row.scheduleName, status: row.scheduleStatus }])[0];
+    // The host omits older running rows' binding to preserve latest ownership.
+    // Restore only that missing input; the shared builder still owns binding and recency rules.
+    const sessionId = row.sessionId || (row.status === 'running' ? inflightSessions.get(row.runId) : undefined);
+    const run = normalizeScheduleRuns([{ ...row, id: row.runId, sessionId }])[0];
+    if (!schedule || !run) throw new Error('Invalid schedule index row');
+    schedules.set(schedule.id, schedule);
+    runs.set(schedule.id, [...(runs.get(schedule.id) ?? []), run]);
+  }
+  return buildSessionScheduleIndex(authoritativeSchedules ?? [...schedules.values()], runs);
 }

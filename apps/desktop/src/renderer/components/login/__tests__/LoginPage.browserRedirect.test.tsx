@@ -84,12 +84,21 @@ describe('LoginPage browser redirect waiting state', () => {
     expect(screen.getByText('Google')).toBeTruthy();
   });
 
-  it('still lets the user cancel the pending browser login', () => {
-    render(<LoginPage />);
+  it.each([false, true])(
+    'uses the panel back button to cancel browser login (loading=%s)',
+    (isLoading) => {
+      loginHook.value.isLoading = isLoading;
+      const onClose = vi.fn();
+      render(<LoginPage intent="add-account" onClose={onClose} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'login.cancel' }));
-    expect(loginHook.dispatch).toHaveBeenCalledWith({ type: 'cancel-browser' });
-  });
+      const back = screen.getByRole('button', { name: 'login.cancel' });
+      expect(back.dataset.testid).toBe('login-back-button');
+      expect(screen.getByTestId('login-panel-browser-redirect').contains(back)).toBe(true);
+      fireEvent.click(back);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(loginHook.dispatch).toHaveBeenCalledWith({ type: 'cancel-browser' });
+    },
+  );
 
   it('keeps the local-mode entry available on an authentication error screen', () => {
     loginHook.value = {

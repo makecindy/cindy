@@ -40,6 +40,8 @@ export class GitExecError extends Error {
   readonly stdout: string;
   /** 原始底层错误对象, spawn ENOENT 等用得上。 */
   readonly cause?: NodeJS.ErrnoException;
+  /** 超时是未知状态，探测调用方不得把它当作「目录不存在」。 */
+  readonly timedOut: boolean;
 
   constructor(opts: {
     args: readonly string[];
@@ -47,6 +49,7 @@ export class GitExecError extends Error {
     stderr: string;
     stdout: string;
     cause?: NodeJS.ErrnoException;
+    timedOut?: boolean;
   }) {
     super(
       `git ${opts.args.join(' ')} failed${
@@ -59,6 +62,7 @@ export class GitExecError extends Error {
     this.stderr = opts.stderr;
     this.stdout = opts.stdout;
     this.cause = opts.cause;
+    this.timedOut = opts.timedOut ?? false;
   }
 }
 
@@ -450,6 +454,7 @@ function execFileOnce(
               ? `timed out after ${timeoutMs}ms; process tree terminated`
               : `timed out after ${timeoutMs}ms; process tree cleanup unconfirmed`,
             stdout: '',
+            timedOut: true,
           }),
         );
       }, timeoutMs);
@@ -515,9 +520,9 @@ export function safeDirectorySpellings(p: string): string[] {
  * 失败)必须向上抛,否则会把「读不到」误判成「未配置」而重复 --add,反而制造出
  * 本条修复要避免的重复条目。
  */
-async function readGlobalSafeDirectories(): Promise<string[]> {
+async function readGlobalSafeDirectories(opts?: Pick<GitExecOpts, 'timeoutMs'>): Promise<string[]> {
   try {
-    const { stdout } = await execFileOnce(['config', '--global', '--get-all', 'safe.directory']);
+    const { stdout } = await execFileOnce(['config', '--global', '--get-all', 'safe.directory'], undefined, opts);
     return stdout
       .split('\n')
       .map((s) => s.trim())
@@ -537,7 +542,7 @@ async function readGlobalSafeDirectories(): Promise<string[]> {
  * dubious-ownership 错误还给调用方,而不是退化成并发写入重复条目。用底层
  * execFileOnce 而非 gitExec, 防止递归进入 dubious-ownership 分支。
  */
-async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
+async function ensureGlobalSafeDirectory(targetPath: string, opts?: Pick<GitExecOpts, 'timeoutMs'>): Promise<void> {
   await withCrossProcessLock(
     globalSafeDirectoryLockPath(),
     { label: 'git-safe-directory', waitMs: 1_000 },
@@ -547,8 +552,8 @@ async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
       }
       // 统一成 git 的拼写再读写: 让幂等检查与后续清理命中同一个值。
       const normalized = normalizeSafeDirectorySpelling(targetPath);
-      if ((await readGlobalSafeDirectories()).some((p) => p === normalized)) return;
-      await execFileOnce(['config', '--global', '--add', 'safe.directory', normalized]);
+      if ((await readGlobalSafeDirectories(opts)).some((p) => p === normalized)) return;
+      await execFileOnce(['config', '--global', '--add', 'safe.directory', normalized], undefined, opts);
     },
   );
 }
@@ -578,17 +583,19 @@ export async function gitExec(
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {
-          await ensureGlobalSafeDirectory(dubiousPath);
+          await ensureGlobalSafeDirectory(dubiousPath, { timeoutMs: opts?.timeoutMs });
           // 配完 safe.directory 后重试原命令
           return await execFileOnce(args, cwd, opts);
         } catch (cause) {
-          // 对外错误契约不变: 调用方/classifier 仍拿到原始 dubious-ownership 错误。
+          // 普通修复失败仍返回原始 dubious-ownership 错误；超时单独向上传递。
           // 但 ensureGlobalSafeDirectory 的真实失败(--get-all 权限/锁冲突/配置损坏,
           // 或拿不到跨进程锁)不能被静默吞掉 —— 先落日志保住诊断信息, 再抛原始错误。
           log.warn(
             `gitExec auto safe.directory add failed for ${dubiousPath}:`,
             cause instanceof Error ? cause.message : String(cause),
           );
+          // 探测超时不能被误判为目录失效，也不能继续 fallback 启动新的 Git。
+          if (cause instanceof GitExecError && cause.timedOut) throw cause;
           throw err;
         }
       }

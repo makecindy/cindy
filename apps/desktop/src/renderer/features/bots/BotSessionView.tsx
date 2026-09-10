@@ -8,6 +8,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
 import type { BotChatIdentity } from './BotSessionContentHeader';
+import { useBotIslandVisibleSession } from './useBotIslandVisibleSession';
 
 type BotSessionGate =
   | { kind: 'loading' }
@@ -65,11 +66,17 @@ function readBotMention(value: unknown, currentBotId: string): ComposerBotMentio
  * Cindy task. Check the durable Bot link before mounting the writable chat.
  */
 export function BotSessionView() {
+  const { botId, sessionId } = useParams();
+  return <BotSessionGateView key={JSON.stringify([botId, sessionId])} />;
+}
+
+function BotSessionGateView() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { botId, sessionId } = useParams();
   const [reloadVersion, setReloadVersion] = useState(0);
   const [gate, setGate] = useState<BotSessionGate>({ kind: 'loading' });
+  useBotIslandVisibleSession(gate.kind === 'ready' ? sessionId ?? null : null);
 
   useEffect(() => {
     let cancelled = false;

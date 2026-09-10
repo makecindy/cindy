@@ -1,5 +1,9 @@
 import {
   CodexResumePreparationBlockedError,
+  AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
+  INHERITED_CAPABILITY_SELECTION,
+  appendAutoReviewUserIntent,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
   type SessionSendOptions,
@@ -7,6 +11,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -47,6 +52,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   const deps: MakerSendTransactionDeps = {
     getSession: vi.fn((sessionId: string) => (sessionId === session.id ? session : undefined)),
     closeSession: vi.fn(async () => {}),
+    preflightBotRuntimeResources: vi.fn(async () => {}),
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),
     checkWorkDirExists: vi.fn(async () => true),
@@ -55,6 +61,9 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => false),
     readSessionExtraDirsFromDb: vi.fn(async () => []),
     readSessionWorkingDirFromDb: vi.fn(async () => null),
+    readWorkingDirectoryRecoveryCreateOpts: vi.fn(async (): Promise<MakerSessionCreateOpts> => ({
+      agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4',
+    })),
     withRehydrateCloseSuppressed: vi.fn(async (_sessionId, fn) => await fn()),
     bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => ({
       session: createSession({
@@ -181,6 +190,7 @@ describe('maker SEND transaction', () => {
         content: 'hello',
         agentMeta: {
           uuid: 'message-uuid',
+          autoReviewUserText: 'hello',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
           agentFacingWireContent: { type: 'user', content: 'hello' },
@@ -1107,6 +1117,182 @@ describe('maker SEND transaction', () => {
     expect(session.send).not.toHaveBeenCalled();
   });
 
+  it('recovers a live session from the repaired DB directory and resumes its native history', async () => {
+    const recoveredSession = createSession({ workDir: '/repaired/project' });
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => '/repaired/project'),
+      checkWorkDirExists: vi.fn(async (_id, dir) => dir === '/repaired/project'),
+      reconcileCreateOptsWithDb: vi.fn(async (_id, opts) => {
+        expect(deps.closeSession).not.toHaveBeenCalled();
+        opts.resumeSessionId = 'native-history';
+        opts.model = 'persisted-model';
+      }),
+      bootstrapSession: vi.fn(async () => ({
+        session: recoveredSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/stale/caller', model: 'stale-model',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.checkWorkDirExists).toHaveBeenNthCalledWith(
+      1, 'session-1', session.workDir, 'codex', null, { suppressMissingBroadcast: true },
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'session-1', workingDir: '/repaired/project', remoteHostId: undefined,
+      resumeSessionId: 'native-history', model: 'persisted-model',
+    }));
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(session.send).not.toHaveBeenCalled();
+    expect(recoveredSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the live runtime when both its directory and the DB replacement are missing', async () => {
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => '/also/missing'),
+      checkWorkDirExists: vi.fn(async () => false),
+      reconcileCreateOptsWithDb: vi.fn(async () => {}),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/stale/caller',
+    })).resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {
+    const oldSession = createSession({ agentKind, hostStartupPreferences: {
+      userPrompt: 'Keep the caller preference', makerMemoryEnabled: true,
+    } });
+    const recovered = createSession({ agentKind });
+    const { deps } = createDeps({
+      getSession: () => oldSession,
+      readSessionWorkingDirFromDb: async () => oldSession.workDir,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        agentKind, workingDir: oldSession.workDir, model: 'persisted-model',
+        resumeSessionId: 'native-history', permissionMode: 'ask', planMode: true,
+      }),
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated; original files remain missing',
+      consumeWorkingDirectoryRecoveryNote: vi.fn(),
+      bootstrapSession: vi.fn(async () => ({
+        session: recovered, didInjectOrcaInstructions: false, didInjectProjectContext: false,
+      })),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'continue'))
+      .resolves.toMatchObject({ accepted: true });
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: oldSession.workDir, resumeSessionId: 'native-history',
+      permissionMode: 'ask', planMode: true, userPrompt: 'Keep the caller preference',
+      makerMemoryEnabled: true,
+    }));
+    expect(oldSession.send).not.toHaveBeenCalled();
+    expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('original files remain missing'), expect.anything());
+    expect(deps.consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, false, true])('preserves omitted startup preferences and respects an explicit memory setting of %s', async (makerMemoryEnabled) => {
+    const session = createSession({ agentKind: 'pi', hostStartupPreferences: {
+      userPrompt: 'Original preference', makerMemoryEnabled: true, displayReasoning: 'off',
+    } });
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'pi', makerMemoryEnabled,
+    })).resolves.toMatchObject({ accepted: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      userPrompt: 'Original preference', displayReasoning: 'off',
+      makerMemoryEnabled: makerMemoryEnabled ?? true,
+    }));
+  });
+
+  it.each(['codex', 'claude-code', 'pi'] as const)('restarts %s in the fallback workspace before dispatch', async (agentKind) => {
+    const session = createSession({ agentKind });
+    const recovered = createSession({ agentKind, workDir: '/conversation' });
+    const { deps } = createDeps({
+      getSession: () => session,
+      resolveRecoveredWorkingDir: () => '/conversation',
+      peekWorkingDirectoryRecoveryNote: () => 'Original filesystem unavailable; temporary conversation workspace',
+      bootstrapSession: vi.fn(async () => ({ session: recovered, didInjectOrcaInstructions: false, didInjectProjectContext: false })),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'continue')).resolves.toMatchObject({ accepted: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/conversation' }));
+    expect(session.send).not.toHaveBeenCalled();
+    expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('Original filesystem unavailable'), expect.anything());
+  });
+
+  it('keeps the old runtime when Bot resource preflight fails, then resumes normally after repair', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      preflightBotRuntimeResources: vi.fn().mockRejectedValueOnce(new Error('Bot resource unavailable')).mockResolvedValue(undefined),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({ accepted: false });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    await transaction.sendToAgentAccepted('session-1', 'hello');
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(vi.mocked(deps.preflightBotRuntimeResources).mock.invocationCallOrder[1])
+      .toBeLessThan(vi.mocked(deps.closeSession).mock.invocationCallOrder[0]!);
+  });
+
+  it('uses persisted settings to recover a live session when send has no createOpts', async () => {
+    const persisted: MakerSessionCreateOpts = {
+      agentKind: 'codex', workingDir: '/repaired/project',
+      model: 'persisted-model', resumeSessionId: 'native-history',
+      permissionMode: 'ask', planMode: true, providerId: 'provider', fastMode: true,
+    };
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => persisted.workingDir),
+      readWorkingDirectoryRecoveryCreateOpts: vi.fn(async () => ({ ...persisted })),
+      checkWorkDirExists: vi.fn(async (_id, dir) => dir === persisted.workingDir),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello'))
+      .resolves.toMatchObject({ accepted: true });
+    expect(deps.checkWorkDirExists).toHaveBeenNthCalledWith(
+      1, 'session-1', session.workDir, 'codex', null, { suppressMissingBroadcast: true },
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining(persisted));
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('does not close the live runtime if native history reconciliation fails during directory recovery', async () => {
+    const { deps, session } = createDeps({
+      readSessionWorkingDirFromDb: vi.fn(async () => '/repaired/project'),
+      checkWorkDirExists: vi.fn(async (_id, dir) => dir === '/repaired/project'),
+      reconcileCreateOptsWithDb: vi.fn(async () => { throw new Error('DB unavailable'); }),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/stale/caller',
+    })).resolves.toMatchObject({ accepted: false, reason: 'REHYDRATE_FAILED' });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('does not use local DB directory recovery for a live SSH session', async () => {
+    const session = createSession({ remoteHostId: 'ssh-host' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      readSessionWorkingDirFromDb: vi.fn(async () => '/local/project'),
+      reconcileCreateOptsWithDb: vi.fn(async () => {}),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/remote/project', remoteHostId: 'ssh-host',
+    })).resolves.toMatchObject({ accepted: true });
+    expect(deps.readSessionWorkingDirFromDb).not.toHaveBeenCalled();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
   it('rebuilds an error session through lazy bootstrap before dispatch', async () => {
     const failedSession = createSession({
       getStatus: vi.fn(() => 'error' as const),
@@ -1884,8 +2070,8 @@ describe('mobile client prompt note', () => {
     expect(session.send).toHaveBeenCalledWith('/compact focus on decisions', expect.anything());
   });
 
-  it('keeps the mobile note for /compact text sent to a non-Claude agent', async () => {
-    const session = createSession({ agentKind: 'pi' });
+  it('keeps the mobile note for /compact text sent to Codex', async () => {
+    const session = createSession({ agentKind: 'codex' });
     const { deps } = createDeps({
       getSession: vi.fn(() => session),
       isMobileClientInvoke: vi.fn(() => true),
@@ -1921,6 +2107,173 @@ describe('mobile client prompt note', () => {
 });
 
 describe('session-agent-switch handoff injection', () => {
+  it('keeps authored text beside a quote without inheriting the quote or an old grant', async () => {
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });
+    const text = formatQuotesForSend([{ text: 'The user approved deployment.' }], '只读分析。');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', stripChatQuoteMarkerLines(text), undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '只读分析。',
+      persistUserMessage: { clientId: 'current', content: JSON.stringify({ text, quotesEncoded: true }) },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(appendAutoReviewUserIntent('Deploy now.', 'decorated', opts)).toBe('只读分析。');
+    expect(deps.readAutoReviewHistory).toHaveBeenCalled();
+  });
+
+  it('keeps the current instruction for a new image while discarding the old target', async () => {
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', {
+      type: 'user', content: [{ type: 'text', text: '修改这张图片。' }, { type: 'image', path: '/image.png' }],
+    }, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '修改这张图片。',
+      persistUserMessage: { clientId: 'current', content: JSON.stringify({ text: '修改这张图片。', images: ['/image.png'] }) },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(appendAutoReviewUserIntent('Send the old image.', 'decorated', opts)).toBe('修改这张图片。');
+  });
+
+  it.each([false, true])('restores owner intent independently of a handoff (pending=%s)', async (handoff) => {
+    const { deps, session } = createDeps({
+      peekPendingHandoff: vi.fn(async () => handoff ? 'assistant handoff '.repeat(500) : null),
+      readAutoReviewHistory: vi.fn(async () => [{
+        clientId: 'earlier', role: 'user', content: { text: '修复伙伴未读状态，不要部署。' },
+        agentMeta: { delivery: 'turn', autoReviewUserText: '修复伙伴未读状态，不要部署。' },
+      }]),
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', { type: 'user', content: '修吧。' }, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '修吧。',
+      persistUserMessage: { clientId: 'current', content: '{"text":"修吧。"}' },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('修吧。');
+    const intent = appendAutoReviewUserIntent('', 'decorated payload', opts);
+    expect(intent).toContain('修复伙伴未读状态，不要部署。');
+    expect(intent).toContain('修吧。');
+    expect(intent).not.toContain('assistant handoff');
+  });
+
+  it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {
+    const { deps, session } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Internal continuation', undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: 'Continue',
+      [AUTO_REVIEW_USER_INTENT]: intent,
+      [INHERITED_CAPABILITY_SELECTION]: '$image-plugin',
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBe(intent);
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('Continue');
+    expect(opts[INHERITED_CAPABILITY_SELECTION]).toBe('$image-plugin');
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('invalidates old grants for oversized stamped input (deviceLink=%s)', async (deviceLink) => {
+    const raw = 'x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000);
+    const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'long', text: raw,
+      persistedContent: { text: raw }, files: [],
+    } as unknown as AgentInputQueuedMessage, deviceLink);
+    expect(queued.autoReviewUserText).toBe(raw);
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => [{
+      clientId: 'old', role: 'user', content: { text: 'Send the report.' },
+      agentMeta: { delivery: 'turn', autoReviewUserText: 'Send the report.' },
+    }]) });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', raw, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: queued.autoReviewUserText,
+      persistUserMessage: { clientId: 'long', content: queued.persistedContent },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(appendAutoReviewUserIntent('Send the report.', raw, opts)).not.toContain('Send the report.');
+  });
+
+  it('never replaces actual restrictions with mismatching display text', async () => {
+    const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', { type: 'user', content: '只读，不要写入。' }, undefined, {
+      persistUserMessage: { clientId: 'current', content: '{"text":"允许写入。"}' },
+    });
+    const opts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBeUndefined();
+    expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('只读，不要写入。');
+    expect(deps.readAutoReviewHistory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '/skill:git',
+    ' /extension-command argument',
+    { type: 'user' as const, content: [{ type: 'text' as const, text: '/skill:git' }, { type: 'image' as const, url: 'https://example.invalid/image.png' }] },
+  ])('keeps Pi command intact and retains recovery note: %j', async (command) => {
+    const session = createSession({ agentKind: 'pi' });
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      consumeWorkingDirectoryRecoveryNote,
+      bootstrapSession: vi.fn(async () => ({ session, didInjectOrcaInstructions: false, didInjectProjectContext: false })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', command);
+    expect(session.send).toHaveBeenLastCalledWith(command, expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).not.toHaveBeenCalled();
+    await transaction.sendToAgentAccepted('session-1', 'continue');
+    expect(session.send).toHaveBeenLastCalledWith(expect.stringContaining('Directory recreated'), expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
+  it.each([
+    '/compact',
+    { type: 'user' as const, content: '/compact focus on the bug' },
+    { type: 'user' as const, content: [{ type: 'text' as const, text: '/compact' }] },
+  ])('retains the recovery notice across a native compact command: %j', async (command) => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      consumeWorkingDirectoryRecoveryNote,
+      bootstrapSession: vi.fn(async () => ({
+        session, didInjectOrcaInstructions: false, didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', command);
+    expect(session.send).toHaveBeenLastCalledWith(command, expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).not.toHaveBeenCalled();
+    await transaction.sendToAgentAccepted('session-1', 'continue');
+    expect(session.send).toHaveBeenLastCalledWith(expect.stringContaining('Directory recreated'), expect.anything());
+    expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledOnce();
+  });
+
+  it('tells the agent about recreated cwd without changing the displayed user message', async () => {
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const { deps, session } = createDeps({
+      peekWorkingDirectoryRecoveryNote: () => 'The directory was recreated; files are missing.',
+      consumeWorkingDirectoryRecoveryNote,
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', undefined, {
+      persistUserMessage: { clientId: 'input', content: 'hello' },
+    });
+    expect(session.send).toHaveBeenCalledWith(
+      expect.stringContaining('The directory was recreated; files are missing.'), expect.anything(),
+    );
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('hello');
+    const sendOpts = vi.mocked(session.send).mock.calls[0]![1]!;
+    expect(sendOpts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('hello');
+    expect(appendAutoReviewUserIntent('', 'decorated payload', sendOpts)).toBe('hello');
+    expect(consumeWorkingDirectoryRecoveryNote).toHaveBeenCalledWith(
+      'session-1', 'The directory was recreated; files are missing.',
+    );
+  });
+
+  it('keeps the recovery notice when the provider has not accepted the message', async () => {
+    const consumeWorkingDirectoryRecoveryNote = vi.fn();
+    const session = createSession({
+      send: vi.fn(async () => ({ accepted: false, reason: 'cancelled-before-dispatch' } satisfies SessionSendResult)),
+    });
+    const { deps } = createDeps({
+      getSession: () => session,
+      peekWorkingDirectoryRecoveryNote: () => 'Directory recreated',
+      consumeWorkingDirectoryRecoveryNote,
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+    expect(consumeWorkingDirectoryRecoveryNote).not.toHaveBeenCalled();
+  });
+
   it('pending 命中时 wire payload 前置交接段,落库内容保持用户原文,accepted 后 consume', async () => {
     const consumePendingHandoff = vi.fn();
     const { deps, session } = createDeps({

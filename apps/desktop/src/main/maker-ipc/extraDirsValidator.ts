@@ -107,6 +107,7 @@ function isSelfOrSubdir(candidate: string, base: string): boolean {
 export async function validateExtraDirs(
   rawDirs: string[] | undefined | null,
   workingDir: string | undefined | null,
+  statDirectory: (dir: string) => Promise<{ isDirectory(): boolean }> = fs.stat,
 ): Promise<ValidateResult> {
   const valid: string[] = [];
   const rejected: ValidateResult['rejected'] = [];
@@ -142,7 +143,7 @@ export async function validateExtraDirs(
 
     let stat;
     try {
-      stat = await fs.stat(root);
+      stat = await statDirectory(root);
     } catch {
       rejected.push({ path: dir, reason: 'not-exist' });
       continue;
@@ -192,15 +193,22 @@ async function canonicalDirectoryKey(dir: string): Promise<string> {
 export async function excludeDirectoryGrantConflicts(
   candidates: readonly string[],
   blocked: readonly string[],
+  resolvePath?: (dir: string) => Promise<string>,
 ): Promise<string[]> {
   if (candidates.length === 0) return [];
-  const blockedKeys = await Promise.all(blocked.map(canonicalDirectoryKey));
+  // Bounded recovery probes must not treat a timed-out alias as a disjoint tree.
+  const canonical = (dir: string) => resolvePath
+    ? resolvePath(dir).catch(() => null)
+    : canonicalDirectoryKey(dir);
+  const blockedKeys = await Promise.all(blocked.map(canonical));
+  if (blockedKeys.some((key) => key === null)) return [];
   const result: string[] = [];
   const acceptedKeys: string[] = [];
   for (const candidate of candidates) {
-    const candidateKey = await canonicalDirectoryKey(candidate);
+    const candidateKey = await canonical(candidate);
+    if (candidateKey === null) continue;
     const overlapsBlockedTree = blockedKeys.some((blockedKey) =>
-      isSelfOrSubdir(candidateKey, blockedKey) || isSelfOrSubdir(blockedKey, candidateKey));
+      isSelfOrSubdir(candidateKey, blockedKey!) || isSelfOrSubdir(blockedKey!, candidateKey));
     const overlapsAcceptedTree = acceptedKeys.some((acceptedKey) =>
       isSelfOrSubdir(candidateKey, acceptedKey) || isSelfOrSubdir(acceptedKey, candidateKey));
     if (!overlapsBlockedTree && !overlapsAcceptedTree) {

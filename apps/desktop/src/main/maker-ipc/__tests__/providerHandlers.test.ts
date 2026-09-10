@@ -22,6 +22,8 @@ import {
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
+import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
+import { extractIpcError } from '../../../renderer/utils/ipcError';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
@@ -170,6 +172,7 @@ describe('provider:list IPC handler', () => {
   it('keeps providers in catalog order and returns display order as owner-scoped metadata', async () => {
     const harness = new IpcHarness();
     const views = [fakeView('xd', true), fakeView('anthropic', false)];
+    const getVisibility = vi.fn(() => overrides);
     const listProviders = vi.fn(async () => views);
     const overrides = { 'claude-code:xd:claude-opus-4-8': false };
     const providerOrder = ['anthropic', 'xd'];
@@ -177,7 +180,7 @@ describe('provider:list IPC handler', () => {
       harness,
       makeDeps({
         listProviders,
-        getModelVisibilityOverrides: () => overrides,
+        getModelVisibilityOverrides: getVisibility,
         getProviderOrder: () => providerOrder,
         currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
       }),
@@ -191,10 +194,52 @@ describe('provider:list IPC handler', () => {
       providerOrder,
       modelVisibilityOverrides: overrides,
     });
+    expect(getVisibility).toHaveBeenCalledWith(views, false);
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
     });
+  });
+
+  it('encodes a real visibility timeout at the IPC boundary for message-only remote transport', async () => {
+    vi.useFakeTimers();
+    clearModelVisibilityMirror();
+    try {
+      const harness = new IpcHarness();
+      registerProviderHandlers(harness, makeDeps({
+        listProviders: async () => [],
+        getModelVisibilityOverrides: async () => {
+          await waitForModelVisibilityMirror(100);
+          return getModelVisibilityMirrorSnapshot();
+        },
+      }));
+      const request = harness.invoke(MAKER_INVOKE.PROVIDER_LIST).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      const error = await request;
+      expect(error).toMatchObject({ code: 'MODEL_VISIBILITY_NOT_READY' });
+      const received = new Error((error as Error).message);
+      expect(extractIpcError(received)).toEqual({
+        code: 'MODEL_VISIBILITY_NOT_READY',
+        message: 'Model preferences are still synchronizing. Retry shortly.',
+      });
+    } finally {
+      vi.useRealTimers();
+      clearModelVisibilityMirror();
+    }
+  });
+
+  it('waits for effective visibility and rejects an account change during that wait', async () => {
+    const harness = new IpcHarness();
+    let owner = { dataOwnerId: 'owner-a', generation: 1 };
+    let release!: (map: Record<string, boolean>) => void;
+    const getVisibility = vi.fn(() => new Promise<Record<string, boolean>>((resolve) => { release = resolve; }));
+    registerProviderHandlers(harness, makeDeps({ listProviders: async () => [fakeView('xd', true)],
+      currentOwnerSession: () => owner, getModelVisibilityOverrides: getVisibility }));
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    await vi.waitFor(() => expect(getVisibility).toHaveBeenCalledOnce());
+    owner = { dataOwnerId: 'owner-b', generation: 2 };
+    release({ 'pi:xd:old-account': true });
+    await expect(pending).rejects.toThrow('active account changed');
   });
 
   it('rejects a catalog snapshot after an A→B→A owner round trip during the async read', async () => {
@@ -434,6 +479,27 @@ describe('model-disable:set handler', () => {
     ).resolves.toEqual({ ok: true });
     expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['seedream-5', 'seedance-2'], true);
   });
+
+  it.each(['audioModels', 'embeddingModels'] as const)(
+    'accepts media-only members in %s and rejects unknown IDs',
+    async (field) => {
+      const harness = new IpcHarness();
+      const provider = { ...catalogView('xd', {}), [field]: [{ id: 'media-only', name: 'Media' }] };
+      const deps = makeDeps({ listProviders: async () => [provider] });
+      registerProviderHandlers(harness, deps);
+
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['media-only'], disabled: true,
+      })).resolves.toEqual({ ok: true });
+      expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['media-only'], true);
+      expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['unknown'], disabled: true,
+      })).rejects.toThrow(/INVALID_PARAMS/);
+      expect(deps.setModelsDisabled).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('停用按目录成员校验:未知 providerId / 未知 modelId → INVALID_PARAMS,不写', async () => {
     const harness = new IpcHarness();
@@ -896,6 +962,23 @@ describe('provider:models-auto-refresh handler', () => {
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'providers-open'),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(requestModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('provider OAuth sender boundary', () => {
+  it.each([false, true])('rejects all OAuth mutations before side effects (missing guard=%s)', async (missing) => {
+    const harness = new IpcHarness();
+    const guard = vi.fn(() => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); });
+    const deps = makeDeps({ assertTrustedSender: missing ? undefined : guard });
+    registerProviderHandlers(harness, deps);
+    for (const channel of [MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL]) {
+      await expect(harness.invokeFrom(123, channel, 'openai-account')).rejects.toThrow(/PERMISSION_DENIED/);
+    }
+    if (!missing) expect(guard).toHaveBeenCalledTimes(3);
+    expect(deps.oauthLogin).not.toHaveBeenCalled();
+    expect(deps.oauthLogout).not.toHaveBeenCalled();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.beginRouteMutation).not.toHaveBeenCalled();
   });
 });
 
@@ -2332,7 +2415,7 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(second).resolves.toEqual({ ok: true });
     expect(calls).toEqual(['remove-1', 'restore-1', 'remove-2']);
     const savedAuth = (await listCustomProviders())[0]?.auth;
-    expect(savedAuth?.method === 'oauth' ? savedAuth.oauth.clientId : undefined).toBe(
+    expect(savedAuth?.method === 'oauth' ? savedAuth.oauth?.clientId : undefined).toBe(
       'winning-client',
     );
   });
@@ -3652,6 +3735,24 @@ describe('model context limit IPC', () => {
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
+  it('returns native facts separately from model preferences without writing or launching a task', async () => {
+    const harness = new IpcHarness();
+    const native = { contextWindow: 272_000, usableContextWindow: 258_400, autoCompactTokenLimit: 244_800,
+      modelMaxContextWindow: 872_000, source: 'runtime' as const, fallbackModel: false };
+    const readCodexContextWindowInfo = vi.fn(async () => native);
+    const writeModelContextLimit = vi.fn();
+    registerProviderHandlers(harness, makeDeps({
+      readModelContextLimit: () => ({ limit: 1_000_000, isCustomized: true }),
+      writeModelContextLimit, readCodexContextWindowInfo,
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...primary, sessionId: 'live-codex' }))
+      .resolves.toMatchObject({ limit: 1_000_000, codexContext: native });
+    expect(readCodexContextWindowInfo).toHaveBeenCalledWith(primary, 'live-codex');
+    expect(writeModelContextLimit).not.toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...primary, sessionId: 123 }))
+      .rejects.toThrow();
+  });
+
   it('validates every alias then writes one atomic edit with the current owner', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
@@ -3668,6 +3769,32 @@ describe('model context limit IPC', () => {
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not save a window when native catalog preparation fails', async () => {
+    const harness = new IpcHarness();
+    const writeModelContextLimit = vi.fn();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      validateModelContextLimit: async () => { throw new Error('native catalog unavailable'); },
+      writeModelContextLimit,
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, primary, 1_000_000, stamp)).rejects.toThrow('native catalog unavailable');
+    expect(writeModelContextLimit).not.toHaveBeenCalled();
+  });
+
+  it('waits for runtime reconfiguration and reports failures for both save and reset', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      writeModelContextLimit: async () => { throw new Error('runtime refresh failed'); },
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, primary, 1_000_000, stamp)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, primary, stamp)).rejects.toThrow();
   });
 
   it('rejects an owner change during asynchronous catalog validation without writing', async () => {

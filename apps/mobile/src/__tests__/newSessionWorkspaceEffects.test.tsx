@@ -25,9 +25,12 @@ const page = source.statements.find((node): node is ts.FunctionDeclaration =>
 if (!page?.body) throw new Error('NewRemoteSessionScreen not found');
 const declarations = new Set([
   'selectedDeviceId', 'selectedDeviceName', 'newSessionPreferences', 'newSessionPreferencesLoaded',
+  'workingDirPreferenceOverridesRef',
   'preferredDefaultDevice', 'recentWorkspaces', 'draft', 'initialWorkspaceKeyRef',
   'appliedDefaultDeviceKeyRef', 'userTouchedDeviceRef', 'userTouchedWorkspaceRef',
-  'patchDraft', 'selectWorkingDir', 'selectDialogueWorkspace', 'selectRecentProject', 'openProjectBrowse',
+  'patchDraft', 'selectWorkingDir', 'rememberWorkingDirForDevice', 'selectDialogueWorkspace',
+  'selectRecentProject', 'openProjectBrowse',
+  'firstMessageRef', 'firstMessageSelectionRef', 'firstMessageSelection',
 ]);
 const effectMarkers = new Set([
   'drainStashedNewSessionDraft', 'readNewSessionPreferences',
@@ -62,11 +65,14 @@ for (const name of [...declarations, ...effectMarkers]) {
 
 interface WorkspaceState {
   draft: NewSessionDraft;
+  firstMessageSelection: { start: number; end: number };
   selectedDeviceId: string;
   newSessionPreferencesLoaded: boolean;
   selectDialogueWorkspace(): void;
   selectRecentProject(path: string): void;
   openProjectBrowse(): void;
+  /** 模拟页面 selectDevice 里与工作区相关的部分:标记用户动过设备、重置初始工作区决策、清空项目目录。 */
+  switchDevice(deviceId: string): void;
 }
 const bindingNames = [
   'useState', 'useRef', 'useMemo', 'useEffect', 'useCallback', 'DEFAULT_NEW_SESSION_DRAFT',
@@ -80,8 +86,14 @@ const bindingNames = [
 const compiled = ts.transpileModule(`function usePageWorkspace(bindings) {
   const { ${bindingNames.join(', ')} } = bindings;
   ${selected.map((statement) => statement.getText(source)).join('\n')}
+  const switchDevice = (deviceId) => {
+    userTouchedDeviceRef.current = true;
+    initialWorkspaceKeyRef.current = null;
+    setSelectedDeviceId(deviceId);
+    setDraft((current) => current.workspaceKind === 'project' ? { ...current, workingDir: '' } : current);
+  };
   return { draft, selectedDeviceId, newSessionPreferencesLoaded,
-    selectDialogueWorkspace, selectRecentProject, openProjectBrowse };
+    firstMessageSelection, selectDialogueWorkspace, selectRecentProject, openProjectBrowse, switchDevice };
 }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const usePageWorkspace = new Function(`${compiled}; return usePageWorkspace;`)() as
   (bindings: Record<string, unknown>) => WorkspaceState;
@@ -109,7 +121,8 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
     saveNewSessionPreferences: vi.fn(async () => {}),
     drainStashedNewSessionDraft: vi.fn(() => options.restoredKind ? {
       draft: { ...DEFAULT_NEW_SESSION_DRAFT, workspaceKind: options.restoredKind,
-        workingDir: options.restoredKind === 'project' ? '/restored/project' : '' },
+        workingDir: options.restoredKind === 'project' ? '/restored/project' : '',
+        firstMessage: 'restored draft' },
       attachments: [], deviceId: 'a', deviceName: 'A',
     } : null),
     loadBrowsePath: vi.fn(async () => {}), setDevicePickerOpen: vi.fn(),
@@ -130,10 +143,14 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
   act(() => root!.render(createElement(Harness)));
   return {
     bindings, commits, get current() { return current; },
-    async resolvePreferences(kind: NewSessionWorkspaceKind | null, deviceId = 'a') {
+    async resolvePreferences(
+      kind: NewSessionWorkspaceKind | null,
+      deviceId = 'a',
+      workingDirByDevice: Record<string, string> = {},
+    ) {
       await act(async () => {
         resolveRead({ workspaceKind: kind, device: { deviceId, name: deviceId },
-          agentKind: null, permissionModeByAgent: {} });
+          agentKind: null, permissionModeByAgent: {}, workingDirByDevice });
         await pendingRead;
       });
     },
@@ -141,6 +158,19 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
 }
 
 describe('new session workspace page effects', () => {
+  it('keeps choices for both devices made before the stored preferences arrive', async () => {
+    const page = mountWorkspace();
+    act(() => page.current.selectRecentProject(' /manual/a '));
+    act(() => page.current.switchDevice('b'));
+    act(() => page.current.selectRecentProject('/manual/b'));
+    await page.resolvePreferences('project', 'a', { a: '/old/a', b: '/old/b' });
+    act(() => page.current.switchDevice('a'));
+    expect(page.current.draft.workingDir).toBe(' /manual/a ');
+    act(() => page.current.switchDevice('b'));
+    expect(page.current.draft.workingDir).toBe('/manual/b');
+    expect(page.bindings.saveNewSessionPreferences).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps an explicit project entry when a different preference arrives late', async () => {
     const page = mountWorkspace({ initialWorkingDir: '/explicit/project' });
     await page.resolvePreferences('dialogue', 'b');
@@ -155,6 +185,7 @@ describe('new session workspace page effects', () => {
     expect(page.current.draft).toMatchObject({ workspaceKind: kind,
       workingDir: kind === 'project' ? '/restored/project' : '' });
     expect(page.current.selectedDeviceId).toBe('a');
+    expect(page.current.firstMessageSelection).toEqual({ start: 'restored draft'.length, end: 'restored draft'.length });
     expect(page.bindings.pickInitialNewSessionWorkspace).not.toHaveBeenCalled();
   });
 
@@ -166,7 +197,10 @@ describe('new session workspace page effects', () => {
     await page.resolvePreferences(kind === 'project' ? 'dialogue' : 'project');
     expect(page.current.draft).toMatchObject({ workspaceKind: kind,
       workingDir: kind === 'project' ? '/manual/project' : '' });
-    expect(page.bindings.saveNewSessionPreferences).toHaveBeenCalledWith({ workspaceKind: kind });
+    expect(page.bindings.saveNewSessionPreferences).toHaveBeenCalledWith(kind === 'project'
+      // 显式点选最近项目同时按设备记住目录(#4103)
+      ? { workspaceKind: 'project', workingDirForDevice: { deviceId: 'a', workingDir: '/manual/project' } }
+      : { workspaceKind: 'dialogue' });
   });
 
   it('keeps an explicitly opened project browser open after a late dialogue preference', async () => {
@@ -190,6 +224,40 @@ describe('new session workspace page effects', () => {
       { device: 'b', kind: 'project', path: '/projects/b' },
     ]);
     expect(page.bindings.loadBrowsePath).not.toHaveBeenCalled();
+  });
+
+  it('restores the directory last explicitly chosen on the remembered device instead of the most recent one (#4103)', async () => {
+    const page = mountWorkspace();
+    // 用户上次在设备 b 显式选了第三个目录(它甚至不在最近列表里);重进后应恢复它而不是最近首项 /projects/b
+    await page.resolvePreferences('project', 'b', { b: '/projects/third', a: '/projects/other' });
+    expect(page.current.selectedDeviceId).toBe('b');
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/projects/third' });
+    expect(page.bindings.pickInitialNewSessionWorkspace).toHaveBeenCalledTimes(1);
+    // 自动恢复不算显式选择:不得把它再写回目录记忆
+    expect(page.bindings.saveNewSessionPreferences).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirForDevice: expect.anything() }),
+    );
+    expect(page.bindings.loadBrowsePath).not.toHaveBeenCalled();
+  });
+
+  it('uses the directory chosen in this session after switching devices and back, not the stale stored one (#4103 Codex P2)', async () => {
+    const page = mountWorkspace();
+    await page.resolvePreferences('project', 'a', { a: '/projects/old-a' });
+    expect(page.current.draft.workingDir).toBe('/projects/old-a');
+    // 本页内显式换成新目录 → 内存里的设备记忆同步更新(落盘不回写 state)
+    act(() => page.current.selectRecentProject('/projects/new-a'));
+    expect(page.current.draft.workingDir).toBe('/projects/new-a');
+    // 切到 b(无记忆 → 最近首项),再切回 a:应恢复本页刚选的 new-a,而不是读取时的 old-a
+    act(() => page.current.switchDevice('b'));
+    expect(page.current.draft.workingDir).toBe('/projects/b');
+    act(() => page.current.switchDevice('a'));
+    expect(page.current.draft.workingDir).toBe('/projects/new-a');
+  });
+
+  it('falls back to the most recent workspace when only another device has a remembered directory', async () => {
+    const page = mountWorkspace();
+    await page.resolvePreferences('project', 'b', { a: '/projects/other' });
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/projects/b' });
   });
 
   it('keeps the existing default when storage has no remembered mode', async () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { extractRenderedMarkdownImageTargets } from '../markdownImageTargets';
+import {
+  extractCachedRenderedMarkdownImageTargets,
+  extractRenderedMarkdownImageTargets,
+  type MarkdownImageTargetCache,
+} from '../markdownImageTargets';
 
 describe('extractRenderedMarkdownImageTargets', () => {
   it('collects rendered images and ignores Markdown literals that render as code or raw HTML', () => {
@@ -39,5 +43,34 @@ describe('extractRenderedMarkdownImageTargets', () => {
         `<img src="${url}/raw-img" alt="raw">`,
       ].join('\n')),
     ).toEqual([url, `${url}/after-inline-code`, `${url}/raw-img`]);
+  });
+
+  it('reuses completed-message results and invalidates them when content changes', () => {
+    const cache: MarkdownImageTargetCache = new Map();
+    const first = extractCachedRenderedMarkdownImageTargets(
+      '![one](cindy-media://one.png)',
+      cache,
+      'assistant-1',
+    );
+    const same = extractCachedRenderedMarkdownImageTargets(
+      '![one](cindy-media://one.png)',
+      cache,
+      'assistant-1',
+    );
+    expect(same).toBe(first);
+
+    const changed = extractCachedRenderedMarkdownImageTargets(
+      '![two](cindy-media://two.png)',
+      cache,
+      'assistant-1',
+    );
+    expect(changed).toEqual(['cindy-media://two.png']);
+    expect(changed).not.toBe(first);
+
+    const empty = extractCachedRenderedMarkdownImageTargets('plain text', cache, 'assistant-2');
+    expect(empty).toEqual([]);
+    expect(extractCachedRenderedMarkdownImageTargets('plain text', cache, 'assistant-2')).toBe(
+      empty,
+    );
   });
 });

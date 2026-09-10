@@ -9,8 +9,9 @@
 //   TapDB / Google 公开配置;EAS 云构建看不到 gitignored 文件,继续使用 EAS environment。
 // - 自建分发变体(`EXPO_PUBLIC_XDT_OTA_SELFHOST=1`):
 //     · iOS 与 Android app identity 各自一个字段,可独立调整,互不影响。
-//     · updates.url 只放稳定占位值;真实 mobile-update-server 地址由启动端点清单的
-//       mobileUpdateBaseUrl 运行时覆写,不参与 build/fingerprint;
+//     · 旧 bridge 模式用占位 updates.url，由 mobileUpdateBaseUrl 运行时覆写；
+//       CINDY_MOBILE_OTA_NATIVE=1 则把构建注入的固定地址与共享 headers 写入原生，
+//       启用原生事务恢复，有意改变自建 runtime。两种模式不能互投原生不兼容的 OTA。
 //     · 保留 region scheme,但使用自建 bundle identity。此变体有意改变指纹,
 //       但只在该 env 开启时生效,EAS 路径仍逐字节不变。
 // - 不注入任何按 commit 变化的内容(如 git hash),避免 fingerprint 每次提交漂移。
@@ -338,8 +339,12 @@ module.exports = (context = {}) => {
 
   // 自建门控用 EXPO_PUBLIC_XDT_OTA_SELFHOST:同一个 EXPO_PUBLIC 标志既在此决定
   // bundleId / 原生 OTA 策略,又被 inline 进 JS 供运行时 IS_OTA_SELFHOST 判定,
-  // 构建与运行时严格对齐。真实 OTA 地址不再作为构建 env 注入。
+  // 构建与运行时严格对齐。原生恢复模式另用非 EXPO_PUBLIC 构建开关显式启用。
   if (selfHosted) {
+    const nativeOta = process.env.CINDY_MOBILE_OTA_NATIVE?.trim();
+    if (nativeOta && nativeOta !== '0' && nativeOta !== '1') {
+      throw new Error('CINDY_MOBILE_OTA_NATIVE must be 0 or 1');
+    }
     // Android 自建线:versionCode 只在此自建分支注入(经 release-android-*.mjs 传入的
     // XDT_ANDROID_VERSION_CODE),APK 覆盖安装 + NPKG md5 去重要求它单调递增。app.json 里
     // **不声明** android.versionCode → 非自建 resolved config 逐字节不变(红线 1,EAS 指纹不受影响)。
@@ -364,6 +369,24 @@ module.exports = (context = {}) => {
         disableAntiBrickingMeasures: true,
       },
     };
+
+    // Explicit build-time rollout switch. Keeping the legacy configuration
+    // available permits the already shipped bridge runtime to remain frozen.
+    // Never detect this native capability from mutable OTA manifest extras.
+    if (nativeOta === '1') {
+      const { resolveUpdatesUrl, requestHeaders, nativeSourceHash } = require('./plugins/selfhost-ota/contract');
+      next = {
+        ...next,
+        plugins: [...next.plugins, ['./plugins/with-selfhost-ota', { sourceHash: nativeSourceHash() }]],
+        updates: {
+          ...next.updates,
+          url: resolveUpdatesUrl(process.env.CINDY_MOBILE_UPDATES_URL),
+          requestHeaders: requestHeaders('release'),
+          checkAutomatically: 'NEVER',
+          disableAntiBrickingMeasures: false,
+        },
+      };
+    }
   }
 
   return next;

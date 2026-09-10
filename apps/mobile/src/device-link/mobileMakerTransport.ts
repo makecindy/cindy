@@ -21,6 +21,7 @@ import {
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from '@cindy/maker-shared/device-link-contract';
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
+import type { HistoryViewPage, HistoryDetailPage, HistoryWorkSummary } from '@cindy/maker-shared/message-window';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatusPayload,
@@ -415,6 +416,9 @@ export interface MobileMakerTransport {
    */
   regenerateSessionTitle(sessionId: string): Promise<{ title: string | null }>;
   listMessages(sessionId: string, opts?: MessageListOptions): Promise<RemoteMessage[]>;
+  readHistoryView(sessionId: string, before?: string): Promise<HistoryViewPage<RemoteMessage>>;
+  readWorkDetails(sessionId: string, ref: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<RemoteMessage>>;
+  setHistoryExpanded(sessionId: string, refs: readonly HistoryWorkSummary[]): Promise<void>;
   aroundMessages(sessionId: string, messageId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   aroundMessagesByClientId(sessionId: string, clientId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   send(
@@ -459,12 +463,12 @@ export interface MobileMakerTransport {
    * 接口返回为准,shape 见 maker-shared summarizeAccountRateLimits),claude-code →
    * 网关配额。老被控端 CHANNEL_NOT_ALLOWED → 调用方隐藏限额区块。
    */
-  getAccountUsage(agentKind: MobileAgentKind): Promise<unknown>;
+  getAccountUsage(agentKind: MobileAgentKind, providerId?: string): Promise<unknown>;
   getSessionEstimatedValue(sessionId: string): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
-  getCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
+  getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   /** Consume the desktop-issued offer; retries must pass the same idempotency key. */
-  resetCodexRateLimits(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
+  resetCodexRateLimits(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
   /** 网关 API key presence-only 探测(只回 boolean;老被控端 → 调用方按 unknown 处理)。 */
   getApiKeyPresent(): Promise<{ present: boolean }>;
   /** 会话「非选中模型」effort/fast 写穿(老被控端 → 调用方吞掉降级)。 */
@@ -569,6 +573,7 @@ export interface MobileMakerTransport {
     ): Promise<void>;
   };
   schedule: {
+    listSidebarIndexRuns?(): Promise<{ runs?: unknown[] }>;
     list(filter?: ScheduleListFilter): Promise<RemoteSchedule[]>;
     get(id: string): Promise<RemoteSchedule>;
     listTemplates(): Promise<RemoteScheduleTemplate[]>;
@@ -681,6 +686,9 @@ export function createMobileMakerTransport({
     ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
     regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
     listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
+    readHistoryView: (sessionId, before) => call('local-db:messages:view', [sessionId, { before }]),
+    readWorkDetails: (sessionId, ref, after) => call('local-db:messages:work-details', [sessionId, ref, { after }]),
+    setHistoryExpanded: (sessionId, refs) => call('local-db:messages:view-intent', [sessionId, refs]),
     aroundMessages: (sessionId, messageId, opts) =>
       call('local-db:messages:around', [sessionId, messageId, opts]),
     aroundMessagesByClientId: (sessionId, clientId, opts) =>
@@ -736,12 +744,22 @@ export function createMobileMakerTransport({
     setFastMode: (sessionId, enabled) => call('maker:set-fast-mode', [sessionId, enabled]),
     setExtraDirs: (sessionId, dirs) => call('maker:set-extra-dirs', [sessionId, dirs]),
     getModelPricing: () => call('maker:usage:model-pricing'),
-    getAccountUsage: (agentKind) => call('maker:usage:account', [agentKind]),
+    getAccountUsage: async (agentKind, providerId) => {
+      const result = await call<unknown>('maker:usage:account', providerId ? [agentKind, providerId] : [agentKind]);
+      if (providerId && providerId !== 'openai' && result && (result as { providerId?: string }).providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      return result;
+    },
     getSessionEstimatedValue: (sessionId) => call('local-db:messages:estimatedSessionValue', [sessionId]),
-    getCodexRateLimits: () => call('maker:usage:codex-rate-limits'),
-    resetCodexRateLimits: (idempotencyKey) => (
-      call('maker:usage:codex-rate-limit-reset', [idempotencyKey])
-    ),
+    getCodexRateLimits: async (providerId) => {
+      const result = await call<MobileCodexRateLimitsResult>('maker:usage:codex-rate-limits', providerId ? [providerId] : undefined);
+      if (providerId && providerId !== 'openai' && result.providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      return result;
+    },
+    resetCodexRateLimits: async (idempotencyKey, providerId) => {
+      const result = await call<MobileCodexRateLimitResetResult>('maker:usage:codex-rate-limit-reset', providerId ? [idempotencyKey, providerId] : [idempotencyKey]);
+      if (providerId && providerId !== 'openai' && result.providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      return result;
+    },
     getApiKeyPresent: () => call('maker:api-key:present'),
     setSessionModelPref: (pref) => call('maker:set-session-model-pref', [pref]),
     applyNewMakerDraftPref: (pref) => call('maker:apply-new-maker-draft-pref', [pref]),
@@ -801,6 +819,7 @@ export function createMobileMakerTransport({
       update: (sessionId, patch) => call('maker:goal:update', [{ sessionId, patch }]),
     },
     schedule: {
+      listSidebarIndexRuns: () => call('maker:schedule:list-sidebar-index-runs'),
       list: (filter) => call('maker:schedule:list', filter ? [filter] : []),
       get: (id) => call('maker:schedule:get', [id]),
       listTemplates: () => call('maker:schedule:list-templates'),

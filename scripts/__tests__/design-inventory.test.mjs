@@ -24,6 +24,7 @@ import {
   catalogSurfaces,
   compareGenerated,
   defaultHumanSeed,
+  defaultHumanAnnotation,
   ensureHumanRows,
   extractHumanSurfaceIds,
   extractRendererEntries,
@@ -125,6 +126,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/skillhub/local SkillhubHomeView',
     '/skillhub/local/:kind/global/:name SkillhubDetailView',
     '/skillhub/local/:kind/project/:projectHash/:name SkillhubDetailView',
+    '/skillhub/local/by-path SkillhubDetailView',
     '/skillhub/market SkillhubMarketListView',
   ]);
 
@@ -334,11 +336,13 @@ test('GENERATED 含 §2.1 六项字段,裸颜色与 audit 共用匹配器', () =
   assert.equal(generated.includes('hardcoded-color-match.mjs'), true);
 
   const auditSource = fs.readFileSync(path.join(ROOT, 'scripts', 'hardcoded-color-audit.mjs'), 'utf8');
-  assert.equal(auditSource.includes('from "./shared/hardcoded-color-match.mjs"'), true);
+  assert.equal(/from ['"]\.\/shared\/hardcoded-color-match\.mjs['"]/.test(auditSource), true);
   assert.equal(/HEX_RE\s*=/.test(auditSource), false, 'audit 不得再内联第二套 HEX 正则');
 
-  const hits = matchBareColors('color:#fff; bg:rgb(1, 2, 3); overlay:rgba(0,0,0,.4); hsl(120, 10%, 20%); hsla(1,2%,3%,.5)');
-  assert.deepEqual(hits, ['#fff', 'rgb(1, 2, 3)', 'rgba(0,0,0,.4)', 'hsl(120, 10%, 20%)', 'hsla(1,2%,3%,.5)']);
+  const hits = matchBareColors('color:#fff; background:rgb(1, 2, 3); border-color:rgba(0,0,0,.4); hsl(120, 10%, 20%); hsla(1,2%,3%,.5)');
+  assert.deepEqual(hits, ['#fff', 'rgb(1, 2, 3)', 'rgba(0,0,0,.4)']);
+  // 数值颜色函数需要样式语境：脱离声明的函数文本与普通字符串一样不计入裸颜色。
+  assert.deepEqual(matchBareColors("const label = 'hsl(120, 10%, 20%)';"), []);
 });
 
 test('孤儿人工行只报告不删除', () => {
@@ -650,19 +654,11 @@ test('Orca 工作台继承会话视图样式事实,不再把聊天界面统计�
   assert.ok(orca.bareRadii >= session.bareRadii && orca.bareRadii > 0);
 });
 
-test('统计层排除 var() 包装与注释伪裸色,共享匹配器口径不变', () => {
-  // 1) hsl(var(--token)) 是语义 token 消费,不是裸值——audit 共享匹配器会命中
-  //    `hsl(var(--content-area)` 前缀,台账统计层必须过滤。
-  assert.deepEqual(
-    filterInventoryBareColors(['hsl(var(--content-area)', 'hsla(var(--accent)', '#fff']),
-    ['#fff'],
-  );
-  assert.deepEqual(filterInventoryBareColors(['rgba(var(--overlay)', 'rgb(1,2,3)']), ['rgb(1,2,3)']);
-  // 2) 共享匹配器本身不动:audit 侧仍按宽松口径命中(治理合同要求两边同一套正则)。
-  assert.equal(matchBareColors('hsl(var(--content-area))').length, 1);
-  assert.equal(matchBareColors('/* PR #104 */').includes('#104'), true);
-  // 3) 注释里的 PR 编号、坐标不是组件样式:TS/TSX 统计前剥注释(块注释与整行 //
-  //    注释;行尾 // 注释是已知边界,与本仓 stripJsComments 路由解析同口径)。
+test('inventory 与 audit 共用语义色、注释与 fallback 分类', () => {
+  assert.deepEqual(matchBareColors('hsl(var(--content-area))'), []);
+  assert.deepEqual(matchBareColors('/* PR #104 */'), []);
+  assert.deepEqual(matchBareColors('hsl(var(--content-area, #fff))'), ['#fff']);
+  assert.deepEqual(filterInventoryBareColors(matchBareColors('rgba(var(--overlay)) rgb(1,2,3)')), ['rgb(1,2,3)']);
   const withComments = `
     // PR #104 撤 wave4 双红渐变
     /* 坐标 @(698,1046) */
@@ -1094,12 +1090,20 @@ test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正�
   assert.equal(seed.includes('unassigned'), true);
   assert.equal(seed.includes('| legacy |'), true);
   assert.equal(seed.includes('| pilot |'), false);
-  assert.equal(seed.includes('待 DS-9 增量'), true);
+  assert.equal(seed.includes('Mobile 已纳入同一台账的静态入口发现'), true);
   assert.equal(seed.includes('cindy-updater/ui'), true);
   assert.equal(seed.includes('DESIGN.md §16 登录链路'), true);
   assert.equal(seed.includes('DESIGN.md §15 CINDY 皮肤族'), true);
   assert.equal(seed.includes('DESIGN.md §10 语义豁免色族消费者'), true);
-  assert.equal(seed.includes('2px status micro-cells'), true);
+  assert.equal(seed.includes('登记成员 workflow-status-cell'), true);
+  assert.equal(seed.includes('登记成员 usage-heatmap-day / usage-token-bar'), true);
+  assert.equal(seed.includes('system-category-square'), true);
+  assert.equal(seed.includes('复用 desktop.chat.session'), true);
+  assert.equal(
+    seed.includes('2px status micro-cells'),
+    false,
+    '已被 09-07 data mark 登记取代的旧分类不得回流种子',
+  );
 });
 
 test('真实台账文件含 GENERATED 标记,人工区覆盖全部 surface ID', () => {
@@ -1243,4 +1247,69 @@ test('os.tmpdir 仅作隔离证明:测试不得把绝对路径写进 GENERATED',
   });
   assert.equal(generated.includes(os.tmpdir()), false);
   assert.equal(generated.includes(ROOT), false);
+});
+
+// Mobile routes use POSIX repository-relative paths on every host OS.
+test('Mobile actual route families and shared visible consumers are discoverable without claiming migration', async () => {
+  const { mobileRouteCoverage, mobileCatalogSurfaces } = await import('../shared/design-inventory.mjs');
+  const coverage = mobileRouteCoverage(ROOT);
+  assert.deepEqual(coverage.missing, []);
+  assert.deepEqual(coverage.stale, []);
+  assert.equal(coverage.mapped.find(r=>r.path.endsWith('devices/desktop/[deviceId].tsx')).component, '@/remote-desktop/RemoteDesktopScreen');
+  const { surfaces } = buildGeneratedSurfaces(ROOT);
+  for (const [id, ends] of [
+    ['mobile.chat.session', ['MessageRenderer.tsx', 'CompanionMessageCard.tsx', 'AuthorizationMessageCard.tsx', 'FailedScheduleNotice.tsx']],
+    ['mobile.remote-desktop', ['RemoteDesktopScreen.tsx', 'viewerHtml.ts']],
+    ['mobile.settings', ['settings.tsx']],
+    ['mobile.overlay.connection-startup', ['ConnectionNoticeOverlay.tsx', 'ConnectionBanner.tsx']],
+  ]) {
+    const surface = surfaces.find(s=>s.id===id);
+    assert.ok(surface, id);
+    for (const end of ends) assert.ok(surface.styleSources.some(f=>f.endsWith(end)), `${id}: ${end}`);
+  }
+  for (const surface of mobileCatalogSurfaces()) assert.equal(defaultHumanAnnotation(surface.id).status, 'legacy');
+  assert.ok(!surfaces.some(s=>/preview|listperf/.test(s.id) && s.platform==='mobile'));
+  assert.equal(coverage.mapped.find(r=>r.path==='apps/mobile/app/index.tsx').surfaceId,'mobile.home');
+});
+
+test('Mobile new, removed, renamed routes and missing dev gates cannot silently pass', async (t) => {
+  const { mobileRouteCoverage } = await import('../shared/design-inventory.mjs');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mobile-inventory-'));
+  t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+  const app = path.join(temp,'apps/mobile/app');fs.mkdirSync(app,{recursive:true});
+  const catalog=[{id:'mobile.resource',mobileRoutes:['resources/[id].tsx']}];
+  fs.mkdirSync(path.join(app,'resources'));fs.writeFileSync(path.join(app,'resources/[id].tsx'),'export default function Resource() { return <View />; }');
+  assert.deepEqual(mobileRouteCoverage(temp,catalog).missing,[]);
+  fs.writeFileSync(path.join(app,'new.tsx'),'export default function NewScreen() { return <View />; }');
+  assert.deepEqual(mobileRouteCoverage(temp,catalog).missing,['apps/mobile/app/new.tsx']);
+  fs.renameSync(path.join(app,'resources/[id].tsx'),path.join(app,'resources/[resourceId].tsx'));
+  assert.deepEqual(mobileRouteCoverage(temp,catalog).stale,['resources/[id].tsx']);
+  fs.writeFileSync(path.join(app,'listperf.tsx'),'export default function LiveScreen() { return <View />; }');
+  assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/listperf.tsx'));
+});
+
+test('Mobile reexports, embedded viewer HTML, platform variants and codepoint ordering survive closure', async (t) => {
+  const { mobileStyleClosure } = await import('../shared/design-inventory.mjs');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mobile-closure-'));
+  t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+  const files={
+    'apps/mobile/app/sample.tsx': "export { default } from '@/screen';",
+    'apps/mobile/src/screen.ts': "export { default } from './Screen';",
+    'apps/mobile/src/Screen.tsx': "import View from './View'; import { html } from './viewerHtml'; export default View;",
+    'apps/mobile/src/View.ios.tsx':'export default function IOS() { return null; }',
+    'apps/mobile/src/View.android.tsx':'export default function Android() { return null; }',
+    'apps/mobile/src/viewerHtml.ts':'export const html = `<body></body>`;',
+  };
+  for(const [f,s] of Object.entries(files)){ const target=path.join(temp,...f.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,s); }
+  const closure=mobileStyleClosure(temp,['apps/mobile/app/sample.tsx']);
+  assert.deepEqual(closure,[...Object.keys(files)].filter(f=>f!=='apps/mobile/src/screen.ts').sort());
+});
+
+test('Mobile additions preserve every existing human decision byte and default only new rows', async () => {
+  const { mobileCatalogSurfaces } = await import('../shared/design-inventory.mjs');
+  const generated=renderGeneratedBlock([tinySurface()]);
+  const human='\n| ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |\n| --- | --- | --- | --- | --- | --- |\n| `desktop.test.surface` | human | pilot | protected | approved route | keep exactly |\n';
+  const doc=ensureHumanRows(`# Inventory\n${generated}${human}`,mobileCatalogSurfaces());
+  assert.ok(doc.includes(human.trim()));
+  assert.ok(doc.includes('| `mobile.chat.session` | unassigned | legacy |'));
 });

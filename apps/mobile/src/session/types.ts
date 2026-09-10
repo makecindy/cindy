@@ -1,7 +1,7 @@
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
-import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
+import type { MobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
@@ -59,6 +59,8 @@ export interface RemoteSession {
    *  原样透出,startedAt > endedAt 且未被 /clear 越过 = 上次 turn 因应用退出被中断,
    *  见桌面 sessionActiveTurn.ts)。老被控端缺省 → 判定恒不命中,banner 不出现。 */
   activeTurnStartedAt?: number | null;
+  /** Host-confirmed pre-boot interruption generation; absent on older hosts. */
+  interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
   agentKind: 'cc' | 'codex' | 'pi';

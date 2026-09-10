@@ -86,6 +86,8 @@ import {
   onInteractionMessage,
   onInteractionResolved,
   onThinkingEvent,
+  getSessionThinkingSnapshots,
+  clearSessionThinkingSnapshots,
   flushAssistantBlock,
   sealAssistantBlockForLateFinal,
   flushOrphanToolResults,
@@ -108,6 +110,7 @@ import {
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
+  redactToolInputForUntrustedBoundary,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -143,6 +146,281 @@ beforeEach(() => {
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
+});
+
+describe('browser proxy credential persistence', () => {
+  const proxyServer = 'http://user%40example.test:p%3Ass%2Fword%40%23@proxy.example.test:12323';
+
+  it('redacts proxyServer before persisting a browser tool_use', async () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'browser-proxy-start',
+        toolName: 'mcp__cindy_browser__call_tool',
+        input: { name: 'browser', args: { action: 'start', proxyServer } },
+      },
+      null,
+    );
+    await flushWrites();
+
+    const persisted = vi.mocked(createMessage).mock.calls.find(
+      ([, body]) => (body as { toolUseId?: string }).toolUseId === 'browser-proxy-start',
+    )?.[1];
+    expect(persisted).toMatchObject({
+      content: {
+        input: {
+          name: 'browser',
+          args: {
+            action: 'start',
+            proxyServer: '[REDACTED]',
+          },
+        },
+      },
+    });
+    const serialized = JSON.stringify(persisted);
+    expect(serialized).not.toContain('user%40example.test');
+    expect(serialized).not.toContain('p%3Ass%2Fword%40%23');
+  });
+
+  it('leaves unrelated tools alone even when their input mentions proxyServer', () => {
+    // A patch that edits code containing the identifier must survive intact:
+    // blanking it would erase the tool detail from the live UI, the persisted
+    // record, and the rehydrated history.
+    const patch = 'diff --git a/proxy.ts b/proxy.ts\n+  const proxyServer = route.server;';
+    expect(redactToolInputForUntrustedBoundary('apply_patch', patch)).toBe(patch);
+    expect(redactToolInputForUntrustedBoundary('Bash', { command: 'grep -r proxyServer src' }))
+      .toEqual({ command: 'grep -r proxyServer src' });
+    // Even a literal proxyServer field on a non-browser tool is left as-is:
+    // only the browser tool surface is in scope for this redaction.
+    const unrelated = { proxyServer: 'http://user:pass@nope.test:8080' };
+    expect(redactToolInputForUntrustedBoundary('some_other_tool', unrelated)).toBe(unrelated);
+  });
+
+  it('redacts the Codex MCP approval envelope', () => {
+    // Codex approvals name the SERVER only and nest the call under toolParams,
+    // with a rendered copy under toolParamsDisplay. Neither the execution-event
+    // tool id nor the top-level proxyServer check reaches them, so an Ask-mode
+    // permission card would carry the credential before parsing rejects it.
+    const redacted = redactToolInputForUntrustedBoundary('mcp:cindy_browser', {
+      serverName: 'cindy_browser',
+      message: 'Allow Codex to use browser?',
+      toolName: 'call_tool',
+      toolParams: {
+        name: 'browser',
+        args: { action: 'start', proxyServer: 'http://user:secret@proxy.test:8080' },
+      },
+      toolParamsDisplay: '{"action":"start","proxyServer":"http://user:secret@proxy.test:8080"}',
+    }) as {
+      toolParams: { args: { proxyServer: string } };
+      toolParamsDisplay: string;
+    };
+
+    expect(redacted.toolParams.args.proxyServer).toBe('[REDACTED]');
+    expect(JSON.stringify(redacted)).not.toContain('secret');
+  });
+
+  it('still redacts on the browser tool surfaces', () => {
+    for (const name of [
+      'mcp__cindy_browser__call_tool',
+      // Codex's translator emits `mcp:${server}:${tool}`, not the `__` form.
+      // Omitting it let a local Codex browser call persist and broadcast the
+      // credential-bearing URL unredacted.
+      'mcp:cindy_browser:call_tool',
+      'cindy_mcp_call_tool',
+      'browser',
+    ]) {
+      const redacted = redactToolInputForUntrustedBoundary(name, {
+        name: 'browser',
+        args: { action: 'start', proxyServer: 'http://user:secret@proxy.test:8080' },
+      }) as { args: { proxyServer: string } };
+      expect(redacted.args.proxyServer, name).toBe('[REDACTED]');
+    }
+  });
+
+  it('does not treat a third-party server impersonating the browser as first-party', () => {
+    // A custom MCP id may contain `__`, so `cindy_browser__evil` yields
+    // `mcp__cindy_browser__evil__call_tool`. A substring match reads that as
+    // the built-in browser and rewrites an unrelated server's input — blanking
+    // that tool call in the live UI, the persisted record and the rehydrated
+    // history. mcp-tool-target.ts names this exact id as why attribution must
+    // not be naive.
+    const impersonators = [
+      'mcp__cindy_browser__evil__call_tool',
+      'mcp__evil_browser__call_tool',
+      'browser_impersonator',
+      'not_cindy_browser_either',
+    ];
+    for (const name of impersonators) {
+      const input = {
+        name: 'browser',
+        args: { action: 'start', proxyServer: 'http://user:secret@proxy.test:8080' },
+      };
+      expect(redactToolInputForUntrustedBoundary(name, input), name).toBe(input);
+    }
+  });
+
+  it('redacts proxyServer nested inside a Pi MCP gateway call_tool envelope', async () => {
+    const gatewayInput = {
+      server: 'cindy_browser',
+      tool: 'call_tool',
+      args: { name: 'browser', args: { action: 'start', proxyServer } },
+    };
+    expect(redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', gatewayInput)).toEqual({
+      server: 'cindy_browser',
+      tool: 'call_tool',
+      args: {
+        name: 'browser',
+        args: {
+          action: 'start',
+          proxyServer: '[REDACTED]',
+        },
+      },
+    });
+    const safeGatewayInput = {
+      server: 'cindy_workspace',
+      tool: 'status',
+      args: {},
+    };
+    expect(
+      redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', safeGatewayInput),
+    ).toBe(safeGatewayInput);
+
+    // A non-browser MCP whose args happen to carry a `proxyServer` field must
+    // pass through untouched. Recursing on any {server, tool} shape re-enters
+    // with an empty name, which skips the mayCarryProxyServer gate and would
+    // blank an unrelated tool's input in the UI, the persisted record, and the
+    // rehydrated history. Only the exact browser envelope may recurse.
+    const unrelatedGatewayInput = {
+      server: 'cindy_workspace',
+      tool: 'configure',
+      args: { proxyServer: 'http://user:secret@proxy.example:8080' },
+    };
+    expect(
+      redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', unrelatedGatewayInput),
+    ).toBe(unrelatedGatewayInput);
+
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'browser-proxy-gateway-start',
+        toolName: 'cindy_mcp_call_tool',
+        input: gatewayInput,
+      },
+      null,
+    );
+    await flushWrites();
+
+    const persisted = vi.mocked(createMessage).mock.calls.find(
+      ([, body]) => (body as { toolUseId?: string }).toolUseId === 'browser-proxy-gateway-start',
+    )?.[1];
+    const serialized = JSON.stringify(persisted);
+    expect(serialized).not.toContain('user%40example.test');
+    expect(serialized).not.toContain('p%3Ass%2Fword%40%23');
+    expect(serialized).toContain('[REDACTED]');
+  });
+
+  it('redacts proxyServer nested inside stringified gateway args', () => {
+    expect(
+      redactToolInputForUntrustedBoundary('cindy_mcp_call_tool', {
+        server: 'cindy_browser',
+        tool: 'call_tool',
+        args: JSON.stringify({ name: 'browser', args: { action: 'start', proxyServer } }),
+      }),
+    ).toEqual({
+      server: 'cindy_browser',
+      tool: 'call_tool',
+      args: JSON.stringify({
+        name: 'browser',
+        args: {
+          action: 'start',
+          proxyServer: '[REDACTED]',
+        },
+      }),
+    });
+  });
+
+  it('redacts the stringified-args fallback without changing unrelated browser inputs', () => {
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+        name: 'browser',
+        args: JSON.stringify({ action: 'start', proxyServer }),
+      }),
+    ).toEqual({
+      name: 'browser',
+      args: JSON.stringify({
+        action: 'start',
+        proxyServer: '[REDACTED]',
+      }),
+    });
+    const safeInput = { name: 'browser', args: { action: 'status' } };
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', safeInput),
+    ).toBe(safeInput);
+    const unauthenticatedProxy = {
+      name: 'browser',
+      args: { action: 'start', proxyServer: 'http://proxy.example.test:12323' },
+    };
+    expect(
+      redactToolInputForUntrustedBoundary(
+        'mcp__cindy_browser__call_tool',
+        unauthenticatedProxy,
+      ),
+    ).toBe(unauthenticatedProxy);
+  });
+
+  it('fails closed for malformed or non-string proxyServer inputs', async () => {
+    const malformed = 'user:secret@proxy.example.test:12323';
+    const redacted = redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+      name: 'browser',
+      args: { action: 'start', proxyServer: malformed },
+    });
+    expect(redacted).toEqual({
+      name: 'browser',
+      args: { action: 'start', proxyServer: '[REDACTED]' },
+    });
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+        name: 'browser',
+        args: JSON.stringify({ action: 'start', proxyServer: malformed }),
+      }),
+    ).toEqual({
+      name: 'browser',
+      args: JSON.stringify({ action: 'start', proxyServer: '[REDACTED]' }),
+    });
+    expect(
+      redactToolInputForUntrustedBoundary('mcp__cindy_browser__call_tool', {
+        name: 'browser',
+        args: { action: 'start', proxyServer: { password: 'nested-secret' } },
+      }),
+    ).toEqual({
+      name: 'browser',
+      args: { action: 'start', proxyServer: '[REDACTED]' },
+    });
+
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'browser-invalid-proxy-start',
+        toolName: 'mcp__cindy_browser__call_tool',
+        input: { name: 'browser', args: { action: 'start', proxyServer: malformed } },
+      },
+      null,
+    );
+    await flushWrites();
+
+    const persisted = vi.mocked(createMessage).mock.calls.find(
+      ([, body]) => (body as { toolUseId?: string }).toolUseId === 'browser-invalid-proxy-start',
+    )?.[1];
+    expect(JSON.stringify(persisted)).not.toContain('secret');
+    expect(persisted).toMatchObject({
+      content: {
+        input: {
+          name: 'browser',
+          args: { action: 'start', proxyServer: '[REDACTED]' },
+        },
+      },
+    });
+  });
 });
 
 describe('update_plan tool_use persistence', () => {
@@ -1683,6 +1961,75 @@ describe('done orphan:残留 buffer 在 turn 末 flush', () => {
 });
 
 describe('thinking persistence', () => {
+  it('keeps final thinking across terminal resets until the queued write succeeds', async () => {
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'pending-final', text: 'complete thought' }, null);
+    resetTurnPersistState(SESSION);
+    await flushWrites();
+    try {
+      resetTurnPersistState(SESSION);
+      expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+        clientId: 'pending-final', content: expect.objectContaining({ text: 'complete thought' }),
+      })]);
+    } finally {
+      finishWrite();
+      await flushWrites();
+    }
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
+  it.each(['clear', 'session', 'tree', 'owner'] as const)(
+    'keeps failed final thinking until explicit %s cleanup', async (boundary) => {
+      vi.mocked(createMessage).mockRejectedValueOnce(new Error('write failed'));
+      onThinkingEvent(SESSION, { stage: 'final', blockId: 'failed-final', text: 'recoverable' }, null);
+      resetTurnPersistState(SESSION);
+      await flushWrites();
+      expect(getSessionThinkingSnapshots(SESSION)).toHaveLength(1);
+      if (boundary === 'clear') noteSessionClearBoundary(SESSION, Date.now());
+      if (boundary === 'session') clearSessionPersistState(SESSION);
+      if (boundary === 'tree') clearSessionThinkingSnapshots(SESSION);
+      if (boundary === 'owner') ownerScopeState.current = false;
+      expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+      ownerScopeState.current = true;
+      expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+    },
+  );
+
+  it('does not let an old write release a replacement snapshot after history cleanup', async () => {
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'old' }, null);
+    await flushWrites();
+    clearSessionThinkingSnapshots(SESSION);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'reused', text: 'new' }, null);
+    finishWrite();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'reused', content: expect.objectContaining({ text: 'new' }),
+    })]);
+    onThinkingEvent(SESSION, { stage: 'redacted', blockId: 'reused' }, null);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+    await flushWrites();
+  });
+
+  it('recovers thinking accumulated while folded, then rejects it after an owner change', () => {
+    onThinkingEvent(SESSION, { stage: 'start', blockId: 'live-thought' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'live-thought', text: 'first ' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'live-thought', text: 'second' }, null);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'live-thought', content: expect.objectContaining({ text: 'first second' }),
+    })]);
+    ownerScopeState.current = false;
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+    ownerScopeState.current = true;
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('uses the final event timestamp instead of delayed write time', async () => {
     const finishedAt = Date.parse('2026-06-20T09:10:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T09:10:04.000Z');
@@ -3091,6 +3438,31 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 });
 
 describe('ask_user persist first-write-wins', () => {
+  it.each([
+    [{ behavior: 'allow', editedPlan: 'Only change build.' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'deny', reason: 'Never change src.' }, 'Never change src.'],
+    [{ behavior: 'deny', dismissed: true, reason: 'session_closed' }, ''],
+  ])('records only the accepted plan or user feedback: %j', async (decision, text) => {
+    const request = { kind: 'plan_review', requestId: 'plan-receipt', plan: 'Delete src.' };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'plan_review', request, decision);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text, acceptedAt: expect.any(Number),
+    });
+  });
+
+  it('retains a complete long clarification until the authorization budget is applied', async () => {
+    const text = 'x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000);
+    const request = { kind: 'ask_user_question', requestId: 'long-answer', questions: [] };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request, { answers: { Scope: text } });
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text: `Clarifications:\n- Scope → ${text}`, acceptedAt: expect.any(Number),
+    });
+  });
+
   it('ignores a later cancelled write after the winner already answered', async () => {
     const persistId = onInteractionMessage(SESSION, {
       kind: 'ask_user_question',
@@ -3120,6 +3492,28 @@ describe('ask_user persist first-write-wins', () => {
         status: 'answered',
         answers: { 'Pick one': 'Keep going' },
       }),
+      { text: 'Clarifications:\n- Pick one → Keep going', acceptedAt: expect.any(Number) },
     );
+  });
+});
+
+
+describe('resolved interactions publish authoritative history rows', () => {
+  it.each(['ask_user_question', 'plan_review'] as const)('broadcasts %s only after persistence completes', async (kind) => {
+    let finish!: (value: unknown) => void;
+    const updated = { id: 'resolved-row', clientId: 'resolved-row', role: kind };
+    vi.mocked(updateMessageContent).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }) as never);
+    onInteractionResolved(SESSION, `resolved-${kind}`, kind, { requestId: `request-${kind}`, plan: 'plan' }, { dismissed: true, behavior: 'deny' });
+    await flushWrites();
+    expect(broadcastMessageRow).not.toHaveBeenCalled();
+    finish(updated);
+    await flushWrites();
+    expect(broadcastMessageRow).toHaveBeenCalledWith(SESSION, updated, ownerScopeState.scope);
+  });
+  it('does not publish a row removed before its decision is persisted', async () => {
+    vi.mocked(updateMessageContent).mockResolvedValueOnce(null);
+    onInteractionResolved(SESSION, 'removed', 'plan_review', { requestId: 'removed' }, { dismissed: true });
+    await flushWrites();
+    expect(broadcastMessageRow).not.toHaveBeenCalled();
   });
 });

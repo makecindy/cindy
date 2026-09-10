@@ -7,14 +7,28 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  lt,
+  lte,
+  gt,
+  gte,
+  desc,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 
 import { getDbClient } from '../client/current';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
-import { persistSessionListPreview } from '../sessionListProjection';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -31,7 +45,7 @@ import {
 } from '../../cindy-media/ledger';
 import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
 import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
-import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
@@ -52,6 +66,8 @@ import { capReferenceMessageRows } from './history.js';
 import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
+import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS } from './historyViewReader';
 
 const log = createLogger('localDb/messages');
 
@@ -177,11 +193,7 @@ async function maybeBroadcastSessionListPreview(
   // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
   // 校验同一 clientId 的内容版本，交错改写会把旧正文写回非 NULL 缓存。
   // 侧栏即时刷新靠广播；下次 list/回填从 messages 现算。
-  broadcastOwnedPayload(
-    'local-db:sessions:patched',
-    { sessionId, patch: { preview } },
-    ownerScope,
-  );
+  broadcastOwnedPayload('local-db:sessions:patched', { sessionId, patch: { preview } }, ownerScope);
 }
 
 function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
@@ -190,9 +202,9 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
     const parsed: unknown = JSON.parse(agentMetaJson);
     return Boolean(
       parsed &&
-        typeof parsed === 'object' &&
-        !Array.isArray(parsed) &&
-        (parsed as { autoResume?: unknown }).autoResume === true,
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (parsed as { autoResume?: unknown }).autoResume === true,
     );
   } catch {
     return false;
@@ -226,8 +238,7 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'thinking',
 ] as const);
 
-export function registerMessageIpc(): void {
-  ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
+export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false) {
     const sid = requireString(sessionId, 'sessionId');
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
@@ -238,7 +249,7 @@ export function registerMessageIpc(): void {
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
     // 只在首页请求跑(分页跳过,#318 性能语义;首页判定 = 无任何分页游标),
     // 覆盖「被控端从未本机打开该会话」的导入缺口。
-    await runMessagesListImportSideEffects(
+    if (!skipImport) await runMessagesListImportSideEffects(
       sid,
       {},
       {
@@ -334,6 +345,73 @@ export function registerMessageIpc(): void {
         });
     }
     return listed;
+}
+
+export function registerMessageIpc(
+  readRunning: (sessionId: string) => boolean = () => false,
+  readLive: (sessionId: string) => Message[] = () => [],
+): void {
+  ipcMain.handle('local-db:messages:list', (_e, sessionId: unknown, opts: unknown) =>
+    readMessagesList(sessionId, opts));
+
+  const historyView = createHistoryViewReader({
+    list: readMessagesList,
+    running: readRunning,
+    live: readLive,
+    anchor: async (sessionId, id) => {
+      const db = getDbClient().drizzle;
+      const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
+      if (id.startsWith('history-live:')) {
+        const live = readLive(sessionId).find((row) => row.id === id);
+        if (live && (session.clearedAt === null || Date.parse(live.createdAt) > session.clearedAt)) return live;
+      }
+      const [row] = await db.select({ ...getMessageSelectFields(), rowid: messageRowid }).from(messages)
+        .where(and(eq(messages.sessionId, sessionId),
+          id.startsWith('history-live:') ? eq(messages.clientId, id.slice('history-live:'.length)) : eq(messages.id, id),
+          isNull(messages.rewindAt),
+          session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined)).limit(1);
+      if (!row) throwIpcError('NOT_FOUND', 'History range changed');
+      return messageToCamelWithRowid(row);
+    },
+  });
+  ipcMain.handle('local-db:messages:view', async (event, sessionId: unknown, opts: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const sid = requireString(sessionId, 'sessionId');
+    const before = (opts as { before?: unknown } | null)?.before;
+    const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before')).catch((error) => {
+      if (isHistoryViewUnavailable(error)) getDeviceLinkInvokeContext()?.historyView?.disable();
+      throw error;
+    });
+    if (before == null) {
+      const liveKeys = historyViewLeaves(page.items)
+        .filter((item) => item.type === 'work' && item.summary.isStreaming).map((item) => item.key);
+      getDeviceLinkInvokeContext()?.historyView?.update(liveKeys);
+    }
+    return page;
+  });
+  ipcMain.handle('local-db:messages:view-intent', (event, sessionId: unknown, refs: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    requireString(sessionId, 'sessionId');
+    if (!Array.isArray(refs) || refs.length > 100) throwIpcError('INVALID_PARAMS', 'Invalid expanded work groups');
+    const keys = refs.map((ref) => requireString(ref?.key, 'key').replace(/^preview-work-/, 'work-'));
+    getDeviceLinkInvokeContext()?.historyView?.setExpanded(keys);
+  });
+  ipcMain.handle('local-db:messages:work-details', async (event, sessionId: unknown, ref: unknown, opts: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const sid = requireString(sessionId, 'sessionId');
+    const value = ref as { key?: unknown; firstMessageId?: unknown; lastMessageId?: unknown; firstStoredMessageId?: unknown; lastStoredMessageId?: unknown; liveMessageIds?: unknown } | null;
+    const after = (opts as { after?: unknown } | null)?.after;
+    if (value?.liveMessageIds != null && (!Array.isArray(value.liveMessageIds) || value.liveMessageIds.length > MAX_HISTORY_SCAN_ROWS)) throwIpcError('INVALID_PARAMS', 'Invalid live work range');
+    return historyView.details(sid, {
+      key: requireString(value?.key, 'key'),
+      firstMessageId: requireString(value?.firstMessageId, 'firstMessageId'),
+      lastMessageId: requireString(value?.lastMessageId, 'lastMessageId'),
+      ...(value?.firstStoredMessageId == null ? {} : { firstStoredMessageId: requireString(value.firstStoredMessageId, 'firstStoredMessageId') }),
+      ...(value?.lastStoredMessageId == null ? {} : { lastStoredMessageId: requireString(value.lastStoredMessageId, 'lastStoredMessageId') }),
+      ...(Array.isArray(value?.liveMessageIds) ? { liveMessageIds: value.liveMessageIds.map((id) => requireString(id, 'liveMessageId')) } : {}),
+    }, after == null ? undefined : requireString(after, 'after'));
   });
 
   ipcMain.handle(
@@ -581,12 +659,14 @@ export function registerMessageIpc(): void {
       createdAt = parsed;
     }
 
+    const ipcMeta = b.agentMeta ? { ...(b.agentMeta as Record<string, unknown>) } : null;
+    if (ipcMeta) delete ipcMeta.autoReviewUserText;
     return createMessage(sid, {
       clientId: cid,
       role: b.role as MessageRole,
       content: b.content,
       toolUseId: typeof b.toolUseId === 'string' ? b.toolUseId : undefined,
-      agentMeta: (b.agentMeta as AgentMeta | null | undefined) ?? null,
+      agentMeta: ipcMeta as AgentMeta | null,
       createdAt,
     });
   });
@@ -601,7 +681,14 @@ export function registerMessageIpc(): void {
       if (agentMeta !== null && (typeof agentMeta !== 'object' || Array.isArray(agentMeta))) {
         throwIpcError('INVALID_PARAMS', 'agentMeta 必须是对象或 null');
       }
-      await updateAgentMeta(sid, cid, agentMeta === null ? null : JSON.stringify(agentMeta));
+      const ipcMeta = agentMeta ? { ...(agentMeta as Record<string, unknown>) } : null;
+      if (ipcMeta) delete ipcMeta.autoReviewUserText;
+      const serialized = ipcMeta ? JSON.stringify(ipcMeta) : null;
+      // Preserve Host-authored evidence atomically; the renderer may neither mint nor replace it.
+      await getDbClient().drizzle.update(messages).set({ agentMeta: sql`CASE
+        WHEN json_valid(${messages.agentMeta}) AND json_type(${messages.agentMeta}, '$.autoReviewUserText') IN ('text', 'object')
+        THEN json_set(${serialized ?? '{}'}, '$.autoReviewUserText', json_extract(${messages.agentMeta}, '$.autoReviewUserText'))
+        ELSE ${serialized} END` }).where(and(eq(messages.sessionId, sid), eq(messages.clientId, cid)));
     },
   );
 
@@ -610,6 +697,12 @@ export function registerMessageIpc(): void {
     async (_e, sessionId: unknown, clientId: unknown, content: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      // User edits invalidate authored text. Card display PATCHes cannot alter the
+      // independent Host-accepted answer (older renderers still send those PATCHes).
+      await getDbClient().drizzle.update(messages).set({
+        agentMeta: sql`CASE WHEN json_valid(${messages.agentMeta})
+          THEN json_remove(${messages.agentMeta}, '$.autoReviewUserText') ELSE ${messages.agentMeta} END`,
+      }).where(and(eq(messages.sessionId, sid), eq(messages.clientId, cid), eq(messages.role, 'user')));
       const msg = await updateMessageContent(sid, cid, content);
       if (!msg) throwIpcError('NOT_FOUND', 'Message 不存在');
       return msg;
@@ -979,13 +1072,9 @@ export async function commitMessageDeletion(
   try {
     const latest = await latestVisiblePreviewRow(sessionId);
     preview = extractMessagePreview(latest?.content, latest?.role);
-    await persistSessionListPreview(
-      sessionId,
-      preview,
-      latest?.role ?? null,
-      latest?.createdAt,
-      latest?.clientId,
-    );
+    // Keep the transaction's invalidation. Only SQL backfill may populate the
+    // raw Markdown cache; persisting this display text would parse code literals
+    // a second time on the next list read (and could overwrite a newer edit).
   } catch (error) {
     // 删除已经原子提交；message.delete 事务已把 list_preview / role / count 置 NULL，
     // 投影刷新失败不能把成功操作伪装成失败。广播保守空值，list 回落子查询。
@@ -1008,7 +1097,8 @@ export async function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
-    reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+    reason:
+      'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
     sourceUserClientId: string | null;
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
@@ -1027,7 +1117,9 @@ export async function commitContextRebuild(
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
-      ...(meta.replacementRoute ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId } : {}),
+      ...(meta.replacementRoute
+        ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId }
+        : {}),
       ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
       ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
       ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
@@ -1307,12 +1399,21 @@ export async function updateMessageContent(
   sessionId: string,
   clientId: string,
   content: unknown,
+  autoReviewAnswer?: { text: string; acceptedAt: number },
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const serialized = safeStringify(content);
-  await dbClient.tx('message.updateContent', {
+  if (autoReviewAnswer !== undefined) {
+    // Host-only interaction result: keep content and its authorization evidence atomic.
+    await db.update(messages).set({
+      content: serialized,
+      agentMeta: sql`json_set(CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END,
+        '$.autoReviewUserText', json(${JSON.stringify(autoReviewAnswer)}))`,
+    }).where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      inArray(messages.role, ['ask_user', 'plan_review'])));
+  } else await dbClient.tx('message.updateContent', {
     sessionId,
     clientId,
     content: serialized,
@@ -1505,35 +1606,35 @@ export async function createMessage(
       expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
     });
     if (guarded && inserted.changes === 0) {
-        const [existingAfterGuard] = await db
-          .select()
-          .from(messages)
-          .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-          .limit(1);
-        const [sessionAfterGuard] = await db
-          .select({ clearedAt: sessions.clearedAt })
-          .from(sessions)
-          .where(eq(sessions.id, sessionId))
-          .limit(1);
-        const actual = sessionAfterGuard?.clearedAt ?? null;
-        if (
-          existingAfterGuard &&
-          actual === expected &&
-          existingAfterGuard.rewindAt === null &&
-          (expected === null || existingAfterGuard.createdAt > expected)
-        ) {
-          return messageToCamel(existingAfterGuard);
-        }
-        if (actual !== expected) {
-          throw Object.assign(
-            new Error(
-              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
-            ),
-            { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
-          );
-        }
-        throw new Error('Message insert skipped without a clear-boundary change');
+      const [existingAfterGuard] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+        .limit(1);
+      const [sessionAfterGuard] = await db
+        .select({ clearedAt: sessions.clearedAt })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const actual = sessionAfterGuard?.clearedAt ?? null;
+      if (
+        existingAfterGuard &&
+        actual === expected &&
+        existingAfterGuard.rewindAt === null &&
+        (expected === null || existingAfterGuard.createdAt > expected)
+      ) {
+        return messageToCamel(existingAfterGuard);
       }
+      if (actual !== expected) {
+        throw Object.assign(
+          new Error(
+            `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
+          ),
+          { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
+        );
+      }
+      throw new Error('Message insert skipped without a clear-boundary change');
+    }
   } catch (err) {
     const after = await db
       .select()
@@ -2346,6 +2447,7 @@ export async function listMessagesForAgentHandoff(
   sessionId: string,
   limit = 400,
   after?: { createdAt: number; rowid: number },
+  role?: 'user' | 'authorization',
 ): Promise<
   Array<{
     clientId: string;
@@ -2371,6 +2473,13 @@ export async function listMessagesForAgentHandoff(
           gt(messages.createdAt, after.createdAt),
           and(eq(messages.createdAt, after.createdAt), gt(messageRowid, after.rowid)),
         );
+  // Bound authorization history by answer acceptance, not the earlier question time.
+  const authorityTime = sql<number>`CASE WHEN ${messages.role} IN ('ask_user', 'plan_review')
+    AND json_valid(${messages.agentMeta}) THEN CASE
+      WHEN json_type(${messages.agentMeta}, '$.autoReviewUserText.acceptedAt') IN ('integer', 'real')
+      AND json_type(${messages.agentMeta}, '$.autoReviewUserText.text') = 'text'
+      THEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.acceptedAt')
+      ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
   const rows = await db
     .select({
       rowid: messageRowid,
@@ -2383,9 +2492,11 @@ export async function listMessagesForAgentHandoff(
     })
     .from(messages)
     .where(
-      and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark),
+      and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
+        role === 'authorization' ? inArray(messages.role, ['user', 'ask_user', 'plan_review'])
+          : role ? eq(messages.role, role) : undefined),
     )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid))
     .limit(limit);
   rows.reverse();
   return rows

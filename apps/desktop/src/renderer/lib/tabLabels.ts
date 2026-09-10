@@ -25,9 +25,11 @@ export type SettingsTab =
   | 'builtin-tools'
   | 'pi-extensions'
   | 'computer-use'
+  | 'cindy-make'
   | 'im-bot'
   | 'help'
-  | 'about';
+  | 'about'
+  | 'storage';
 
 export const TAB_IDS = [
   'general',
@@ -53,6 +55,8 @@ export const TAB_IDS = [
   'ghosts',
   'builtin-tools',
   'computer-use',
+  'cindy-make',
+  'storage',
   'help',
   'about',
 ] as const satisfies ReadonlyArray<SettingsTab>;
@@ -77,9 +81,11 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   'builtin-tools': 'settings.tabs.builtinTools',
   'pi-extensions': 'settings.tabs.piExtensions',
   'computer-use': 'settings.tabs.computerUse',
+  'cindy-make': 'settings.tabs.cindyMake',
   'im-bot': 'settings.tabs.imBot',
   help: 'settings.tabs.help',
   about: 'settings.tabs.about',
+  storage: 'settings.tabs.storage',
 };
 
 // 只校验当前「可见/可路由」的 tab(即 TAB_IDS 里的项)。注意 `tina` 与

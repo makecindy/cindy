@@ -1944,6 +1944,11 @@
           "baseUrl": "https://open.bigmodel.cn/api/anthropic",
           "models": [
             {
+              "id": "glm-5.3[1m]",
+              "name": "GLM-5.3 (1M)",
+              "contextWindow": 1000000
+            },
+            {
               "id": "glm-5.2[1m]",
               "name": "GLM-5.2 (1M)",
               "contextWindow": 1000000
@@ -2083,6 +2088,11 @@
         "claude-code": {
           "baseUrl": "https://api.z.ai/api/anthropic",
           "models": [
+            {
+              "id": "glm-5.3[1m]",
+              "name": "GLM-5.3 (1M)",
+              "contextWindow": 1000000
+            },
             {
               "id": "glm-5.2[1m]",
               "name": "GLM-5.2 (1M)",

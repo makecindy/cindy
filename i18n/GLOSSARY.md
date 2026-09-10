@@ -195,6 +195,10 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
 
+### Cindy Make
+
+用户通过内置 /cindy-make 显式开启的 Cindy 个人版制作流程，先复用 /cindy-make-doctor 检查本机环境，再按平台补齐缺少的便携工具，并在消息流卡片中保留修改需求；Doctor 自身只检查，上游查询与构建分阶段接入。命令名已由用户指定，卡片保留同一专名。
+
 ### Content Update
 
 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
@@ -274,6 +278,10 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 ### Erika
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
+
+### Audio Generation
+
+V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。
 
 ### Compression
 
@@ -363,6 +371,30 @@ dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值
 
 已确定禁用：`开发版（仅当英文含 Dev）`（zh-CN）、`開発版（仅当英文含 Dev）`（ja）、`개발판（仅当英文含 Dev）`（ko）
 
+### Remote desktop
+
+同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。
+
+### Lock screen control
+
+Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。
+
+### Native resolution
+
+Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生.
+
+### Picture in picture
+
+Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
+
+### Computer resolution
+
+Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
+
+### Take over connection
+
+Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery.
+
 ### Activity Monitor
 
 独立窗口/兼容页签,展示本机进程 CPU/内存并可终止 Agent 进程。不可叫「任务管理器」——Session→任务 已 decided,会被读成管理左侧任务列表。不叫「用量」——会和 token / 账号 Usage→用量 混淆(#3183)。「资源监视器」是窗口标题,看的是本机资源占用,不是输入监控;输入监控权限仍用「监听权限」。
@@ -370,6 +402,14 @@ dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值
 ### Role name
 
 Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改变 Agent、模型、权限或能力。先登记为 proposed，避免「角色 / 名称 / Role」多套说法并存。
+
+### Routine
+
+伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。
+
+### Trigger
+
+例行任务的时间或事件触发条件。
 
 ### Run records
 

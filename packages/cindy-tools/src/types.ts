@@ -347,6 +347,8 @@ export type CindyMediaToolRequest =
 
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
+  /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
+  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**

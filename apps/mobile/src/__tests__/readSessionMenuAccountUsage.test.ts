@@ -29,6 +29,16 @@ const reader = () => ({
 });
 
 describe("existing remote quota compatibility", () => {
+  it('reads the selected independent account and never falls back after its read fails', async () => {
+    const r = reader();
+    const provider = { id: 'openai-second', auth: { method: 'oauth' as const, native: 'codex' as const } };
+    const selected = { ...session, providerId: provider.id };
+    await readSessionMenuAccountUsage(selected, r, provider);
+    expect(r.getCodexRateLimits).toHaveBeenCalledWith(provider.id);
+    r.getCodexRateLimits.mockRejectedValue(new Error('legacy host'));
+    await expect(readSessionMenuAccountUsage(selected, r, provider)).rejects.toThrow('legacy host');
+    expect(r.getAccountUsage).not.toHaveBeenCalled();
+  });
   it("reads Codex quota using only the existing transport methods", async () => {
     const r = reader();
     const result = await readSessionMenuAccountUsage(session, r);

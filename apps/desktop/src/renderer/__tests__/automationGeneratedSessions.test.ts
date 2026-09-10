@@ -526,13 +526,14 @@ describe('automation-generated sessions', () => {
     );
 
     expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
-    expect(sessionViewSource).toContain('scheduleSessionInfo?.hasFailedRun');
+    expect(sessionViewSource).toContain('scheduleSessionInfo.hasFailedRun');
+    expect(sessionViewSource).toContain('shouldShowFailedScheduleNotice({');
     expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
     expect(sessionViewSource).toContain('latestUnreadFailedRunId');
-    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined)');
     expect(sessionViewSource).toContain(
-      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded)',
+      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined)',
     );
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
     expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
@@ -1075,7 +1076,8 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain("eq(sessions.source, 'scheduler')");
     expect(storageSource).toContain('listDirectScheduleIdsByLegacyKey');
     expect(storageSource).toContain('directScheduleId && directScheduleId !== row.id');
-    expect(scheduleIndexHookSource).toContain('nextFireAt: run.nextFireAt');
+    expect(scheduleIndexHookSource).toContain('projectScheduleSidebarIndex(runs)');
+    expect(readFileSync(new URL('../features/scheduler/lib/projectScheduleSidebarIndex.ts', import.meta.url), 'utf8')).toContain('nextFireAt: run.nextFireAt');
     expect(preloadSource).toContain('listSidebarIndexRuns');
   });
 

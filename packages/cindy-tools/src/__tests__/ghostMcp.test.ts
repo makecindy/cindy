@@ -1959,3 +1959,24 @@ describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () =>
     expect(callGhostTool.mock.calls[1][0]).not.toHaveProperty("agentToolUseId");
   });
 });
+
+describe('connect_account transport', () => {
+  it('exposes a Host connection without requiring an installed plugin', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ listAwakeGhosts: async () => [], connectAccount }));
+    const client = new Client({ name: 'test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined });
+      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
+      expect(rejected.isError).toBe(true);
+      expect(connectAccount).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+});

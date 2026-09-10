@@ -4,6 +4,7 @@ import { clipboard, nativeImage } from 'electron';
 
 import type {
   IOSSimulatorNativeH264StreamProfileRequest,
+  IOSSimulatorPreferences,
   IOSSimulatorRendererToolName,
   IOSSimulatorSessionStatus,
   IOSSimulatorToolResponse,
@@ -22,6 +23,10 @@ import {
   setIOSSimulatorViewerStreamProfile,
   updateIOSSimulatorViewerTouch,
 } from '../mcp-integrations/ios-simulator.js';
+import {
+  readIOSSimulatorPreferences,
+  writeIOSSimulatorAutoOpenEmbeddedPanel,
+} from '../mcp-integrations/ios-simulator-preferences.js';
 import {
   getIOSSimulatorRendererSessionAccess,
   getIOSSimulatorRendererViewerAccess,
@@ -43,6 +48,8 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 const log = createLogger('maker-ipc:ios-simulator');
 
 type IOSSimulatorIpcOperation =
+  | 'get-preferences'
+  | 'set-preferences'
   | 'request-access'
   | 'status'
   | 'call-tool'
@@ -56,6 +63,8 @@ type IOSSimulatorIpcOperation =
   | 'live-touch';
 
 const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> = {
+  'get-preferences': 'iOS Simulator preferences are temporarily unavailable.',
+  'set-preferences': 'iOS Simulator preferences could not be updated.',
   'request-access': 'iOS Simulator access could not be requested.',
   status: 'iOS Simulator status is temporarily unavailable.',
   'call-tool': 'iOS Simulator operation failed.',
@@ -75,6 +84,8 @@ export interface IOSSimulatorHandlerDeps {
   getSessionContext(sessionId: string): Promise<{ workingDir: string | null } | null>;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
+  getPreferences(): IOSSimulatorPreferences;
+  setAutoOpenEmbeddedPanel(enabled: boolean): Promise<IOSSimulatorPreferences>;
   getSessionAccess(
     target: IOSSimulatorRendererWebContents,
   ): IOSSimulatorRendererAccessSnapshot | null;
@@ -175,6 +186,8 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
   getSessionContext: async () => null,
   getOwnerScopeKey: activeOwnerScopeKey,
   isOwnerBoundaryPending: isAppSessionBoundaryPending,
+  getPreferences: readIOSSimulatorPreferences,
+  setAutoOpenEmbeddedPanel: writeIOSSimulatorAutoOpenEmbeddedPanel,
   getSessionAccess: getIOSSimulatorRendererSessionAccess,
   getViewerAccess: getIOSSimulatorRendererViewerAccess,
   hasViewerAccess: hasIOSSimulatorRendererViewerAccess,
@@ -340,6 +353,31 @@ function readSenderWebContents(event: unknown): IOSSimulatorRendererWebContents 
   return sender as IOSSimulatorRendererWebContents;
 }
 
+async function callIOSSimulatorPreferences<T>(
+  deps: IOSSimulatorHandlerDeps,
+  operation: 'get-preferences' | 'set-preferences',
+  call: () => T | Promise<T>,
+): Promise<T> {
+  const ownerScopeKey = deps.getOwnerScopeKey();
+  const assertOwnerScopeCurrent = (): void => {
+    if (deps.isOwnerBoundaryPending() || deps.getOwnerScopeKey() !== ownerScopeKey) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'iOS Simulator preferences changed owner while handling the request. Retry the operation.',
+      );
+    }
+  };
+  assertOwnerScopeCurrent();
+  try {
+    const result = await call();
+    assertOwnerScopeCurrent();
+    return result;
+  } catch (error) {
+    assertOwnerScopeCurrent();
+    throwIOSSimulatorIpcError(deps, operation, error);
+  }
+}
+
 export function registerIOSSimulatorHandlers(
   registry: IpcHandlerRegistry,
   deps: Partial<IOSSimulatorHandlerDeps> = {},
@@ -431,6 +469,18 @@ export function registerIOSSimulatorHandlers(
       }
     });
   };
+  handle(MAKER_INVOKE.IOS_SIMULATOR_GET_PREFERENCES, () =>
+    callIOSSimulatorPreferences(resolved, 'get-preferences', () => resolved.getPreferences()),
+  );
+  handle(MAKER_INVOKE.IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL, (_event, payload) => {
+    const record = readRecord(payload);
+    if (typeof record.enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enabled (boolean) required');
+    }
+    return callIOSSimulatorPreferences(resolved, 'set-preferences', () =>
+      resolved.setAutoOpenEmbeddedPanel(record.enabled as boolean),
+    );
+  });
   handle(MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, async (event, payload) => {
     const sessionId = readSessionId(payload);
     const sender = readSenderWebContents(event);

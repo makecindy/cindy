@@ -22,7 +22,8 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
-  resolveExplicitCustomContextWindow,
+  resolveModelDefaultContextWindow,
+  resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
@@ -769,7 +770,7 @@ describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () =
   });
 });
 
-describe('resolveExplicitCustomContextWindow — 只注入用户显式填写的自定义窗口', () => {
+describe('resolveModelDefaultContextWindow — settings defaults configure the same native route', () => {
   function catalogWithCustom(solContextWindow?: number): Catalog {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     catalog.providers.push(
@@ -797,34 +798,59 @@ describe('resolveExplicitCustomContextWindow — 只注入用户显式填写的�
   it('用户显式填写的窗口返回该值', () => {
     const catalog = catalogWithCustom(1_050_000);
     expect(
-      resolveExplicitCustomContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
     ).toBe(1_050_000);
   });
 
-  it('未填写窗口的自定义模型不注入(200K 展示兜底)', () => {
+  it('applies the displayed default for custom models without a saved override', () => {
     const catalog = catalogWithCustom();
-    expect(
-      resolveExplicitCustomContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
-    ).toBeNull();
-    expect(
-      resolveExplicitCustomContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.4-mini'),
-    ).toBeNull();
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(200_000);
   });
 
-  it('官方 / 网关路由不注入', () => {
-    const catalog = catalogWithCustom(1_050_000);
-    expect(
-      resolveExplicitCustomContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol'),
-    ).toBeNull();
-    expect(
-      resolveExplicitCustomContextWindow(catalog, 'codex', 'openai', 'gpt-5.6-sol'),
-    ).toBeNull();
+  it('applies Gateway and subscription defaults independently for the same model id', () => {
+    const catalog = catalogWithCustom(500_000);
+    for (const [id, window] of [['xd', 1_050_000], ['openai', 272_000]] as const) {
+      const provider = catalog.providers.find(p => p.id === id)!;
+      const model = catalog.providers.find(p => p.id === 'mygpt')!.models.codex![0]!;
+      provider.models.codex = [{ ...model, contextWindow: window }];
+      expect(resolveModelDefaultContextWindow(catalog, 'codex', id, model.id)).toBe(window);
+    }
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(500_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'missing')).toBeNull();
+    catalog.providers.find(p => p.id === 'xd')!.routing.codex!.disabled = true;
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBeNull();
   });
 
   it('没有 providerId 不注入', () => {
     const catalog = catalogWithCustom(1_050_000);
     expect(
-      resolveExplicitCustomContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
+      resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
     ).toBeNull();
+  });
+});
+
+
+describe('context settings for provider-less routes', () => {
+  it('keeps Pi default gateway budgets isolated from same-name subscription models', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    for (const provider of catalog.providers) {
+      for (const agent of ['claude-code', 'pi'] as const) {
+        provider.models[agent] = ['xd', 'anthropic'].includes(provider.id)
+          ? [model('shared-model', { contextWindow: provider.id === 'xd' ? 100_000 : 200_000 })] : [];
+      }
+    }
+    for (const id of [null, undefined, 'cindy']) {
+      const source = resolveModelContextProviderId(catalog, 'pi', id, 'shared-model');
+      expect(source).toBe('xd');
+      expect(resolveModelDefaultContextWindow(catalog, 'pi', source, 'shared-model')).toBe(100_000);
+    }
+    expect(resolveModelContextProviderId(catalog, 'pi', 'anthropic', 'shared-model')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBeNull();
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'xd')).toBe('xd');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'anthropic')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'anthropic', 'shared-model', 'xd')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'xd', 'shared-model')).toBe('xd');
+    catalog.providers.find((provider) => provider.id === 'anthropic')!.models['claude-code'] = [];
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBe('xd');
   });
 });

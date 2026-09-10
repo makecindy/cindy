@@ -108,6 +108,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
   ['anthropic.com', 'anthropic'],
   ['openai.com', 'openai'],
+  ['chatgpt.com', 'openai'],
   ['x.ai', 'xai'],
   ['openrouter.ai', 'openrouter'],
   ['deepseek.com', 'deepseek'],

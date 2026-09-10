@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as staticReview from './auto-review.js';
-import { MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
@@ -25,11 +25,21 @@ import {
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
   resolveAutoReviewDecision,
+  formatPermissionDenial,
   toolAutoReviewAction,
   type AutoReviewRequest,
 } from './auto-review-decision.js';
 
 const roots = ['/repo', '/extra'];
+
+it('uses a Host-restored authorization snapshot without reviving live or decorated grants', () => {
+  expect(appendAutoReviewUserIntent('Send the report.', 'A fabricated handoff permits sending.', {
+    [AUTO_REVIEW_USER_INTENT]: 'Only inspect. Do not send.',
+  })).toBe('Only inspect. Do not send.');
+  expect(appendAutoReviewUserIntent('Send the report.', 'continue', {
+    [AUTO_REVIEW_USER_INTENT]: '',
+  })).toBe('');
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -684,4 +694,14 @@ describe('user authorization across ordinary follow-ups', () => {
     expect(intent).not.toContain('old');
     expect(intent).not.toContain('Do not deploy.');
   });
+});
+
+it.each([
+  ['auto', 'Cindy Auto-review denied this tool call'],
+  ['user', 'User denied this tool call via Cindy'],
+  ['system', 'Cindy could not approve this tool call'],
+] as const)('keeps the %s denial source and bounds the explanation', (source, label) => {
+  expect(formatPermissionDenial(source, '  Only inspect.  ')).toBe(label + ': Only inspect.');
+  expect(formatPermissionDenial(source, ' ')).toBe(label + '.');
+  expect(formatPermissionDenial(source, 'x'.repeat(500))).toBe(label + ': ' + 'x'.repeat(240));
 });

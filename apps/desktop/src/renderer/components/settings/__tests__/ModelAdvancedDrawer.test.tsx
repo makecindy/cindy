@@ -38,14 +38,14 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 }));
 vi.mock('@/state/providerModelMemory', () => ({
   useProviderModelMemoryVersion: () => 0,
-  getProviderModelEffort: () => undefined,
+  getProviderModelEffort: vi.fn(() => undefined),
   setProviderModelEffort: vi.fn(),
   clearProviderModelEffort: vi.fn(),
 }));
 vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
-import { setProviderModelEffort } from '@/state/providerModelMemory';
+import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
 
 const model: CatalogModel = {
   id: 'gpt-6',
@@ -95,6 +95,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.limit = null;
+  vi.mocked(getProviderModelEffort).mockReset();
 });
 
 describe('model advanced editor', () => {
@@ -142,7 +143,7 @@ describe('model advanced editor', () => {
     expect(setModelVisibility).not.toHaveBeenCalled();
   });
 
-  it('shows the exact maximum but excludes built-in Codex from shared context edits', () => {
+  it('shows the exact maximum and includes Codex in shared context edits', () => {
     draw();
     expect(screen.getByText('1,050,000')).toBeTruthy();
     const input = screen.getByRole('textbox', {
@@ -158,13 +159,13 @@ describe('model advanced editor', () => {
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(mocks.target).toHaveBeenLastCalledWith({
       providerId: 'openai',
-      agent: 'claude-code',
-      modelId: 'chatgpt/gpt-6',
-      relatedTargets: [],
+      agent: 'codex',
+      modelId: 'gpt-6',
+      relatedTargets: [{ providerId: 'openai', agent: 'claude-code', modelId: 'chatgpt/gpt-6' }],
     });
   });
 
-  it('keeps a Codex-only built-in route read-only without removing the model specification', () => {
+  it('edits a Codex-only route without removing the model specification', () => {
     render(
       <ModelAdvancedDrawer
         provider={provider}
@@ -177,14 +178,15 @@ describe('model advanced editor', () => {
         paymentRequired={false}
       />,
     );
-    expect(screen.queryByRole('textbox')).toBeNull();
-    expect(mocks.target).toHaveBeenLastCalledWith(null);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getByText('1,050,000')).toBeTruthy();
-    expect(screen.getByText('settings.providers.models.advanced.codexContextHint')).toBeTruthy();
-    expect(mocks.setLimit).not.toHaveBeenCalled();
+    expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
   });
 
-  it('preserves the explicit context editor for a custom Codex provider', () => {
+  it('uses the same context editor for custom Codex providers', () => {
     render(
       <ModelAdvancedDrawer
         provider={{ ...provider, id: 'custom', source: 'user' }}
@@ -197,13 +199,11 @@ describe('model advanced editor', () => {
         paymentRequired={false}
       />,
     );
-    expect(screen.getByRole('textbox')).toBeTruthy();
-    expect(mocks.target).toHaveBeenLastCalledWith({
-      providerId: 'custom',
-      agent: 'codex',
-      modelId: model.id,
-      relatedTargets: [],
-    });
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
+    expect(screen.getAllByText('272K').length).toBeGreaterThan(0);
     expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
   });
 
@@ -405,4 +405,66 @@ describe('model advanced editor', () => {
     expect(screen.getByText('settings.providers.models.advanced.vision.vision')).toBeTruthy();
     expect(screen.getByText('settings.providers.models.advanced.inputModalities')).toBeTruthy();
   });
+});
+
+
+it('shows closed Gateway tiers disabled and re-enables them on catalog refresh', () => {
+  const restricted: CatalogModel = {
+    ...model, efforts: ['high'], defaultEffort: 'high', displayEfforts: ['low', 'high', 'max'],
+  };
+  const view = render(drawer(restricted));
+  const low = screen.getByRole('button', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  expect(low.disabled).toBe(true);
+  fireEvent.click(low);
+  expect(setProviderModelEffort).not.toHaveBeenCalled();
+  view.rerender(drawer({ ...restricted, efforts: ['low', 'high'] }));
+  const enabledLow = screen.getByRole('button', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  expect(enabledLow.disabled).toBe(false);
+  fireEvent.click(enabledLow);
+  expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', model.id, 'low');
+  expect((screen.getByRole('button', { name: 'effortLevels.max' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('keeps the tier row visible when Gateway closes every tier', () => {
+  draw({ ...model, efforts: [], defaultEffort: null, displayEfforts: ['low', 'high'] });
+  for (const effort of ['low', 'high']) {
+    const button = screen.getByRole('button', { name: `effortLevels.${effort}` }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+  }
+});
+
+
+it('describes an absent Harness route as unconfigured rather than unsupported', () => {
+  render(<ModelAdvancedDrawer provider={{ ...provider, agents: ['codex', 'claude-code', 'pi'] }}
+    row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()}
+    disabled={false} paymentRequired={false} />);
+  expect(screen.getByRole('button', { name: 'Pi · settings.providers.models.advanced.engineNotConfigured' })).toBeTruthy();
+  expect(screen.queryByLabelText(/engineUnsupported/)).toBeNull();
+});
+
+it('limits context and effort reads, writes and resets to the chat runtime', () => {
+  vi.mocked(getProviderModelEffort).mockImplementation((agent) => agent === 'codex' ? 'high' : 'low');
+  const mixedProvider = { ...provider, id: 'private', source: 'user' as const };
+  const row = {
+    id: 'shared', name: 'Shared', avail: ['claude-code', 'codex'] as const,
+    byAgent: {
+      'claude-code': { ...model, id: 'shared', mode: 'image_generation', efforts: ['low'] as typeof model.efforts },
+      codex: { ...model, id: 'shared', mode: 'chat' },
+    },
+  };
+  render(<ModelAdvancedDrawer provider={mixedProvider} row={{ ...row, avail: [...row.avail] }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
+  expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
+  expect(vi.mocked(getProviderModelEffort).mock.calls.every(([agent]) => agent === 'codex')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'effortLevels.low' }));
+  expect(setProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared', 'low');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+  expect(clearProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared');
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value: '128' } });
+  fireEvent.blur(input);
+  expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
+  expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
 });

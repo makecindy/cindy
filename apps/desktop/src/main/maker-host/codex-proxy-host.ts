@@ -1,3 +1,4 @@
+import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 codex-proxy 生命周期管理 ——
  *
@@ -41,6 +42,7 @@ import {
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesCustomToolFunctionAdapter,
+  normalizeResponsesToolItemIds,
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
@@ -168,6 +170,12 @@ const _customContextStartPromises = new Map<
   { authInjection: CodexProxyAuthInjection; routeSignature: string; promise: Promise<void> }
 >();
 const _customContextGenerations = new Map<string, number>();
+/** Each handle owns its live thread/socket mapping, including isolated Host proxies. */
+function* activeCodexProxyHandles(): Iterable<ProxyHandle> {
+  if (_handle) yield _handle;
+  yield* _controlPlaneHandles.values();
+  for (const entry of _customContextHandles.values()) yield entry.handle;
+}
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
@@ -191,10 +199,20 @@ const CODEX_BODY_RECOVERY_RULES = [
   vllmResponsesCompatibilityRule,
 ] as const;
 
+/** Only fall back for the exact dialect mismatches the outgoing normalizer can repair. */
+function isRepairableToolItemIdError(errorText: string): boolean {
+  // Codex additionalDetails may contain an escaped JSON error inside another error envelope.
+  const text = errorText.replace(/\\+(?=["'])/g, '');
+  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
+  if (!match) return false;
+  return ({ fc: 'ctc', fco: 'ctco', ctc: 'fc', ctco: 'fco' } as Record<string, string>)[match[1]!]
+    === match[2]!;
+}
+
 /**
  * WS 已建立后 proxy 只转发 socket，真正的上游请求错误会由 app-server 报给 maker-core。
- * maker-core 把错误文本回传到这里，由与 HTTP recovery 完全相同的 rule 判定并登记：
- * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，既有 strip+retry 接管。
+ * maker-core 把错误文本回传到这里，仅识别 HTTP recovery rule 或已知可校正的工具 ID 错配。
+ * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，由请求校正／strip 接管。
  */
 export function armCodexHttpRecovery(args: {
   sessionId: string;
@@ -212,7 +230,8 @@ export function armCodexHttpRecovery(args: {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  if (!rule) return null;
+  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
   const existingSessionId = threadToSession.get(threadId);
@@ -224,8 +243,11 @@ export function armCodexHttpRecovery(args: {
     });
     return null;
   }
-  httpRecoveryReasonByThread.set(threadId, rule.id);
-  const disconnectedWebSockets = _handle?.disconnectWebSocketsForThread?.(threadId) ?? 0;
+  httpRecoveryReasonByThread.set(threadId, reason);
+  let disconnectedWebSockets = 0;
+  for (const handle of activeCodexProxyHandles()) {
+    disconnectedWebSockets += handle.disconnectWebSocketsForThread?.(threadId) ?? 0;
+  }
   if (disconnectedWebSockets === 0) {
     httpRecoveryReasonByThread.delete(threadId);
     // startup-prewarm 没有稳定 thread header，且 shared app-server 会跨业务 session
@@ -234,7 +256,7 @@ export function armCodexHttpRecovery(args: {
     log.info('codex websocket recovery left to native transport; no scoped socket found', {
       sessionId,
       threadId,
-      reason: rule.id,
+      reason,
     });
     return null;
   }
@@ -250,10 +272,10 @@ export function armCodexHttpRecovery(args: {
   log.info('codex websocket recovery fallback armed', {
     sessionId,
     threadId,
-    reason: rule.id,
+    reason,
     disconnectedWebSockets,
   });
-  return rule.id;
+  return reason;
 }
 
 // codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
@@ -1069,7 +1091,7 @@ function createChatBridgeDecision(
     // 出站代理;显式注入代理感知 fetch(见 outbound-fetch.ts)。
   }, { logger: log, fetchImpl: outboundFetch });
   return {
-    localHandler: ({ rawBody, parsedBody, res }) => {
+    localHandler: ({ rawBody, parsedBody, ctx, res }) => {
       const body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
@@ -1080,7 +1102,10 @@ function createChatBridgeDecision(
         providerId,
         upstreamBase: route.routing.upstream,
       });
-      return handler.handle({ parsedBody: body, res });
+      // 只把入站头快照交给 bridge 解析稳定会话 ID(→ x-opencode-session,#4073);bridge 不透传
+      // 这些头,凭证与 Codex 账号头仍由 buildLocalHandlerHeaders 的隔离边界管。
+      // ctx 在生产路径恒有;既有测试与旧调用方可能省略,按「无入站头」处理即不附加会话头。
+      return handler.handle({ parsedBody: body, res, requestHeaders: ctx?.headers });
     },
   };
 }
@@ -1272,8 +1297,7 @@ function createAnthropicBridgeDecision(
   // For Codex, provider-oauth-header is the subscription-safe route: the host
   // injects the Claude.ai token and never forwards the Codex/OpenAI bearer.
   if (
-    route.providerId === 'anthropic'
-    && route.providerSource === 'builtin'
+    isClaudeSubscriptionProviderId(route.providerId)
     && route.routing.authStrategy === 'provider-oauth-header'
     && !route.oauthToken
   ) {
@@ -1296,8 +1320,7 @@ function createAnthropicBridgeDecision(
   const usesProviderOAuth = route.routing.authStrategy === 'provider-oauth-header';
   const isAnthropicSubscriptionOAuth =
     usesProviderOAuth
-    && route.providerId === 'anthropic'
-    && route.providerSource === 'builtin';
+    && isClaudeSubscriptionProviderId(route.providerId);
   const buildProviderHeaders = (token: string | null): Record<string, string> => {
     const { headers: baseHeaders } = buildLocalHandlerHeaders(
       token === route.oauthToken ? route : { ...route, oauthToken: token },
@@ -3242,6 +3265,9 @@ function createTransformRequestChain(
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
     buildVisionBridgeProxyTransform(log),
+    // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
+    // This covers native-custom routes and tool-less /responses/compact without changing call_id.
+    normalizeResponsesToolItemIds,
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -3350,9 +3376,26 @@ function createCodexProxyHandle(
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter),
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter).map(
+      (transform): RequestTransform => {
+        // Namespaced Responses use a frozen Provider route. Preserve its native
+        // fields and model; only repair known tool ID mismatches on this path.
+        if (transform === normalizeResponsesToolItemIds) return transform;
+        const scoped: RequestTransform = (body, ctx) =>
+          isCodexCustomProviderNamespacePath(ctx.url) ? null : transform(body, ctx);
+        // Keep adapter rejection and request-state cleanup on ordinary routes.
+        scoped.errorMode = transform.errorMode;
+        scoped.onRequestSettled = transform.onRequestSettled;
+        return scoped;
+      },
+    ),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
-    bypassRequestTransforms: (_body, ctx) => isCodexCustomProviderNamespacePath(ctx.url),
+    bypassRequestTransforms: (_body, ctx) => {
+      const path = parseCodexCustomProviderPath(ctx.url);
+      // Image payloads (including JSON) retain their byte-for-byte bypass.
+      return path.kind !== 'not-custom-provider-route'
+        && !(path.kind === 'route' && path.pathKind === 'responses');
+    },
     transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
       contentType: ctx.responseHeaders['content-type'] ?? '',
       contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
@@ -3374,7 +3417,10 @@ function createCodexProxyHandle(
         resolveUserProviderName: (providerId) =>
           getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
       }),
-      createXaiProxyAuthInvalidationObserver(),
+      createXaiProxyAuthInvalidationObserver((ctx) => {
+        const sessionId = sessionIdFromHeaders(ctx.requestHeaders);
+        return sessionId ? getSessionProvider(sessionId) : null;
+      }),
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
@@ -3819,7 +3865,9 @@ function clearSessionThreads(sessionId: string): string[] {
       // Session 关闭既可能是普通释放，也可能是 OAuth ↔ 第三方模型的 route 切换。
       // 两种情况都必须撤销旧 thread 的 WS 成功证明：第三方恢复使用 cindy_gateway/HTTP，
       // 迟到的旧 upgrade 不能命中本次新增的 Cindy 侧 WS 保活；其他 thread 不受影响。
-      _handle?.forgetWebSocketStateForThread?.(threadId);
+      for (const handle of activeCodexProxyHandles()) {
+        handle.forgetWebSocketStateForThread?.(threadId);
+      }
       threadToSession.delete(threadId);
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);

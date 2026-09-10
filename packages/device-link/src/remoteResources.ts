@@ -72,6 +72,8 @@ export interface RemoteResourceDisplay {
   subtitle?: RemoteText;
   preview?: RemoteText;
   timestamp?: number;
+  /** Latest visible reply in host time; controllers keep their own read position. */
+  lastReplyAt?: number;
   avatar?: RemoteResourceAvatar;
   status?: RemoteResourceStatus;
   badges?: RemoteResourceBadge[];
