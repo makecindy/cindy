@@ -37,7 +37,7 @@
     "queuePositionNth": "第 {{index}}",
     "composerBlockedByPending": "先處理電腦端的待處理請求後才能繼續輸入。",
     "missingRequestId": "這個遠端互動缺少 requestId，無法回傳決定。",
-    "desktopConfirmUnsupported": "此確認只能在被控電腦處理。請回到桌面端繼續。",
+    "desktopConfirmUnsupported": "此確認只能在遠端電腦處理。請回到桌面端繼續。",
     "unsupportedType": "手機版暫不支援這個遠端互動型別。",
     "unsupportedKind": "暫不支援",
     "desktopOnlyKind": "電腦端處理",
@@ -171,7 +171,7 @@
     "goalObjectiveAccessibility": "目標內容",
     "goalPlaceholder": "想要達成什麼？Agent 會圍繞這個目標自動續跑，直到完成或達到限制。",
     "advancedSettings": "進階設定",
-    "limitsHint": "未改動時跟隨被控端的預設限制；達到任一上限時目標自動停止，可隨時手動終止；「不限」表示不設該上限。",
+    "limitsHint": "未改動時跟隨遠端電腦的預設限制；達到任一上限時目標自動停止，可隨時手動終止；「不限」表示不設該上限。",
     "maxTurns": "最大輪數",
     "tokenBudget": "Token 預算",
     "noProgressLimit": "無進展上限",
@@ -193,7 +193,7 @@
     "photoNotReadable": "這張照片暫時無法讀取(可能還沒從 iCloud 下載完成)，請稍後重試。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "請在被控桌面完成設定，本卡片會自動更新狀態。",
+    "completeOnDesktop": "請在遠端電腦完成設定，本卡片會自動更新狀態。",
     "chooseOne": "選擇一種配置方式",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在電腦端{{action}}",

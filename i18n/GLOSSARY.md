@@ -383,6 +383,10 @@ dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值
 
 已确定禁用：`开发版（仅当英文含 Dev）`（zh-CN）、`開発版（仅当英文含 Dev）`（ja）、`개발판（仅当英文含 Dev）`（ko）
 
+### Remote computer
+
+用户可见文案用具体对象说明连接与操作，避免被控端、被控电脑等实现术语；指当前电脑时用这台电脑，指保存密码的位置时用此设备。
+
 ### Remote desktop
 
 同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。
@@ -406,6 +410,10 @@ Remote desktop display controls; resolution changes the host display, small wind
 ### Take over connection
 
 Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery.
+
+### Remote device
+
+远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
 
 ### Activity Monitor
 

@@ -44,9 +44,9 @@
     "viewOnly": "仅查看",
     "upgrade": "请升级电脑端 Cindy 后使用远程桌面。",
     "disabled": "请在电脑端的设置 → 远程控制中开启远程桌面。",
-    "busy": "桌面输入正在使用中。请让其他设备释放控制，或等待 Agent 操作结束。",
+    "busy": "其他设备或 Agent 正在操作电脑。请先停止其他设备的操作，或等待 Agent 操作结束。",
     "connectionError": "连接已结束。请检查电脑是否在线，然后重新连接。",
-    "releaseControl": "释放控制",
+    "releaseControl": "停止操作",
     "takeControl": "接管操作",
     "pointer": "触控板",
     "touch": "触屏",
@@ -3089,7 +3089,7 @@
       "entryTitle": "Pi 扩展设置",
       "entryDescription": "安装、启用或卸载 Cindy 的 Pi 扩展",
       "backToGeneral": "返回通用",
-      "description": "扩展只安装并运行在这台设备的 Cindy 中，不会传到手机或其他控制端。无论任务从哪里发起，只要由这台设备的普通 Pi 执行都会生效；Review 不加载。",
+      "description": "扩展只安装并运行在这台设备的 Cindy 中，不会传到手机或其他设备。无论任务从哪里发起，只要由这台设备的普通 Pi 执行都会生效；Review 不加载。",
       "installSectionTitle": "安装扩展",
       "installSectionDescription": "粘贴 pi.dev 页面上的安装来源，或输入 npm 包名、Git 地址、本地绝对路径。",
       "installedSectionTitle": "已安装",
@@ -3259,13 +3259,13 @@
         "resetToDefault": "恢复默认",
         "toggleFailed": "切换浏览器目标失败",
         "health": {
-          "ready": "内置浏览器控制端已连接。",
+          "ready": "内置浏览器已连接。",
           "error": "内置浏览器连接异常：{{reason}}。点击「恢复浏览器」重建控制连接。",
           "reasons": {
             "disposing": "上一次关闭尚未完成",
             "hostUnavailable": "内置浏览器界面尚未就绪或连接已中断",
-            "startFailed": "新的控制端未能启动",
-            "statusFailed": "控制端状态检查失败",
+            "startFailed": "浏览器连接未能启动",
+            "statusFailed": "无法检查浏览器连接状态",
             "recoveryFailed": "控制连接未能重建"
           },
           "reconnect": "重新连接浏览器",
@@ -3551,7 +3551,7 @@
         "controlIt": "我控制它",
         "allowInbound": "允许它控制本机",
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
-        "peerControlOff": "对方未开启被控",
+        "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
         "controllingThisMac": "正在控制本机"
       },
@@ -3828,7 +3828,7 @@
       "title": "设备互联",
       "description": "同一飞书账号登录的设备可以互相发现；开启「允许控制」后，你的其它设备可以远程连接本机的 {{appName}}。",
       "allowControl": "允许同账号设备控制本机",
-      "allowControlHint": "开启后，使用同一账号登录的其它设备无需逐次确认即可控制本机；本机会显示被控状态，可随时断开。",
+      "allowControlHint": "开启后，使用同一账号登录的其它设备无需逐次确认即可控制本机；本机会显示远程控制提示，可随时断开。",
       "keepAwake": "保持电脑唤醒",
       "keepAwakeHint": "开启后本机不会进入休眠，后台的 Agent 与定时任务可持续运行(仍可关闭显示器 / 锁屏)。",
       "linkStatus": {
@@ -3866,7 +3866,7 @@
       },
       "toast": {
         "enabled": "已允许同账号设备控制本机",
-        "disabled": "已关闭被控",
+        "disabled": "已关闭远程控制",
         "toggleFailed": "切换开关失败",
         "controlEnabled": "已开启对该设备的控制",
         "controlDisabled": "已关闭对该设备的控制",
@@ -3880,7 +3880,7 @@
         "deleteFailed": "删除失败",
         "disconnected": "已断开所有远程连接",
         "disconnectFailed": "断开远程连接失败",
-        "remoteSessionEnded": "被控设备已结束该远程任务"
+        "remoteSessionEnded": "远程设备已结束该远程任务"
       },
       "control": "控制",
       "standbyHint": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。"
@@ -5622,8 +5622,8 @@
     "controlledTooltip": "另一台登录同账号的设备正在远程控制本机。你可以撤销其访问权限。",
     "revokeAccess": "撤销权限",
     "viewControllers": "查看",
-    "collapseControlledNotice": "收起被控提示",
-    "expandControlledNotice": "展开被控提示：{{label}}",
+    "collapseControlledNotice": "收起远程控制提示",
+    "expandControlledNotice": "展开远程控制提示：{{label}}",
     "versionMismatch": "对方版本不一致，部分功能可能受限"
   },
   "accountDeletion": {
@@ -6606,9 +6606,9 @@
       },
       "remote": {
         "deviceTooOldTitle": "对方设备版本过旧",
-        "deviceTooOldDesc": "对方设备的 {{appName}} 版本过旧，暂不支持远程审查，请升级被控设备后重试。",
+        "deviceTooOldDesc": "对方设备的 {{appName}} 版本过旧，暂不支持远程审查，请升级远程设备后重试。",
         "oversizeTitle": "改动数据过大",
-        "oversizeDesc": "该视图的改动超过设备互联单次传输上限，请在被控设备上查看。"
+        "oversizeDesc": "该视图的改动超过设备互联单次传输上限，请在远程设备上查看。"
       },
       "unmodifiedLines_one": "{{count}} 行未改动",
       "unmodifiedLines_other": "{{count}} 行未改动",
@@ -7578,7 +7578,7 @@
       "chooseOne": "选择一种配置方式",
       "restoreAria": "展开 {{name}} 设置",
       "minimizeAria": "收起 {{name}} 设置",
-      "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
+      "completeOnDesktop": "请在远程电脑完成设置，本卡片会自动更新状态。",
       "cancel": "取消",
       "cancelling": "正在取消…",
       "retry": "重试",
@@ -7660,7 +7660,7 @@
     },
     "addRemoteProject": {
       "title": "添加远程项目",
-      "hint": "选择一台已连接的远程主机或被控设备，并选择此项目的文件夹。",
+      "hint": "选择一台已连接的远程主机或远程设备，并选择此项目的文件夹。",
       "host": "远程主机 / 设备",
       "sourceGroupSsh": "远程主机 (SSH)",
       "sourceGroupDevice": "我的设备",
@@ -7669,8 +7669,8 @@
       "refresh": "刷新",
       "add": "添加项目",
       "cancel": "取消",
-      "empty": "请先在「设置 → 远程连接」连接一台被控设备，或在「设置 → 远端机器」添加 SSH 主机。",
-      "emptyPiSshFiltered": "Pi 仅在本地运行，这里不显示 SSH 主机。请在「设置 → 远程连接」连接一台被控设备，或切换到 Claude / Codex 以使用 SSH 主机。",
+      "empty": "请先在「设置 → 远程连接」连接一台远程设备，或在「设置 → 远端机器」添加 SSH 主机。",
+      "emptyPiSshFiltered": "Pi 仅在本地运行，这里不显示 SSH 主机。请在「设置 → 远程连接」连接一台远程设备，或切换到 Claude / Codex 以使用 SSH 主机。",
       "loading": "加载中…",
       "noSubdirs": "此目录下没有子文件夹",
       "doubleClickHint": "双击进入此文件夹",
@@ -7965,7 +7965,7 @@
       "openHint": "召集 Worker 协作",
       "disabledHint": "协同模式已关闭，请在设置中重新启用",
       "unavailableHint": "暂时无法确认协同设置，请稍后重试",
-      "unsupportedRemoteHint": "被控设备的版本过旧，暂不支持协同",
+      "unsupportedRemoteHint": "远程设备的版本过旧，暂不支持协同",
       "remoteContinueNotice": "本条消息仍会以单任务继续发送。",
       "handoffRecoveredMessage": "上次开启协同时被中断，未发出的消息已恢复到输入框",
       "handoffRecoveredGoal": "上次开启协同时被中断，目标未启动，内容已恢复到输入框",
@@ -7986,19 +7986,19 @@
       "errors": {
         "INVALID_PARAMS": "所选模型或协同配置已不可用，请重新选择后重试。",
         "INVALID_PARAMS_CONTINUE": "所选模型或协同配置已不可用；协同未开启，已改为单任务继续。请重新选择后重试。",
-        "INVALID_PARAMS_REMOTE": "被控设备不支持所选模型或协同配置。请改选该设备支持的模型后重试。",
+        "INVALID_PARAMS_REMOTE": "远程设备不支持所选模型或协同配置。请改选该设备支持的模型后重试。",
         "NO_PROVIDER_FOR_AGENT": "当前设备没有为该 Agent 连接可用的模型供应商。请先在设置中完成连接。",
         "NO_PROVIDER_FOR_AGENT_CONTINUE": "当前设备没有为该 Agent 连接可用的模型供应商；协同未开启，已改为单任务继续。请先在设置中完成连接。",
-        "NO_PROVIDER_FOR_AGENT_REMOTE": "被控设备没有为该 Agent 连接可用的模型供应商。请在被控设备上完成连接后重试。",
+        "NO_PROVIDER_FOR_AGENT_REMOTE": "远程设备没有为该 Agent 连接可用的模型供应商。请在远程设备上完成连接后重试。",
         "PROVIDER_ROUTE_UNAVAILABLE": "所选模型与供应商的精确路由当前不可用，请改选可用的模型或供应商后重试。",
         "PROVIDER_ROUTE_UNAVAILABLE_CONTINUE": "所选模型与供应商的精确路由当前不可用；协同未开启，已改为单任务继续。请改选可用的模型或供应商后重试。",
-        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "被控设备上的所选模型与供应商精确路由当前不可用，请改选该设备可用的路由后重试。",
+        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "远程设备上的所选模型与供应商精确路由当前不可用，请改选该设备可用的路由后重试。",
         "BUDGET_MODEL_REQUIRES_API_MODE": "此 Codex 模型需要先在设置中配置 API key 才能使用。请配置后重试。",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "此 Codex 模型需要先在设置中配置 API key；协同未开启，已改为单任务继续。请配置 API key 后重试。",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "被控设备尚未配置此 Codex 模型所需的 API key。请在被控设备上配置后重试。",
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "远程设备尚未配置此 Codex 模型所需的 API key。请在远程设备上配置后重试。",
         "PRECONDITION_FAILED": "协同模式已关闭，或当前任务暂不支持协同。",
         "PRECONDITION_FAILED_CONTINUE": "协同模式未开启，已改为单任务继续。",
-        "PRECONDITION_FAILED_REMOTE": "被控任务不支持协同。"
+        "PRECONDITION_FAILED_REMOTE": "远程任务不支持协同。"
       }
     },
     "chatInput": {
@@ -9168,12 +9168,12 @@
       "runningTool": "{{tool}} 运行中…"
     },
     "remoteSession": {
-      "reconnecting": "与被控设备的连接中断，正在重连…",
-      "hostOffline": "被控设备已离线，暂时无法同步",
-      "degraded": "与被控设备的连接不稳定，正在自动重试…",
-      "actionsUnavailable": "被控设备暂不可用，恢复连接后才能修改该任务",
+      "reconnecting": "与远程设备的连接中断，正在重连…",
+      "hostOffline": "远程设备已离线，暂时无法同步",
+      "degraded": "与远程设备的连接不稳定，正在自动重试…",
+      "actionsUnavailable": "远程设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
-      "loading": "正在从被控设备加载任务…",
+      "loading": "正在从远程设备加载任务…",
       "suspectStall": "本轮长时间无更新，可能已断流",
       "finalizeStuck": "结束本轮",
       "issue": {
@@ -9260,8 +9260,8 @@
       "modelSwitchedFastModeOff": "已切换模型，Fast Mode 已关闭"
     },
     "remoteDesktopConfirmation": {
-      "title": "需要在被控电脑上确认",
-      "description": "请在被控电脑上打开 Cindy，查看并处理这项确认。"
+      "title": "需要在远程电脑上确认",
+      "description": "请在远程电脑上打开 Cindy，查看并处理这项确认。"
     },
     "handoff": {
       "card": {
@@ -9622,7 +9622,7 @@
         "switched": "已切换任务分支",
         "switchedWithDraft": "已切换分支，原问题已放回输入框",
         "runningBlocked": "当前轮结束后才能切换任务分支。",
-        "remoteBlocked": "请先重连或升级被控桌面端，再切换分支。",
+        "remoteBlocked": "请先重连或升级远程电脑上的 Cindy，再切换分支。",
         "filesWarning": "切换只改变对话上下文，不会回滚工作区文件。",
         "summarize": "离开当前分支时生成摘要（会调用模型）",
         "summaryFocus": "可选：摘要重点，例如保留错误处理结论",
@@ -11529,13 +11529,13 @@
       "piBinaryMissingTitle": "Pi 组件未就绪",
       "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Pi 连接状态。",
       "goToSettings": "前往设置",
-      "remoteCodexBinaryMissingTitle": "被控端 Codex 组件未就绪",
-      "remotePiBinaryMissingTitle": "被控端 Pi 组件未就绪",
-      "remoteAuthDescription": "需要在被控设备「{{device}}」上完成配置后，才能在这里新建并运行任务。请在该设备上配置后重试。",
-      "remoteCodexNoSourceTitle": "被控端 Codex 暂无可用来源",
-      "remoteCodexNoSourceDescription": "被控设备「{{device}}」尚未连接 Codex 可用的模型来源，无法在这里新建并运行任务。请在该设备上打开 {{appName}}，在「设置 → 模型供应商」登录 OpenAI 或连接其他来源后重试。",
-      "remoteCcNoSourceTitle": "被控端 Claude 暂无可用来源",
-      "remoteCcNoSourceDescription": "被控设备「{{device}}」尚未连接可用的 Claude 模型来源，无法在这里新建并运行任务。请在该设备上打开 {{appName}}，在「设置 → 模型供应商」连接来源后重试。",
+      "remoteCodexBinaryMissingTitle": "远程电脑 Codex 组件未就绪",
+      "remotePiBinaryMissingTitle": "远程电脑 Pi 组件未就绪",
+      "remoteAuthDescription": "需要在远程设备「{{device}}」上完成配置后，才能在这里新建并运行任务。请在该设备上配置后重试。",
+      "remoteCodexNoSourceTitle": "远程电脑 Codex 暂无可用来源",
+      "remoteCodexNoSourceDescription": "远程设备「{{device}}」尚未连接 Codex 可用的模型来源，无法在这里新建并运行任务。请在该设备上打开 {{appName}}，在「设置 → 模型供应商」登录 OpenAI 或连接其他来源后重试。",
+      "remoteCcNoSourceTitle": "远程电脑 Claude 暂无可用来源",
+      "remoteCcNoSourceDescription": "远程设备「{{device}}」尚未连接可用的 Claude 模型来源，无法在这里新建并运行任务。请在该设备上打开 {{appName}}，在「设置 → 模型供应商」连接来源后重试。",
       "gotIt": "知道了"
     },
     "fileTypes": {
@@ -11655,7 +11655,7 @@
   },
   "commands": {
     "toast": {
-      "remoteUnsupported": "对方设备的应用版本过旧，暂不支持在远程任务使用此命令，请先升级被控设备的 {{appName}}"
+      "remoteUnsupported": "对方设备的应用版本过旧，暂不支持在远程任务使用此命令，请先升级远程设备的 {{appName}}"
     }
   },
   "goal": {

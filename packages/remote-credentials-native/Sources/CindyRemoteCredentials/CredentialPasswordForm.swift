@@ -1,5 +1,6 @@
 #if os(iOS)
 import UIKit
+import LocalAuthentication
 
 private final class CredentialResourceAnchor: NSObject {}
 
@@ -26,16 +27,15 @@ struct CredentialLabels {
 final class CredentialPasswordForm: UIViewController, UIAdaptivePresentationControllerDelegate, UITextFieldDelegate {
   private let labels: CredentialLabels
   private let account: String
-  private let target: String
   private let completion: (Result<(Data, Bool), CredentialError>) -> Void
   private let password = UITextField()
   private let remember = UISwitch()
   private var finished = false
   private let saveRequired: Bool
 
-  init(labels: CredentialLabels, account: String, target: String, saveRequired: Bool = false,
+  init(labels: CredentialLabels, account: String, saveRequired: Bool = false,
     completion: @escaping (Result<(Data, Bool), CredentialError>) -> Void) {
-    self.labels = labels; self.account = account; self.target = target; self.completion = completion
+    self.labels = labels; self.account = account; self.completion = completion
     self.saveRequired = saveRequired
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .pageSheet
@@ -67,7 +67,7 @@ final class CredentialPasswordForm: UIViewController, UIAdaptivePresentationCont
       return value
     }
     stack.addArrangedSubview(label(labels["title"]))
-    stack.addArrangedSubview(label(account + "\n" + target, secondary: true))
+    stack.addArrangedSubview(label(account, secondary: true))
     password.isSecureTextEntry = true; password.textContentType = .password
     password.autocorrectionType = .no; password.autocapitalizationType = .none
     password.placeholder = labels["password"]; password.accessibilityLabel = labels["password"]
@@ -78,7 +78,16 @@ final class CredentialPasswordForm: UIViewController, UIAdaptivePresentationCont
     remember.accessibilityLabel = labels["remember"]; remember.onTintColor = .label
     row.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
     if !saveRequired { stack.addArrangedSubview(row) }
-    stack.addArrangedSubview(label(labels["explanation"], secondary: true))
+    let context = LAContext()
+    // Discover the hardware type without requesting authentication or changing preferences.
+    _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+    let explanationKey: String
+    switch context.biometryType {
+    case .faceID: explanationKey = "explanationFaceID"
+    case .touchID: explanationKey = "explanationTouchID"
+    default: explanationKey = "explanation"
+    }
+    stack.addArrangedSubview(label(labels[explanationKey], secondary: true))
     for (text, action) in [(labels["verify"], #selector(submit)), (labels["cancel"], #selector(cancel))] {
       let button = UIButton(type: .system); button.setTitle(text, for: .normal)
       button.titleLabel?.font = .preferredFont(forTextStyle: .body)

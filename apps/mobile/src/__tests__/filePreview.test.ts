@@ -56,8 +56,8 @@ describe('filePreview', () => {
       size: 8 * 1024 * 1024,
       limitMb: 5,
     })).toContain('文件超过远程预览上限');
-    expect(describeTextPreviewFailure({ success: false, reason: 'forbidden', size: 0 })).toBe('被控电脑拒绝读取这个路径。');
-    expect(describeTextPreviewFailure({ success: false, reason: 'not_found', size: 0 })).toBe('被控电脑上没有找到这个文件。');
+    expect(describeTextPreviewFailure({ success: false, reason: 'forbidden', size: 0 })).toBe('远程电脑拒绝读取这个路径。');
+    expect(describeTextPreviewFailure({ success: false, reason: 'not_found', size: 0 })).toBe('远程电脑上没有找到这个文件。');
     expect(describeTextPreviewFailure({ success: false, reason: 'read_failed', size: 0, error: 'EACCES' })).toBe('读取失败：EACCES');
     expect(describeTextPreviewFailure({ success: false, size: 128, error: 'binary file' })).toBe('binary file');
   });

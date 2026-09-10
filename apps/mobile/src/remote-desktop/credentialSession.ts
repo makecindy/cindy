@@ -40,6 +40,8 @@ export function credentialErrorKey(error: unknown): string {
       ? String(error.code)
       : "";
   const text = `${code} ${String(error)}`;
+  if (text.includes("CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED"))
+    return "credentialSigningRequired";
   if (text.includes("CREDENTIAL_PASSWORD_REJECTED"))
     return "credentialPasswordRejected";
   if (text.includes("CREDENTIAL_CANCELLED")) return "credentialCancelled";
