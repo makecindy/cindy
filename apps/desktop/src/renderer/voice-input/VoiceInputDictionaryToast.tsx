@@ -78,10 +78,7 @@ export function VoiceInputDictionaryToast() {
           <div className="shrink-0 whitespace-nowrap text-12 font-medium leading-5 text-[var(--cmd-palette-item-meta)]">
             {title}
           </div>
-          <div
-            className="min-w-0 truncate text-14 font-semibold leading-5 text-[var(--cmd-palette-item-text)]"
-            title={termText}
-          >
+          <div className="min-w-0 truncate text-14 font-semibold leading-5 text-[var(--cmd-palette-item-text)]">
             {termText}
           </div>
         </div>
