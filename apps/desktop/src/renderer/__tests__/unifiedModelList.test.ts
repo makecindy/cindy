@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildUnionRows,
+  canWriteModelVisibility,
   managementKindOfRow,
   managementKindsOfRow,
   hasPaymentRequiredDisabledRow,
@@ -341,4 +342,26 @@ it.each([false, true])('aggregates mixed runtime types independent of order (%s)
   expect(isCapabilityRow(row!, true)).toBe(false);
   expect(modelVisibilityTargets(mixed, row!, true)).toEqual([{ agent: 'claude-code', modelId: 'shared' }]);
   expect(modelVisibilityTargets(mixed, row!, false)).toEqual([{ agent: 'claude-code', modelId: 'shared' }]);
+});
+
+describe('canWriteModelVisibility', () => {
+  it('lets image switches write when only the Images API key is ready', () => {
+    expect(
+      canWriteModelVisibility({
+        connected: false,
+        mediaRow: true,
+        mediaReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('still requires chat connection for conversation model switches', () => {
+    expect(
+      canWriteModelVisibility({
+        connected: false,
+        mediaRow: false,
+        mediaReady: false,
+      }),
+    ).toBe(false);
+  });
 });

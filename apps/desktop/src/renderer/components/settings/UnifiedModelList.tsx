@@ -280,6 +280,18 @@ function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): bool
   return managementKindsOfRow(row, userProvider).some((kind) => kind === 'image' || kind === 'video');
 }
 
+/** Image/video switches follow media readiness, not the chat OAuth connection. */
+export function canWriteModelVisibility(options: {
+  connected: boolean;
+  suspended?: boolean;
+  mediaRow: boolean;
+  mediaReady: boolean;
+}): boolean {
+  if (options.suspended) return false;
+  if (options.mediaRow) return options.mediaReady;
+  return options.connected;
+}
+
 /** 该行在指定 agent 下的可见性(不可用 → null)。 */
 function rowEnabled(providerId: string, row: UnionModelRow, agent: AgentKind, userProvider: boolean): boolean | null {
   const m = row.byAgent[agent];
@@ -792,14 +804,24 @@ export function UnifiedModelList({
   /** 开启只选推荐引擎；关闭清掉该行所有引擎的显示。写入始终使用各引擎真实模型 ID。 */
   const toggleRow = useCallback(
     async (row: UnionModelRow) => {
-      if (!selectionAvailable) return;
-      const next = !rowAnyEnabled(provider.id, row, provider.source === 'user');
+      const userProvider = provider.source === 'user';
+      if (
+        !canWriteModelVisibility({
+          connected: provider.connected,
+          suspended: provider.suspended,
+          mediaRow: isCapabilityRow(row, userProvider) && rowHasVisibilitySwitch(row, userProvider),
+          mediaReady: rowState(row).canSelect,
+        })
+      ) {
+        return;
+      }
+      const next = !rowAnyEnabled(provider.id, row, userProvider);
       const targets = modelVisibilityTargets(provider, row, next);
       if (await setModelVisibilities(provider.id, targets, next) === false) {
         showVisibilityWriteFailure();
       }
     },
-    [provider, selectionAvailable, showVisibilityWriteFailure],
+    [provider, rowState, showVisibilityWriteFailure],
   );
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
