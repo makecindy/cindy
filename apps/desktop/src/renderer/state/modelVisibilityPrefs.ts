@@ -261,6 +261,7 @@ function parseStoredMap(raw: string | null): { map: VisibilityMap; corrupt: bool
 function readStoredMap(raw: string | null): VisibilityMap {
   const parsed = parseStoredMap(raw);
   if (parsed.corrupt) mapCorrupt = true;
+  else if (raw !== null && raw !== '') mapCorrupt = false;
   return parsed.map;
 }
 
@@ -474,6 +475,7 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
   cache = map;
+  mapCorrupt = false;
   return true;
 }
 
