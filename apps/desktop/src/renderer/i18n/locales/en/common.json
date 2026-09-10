@@ -47,7 +47,7 @@
     "busy": "Another device or Agent is using the computer. Stop controlling it from the other device or wait for the Agent to finish.",
     "connectionError": "Connection ended. Check that the computer is online, then reconnect.",
     "releaseControl": "Stop Controlling",
-    "takeControl": "Take control",
+    "takeControl": "Take Control",
     "pointer": "Trackpad",
     "touch": "Touch",
     "pan": "Move view",

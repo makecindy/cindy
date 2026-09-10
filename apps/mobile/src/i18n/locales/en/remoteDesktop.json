@@ -67,7 +67,7 @@
   "connectionBusy": "Another device is connected to this remote desktop. Exit remote desktop on that device, then try connecting again.",
   "connectionError": "Connection ended. Check that the computer is online, then reconnect.",
   "releaseControl": "Stop Controlling",
-  "takeControl": "Take control",
+  "takeControl": "Take Control",
   "pointer": "Trackpad",
   "touch": "Touch",
   "pan": "Move view",
