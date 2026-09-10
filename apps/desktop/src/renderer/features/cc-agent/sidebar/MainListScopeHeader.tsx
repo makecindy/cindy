@@ -8,11 +8,13 @@
  */
 import { useState, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
 import { SidebarFilterPopover } from './SidebarFilterPopover';
+import { DialogueStatusMenu } from './sections/DialogueStatusMenu';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
 
@@ -47,6 +49,7 @@ export function MainListScopeHeader({
     disabled: boolean;
   } | null;
 }): ReactNode {
+  const { t } = useTranslation();
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
@@ -73,6 +76,13 @@ export function MainListScopeHeader({
               </button>
             </Tip>
           ) : null}
+          <DialogueStatusMenu
+            status={filter.status}
+            onStatusChange={filter.setStatus}
+            sortByLabel={t(`ccAgent.sidebar.filterSortBy.${filter.sortBy}`)}
+            buttonClassName="size-6 hover:bg-sidebar-item-hover hover:text-foreground"
+            iconSize={14}
+          />
           <SidebarFilterPopover
             filter={filter}
             allKnownProjects={allKnownProjects}

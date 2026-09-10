@@ -1116,6 +1116,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       ));
       clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
       if (shouldRecover) void rehydrateWithClient(client, deviceId);
+      return shouldRecover;
     });
     client.start();
 

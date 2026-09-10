@@ -168,6 +168,7 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
+import { DialogueStatusMenu } from './sidebar/sections/DialogueStatusMenu';
 import { holdSidebarViewedPriority, ProjectsSection } from './sidebar/sections/ProjectsSection';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
@@ -3665,6 +3666,9 @@ function ExpandedView({
         onScheduleAction={handleScheduleAction}
         onCreateDialogue={handleCreateDialogue}
         isCreateDialogueDisabled={dialogueCreatePending}
+        dialogueSortBy={dialogueSortBy}
+        status={filter.status}
+        onStatusChange={filter.setStatus}
         onCreateInProject={handleCreateInProject}
         onToggleProjectPin={handleToggleProjectPin}
         onRemoveProjectFromSidebar={handleRemoveProjectFromSidebar}
@@ -3951,6 +3955,10 @@ interface RailPanelsProps {
   /** 新建对话(对话面板头部 SquarePen)——展开态 DialogueSection 段头同源 handler。 */
   onCreateDialogue: () => void;
   isCreateDialogueDisabled: boolean;
+  /** 对话区状态筛选:与展开态混排组头共用 filter.status,折叠时仍能切活跃/已归档/全部。 */
+  dialogueSortBy: DialogueSortBy;
+  status: UseSidebarFilterReturn['status'];
+  onStatusChange: UseSidebarFilterReturn['setStatus'];
   /** 在此项目内新建(项目行右键菜单 + 三级面板头部)——展开态 ProjectNode
    *  的 newInDirectory 主操作同源 handler(内置远程写保护)。 */
   onCreateInProject: (project: ProjectNode) => void;
@@ -3990,6 +3998,9 @@ function RailPanels({
   onScheduleAction,
   onCreateDialogue,
   isCreateDialogueDisabled,
+  dialogueSortBy,
+  status,
+  onStatusChange,
   onCreateInProject,
   onToggleProjectPin,
   onRemoveProjectFromSidebar,
@@ -4356,12 +4367,21 @@ function RailPanels({
             {panelHead(
               t('ccAgent.sidebar.railNav.dialogues'),
               dialogues.length,
-              panelHeadCreateButton(
-                t('ccAgent.sidebar.newDialogue'),
-                onCreateDialogue,
-                isCreateDialogueDisabled,
-                t('ccAgent.sidebar.creationInProgress'),
-              ),
+              <div className="flex shrink-0 items-center gap-0.5">
+                <DialogueStatusMenu
+                  status={status}
+                  onStatusChange={onStatusChange}
+                  sortByLabel={t(`ccAgent.sidebar.dialogueSort.${dialogueSortBy}`)}
+                  buttonClassName="h-6 w-6 -my-1 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                  iconSize={14}
+                />
+                {panelHeadCreateButton(
+                  t('ccAgent.sidebar.newDialogue'),
+                  onCreateDialogue,
+                  isCreateDialogueDisabled,
+                  t('ccAgent.sidebar.creationInProgress'),
+                )}
+              </div>,
             )}
             <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
               <SessionEntryList

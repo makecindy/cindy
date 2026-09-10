@@ -9318,7 +9318,7 @@
       "loadingDialogues": "載入中…",
       "noDialogues": "暫無任務",
       "dialogueSettings": "整理對話",
-      "dialogueSettingsAria": "整理對話（排序：{{sortBy}}）",
+      "dialogueSettingsAria": "整理對話（狀態：{{status}}，排序：{{sortBy}}）",
       "dialogueSortHeading": "排序",
       "dialogueSort": {
         "recency": "最近優先",
