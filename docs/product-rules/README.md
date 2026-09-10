@@ -11,6 +11,13 @@
 
 ## 当前规则
 
+模型相关工作先读 [模型配置与下发](../dev-rules/model-catalog-maintenance.md)，再按任务进入：
+
+- [模型资料优先级](model-metadata-precedence.md)：公共资料、默认/实报/用户覆盖、多账号身份与成员空值语义。
+- [本地模型筛选](local-model-selection.md)：候选、推荐、量化包装和硬件证据。
+- [供应商设置](provider-settings.md)：连接身份、状态、操作与用量展示。
+- [V4 全类型规范](../model-registry-v4-media.md)：媒体字段、成员投影及额外发布条件。
+
 - [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、
   Core 边界，以及 Agent、Skill、插件的产品分工。
 - [`review-product-direction.md`](review-product-direction.md)：Cindy Review 的北极星、

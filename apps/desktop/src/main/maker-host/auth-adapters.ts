@@ -622,7 +622,12 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
-    if (options?.providerId && subscriptionAccountKind(options.providerId)) return subscriptionAccountState(options.providerId);
+    if (options?.providerId && subscriptionAccountKind(options.providerId)) {
+      if (!isAnthropicCompatProxyHandleReady()) {
+        return { authenticated: false, errorReason: 'proxy_not_ready' };
+      }
+      return subscriptionAccountState(options.providerId);
+    }
     if (!safeStorage.isEncryptionAvailable()) {
       return { authenticated: false, errorReason: 'no_encryption' };
     }

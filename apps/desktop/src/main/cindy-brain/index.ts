@@ -387,6 +387,7 @@ import {
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
@@ -3518,6 +3519,7 @@ function getCatalogMediaConfig(
       kind === 'image'
         ? (providerId) => getImageChannelRegistry().isProviderEditReady(providerId)
         : undefined,
+      kind === 'image' || kind === 'video' ? isCatalogMediaModelVisible : undefined,
     );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
@@ -3581,7 +3583,7 @@ function getMediaPreferenceConfig(
     getActiveCatalog().providers.map((provider) => [provider.id, provider] as const),
   );
   const providerModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
-    kind === 'video' ? listLocalProviderVideoModels() : listProviderMediaModels(),
+    kind === 'video' ? listLocalProviderVideoModels(true) : listProviderMediaModels(),
     kind,
     (model) => supportsMediaCapability(model.modalities, coreCapability),
   )
@@ -3605,6 +3607,12 @@ function getMediaPreferenceConfig(
       getXdGatewayModels(),
       coreCapability,
       readModelDisableOverrides(),
+    ).filter((model) =>
+      isCatalogMediaModelVisible(
+        'xd',
+        model.id,
+        'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      ),
     ),
     kind,
     (model) => isMediaModelExecutable(model.id, coreCapability),
@@ -3774,7 +3782,7 @@ async function getGhostConfigurableMediaModels(
     // carried image-provider models. Video providers are host-owned (the video
     // registry executes them), so add their local projection explicitly and do
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
-    const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
+    const localVideoModels = type === 'video' ? listLocalProviderVideoModels(true) : [];
     const availability = await loadPluginMediaAvailability(
       type,
       localVideoModels.length,
@@ -3785,6 +3793,12 @@ async function getGhostConfigurableMediaModels(
         models.findIndex(
           (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
         ) === index,
+    ).filter((model) =>
+      isCatalogMediaModelVisible(
+        model.providerId,
+        model.id,
+        'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      ),
     );
     const candidates = selectExecutableCoreMediaModels(allModels, type);
     const models = isProviderBlindCoreArt(ghost)
@@ -4257,7 +4271,7 @@ function resolveImageChannelForModel(
   return getImageChannelRegistry().resolve(entry.providerId);
 }
 
-function listLocalProviderMediaModels() {
+function listLocalProviderMediaModels(respectDisplaySwitch = false) {
   const access = readModelDisableOverrides();
   return getActiveCatalog().providers.flatMap((provider) => {
     if (
@@ -4269,7 +4283,11 @@ function listLocalProviderMediaModels() {
     }
     const supportsEdit = getImageChannelRegistry().isProviderEditReady(provider.id);
     return (provider.imageModels ?? []).flatMap((model) => {
-      if (isModelDisabled(access, provider.id, model.id)) {
+      if (
+        isModelDisabled(access, provider.id, model.id) ||
+        (respectDisplaySwitch &&
+          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
+      ) {
         return [];
       }
       // Legacy/provider catalogs may only carry id/name. The channel registry is
@@ -4304,7 +4322,7 @@ function listLocalProviderMediaModels() {
  * provider runtime. Keep their catalog projection beside the image projection
  * so Art can read the same provider-owned models that Settings displays.
  */
-function listLocalProviderVideoModels() {
+function listLocalProviderVideoModels(respectDisplaySwitch = false) {
   const access = readModelDisableOverrides();
   const registry = getVideoProviderRegistry();
   if (!registry) return [];
@@ -4319,7 +4337,9 @@ function listLocalProviderVideoModels() {
     return (provider.videoModels ?? []).flatMap((model) => {
       if (
         isModelDisabled(access, provider.id, model.id) ||
-        !registry.hasAlias(model.id, provider.id)
+        !registry.hasAlias(model.id, provider.id) ||
+        (respectDisplaySwitch &&
+          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
       ) {
         return [];
       }
@@ -4343,8 +4363,10 @@ function listLocalProviderVideoModels() {
 }
 
 configureProviderMediaRuntime({
-  listModels: listLocalProviderMediaModels,
-  listVideoModels: listLocalProviderVideoModels,
+  listModels: () => listLocalProviderMediaModels(true),
+  listVideoModels: () => listLocalProviderVideoModels(true),
+  listExecutableModels: () => listLocalProviderMediaModels(false),
+  listExecutableVideoModels: () => listLocalProviderVideoModels(false),
   invoke: async (request) => {
     if (request.capability !== 'image.generate' && request.capability !== 'image.edit') {
       throw new Error('当前第三方 Provider 执行通道不支持该媒体能力');

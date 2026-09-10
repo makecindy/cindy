@@ -116,6 +116,10 @@ import {
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
+import {
+  notifyOpenAiMediaCredentialChanged,
+  refreshOpenAiMediaModels,
+} from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -437,6 +441,7 @@ function handleProviderSecretsCleared(): void {
   clearDiscoveredProviderModels();
   clearXaiDiscoveredModels();
   clearXaiMediaModels();
+  notifyOpenAiMediaCredentialChanged();
 }
 
 /**
@@ -542,6 +547,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 无 LKG / 刷新失败时 active-catalog 才继续使用 server Catalog → bundled 救急。
         await loadXaiModelsFromDiskCache();
         void refreshXaiModelsFromHttp();
+        void refreshOpenAiMediaModels();
         activeLoaded = true;
         return catalog;
       })

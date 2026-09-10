@@ -811,6 +811,7 @@ import {
   readModelContextLimit,
   writeModelContextLimitsWithRefresh,
 } from '../maker-host/model-context-limit-store.js';
+import { refreshOpenAiMediaModels } from '../maker-host/model-discovery/openai-media.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
@@ -5318,6 +5319,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         refreshAnthropic: refreshAnthropicModelsFromHttp,
         refreshOpenAi: () =>
           maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' }),
+        refreshOpenAiMedia: refreshOpenAiMediaModels,
         refreshXai: refreshXaiModelsFromHttp,
         refreshXaiMedia: refreshXaiMediaModels,
       }),
