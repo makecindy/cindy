@@ -378,7 +378,7 @@ agent_options:
 
 两条命令都从仓库根目录启动 `codex exec`，请求通过 stdin 传入。refresh 让 Agent 读取、搜索源码；update 将旧知识和 diff 交给 Agent 更新。执行采用 `read-only` sandbox 和 `approval_policy="never"`，不能弹出审批等待。只读 sandbox 限制本地命令，不代表为用户配置的所有 MCP 服务提供只读权限；维护所用 Codex 配置应只启用可信的只读工具。
 
-宿主同时要求退出码为 0、出现 `turn.completed` 且没有 `turn.failed`，再从 `--output-last-message` 文件读取最终正文。JSONL 中的过程文字和工具输出不写入知识文件。正文必须以 Markdown 标题开头、不包含 frontmatter 或全文代码围栏、保留旧正文的二级章节，并含非空的 `## 是什么`；这只是结构校验，不保证知识事实正确。单条事件和最终正文限制为 1 MiB。
+宿主同时要求退出码为 0、出现 `turn.completed` 且没有 `turn.failed`，再从 `--output-last-message` 文件读取最终正文。JSONL 中的过程文字和工具输出不写入知识文件。正文必须以 Markdown 标题开头、不包含 frontmatter 或全文代码围栏、保留旧正文的二级章节（支持最多三个前导空格）。`## 是什么` 的首段必须是 TOC 可消费的文字摘要，不能以代码围栏代替；演进备忘的既有内容必须原样保留，只允许在末尾追加。这些校验不保证知识事实正确。单条事件和最终正文限制为 1 MiB。
 
 命令缺失、失败终态、超时、空结果或校验失败时，沿用现有流程保留旧正文并标记 stale，可用 `refresh --stale` 重试。原始 CLI 诊断不写入 stale 原因。执行结束清理本次临时输出；超时会尝试回收本次进程树（POSIX 进程组 / Windows taskkill）。Windows 包装器若先退出并留下脱离进程树的后台任务，taskkill 无法保证回收，因此自定义 command 应以前台方式运行 CLI。`--check-only` 不启动 Agent，`auto_update: false` 仍冻结维护（refresh 可显式 `--force`）。
 

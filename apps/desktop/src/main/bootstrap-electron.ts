@@ -308,7 +308,8 @@ import {
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
-import { openMakeToolsDirectory } from './cindy-make/toolsDirectory';
+import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
+import { makeSourceRoot, readCindySourceStatus } from './cindy-make/sourcePreparation.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   collectDatabaseSizeWarningStatus,
@@ -7279,6 +7280,21 @@ const registerIpcHandlers = () => {
     async (event): Promise<{ success: boolean }> => {
       assertTrustedAppRendererEvent(event);
       return openMakeToolsDirectory(app.getPath('userData'), {
+        openPath: (directory) => shell.openPath(directory),
+      });
+    },
+  );
+
+  ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readCindySourceStatus(makeSourceRoot(app.getPath('userData')));
+  });
+
+  ipcMain.handle(
+    'app:open-cindy-make-source-dir',
+    async (event): Promise<{ success: boolean }> => {
+      assertTrustedAppRendererEvent(event);
+      return openMakeSourceDirectory(app.getPath('userData'), {
         openPath: (directory) => shell.openPath(directory),
       });
     },

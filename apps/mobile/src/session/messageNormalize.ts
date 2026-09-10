@@ -50,9 +50,9 @@ import {
   type RemoteMoney,
 } from '@/session/remoteMoney';
 import {
-  localizeToolLoopError,
+  localizeAgentError,
   parseMobileToolLoopErrorDetails,
-} from '@/session/toolLoopErrorI18n';
+} from '@/session/agentErrorI18n';
 import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
 
 export type NormalizedRemoteMessageKind =
@@ -191,8 +191,13 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
 const toolResultPreviewByContent = new WeakMap<object, { language: string; preview: string }>();
 const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
-export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
-  const sorted = sortMessagesByCreatedAt(messages);
+export function normalizeRemoteMessages(
+  messages: readonly RemoteMessage[],
+  options: { preserveSourceOrder?: boolean } = {},
+): NormalizedRemoteMessage[] {
+  // History views already place live tails after their persisted prefix. A live
+  // row's provisional timestamp must not undo that order during normalization.
+  const sorted = options.preserveSourceOrder ? messages : sortMessagesByCreatedAt(messages);
   const toolResultPairing = buildMessageToolResultPairing(sorted, {
     contentToPreview: toolResultContentToPreview,
   });
@@ -296,7 +301,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
       const errText =
-        describeAgentAuthError(rawText) ?? localizeToolLoopError(c?.reason, toolLoop) ?? rawText;
+        describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop) ?? rawText;
       result.push({
         key: messageNormalizeKey(message),
         source: message,

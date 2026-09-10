@@ -63,6 +63,7 @@ function createHandle(overrides: Partial<AgentSessionHandle>): AgentSessionHandl
     abort: async () => undefined,
     close: async () => undefined,
     events: async function* () {
+      yield* [];
       await new Promise<never>(() => undefined);
     },
     getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),

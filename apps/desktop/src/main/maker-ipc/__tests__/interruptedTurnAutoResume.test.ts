@@ -90,7 +90,7 @@ describe('isInterruptedTurnError', () => {
   });
 
   it('rejects errors that carry a stable reason (已分类,另有处置路径)', () => {
-    for (const reason of ['turn-failed', 'silent-stop-exhausted']) {
+    for (const reason of ['turn-failed', 'silent-stop-exhausted', 'output-limit']) {
       expect(
         isInterruptedTurnError({
           sdkError: 'server_error',

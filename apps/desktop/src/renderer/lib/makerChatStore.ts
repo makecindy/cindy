@@ -14957,8 +14957,9 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
 }
 
 /**
- * F-CMD: Insert a local-only system card into the message stream.
- * Not persisted to the database — purely ephemeral UI.
+ * F-CMD: Insert a local system card into the message stream.
+ * Cindy Make cards are persisted below so the structured card survives reloads;
+ * the other command cards remain local-only UI state.
  */
 function insertSystemCard(
   sessionId: string,
@@ -14993,7 +14994,49 @@ function insertSystemCard(
       ],
     };
   });
+  if (
+    (cardType === 'cindy-make' || cardType === 'cindy-make-doctor') &&
+    data?.modalOnly !== true
+  ) {
+    enqueueCindyMakeCardPersistence(sessionId, clientId, cardType, data ?? {}, true);
+  }
   return clientId;
+}
+
+const CINDY_MAKE_CARD_MARKER = '__cindyMakeCard';
+const cindyMakeCardQueues = new Map<string, Promise<void>>();
+const cindyMakeNewCards = new Set<string>();
+
+/** Persist Cindy Make's structured card in the same message row that renders it. */
+function enqueueCindyMakeCardPersistence(
+  sessionId: string,
+  clientId: string,
+  cardType: 'cindy-make' | 'cindy-make-doctor',
+  data: Record<string, unknown>,
+  creating = false,
+): void {
+  const key = `${sessionId}:${clientId}`;
+  if (creating) cindyMakeNewCards.add(key);
+  const previous = cindyMakeCardQueues.get(key) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const content = { [CINDY_MAKE_CARD_MARKER]: { type: cardType, data } };
+      if (cindyMakeNewCards.has(key)) {
+        await messageService.create(sessionId, {
+          clientId,
+          role: 'assistant',
+          content,
+        });
+        cindyMakeNewCards.delete(key);
+      } else {
+        await messageService.updateContent(sessionId, clientId, content);
+      }
+    })
+    .catch((error) => {
+      log.warn('Failed to persist Cindy Make card:', error);
+    });
+  cindyMakeCardQueues.set(key, next);
 }
 
 /**
@@ -15057,6 +15100,20 @@ function updateSystemCardData(
     };
     return { ...s, messages };
   });
+  const current = getSnapshot(sessionId).messages.find((message) => message.clientId === clientId);
+  if (
+    current?.systemCardType === 'cindy-make' ||
+    current?.systemCardType === 'cindy-make-doctor'
+  ) {
+    if (current.systemCardData?.modalOnly !== true) {
+      enqueueCindyMakeCardPersistence(
+        sessionId,
+        clientId,
+        current.systemCardType,
+        current.systemCardData ?? {},
+      );
+    }
+  }
 }
 
 /**
@@ -17078,6 +17135,27 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   const ordered = filtered.sort(compareMessageTimeline);
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
+    const persistedCindyCard =
+      m.role === 'assistant' && m.content && typeof m.content === 'object'
+        ? (m.content as Record<string, unknown>)[CINDY_MAKE_CARD_MARKER]
+        : undefined;
+    if (persistedCindyCard && typeof persistedCindyCard === 'object') {
+      const card = persistedCindyCard as Record<string, unknown>;
+      const type: 'cindy-make' | 'cindy-make-doctor' =
+        card.type === 'cindy-make' ? 'cindy-make' : 'cindy-make-doctor';
+      const data =
+        card.data && typeof card.data === 'object'
+          ? (card.data as Record<string, unknown>)
+          : {};
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: type,
+        systemCardData: data,
+      };
+    }
     if (m.role === 'tool_use' && m.content && typeof m.content === 'object') {
       const c = m.content as Record<string, unknown>;
       const { toolName, input: toolInput, toolUseId } = parseMessageToolUse(m);

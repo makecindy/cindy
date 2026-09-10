@@ -6,7 +6,7 @@
  * 消息的 `agentMeta.parentUuid`;Agent 的最终 tool_result(子 agent 终稿)经 tool_use_id 配对;codex
  * 无 parentUuid → 自然不触发;嵌套真实存在(深度通常 1,极少 2)。
  *
- * 纯函数,可单测。归一化 / 分桶不靠模型判断(规则 9):全程按 parentUuid 精确归属 + createdAt 定序。
+ * 纯函数,可单测。按 parentUuid 精确归属;历史视图保留来源顺序,旧路径按 createdAt 定序。
  */
 import {
   buildMessageRenderItems,
@@ -50,7 +50,7 @@ export function hasSubagentMessages(normalized: readonly NormalizedRemoteMessage
 export function buildSubagentAwareRenderItems(
   normalized: readonly NormalizedRemoteMessage[],
   resultMeta: ReadonlyMap<string, SubagentResultMeta>,
-  options: MessageRenderOptions,
+  options: MessageRenderOptions & { preserveSourceOrder?: boolean },
 ): MobileMessageRenderItem[] {
   // 不变量:每条 normalized 消息在输出里恰好出现一次。
   // 生产是 80 条最近窗口(分页),Agent tool_use 的 createdAt 早于其 children → 窗口边界可能把某子 agent
@@ -77,20 +77,23 @@ export function buildSubagentAwareRenderItems(
       topLevel.push(message);
     }
   }
-  // 各桶按 createdAt 稳定定序,保证确定性(归一化已大致有序,这里兜底)。
-  for (const bucket of byParent.values()) bucket.sort(compareByCreatedAt);
+  // 历史视图已给出权威顺序,不能再按流式消息的临时时间排序。
+  if (!options.preserveSourceOrder) {
+    for (const bucket of byParent.values()) bucket.sort(compareByCreatedAt);
+  }
 
   const consumed = new Set<string>();
   const out = buildLevel(topLevel, byParent, resultMeta, options, 0, consumed);
 
   // F2 兜底:深度上限(MAX_SUBAGENT_NEST_DEPTH)导致未被任何 subagent_group 消费的桶。真实嵌套 ≤2 够不到
   // cap=5,纯防御异常数据;但绝不 silent drop —— 把这些 children 追加 flat 渲染,保住"恰好出现一次"不变量。
-  const leftover: NormalizedRemoteMessage[] = [];
-  for (const [parentId, bucket] of byParent) {
-    if (!consumed.has(parentId)) leftover.push(...bucket);
-  }
+  // 从原序列取回未消费行,避免拼接多个 parent 桶打乱交错段落。
+  const leftover = normalized.filter((message) => {
+    const parent = parentUuidOf(message);
+    return parent !== null && byParent.has(parent) && !consumed.has(parent);
+  });
   if (leftover.length > 0) {
-    leftover.sort(compareByCreatedAt);
+    if (!options.preserveSourceOrder) leftover.sort(compareByCreatedAt);
     out.push(...buildMessageRenderItems(leftover, options));
   }
   return out;

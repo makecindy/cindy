@@ -3242,6 +3242,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       success: boolean;
       status: string;
+      rejectionReason?: string;
       gates?: Array<{ name: string; status: string; issues?: unknown[] }>;
       scorecard?: Record<string, unknown>;
       error?: string;
@@ -3802,6 +3803,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Open <userData>/cindy-make/tools in the OS file manager (Settings → Cindy Make).
   openCindyMakeToolsDir: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:open-cindy-make-tools-dir'),
+
+  getCindyMakeSourceStatus: (): Promise<import('../shared/cindyMakeDoctor').MakeSourceStatus> =>
+    ipcRenderer.invoke('app:get-cindy-make-source-status'),
+
+  openCindyMakeSourceDir: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('app:open-cindy-make-source-dir'),
 
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main

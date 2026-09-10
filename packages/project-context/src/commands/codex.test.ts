@@ -120,6 +120,62 @@ function respond(content: string, terminal = 'turn.completed') {
   });
 }
 
+it.each(['refresh', 'update'] as const)('%s 拒绝改写演进备忘，保留旧正文并可恢复', async (mode) => {
+  const f = fixture();
+  const history = '- 2026-01-01：保留接口。\n\n```md\n## 历史示例\n旧内容\n```';
+  const previous = readKnowledgeFile(f.file);
+  writeKnowledgeFile(f.file, previous.frontmatter, oldBody + '\n## 演进备忘\n\n' + history);
+  f.manifest();
+  const original = readKnowledgeFile(f.file).body;
+  const run = () =>
+    mode === 'refresh' ? runRefresh({ cwd: f.cwd, all: true }) : runUpdate({ cwd: f.cwd });
+  for (const invalid of [
+    '',
+    history.replace('保留接口', '删除接口'),
+    history.replace('旧内容', '新内容'),
+    '- 新记录\n' + history,
+  ]) {
+    respond(newBody + '\n## 演进备忘\n\n' + invalid);
+    await run();
+    const rejected = readKnowledgeFile(f.file);
+    expect(rejected.body).toBe(original);
+    expect(rejected.frontmatter.stale).toBe(true);
+    expect(rejected.frontmatter.stale_reason).toContain('演进备忘');
+  }
+  respond(newBody + '\n## 演进备忘\n\n' + history + '\n\n- 2026-09-10：新增记录。');
+  await runRefresh({ cwd: f.cwd, stale: true });
+  const recovered = readKnowledgeFile(f.file);
+  expect(recovered.frontmatter.stale).toBe(false);
+  expect(recovered.body).toContain(history + '\n\n- 2026-09-10');
+});
+
+it.each([1, 2, 3])('接受 %s 个空格缩进的章节并生成正确 TOC', async (spaces) => {
+  const f = fixture();
+  respond(newBody.replace(/^## /gm, ' '.repeat(spaces) + '## '));
+  expect((await runRefresh({ cwd: f.cwd, all: true })).refreshed).toEqual(['example']);
+  expect(fs.readFileSync(f.paths.tocPath, 'utf8')).toContain('**example** — 新版描述。');
+});
+
+it.each(['```ts\nconst example = 1;\n```', '~~~ts\nconst example = 1;\n~~~'])(
+  '拒绝代码围栏开头的摘要：%s',
+  async (example) => {
+    const f = fixture();
+    const original = readKnowledgeFile(f.file).body;
+    respond(newBody.replace('新版描述。', example + '\n\n新版描述。'));
+    expect((await runRefresh({ cwd: f.cwd, all: true })).failed).toHaveLength(1);
+    expect(readKnowledgeFile(f.file).body).toBe(original);
+    expect(readKnowledgeFile(f.file).frontmatter.stale).toBe(true);
+  },
+);
+
+it('摘要后的代码示例保持可用', async () => {
+  const f = fixture();
+  respond(newBody.replace('新版描述。', '新版描述。\n\n```ts\nconst example = 1;\n```'));
+  expect((await runRefresh({ cwd: f.cwd, all: true })).refreshed).toEqual(['example']);
+  expect(fs.readFileSync(f.paths.tocPath, 'utf8')).toContain('**example** — 新版描述。');
+  expect(fs.readFileSync(f.paths.tocPath, 'utf8')).not.toContain('const example');
+});
+
 it('TOC 无法识别的摘要标题保留旧正文并标 stale', async () => {
   const f = fixture();
   const previous = readKnowledgeFile(f.file).body;
@@ -144,7 +200,10 @@ it('真实 Git smoke：刷新失败后 --stale 恢复正文和 TOC', async () =>
   expect(updated.frontmatter.stale).toBe(false);
   expect(updated.frontmatter.last_synced_commit).toBe(previous.frontmatter.last_synced_commit);
   expect(fs.readFileSync(f.paths.tocPath, 'utf8')).toContain('新版描述');
-  expect(path.resolve(String(vi.mocked(spawn).mock.calls[0][2]?.cwd))).toBe(f.cwd);
+  // Git 可能将 Windows 8.3 短路径展开；比较实际目录而非路径拼写。
+  expect(fs.realpathSync(String(vi.mocked(spawn).mock.calls[0][2]?.cwd))).toBe(
+    fs.realpathSync(f.cwd),
+  );
 });
 
 it.each([true, false])('小 diff 更新成功=%s，宿主维护同步元数据并从仓库根启动', async (success) => {

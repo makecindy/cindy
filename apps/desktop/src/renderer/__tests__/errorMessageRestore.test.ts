@@ -77,6 +77,14 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
   });
 
+  it('restores a Pi output limit for localized history rendering', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('output-limit', { message: 'Pi reached the model output limit.', reason: 'output-limit' }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'error', errorReason: 'output-limit', isStreaming: false });
+    expect(ERROR_REASON_I18N_KEYS[mapped[0]!.errorReason!]).toBe('logic.errors.outputLimit');
+  });
+
   it('restores the overload reason from persisted rows so history can localize it', () => {
     const mapped = makerChatStore.__mapServerMessagesForTest([
       errorRow('e-overload', {

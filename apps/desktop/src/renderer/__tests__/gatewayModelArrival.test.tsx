@@ -57,7 +57,7 @@ it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
   },
 );
 
-it('lists downloaded Gateway models in settings without enabling them until the user chooses them', async () => {
+it('lists downloaded Gateway models in settings and follows catalog defaults until the user switches them', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
     claimLegacyModelVisibilityOwner: () => ({ dataOwnerId: 'arrival-test', ownerGeneration: 1,
       canWriteOwnerScoped: true, claimed: true, canInitialize: true, profileOrigin: 'new' }),
@@ -115,15 +115,15 @@ it('lists downloaded Gateway models in settings without enabling them until the 
   // Settings now keeps disabled visibility rows expanded, while picker filtering stays off.
   expect(screen.getByText('Future Model 9')).toBeTruthy();
   expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe(
-    'false',
+    'true',
   );
   const pickerEntries = () => unifiedModelEntries({ providers: [snapshot()],
     isVisible: (providerId, model, agent) => isModelEnabled(agent, providerId, model) });
-  expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(false);
-  await act(async () => fireEvent.click(screen.getByRole('switch', { name: /Future Model 9/ })));
-  expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe('true');
   expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(true);
   expect(screen.getByText('new-labs')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('switch', { name: /Future Model 9/ })));
+  expect(screen.getByRole('switch', { name: /Future Model 9/ }).getAttribute('aria-checked')).toBe('false');
+  expect(pickerEntries().some((entry) => entry.modelId === 'new-labs/future-9')).toBe(false);
   expect(snapshot().models['claude-code']?.find((m) => m.id === 'new-labs/future-9')).toMatchObject(
     {
       contextWindow: 500_000,

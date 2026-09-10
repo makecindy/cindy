@@ -544,9 +544,9 @@ export function createMakerHookSessionRunner(deps: {
         rowProviderId = row?.providerId ?? null;
       }
 
-      const fail = (msg: string): HookRunOutcome => ({
+      const fail = (msg: string, finalText = ''): HookRunOutcome => ({
         status: 'error',
-        finalText: '',
+        finalText,
         errorMessage: msg,
         durationMs: Date.now() - startedAt,
       });
@@ -1279,7 +1279,12 @@ export function createMakerHookSessionRunner(deps: {
         await observer.finished;
       } catch (err) {
         observer.stop();
-        return fail(err instanceof Error ? err.message : String(err));
+        return fail(
+          err instanceof Error ? err.message : String(err),
+          observer.errorReason === 'output-limit'
+            ? stripInternalWebCitations(observer.finalText())
+            : '',
+        );
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -1395,10 +1400,12 @@ function beginContinuationWatch(
       return;
     }
     if (errorMessage !== null) {
-      // 与 run() 的失败收口同形(finalText 空, 错误交给渠道渲染)。
+      // 与 run() 一致：只有确定的输出上限失败携带已累计正文。
       req.onEnd({
         status: 'error',
-        finalText: '',
+        finalText: observer.errorReason === 'output-limit'
+          ? stripInternalWebCitations(observer.finalText())
+          : '',
         errorMessage,
         durationMs: Date.now() - startedAt,
       });

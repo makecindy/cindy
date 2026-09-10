@@ -34,6 +34,7 @@ import { createLogger } from '@/lib/logger';
 import { buildFence, detectRenderable } from '@/lib/textPreview';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { useMetaColumnResize } from './hooks/useMetaColumnResize';
@@ -57,8 +58,8 @@ import {
   activePublishedReviewFromVersions,
   activePublishedReviewVersion,
   effectivePublishedStatus,
+  effectivePublishedStatusVersion,
   isEffectiveActivePublishedReview,
-  latestRejectedVersionFromVersions,
   publishedStatusLabelKey,
   rejectedPublishedReviewFromVersions,
 } from './lib/publishedStatus';
@@ -72,9 +73,11 @@ import {
 } from './lib/skillUsageState';
 import { buildRecentTrendRows, formatLocalDayKey } from './lib/skillUsageTrend';
 import { type SkillUsageVersionComparison, selectSkillUsageVersionComparison } from './lib/skillUsageViewModel';
-import { PublishDialog, type ScanResultPayload } from './PublishDialog';
+import { PublishDialog } from './PublishDialog';
 import { ScanResultDialog } from './ScanResultDialog';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
+import { usePublicationFeedback, useRejectionFeedback } from './hooks/useRejectionFeedback';
+import { shouldHandlePublishProgressEvent } from './lib/publishProgressFilter';
 import { SkillhubDiffPanel } from './SkillhubDiffPanel';
 
 const log = createLogger('SkillhubDetailView');
@@ -1069,6 +1072,7 @@ export function SkillhubDetailView() {
   // 改成同步从 SWR 缓存取上次结果,缓存命中(常见的重访场景)时直接渲染最终态,
   // 完全不闪;缓存 miss(首访)时才退回到 null + loading=true。
   const entryInfoKey = entry?.name ? `${entryCatalogScope ?? 'default'}:${entry.name}` : null;
+  const { result: scanResult, setResult: setScanResult } = usePublicationFeedback(entryInfoKey);
   const [trackedEntryInfoKey, setTrackedEntryInfoKey] = useState<string | null>(entryInfoKey);
   if (entryInfoKey !== trackedEntryInfoKey) {
     setTrackedEntryInfoKey(entryInfoKey);
@@ -1104,7 +1108,7 @@ export function SkillhubDetailView() {
       if (active) {
         return { info, liveScanStatus: { status: active.status, version: active.version } };
       }
-      const rejected = rejectedPublishedReviewFromVersions(versionsRes.versions, info?.latestVersion);
+      const rejected = rejectedPublishedReviewFromVersions(versionsRes.versions, info?.latestVersion, info?.moderationStatus);
       if (rejected) {
         return { info, liveScanStatus: { status: rejected.status, version: rejected.version } };
       }
@@ -1202,6 +1206,7 @@ export function SkillhubDetailView() {
   useEffect(() => {
     if (!publishProgressTarget) return;
     const unsubscribe = window.electronAPI.skillhub.onPublishProgress((event) => {
+      if (!shouldHandlePublishProgressEvent(event, publishProgressTarget.name)) return;
       if (event.phase === 'done') {
         if (event.name !== publishProgressTarget.name) return;
         if (publishOpenRef.current) {
@@ -1234,13 +1239,13 @@ export function SkillhubDetailView() {
         void triggerIncrementalSync([event.name]);
         setInfoFetchTrigger((n) => n + 1);
         if (!publishOpenRef.current) {
-          setScanResult({ status: event.status, gates: event.gates });
+          setScanResult({ status: event.status, gates: event.gates, rejectionReason: event.rejectionReason });
         }
         return;
       }
     });
     return unsubscribe;
-  }, [publishProgressTarget]);
+  }, [publishProgressTarget, setScanResult]);
 
   // dialog 关闭后重新查一次当前 skill 远端状态。进入人工审核后不再自动轮询，
   // 用户主动刷新时由常规 info 请求读取最新状态。
@@ -1267,7 +1272,8 @@ export function SkillhubDetailView() {
   const effectivePublishLoading = entryCatalogScope === 'team' ? publishTargetLoading : infoLoading;
   const reviewVersion = activePublishedReviewVersion(effectivePublishInfo) ?? activePublishedReviewVersion(liveScanSource);
   const isPublishedReviewing = isEffectiveActivePublishedReview(effectivePublishInfo) || isEffectiveActivePublishedReview(liveScanSource);
-  const publishedStatus = effectivePublishedStatus(effectivePublishInfo) ?? effectivePublishedStatus(liveScanSource);
+  const publishedStatusSource = effectivePublishedStatus(effectivePublishInfo) ? effectivePublishInfo : liveScanSource;
+  const publishedStatus = effectivePublishedStatus(publishedStatusSource);
   const publishDialogPendingVersion =
     effectivePublishInfo?.pendingVersion ??
     (reviewVersion && publishedStatus
@@ -1309,7 +1315,12 @@ export function SkillhubDetailView() {
   const isMineDirty = detailActionState?.isMineDirty ?? false;
   const showForeignDirtyBanner = detailActionState?.showForeignDirtyBanner ?? false;
 
-  const [scanResult, setScanResult] = useState<ScanResultPayload | null>(null);
+  const rejectionFeedback = useRejectionFeedback({
+    entryKey: entryInfoKey,
+    name: entry?.name ?? null,
+    version: publishedStatus === 'rejected' ? effectivePublishedStatusVersion(publishedStatusSource) : null,
+    canManage: publishDetailState?.canManage === true,
+  });
 
   // Diff panel state — 点 mine-dirty banner 时打开,看本地跟上次发布版的逐文件 diff
   const [diffPanelOpen, setDiffPanelOpen] = useState(false);
@@ -1892,27 +1903,9 @@ export function SkillhubDetailView() {
                 <button
                   type="button"
                   className="inline-flex h-5 shrink-0 items-center text-[var(--error-fg-strong)] hover:opacity-70 transition-opacity"
-                  onClick={async () => {
-                    if (!entry?.name) return;
-                    const res = await window.electronAPI.skillhub.listPublishedVersions(entry.name);
-                    if (!res.success || !res.versions) {
-                      setScanResult({ status: 'rejected', gates: [] });
-                      return;
-                    }
-                    const rejected = latestRejectedVersionFromVersions(res.versions);
-                    if (!rejected) {
-                      setScanResult({ status: 'rejected', gates: [] });
-                      return;
-                    }
-                    const item = (res.versions as Array<Record<string, unknown>>).find(
-                      (v) => String(v.version ?? '').trim() === rejected.version,
-                    );
-                    const raw = item?.scanResult;
-                    const parsed = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : raw;
-                    const gates = (parsed && typeof parsed === 'object' && Array.isArray((parsed as { gates?: unknown }).gates))
-                      ? (parsed as { gates: Array<{ name: string; label?: Record<string, string>; status: string; issues?: unknown[] }> }).gates
-                      : [];
-                    setScanResult({ status: 'rejected', gates });
+                  onClick={() => {
+                    setScanResult(null);
+                    void rejectionFeedback.open();
                   }}
                 >
                   <AlertCircle size={14} />
@@ -2561,9 +2554,11 @@ export function SkillhubDetailView() {
             // + 旧 name 的 info 缓存(让新 name 重新查),然后刷新 scanner,
             // 最后导航到新 URL。先 await refresh 才 navigate,确保新 URL 落地时
             // skills 已包含新 entry,免得短暂闪一下"未找到"。
+            const owner = getDataOwnerGeneration();
             invalidateInfo(entry.name);
             invalidateHash(newAbsolutePath);
             void refreshSkillhub().then((scannedSkills) => {
+              if (!isDataOwnerIdCurrent(owner)) return;
               const renamed = findLocalSkillByPath(scannedSkills, newAbsolutePath);
               if (!renamed) return;
               setLastEntryId(renamed.id);
@@ -2582,9 +2577,9 @@ export function SkillhubDetailView() {
       />
 
       <ScanResultDialog
-        open={scanResult !== null}
-        onClose={() => setScanResult(null)}
-        result={scanResult}
+        open={rejectionFeedback.result !== null || scanResult !== null}
+        onClose={() => { rejectionFeedback.dismiss(); setScanResult(null); }}
+        result={rejectionFeedback.result ?? scanResult}
       />
     </div>
   );

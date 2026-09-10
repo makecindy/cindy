@@ -76,10 +76,14 @@ export type MobileMessageRenderItem =
 
 export function buildMobileMessageRenderItems(
   messages: readonly RemoteMessage[],
-  options: MessageRenderOptions & { autoResumePending?: Record<string, unknown> | null; sessionId?: string } = {},
+  options: MessageRenderOptions & {
+    autoResumePending?: Record<string, unknown> | null;
+    sessionId?: string;
+    preserveSourceOrder?: boolean;
+  } = {},
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
 ): MobileMessageRenderItem[] {
-  const normalized = normalizeRemoteMessages(messages);
+  const normalized = normalizeRemoteMessages(messages, options);
   scopeUnsettledToolsToActiveTail(normalized);
   markTurnFinalAssistants(normalized, options.isSessionStreaming === true);
   if (options.autoResumePending) {

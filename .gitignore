@@ -33,6 +33,8 @@ out/
 .vite/
 apps/desktop/release/
 apps/desktop/resources/tools/
+# Generated at package time and embedded in the installed app's Resources.
+apps/desktop/resources/cindy-source.json
 # build-remote-bundles.mjs 会在 dev/package/build 前重新生成这些目录。
 apps/desktop/resources/cc-manager/
 apps/desktop/resources/pi-manager/

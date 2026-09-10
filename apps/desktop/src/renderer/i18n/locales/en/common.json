@@ -5557,6 +5557,33 @@
     "cindyMake": {
       "title": "Cindy Make",
       "openToolsDir": "Open tools folder",
+      "source": {
+        "title": "Source checkout",
+        "openDir": "Open source folder",
+        "prepare": "Prepare source",
+        "reset": "Clear source",
+        "update": "Update source",
+        "preparingAction": "Preparing source",
+        "path": "Path",
+        "channel": "Channel",
+        "version": "Version",
+        "ref": "Ref",
+        "commit": "Commit",
+        "status": {
+          "missing": "No personal source has been prepared",
+          "pending": "Preparing source checkout",
+          "preparing": "Preparing personal source",
+          "ready": "Personal source is ready",
+          "failed": "Source preparation failed",
+          "cancelled": "Source preparation stopped"
+        },
+        "resetConfirm": {
+          "title": "Clear personal source?",
+          "description": "This removes the managed checkout only. You can prepare the source again afterward.",
+          "confirm": "Clear source",
+          "cancel": "Cancel"
+        }
+      },
       "description": "The card below checks this computer and lets you install missing portable tools. Native compiler prerequisites show an official installation guide.",
       "checking": "Checking environment…",
       "forceManaged": {
@@ -11244,6 +11271,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "Review Rejected",
+      "rejectedDesc": "This version did not pass review. Address the feedback below and publish again.",
+      "rejectionReasonUnavailable": "This version did not pass review, but no specific reason is available. Contact the reviewer for details.",
+      "rejectionReason": "Rejection Reason",
       "dismiss": "Got it",
       "passedTitle": "Security Scan Passed",
       "passedDesc": "This version has passed all security checks and is now live on the market.",
@@ -11463,6 +11494,7 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
+      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
@@ -12324,7 +12356,7 @@
       }
     },
     "upstream": {
-      "pending": "Upstream search starts automatically once every environment check passes.",
+      "pending": "Upstream search starts automatically once the environment and source are ready.",
       "needsRequest": "A change request is needed",
       "needRequest": "Describe the change, including a feature name or error, to search upstream.",
       "placeholder": "For example: fix message stream flickering",
@@ -12342,8 +12374,6 @@
       "wait": "Wait for upstream",
       "personal": "Continue with a personal version",
       "retry": "Recheck and search again",
-      "expand": "Show upstream results",
-      "collapse": "Hide upstream results",
       "count": "Found {{count}} potentially related open Issues or PRs",
       "kind": {
         "issue": "Issue",
@@ -12361,7 +12391,7 @@
       },
       "decisionHint": {
         "wait": "This workflow has stopped. No subscription or automatic update was created.",
-        "personal": "Your choice is recorded in this card. Source preparation and building are not connected yet; no source has been downloaded or changed."
+        "personal": "Your choice is recorded. Cindy is creating a code session in the source directory."
       },
       "failure": {
         "network": "Could not reach GitHub. Check your connection and retry.",
@@ -12372,6 +12402,45 @@
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · Prepare environment",
-    "stepUpstream": "2 · Check upstream"
+    "stepUpstream": "3 · Check upstream",
+    "stepSource": "2 · Prepare source",
+    "source": {
+      "preparing": "Preparing source checkout…",
+      "phase": {
+        "checking": "Checking Git and source",
+        "cloning": "Downloading source",
+        "fetching": "Refreshing repository",
+        "checkingOut": "Selecting version"
+      },
+      "ready": "Source is ready",
+      "failed": "Source preparation failed",
+      "cancelled": "Source preparation stopped",
+      "errors": {
+        "unsupportedVersion": "This build version is not supported.",
+        "tagNotFound": "The required version tag was not found.",
+        "dirty": "The managed source folder has local changes. Commit or remove them before retrying.",
+        "gitFailed": "Git could not prepare the source checkout.",
+        "cancelled": "Source preparation stopped.",
+        "localCommits": "The source contains local commits or stashes not included upstream. Keep or back them up before clearing.",
+        "environmentNotReady": "The build environment is not ready. Check the required tools.",
+        "gitUnavailable": "Git is unavailable. Check and install Git in the environment card, then retry."
+      },
+      "gitProgress": {
+        "counting": "Counting objects",
+        "compressing": "Compressing objects",
+        "receiving": "Receiving objects",
+        "resolving": "Resolving deltas",
+        "checkingOut": "Updating files"
+      },
+      "missing": "No source is prepared"
+    },
+    "code": {
+      "starting": "Opening personal build task",
+      "started": "Personal build task created",
+      "failed": "Could not create personal build task",
+      "start": "Start personal build",
+      "open": "Open personal build task",
+      "sendFailed": "Could not send the request to the personal build task"
+    }
   }
 }

@@ -1179,6 +1179,24 @@ describe('usage through the production event pipeline', () => {
 
 
 describe('Bot adapters in the shared event pipeline', () => {
+  it.each(['a long but incomplete answer', ''])('settles output-limit with its available result (%j) before the paired done', async (result) => {
+    const h = harness();
+    h.emit(event('error', {
+      reason: 'output-limit', message: 'Pi reached the model output limit.',
+      isTerminal: true, result,
+    }, { source: 'pi', sessionTurnGeneration: 4 }));
+    await microtasks();
+    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      childSessionId: 'task', outcome: 'error', resultText: result,
+      error: 'Pi reached the model output limit.',
+    }));
+    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
+    h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
+    await microtasks();
+    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledOnce();
+    await h.dispose();
+  });
+
   it('preserves private input provenance in persistence and broadcast before done clears the active input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');

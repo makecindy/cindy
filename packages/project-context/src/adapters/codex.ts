@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn as spawnNative } from 'node:child_process';
 import spawn from 'cross-spawn';
 import matter from 'gray-matter';
+import { extractSummary } from '../toc.js';
 import type { AgentAdapter } from './types.js';
 
 export interface CodexAdapterOptions {
@@ -110,6 +111,21 @@ async function runCodex(
     ) {
       throw new Error('codex adapter: 最终正文缺少既有二级章节或“是什么”为空，旧知识将保留。');
     }
+    const summarySection = sections.get('是什么')!.trim();
+    const firstParagraph = summarySection.split(/\n\s*\n/u)[0];
+    const summary = extractSummary(body);
+    if (
+      !summary ||
+      /^\s{0,3}(?:`{3,}|~{3,})/mu.test(firstParagraph) ||
+      summary !== extractSummary('## 是什么\n' + summarySection)
+    ) {
+      throw new Error('codex adapter: “是什么”首段必须是 TOC 可消费的文字摘要，旧知识将保留。');
+    }
+    const history = required.get('演进备忘')?.trim();
+    const nextHistory = sections.get('演进备忘')?.trim() ?? '';
+    if (history && nextHistory !== history && !nextHistory.startsWith(history + '\n')) {
+      throw new Error('codex adapter: 演进备忘必须原样保留既有内容并仅在末尾追加，旧知识将保留。');
+    }
     return body + '\n';
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -124,12 +140,16 @@ function markdownSections(body: string): Map<string, string> {
   for (const line of body.split(/\r?\n/u)) {
     const marker = /^\s{0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
     if (marker) {
+      if (current) sections.set(current, sections.get(current) + '\n' + line);
       if (!fence) fence = marker;
       else if (marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
       continue;
     }
-    if (fence) continue;
-    const heading = /^##\s+(.+?)\s*$/u.exec(line)?.[1];
+    if (fence) {
+      if (current) sections.set(current, sections.get(current) + '\n' + line);
+      continue;
+    }
+    const heading = /^ {0,3}##\s+(.+?)\s*$/u.exec(line)?.[1];
     if (heading) {
       // TOC 消费第一个同名章节，后续重复标题不能掩盖空摘要。
       current = sections.has(heading) ? undefined : heading;

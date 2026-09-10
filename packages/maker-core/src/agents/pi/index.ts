@@ -25,7 +25,7 @@ import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDis
 
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
@@ -507,9 +507,284 @@ async function stageManagedRipgrep(configHome: string, sourcePath: string | unde
   const binDir = joinRemotePosixPath(configHome, 'bin');
   const targetPath = path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
   await fs.mkdir(binDir, { recursive: true });
-  await fs.copyFile(sourcePath, targetPath);
+  // CoW clones keep private file identity; unsupported filesystems fall back to copying.
+  // A hard link would let one runtime overwrite the managed binary and its siblings.
+  await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_FICLONE);
   if (process.platform !== 'win32') await fs.chmod(targetPath, 0o755);
   return targetPath;
+}
+
+const LOCAL_CONFIG_HOME_OWNER_FILE = '.cindy-owner.json';
+const LOCAL_CONFIG_HOME_OWNER_VERSION = 2;
+const LOCAL_CONFIG_HOME_REMOVE_RETRY_DELAYS_MS = [0, 25, 100] as const;
+/** One background turn may inspect only this many directory entries. */
+const LOCAL_CONFIG_HOME_SWEEP_ENTRY_BUDGET = 8;
+/** Stop a round after the current async operation once this soft budget expires. */
+const LOCAL_CONFIG_HOME_SWEEP_TIME_BUDGET_MS = 250;
+const LOCAL_CONFIG_HOME_RUNTIME_ID_RE = /^[a-f0-9]{32}$/;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+const activeLocalConfigHomes = new Set<string>();
+const activeLocalConfigHomeSweeps = new Set<string>();
+
+/** Durable proof used only to decide whether a local per-session config home is reclaimable. */
+interface LocalConfigHomeOwnerV1 {
+  version: 1;
+  ownerPid: number;
+  createdAt: number;
+  directoryName: string;
+}
+
+interface LocalConfigHomeOwnerV2 {
+  version: typeof LOCAL_CONFIG_HOME_OWNER_VERSION;
+  ownerPid: number;
+  createdAt: number;
+  directoryName: string;
+  runtimeId: string;
+  sessionIdHash: string;
+}
+
+type LocalConfigHomeOwner = LocalConfigHomeOwnerV1 | LocalConfigHomeOwnerV2;
+
+/** Minimal logging interface required by local config-home reclamation policy. */
+interface ConfigHomeCleanupLogger {
+  debug(message: string, fields?: Record<string, unknown>): void;
+}
+
+type PiStartupStage = 'mcp-ready' | 'pi-spawn' | 'rpc-ready' | 'first-model-request';
+
+function logPiStartupStage(
+  logger: AgentDeps['logger'],
+  startupTraceId: string,
+  stage: PiStartupStage,
+  startedAt: number,
+  status: 'ok' | 'degraded' | 'skipped',
+  counts: Record<string, number> = {},
+): void {
+  logger.info('pi startup stage', {
+    startupTraceId,
+    stage,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    status,
+    ...counts,
+  });
+}
+
+function localConfigHomeKey(configHome: string): string {
+  const resolved = path.resolve(configHome);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+async function registerLocalConfigHome(
+  configHome: string,
+  sessionId: string,
+  runtimeId: string,
+): Promise<void> {
+  const normalized = path.resolve(configHome);
+  if (path.basename(normalized) !== runtimeId || !LOCAL_CONFIG_HOME_RUNTIME_ID_RE.test(runtimeId)) {
+    throw new Error('pi: invalid local config-home runtime identity');
+  }
+  const owner: LocalConfigHomeOwnerV2 = {
+    version: LOCAL_CONFIG_HOME_OWNER_VERSION,
+    ownerPid: process.pid,
+    createdAt: Date.now(),
+    directoryName: path.basename(normalized),
+    runtimeId,
+    sessionIdHash: createHash('sha256').update(sessionId).digest('hex'),
+  };
+  // Publish local liveness before the marker becomes visible to another sweep.
+  activeLocalConfigHomes.add(localConfigHomeKey(normalized));
+  try {
+    await fs.writeFile(
+      path.join(normalized, LOCAL_CONFIG_HOME_OWNER_FILE),
+      `${JSON.stringify(owner)}\n`,
+      { encoding: 'utf8', mode: 0o600, flag: 'wx' },
+    );
+  } catch (error) {
+    activeLocalConfigHomes.delete(localConfigHomeKey(normalized));
+    throw error;
+  }
+}
+
+function unregisterLocalConfigHome(configHome: string): void {
+  activeLocalConfigHomes.delete(localConfigHomeKey(configHome));
+}
+
+async function readLocalConfigHomeOwner(configHome: string): Promise<LocalConfigHomeOwner | null> {
+  const markerPath = path.join(configHome, LOCAL_CONFIG_HOME_OWNER_FILE);
+  try {
+    const markerStat = await fs.lstat(markerPath);
+    if (!markerStat.isFile() || markerStat.size > 1024) return null;
+    const parsed = JSON.parse(await fs.readFile(markerPath, 'utf8')) as Record<string, unknown>;
+    if (
+      !Number.isSafeInteger(parsed.ownerPid)
+      || (parsed.ownerPid as number) <= 0
+      || !Number.isSafeInteger(parsed.createdAt)
+      || (parsed.createdAt as number) <= 0
+      || parsed.directoryName !== path.basename(configHome)
+    ) return null;
+    if (parsed.version === 1) {
+      return {
+        version: 1,
+        ownerPid: parsed.ownerPid as number,
+        createdAt: parsed.createdAt as number,
+        directoryName: parsed.directoryName,
+      };
+    }
+    if (
+      parsed.version !== LOCAL_CONFIG_HOME_OWNER_VERSION
+      || typeof parsed.runtimeId !== 'string'
+      || parsed.runtimeId !== parsed.directoryName
+      || !LOCAL_CONFIG_HOME_RUNTIME_ID_RE.test(parsed.runtimeId)
+      || typeof parsed.sessionIdHash !== 'string'
+      || !SHA256_HEX_RE.test(parsed.sessionIdHash)
+    ) return null;
+    return {
+      version: LOCAL_CONFIG_HOME_OWNER_VERSION,
+      ownerPid: parsed.ownerPid as number,
+      createdAt: parsed.createdAt as number,
+      directoryName: parsed.directoryName,
+      runtimeId: parsed.runtimeId,
+      sessionIdHash: parsed.sessionIdHash,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isLocalProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function localConfigHomeOwnerIsActive(
+  owner: LocalConfigHomeOwner,
+  configHome: string,
+): boolean {
+  // A wall-clock start-time estimate cannot prove a foreign process exited:
+  // clock corrections make a live owner look like a different incarnation.
+  // Retain live/unknown foreign PIDs, including possible PID reuse, until exit.
+  // Our own active set also covers startup publication and unconfirmed shutdown.
+  return owner.ownerPid === process.pid
+    ? activeLocalConfigHomes.has(localConfigHomeKey(configHome))
+    : isLocalProcessAlive(owner.ownerPid);
+}
+
+function sameLocalConfigHomeOwner(
+  left: LocalConfigHomeOwner,
+  right: LocalConfigHomeOwner,
+): boolean {
+  if (left.version !== right.version) return false;
+  if (
+    left.ownerPid !== right.ownerPid
+    || left.createdAt !== right.createdAt
+    || left.directoryName !== right.directoryName
+  ) return false;
+  return left.version === 1 || (
+    right.version === LOCAL_CONFIG_HOME_OWNER_VERSION
+    && left.runtimeId === right.runtimeId
+    && left.sessionIdHash === right.sessionIdHash
+  );
+}
+
+async function removeLocalConfigHomeWithRetry(
+  configHome: string,
+): Promise<{ removed: true } | { removed: false; error: unknown }> {
+  let lastError: unknown = new Error('pi configHome cleanup failed');
+  for (const delayMs of LOCAL_CONFIG_HOME_REMOVE_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    try {
+      await fs.rm(configHome, { recursive: true, force: true });
+      return { removed: true };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return { removed: false, error: lastError };
+}
+
+async function sweepStaleLocalConfigHomes(
+  agentHome: string,
+  logger: ConfigHomeCleanupLogger,
+): Promise<void> {
+  const runTmp = path.resolve(agentHome, 'run-tmp');
+  let entries;
+  try {
+    entries = await fs.opendir(runTmp, { bufferSize: LOCAL_CONFIG_HOME_SWEEP_ENTRY_BUDGET });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    logger.debug('pi configHome orphan scan failed (non-fatal)', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  let roundStartedAt = Date.now();
+  let inspected = 0;
+  // Stream the directory: the backlog itself must not become one unbounded allocation.
+  for await (const entry of entries) {
+    if (inspected >= LOCAL_CONFIG_HOME_SWEEP_ENTRY_BUDGET
+      || (inspected > 0 && Date.now() - roundStartedAt >= LOCAL_CONFIG_HOME_SWEEP_TIME_BUDGET_MS)) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 0);
+        timer.unref();
+      });
+      roundStartedAt = Date.now();
+      inspected = 0;
+    }
+    inspected += 1;
+    if (!entry.isDirectory()) continue;
+    const candidate = path.resolve(runTmp, entry.name);
+    if (path.dirname(candidate) !== runTmp) continue;
+    const owner = await readLocalConfigHomeOwner(candidate);
+    // Markerless homes may belong to an older Cindy instance between directory
+    // creation and Pi spawn. No process snapshot can prove them reclaimable.
+    if (!owner) continue;
+    if (localConfigHomeOwnerIsActive(owner, candidate)) continue;
+
+    // Re-read immediately before deletion. A directory whose marker changed or
+    // whose owner became active is no longer the orphan we proved above.
+    const currentOwner = await readLocalConfigHomeOwner(candidate);
+    if (
+      !currentOwner
+      || !sameLocalConfigHomeOwner(currentOwner, owner)
+    ) continue;
+    if (localConfigHomeOwnerIsActive(currentOwner, candidate)) continue;
+
+    const outcome = await removeLocalConfigHomeWithRetry(candidate);
+    if (!outcome.removed) {
+      logger.debug('pi configHome orphan cleanup failed (retried next startSession)', {
+        configHomeId: entry.name,
+        message: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+      });
+    }
+  }
+}
+
+/** Coalesce startup-triggered sweeps without putting reclamation on the startup critical path. */
+function scheduleStaleLocalConfigHomeSweep(
+  agentHome: string,
+  logger: ConfigHomeCleanupLogger,
+): void {
+  const sweepKey = localConfigHomeKey(path.resolve(agentHome, 'run-tmp'));
+  if (activeLocalConfigHomeSweeps.has(sweepKey)) return;
+  activeLocalConfigHomeSweeps.add(sweepKey);
+  const timer = setTimeout(() => {
+    void sweepStaleLocalConfigHomes(agentHome, logger)
+      .catch((error) => {
+        logger.debug('pi configHome orphan scan failed (non-fatal)', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        activeLocalConfigHomeSweeps.delete(sweepKey);
+      });
+  }, 0);
+  timer.unref();
 }
 
 /** cindy Effort → pi thinking level(pi 无 ultra)。思考开关走 setThinkingEnabled / thinkingEnabled。 */
@@ -2109,6 +2384,7 @@ export class PiAgent extends BaseAgent {
   }
 
   private async startSessionWhileRunning(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    const startupTraceId = randomBytes(8).toString('hex');
     const startupCleanupKey = opts.sessionId ?? '<anonymous>';
     // A previous pre-publication Pi process for this business session must be
     // confirmed dead before another spawn can begin.
@@ -2573,6 +2849,12 @@ export class PiAgent extends BaseAgent {
         message: 'remote pi sessions require getRemotePiFileOps — host must provide SSH file primitives',
       });
     }
+    if (!remote) {
+      scheduleStaleLocalConfigHomeSweep(
+        agentHome,
+        this.deps.logger,
+      );
+    }
     const allowPiPackageManagement = !reviewMode && !remote && Boolean(this.deps.mutatePiManagedPackage);
     // The UI-request title is visible to every extension in the Pi process.
     // Authenticate the host-backed mutation channel with a per-runtime bearer
@@ -2602,7 +2884,11 @@ export class PiAgent extends BaseAgent {
         return null;
       }
     };
-    const rmPath = async (target: string, opts2?: { recursive?: boolean }): Promise<void> => {
+    const rmPath = async (
+      target: string,
+      opts2?: { recursive?: boolean },
+      propagateError = false,
+    ): Promise<void> => {
       // 轮 22 MEDIUM-5:两分支统一吞错(force 语义) —— 远端 fileOps.rm 抛错
       // 时本地分支却静默, 语义不对称会误导未来调用方。rm 失败由上层
       // cleanupConfigHome 的 catch 兜底。
@@ -2615,7 +2901,8 @@ export class PiAgent extends BaseAgent {
             force: true,
           });
         }
-      } catch {
+      } catch (error) {
+        if (propagateError) throw error;
         /* best-effort:rm 失败不致命 */
       }
     };
@@ -2637,6 +2924,7 @@ export class PiAgent extends BaseAgent {
     // 远端再叠 models.json+settings.json hash:startSession 在 pi/ensure 之前就会写
     // 这两份快照。若只按 sessionId 分目录, 另一实例改路由或 retry 策略会先覆盖
     // 仍在跑的旧 Pi / 子代理热读快照。
+    const localConfigHomeRuntimeId = remote ? undefined : randomBytes(16).toString('hex');
     // Bot contexts remain profile-only. SSH tasks use the remote user's rules,
     // never the controlling desktop's personal instructions.
     const globalContextFiles = opts.botRuntimeProfile ? [] : await readPiGlobalContext(
@@ -2648,34 +2936,55 @@ export class PiAgent extends BaseAgent {
       : '';
     let configHome = remote
       ? joinRemotePosixPath(agentHome, 'run-tmp', stableSessionPathSegment(opts.sessionId))
-      : joinRemotePosixPath(agentHome, 'run-tmp', randomBytes(8).toString('hex'));
+      : joinRemotePosixPath(agentHome, 'run-tmp', localConfigHomeRuntimeId!);
     let configHomeCleaned = false;
-    // 清理失败(SSH 断链时 fileOps.rm 抛错)不置标志 —— 下次会话的 startSession
-    // 会主动清陈旧 configHome(见下),且不因「一次失败永久跳过」累积泄漏
-    // (R4-2 竞态 1/6)。
-    const cleanupConfigHome = (): void => {
-      if (configHomeCleaned) return;
-      void rmPath(configHome, { recursive: true }).then(
-        () => {
-          configHomeCleaned = true;
-        },
-        // 失败不置标志(下次 startSession 清陈旧目录兜底), 但必须留日志——
-        // 否则远端 SSH fs 卡死等根因不可见(R7 审计 L-3)。
-        (err) => {
-          this.deps.logger.debug('pi configHome cleanup failed (retried next startSession)', {
-            configHome,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        },
-      );
+    let configHomeCleanupPromise: Promise<void> | undefined;
+    const cleanupConfigHome = (): Promise<void> => {
+      if (configHomeCleaned) return Promise.resolve();
+      if (configHomeCleanupPromise) return configHomeCleanupPromise;
+      if (!remote) unregisterLocalConfigHome(configHome);
+      const pending = (async () => {
+        if (remote) {
+          await rmPath(configHome, { recursive: true }, true);
+        } else {
+          const outcome = await removeLocalConfigHomeWithRetry(configHome);
+          if (!outcome.removed) throw outcome.error;
+        }
+        configHomeCleaned = true;
+      })().catch((err) => {
+        // Keep the owner marker and cleaned=false. A later lifecycle callback
+        // retries directly; the next local start also reclaims this directory
+        // after proving that its owner/session is no longer active.
+        this.deps.logger.debug('pi configHome cleanup failed (retried next startSession)', {
+          configHomeId: remote ? path.posix.basename(configHome) : path.basename(configHome),
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }).finally(() => {
+        if (configHomeCleanupPromise === pending) configHomeCleanupPromise = undefined;
+      });
+      configHomeCleanupPromise = pending;
+      return pending;
     };
-    // 轮 40-w4-t4 CRITICAL:不再在新会话启动时清 run-tmp 其它目录 —— 远端
-    // 并发会话 A 的 configHome 会被 B 的启动清理删除(无 owner/lease 校验),
-    // 破坏 A 的 bridge extension/models.json 运行期快照。清理只绑定到
-    // 本会话自己的 close/失败(cleanupConfigHome);run-tmp 残留(断链时清理
-    // 失败的孤儿)由本会话 close 路径的低频清理覆盖, 不牺牲活跃会话。
-    // 注:断链残留的孤儿 configHome 会累积 —— 但删错活跃会话是毁任务,
-    // 宁可残留(可由用户手动清或未来加 lease 机制), 不误删。
+    // Until a handle owns the lifecycle, any setup rejection must remove this
+    // private home. An unconfirmed process close transfers cleanup to the
+    // session-keyed quarantine instead, because its Pi process may still read it.
+    let configHomeLifecycleTransferred = false;
+    let configHomeCleanupDeferredToQuarantine = false;
+    let localConfigHomeCreated = false;
+    try {
+      if (!remote) {
+        await fs.mkdir(path.dirname(configHome), { recursive: true, mode: 0o700 });
+        await fs.mkdir(configHome, { mode: 0o700 });
+        localConfigHomeCreated = true;
+        await registerLocalConfigHome(
+          configHome,
+          opts.sessionId ?? '<anonymous>',
+          localConfigHomeRuntimeId!,
+        );
+      }
+    // Local run-tmp sweeping is owner-aware: a live pid, or a configHome still
+    // registered by this process, is never removed. Remote daemon homes keep
+    // their existing stable identity and are not swept by local filesystem logic.
     if (remote) {
       const preview = await this.writeModelsJson(configHome, nativeProviders, retainedRuntimeModel, authProviderId, {
         remote,
@@ -3055,6 +3364,8 @@ export class PiAgent extends BaseAgent {
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
     const remoteSkipMcpBridge = Boolean(
       opts.remoteHostId && this.deps.remotePiSkipMcpBridge?.(opts.remoteHostId));
+    const mcpReadyStartedAt = Date.now();
+    let mcpReadyStatus: 'ok' | 'degraded' | 'skipped' = 'skipped';
     if (!reviewMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(
@@ -3090,12 +3401,22 @@ export class PiAgent extends BaseAgent {
             registeredMcpServerNames.add(server.name);
           }
         }
+        mcpReadyStatus = 'ok';
       } catch (err) {
+        mcpReadyStatus = 'degraded';
         this.deps.logger.error('pi MCP bridge prep failed, continuing without cindy tools', {
           message: err instanceof Error ? err.message : String(err),
         });
       }
     }
+    logPiStartupStage(
+      this.deps.logger,
+      startupTraceId,
+      'mcp-ready',
+      mcpReadyStartedAt,
+      mcpReadyStatus,
+      { mcpServerCount: registeredMcpServerNames.size },
+    );
 
     // 压缩即记忆:makerMemory 开启时,把 pi 压缩上下文时丢弃内容的摘要沉淀成 `digest`
     // 记忆(进 FTS 可 memory_search 检索,但排除出 MEMORY.md / system prompt,不污染
@@ -3286,7 +3607,7 @@ export class PiAgent extends BaseAgent {
       if (this.deps.resolvePiManagedPackageResources) {
         try {
           // Advisory metadata only (command palette, labels, diagnostics).
-          managedPackageResources = await this.deps.resolvePiManagedPackageResources();
+          managedPackageResources = await this.deps.resolvePiManagedPackageResources({ startupTraceId });
         } catch {
           this.deps.logger.warn('pi managed package metadata unavailable', {
             sessionId: opts.sessionId ?? null,
@@ -4572,6 +4893,8 @@ export class PiAgent extends BaseAgent {
       return proxyLeaseInitialInspection;
     };
     let durableSpawnEnv: NodeJS.ProcessEnv = {};
+    let piSpawnStartedAt: number | undefined;
+    let piSpawnLogged = false;
     try {
       for (const file of globalContextFiles) {
         await writeFile(joinRemotePosixPath(configHome, file.name), file.content);
@@ -4713,6 +5036,7 @@ export class PiAgent extends BaseAgent {
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
+      piSpawnStartedAt = Date.now();
       const { transport } = await this.createTransport(
         {
           args,
@@ -4937,13 +5261,18 @@ export class PiAgent extends BaseAgent {
           // runtime 文件残留由下次 startSession 的清陈旧目录兜底(轮 40-w4-t4)。
           // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
           if (!remote) {
-            cleanupConfigHome();
+            void cleanupConfigHome();
             cleanupRuntimeFiles();
           }
           queue.end();
         },
       });
+      logPiStartupStage(this.deps.logger, startupTraceId, 'pi-spawn', piSpawnStartedAt, 'ok');
+      piSpawnLogged = true;
     } catch (err) {
+      if (piSpawnStartedAt !== undefined && !piSpawnLogged) {
+        logPiStartupStage(this.deps.logger, startupTraceId, 'pi-spawn', piSpawnStartedAt, 'degraded');
+      }
       clearPiSubagentRefreshTimer();
       disposePiTranslateContext(ctx);
       try {
@@ -4953,7 +5282,7 @@ export class PiAgent extends BaseAgent {
       }
       // 轮 42 P1:远端失败也不清理 runtime 文件(可能与并发存活会话共享/复用)。
       if (!remote) {
-        cleanupConfigHome();
+        await cleanupConfigHome();
         cleanupRuntimeFiles();
       }
       throw err;
@@ -5054,6 +5383,8 @@ export class PiAgent extends BaseAgent {
     // 身份注册(否则 ?session= ctx 泄漏)+ 关掉可能已 spawn 的子进程(否则僵尸 pi
     // 仍持有本会话的 MCP 路由),再把原始错误抛给调用方。
     let sdkSessionId = '';
+    const rpcReadyStartedAt = Date.now();
+    let rpcReadyLogged = false;
     let runtimeCapabilityRefreshPromise: Promise<void> | undefined;
     const refreshRuntimeCapabilities = async (stage: 'ready' | 'switch_session' | 'fork'): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
@@ -5328,6 +5659,8 @@ export class PiAgent extends BaseAgent {
       }
       sdkSessionId = validateSdkSessionId(stateData.sessionFile || stateData.sessionId!);
       queue.push({ type: 'session_id', data: sdkSessionId, source: 'pi' });
+      logPiStartupStage(this.deps.logger, startupTraceId, 'rpc-ready', rpcReadyStartedAt, 'ok');
+      rpcReadyLogged = true;
 
       // get_state is the ready boundary. Capture exactly once after the final
       // fresh/resumed runtime has been selected; list/customization calls never
@@ -5355,6 +5688,9 @@ export class PiAgent extends BaseAgent {
         }
       }
     } catch (err) {
+      if (!rpcReadyLogged) {
+        logPiStartupStage(this.deps.logger, startupTraceId, 'rpc-ready', rpcReadyStartedAt, 'degraded');
+      }
       disposePiTranslateContext(ctx);
       try {
         disposeSessionRegistrations();
@@ -5369,6 +5705,7 @@ export class PiAgent extends BaseAgent {
       try {
         await proc.close();
       } catch (error) {
+        if (!remote) configHomeCleanupDeferredToQuarantine = true;
         let confirmStopped!: () => void;
         const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
         cleanupPending = new AgentStartupCleanupPendingError(
@@ -5381,14 +5718,14 @@ export class PiAgent extends BaseAgent {
           confirmStopped,
           ...(!remote
             ? { cleanupLocal: () => {
-                cleanupConfigHome();
+                void cleanupConfigHome();
                 cleanupRuntimeFiles();
               } }
             : {}),
         });
       }
       if (!remote && !cleanupPending) {
-        cleanupConfigHome();
+        await cleanupConfigHome();
         cleanupRuntimeFiles();
       }
       if (cleanupPending) throw cleanupPending;
@@ -5400,6 +5737,7 @@ export class PiAgent extends BaseAgent {
       this.launchSubagentRunner(request);
     const deps = this.deps;
     const agentKind = this.kind;
+    let firstModelRequestLogged = false;
 
     // 取消边界:main 的队列协调器在 Stop/close 抢占时会 abort 传入的 signal 并撤下
     // steer 标记。send/steer 必须在**构建 prompt(读附件是 async)前后、投递 RPC 前**
@@ -6114,6 +6452,9 @@ export class PiAgent extends BaseAgent {
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
           promptRequestStarted = true;
+          const firstModelRequestStartedAt = firstModelRequestLogged ? undefined : Date.now();
+          if (firstModelRequestStartedAt !== undefined) firstModelRequestLogged = true;
+          let firstModelRequestStatus: 'ok' | 'degraded' = 'degraded';
           try {
             doctorCommandActivity.enter(isDoctorCommand);
             const resp = await runExclusivePiRpc(() => proc.request(command, {
@@ -6124,6 +6465,7 @@ export class PiAgent extends BaseAgent {
               refreshTimeoutOnEvent: (event) =>
                 PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
             }));
+            firstModelRequestStatus = resp.success ? 'ok' : 'degraded';
             if (!resp.success) {
               rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
               if (managedPackageRoute.accepted) {
@@ -6249,6 +6591,15 @@ export class PiAgent extends BaseAgent {
               }
             }
           } finally {
+            if (firstModelRequestStartedAt !== undefined) {
+              logPiStartupStage(
+                deps.logger,
+                startupTraceId,
+                'first-model-request',
+                firstModelRequestStartedAt,
+                firstModelRequestStatus,
+              );
+            }
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
             }
@@ -6519,7 +6870,7 @@ export class PiAgent extends BaseAgent {
         piProcessExited = true;
         if (!remote) {
           // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
-          cleanupConfigHome();
+          await cleanupConfigHome();
           cleanupRuntimeFiles();
         }
       },
@@ -6911,7 +7262,18 @@ export class PiAgent extends BaseAgent {
       },
     };
 
+    configHomeLifecycleTransferred = true;
     return handle;
+    } finally {
+      if (
+        !remote
+        && localConfigHomeCreated
+        && !configHomeLifecycleTransferred
+        && !configHomeCleanupDeferredToQuarantine
+      ) {
+        await cleanupConfigHome();
+      }
+    }
   }
 
   async getMemoryStatus(): Promise<MemoryStatus> {

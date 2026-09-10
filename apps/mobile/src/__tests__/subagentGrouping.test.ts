@@ -70,6 +70,26 @@ function collectSourceIds(items: readonly MobileMessageRenderItem[]): string[] {
 }
 
 describe('subagent grouping (buildMobileMessageRenderItems)', () => {
+  it.each([1, 2, 7])('preserves history paragraph order through %s nesting levels and fallback', (depth) => {
+    const parents = Array.from({ length: depth }, (_, index) => agentToolUse(`order-A${index}`, {
+      parentUuid: index === 0 ? undefined : `order-A${index - 1}`,
+      createdAt: `2026-01-01T00:00:0${index}.000Z`,
+    }));
+    const paragraphs = ['first', 'second', 'third'].map((id, index) => msg({
+      id, role: 'assistant', content: id,
+      agentMeta: { parentUuid: `order-A${depth === 7 && index === 1 ? 5 : depth - 1}`, isStreaming: index > 0 },
+      createdAt: `2026-01-01T00:00:${30 - index}.000Z`,
+    }));
+    const messages = [...parents, ...paragraphs];
+    const original = structuredClone(messages);
+    const paragraphIds = (preserveSourceOrder: boolean) => collectSourceIds(buildMobileMessageRenderItems(
+      messages, { preserveSourceOrder, isSessionStreaming: true },
+    )).filter(id => paragraphs.some(message => message.id === id));
+    expect(paragraphIds(true)).toEqual(['first', 'second', 'third']);
+    expect(paragraphIds(false)).toEqual(['third', 'second', 'first']);
+    expect(messages).toEqual(original);
+  });
+
   it('replaces a top-level Agent tool_use with a subagent_group nesting its children', () => {
     const items = buildMobileMessageRenderItems([
       msg({ id: 'u', role: 'user', content: { text: 'go' }, createdAt: '2026-01-01T00:00:01.000Z' }),

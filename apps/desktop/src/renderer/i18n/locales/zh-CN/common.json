@@ -5555,6 +5555,33 @@
     "cindyMake": {
       "title": "Cindy Make",
       "openToolsDir": "打开工具目录",
+      "source": {
+        "title": "源码状态",
+        "openDir": "打开源码目录",
+        "prepare": "准备源码",
+        "reset": "清理源码",
+        "update": "更新源码",
+        "preparingAction": "正在准备源码",
+        "path": "路径",
+        "channel": "渠道",
+        "version": "版本",
+        "ref": "Ref",
+        "commit": "Commit",
+        "status": {
+          "missing": "尚未准备个人版源码",
+          "pending": "正在准备源码",
+          "preparing": "正在准备个人版源码",
+          "ready": "个人版源码已准备好",
+          "failed": "源码准备失败",
+          "cancelled": "源码准备已停止"
+        },
+        "resetConfirm": {
+          "title": "清理个人源码？",
+          "description": "这只会删除 Cindy 管理的源码目录。清理后如需使用，请再次点击准备源码。",
+          "confirm": "清理源码",
+          "cancel": "取消"
+        }
+      },
       "description": "下方卡片会检查本机环境，并可安装缺少的便携工具。原生编译工具缺失时会显示官方下载指引。",
       "checking": "正在检查环境…",
       "forceManaged": {
@@ -11228,6 +11255,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "审核未通过",
+      "rejectedDesc": "该版本未通过审核，请根据以下反馈修改后重新发布。",
+      "rejectionReasonUnavailable": "该版本未通过审核，暂未提供具体原因。请联系审核方了解详情。",
+      "rejectionReason": "拒审原因",
       "dismiss": "知道了",
       "passedTitle": "安全扫描通过",
       "passedDesc": "该版本已通过所有安全检查，现已发布到市场。",
@@ -11447,6 +11478,7 @@
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
@@ -12307,7 +12339,7 @@
       }
     },
     "upstream": {
-      "pending": "环境全部通过后，自动查询上游。",
+      "pending": "环境和源码准备完成后，自动查询上游。",
       "needsRequest": "等待补充修改需求",
       "needRequest": "填写要修改的功能名称或具体报错，查询相关上游内容。",
       "placeholder": "例如：修复消息流闪烁",
@@ -12325,8 +12357,6 @@
       "wait": "等待上游",
       "personal": "继续制作个人版",
       "retry": "重新检查并查询",
-      "expand": "展开上游结果",
-      "collapse": "收起上游结果",
       "count": "找到 {{count}} 条可能相关的开放 Issue 或 PR",
       "kind": {
         "issue": "Issue",
@@ -12344,7 +12374,7 @@
       },
       "decisionHint": {
         "wait": "本次流程已停止，尚未订阅通知或设置自动更新。",
-        "personal": "选择已记录在本卡片中。源码准备和构建尚未接入，当前没有拉取或修改源码。"
+        "personal": "选择已记录，Cindy 正在源码目录中创建实现任务。"
       },
       "failure": {
         "network": "无法连接 GitHub，请检查网络后重试。",
@@ -12355,6 +12385,45 @@
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 准备环境",
-    "stepUpstream": "2 · 查询上游"
+    "stepUpstream": "3 · 查询上游",
+    "stepSource": "2 · 准备源码",
+    "source": {
+      "preparing": "正在准备源码",
+      "phase": {
+        "checking": "正在检查 Git 和源码",
+        "cloning": "正在下载源码",
+        "fetching": "正在刷新仓库",
+        "checkingOut": "正在切换版本"
+      },
+      "ready": "源码已准备好",
+      "failed": "源码准备失败",
+      "cancelled": "源码准备已停止",
+      "errors": {
+        "unsupportedVersion": "当前版本格式不受支持。",
+        "tagNotFound": "当前版本所需的 tag 不存在。",
+        "dirty": "源码目录有未提交改动，请处理后再重试。",
+        "gitFailed": "Git 无法准备源码目录。",
+        "cancelled": "源码准备已停止。",
+        "localCommits": "源码中有尚未包含在上游的本地提交或暂存记录，请保留或备份后再清理。",
+        "environmentNotReady": "构建环境尚未就绪，请检查所需工具。",
+        "gitUnavailable": "Git 不可用，请先在环境卡片中检查并安装 Git，再重试。"
+      },
+      "gitProgress": {
+        "counting": "正在统计对象",
+        "compressing": "正在压缩对象",
+        "receiving": "正在接收对象",
+        "resolving": "正在解析增量",
+        "checkingOut": "正在更新文件"
+      },
+      "missing": "尚未准备源码"
+    },
+    "code": {
+      "starting": "正在打开个人版任务",
+      "started": "个人版任务已创建",
+      "failed": "个人版任务创建失败",
+      "start": "开始制作个人版",
+      "open": "打开个人版任务",
+      "sendFailed": "需求发送失败，请打开个人版任务重试"
+    }
   }
 }
