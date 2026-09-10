@@ -38,6 +38,7 @@ import { pickWizardRecommend, type WizardRecommend } from './wizardRecommend';
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { providerMonogram } from '@/lib/providerModels';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
+import { acquireCodexLogin, type CodexLoginLease } from '@/hooks/codexAuthLogin';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -675,7 +676,11 @@ export function AddProviderWizard({
   }, [entry, presets, pickPreset]);
 
   const accountLoginRef = useRef<{ providerId: string; ownerId: string } | null>(null);
+  const localLoginRef = useRef<{ cancel: () => void } | null>(null);
   useEffect(() => () => {
+    const localLogin = localLoginRef.current;
+    localLoginRef.current = null;
+    localLogin?.cancel();
     const login = accountLoginRef.current;
     accountLoginRef.current = null;
     if (login) void window.electronAPI.maker.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
@@ -683,28 +688,46 @@ export function AddProviderWizard({
 
   const useLocalOpenAiAccount = useCallback(async () => {
     setLoggingIn(true);
+    let lease: CodexLoginLease | undefined;
+    const login = { cancel: () => lease?.release({ cancelIfLastOwner: true }) };
+    localLoginRef.current = login;
     try {
-      const state = await window.electronAPI.maker.auth.triggerLogin('codex', { mode: 'local' });
-      const detected = await window.electronAPI.maker.scanLocalCli();
-      setCliDetections(detected.detections);
+      lease = acquireCodexLogin('local');
+      const state = await lease.promise;
+      if (localLoginRef.current !== login) return;
       if (state.authenticated && state.authSource === 'oauth' && state.credentialScope === 'system-shared') {
         onDone('openai');
-      } else {
+      } else if (state.errorReason !== 'login_cancelled') {
         toast.error(t('settings.providers.openai.localUnavailable'));
       }
     } catch {
-      toast.error(t('settings.providers.openai.localUnavailable'));
-    } finally { setLoggingIn(false); }
+      if (localLoginRef.current === login) toast.error(t('settings.providers.openai.localUnavailable'));
+    } finally {
+      lease?.release();
+      if (localLoginRef.current === login) {
+        localLoginRef.current = null;
+        setLoggingIn(false);
+      }
+    }
   }, [onDone, t]);
 
   const useLocalClaudeAccount = useCallback(async () => {
     setLoggingIn(true);
+    const loginKey = crypto.randomUUID();
+    const login = { cancel: () => { void window.electronAPI.maker.claudeOAuthCancel(loginKey).catch(() => undefined); } };
+    localLoginRef.current = login;
     try {
-      const result = await window.electronAPI.maker.claudeOAuthLogin();
+      const result = await window.electronAPI.maker.claudeOAuthLogin(loginKey);
+      if (localLoginRef.current !== login) return;
       if (result.ok) onDone('anthropic');
-      else toast.error(t('settings.providers.localAccount.unavailable'));
-    } catch { toast.error(t('settings.providers.localAccount.unavailable')); }
-    finally { setLoggingIn(false); }
+      else if (result.reason !== 'login_cancelled') toast.error(t('settings.providers.localAccount.unavailable'));
+    } catch { if (localLoginRef.current === login) toast.error(t('settings.providers.localAccount.unavailable')); }
+    finally {
+      if (localLoginRef.current === login) {
+        localLoginRef.current = null;
+        setLoggingIn(false);
+      }
+    }
   }, [onDone, t]);
 
   // ── OAuth 授权(复用既有鉴权流;成功即完成,无第 3 步)────────────────────
@@ -774,6 +797,9 @@ export function AddProviderWizard({
    * 都必须能中止 main 侧 login runner,否则浏览器流挂起时用户无法重试。
    */
   const cancelAuthorize = useCallback(() => {
+    const localLogin = localLoginRef.current;
+    localLoginRef.current = null;
+    localLogin?.cancel();
     if (!sel || sel.kind !== 'oauth') return;
     const id = sel.provider.id;
     if (id === 'openai' || id === 'anthropic' || id === 'xai') {

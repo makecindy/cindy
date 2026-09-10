@@ -9,7 +9,8 @@ const h = vi.hoisted(() => ({
   write: vi.fn(),
   clear: vi.fn(),
 }));
-vi.mock('../claude-credentials-store.js', () => ({
+vi.mock('../claude-credentials-store.js', async (original) => ({
+  ...(await original<typeof import('../claude-credentials-store.js')>()),
   readClaudeAiOAuthUnbound: () => h.available ? { accessToken: h.token } : null,
   readClaudeAiOAuth: () => null,
   writeClaudeAiOAuth: h.write,

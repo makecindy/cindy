@@ -601,11 +601,22 @@ function AnthropicHeader({
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider?.connected ?? false;
+  const loginRef = useRef<string | null>(null);
+  const cancelLogin = useCallback(() => {
+    if (!loginRef.current) return;
+    const loginKey = loginRef.current;
+    loginRef.current = null;
+    void window.electronAPI.maker.claudeOAuthCancel(loginKey).catch(() => undefined);
+  }, []);
+  useEffect(() => cancelLogin, [cancelLogin]);
 
   const handleLogin = useCallback(async () => {
+    const login = crypto.randomUUID();
+    loginRef.current = login;
     setLoggingIn(true);
     try {
-      const r = await window.electronAPI.maker.claudeOAuthLogin();
+      const r = await window.electronAPI.maker.claudeOAuthLogin(login);
+      if (loginRef.current !== login) return;
       if (r.ok) {
         toast.success(t('settings.connections.claude.toast.loggedIn'));
         onChanged();
@@ -619,9 +630,12 @@ function AnthropicHeader({
         toast.error(t('settings.connections.claude.toast.loginFailed'));
       }
     } catch {
-      toast.error(t('settings.connections.claude.toast.loginFailed'));
+      if (loginRef.current === login) toast.error(t('settings.connections.claude.toast.loginFailed'));
     } finally {
-      setLoggingIn(false);
+      if (loginRef.current === login) {
+        loginRef.current = null;
+        setLoggingIn(false);
+      }
     }
   }, [onChanged, t]);
 
@@ -666,7 +680,7 @@ function AnthropicHeader({
         ),
         onClick: () => {
           if (loggingIn) {
-            void window.electronAPI.maker.claudeOAuthCancel();
+            cancelLogin();
             setLoggingIn(false);
           } else {
             void handleLogin();

@@ -701,7 +701,7 @@ import {
 } from './im/defaultSettingsStore.js';
 import { hasClaudeAiOAuth } from './maker-host/claude-credentials-store.js';
 import { disconnectClaudeAiOAuth, reconnectClaudeAiOAuth } from './maker-host/claude-oauth-refresh.js';
-import { cancelClaudeOAuthLogin } from './maker-host/claude-oauth-login.js';
+import { beginClaudeLocalLogin, cancelClaudeOAuthLogin } from './maker-host/claude-oauth-login.js';
 import {
   runGrokOAuthLogin,
   cancelGrokOAuthLogin,
@@ -4836,19 +4836,19 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_STATUS, async () => {
     return { authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async (event) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async (event, loginKey?: string) => {
     assertTrustedAppRendererEvent(event);
     const owner = activeOwnerScopeKey();
     if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId) return { ok: false, reason: 'login_cancelled', authorized: false };
-    cancelClaudeOAuthLogin();
-    if (!reconnectClaudeAiOAuth()) return { ok: false, reason: 'local_unavailable', authorized: false };
+    const signal = beginClaudeLocalLogin(loginKey);
     resetProviderModelAutoRefreshCooldowns('anthropic');
     await clearAnthropicDiscoveredModels();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
     await ensureAnthropicCompatProxyReady();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
-    await broadcastClaudeAuthStateChanged();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (!reconnectClaudeAiOAuth()) return { ok: false, reason: 'local_unavailable', authorized: false };
+    // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
+    void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
     void refreshAnthropicModelsFromHttp();
     return { ok: true, authorized: hasClaudeAiOAuth() };
@@ -4879,8 +4879,9 @@ const registerIpcHandlers = () => {
     await clearAnthropicDiscoveredModels();
     return { authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async () => {
-    cancelClaudeOAuthLogin();
+  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async (event, loginKey?: string) => {
+    assertTrustedAppRendererEvent(event);
+    cancelClaudeOAuthLogin(loginKey);
     return { authorized: hasClaudeAiOAuth() };
   });
 

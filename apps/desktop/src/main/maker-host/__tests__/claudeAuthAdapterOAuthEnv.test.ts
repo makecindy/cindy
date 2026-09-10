@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   gatewayKey: 'sk-xd-gateway' as string | null,
   cleared: 0,
   revoked: false,
+  revocationFails: false,
   refresherInvalidated: 0,
   invalidGrantHandler: null as ((digest: string) => void) | null,
   rejectedDigest: undefined as string | undefined,
@@ -55,6 +56,7 @@ vi.mock('../nativeProviderAuthBinding.js', async (original) => ({
   ...(await original<typeof import('../nativeProviderAuthBinding.js')>()),
   isNativeProviderAuthRevoked: () => h.revoked,
   unbindNativeProviderAuth: (_provider: string, opts?: { rejectedCredentialDigest?: string }) => {
+    if (h.revocationFails) throw new Error('binding write failed');
     h.revoked = true;
     h.rejectedDigest = opts?.rejectedCredentialDigest;
   },
@@ -125,6 +127,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     h.gatewayKey = 'sk-xd-gateway';
     h.cleared = 0;
     h.revoked = false;
+    h.revocationFails = false;
     h.refresherInvalidated = 0;
     h.refreshDelayMs = 0;
     h.encryptionAvailable = true;
@@ -304,5 +307,16 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(h.cleared).toBe(0);
     expect(h.revoked).toBe(true);
     expect(h.refresherInvalidated).toBe(1);
+  });
+
+  it('still retains and broadcasts automatic invalidation when persistence fails', async () => {
+    const adapter = await makeAdapter();
+    const broadcast = vi.fn();
+    adapter.setOnInvalidatedBroadcast(broadcast);
+    h.revocationFails = true;
+    h.invalidGrantHandler?.('c'.repeat(64));
+    await vi.waitFor(() => expect(broadcast).toHaveBeenCalledWith('claude_oauth_refresh_invalid_grant'));
+    expect(h.retainPresentation).toHaveBeenCalledWith('anthropic');
+    expect(h.cleared).toBe(0);
   });
 });

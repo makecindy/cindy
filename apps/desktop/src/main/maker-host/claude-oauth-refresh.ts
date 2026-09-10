@@ -43,11 +43,11 @@
  */
 
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
 import {
+  claudeOAuthCredentialDigest,
   readClaudeAiOAuthUnbound,
   readClaudeAiOAuth,
   writeClaudeAiOAuth,
@@ -765,7 +765,4 @@ export function setClaudeOAuthInvalidGrantHandler(handler: ((credentialDigest: s
   invalidGrantHandler = handler;
 }
 
-/** Only token identity matters; profile and expiry metadata may change independently. */
-export function claudeOAuthCredentialDigest(oauth: ClaudeAiOAuth): string {
-  return createHash('sha256').update(JSON.stringify([oauth.accessToken, oauth.refreshToken ?? null])).digest('hex');
-}
+export { claudeOAuthCredentialDigest } from './claude-credentials-store.js';

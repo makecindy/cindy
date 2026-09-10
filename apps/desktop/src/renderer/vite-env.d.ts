@@ -6170,12 +6170,12 @@ interface ElectronAPI {
 
     /** Claude.ai 订阅 OAuth 登录状态(系统 ~/.claude 凭证库是否有 OAuth 登录) */
     claudeOAuthStatus: () => Promise<{ authorized: boolean }>;
-    /** 拉起浏览器 OAuth 登录 Claude.ai 订阅;成功写凭证。reason 在失败时给出(cancelled/timeout/...) */
-    claudeOAuthLogin: () => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
-    /** 登出 Claude.ai 订阅(⚠️ 同时清本地 claude 的登录凭证) */
+    /** 连接本机 Claude 订阅；loginKey 用于限定取消范围。 */
+    claudeOAuthLogin: (loginKey?: string) => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
+    /** 断开 Cindy 使用许可，保留本机 Claude 凭证。 */
     claudeOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<{ authorized: boolean }>;
-    /** 取消进行中的浏览器 OAuth 登录流 */
-    claudeOAuthCancel: () => Promise<{ authorized: boolean }>;
+    /** 取消对应登录尝试。 */
+    claudeOAuthCancel: (loginKey?: string) => Promise<{ authorized: boolean }>;
     /** 拉起浏览器 OAuth 登录 xAI(SuperGrok 订阅);成功写 safeStorage。reason 在失败时给出 */
     xaiOAuthLogin: () => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
     /** 登出 xAI(清本机 safeStorage 的 xai 凭证) */

@@ -20,6 +20,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -28,7 +29,7 @@ import {
   decideKeychainWriteMode,
   planClaudeAiOAuthClear,
 } from './claude-credentials-blob.js';
-import { isNativeProviderAuthBound } from './nativeProviderAuthBinding.js';
+import { isNativeProviderAuthBound, isNativeProviderCredentialRejected } from './nativeProviderAuthBinding.js';
 
 const log = desktopMakerLogger.child('claude-credentials-store');
 
@@ -175,7 +176,13 @@ function writeBlob(blob: Record<string, unknown>): void {
  */
 export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
   if (!isNativeProviderAuthBound('anthropic')) return null;
-  return readClaudeAiOAuthUnbound();
+  const oauth = readClaudeAiOAuthUnbound();
+  return oauth && !isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth)) ? oauth : null;
+}
+
+/** Only token identity matters; profile and expiry metadata may change independently. */
+export function claudeOAuthCredentialDigest(oauth: ClaudeAiOAuth): string {
+  return createHash('sha256').update(JSON.stringify([oauth.accessToken, oauth.refreshToken ?? null])).digest('hex');
 }
 
 /** Read native credentials for an explicit reattachment without changing their owner. */

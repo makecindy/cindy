@@ -23,6 +23,8 @@ import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFil
 // Windows topology semantics. Durability capabilities belong to the actual
 // host filesystem, so capture them before any such override can occur.
 const NATIVE_BINDING_HOST_PLATFORM = hostPlatform();
+// Preserve the same rejection check in this process when durable revocation cannot be written.
+const rejectedCredentialFallback = new Map<string, string>();
 
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
@@ -477,6 +479,7 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 
 /** Unreadable binding state cannot prove that reusing a native credential is safe. */
 export function isNativeProviderCredentialRejected(provider: NativeProviderId, digest: string): boolean {
+  if (rejectedCredentialFallback.get(`${bindingPath()}:${provider}`) === digest) return true;
   const read = readBindingsOrFail();
   return !read.ok || read.bindings.rejectedCredentialDigests?.[provider] === digest;
 }
@@ -710,6 +713,9 @@ export function unbindNativeProviderAuth(
   if (opts?.rejectedCredentialDigest !== undefined && (
     !opts.revoked || !/^[a-f0-9]{64}$/.test(opts.rejectedCredentialDigest)
   )) throw new Error('Invalid rejected credential digest');
+  if (opts?.rejectedCredentialDigest) {
+    rejectedCredentialFallback.set(`${bindingPath()}:${provider}`, opts.rejectedCredentialDigest);
+  }
   // 归属读不出来时放弃写入。用户的意图是「登出这一个 provider」,不是「把其余 provider 的
   // 归属清空」—— 而把损坏文件覆盖成一份只剩撤销标记的新文件正是后者,其余 provider 从此
   // 无主,下一次可信读取就会把它们的残留凭证认领给当前账号(PR #548 review)。

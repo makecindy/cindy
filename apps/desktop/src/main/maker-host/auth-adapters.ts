@@ -550,7 +550,9 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
     // 副作用(authAdaptersImportPurity 约定)。
     setClaudeOAuthInvalidGrantHandler((digest) => {
-      void this.invalidateNativeCredential('claude_oauth_refresh_invalid_grant', digest);
+      void this.invalidateNativeCredential('claude_oauth_refresh_invalid_grant', digest).catch((error) => {
+        log.warn('claude invalidation cleanup failed', { error: error instanceof Error ? error.message : String(error) });
+      });
     });
   }
 
@@ -570,7 +572,11 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   private async invalidateNativeCredential(reason: string, rejectedCredentialDigest?: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
     invalidateClaudeOAuthRefresh();
-    unbindNativeProviderAuth('anthropic', { revoked: true, ...(rejectedCredentialDigest ? { rejectedCredentialDigest } : {}) });
+    try {
+      unbindNativeProviderAuth('anthropic', { revoked: true, ...(rejectedCredentialDigest ? { rejectedCredentialDigest } : {}) });
+    } catch (error) {
+      log.warn('claude credential revocation could not be persisted', { error: error instanceof Error ? error.message : String(error) });
+    }
     retainInvalidatedProviderPresentation('anthropic');
     if (this.onInvalidatedBroadcast) {
       try {

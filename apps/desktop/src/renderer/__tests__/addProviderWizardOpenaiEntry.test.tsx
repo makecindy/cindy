@@ -133,7 +133,7 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     renderWizard('openai', onDone);
     fireEvent.click(screen.getByText('settings.providers.openai.useLocalAccount'));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
-    expect(window.electronAPI.maker.auth.triggerLogin).toHaveBeenCalledWith('codex', { mode: 'local' });
+    expect(window.electronAPI.maker.auth.triggerLogin).toHaveBeenCalledWith('codex', { mode: 'local', ownerId: expect.any(String) });
     expect(window.electronAPI.maker.providerOAuthLogin).not.toHaveBeenCalled();
   });
 

@@ -70,6 +70,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 }));
 
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { invalidatePendingCodexLogin } from '@/hooks/codexAuthLogin';
 
 const OPENAI_PROVIDER = {
   id: 'openai',
@@ -141,6 +142,7 @@ type ProviderOAuthProgress = {
 let providerOAuthProgressListener: ((progress: ProviderOAuthProgress) => void) | null = null;
 
 beforeEach(() => {
+  invalidatePendingCodexLogin();
   triggerLogin.mockReset();
   cancelLogin.mockReset();
   createAccount.mockReset().mockResolvedValue(undefined);
@@ -156,6 +158,9 @@ beforeEach(() => {
   });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      auth: { triggerLogin, cancelLogin },
+      claudeOAuthLogin: triggerLogin,
+      claudeOAuthCancel: cancelLogin,
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -181,6 +186,30 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  it.each(['openai', 'anthropic'].flatMap(id => ['cancel', 'unmount'].map(exit => ({ id, exit }))))('discards local $id completion after $exit', async ({ id, exit }) => {
+    let finish!: (value: unknown) => void;
+    triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    cancelLogin.mockResolvedValue({});
+    const onDone = vi.fn();
+    const { unmount } = render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id }]}
+      entry={{ kind: 'builtin', providerId: id }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText(id === 'openai' ? 'settings.providers.openai.useLocalAccount' : 'settings.providers.localAccount.useClaude'));
+    await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
+    if (exit === 'unmount') unmount();
+    else fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    expect(cancelLogin).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ ok: true, authenticated: true, authSource: 'oauth', credentialScope: 'system-shared' }); });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('completes a successful local OpenAI login even if CLI scanning fails', async () => {
+    triggerLogin.mockResolvedValue({ authenticated: true, authSource: 'oauth', credentialScope: 'system-shared' });
+    vi.mocked(window.electronAPI.maker.scanLocalCli).mockRejectedValue(new Error('EACCES'));
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]} entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('settings.providers.openai.useLocalAccount'));
+    await waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('openai'));
+  });
   it.each(['openai', 'anthropic', 'xai'].flatMap(id =>
     ['cancel', 'unmount'].map(exit => ({ id, exit })),
   ))('removes $id when login succeeds after $exit', async ({ id, exit }) => {
