@@ -37,7 +37,10 @@
       "xhigh": "超高",
       "max": "最高",
       "ultra": "极致"
-    }
+    },
+    "resetDefaults": "下次使用跟随默认",
+    "resetDefaultsHint": "清除已保存的模型偏好，当前任务的运行配置保持不变。",
+    "resetDefaultsError": "未能确认重置。请检查电脑连接和版本后重试。"
   },
   "contextWindowSwitch": {
     "title": "这个模型装不下当前对话",

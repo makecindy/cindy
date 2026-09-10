@@ -124,10 +124,17 @@ export function makeSessionMirrorAccessors(
     agent: AgentKind,
     providerId: string,
     model: string,
-    patch: { effort?: string; fast?: boolean },
-  ) => void,
-): MobileModelMemoryAccessors {
+    patch: { effort?: string; fast?: boolean; reset?: ('effort' | 'fast')[] },
+  ) => unknown | Promise<unknown>,
+ ): MobileModelMemoryAccessors {
   return {
+    reset: async (agent, providerId, model) => {
+      const result = await onWrite(agent, providerId, model, { reset: ['effort', 'fast'] });
+      if (!result || typeof result !== 'object' || (result as { resetApplied?: unknown }).resetApplied !== true) throw new Error('MODEL_MEMORY_RESET_UNSUPPORTED');
+      const slot = getSlot(sessionId, agent, providerId, false);
+      if (slot) { delete slot.effortByModel[model]; delete slot.fastByModel[model]; }
+      emit();
+    },
     getEffort: (agent, providerId, model) =>
       getSlot(sessionId, agent, providerId, false)?.effortByModel[model],
     getFast: (agent, providerId, model) =>

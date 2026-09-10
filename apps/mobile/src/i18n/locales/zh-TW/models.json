@@ -37,7 +37,10 @@
       "xhigh": "超高",
       "max": "最高",
       "ultra": "極致"
-    }
+    },
+    "resetDefaults": "下次使用跟隨預設值",
+    "resetDefaultsHint": "清除已儲存的模型偏好，目前任務的執行設定保持不變。",
+    "resetDefaultsError": "未能確認重設。請檢查電腦連線和版本後重試。"
   },
   "contextWindowSwitch": {
     "title": "此模型無法容納目前對話",

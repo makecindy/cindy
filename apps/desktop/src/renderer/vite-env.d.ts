@@ -2425,6 +2425,7 @@ interface ElectronAPI {
       string,
       { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
     >,
+    resetRequestId?: string,
   ) => void;
 
   /** 被控端 renderer → 自身 main:会话「非选中模型」effort/fast 变化镜像(转发给控制端)。 */
@@ -2448,6 +2449,9 @@ interface ElectronAPI {
       effort?: string;
       fast?: boolean;
       thinking?: boolean;
+      reset?: ('effort' | 'fast')[];
+      resetRequestId?: string;
+      resetDataOwnerId?: string | null;
     }) => void,
   ) => () => void;
 

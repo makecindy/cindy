@@ -1935,7 +1935,10 @@
           },
           "codexContextUnknown": "CLI configuration unavailable",
           "codexContextValues": "Total {{total}} · Usable {{usable}} · Auto-compact {{compact}} tokens",
-          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service."
+          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service.",
+          "catalogRevision": "Published configuration: {{revision}}",
+          "personalWindow": "Using your context limit",
+          "followCatalog": "Following published defaults"
         },
         "kindFilter": {
           "all": "All",

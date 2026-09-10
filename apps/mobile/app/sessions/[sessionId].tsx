@@ -2434,6 +2434,7 @@ export default function SessionScreen() {
   ]);
   const sessionMirrorAccessors = useMemo(
     () => makeSessionMirrorAccessors(sessionId, (agent, providerId, model, patch) => {
+      if (patch.reset) return maker.resetModelMemory({ agent, providerId, modelId: model });
       void maker.setSessionModelPref({ sessionId, agent, providerId, model, ...patch }).catch(() => undefined);
       void maker.applyNewMakerDraftPref({ agent, providerId, modelId: model, active: false, ...patch }).catch(() => undefined);
     }),

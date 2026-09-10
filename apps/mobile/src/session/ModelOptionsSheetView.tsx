@@ -8,6 +8,7 @@
  * **非选中行** → 写注入记忆(草稿 = draftModelMemory / 会话 = sessionModelMirror 写穿被控端)。
  * effort 点击后停留(可连续调 Fast),返回/把手下拉由浮窗层负责。
  */
+import { useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
@@ -163,6 +164,8 @@ export function ModelOptionsSheetView({
   disabled = false,
   testID = "modelOptions",
 }: ModelOptionsSheetViewProps) {
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(false);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -251,6 +254,14 @@ export function ModelOptionsSheetView({
           ) : null}
         </View>
       ) : null}
+      {modelMemory?.reset && providerId ? <>
+        <Pressable accessibilityRole="button" disabled={disabled || resetting} style={styles.effortOptionRow}
+          onPress={() => { setResetting(true); setResetError(false); void modelMemory.reset!(agentKind, providerId, model.id).catch(() => setResetError(true)).finally(() => setResetting(false)); }}>
+          <Text style={styles.effortOptionText}>{t('models.options.resetDefaults')}</Text>
+        </Pressable>
+        <Text style={styles.sectionLabel}>{t('models.options.resetDefaultsHint')}</Text>
+        {resetError ? <Text accessibilityRole="alert" style={styles.sectionLabel}>{t('models.options.resetDefaultsError')}</Text> : null}
+      </> : null}
       {fastEditable ? (
         <View style={styles.fastRow}>
           <Text style={styles.fastRowLabel}>

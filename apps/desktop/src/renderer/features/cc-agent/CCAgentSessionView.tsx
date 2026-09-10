@@ -1149,13 +1149,14 @@ export function CCAgentSessionView({
     if (!remoteDeviceId || !remoteModelMemoryScopeKey) return undefined;
     const deviceId = remoteDeviceId;
     return makeMirrorAccessors(remoteModelMemoryScopeKey, (agent, providerId, model, patch) => {
-      window.electronAPI.deviceLink
+      return window.electronAPI.deviceLink
         .invoke(deviceId, 'maker:apply-new-maker-draft-pref', [
           {
             agent,
             providerId,
             modelId: model,
             active: false,
+            ...(patch.reset ? { reset: patch.reset } : {}),
             ...(patch.markModelChoice !== undefined
               ? { markModelChoice: patch.markModelChoice }
               : {}),
@@ -1164,7 +1165,8 @@ export function CCAgentSessionView({
             ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
           },
         ])
-        .catch(() => {
+        .catch((error) => {
+          if (patch.reset) throw error;
           // 旧版被控端 / 离线时仍保留控制端乐观镜像,不回退写本机预设。
         });
     });

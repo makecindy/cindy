@@ -139,3 +139,22 @@ describe('makeMirrorAccessors', () => {
     expect(acc.getEffort('claude-code', 'anthropic', 'opus')).toBe('medium');
   });
 });
+
+
+describe('remote reset confirmation', () => {
+  it('keeps an override for an old or offline host, then deletes only the acknowledged field', async () => {
+    replaceScope(DRAFT, { 'codex:openai': { effortByModel: { model: 'high' }, fastByModel: { model: true } } });
+    const unsupported = makeMirrorAccessors(DRAFT, () => undefined);
+    await expect(unsupported.clearEffort!('codex', 'openai', 'model')).rejects.toThrow('UNSUPPORTED');
+    expect(unsupported.getEffort('codex', 'openai', 'model')).toBe('high');
+    const offline = makeMirrorAccessors(DRAFT, async () => { throw new Error('offline'); });
+    await expect(offline.clearFast!('codex', 'openai', 'model')).rejects.toThrow('offline');
+    expect(offline.getFast('codex', 'openai', 'model')).toBe(true);
+    const confirmed = makeMirrorAccessors(DRAFT, async () => ({ resetApplied: true }));
+    await confirmed.clearEffort!('codex', 'openai', 'model');
+    expect(confirmed.getEffort('codex', 'openai', 'model')).toBeUndefined();
+    expect(confirmed.getFast('codex', 'openai', 'model')).toBe(true);
+    await confirmed.clearFast!('codex', 'openai', 'model');
+    expect(confirmed.getFast('codex', 'openai', 'model')).toBeUndefined();
+  });
+});

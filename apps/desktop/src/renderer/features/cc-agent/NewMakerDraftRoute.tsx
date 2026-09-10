@@ -1435,9 +1435,9 @@ export function NewMakerDraftRoute() {
         const v = getProviderModelFast(capabilityAgentKind, effectiveSourceId, modelId);
         if (v !== undefined) return v;
       }
-      return getFastModeForModel(modelId);
+      return providers.find((provider) => provider.id === effectiveSourceId)?.models[capabilityAgentKind]?.find((model) => model.id === modelId)?.defaultFast ?? getFastModeForModel(modelId);
     },
-    [effectiveSourceId, capabilityAgentKind],
+    [effectiveSourceId, capabilityAgentKind, providers],
   );
 
   // ── device-link 远程草稿:全量镜像被控端「当前 New Maker 草稿」 ──────────────────
@@ -1867,13 +1867,14 @@ export function NewMakerDraftRoute() {
     if (!mirrorScopeKey || !effectiveDeviceLinkDeviceId) return undefined;
     const deviceId = effectiveDeviceLinkDeviceId;
     return makeMirrorAccessors(mirrorScopeKey, (agent, providerId, model, patch) => {
-      window.electronAPI.deviceLink
+      return window.electronAPI.deviceLink
         .invoke(deviceId, 'maker:apply-new-maker-draft-pref', [
           {
             agent,
             providerId,
             modelId: model,
             active: false,
+            ...(patch.reset ? { reset: patch.reset } : {}),
             ...(patch.markModelChoice !== undefined
               ? { markModelChoice: patch.markModelChoice }
               : {}),
@@ -1882,7 +1883,8 @@ export function NewMakerDraftRoute() {
             ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
           },
         ])
-        .catch(() => {
+        .catch((error) => {
+          if (patch.reset) throw error;
           // CHANNEL_NOT_ALLOWED(旧版被控端)/ 离线 → 吞掉,保留控制端乐观镜像(优雅降级)。
         });
     });

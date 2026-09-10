@@ -37,7 +37,10 @@
       "xhigh": "超高",
       "max": "最高",
       "ultra": "究極"
-    }
+    },
+    "resetDefaults": "次回は既定値を使用",
+    "resetDefaultsHint": "保存したモデル設定を削除します。現在のタスクの設定は変更しません。",
+    "resetDefaultsError": "リセットを確認できませんでした。PC の接続とバージョンを確認して再試行してください。"
   },
   "contextWindowSwitch": {
     "title": "このモデルには現在の会話が収まりません",

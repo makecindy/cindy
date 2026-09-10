@@ -475,6 +475,7 @@ export interface MobileMakerTransport {
   setSessionModelPref(pref: MobileSessionModelPref): Promise<void>;
   /** 草稿「模型 effort/fast」写穿(active 恒 false;老被控端 → 调用方吞掉降级)。 */
   applyNewMakerDraftPref(pref: MobileNewMakerDraftPref): Promise<void>;
+  resetModelMemory(pref: { agent: MobileNewMakerDraftPref['agent']; providerId: string; modelId: string }): Promise<{ resetApplied: true }>;
   /** 工作端 New Maker 草稿默认值镜像(只读;手机当前只消费 worktreeEnabled)。 */
   getNewMakerDefaults(agentKind: MobileAgentKind): Promise<MobileNewMakerDefaults>;
   /** 「新建会话默认启用 worktree」写穿工作端(老被控端 → 调用方吞掉降级)。 */
@@ -753,6 +754,7 @@ export function createMobileMakerTransport({
     getApiKeyPresent: () => call('maker:api-key:present'),
     setSessionModelPref: (pref) => call('maker:set-session-model-pref', [pref]),
     applyNewMakerDraftPref: (pref) => call('maker:apply-new-maker-draft-pref', [pref]),
+    resetModelMemory: (pref) => call('maker:apply-new-maker-draft-pref', [{ ...pref, active: false, reset: ['effort', 'fast'] }]),
     getNewMakerDefaults: (agentKind) => call('maker:get-new-maker-defaults', [agentKind]),
     applyNewMakerWorktreePref: (worktreeEnabled) =>
       call('maker:apply-new-maker-worktree-pref', [{ worktreeEnabled }]),

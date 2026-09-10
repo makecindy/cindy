@@ -1934,7 +1934,10 @@
           },
           "codexContextUnknown": "CLI 설정을 읽을 수 없음",
           "codexContextValues": "전체 {{total}} · 사용 가능 {{usable}} · 자동 압축 {{compact}} tokens",
-          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다."
+          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다.",
+          "catalogRevision": "게시된 설정: {{revision}}",
+          "personalWindow": "사용자가 설정한 컨텍스트 제한 사용 중",
+          "followCatalog": "게시된 기본값 사용 중"
         },
         "kindFilter": {
           "all": "전체",

@@ -26,6 +26,7 @@ const STORAGE_KEY = 'xdtm:draftModelMemory:v1';
  * sessionModelMirror 的 accessors,组件本身不耦合具体存储。
  */
 export interface MobileModelMemoryAccessors {
+  reset?(agent: AgentKind, providerId: string, modelId: string): Promise<void>;
   getEffort(agent: AgentKind, providerId: string, modelId: string): string | undefined;
   setEffort(agent: AgentKind, providerId: string, modelId: string, effort: string): void;
   getFast(agent: AgentKind, providerId: string, modelId: string): boolean | undefined;
@@ -145,6 +146,23 @@ function getSlot(deviceId: string, agent: AgentKind, providerId: string, create:
 /** 取某被控设备的草稿记忆读写器(注入模型选择列表)。deviceId 空 → 全 no-op/undefined。 */
 export function draftModelMemoryFor(deviceId: string): MobileModelMemoryAccessors {
   return {
+    reset: async (agent, providerId, modelId) => {
+      await hydrateDraftModelMemory();
+      if (!deviceId || !providerId || !modelId) return;
+      const slot = getSlot(deviceId, agent, providerId, false);
+      if (!slot) return;
+      const previousEffort = slot.effortByModel[modelId];
+      const previousFast = slot.fastByModel[modelId];
+      delete slot.effortByModel[modelId]; delete slot.fastByModel[modelId];
+      try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cache)); }
+      catch (error) {
+        // Retain concurrent edits, and restore only keys still absent from this attempted reset.
+        if (slot.effortByModel[modelId] === undefined && previousEffort !== undefined) slot.effortByModel[modelId] = previousEffort;
+        if (slot.fastByModel[modelId] === undefined && previousFast !== undefined) slot.fastByModel[modelId] = previousFast;
+        emit(); throw error;
+      }
+      emit();
+    },
     getEffort: (agent, providerId, modelId) => {
       if (!deviceId || !providerId || !modelId) return undefined;
       return getSlot(deviceId, agent, providerId, false)?.effortByModel[modelId];

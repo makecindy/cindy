@@ -1,3 +1,4 @@
+import { ModelMemoryResetRequests } from '../maker-host/model-memory-reset.js';
 import { registerPluginListHandler } from './pluginListHandler.js';
 import { initializeBotAuthorizationHost } from './botAuthorizationHost.js';
 import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, commitBotAuthorizationInput, type BotAuthorizationInputGuard, getBotAuthorizationService } from './botAuthorizationService.js';
@@ -3173,6 +3174,7 @@ let pendingAgentSwitchApplyHolder:
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
+const modelMemoryResetRequests = new ModelMemoryResetRequests();
 const reviewRunOwner: ReviewRunOwner = { instanceId: randomUUID(), processId: process.pid };
 const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   getDbClient,
@@ -4805,9 +4807,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // device-link:被控端 providerModelMemory(草稿列表行的真实读源)全量镜像给 main。旧的
   // newMakerDraft.effortByModel 已不再写非选中模型,故必须把这一层也同步出去,控制端才能完整镜像
   // 被控端草稿模型列表。镜像更新后同样广播 NEW_MAKER_DRAFT_CHANGED(payload 含 providerModelMemory)。
-  ipcMain.on(MAKER_SEND.SYNC_PROVIDER_MODEL_MEMORY, (_e, payload: unknown) => {
+  ipcMain.on(MAKER_SEND.SYNC_PROVIDER_MODEL_MEMORY, (event, payload: unknown, resetRequestId: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (!payload || typeof payload !== 'object') return;
     // 结构宽松校验:顶层是 object,值再交给消费方按字段读(脏数据不至于崩,缺字段回落默认)。
+    if (resetRequestId !== undefined && !modelMemoryResetRequests.acknowledge(resetRequestId)) return;
     setProviderModelMemoryCache(payload as ProviderModelMemorySnapshot);
     broadcastNewMakerDraftChanged();
   });
@@ -5162,6 +5166,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       thinking?: unknown;
       active?: unknown;
       markModelChoice?: unknown;
+      reset?: unknown;
     };
     if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
       throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
@@ -5186,6 +5191,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (p.markModelChoice !== undefined && typeof p.markModelChoice !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'markModelChoice must be boolean');
+    }
+    if (p.reset !== undefined) {
+      if (!Array.isArray(p.reset) || !p.reset.length || p.reset.length > 2 || p.reset.some((field) => field !== 'effort' && field !== 'fast')
+        || p.active === true || p.effort !== undefined || p.fast !== undefined || p.thinking !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'invalid model memory reset');
+      }
+      const resetOwnerScope = activeOwnerScopeKey();
+      return modelMemoryResetRequests.request((resetRequestId) => {
+        broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, { agent: p.agent, providerId: p.providerId, modelId: p.modelId, active: false, reset: p.reset, resetRequestId, resetDataOwnerId: getActiveAppSession().dataOwnerId });
+      }, () => activeOwnerScopeKey() === resetOwnerScope && !isAppSessionBoundaryPending());
     }
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
       agent: p.agent,
@@ -5360,7 +5375,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),
     setProviderOrder: (providerIds) => setProviderOrder(providerIds),
     getProviderOrder: () => readProviderOrder(),
-    listPresets: () => getActiveCatalog().presets ?? [],
+    listPresets: () => {
+      const catalog = getActiveCatalog();
+      return (catalog.presets ?? []).filter((preset) => !catalog.modelRegistry?.disabledPresetIds?.includes(preset.id));
+    },
     testConnection: (input) => testProviderConnection(input),
     fetchModels: (spec) => fetchProviderModels(spec),
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。

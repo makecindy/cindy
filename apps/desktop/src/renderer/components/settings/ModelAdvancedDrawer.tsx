@@ -436,6 +436,12 @@ export function ModelAdvancedDrawer({
               key={`${provider.id}:${primaryModel.id}`}
               className="min-h-0 overflow-y-auto px-5 pb-5 pt-3"
             >
+              {primaryModel.catalogDefaults && (
+                <p className="mb-4 break-words text-12 text-[var(--text-secondary)]">
+                  {t('settings.providers.models.advanced.catalogRevision', { revision: primaryModel.catalogDefaults.revision ?? '—' })}
+                  {' · '}{t(ctx.limit !== null ? 'settings.providers.models.advanced.personalWindow' : 'settings.providers.models.advanced.followCatalog')}
+                </p>
+              )}
               <div className="grid gap-5 min-[760px]:grid-cols-2 min-[760px]:gap-6">
                 <div className="min-w-0">
                   {conversational && (

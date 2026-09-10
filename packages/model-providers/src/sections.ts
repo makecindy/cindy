@@ -30,6 +30,7 @@ export function isModelVisible(
 
 /** 「按供应商分段」里每行模型的展示形状(从 catalog 派生,字段够渲染 + effort 配置用)。 */
 export interface SectionModel {
+  defaultFast?: boolean;
   id: string;
   displayName: string;
   description?: string;
@@ -180,6 +181,7 @@ export function buildProviderSections(args: {
         efforts: m.efforts,
         ...(m.displayEfforts ? { displayEfforts: m.displayEfforts } : {}),
         defaultEffort: m.defaultEffort,
+        defaultFast: m.defaultFast,
         contextWindow: m.contextWindow,
       };
       if (m.description !== undefined) sm.description = m.description;

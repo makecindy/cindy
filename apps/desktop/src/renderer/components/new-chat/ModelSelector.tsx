@@ -173,9 +173,9 @@ export interface ModelMemoryAccessors {
    * wire protocol 变更,不在本次范围)。没注入时 `resetToRecommended` 退回既有的快照写法,
    * 行为与改动前一致。
    */
-  clearEffort?: (agent: AgentKind, providerId: string, modelId: string) => void;
+  clearEffort?: (agent: AgentKind, providerId: string, modelId: string) => void | Promise<void>;
   /** 同 `clearEffort`,针对 Fast(缺省即关,所以删除与写 false 显示等价,但不钉住默认)。 */
-  clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void;
+  clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void | Promise<void>;
 }
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
@@ -439,6 +439,7 @@ function formatContextWindow(tokens: number): string {
 
 // 单栏列表里每行 / Edit 配置列消费的最小模型形状(SectionModel 与 renderer ModelDescriptor 都满足)。
 interface RowModel {
+  defaultFast?: boolean;
   id: string;
   displayName: string;
   description?: string;
@@ -1736,7 +1737,7 @@ function ModelSelectorContentView({
     if (!fastEditable(providerId, m)) return false;
     if (isSelectedRow(providerId, m.id)) return fastMode;
     if (!currentAgentKind || !providerId) return false;
-    return modelMemory?.getFast(currentAgentKind, providerId, m.id) ?? false;
+    return modelMemory?.getFast(currentAgentKind, providerId, m.id) ?? m.defaultFast ?? false;
   };
 
   // 某 (供应商, 模型) 行当前要展示的 effort(选中 → 调用方值;否则全局模型预设 → 模型默认)。

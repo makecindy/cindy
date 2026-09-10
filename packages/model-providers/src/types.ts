@@ -273,6 +273,11 @@ export interface ModelCost {
  * 跨 provider(如 gpt-5.5 同时由 openai 与 xd 提供)则必须元数据一致(见 catalog.ts 校验)。
  */
 export interface CatalogModel {
+  /** Published product defaults; optional on older hosts. Personal overrides remain separate. */
+  defaultFast?: boolean;
+  preferredAgent?: AgentKind;
+  catalogDefaults?: { revision?: string; contextWindow?: number; effort?: Effort | null; fast?: boolean; visible?: boolean };
+
   userModelConfig?: ProviderRuntimeModelConfig;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
@@ -567,7 +572,7 @@ export interface Provider {
  */
 export interface ProviderRuntimeModelConfig extends Pick<
   ModelMetadata,
-  "mode" | "modalities" | "officialDocs"
+  "mode" | "modalities" | "officialDocs" | "description" | "maxOutputTokens" | "efforts" | "defaultEffort" | "supportsFastMode"
 > {
   discoveredMetadata?: ModelMetadata;
   nameExplicit?: boolean;
@@ -578,6 +583,8 @@ export interface ProviderRuntimeModelConfig extends Pick<
   /** 同一 runtime 内该模型的上游覆盖；缺省使用 runtime 级路由。 */
   route?: ProviderModelRouteConfig;
   contextWindow?: number;
+  /** Published template defaults; consumed only from a matching current preset, never a user snapshot. */
+  productDefaults?: import("./modelCatalogPolicy.js").ModelProductDefaults;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */

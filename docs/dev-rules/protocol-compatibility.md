@@ -179,3 +179,6 @@
 Seed 2.1 Pro 按火山方舟官方示例选择 Chat Completions 为 Cindy 的标准接入协议，
 依据与全路由覆盖验收见 model-catalog-maintenance.md。
 价格、窗口、推理档位不随此次协议补全修改；协议默认开启策略仍保留用户显式覆盖。
+# 模型默认重置的增量兼容（2026-09-10）
+
+沿用 `APPLY_NEW_MAKER_DRAFT_PREF`，增加 `reset: ('effort' | 'fast')[]`，只允许 `active: false` 且不混入赋值字段。主机发送带 request ID 和数据 owner 的指令；renderer 核对 owner、删除覆盖并落盘后，经已有 `SYNC_PROVIDER_MODEL_MEMORY` 回执，调用返回 `{ resetApplied: true }`。旧主机无回执时保留控制端镜像，不能把写入当前默认快照当成删除。普通旧字段及通道名保持不变。

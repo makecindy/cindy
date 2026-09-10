@@ -1934,7 +1934,10 @@
           },
           "codexContextUnknown": "未讀取到 CLI 設定",
           "codexContextValues": "總視窗 {{total}} · 可用 {{usable}} · 自動壓縮 {{compact}} tokens",
-          "contextLimitGptHint": "GPT 預設最多使用 272K；可在此自訂為 1M。Codex 會同步套用視窗與自動壓縮門檻，保留 5% 餘量；實際容量受模型服務限制。"
+          "contextLimitGptHint": "GPT 預設最多使用 272K；可在此自訂為 1M。Codex 會同步套用視窗與自動壓縮門檻，保留 5% 餘量；實際容量受模型服務限制。",
+          "catalogRevision": "發布設定：{{revision}}",
+          "personalWindow": "正在使用你的上下文限制",
+          "followCatalog": "正在跟隨發布預設值"
         },
         "kindFilter": {
           "all": "全部",

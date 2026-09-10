@@ -247,7 +247,7 @@ export function resolveRowSelection(args: {
   const fastEditable =
     args.hasFastModeCap && modelSupportsFastMode(row.provider, row.model.id, agentKind);
   const fastMode = fastEditable
-    ? memory?.getFast(agentKind, row.provider.id, row.model.id) ?? false
+    ? memory?.getFast(agentKind, row.provider.id, row.model.id) ?? row.model.defaultFast ?? false
     : false;
 
   return { model: row.model.id, providerId: row.provider.id, effort, fastMode };

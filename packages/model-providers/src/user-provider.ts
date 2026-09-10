@@ -1,3 +1,4 @@
+import { applyModelProductDefaults, resolveModelProductDefaults } from "./modelCatalogPolicy.js";
 import { providerMediaField } from "./providerMediaModels.js";
 import {
   expandedRegistryEntries,
@@ -297,11 +298,11 @@ function toCatalogModel(
           ? []
           : (CUSTOM_EFFORTS[agent] ?? []);
   const registryEfforts =
-    m.reasoning !== undefined || modelRegistry?.schemaVersion === 4
+    m.reasoning !== undefined || [4, 5].includes(modelRegistry?.schemaVersion ?? 0)
       ? undefined
       : registryEffortMetadata(modelRegistry, m.id, agent);
   const supportsFastMode =
-    modelRegistry?.schemaVersion !== 4 &&
+    ![4, 5].includes(modelRegistry?.schemaVersion ?? 0) &&
     registrySupportsFastMode(modelRegistry, m.id, agent);
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
@@ -340,7 +341,7 @@ function toCatalogModel(
   };
   const user = runtimeUserModelMetadata(m);
   const resolved =
-    modelRegistry?.schemaVersion === 4 ||
+    [4, 5].includes(modelRegistry?.schemaVersion ?? 0) ||
     m.discoveredMetadata ||
     providerDefaults
       ? resolveModelMetadata(
@@ -419,6 +420,7 @@ function toRouting(
 export interface BuildUserProviderOptions {
   modelRegistry?: ModelRegistry | null;
   presets?: readonly import("./types.js").ProviderPreset[];
+  catalogRevision?: string;
 }
 
 export function buildUserProvider(
@@ -473,23 +475,31 @@ export function buildUserProvider(
         presetModel && sameRoute
           ? pickModelMetadata({
               ...presetModel,
-              efforts:
-                presetModel.reasoning === false
-                  ? []
-                  : presetModel.reasoningEfforts,
-              defaultEffort: presetModel.reasoningDefaultEffort,
+              ...(presetModel.reasoning !== undefined ? {
+                efforts: presetModel.reasoning === false ? [] : presetModel.reasoningEfforts,
+                defaultEffort: presetModel.reasoningDefaultEffort,
+              } : {}),
             })
           : undefined;
-      return {
-        ...toCatalogModel(
+      let model = toCatalogModel(
           m,
           followsPreset && sameRoute ? preset!.id : config.id,
           agent,
           options.modelRegistry,
           defaults,
-        ),
-        ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
-      };
+        );
+      if (followsPreset && sameRoute && presetModel) {
+        const policy = presetModel.productDefaults ?? resolveModelProductDefaults(options.modelRegistry ?? undefined, preset!.id, m.id, agent);
+        if (policy) {
+          const effective = { ...policy, ...policy.perAgent?.[agent] };
+          // Explicit form edits are personal choices, not published defaults.
+          if (m.contextWindow !== undefined) delete effective.contextWindow;
+          if (m.reasoningDefaultEffort !== undefined) delete effective.effort;
+          if (m.defaultEnabled !== undefined) delete effective.visible;
+          model = applyModelProductDefaults(model, effective, options.catalogRevision);
+        }
+      }
+      return { ...model, ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}) };
     });
   }
   const mediaLists: Partial<

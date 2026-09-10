@@ -200,7 +200,7 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
   const effort = pickEffort(capability, memoryEffort?.(agent));
   const fastCapable =
     capability?.supportsFastMode === true && (agentFastModeCapable?.(agent) ?? true);
-  const fast = fastCapable ? (memoryFast?.(agent) ?? false) : false;
+  const fast = fastCapable ? (memoryFast?.(agent) ?? capability?.defaultFast ?? false) : false;
   const customized =
     // 「已自定义」是相对**该行此刻的缺省**说的:会话内 pinned 生效时,落在当前引擎上
     // 是缺省而不是自定义(否则会话里几乎每一行都被标成已自定义,提亮就失去信息量)。
@@ -208,7 +208,7 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
     // 用户留过的引擎选择仍应提亮。
     (overrideUsable && engineOverride !== baseline) ||
     (effort !== null && capability?.defaultEffort != null && effort !== capability.defaultEffort) ||
-    fast;
+    fast !== (fastCapable && capability?.defaultFast === true);
   return {
     engine,
     agent,

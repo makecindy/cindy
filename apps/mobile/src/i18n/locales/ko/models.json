@@ -37,7 +37,10 @@
       "xhigh": "초고",
       "max": "최고",
       "ultra": "극한"
-    }
+    },
+    "resetDefaults": "다음부터 기본값 사용",
+    "resetDefaultsHint": "저장된 모델 기본 설정을 삭제합니다. 현재 작업의 실행 설정은 유지됩니다.",
+    "resetDefaultsError": "초기화를 확인하지 못했습니다. PC 연결과 버전을 확인한 후 다시 시도하세요."
   },
   "contextWindowSwitch": {
     "title": "이 모델에는 현재 대화가 모두 들어가지 않습니다",

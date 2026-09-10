@@ -365,6 +365,8 @@ export function pickRecommendedAgent(
     const model = findCatalogModel(provider, modelId, agent, { exact: true });
     if (model) models[agent] = model;
   }
+  const configured = Object.values(models).find((model) => model?.preferredAgent)?.preferredAgent;
+  if (configured && candidates.includes(configured)) return configured;
   const comparison = provider ? modelProtocolComparison(provider, models) : null;
   const canonical = comparison?.reference;
   if (canonical) {
@@ -423,6 +425,7 @@ export function recommendedAgentForModel(
 
 /** 某 (provider, model, agent) 已解析的能力(规格 §2.2)。 */
 export interface UnifiedAgentCapability {
+  defaultFast?: boolean;
   agent: AgentKind;
   /**
    * ★该引擎下真正要发出去的 model id(bridge 壳已还原)。写 draft / 建会话 / 切模型
@@ -501,6 +504,7 @@ function capabilityOf(
     ...resolveDefaultEffort(model),
     // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
     supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
+    defaultFast: model.defaultFast,
     contextWindow: model.contextWindow,
     contextWindowVerified: model.contextWindowVerified === true,
   };

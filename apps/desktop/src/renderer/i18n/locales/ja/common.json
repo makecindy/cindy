@@ -1934,7 +1934,10 @@
           },
           "codexContextUnknown": "CLI 設定を取得できません",
           "codexContextValues": "総容量 {{total}} · 使用可能 {{usable}} · 自動圧縮 {{compact}} tokens",
-          "contextLimitGptHint": "GPT は既定で最大 272K を使用します。ここで 1M に変更できます。Codex はウィンドウと自動圧縮のしきい値を同時に適用し、5% の余裕を確保します。実際の容量はモデルサービスに依存します。"
+          "contextLimitGptHint": "GPT は既定で最大 272K を使用します。ここで 1M に変更できます。Codex はウィンドウと自動圧縮のしきい値を同時に適用し、5% の余裕を確保します。実際の容量はモデルサービスに依存します。",
+          "catalogRevision": "公開済み設定：{{revision}}",
+          "personalWindow": "設定したコンテキスト上限を使用中",
+          "followCatalog": "公開済みの既定値を使用中"
         },
         "kindFilter": {
           "all": "すべて",

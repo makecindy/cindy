@@ -56,6 +56,10 @@ import {
   patchVendorPrefsPreservingModelChoice,
 } from '@/state/newMakerDraft';
 import {
+  hasPendingProviderModelMemoryWrites,
+  isProviderModelMemoryOwner,
+  clearProviderModelEffort,
+  clearProviderModelFast,
   snapshotForSeed,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -245,7 +249,14 @@ export function App() {
   // 通过 providerModelMemory 同步。写入触发上面的镜像 effect → NEW_MAKER_DRAFT_CHANGED 回流控制端。
   useEffect(() => {
     const offDraft = window.electronAPI.onMakerDraftPrefApply(
-      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice }) => {
+      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice, reset, resetRequestId, resetDataOwnerId }) => {
+        if (reset && resetRequestId) {
+          if (!isProviderModelMemoryOwner(resetDataOwnerId)) return;
+          if (reset.includes('effort')) clearProviderModelEffort(agent, providerId, modelId);
+          if (reset.includes('fast')) clearProviderModelFast(agent, providerId, modelId);
+          if (!hasPendingProviderModelMemoryWrites()) window.electronAPI.syncProviderModelMemory(snapshotForSeed(), resetRequestId);
+          return;
+        }
         const vendor = agentKindToVendor(agent);
         if (active) {
           const patch =

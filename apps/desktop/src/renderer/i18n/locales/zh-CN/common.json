@@ -1934,7 +1934,10 @@
           },
           "codexContextUnknown": "未读取到 CLI 配置",
           "codexContextValues": "总窗口 {{total}} · 可用 {{usable}} · 自动压缩 {{compact}} tokens",
-          "contextLimitGptHint": "GPT 默认最多使用 272K；可在此自定义到 1M。Codex 会同步应用窗口与自动压缩阈值，保留 5% 余量；实际容量受模型服务限制。"
+          "contextLimitGptHint": "GPT 默认最多使用 272K；可在此自定义到 1M。Codex 会同步应用窗口与自动压缩阈值，保留 5% 余量；实际容量受模型服务限制。",
+          "catalogRevision": "发布配置：{{revision}}",
+          "personalWindow": "正在使用你的上下文限制",
+          "followCatalog": "正在跟随发布默认值"
         },
         "kindFilter": {
           "all": "全部",

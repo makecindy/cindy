@@ -201,10 +201,21 @@ export function makeMirrorAccessors(
     agent: AgentKind,
     providerId: string,
     model: string,
-    patch: { effort?: Effort; fast?: boolean; thinking?: boolean; markModelChoice?: boolean },
-  ) => void,
+    patch: { effort?: Effort; fast?: boolean; thinking?: boolean; markModelChoice?: boolean; reset?: ('effort' | 'fast')[] },
+  ) => unknown | Promise<unknown>,
 ): ModelMemoryAccessors {
+  const clear = async (field: 'effort' | 'fast', agent: AgentKind, providerId: string, model: string) => {
+    const response = await onWrite(agent, providerId, model, { reset: [field] });
+    if (!response || typeof response !== 'object' || (response as { resetApplied?: unknown }).resetApplied !== true) {
+      throw new Error('MODEL_MEMORY_RESET_UNSUPPORTED');
+    }
+    const slot = getSlot(scopeKey, agent, providerId, false);
+    if (slot) delete (field === 'effort' ? slot.effortByModel : slot.fastByModel)[model];
+    scopeSerial.delete(scopeKey); emit();
+  };
   return {
+    clearEffort: (agent, providerId, model) => clear('effort', agent, providerId, model),
+    clearFast: (agent, providerId, model) => clear('fast', agent, providerId, model),
     getEffort: (agent, providerId, model) => getMirrorEffort(scopeKey, agent, providerId, model),
     getFast: (agent, providerId, model) => getMirrorFast(scopeKey, agent, providerId, model),
     getThinking: (agent, providerId, model) => getMirrorThinking(scopeKey, agent, providerId, model),

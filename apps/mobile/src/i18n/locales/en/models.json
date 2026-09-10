@@ -37,7 +37,10 @@
       "xhigh": "Extra High",
       "max": "Maximum",
       "ultra": "Ultra"
-    }
+    },
+    "resetDefaults": "Follow defaults next time",
+    "resetDefaultsHint": "Clears saved model preferences. The current task keeps its active settings.",
+    "resetDefaultsError": "Reset was not confirmed. Check the desktop connection and version, then retry."
   },
   "contextWindowSwitch": {
     "title": "This model can't fit the current conversation",
