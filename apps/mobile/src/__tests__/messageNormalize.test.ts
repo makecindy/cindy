@@ -1361,3 +1361,16 @@ describe('companion timeline', () => {
     expect(rows[2].companion).toBeUndefined();
   });
 });
+
+it('keeps one companion task after its initiating explanation and before its completion reply', () => {
+  const meta = { v: 1, role: 'delegation-request', delegationId: 'd', fromBotId: 'bot', fromBotName: 'Cindy', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Change' };
+  const input = [
+    message({ id: 'start', role: 'user', content: 'Change' }),
+    message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: meta } }),
+    message({ id: 'intro', role: 'assistant', content: 'Started' }),
+    message({ id: 'trigger', role: 'user', content: 'finished', agentMeta: { synthetic: true } }),
+    message({ id: 'done', role: 'assistant', content: 'Done' }),
+  ];
+  const items = buildMobileMessageRenderItems(input, { preserveSourceOrder: true, isSessionStreaming: true });
+  expect(items.flatMap((item) => item.type === 'message' ? [item.message.source.id] : [])).toEqual(['start', 'intro', 'task', 'trigger', 'done']);
+});

@@ -96,6 +96,7 @@ beforeEach(() => {
     configurable: true,
     writable: true,
     value: {
+      openExternal: vi.fn().mockResolvedValue({ success: true }),
       maker: {
         listBotDelegations: (...args: unknown[]) => listBotDelegations(...args),
         cancelBotDelegation: (...args: unknown[]) => cancelBotDelegation(...args),
@@ -115,6 +116,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   remoteProjectsStore.clear();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   __resetStickySessionOriginForTest();
   __resetBotDelegationLiveForTest();
 });
@@ -133,14 +135,15 @@ describe('BotSessionTaskCard', () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
-    expect(screen.getByText('bots.collab.backgroundTask')).toBeTruthy();
+    expect(screen.queryByText('bots.collab.backgroundTask')).toBeNull();
     await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy());
     expect(screen.getByText('bots.collab.stopTask')).toBeTruthy();
   });
 
   it('ignores historical target-side task mirrors', () => {
     const { container } = render(
-      <BotSessionTaskCard data={{
+      <BotSessionTaskCard
+        data={{
           ...meta({ role: 'guest-request' }),
         }}
         sessionId={SESSION_ID}
@@ -152,16 +155,22 @@ describe('BotSessionTaskCard', () => {
 
   it('does not roll a completed card back when an older running snapshot arrives late', async () => {
     let finishOldRead!: (value: unknown) => void;
-    listBotDelegations.mockImplementationOnce(() => new Promise((resolve) => {
-      finishOldRead = resolve;
-    }));
+    listBotDelegations.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOldRead = resolve;
+        }),
+    );
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
     await act(async () => {
-      for (const listener of listeners) listener({
-        delegationId: DELEGATION_ID, parentSessionId: SESSION_ID,
-        childSessionId: 'child-1', status: 'completed',
-      });
+      for (const listener of listeners)
+        listener({
+          delegationId: DELEGATION_ID,
+          parentSessionId: SESSION_ID,
+          childSessionId: 'child-1',
+          status: 'completed',
+        });
     });
     await screen.findByText(/bots\.collab\.status\.completed/);
     await act(async () => {
@@ -202,7 +211,7 @@ describe('BotSessionTaskCard', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/child-1');
   });
 
-  it('shows the returned result directly on the task card', async () => {
+  it('keeps the full returned report out of the compact task card', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
       delegations: [
@@ -213,7 +222,8 @@ describe('BotSessionTaskCard', () => {
       ],
     });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    expect(await screen.findByText(/三条结论/)).toBeTruthy();
+    await screen.findByText(/bots\.collab\.status\.completed/);
+    expect(screen.queryByText(/三条结论/)).toBeNull();
   });
 
   it('reports a stopped delegation as stopped, not as a failure', async () => {
@@ -289,7 +299,7 @@ describe('BotSessionTaskCard', () => {
     await waitFor(() => expect(listBotDelegations).toHaveBeenCalledTimes(2));
 
     expect(screen.getByText(/bots\.collab\.status\.completed/)).toBeTruthy();
-    expect(screen.getByText('已经交付。')).toBeTruthy();
+    expect(screen.getByText('bots.collab.stale')).toBeTruthy();
     expect(screen.queryByText(/bots\.collab\.status\.unknown/)).toBeNull();
   });
   /*
@@ -321,16 +331,18 @@ describe('BotSessionTaskCard', () => {
 
     expect(screen.getByText(/bots\.collab\.status\.queued/)).toBeTruthy();
     expect(screen.queryByText(/bots\.collab\.status\.unknown/)).toBeNull();
-    expect(container.querySelector('.animate-pulse')).not.toBeNull();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
   it('reports a new failed + TIMEOUT task as timed out, not as a failure', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
-      delegations: [delegation('timed-out', {
-        completedAt: Date.now(),
-        lastError: 'TIMEOUT: exceeded the deadline',
-      })],
+      delegations: [
+        delegation('timed-out', {
+          completedAt: Date.now(),
+          lastError: 'TIMEOUT: exceeded the deadline',
+        }),
+      ],
     });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
@@ -339,17 +351,26 @@ describe('BotSessionTaskCard', () => {
   });
 });
 
-
 it('routes remote task reads, stop, child navigation and push refresh to the same Mac', async () => {
   mocks.remoteBots = [{ deviceId: 'home', online: true }];
   remoteProjectsStore.pinSessionOrigin('home', SESSION_ID);
   let push!: (value: any, stamp?: any) => void;
   let status!: (value: any) => void;
-  const invoke = vi.fn(async (_device: string, channel: string) => channel === 'maker:bot-delegations:list'
-    ? { ok: true, delegations: [delegation('running')] } : { ok: true });
+  const invoke = vi.fn(async (_device: string, channel: string) =>
+    channel === 'maker:bot-delegations:list'
+      ? { ok: true, delegations: [delegation('running')] }
+      : { ok: true },
+  );
   window.electronAPI.deviceLink = {
-    invoke, onRemotePush: (fn: any) => { push = fn; return () => {}; },
-    onStatusChanged: (fn: any) => { status = fn; return () => {}; },
+    invoke,
+    onRemotePush: (fn: any) => {
+      push = fn;
+      return () => {};
+    },
+    onStatusChanged: (fn: any) => {
+      status = fn;
+      return () => {};
+    },
   } as any;
   render(<BotSessionTaskCard sessionId={SESSION_ID} data={meta() as any} />);
   const stop = await screen.findByRole('button', { name: 'bots.collab.stopTask' });
@@ -359,13 +380,82 @@ it('routes remote task reads, stop, child navigation and push refresh to the sam
   expect(remoteProjectsStore.getSessionDeviceId('child-1')).toBe('home');
   // Even when reconnect clears the transient registry, stop must never hit the local maker.
   remoteProjectsStore.clear();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   fireEvent.click(stop);
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', [SESSION_ID, DELEGATION_ID]));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', [
+      SESSION_ID,
+      DELEGATION_ID,
+    ]),
+  );
   expect(cancelBotDelegation).not.toHaveBeenCalled();
   const reads = invoke.mock.calls.length;
-  act(() => push({ deviceId: 'office', channel: 'maker:bot-delegation:changed', payload: { parentSessionId: SESSION_ID } }));
+  act(() =>
+    push({
+      deviceId: 'office',
+      channel: 'maker:bot-delegation:changed',
+      payload: { parentSessionId: SESSION_ID },
+    }),
+  );
   expect(invoke).toHaveBeenCalledTimes(reads);
-  invoke.mockResolvedValue({ ok: true, delegations: [delegation('completed', { resultSummary: 'Remote done' })] });
+  invoke.mockResolvedValue({
+    ok: true,
+    delegations: [delegation('completed', { resultSummary: 'Remote done' })],
+  });
   act(() => status({ status: 'online' }));
-  await screen.findByText('Remote done');
+  await screen.findByText(/bots\.collab\.status\.completed/);
+});
+
+it('opens a returned PR with the same small secondary control as opening the task', async () => {
+  listBotDelegations.mockResolvedValue({
+    ok: true,
+    delegations: [
+      delegation('completed', {
+        resultSummary:
+          '## Deliverables\n[PR](https://github.com/MakeCindy/Cindy/pull/733/files)\n/private/report.md',
+        artifacts: [{ path: '/private/report.md', status: 'added' }],
+      }),
+    ],
+  });
+  const { container } = render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+  const pr = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  const task = screen.getByRole('button', { name: 'bots.collab.watchWork' });
+  expect(pr.className).toBe(task.className);
+  expect(pr.className).toContain('h-8');
+  expect(container.textContent).not.toContain('/private/report.md');
+  expect(container.textContent).not.toContain('## Deliverables');
+  fireEvent.click(pr);
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith(
+    'https://github.com/makecindy/cindy/pull/733',
+  );
+});
+
+it('does not mistake a contextual PR in the objective for the task result', async () => {
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+  render(
+    <BotSessionTaskCard
+      data={{ ...meta({ objective: 'Compare https://github.com/a/b/pull/1' }) }}
+      sessionId={SESSION_ID}
+    />,
+  );
+  await screen.findByText(/bots\.collab\.status\.completed/);
+  expect(screen.queryByRole('button', { name: 'bots.collab.viewPr' })).toBeNull();
+});
+
+it('offers every returned PR without opening an arbitrary first link', async () => {
+  listBotDelegations.mockResolvedValue({
+    ok: true,
+    delegations: [
+      delegation('completed', {
+        resultSummary: 'https://github.com/a/b/pull/1 https://github.com/a/b/pull/2',
+      }),
+    ],
+  });
+  render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+  const button = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  fireEvent.keyDown(button, { key: 'Enter' });
+  const choice = await screen.findByRole('menuitem', { name: 'a/b #2' });
+  expect(window.electronAPI.openExternal).not.toHaveBeenCalled();
+  fireEvent.click(choice);
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://github.com/a/b/pull/2');
 });
