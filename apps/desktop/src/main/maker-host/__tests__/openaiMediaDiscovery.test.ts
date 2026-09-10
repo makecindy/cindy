@@ -186,6 +186,28 @@ describe('OpenAI media discovery lifecycle', () => {
     expect(h.applied).toEqual([]);
   });
 
+  it('waits for async OAuth invalidation before retrying with the new token', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get('authorization');
+      if (authorization === 'Bearer oauth-token') {
+        return new Response('expired', { status: 401 });
+      }
+      return new Response(modelsList(['gpt-image-2.5-sunburst']), { status: 200 });
+    }) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      h.auth.token = 'refreshed-token';
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(true);
+    expect(h.applied).toEqual([
+      {
+        imageModels: [{ id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' }],
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('retries once with a refreshed OAuth token', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const authorization = new Headers(init?.headers).get('authorization');

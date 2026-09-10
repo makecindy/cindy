@@ -373,8 +373,8 @@ const discovery = createOpenAiMediaDiscovery({
   isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
   fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
   applySnapshot: (snapshot) => setDiscoveredProviderMediaModels('openai', snapshot),
-  onOAuthRejected: (failure) => {
-    void invalidateChatgptBridgeAuth(failure);
+  onOAuthRejected: async (failure) => {
+    await invalidateChatgptBridgeAuth(failure);
   },
   log,
 });
