@@ -3431,7 +3431,7 @@ function ProjectRow({
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
-  const displayTitle = machineIdentity
+  const displayTitle = machineIdentity && !machineIdentity.hideLabel
     ? `${project.title} (${machineIdentity.displayLabel})`
     : project.title;
   const reorderable = kind === 'project' && !!onDragStart && !!onDragMove && !!onDragEnd;
