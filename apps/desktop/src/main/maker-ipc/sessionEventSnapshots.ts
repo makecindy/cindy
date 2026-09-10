@@ -1,3 +1,4 @@
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import type { Session } from '@cindy/maker-core';
 import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 import { recordCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
@@ -35,6 +36,9 @@ export function recordSessionEventSnapshots(session: Session, prepared: Prepared
     );
   }
   if (pendingCodexAccountUsageSnapshot) {
-    recordCodexAccountUsageSnapshot(pendingCodexAccountUsageSnapshot);
+    const providerId = getSessionProvider(session.id);
+    if (providerId == null || isOpenAiSubscriptionProviderId(providerId)) {
+      void recordCodexAccountUsageSnapshot(pendingCodexAccountUsageSnapshot, providerId ?? undefined);
+    }
   }
 }

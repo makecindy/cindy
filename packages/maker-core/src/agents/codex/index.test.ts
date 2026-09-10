@@ -6540,6 +6540,31 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('isolates native account hosts and requires a rebuild when changing accounts', async () => {
+    const deps = createDeps({}, { isCodexAccountProvider: (id) => id === 'account-a' || id === 'account-b' });
+    const agent = new CodexAgent(deps);
+    const a = await agent.startSession({ sessionId: 'account-session-a', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' });
+    const b = await agent.startSession({ sessionId: 'account-session-b', providerId: 'account-b', model: 'gpt-5.4', workingDir: '/repo' });
+    expect(createdTransports).toHaveLength(2);
+    expect(await a.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'account-b' })).toBe(true);
+    expect(await a.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: null })).toBe(true);
+    await expect(a.setModel?.('gpt-5.4', { providerId: 'account-b' })).rejects.toThrow('requires rebuilding');
+    await a.close();
+    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    await b.close();
+    await agent.dispose();
+  });
+
+  it('propagates account host shutdown failure before another account can resume its rollout', async () => {
+    const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: (id) => id === 'account-a' }));
+    const handle = await agent.startSession({ sessionId: 'account-close-failure', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' });
+    MockCodexTransport.closeError = new Error('account transport retirement failed');
+    await expect(handle.close()).rejects.toThrow('account transport retirement failed');
+    MockCodexTransport.closeError = null;
+    await agent.dispose();
+  });
+
   it('collapses in-flight turn state with a terminal transport error when the local host is force-retired', async () => {
     // 回归 2026-07-19:auth 失效触发 retiring host with active sessions 时,原实现
     // 静默清 subscribers 再杀进程,session 收不到任何终态事件 → isTurnRunning 永久
@@ -8733,6 +8758,59 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   describe('automatic remote compaction summary fallback', () => {
+    it.each(['cindy_openai', 'cindy_summary', null])('resumes canonical account history before host reads (%s)', async (savedProvider) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-account-resume-'));
+      const threadId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
+      const source = path.join(dir, 'rollout.jsonl');
+      const history = [
+        { ordinal: 0, type: 'session_meta', payload: { id: threadId, model_provider: savedProvider } },
+        { ordinal: 1, type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Remember this message' }] } },
+        { ordinal: 2, type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'I remember' }] } },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n';
+      try {
+        await fs.writeFile(source, history);
+        const prepare = vi.fn(async () => source);
+        const recordLocation = vi.fn(async () => {});
+        const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession: prepare,
+          resolveCodexThreadStorageHome: async () => dir, recordCodexThreadLocation: recordLocation }));
+        const host = installFakeHost(agent, (method, raw) => {
+          if (method === 'thread/read') throw new Error(`thread not loaded: ${threadId}`);
+          if (method === Method.ThreadResume) return { thread: { id: threadId, path: source }, model: 'gpt-5.6-luna', modelProvider: (raw as { modelProvider?: string }).modelProvider };
+          return undefined;
+        }, { codexProxyActive: true, localCompactionProviderId: 'cindy_summary', codexHome: '/tmp/target-account-home' });
+        const handle = await agent.startSession({ sessionId: 'account-switch', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: dir, resumeSessionId: threadId });
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(host.getHost).toHaveBeenCalledWith(undefined, expect.anything(), expect.objectContaining({ sqliteHome: dir, keyOverride: expect.stringContaining(`:storage:${dir}`) }));
+        expect(recordLocation).toHaveBeenCalledWith(threadId, dir, source);
+        const resume = host.request.mock.calls.find(([m]) => m === Method.ThreadResume)!;
+        expect(resume[1]).toMatchObject({ threadId, path: source });
+        if (savedProvider === 'cindy_summary') expect(resume[1]).toMatchObject({ modelProvider: savedProvider });
+        expect(host.request.mock.calls.some(([m]) => m === 'thread/read' || m === Method.ThreadStart || m === Method.ThreadFork)).toBe(false);
+        expect(handle.id).toBe(threadId);
+        await handle.close();
+        expect(await fs.readFile(source, 'utf8')).toBe(history);
+      } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    });
+
+    it.each(['wrong-id', 'missing-file', 'resume-failure'])('never replaces existing account history on %s', async (failure) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-account-resume-error-'));
+      const threadId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
+      const source = path.join(dir, 'rollout.jsonl');
+      const history = JSON.stringify({ type: 'session_meta', payload: { id: failure === 'wrong-id' ? 'other-thread' : threadId, model_provider: 'cindy_openai' } }) + '\n';
+      try {
+        if (failure !== 'missing-file') await fs.writeFile(source, history);
+        const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession: async () => source }));
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.ThreadResume) throw Object.assign(new Error(`codex app-server thread/resume error -32600: no rollout found for thread id ${threadId}`), { code: -32600, data: undefined });
+          return undefined;
+        }, { localCompactionProviderId: 'cindy_summary' });
+        await expect(agent.startSession({ sessionId: 'failed-account-switch', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: dir, resumeSessionId: threadId })).rejects.toThrow();
+        expect(host.request.mock.calls.some(([m]) => m === Method.ThreadStart || m === Method.ThreadFork)).toBe(false);
+        expect((agent as unknown as { hostSessionBindingLeases: Map<string, number> }).hostSessionBindingLeases.size).toBe(0);
+        if (failure !== 'missing-file') expect(await fs.readFile(source, 'utf8')).toBe(history);
+      } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    });
+
     const failure = { message: 'unexpected status 502 Bad Gateway', codexErrorInfo: 'other' as const };
     const nativeId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
     function setup(savedProvider = 'cindy_codex', resolveModelContextLimit = () => 1_000_000) {
@@ -22530,6 +22608,34 @@ describe('CodexAgent native fork anchor events', () => {
 });
 
 describe('CodexAgent.forkSdkSession', () => {
+  it('reads cross-account fork boundaries and records the child in the source index', async () => {
+    const recordCodexThreadLocation = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, {
+      isCodexAccountProvider: (id) => id === 'account-b',
+      resolveCodexThreadStorageHome: async () => '/account-a',
+      prepareCodexResumeSession: async () => '/account-a/sessions/source.jsonl',
+      recordCodexThreadLocation,
+    }));
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadTurnsList) {
+        expect(host.getHost).toHaveBeenCalledWith(undefined, 'oauth-bearer',
+          expect.objectContaining({ providerId: 'account-b', sqliteHome: '/account-a' }));
+        return { data: [{ id: 'boundary', status: 'completed', startedAt: 100 }], nextCursor: null };
+      }
+      if (method === Method.ThreadFork) return {
+        thread: { id: 'child', path: '/account-b/sessions/child.jsonl' },
+      };
+    }, { userAgent: 'mock-codex/0.153.4', codexHome: '/account-b' });
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source', upToMessageId: undefined,
+      providerId: 'account-b', tailTurnsToDrop: 1, forkAtTimestampMs: 110_123,
+    })).resolves.toMatchObject({ newSdkSessionId: 'child', usedNativeForkAnchor: true });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      path: '/account-a/sessions/source.jsonl', lastTurnId: 'boundary',
+    }));
+    expect(recordCodexThreadLocation).toHaveBeenCalledWith('child', '/account-a', '/account-b/sessions/child.jsonl');
+  });
+
   it('forks failed paginated history without rollback when no UI anchor was saved', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => {
@@ -23139,7 +23245,7 @@ describe('CodexAgent.forkSdkSession', () => {
       await fs.mkdir(sessionsDir, { recursive: true });
       const host = installFakeHost(agent, async (method, params) => {
         if (method === Method.ThreadFork) {
-          expect(params).not.toHaveProperty('path');
+          expect((params as { path?: string }).path).toBe(sourceRollout);
           await fs.copyFile(sourceRollout, childRollout);
         }
         return undefined;
@@ -23156,7 +23262,7 @@ describe('CodexAgent.forkSdkSession', () => {
       expect(child).not.toContain('encrypted_content');
       expect(host.request).toHaveBeenCalledWith(
         Method.ThreadFork,
-        expect.not.objectContaining({ path: expect.any(String) }),
+        expect.objectContaining({ path: sourceRollout }),
       );
     } finally {
       await fs.rm(externalHome, { recursive: true, force: true });

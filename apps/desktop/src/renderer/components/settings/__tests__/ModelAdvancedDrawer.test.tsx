@@ -434,6 +434,16 @@ it('keeps the tier row visible when Gateway closes every tier', () => {
   }
 });
 
+
+it('describes an absent Harness route as unconfigured rather than unsupported', () => {
+  render(<ModelAdvancedDrawer provider={{ ...provider, agents: ['codex', 'claude-code', 'pi'] }}
+    row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()}
+    disabled={false} paymentRequired={false} />);
+  expect(screen.getByRole('button', { name: 'Pi · settings.providers.models.advanced.engineNotConfigured' })).toBeTruthy();
+  expect(screen.queryByLabelText(/engineUnsupported/)).toBeNull();
+});
+
 it('limits context and effort reads, writes and resets to the chat runtime', () => {
   vi.mocked(getProviderModelEffort).mockImplementation((agent) => agent === 'codex' ? 'high' : 'low');
   const mixedProvider = { ...provider, id: 'private', source: 'user' as const };

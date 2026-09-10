@@ -10,12 +10,13 @@ import type { AgentKind } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
-  providerReferencePriceQuote,
+  modelPricingKey,
   registryPricingCatalog,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelPriceQuote, ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
 import {
   applyModelPriceOverrides,
   mergeStoredModelPriceOverride,
@@ -29,8 +30,19 @@ export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pr
 
 /** Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。 */
 export function getReferenceModelPricing(): ModelPricingCatalog {
-  const registry = getActiveCatalog().modelRegistry;
-  return applyModelPriceOverrides(registryPricingCatalog(registry), registry);
+  const catalog = getActiveCatalog();
+  const registry = catalog.modelRegistry;
+  const pricing = registryPricingCatalog(registry);
+  for (const provider of catalog.providers) {
+    if (provider.auth?.method !== 'oauth' || !provider.auth.native) continue;
+    for (const [agent, models] of Object.entries(provider.models)) {
+      for (const model of models ?? []) {
+        const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind });
+        if (quote) (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = quote;
+      }
+    }
+  }
+  return applyModelPriceOverrides(pricing, registry);
 }
 
 export function broadcastReferenceModelPricing(): void {
@@ -49,19 +61,20 @@ export function getCodexProviderSubscriptionValuePrice(
   pricing: ModelPricingCatalog | null | undefined,
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
+  agent: AgentKind = 'codex',
 ): ModelPriceQuote | undefined {
   if (providerId === 'xd') return undefined;
-  const effective = getModelPriceQuote(pricing, providerId, modelId, 'codex');
+  const effective = getModelPriceQuote(pricing, providerId, modelId, agent);
   if (effective?.source === 'user-override') {
     if (at === undefined) return effective;
     return (
       mergeStoredModelPriceOverride(
-        { providerId, agent: 'codex', modelId: effective.modelId },
+        { providerId, agent, modelId: effective.modelId },
         providerReferencePriceQuote(
           providerId,
           effective.modelId,
           getActiveCatalog().modelRegistry,
-          { agent: 'codex', at },
+          { agent, at },
         ),
         overrides,
       ) ?? effective
@@ -71,7 +84,7 @@ export function getCodexProviderSubscriptionValuePrice(
     providerId,
     modelId,
     getActiveCatalog().modelRegistry,
-    { agent: 'codex', at },
+    { agent, at },
   );
   return reference ?? (at === undefined ? effective : undefined);
 }

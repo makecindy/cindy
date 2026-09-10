@@ -1,3 +1,4 @@
+import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 codex-proxy 生命周期管理 ——
  *
@@ -1296,8 +1297,7 @@ function createAnthropicBridgeDecision(
   // For Codex, provider-oauth-header is the subscription-safe route: the host
   // injects the Claude.ai token and never forwards the Codex/OpenAI bearer.
   if (
-    route.providerId === 'anthropic'
-    && route.providerSource === 'builtin'
+    isClaudeSubscriptionProviderId(route.providerId)
     && route.routing.authStrategy === 'provider-oauth-header'
     && !route.oauthToken
   ) {
@@ -1320,8 +1320,7 @@ function createAnthropicBridgeDecision(
   const usesProviderOAuth = route.routing.authStrategy === 'provider-oauth-header';
   const isAnthropicSubscriptionOAuth =
     usesProviderOAuth
-    && route.providerId === 'anthropic'
-    && route.providerSource === 'builtin';
+    && isClaudeSubscriptionProviderId(route.providerId);
   const buildProviderHeaders = (token: string | null): Record<string, string> => {
     const { headers: baseHeaders } = buildLocalHandlerHeaders(
       token === route.oauthToken ? route : { ...route, oauthToken: token },
@@ -3418,7 +3417,10 @@ function createCodexProxyHandle(
         resolveUserProviderName: (providerId) =>
           getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
       }),
-      createXaiProxyAuthInvalidationObserver(),
+      createXaiProxyAuthInvalidationObserver((ctx) => {
+        const sessionId = sessionIdFromHeaders(ctx.requestHeaders);
+        return sessionId ? getSessionProvider(sessionId) : null;
+      }),
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',

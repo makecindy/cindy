@@ -1294,7 +1294,6 @@
           },
           "toast": {
             "title": "Added to dictionary",
-            "titleMultiple": "Added {{count}} terms",
             "termsSummary": "{{terms}} and {{count}} terms total",
             "automaticAdded": "Auto-added to dictionary: {{term}}",
             "automaticAddedMultiple": "Auto-added {{count}} terms, including {{term}}",
@@ -1493,6 +1492,10 @@
       },
       "pill": {
         "connected": "Connected",
+        "configured": "Configured",
+        "disconnected": "Not connected",
+        "connecting": "Connecting…",
+        "rename": "Rename",
         "suspended": "Disabled"
       },
       "button": {
@@ -1517,7 +1520,17 @@
         "reconnectRequired": "Reconnect Needed",
         "connect": "Connect ChatGPT",
         "reconnect": "Reconnect ChatGPT",
-        "cancelConnect": "Cancel Connection"
+        "cancelConnect": "Cancel Connection",
+        "accountSource": {
+          "local": "Local Codex account",
+          "oauth": "Independently signed-in account",
+          "unknown": "Existing OpenAI connection"
+        },
+        "useLocalAccount": "Use local Codex account",
+        "addIndependentAccount": "Sign in to a separate account",
+        "accountSourcesDescription": "Use your existing local Codex connection or sign in to a separately saved account. Both support the same features.",
+        "independentAccountDescription": "Sign in to a separately saved ChatGPT account, or connect with an API key.",
+        "localUnavailable": "No local connection is available to reuse. Existing provider accounts will not be replaced."
       },
       "xai": {
         "title": "xAI",
@@ -1526,7 +1539,7 @@
         "billingLabel": "SuperGrok subscription (direct)",
         "asset": {
           "weeklyTitle": "Weekly limit",
-          "weeklyUsed": "{{percent}}% used",
+          "weeklyRemaining": "{{percent}}% remaining",
           "resetsAt": "Resets {{at}}",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Open Grok usage"
@@ -1812,7 +1825,7 @@
         "subscription": "Subscription",
         "subscriptionProduct": "{{product}} Subscription",
         "noResults": "No matching models",
-        "capabilityNote": "Not available in {{agent}}",
+        "capabilityNote": "Not configured for {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
@@ -1888,6 +1901,7 @@
           "engines": "Engine support",
           "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
           "engineUnsupported": "Not supported",
+          "engineNotConfigured": "Not configured",
           "engineNoFast": "No Fast",
           "vision": {
             "vision": "Supported",
@@ -2070,7 +2084,7 @@
         "back": "← Back",
         "finish": "Finish",
         "cancel": "Cancel",
-        "useApiKey": "Use an API key instead",
+        "useApiKey": "API key connection",
         "metaOAuthOrApi": "Subscription (OAuth) · API key",
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
@@ -2223,27 +2237,15 @@
           "cancel": "Cancel"
         }
       },
-      "imagesKey": {
-        "label": "Image generation API key",
-        "placeholder": "Paste OpenAI platform API key",
-        "save": "Save",
-        "clear": "Clear",
-        "toast": {
-          "saved": "Image generation API key saved",
-          "saveFailed": "Failed to save image generation API key. Please try again.",
-          "cleared": "Image generation API key cleared",
-          "clearFailed": "Failed to clear image generation API key"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% used",
+        "percentRemaining": "{{percent}}% remaining",
         "resetsAt": "Resets {{at}}",
         "claudePlanFallback": "Claude subscription",
-        "claudeWeekly": "7-day window {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7-day window: {{percent}}% remaining",
+        "scopedModel": "{{model}}: {{percent}}% remaining",
         "openClaudeUsage": "Open usage page",
         "codexPlanFallback": "ChatGPT subscription",
-        "codexSecondary": "Secondary window {{percent}}%",
+        "codexSecondary": "Secondary window: {{percent}}% remaining",
         "codexResetCredits": "{{count}} limit reset credits"
       }
     },
@@ -5961,6 +5963,8 @@
     "modelWeeklyLabel": "{{model}} weekly",
     "usedPercent": "Used {{percent}}%",
     "remainingPercent": "Remaining {{percent}}%",
+    "resetIn": "Resets in {{duration}}",
+    "resetPending": "Awaiting reset update",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",
     "limitRejected": "Plan limit reached; requests may be rejected",
@@ -9333,7 +9337,7 @@
       "loadingDialogues": "Loading…",
       "noDialogues": "No sessions",
       "dialogueSettings": "Organize Chat",
-      "dialogueSettingsAria": "Organize Chat (Status: {{status}}, Sort by: {{sortBy}})",
+      "dialogueSettingsAria": "Organize Chat (Sort by: {{sortBy}})",
       "dialogueSortHeading": "Sort by",
       "dialogueSort": {
         "recency": "Recent first",
@@ -11240,6 +11244,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "Review Rejected",
+      "rejectedDesc": "This version did not pass review. Address the feedback below and publish again.",
+      "rejectionReasonUnavailable": "This version did not pass review, but no specific reason is available. Contact the reviewer for details.",
+      "rejectionReason": "Rejection Reason",
       "dismiss": "Got it",
       "passedTitle": "Security Scan Passed",
       "passedDesc": "This version has passed all security checks and is now live on the market.",
@@ -11459,6 +11467,7 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
+      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",

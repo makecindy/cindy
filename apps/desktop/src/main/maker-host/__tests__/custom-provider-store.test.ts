@@ -7,6 +7,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
 import {
@@ -74,7 +75,39 @@ afterEach(() => {
   raw = null;
 });
 
+describe('custom provider updates through the runtime database proxy', () => {
+  it('reports an applied model update and rejects a stale snapshot', async () => {
+    const worker = await createDbClient({ useInlineWorker: true });
+    try {
+      for (const sql of CREATE_SQL.split(';').map((part) => part.trim()).filter(Boolean)) {
+        await worker.exec(sql);
+      }
+      setCurrentDbClient(worker, 'test-user');
+      await createCustomProvider(valid);
+      const before = (await getCustomProvider(valid.id))!;
+      const next = { ...before, runtimes: { codex: { ...before.runtimes.codex!, models: [
+        ...before.runtimes.codex!.models, { id: 'new-model', name: 'New model' },
+      ] } } };
+      const applied = await updateCustomProviderIfUnchanged(valid.id, before, next);
+      expect((await getCustomProvider(valid.id))?.runtimes.codex?.models).toHaveLength(2);
+      expect(applied).toBe(true);
+      expect(await updateCustomProviderIfUnchanged(valid.id, before, before)).toBe(false);
+      expect((await getCustomProvider(valid.id))?.runtimes.codex?.models).toHaveLength(2);
+    } finally {
+      clearCurrentDbClient(worker);
+      await worker.dispose();
+    }
+  });
+});
+
 describe('validateCustomProviderConfig (per-runtime)', () => {
+  it('accepts only the native Codex route for account credentials', () => {
+    const account: CustomProviderConfig = { id: 'openai-work', name: 'Work', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses', models: [] } } };
+    expect(validateCustomProviderConfig(account).ok).toBe(true);
+    expect(validateCustomProviderConfig({ ...account, runtimes: { codex: { ...account.runtimes.codex, baseUrl: 'https://other.invalid' } } }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...account, runtimes: { codex: { ...account.runtimes.codex, headers: { Authorization: 'secret' } } } }).ok).toBe(false);
+  });
   it.each(['codex', 'claude-code', 'pi'] as const)(
     'round-trips opaque preset references for %s',
     async (agent) => {

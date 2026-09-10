@@ -90,7 +90,7 @@ describe('maker:event hot path ordering', () => {
       'lastReportedCostUsdBySession.delete(',
       'lastReportedModelUsageBySession.delete(',
       'turnModelPromiseBySession.delete(',
-      'turnPiFastModeBySession.delete(',
+      'turnUsageContextBySession.delete(',
       'productTurnWallClockTracker.clear(',
       'productTurnUsageTargetTracker.clear(',
       'claudeOutputLagTimingGuard.clear(',
@@ -796,7 +796,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneIndex).toBeGreaterThanOrEqual(0);
 
     const codexDoneSource = wireSessionSource.slice(codexDoneIndex);
-    expect(codexDoneSource).toContain('const sessionProvider = getSessionProvider(session.id);');
+    expect(codexDoneSource).toContain('const sessionProvider = turnContext.providerId;');
     expect(codexDoneSource).toContain(
       'const isRemoteCodexSession = Boolean(session.remoteHostId);',
     );
@@ -819,7 +819,7 @@ describe('maker:event hot path ordering', () => {
       'promptTokens + completionTokens + reasoningTokens + cachedTokens',
     );
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
-    expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
+    expect(codexDoneSource).toContain('turnContext.isUserProviderRoute');
     expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
     expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
@@ -935,10 +935,10 @@ describe('maker:event hot path ordering', () => {
     );
     expect(claudeDoneSource).toContain('const subscriptionTurnEstimates: RegionalMoney[] = [];');
     expect(claudeDoneSource).toMatch(
-      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
+      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*\(sessionProviderForBilling\s*\? getCodexProviderSubscriptionValuePrice\(sessionProviderForBilling, m\.model, pricing, undefined, undefined, 'claude-code'\)\s*: undefined\) \?\? getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
     );
     // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
-    expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");
+    expect(claudeDoneSource).toContain("turnContext.subscriptionKind === 'claude'");
     expect(claudeDoneSource).toContain('const observedClaudeRoute =');
     expect(claudeDoneSource).toContain('readClaudeSessionRoute(session.id)');
     expect(claudeDoneSource).toContain("observedClaudeRoute === 'subscription'");
@@ -968,9 +968,9 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
     expect(piDoneSource).toContain(
-      '(turnPiFastModeBySession.get(session.id) ?? getSessionFastMode(session.id))',
+      'turnContext.piFastMode',
     );
-    expect(piDoneSource).toContain('turnPiFastModeBySession.delete(session.id);');
+    expect(piDoneSource).toContain('turnUsageContextBySession.delete(session.id);');
     expect(piDoneSource).toContain(
       "segment.priceVariant ?? (segment.id?.startsWith('pi:') ? piPriceVariant : 'standard'),",
     );

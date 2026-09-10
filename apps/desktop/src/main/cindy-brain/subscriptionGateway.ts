@@ -1112,7 +1112,7 @@ export class GhostActivityTracker {
   }
 }
 
-/** 从 done 事件的 usage 里尽力抽 token 数。三种真实形态都认:
+/** 从终态事件的 usage 里尽力抽 token 数。三种真实形态都认:
  *  cc snake_case(input_tokens/cache_read_input_tokens…)、通用 camelCase、
  *  codex translator 形态(promptTokens/completionTokens/cachedTokens);
  *  抽不出的字段缺省——协议里 usage 字段全部可选。 */
@@ -1134,7 +1134,7 @@ export function normalizeTurnUsage(raw: unknown): GhostEventTurnEndData['usage']
     'cachedInputTokens',
     'cachedTokens',
   );
-  const cacheCreationTokens = pick('cacheCreateTokens', 'cache_creation_input_tokens');
+  const cacheCreationTokens = pick('cacheCreationTokens', 'cacheCreateTokens', 'cache_creation_input_tokens');
   const usage = {
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(outputTokens !== undefined ? { outputTokens } : {}),
@@ -1251,19 +1251,14 @@ export class GhostTurnTranslator {
     }
 
     if (this.state === 'idle') return; // done/error 只在 turn 内有意义,幂等防重
-    if (ev.type === 'done') {
-      const usage = normalizeTurnUsage(
+    if (ev.type === 'done' || ev.type === 'error') {
+      const data =
         typeof ev.data === 'object' && ev.data !== null
-          ? (ev.data as { usage?: unknown }).usage
-          : undefined,
-      );
-      this.finish(base, 'completed', mergeTurnUsage(this.continuationUsage, usage));
-    } else if (ev.type === 'error') {
-      const isTerminal =
-        typeof ev.data === 'object' && ev.data !== null
-          ? (ev.data as { isTerminal?: unknown }).isTerminal !== false
-          : true;
-      if (isTerminal) this.finish(base, 'error', undefined);
+          ? ev.data as { isTerminal?: unknown; usage?: unknown }
+          : undefined;
+      if (ev.type === 'error' && data?.isTerminal === false) return;
+      const usage = normalizeTurnUsage(data?.usage);
+      this.finish(base, ev.type === 'error' ? 'error' : 'completed', mergeTurnUsage(this.continuationUsage, usage));
     }
   }
 

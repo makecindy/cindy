@@ -1,3 +1,6 @@
+import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -9,7 +12,7 @@ import {
 } from '../turnCostBroadcaster.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { getGatewayModelPricingForModel } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../usage/referenceModelPricing.js';
 import {
   getSubscriptionValuePriceFor,
   piSubscriptionUsageModelKey,
@@ -41,12 +44,9 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { broadcastSchedulerChanged } from './schedule.js';
-import { getSessionProvider } from '../maker-host/session-provider-store.js';
-import { isUserProviderSession } from '../maker-host/provider-route.js';
-import { getSessionFastMode } from '../maker-host/session-effort-store.js';
 
 export interface RecordSessionPiTurnUsageDeps {
-  readonly turnPiFastModeBySession: Map<string, boolean>;
+  readonly turnUsageContextBySession: Map<string, TurnUsageContext>;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly readSessionModelForUsage: (sessionId: string) => Promise<string>;
   readonly unpricedSubscriptionValueMarker: () => RegionalMoney;
@@ -64,15 +64,16 @@ export function recordSessionPiTurnUsage(
   //   xd / 默认网关            → 实际 gateway cost。
   // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
   if (event.type === 'done' && event.source === 'pi') {
-    const sessionProvider = getSessionProvider(session.id);
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    const sessionProvider = turnContext.providerId;
     // New Pi payloads carry the tariff on every request segment. Keep the
     // turn-start snapshot only as a compatibility fallback for older or
     // incomplete payloads that have no explicit priceVariant.
     const piPriceVariant =
-      (deps.turnPiFastModeBySession.get(session.id) ?? getSessionFastMode(session.id))
+      turnContext.piFastMode
         ? 'priority'
         : 'standard';
-    deps.turnPiFastModeBySession.delete(session.id);
+    deps.turnUsageContextBySession.delete(session.id);
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
     deps.turnModelPromiseBySession.delete(session.id);
@@ -118,7 +119,7 @@ export function recordSessionPiTurnUsage(
           // 模型读取失败仍持久化 token/cache，模型显示为 unknown。
         }
         const pricingModel = normalizeModelIdForPricing(turnModel);
-        const isCustomProviderRoute = isUserProviderSession(session.id);
+        const isCustomProviderRoute = turnContext.isUserProviderRoute;
         const effectiveProvider =
           sessionProvider ??
           (pricingModel.startsWith(CHATGPT_MODEL_PREFIX)
@@ -127,11 +128,10 @@ export function recordSessionPiTurnUsage(
               ? 'xai'
               : null);
         const isSubscriptionValue =
-          effectiveProvider === 'openai' ||
-          effectiveProvider === 'anthropic' ||
-          effectiveProvider === 'xai' ||
+          turnContext.subscriptionKind !== null ||
+          turnContext.accessKind === 'subscription' ||
           (!isCustomProviderRoute && isSubscriptionDirectRoute(pricingModel));
-        const billingRoute: BillingRoute = isCustomProviderRoute
+        const billingRoute: BillingRoute = isCustomProviderRoute && !isSubscriptionValue
           ? 'provider-api'
           : isSubscriptionValue
             ? 'subscription'
@@ -200,7 +200,9 @@ export function recordSessionPiTurnUsage(
             const pricingSegments = piSegmentsReliable ? group.segments : [];
             let money: RegionalMoney | null = null;
             if (billingRoute === 'subscription') {
-              const quote = getSubscriptionValuePriceFor('pi', model, pricing);
+              const quote = (effectiveProvider
+                ? getCodexProviderSubscriptionValuePrice(effectiveProvider, model, pricing, undefined, undefined, 'pi')
+                : undefined) ?? getSubscriptionValuePriceFor('pi', model, pricing);
               money = computePriceQuoteTurnMoney(
                 group.tokens,
                 quote ?? undefined,
@@ -310,12 +312,12 @@ export function recordSessionPiTurnUsage(
           }
         }
 
-        if (effectiveProvider === 'openai') {
-          triggerCodexAccountUsageRefresh();
-        } else if (effectiveProvider === 'anthropic') {
-          triggerClaudeSubscriptionUsageRefresh();
-        } else if (effectiveProvider === 'xai') {
-          triggerXaiSubscriptionUsageRefresh();
+        if (effectiveProvider && isOpenAiSubscriptionProviderId(effectiveProvider)) {
+          triggerCodexAccountUsageRefresh(effectiveProvider);
+        } else if (isClaudeSubscriptionProviderId(effectiveProvider)) {
+          triggerClaudeSubscriptionUsageRefresh(effectiveProvider ?? undefined);
+        } else if (isXaiSubscriptionProviderId(effectiveProvider)) {
+          triggerXaiSubscriptionUsageRefresh(effectiveProvider ?? undefined);
         } else if (effectiveProvider === 'xd' || effectiveProvider == null) {
           void triggerClaudeAccountUsageRefresh();
         }

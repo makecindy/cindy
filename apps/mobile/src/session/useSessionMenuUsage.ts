@@ -1,3 +1,4 @@
+import type { OpenAiAccountProvider } from './sessionControls';
 import { useCallback, useEffect, useState } from "react";
 import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import { normalizeRemoteMoney, type RemoteMoney } from "@/session/remoteMoney";
@@ -51,6 +52,7 @@ export function useSessionMenuUsage(
   reader: SessionMenuUsageReader,
   visible: boolean,
   codexRateLimits: MobileCodexRateLimitsResult | null = null,
+  provider?: OpenAiAccountProvider,
 ) {
   const taskScope = [
     session.deviceLinkDeviceId,
@@ -95,7 +97,7 @@ export function useSessionMenuUsage(
       inFlight = true;
       update({ loading: true });
       await Promise.allSettled([
-        readSessionMenuAccountUsage(session, reader).then(
+        readSessionMenuAccountUsage(session, reader, provider).then(
           (account) => update({ account, accountFailed: false }),
           (error) =>
             update({
@@ -144,6 +146,7 @@ export function useSessionMenuUsage(
     refreshKey,
     session.id,
     codexRateLimits,
+    provider,
   ]);
   return {
     ...(stored?.scope === scope

@@ -35,9 +35,10 @@ const STATIC_CLAUDE_BEHAVIOR_FLAGS: Readonly<Record<string, string>> = {
 export function claudeToolSearchMode(
   providerId: string | null | undefined,
   credentialMode?: string,
+  nativeAuth?: string,
 ): 'auto' | 'false' {
   const provider = providerId?.trim() || null;
-  if (provider) return provider === 'xd' || provider === 'anthropic' ? 'auto' : 'false';
+  if (provider) return provider === 'xd' || provider === 'anthropic' || nativeAuth === 'claude' ? 'auto' : 'false';
   return credentialMode === 'provider-oauth' ? 'false' : 'auto';
 }
 
@@ -46,6 +47,7 @@ export interface ClaudeSpawnFlagsContext {
   credentialMode?: string;
   /** 本次 spawn 的会话来源。null/undefined = 隐式默认路由。 */
   providerId?: string | null;
+  nativeAuth?: string;
   /** 是否连了 Claude.ai 订阅。惰性回调:gateway-key 分支不调用、不产生钥匙串读。 */
   oauthConnected: () => boolean;
 }
@@ -58,7 +60,7 @@ export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Recor
   // '0'/'false'/'no'/'off' 视为禁用,'1' = 保留归因,与未设置同义。
   return {
     ...STATIC_CLAUDE_BEHAVIOR_FLAGS,
-    ENABLE_TOOL_SEARCH: claudeToolSearchMode(ctx.providerId, ctx.credentialMode),
+    ENABLE_TOOL_SEARCH: claudeToolSearchMode(ctx.providerId, ctx.credentialMode, ctx.nativeAuth),
     CLAUDE_CODE_ATTRIBUTION_HEADER: keepAttribution ? '1' : '0',
   };
 }

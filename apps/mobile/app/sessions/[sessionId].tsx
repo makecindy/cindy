@@ -1966,7 +1966,25 @@ export default function SessionScreen() {
     [sessionId, sessions],
   );
   const sessionManagedByHost = isHostManagedSession(currentSession);
-  const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession);
+  const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
+  const accountProvider = composerDeviceProviders.ready
+    ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)
+    : undefined;
+  const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession, accountProvider);
+  const accountProviderId = currentSession?.providerId ?? 'openai';
+  const accountControlScope = `${deviceId}\0${sessionId}\0${accountProviderId}`;
+  const accountControlScopeRef = useRef(accountControlScope);
+  accountControlScopeRef.current = accountControlScope;
+  const [storedAccountControlScope, setStoredAccountControlScope] = useState(accountControlScope);
+  // Reset during render, before a menu or reset callback can receive another account's offer.
+  // React rerenders this component before committing its children when its own state changes here.
+  if (storedAccountControlScope !== accountControlScope) {
+    setStoredAccountControlScope(accountControlScope);
+    setAccountUsage(null);
+    setCodexRateLimits(null);
+    setCodexResetBusy(false);
+    setCodexResetRetryKey(null);
+  }
   const isDeviceAccessRevoked = !!deviceId && revokedDevices.has(deviceId);
   // 熔断 open:被控电脑「进程活着但不回包」的半死态;relay status 恒 online,必须单独入参。
   const isDeviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
@@ -2393,7 +2411,6 @@ export default function SessionScreen() {
     [composerDisplayRuntimeOptions, composerDisplaySession, i18nInstance.language],
   );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
-  const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
   const composerModelSections = useMemo(
     () => composerDisplaySession
       ? buildMobileModelSections({
@@ -3226,6 +3243,13 @@ export default function SessionScreen() {
     // 旧连接代的 in-flight load 若在尾部读 ref 的最新值,会把旧窗口数据标成新代已同步,
     // 抢在排队的 resync 之前放行回执。开始时捕获则旧 load 落的是旧代 key,门槛不放行。
     const readAckEpochAtStart = readAckEpochRef.current;
+    const reportSyncPhase = (phase: string, extra: { readMs?: number; commitMs?: number; outcome?: string } = {}) => {
+      if (syncRun.isStale() || !messageAuthorityCurrent()) return;
+      mobileDebugLog('debug', 'recovery', 'detail sync phase', {
+        startedAt: snapshotStartedAt, connection: readAckEpochAtStart, phase,
+        totalMs: Math.max(0, Date.now() - snapshotStartedAt), ...extra,
+      });
+    };
     const subscriptionIdentityAtStart = JSON.stringify([
       deviceId,
       sessionId,
@@ -3335,6 +3359,7 @@ export default function SessionScreen() {
     setLoading(true);
     try {
       await prepareLinkAndSubscription();
+      reportSyncPhase('link-ready');
       if (syncRun.isStale() || !messageAuthorityCurrent()) return;
       // Capture at the first snapshot read, after link-open. An ACK received while
       // opening the link is already covered; it must not force another full batch.
@@ -3401,22 +3426,34 @@ export default function SessionScreen() {
           }
         },
       });
-      const commitRead = <T,>(read: () => Promise<T>, commit: (value: T) => void) =>
-        runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, commit);
+      const commitRead = <T,>(phase: string, read: () => Promise<T>, commit: (value: T) => void) => {
+        const startedAt = Date.now();
+        return runConnectionScopedSessionMetadataRead(() => retryRead(read), isCurrent, (value) => {
+          const commitAt = Date.now();
+          commit(value);
+          reportSyncPhase(phase, { readMs: Math.max(0, commitAt - startedAt), commitMs: Math.max(0, Date.now() - commitAt), outcome: 'applied' });
+        }).catch((error) => {
+          reportSyncPhase(phase, { readMs: Math.max(0, Date.now() - startedAt), outcome: 'failed' });
+          throw error;
+        });
+      };
       // Only the control/read-receipt barrier waits for all resources. Each response
       // is applied independently, and a changed metadata response starts history
       // immediately rather than waiting for pending/projection/active.
       await waitForIndependentSnapshotReads([
-        messageRead,
-        commitRead(fetchPendingInteractions, (pendingInteractions) => {
+        messageRead.then(() => reportSyncPhase('history-settled')).catch((error) => {
+          reportSyncPhase('history', { outcome: 'failed' });
+          throw error;
+        }),
+        commitRead('pending', fetchPendingInteractions, (pendingInteractions) => {
           remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         }),
-        commitRead(fetchProjection, (projectionResult) => {
+        commitRead('projection', fetchProjection, (projectionResult) => {
           remoteSessionStore.setInputProjectionIfCurrent(
             sessionId, projectionResult.projection, projectionResult.authorityEpochAtStart,
           );
         }),
-        commitRead(fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
+        commitRead('active', fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
           remoteSessionStore.setActiveSessionSnapshots(
             deviceId,
             Array.isArray(activeSessionSnapshot.activeSessions) ? activeSessionSnapshot.activeSessions : [],
@@ -3437,8 +3474,7 @@ export default function SessionScreen() {
       setContentSyncedKey(contentKeyAtStart);
       if (contentKeyAtStart !== null && contentRecoveryKeyRef.current === contentKeyAtStart) {
         syncRun.satisfy('subscription-acked');
-        console.debug('[device-link] recovery snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
-        mobileDebugLog('debug', 'recovery', 'snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
+        reportSyncPhase('complete');
       }
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早
@@ -8055,30 +8091,30 @@ export default function SessionScreen() {
       return;
     }
     try {
-      const snapshot = await maker.getCodexRateLimits();
+      const snapshot = await maker.getCodexRateLimits(accountProviderId === 'openai' ? undefined : accountProviderId);
       // 迟到结果仍按账号控制快照的会话归属校验。
-      if (contextUsageSessionRef.current !== sessionId) return;
+      if (accountControlScopeRef.current !== accountControlScope) return;
       setCodexRateLimits(snapshot);
       setAccountUsage(snapshot.rateLimits);
     } catch (err) {
-      if (contextUsageSessionRef.current !== sessionId) return;
+      if (accountControlScopeRef.current !== accountControlScope) return;
       // 权威控制面读取失败后只能降级为只读用量；旧 offer / retry key 不得继续可消费。
       setCodexRateLimits(null);
       setCodexResetRetryKey(null);
-      if (!shouldFallbackToLegacyCodexUsage(err)) {
+      if (accountProviderId !== 'openai' || !shouldFallbackToLegacyCodexUsage(err)) {
         // 账号切换期间 legacy cache 仍可能属于旧 workspace；等待下一次权威读取。
         setAccountUsage(null);
         return;
       }
       try {
-        const snapshot = await maker.getAccountUsage('codex');
-        if (contextUsageSessionRef.current !== sessionId) return;
+        const snapshot = await maker.getAccountUsage('codex', accountProviderId === 'openai' ? undefined : accountProviderId);
+        if (accountControlScopeRef.current !== accountControlScope) return;
         setAccountUsage(snapshot);
       } catch {
         // 静默:通道不支持 / 网络瞬断都不打扰用户。
       }
     }
-  }, [localCodexRateLimitControl, maker, sessionId]);
+  }, [localCodexRateLimitControl, maker, sessionId, accountProviderId, accountControlScope]);
 
   // reset 只接受 desktop read 签发的 UUID。网络等结果不明的失败保留同一幂等键；
   // Desktop 明确拒绝的 stale offer 则立即作废并刷新，避免反复提交已失效凭证。
@@ -8092,22 +8128,22 @@ export default function SessionScreen() {
       || (codexResetRetryKey !== null && offer.idempotencyKey !== codexResetRetryKey)) {
       setCodexResetRetryKey(null);
       await refreshAccountUsage();
-      if (contextUsageSessionRef.current !== sessionId) return;
+      if (accountControlScopeRef.current !== accountControlScope) return;
       Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'));
       return;
     }
     setCodexResetRetryKey(idempotencyKey);
     setCodexResetBusy(true);
     try {
-      const result = await maker.resetCodexRateLimits(idempotencyKey);
-      if (contextUsageSessionRef.current !== sessionId) return;
+      const result = await maker.resetCodexRateLimits(idempotencyKey, accountProviderId === 'openai' ? undefined : accountProviderId);
+      if (accountControlScopeRef.current !== accountControlScope) return;
       setCodexResetRetryKey(null);
       if (result.rateLimits) {
         setCodexRateLimits(result.rateLimits);
         setAccountUsage(result.rateLimits.rateLimits);
       } else {
         await refreshAccountUsage();
-        if (contextUsageSessionRef.current !== sessionId) return;
+        if (accountControlScopeRef.current !== accountControlScope) return;
       }
       const message = {
         reset: t('session.screen.resetOutcomeReset'),
@@ -8117,12 +8153,12 @@ export default function SessionScreen() {
       }[result.outcome];
       Alert.alert(result.outcome === 'reset' ? t('session.screen.resetDoneTitle') : t('session.screen.resetResultTitle'), message);
     } catch (err) {
-      if (contextUsageSessionRef.current === sessionId) {
+      if (accountControlScopeRef.current === accountControlScope) {
         if (isPreconditionFailedRemoteError(err)) {
           setCodexResetRetryKey(null);
           setCodexRateLimits((current) => current ? { ...current, resetOffer: null } : null);
           await refreshAccountUsage();
-          if (contextUsageSessionRef.current === sessionId) {
+          if (accountControlScopeRef.current === accountControlScope) {
             Alert.alert(t('session.screen.resetReconfirmTitle'), humanizeRemoteError(err));
           }
         } else {
@@ -8130,9 +8166,9 @@ export default function SessionScreen() {
         }
       }
     } finally {
-      if (contextUsageSessionRef.current === sessionId) setCodexResetBusy(false);
+      if (accountControlScopeRef.current === accountControlScope) setCodexResetBusy(false);
     }
-  }, [codexRateLimits, codexResetBusy, codexResetRetryKey, maker, refreshAccountUsage, sessionId]);
+  }, [codexRateLimits, codexResetBusy, codexResetRetryKey, maker, refreshAccountUsage, sessionId, accountProviderId, accountControlScope]);
 
   const loadExtraDirBrowsePath = useCallback(async (targetPath: string) => {
     if (!deviceId || !currentSession || currentSession.workspaceKind !== 'project') return;
@@ -8868,6 +8904,7 @@ export default function SessionScreen() {
         {currentSession && !sessionManagedByHost ? (
           <SessionMenuSheet
             usageReader={maker}
+            accountProvider={accountProvider}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}

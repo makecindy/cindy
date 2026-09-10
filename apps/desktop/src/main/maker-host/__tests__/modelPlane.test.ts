@@ -148,7 +148,7 @@ describe('registry presence 实体化', () => {
     }
   });
 
-  it('a loaded legacy Catalog cannot replace the local Pi membership baseline', () => {
+  it('an explicit empty Pi declaration clears Pi while legacy root arrays remain Registry projections', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
     // Root models consume Registry; Pi retains its independent native baseline.
@@ -164,7 +164,7 @@ describe('registry presence 实体化', () => {
         expect.objectContaining({ id: 'xai/grok-test', contextWindow: 500_000 }),
       ]);
     }
-    expect(models('xai', 'pi')).toEqual(withNativeMetadataAndDefaults('xai', expected.models.pi));
+    expect(models('xai', 'pi')).toEqual([]);
   });
 
   it('远端 Registry 宣告 GPT-6 只进入 Codex/Claude，不会自动加入 Pi', () => {
@@ -394,7 +394,7 @@ describe('registry presence 实体化', () => {
     expect(models('openai', 'codex')).toEqual([]);
   });
 
-  it('能力不完整的 route 单条隔离 + 告警,不拖垮其余', () => {
+  it('missing effort metadata retains declared models without inventing a level', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({ efforts: undefined, defaultEffort: undefined }),
@@ -404,10 +404,26 @@ describe('registry presence 实体化', () => {
         }),
       ]),
     );
-    expect(models('openai', 'codex').map((m) => m.id)).toEqual(['gpt-6-mini']);
-    expect(getModelPlaneWarnings()).toMatchObject([
-      { providerId: 'openai', modelId: 'gpt-6', reason: expect.stringContaining('efforts') },
-    ]);
+    for (const agent of ['codex', 'claude-code'] as const) {
+      const id = agent === 'codex' ? 'gpt-6' : 'chatgpt/gpt-6';
+      expect(models('openai', agent).find(m => m.id === id))
+        .toMatchObject({ efforts: [], defaultEffort: null });
+    }
+    expect(getModelPlaneWarnings()).toEqual([]);
+  });
+
+  it.each([false, true])('missing inherits discovery; explicit empty clears it (%s)', (clear) => {
+    setDiscoveredCodexModels([{ id: 'gpt-6', name: 'Discovered', contextWindow: 400000,
+      efforts: ['low', 'high'], defaultEffort: 'high' }]);
+    setActiveCatalog(baseCatalog([gpt6Entry({
+      efforts: clear ? [] : undefined, defaultEffort: undefined,
+    })]));
+    for (const agent of ['codex', 'claude-code'] as const) {
+      const id = agent === 'codex' ? 'gpt-6' : 'chatgpt/gpt-6';
+      expect(models('openai', agent).find(m => m.id === id)).toMatchObject({
+        efforts: clear ? [] : ['low', 'high'], defaultEffort: clear ? null : 'high',
+      });
+    }
   });
 
   it('非法 effort token 整条隔离并告警,不能静默过滤成固定档模型', () => {
@@ -802,7 +818,8 @@ describe('本地 override(local 永远最高)', () => {
     const claude = models('xai', 'claude-code').find((m) => m.id === 'xai/grok-test');
     expect(claude).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'] });
     expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toBeUndefined();
-    expect(models('xai', 'pi').some((m) => m.id === 'grok-pi-only-fixture')).toBe(false);
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-pi-only-fixture')).toBe(true);
+    expect(models('xai', 'codex').some((m) => m.id === 'grok-pi-only-fixture')).toBe(false);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {

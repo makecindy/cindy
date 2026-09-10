@@ -243,7 +243,7 @@ describe('provider catalog realm reload', () => {
         staleToken: 'rejected-token',
       }),
     ).resolves.toBe('fresh-token');
-    expect(h.recoverGrokAuthAfterRejection).toHaveBeenLastCalledWith('rejected-token');
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenLastCalledWith('rejected-token', 'xai');
 
     h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('unchanged');
     await expect(

@@ -9,7 +9,7 @@ import {
 } from '@cindy/maker-shared/agent-input-projection';
 import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSession } from '@/session/types';
 import type { RemoteSerializedAttachment } from '@/session/types';
-import { parseMobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
+import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,

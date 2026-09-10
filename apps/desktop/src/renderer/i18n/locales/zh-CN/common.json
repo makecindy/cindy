@@ -1293,8 +1293,7 @@
             "manual": "手动"
           },
           "toast": {
-            "title": "已自动加入词典",
-            "titleMultiple": "已自动加入 {{count}} 个词",
+            "title": "已加入词典",
             "termsSummary": "{{terms}} 等 {{count}} 个词",
             "automaticAdded": "已自动加入词典：{{term}}",
             "automaticAddedMultiple": "已自动加入词典：{{term}} 等 {{count}} 个词",
@@ -1493,6 +1492,10 @@
       },
       "pill": {
         "connected": "已连接",
+        "configured": "已配置",
+        "disconnected": "未连接",
+        "connecting": "正在连接…",
+        "rename": "重命名",
         "suspended": "已停用"
       },
       "button": {
@@ -1517,7 +1520,17 @@
         "reconnectRequired": "需要重新连接",
         "connect": "连接 ChatGPT",
         "reconnect": "重新连接 ChatGPT",
-        "cancelConnect": "取消连接"
+        "cancelConnect": "取消连接",
+        "accountSource": {
+          "local": "本机 Codex 账号",
+          "oauth": "独立登录账号",
+          "unknown": "现有 OpenAI 连接"
+        },
+        "useLocalAccount": "使用本机 Codex 账号",
+        "addIndependentAccount": "登录独立账号",
+        "accountSourcesDescription": "使用已有的本机 Codex 连接，或登录一个独立保存的账号。两种方式支持相同功能。",
+        "independentAccountDescription": "登录一个独立保存的 ChatGPT 账号，或使用 API key 接入。",
+        "localUnavailable": "当前没有可直接复用的本机连接。已有供应商绑定的账号不会被替换。"
       },
       "xai": {
         "title": "xAI",
@@ -1526,7 +1539,7 @@
         "billingLabel": "SuperGrok 订阅直连",
         "asset": {
           "weeklyTitle": "每周限额",
-          "weeklyUsed": "{{percent}}% 已使用",
+          "weeklyRemaining": "剩余 {{percent}}%",
           "resetsAt": "{{at}} 重置",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "打开 Grok 用量页面"
@@ -1811,7 +1824,7 @@
         "subscription": "订阅",
         "subscriptionProduct": "{{product}} 订阅",
         "noResults": "无匹配模型",
-        "capabilityNote": "不支持 {{agent}}",
+        "capabilityNote": "尚未配置 {{agent}}",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
         "refreshBuiltinAria": "刷新模型列表",
         "refreshingAria": "正在刷新模型列表…",
@@ -1887,6 +1900,7 @@
           "engines": "引擎支持",
           "enginesHint": "兼容模式需要转换请求，默认关闭，可按需开启。",
           "engineUnsupported": "不支持",
+          "engineNotConfigured": "尚未配置",
           "engineNoFast": "无 Fast",
           "vision": {
             "vision": "支持",
@@ -2069,7 +2083,7 @@
         "back": "← 上一步",
         "finish": "完成添加",
         "cancel": "取消",
-        "useApiKey": "改用 API Key 接入",
+        "useApiKey": "API key 接入",
         "metaOAuthOrApi": "订阅授权 · API Key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 连接",
@@ -2222,27 +2236,15 @@
           "cancel": "取消"
         }
       },
-      "imagesKey": {
-        "label": "图像生成 API key",
-        "placeholder": "粘贴 OpenAI 平台 API key",
-        "save": "保存",
-        "clear": "清除",
-        "toast": {
-          "saved": "图像生成 API key 已保存",
-          "saveFailed": "保存图像生成 API key 失败，请重试",
-          "cleared": "已清除图像生成 API key",
-          "clearFailed": "清除图像生成 API key 失败"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 已使用",
+        "percentRemaining": "剩余 {{percent}}%",
         "resetsAt": "{{at}} 重置",
         "claudePlanFallback": "Claude 订阅",
-        "claudeWeekly": "7 天窗口 {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7 天窗口剩余 {{percent}}%",
+        "scopedModel": "{{model}} 剩余 {{percent}}%",
         "openClaudeUsage": "打开用量页面",
         "codexPlanFallback": "ChatGPT 订阅",
-        "codexSecondary": "次级窗口 {{percent}}%",
+        "codexSecondary": "次级窗口剩余 {{percent}}%",
         "codexResetCredits": "限额重置券 {{count}} 张"
       }
     },
@@ -5959,6 +5961,8 @@
     "modelWeeklyLabel": "{{model}} 周限",
     "usedPercent": "已用 {{percent}}%",
     "remainingPercent": "剩余 {{percent}}%",
+    "resetIn": "{{duration}}后重置",
+    "resetPending": "等待重置数据更新",
     "resetAt": "{{at}} 重置",
     "noWindows": "暂无配额窗口数据",
     "limitRejected": "已触发套餐限额，请求可能被拒绝",
@@ -9318,7 +9322,7 @@
       "loadingDialogues": "加载中…",
       "noDialogues": "暂无任务",
       "dialogueSettings": "整理对话",
-      "dialogueSettingsAria": "整理对话（状态：{{status}}，排序：{{sortBy}}）",
+      "dialogueSettingsAria": "整理对话（排序：{{sortBy}}）",
       "dialogueSortHeading": "排序",
       "dialogueSort": {
         "recency": "最近优先",
@@ -11224,6 +11228,10 @@
       }
     },
     "scanResult": {
+      "rejectedTitle": "审核未通过",
+      "rejectedDesc": "该版本未通过审核，请根据以下反馈修改后重新发布。",
+      "rejectionReasonUnavailable": "该版本未通过审核，暂未提供具体原因。请联系审核方了解详情。",
+      "rejectionReason": "拒审原因",
       "dismiss": "知道了",
       "passedTitle": "安全扫描通过",
       "passedDesc": "该版本已通过所有安全检查，现已发布到市场。",
@@ -11443,6 +11451,7 @@
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",

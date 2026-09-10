@@ -16,6 +16,11 @@ const state = vi.hoisted(() => ({
   capToolchainThreads: true,
 }));
 
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
 vi.mock('../agent-resource-settings-store.js', () => ({
   readAgentResourceSettings: () => ({ capToolchainThreads: state.capToolchainThreads, processPriority: 'normal' }),
 }));
