@@ -2980,6 +2980,8 @@ interface ElectronAPI {
 
   /** Open Cindy's managed Make tools directory (`<userData>/cindy-make/tools`). */
   openCindyMakeToolsDir: () => Promise<{ success: boolean }>;
+  getCindyMakeSourceStatus: () => Promise<import('../shared/cindyMakeDoctor').MakeSourceStatus>;
+  openCindyMakeSourceDir: () => Promise<{ success: boolean }>;
 
   /**
    * Reveal a file in the OS file manager (Explorer / Finder). Accepts either

@@ -1440,6 +1440,21 @@ export function selectVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
     : messages;
 }
 
+/**
+ * A Cindy Make card is appended as a local assistant system message, but it
+ * represents a new command turn for the visible timeline. Treating it as a
+ * boundary keeps artifacts from the preceding user turn before the card.
+ */
+function isRenderTurnBoundary(message: ChatMessage): boolean {
+  if (message.role === 'user') {
+    return message.delivery !== 'steer' && !message.isSyntheticTrigger;
+  }
+  return (
+    message.role === 'assistant' &&
+    (message.systemCardType === 'cindy-make' || message.systemCardType === 'cindy-make-doctor')
+  );
+}
+
 export function buildRenderItems(
   allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
@@ -1463,6 +1478,9 @@ export function buildRenderItems(
   items: RenderItem[];
   singleResultMap: Map<string, string>;
 } {
+  // Modal-only Cindy Make cards are transient UI state. They stay in the
+  // shared store for the dialog to observe, but never enter the chat timeline.
+  allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
   // ── Pass -1: 剔除子代理内部消息 ──
   // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
   // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
@@ -1521,8 +1539,7 @@ export function buildRenderItems(
   let inlineTurnStart = 0;
   for (let index = 0; index <= messages.length; index += 1) {
     const message = messages[index];
-    const isBoundary =
-      message?.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger;
+    const isBoundary = message ? isRenderTurnBoundary(message) : false;
     if (isBoundary && index > inlineTurnStart) {
       recordTurnInlineImages(inlineTurnStart, index);
       inlineTurnStart = index;
@@ -1824,8 +1841,10 @@ export function buildRenderItems(
   while (i < messages.length) {
     const msg = messages[i];
 
-    // User turn boundary: attach the sealed patch after the turn it belongs to.
-    if (msg.role === 'user' && msg.delivery !== 'steer' && !msg.isSyntheticTrigger) {
+    // Turn boundary: attach the sealed patch after the turn it belongs to.
+    // Cindy Make cards are local command messages and start their own visible turn,
+    // so the preceding turn's file-change card stays above them.
+    if (isRenderTurnBoundary(msg)) {
       flushSegment();
       flushTurnChanges(turnStartIdx, i);
       turnStartIdx = i;

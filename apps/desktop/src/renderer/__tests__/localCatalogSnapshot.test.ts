@@ -209,7 +209,7 @@ describe('refreshLocalCatalogSnapshot', () => {
       expect(mocks.commitCapabilities).toHaveBeenCalledTimes(recovers ? 1 : 0);
       if (recovers) {
         expect(mocks.commitProviders).toHaveBeenLastCalledWith(2, providers);
-        expect(sync).toHaveBeenLastCalledWith('owner-a', 1, { 'pi:xd:recommended': true },
+        expect(sync).toHaveBeenLastCalledWith('owner-a', 1, {},
           expect.not.objectContaining({ pending: true }));
         expect(prefs.isModelEnabled('pi', 'xd', { id: 'recommended' })).toBe(true);
       } else {

@@ -5555,6 +5555,33 @@
     "cindyMake": {
       "title": "Cindy Make",
       "openToolsDir": "打開工具目錄",
+      "source": {
+        "title": "原始碼狀態",
+        "openDir": "開啟原始碼目錄",
+        "prepare": "準備原始碼",
+        "reset": "清理原始碼",
+        "update": "更新原始碼",
+        "preparingAction": "正在準備原始碼",
+        "path": "路徑",
+        "channel": "渠道",
+        "version": "版本",
+        "ref": "Ref",
+        "commit": "Commit",
+        "status": {
+          "missing": "尚未準備個人版原始碼",
+          "pending": "正在準備原始碼",
+          "preparing": "正在準備個人版原始碼",
+          "ready": "個人版原始碼已準備好",
+          "failed": "原始碼準備失敗",
+          "cancelled": "原始碼準備已停止"
+        },
+        "resetConfirm": {
+          "title": "清理個人原始碼？",
+          "description": "這只會刪除 Cindy 管理的原始碼目錄。清理後如需使用，請再次點擊準備原始碼。",
+          "confirm": "清理原始碼",
+          "cancel": "取消"
+        }
+      },
       "description": "下方卡片會檢查本機環境，並可安裝缺少的可攜工具。原生編譯工具缺失時會顯示官方下載指引。",
       "checking": "正在檢查環境…",
       "forceManaged": {
@@ -12312,7 +12339,7 @@
       }
     },
     "upstream": {
-      "pending": "環境全部通過後，自動查詢上游。",
+      "pending": "環境和原始碼準備完成後，自動查詢上游。",
       "needsRequest": "等待補充修改需求",
       "needRequest": "填寫要修改的功能名稱或具體錯誤，查詢相關上游內容。",
       "placeholder": "例如：修復訊息串流閃爍",
@@ -12330,8 +12357,6 @@
       "wait": "等待上游",
       "personal": "繼續製作個人版",
       "retry": "重新檢查並查詢",
-      "expand": "展開上游結果",
-      "collapse": "收起上游結果",
       "count": "找到 {{count}} 筆可能相關的開放 Issue 或 PR",
       "kind": {
         "issue": "Issue",
@@ -12349,7 +12374,7 @@
       },
       "decisionHint": {
         "wait": "本次流程已停止，尚未訂閱通知或設定自動更新。",
-        "personal": "選擇已記錄在本卡片中。原始碼準備和建置尚未接入，目前沒有下載或修改原始碼。"
+        "personal": "選擇已記錄，Cindy 正在原始碼目錄中建立實作任務。"
       },
       "failure": {
         "network": "無法連線 GitHub，請檢查網路後重試。",
@@ -12360,6 +12385,45 @@
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 準備環境",
-    "stepUpstream": "2 · 查詢上游"
+    "stepUpstream": "3 · 查詢上游",
+    "stepSource": "2 · 準備原始碼",
+    "source": {
+      "preparing": "正在準備原始碼",
+      "phase": {
+        "checking": "正在檢查 Git 和原始碼",
+        "cloning": "正在下載原始碼",
+        "fetching": "正在更新儲存庫",
+        "checkingOut": "正在切換版本"
+      },
+      "ready": "原始碼已準備好",
+      "failed": "原始碼準備失敗",
+      "cancelled": "原始碼準備已停止",
+      "errors": {
+        "unsupportedVersion": "目前版本格式不受支援。",
+        "tagNotFound": "目前版本所需的 tag 不存在。",
+        "dirty": "原始碼目錄有未提交變更，請處理後再重試。",
+        "gitFailed": "Git 無法準備原始碼目錄。",
+        "cancelled": "原始碼準備已停止。",
+        "localCommits": "原始碼中有尚未包含在上游的本機提交或暫存記錄，請保留或備份後再清理。",
+        "environmentNotReady": "建置環境尚未就緒，請檢查所需工具。",
+        "gitUnavailable": "Git 無法使用，請先在環境卡片中檢查並安裝 Git，再重試。"
+      },
+      "gitProgress": {
+        "counting": "正在統計物件",
+        "compressing": "正在壓縮物件",
+        "receiving": "正在接收物件",
+        "resolving": "正在解析差異",
+        "checkingOut": "正在更新檔案"
+      },
+      "missing": "尚未準備原始碼"
+    },
+    "code": {
+      "starting": "正在開啟個人版任務",
+      "started": "個人版任務已建立",
+      "failed": "個人版任務建立失敗",
+      "start": "開始製作個人版",
+      "open": "開啟個人版任務",
+      "sendFailed": "需求傳送失敗，請開啟個人版任務重試"
+    }
   }
 }

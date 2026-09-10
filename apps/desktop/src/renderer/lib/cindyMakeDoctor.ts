@@ -16,7 +16,12 @@ export function startMakeDoctor(
   onReport: (report: MakeDoctorReport) => void,
   api: DoctorApi = window.electronAPI.maker,
   command: 'cindy-make-doctor' | 'cindy-make' = 'cindy-make-doctor',
-  options: { forceManagedTools?: boolean; signal?: AbortSignal; request?: string } = {},
+  options: {
+    forceManagedTools?: boolean;
+    signal?: AbortSignal;
+    request?: string;
+    makeAction?: 'prepare-source' | 'clear-source';
+  } = {},
 ): string {
   const owner = getDataOwnerGeneration();
   const runId = crypto.randomUUID();
@@ -28,7 +33,9 @@ export function startMakeDoctor(
     status: 'running',
     mode: command === 'cindy-make' ? 'prepare' : 'check',
     ...(forceManagedTools ? { forceManagedTools: true } : {}),
-    checks: MAKE_DOCTOR_CHECK_IDS.map((id) => ({ id, status: 'pending' })),
+    checks: options.makeAction
+      ? []
+      : MAKE_DOCTOR_CHECK_IDS.map((id) => ({ id, status: 'pending' })),
     ...(command === 'cindy-make' && options.request !== undefined
       ? { upstream: { status: 'pending' as const, items: [] } }
       : {}),
@@ -61,6 +68,16 @@ export function startMakeDoctor(
     publish({
       ...latest,
       status: 'failed',
+      ...(latest.source?.status === 'preparing'
+        ? {
+            source: {
+              ...latest.source,
+              status: 'failed' as const,
+              error: 'gitFailed' as const,
+              progress: undefined,
+            },
+          }
+        : {}),
       ...(latest.upstream?.status === 'searching'
         ? {
             upstream: {
@@ -96,6 +113,7 @@ export function startMakeDoctor(
     void api
       .executeDesktopCommand(command, {
         doctorRunId: runId,
+        ...(options.makeAction ? { makeAction: options.makeAction } : {}),
         ...(forceManagedTools ? { forceManagedTools: true } : {}),
         ...(options.request !== undefined ? { makeRequest: options.request } : {}),
       })

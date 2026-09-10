@@ -5555,6 +5555,33 @@
     "cindyMake": {
       "title": "Cindy Make",
       "openToolsDir": "도구 폴더 열기",
+      "source": {
+        "title": "소스 상태",
+        "openDir": "소스 폴더 열기",
+        "prepare": "소스 준비",
+        "reset": "소스 정리",
+        "update": "소스 업데이트",
+        "preparingAction": "소스 준비 중",
+        "path": "경로",
+        "channel": "채널",
+        "version": "버전",
+        "ref": "Ref",
+        "commit": "커밋",
+        "status": {
+          "missing": "개인 소스가 아직 준비되지 않았습니다",
+          "pending": "소스 준비 중",
+          "preparing": "개인 소스를 준비하는 중입니다",
+          "ready": "개인 소스가 준비되었습니다",
+          "failed": "소스 준비에 실패했습니다",
+          "cancelled": "소스 준비가 중지됨"
+        },
+        "resetConfirm": {
+          "title": "개인 소스를 정리할까요?",
+          "description": "Cindy가 관리하는 소스 디렉터리만 삭제합니다. 필요하면 나중에 소스를 다시 준비할 수 있습니다.",
+          "confirm": "소스 정리",
+          "cancel": "취소"
+        }
+      },
       "description": "아래 카드에서 이 컴퓨터의 환경을 확인하고 필요한 휴대용 도구를 설치할 수 있습니다. 네이티브 컴파일 도구가 없으면 공식 설치 안내를 표시합니다.",
       "checking": "환경 확인 중…",
       "forceManaged": {
@@ -12312,7 +12339,7 @@
       }
     },
     "upstream": {
-      "pending": "모든 환경 검사를 통과하면 업스트림 검색을 자동으로 시작합니다.",
+      "pending": "환경과 소스가 준비되면 업스트림 검색을 자동으로 시작합니다.",
       "needsRequest": "변경 요청 입력 대기 중",
       "needRequest": "변경할 기능 이름이나 구체적인 오류를 입력해 관련 업스트림 작업을 검색하세요.",
       "placeholder": "예: 메시지 스트림 깜박임 수정",
@@ -12330,8 +12357,6 @@
       "wait": "업스트림 기다리기",
       "personal": "개인 버전 제작 계속",
       "retry": "환경 재확인 및 검색",
-      "expand": "업스트림 결과 보기",
-      "collapse": "업스트림 결과 숨기기",
       "count": "관련 가능성이 있는 열린 Issue 또는 PR {{count}}개를 찾았습니다",
       "kind": {
         "issue": "이슈",
@@ -12349,7 +12374,7 @@
       },
       "decisionHint": {
         "wait": "이 과정은 중지되었습니다. 알림 구독이나 자동 업데이트는 설정되지 않았습니다.",
-        "personal": "선택을 이 카드에 기록했습니다. 소스 준비와 빌드는 아직 연결되지 않았으며 소스를 다운로드하거나 수정하지 않았습니다."
+        "personal": "선택이 기록되었습니다. Cindy가 소스 디렉터리에서 구현용 세션을 만들고 있습니다."
       },
       "failure": {
         "network": "GitHub에 연결할 수 없습니다. 네트워크를 확인하고 다시 시도하세요.",
@@ -12360,6 +12385,45 @@
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 환경 준비",
-    "stepUpstream": "2 · 업스트림 검색"
+    "stepUpstream": "3 · 업스트림 검색",
+    "stepSource": "2 · 소스 준비",
+    "source": {
+      "preparing": "소스를 준비하는 중",
+      "phase": {
+        "checking": "Git 및 소스 확인 중",
+        "cloning": "소스 다운로드 중",
+        "fetching": "저장소 새로 고침 중",
+        "checkingOut": "버전 전환 중"
+      },
+      "ready": "소스가 준비되었습니다",
+      "failed": "소스 준비 실패",
+      "cancelled": "소스 준비가 중지됨",
+      "errors": {
+        "unsupportedVersion": "현재 버전 형식은 지원되지 않습니다.",
+        "tagNotFound": "현재 버전에 필요한 태그를 찾지 못했습니다.",
+        "dirty": "소스 디렉터리에 커밋되지 않은 변경이 있습니다.",
+        "gitFailed": "Git으로 소스를 준비하지 못했습니다.",
+        "cancelled": "소스 준비가 중지되었습니다.",
+        "localCommits": "소스에 업스트림에 포함되지 않은 로컬 커밋 또는 스태시가 있습니다. 정리하기 전에 보관하거나 백업하세요.",
+        "environmentNotReady": "빌드 환경이 준비되지 않았습니다. 필요한 도구를 확인하세요.",
+        "gitUnavailable": "Git을 사용할 수 없습니다. 환경 카드에서 Git을 확인하고 설치한 후 다시 시도하세요."
+      },
+      "gitProgress": {
+        "counting": "개체 수 계산 중",
+        "compressing": "개체 압축 중",
+        "receiving": "개체 수신 중",
+        "resolving": "델타 분석 중",
+        "checkingOut": "파일 업데이트 중"
+      },
+      "missing": "아직 소스가 준비되지 않았습니다"
+    },
+    "code": {
+      "starting": "개인 버전 작업을 여는 중",
+      "started": "개인 버전 작업이 생성되었습니다",
+      "failed": "개인 버전 작업을 만들 수 없습니다",
+      "start": "개인 버전 만들기",
+      "open": "개인 버전 작업 열기",
+      "sendFailed": "요청을 보내지 못했습니다. 개인 버전 작업을 열어 다시 시도하세요"
+    }
   }
 }
