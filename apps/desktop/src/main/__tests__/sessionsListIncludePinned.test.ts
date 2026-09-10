@@ -174,7 +174,7 @@ function resolveReferencesHandler() {
 }
 
 describe('local-db:sessions:list includePinned', () => {
-  it('projects usage-history windows before stripping agent identity from the response', async () => {
+  it('preserves applied usage-history windows when stripping agent identity from the response', async () => {
     const resolveContextWindow = vi.fn((row: { agentKind?: string | null }) =>
       row.agentKind === 'codex' ? 272_000 : null,
     );
@@ -185,21 +185,21 @@ describe('local-db:sessions:list includePinned', () => {
       sessionRow('pi', { agentKind: 'pi', contextWindow: 872_000, contextTokens: 140_500 }),
     ]);
     const result = await handler({}, 20, 'all', { usageHistory: true });
-    expect(result[0]).toMatchObject({ contextWindow: 272_000, contextTokens: 140_500 });
+    expect(result[0]).toMatchObject({ contextWindow: 1_050_000, contextTokens: 140_500 });
     expect(result[1]).toMatchObject({ contextWindow: 872_000, contextTokens: 140_500 });
     expect(result[0]).not.toHaveProperty('agentKind');
     expect(result[1]).not.toHaveProperty('agentKind');
   });
 
   it.each(['local-db:sessions:get', 'local-db:sessions:list'])(
-    '%s projects historical context using the stored route without writing it',
+    '%s fills missing historical context using the stored route without writing it',
     async (channel) => {
       const resolveContextWindow = vi.fn(() => 272_000);
       registerSessionIpc(undefined, { resolveContextWindow });
       const handler = h.ipcHandle.mock.calls.find(([name]) => name === channel)![1];
       const saved = listRow('old-astra', {
         agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
-        contextTokens: 140_500, contextWindow: 1_050_000,
+        contextTokens: 140_500, contextWindow: 0,
       });
       h.queryResults.push([saved]);
       const result = channel.endsWith(':get')
@@ -209,7 +209,7 @@ describe('local-db:sessions:list includePinned', () => {
       expect(resolveContextWindow).toHaveBeenCalledWith(expect.objectContaining({
         agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
       }));
-      expect(saved.session.contextWindow).toBe(1_050_000);
+      expect(saved.session.contextWindow).toBe(0);
     },
   );
 

@@ -5958,7 +5958,7 @@ function ContextCapacityRing({
         ? 'var(--warning-fg)'
         : 'var(--msg-tool-card-chevron)';
 
-  const usedTokens = Math.min(contextTokens, contextWindow || Infinity);
+  const usedTokens = Math.max(0, contextTokens);
   const tooltipText =
     contextWindow > 0
       ? `Context — ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindow)} (${pct}%)`

@@ -129,6 +129,10 @@ const noopLogger: Logger = {
 };
 
 describe("Pi native settings", () => {
+  it.each([1_000, 32_000, 200_000])('uses budget %s for compaction without shrinking request capacity', (budget) => {
+    const settings = JSON.parse(buildPiSettingsJsonContent(200_000, 90, [], budget));
+    expect(200_000 - settings.compaction.reserveTokens).toBe(budget * 0.9);
+  });
   it("maps the configured percentage to Pi reserve tokens", () => {
     const retry = {
       enabled: true,
@@ -181,6 +185,24 @@ describe("PiAgent native auto-compaction ownership", () => {
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('keeps the applied small budget until native settings are reloaded', async () => {
+    let budget: number | null = 1_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => budget;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'small-budget', workingDir: cwd, model: 'm', providerId: 'xd' });
+    try {
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect((await handle.getContextUsage!()).maxTokens).toBe(1_000);
+      expect((await handle.getContextUsage!()).rawMaxTokens).toBe(200_000);
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(false);
+      budget = 32_000;
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
+      budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
+    } finally { await handle.close(); }
   });
 
   it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {

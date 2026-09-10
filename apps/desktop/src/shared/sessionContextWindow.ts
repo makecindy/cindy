@@ -56,10 +56,11 @@ export function resolveSessionContextWindow(
   );
 }
 
-/** Read-only projection: retain token counts and storage, refresh only the denominator. */
+/** Fill missing history metadata without replacing the budget applied to its recorded usage. */
 export function projectSessionContextWindow<
   T extends ContextWindowSession & { contextWindow: number },
 >(session: T, resolve?: (session: ContextWindowSession) => number | null): T {
+  if (Number.isFinite(session.contextWindow) && session.contextWindow > 0) return session;
   const window = resolve?.(session);
   return window && Number.isFinite(window) && window > 0 && window !== session.contextWindow
     ? { ...session, contextWindow: window }

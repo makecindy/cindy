@@ -443,7 +443,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       let handle: AgentSessionHandle | undefined;
       let nativeId: string | undefined;
       try {
-        for (const next of [80_000, 140_000, 60_000, null]) {
+        for (const next of [80_000, 1_000, 32_000, 1_000, 140_000, 60_000, null]) {
           limit = next;
           handle = await agent.startSession({
             sessionId: 'context-window-resume', workingDir, model: 'pi-test-model',
@@ -463,6 +463,14 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           await handle.send({ type: 'user', content: 'remember CONTEXT_HISTORY_CANARY' });
           await done;
           expect(events.some((event) => event.type === 'text')).toBe(true);
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+          // This is the real Pi request builder: a 1K compaction budget used to
+          // clamp max_tokens to 1, even for the very first short prompt.
+          for (const request of seenRequests.slice(before)) {
+            const body = JSON.parse(request.body);
+            expect(body.max_tokens).toBeGreaterThan(1);
+          }
+          expect(handle.getUsageSnapshot().contextWindow).toBe(next ?? 200_000);
           expect(seenRequests.slice(before).some((request) => request.body.includes('CONTEXT_HISTORY_CANARY'))).toBe(true);
           if (next !== 80_000) {
             const body = JSON.parse(seenRequests[before]!.body);

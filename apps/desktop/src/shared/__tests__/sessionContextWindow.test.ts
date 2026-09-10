@@ -71,16 +71,16 @@ describe('session context read projection', () => {
     expect(resolveVerifiedContextWindow(routes, 'codex', 'xd', model.id, 1_000_000)).toBe(272_000);
   });
 
-  it.each(['cc', 'claude-code'])(
-    'corrects %s history without mutating its stored snapshot',
+  it.each(['cc', 'claude-code', 'pi', 'codex'])(
+    'preserves the applied %s history budget when catalog or settings change',
     (agentKind) => {
-      const saved = { ...session, agentKind };
-      const result = projectSessionContextWindow(saved, (row) =>
-        resolveSessionContextWindow(catalog, row),
-      );
-      expect(result).toEqual({ ...saved, contextWindow: 272_000 });
-      expect(saved.contextWindow).toBe(1_050_000);
-      expect(Math.round((result.contextTokens / result.contextWindow) * 100)).toBe(52);
+      for (const contextWindow of [1_000, 32_000, 500_000, 1_050_000]) {
+        const saved = { ...session, agentKind, contextWindow };
+        expect(projectSessionContextWindow(saved, () => 272_000)).toBe(saved);
+      }
+      const unknown = { ...session, agentKind, contextWindow: 0 };
+      expect(projectSessionContextWindow(unknown, () => 32_000))
+        .toEqual({ ...unknown, contextWindow: 32_000 });
     },
   );
 
