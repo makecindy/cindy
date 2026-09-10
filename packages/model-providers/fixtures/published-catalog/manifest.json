@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "file": "valid-v1.json",
+      "valid": true,
+      "description": "Registry V1"
+    },
+    {
+      "file": "valid-v2.json",
+      "valid": true,
+      "description": "Registry V2"
+    },
+    {
+      "file": "valid-v3.json",
+      "valid": true,
+      "description": "Registry V3"
+    },
+    {
+      "file": "valid-v4.json",
+      "valid": true,
+      "description": "Registry V4"
+    },
+    {
+      "file": "valid-v5.json",
+      "valid": true,
+      "description": "Registry V5"
+    },
+    {
+      "file": "invalid-unsupported-locale.json",
+      "valid": false,
+      "description": "unsupported-locale"
+    },
+    {
+      "file": "invalid-invalid-product-default.json",
+      "valid": false,
+      "description": "invalid-product-default"
+    },
+    {
+      "file": "invalid-unresolved-preset-reference.json",
+      "valid": false,
+      "description": "unresolved-preset-reference"
+    },
+    {
+      "file": "invalid-unresolved-model-reference.json",
+      "valid": false,
+      "description": "unresolved-model-reference"
+    },
+    {
+      "file": "invalid-ambiguous-model-alias.json",
+      "valid": false,
+      "description": "ambiguous-model-alias"
+    },
+    {
+      "file": "invalid-unknown-top-level.json",
+      "valid": false,
+      "description": "unknown-top-level"
+    },
+    {
+      "file": "invalid-v4-new-field.json",
+      "valid": false,
+      "description": "v4-new-field"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "version": "catalog-1",
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "source": "builtin",
+      "agents": [
+        "codex"
+      ],
+      "auth": {
+        "method": "oauth"
+      },
+      "routing": {
+        "codex": {
+          "upstream": "https://api.example.com",
+          "authStrategy": "oauth-passthrough"
+        }
+      },
+      "models": {
+        "codex": []
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "example",
+      "name": "Example",
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://api.example.com/v1",
+          "models": [
+            {
+              "contextWindow": 1000000,
+              "maxOutputTokens": 64000,
+              "id": "test-model",
+              "name": "Test Model"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "modelRegistry": {
+    "schemaVersion": 4,
+    "updatedAt": "2026-09-10T00:00:00.000Z",
+    "baseModels": [
+      {
+        "id": "test-family",
+        "aliases": [],
+        "defaults": {
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000
+        }
+      }
+    ],
+    "models": [
+      {
+        "id": "test-model",
+        "modelRef": "test-family",
+        "name": "Test Model",
+        "status": "active",
+        "efforts": [
+          "low",
+          "high"
+        ],
+        "defaultEffort": "high",
+        "supportsFastMode": true,
+        "routes": [
+          {
+            "providerId": "openai",
+            "modelId": "test-model",
+            "agents": [
+              "codex"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

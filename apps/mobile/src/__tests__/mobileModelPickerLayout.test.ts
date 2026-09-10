@@ -15,7 +15,8 @@ const source = readFileSync(
 
 describe('MobileModelPickerList compact rows', () => {
   it('gives provider-aware model names a dedicated primary line', () => {
-    const modelName = source.indexOf('{row.model.displayName}');
+    const modelName = source.indexOf('{displayName}');
+    expect(source).toContain('const displayName = presentation?.name ?? row.model.displayName;');
     const metadata = source.indexOf(
       '{isSubscription || rowEffort || fastOn ? (',
       modelName,

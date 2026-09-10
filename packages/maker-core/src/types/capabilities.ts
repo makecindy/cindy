@@ -225,6 +225,9 @@ export interface MemoryCapability {
 }
 
 export interface ModelDescriptor {
+  defaultFast?: boolean;
+  /** Published editorial copy; never used to choose a wire model or infer capabilities. */
+  presentation?: import("@cindy/model-providers").ModelPresentation;
   id: string;
   displayName: string;
   description?: string;

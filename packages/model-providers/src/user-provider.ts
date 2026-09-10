@@ -1,8 +1,10 @@
+import { mergeModelPresentation } from "./modelPresentation.js";
 import { applyModelProductDefaults, resolveModelProductDefaults } from "./modelCatalogPolicy.js";
 import { providerMediaField } from "./providerMediaModels.js";
 import {
   expandedRegistryEntries,
-  resolveModelMetadata,
+  findBaseModel,
+  resolveModelMetadataWithSources as resolveModelMetadata,
   applyModelMetadata,
   pickModelMetadata,
   runtimeUserModelMetadata,
@@ -286,6 +288,7 @@ function toCatalogModel(
   agent: AgentKind,
   modelRegistry: ModelRegistry | null | undefined,
   providerDefaults?: ModelMetadata,
+  baseModelRef?: string,
 ): CatalogModel {
   // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
   // 字段缺省才走历史 fallback（Pi 空档 / 其它自定义 Provider 的 CUSTOM_EFFORTS）。
@@ -352,6 +355,8 @@ function toCatalogModel(
           pickModelMetadata(user),
           agent,
           providerDefaults,
+          "discovery",
+          baseModelRef,
         )
       : pickModelMetadata(user);
   return applyModelMetadata(model, resolved);
@@ -487,9 +492,17 @@ export function buildUserProvider(
           agent,
           options.modelRegistry,
           defaults,
+          followsPreset && sameRoute ? presetModel?.modelRef : undefined,
         );
       if (followsPreset && sameRoute && presetModel) {
-        const policy = presetModel.productDefaults ?? resolveModelProductDefaults(options.modelRegistry ?? undefined, preset!.id, m.id, agent);
+        const inherited = resolveModelProductDefaults(options.modelRegistry ?? undefined, preset!.id, m.id, agent);
+        const basePresentation = findBaseModel(options.modelRegistry ?? undefined, presetModel.modelRef ?? m.id)?.presentation;
+        const presentation = mergeModelPresentation(basePresentation,inherited?.presentation,presetModel.productDefaults?.presentation);
+        const policy = inherited || presetModel.productDefaults || presentation ? {
+          ...inherited,...presetModel.productDefaults,
+          perAgent:{...inherited?.perAgent,...presetModel.productDefaults?.perAgent},
+          ...(presentation ? {presentation} : {}),
+        } : undefined;
         if (policy) {
           const effective = { ...policy, ...policy.perAgent?.[agent] };
           // Explicit form edits are personal choices, not published defaults.

@@ -124,7 +124,7 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
     try {
       const url = new URL(explicit);
       if (url.pathname.endsWith("/api/model-catalog/catalog")) {
-        url.searchParams.set("registrySchemaVersion", "4");
+        url.searchParams.set("registrySchemaVersion", "5");
         return url.toString();
       }
     } catch {

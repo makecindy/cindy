@@ -1,3 +1,4 @@
+import { ModelFieldSources } from './ModelFieldSources';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
 /**
@@ -418,7 +419,7 @@ export function ModelAdvancedDrawer({
                   tabIndex={-1}
                   className="break-words text-15 font-medium text-[var(--text-primary)] outline-none"
                 >
-                  {localizedModelName(primaryModel.name, t)}
+                  {localizedModelName(primaryModel.name, t, undefined, primaryModel.presentation)}
                 </Dialog.Title>
                 <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
                   {provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name}
@@ -442,6 +443,7 @@ export function ModelAdvancedDrawer({
                   {' · '}{t(ctx.limit !== null ? 'settings.providers.models.advanced.personalWindow' : 'settings.providers.models.advanced.followCatalog')}
                 </p>
               )}
+              <ModelFieldSources model={primaryModel} contextLimit={ctx.limit} connected={provider.connected} suspended={provider.suspended === true} userProvider={provider.source === "user"} visible={isModelEnabled(primaryAgent, provider.id, primaryModel)} />
               <div className="grid gap-5 min-[760px]:grid-cols-2 min-[760px]:gap-6">
                 <div className="min-w-0">
                   {conversational && (
@@ -566,7 +568,7 @@ export function ModelAdvancedDrawer({
                                     );
                                   }
                                 }}
-                                aria-label={`${localizedModelName(primaryModel.name, t)} · ${AGENT_LABEL[agent]}`}
+                                aria-label={`${localizedModelName(primaryModel.name, t, undefined, primaryModel.presentation)} · ${AGENT_LABEL[agent]}`}
                               />
                             </span>
                           </div>

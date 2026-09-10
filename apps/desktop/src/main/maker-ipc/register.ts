@@ -5314,6 +5314,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 便于脱 Electron + 内存 db 单测。CRUD 成功后刷新 active-catalog 并广播 PROVIDER_CHANGED，
   // 让设置页列表 + 对话模型选择器（各 useProviders 实例）live 刷新。
   configureProviderModelAutoRefresh({
+    isActive: () => BrowserWindow.getAllWindows().some(window => !window.isDestroyed() && window.isFocused()) || maker.listActiveSessions().some(session => session.isTurnRunning()),
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getScopeKey: () => getActiveAppSession().generation,
     // 通知唯一出口是 active-catalog changedListener(capabilities 先对齐再广播);

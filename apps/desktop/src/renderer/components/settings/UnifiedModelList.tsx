@@ -887,7 +887,7 @@ export function UnifiedModelList({
             color: state.ready && (capability || anyOn) ? 'var(--settings-section-title)' : 'var(--text-tertiary)',
           }}
         >
-          {localizedModelName(rep.name, t)}
+          {localizedModelName(rep.name, t, undefined, rep.presentation)}
         </span>
         {/* 价格档与折扣紧跟模型名(不单独成列):这一列不是用来纵向比价的,
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
@@ -955,7 +955,7 @@ export function UnifiedModelList({
             disabled={!state.canSelect}
             checked={anyOn}
             onCheckedChange={() => toggleRow(row)}
-            aria-label={localizedModelName(rep.name, t)}
+            aria-label={localizedModelName(rep.name, t, undefined, rep.presentation)}
           />
         )}
       </div>
@@ -1309,7 +1309,7 @@ export function UnifiedModelList({
                             className="min-w-0 truncate text-14 font-medium"
                             style={{ color: 'var(--text-disabled)' }}
                           >
-                            {localizedModelName(rep.name, t)}
+                            {localizedModelName(rep.name, t, undefined, rep.presentation)}
                           </span>
                           {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
                           <span

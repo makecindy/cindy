@@ -1,3 +1,4 @@
+import { reportCatalogConsumption } from './catalog-consumption.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 /**
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
@@ -527,6 +528,8 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 无 LKG / 刷新失败时 active-catalog 才继续使用 server Catalog → bundled 救急。
         await loadXaiModelsFromDiskCache();
         void refreshXaiModelsFromHttp();
+        if (!source.url && capabilityEvidence === 'current' && authorityCatalog && getActiveCatalog().version === authorityCatalog.version)
+          reportCatalogConsumption(authorityCatalog);
         activeLoaded = true;
         return catalog;
       })
@@ -655,7 +658,10 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
             capabilityEvidence,
             unverifiedXdMediaKinds,
           });
-          return getActiveCatalog();
+          const assembled = getActiveCatalog();
+          if (!sourceConfig.url && source === 'remote' && capabilityEvidence === 'current' && authorityCatalog && assembled.version === authorityCatalog.version)
+            reportCatalogConsumption(authorityCatalog);
+          return assembled;
         }
         if (relation === 'invalid-incoming') {
           log.warn('model registry updatedAt is invalid; rejecting', {
@@ -684,6 +690,8 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();
+      if (!sourceConfig.url && source === 'remote' && capabilityEvidence === 'current' && authorityCatalog && activeCatalog.version === authorityCatalog.version)
+        reportCatalogConsumption(authorityCatalog);
       logModelPlaneWarnings();
       broadcastReferenceModelPricing();
       return activeCatalog;

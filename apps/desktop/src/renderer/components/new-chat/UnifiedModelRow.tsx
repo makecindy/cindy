@@ -75,8 +75,8 @@ export function UnifiedModelRow({
   onPaymentRequired?: () => void;
 }) {
   const { t } = useTranslation();
-  const displayName = localizedModelName(entry.displayName, t);
-  const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
+  const displayName = localizedModelName(entry.displayName, t, undefined, entry.presentation);
+  const description = localizedModelDescription({ id: entry.modelId, group: entry.group, presentation: entry.presentation }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);

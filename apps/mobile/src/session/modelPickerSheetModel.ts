@@ -1,3 +1,4 @@
+import { localizedModelPresentation } from '@cindy/model-providers';
 /**
  * modelPickerSheetModel —— 模型选择浮窗的视图状态机与派生纯逻辑(**纯逻辑,零 react-native**)。
  *
@@ -71,7 +72,7 @@ export function findOptionsTarget(
     return {
       model: row.model,
       provider: row.provider,
-      displayName: row.model.displayName,
+      displayName: localizedModelPresentation(row.model.presentation, i18n.resolvedLanguage ?? i18n.language)?.name ?? row.model.displayName,
       contextWindow: row.model.contextWindow,
     };
   }

@@ -1,4 +1,5 @@
 export interface MobileModelOption {
+  defaultFast?: boolean;
   id: string;
   label: string;
   description?: string;
@@ -361,6 +362,7 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
     effortDisplayNames,
     defaultEffort: readString(value.defaultEffort),
     supportsFastMode: value.supportsFastMode === true,
+    ...(typeof value.defaultFast === "boolean" ? { defaultFast: value.defaultFast && value.supportsFastMode === true } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(newSessionDefault.length > 0 ? { newSessionDefault } : {}),
   };

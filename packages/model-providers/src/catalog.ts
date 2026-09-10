@@ -1,3 +1,4 @@
+import { validPresetModelReferences } from "./modelCatalogPolicy.js";
 import { validModelProductDefaults } from "./modelCatalogPolicy.js";
 /**
  * 目录运行时校验(parseCatalog)+ presets 清洗排序。
@@ -559,6 +560,7 @@ function isValidPreset(v: unknown): v is ProviderPreset {
         return false;
       }
       if (!hasValidPresetReasoningCapability(agent, mm)) return false;
+      if (mm.modelRef !== undefined && (typeof mm.modelRef !== "string" || !mm.modelRef || mm.modelRef.length > 256)) return false;
       if (mm.productDefaults !== undefined && !validModelProductDefaults(mm.productDefaults)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
@@ -820,6 +822,7 @@ export function parseCatalog(input: string | unknown): Catalog {
     assert(registry.ok, registry.ok ? '' : registry.error);
     catalog.modelRegistry = registry.value;
   }
+  assert(validPresetModelReferences(presets,catalog.modelRegistry), "catalog preset modelRef is unresolved or requires Registry V5");
   // Validate authored lists before projection so malformed input cannot be repaired or crash mapping.
   for (const provider of catalog.providers) {
     for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const)

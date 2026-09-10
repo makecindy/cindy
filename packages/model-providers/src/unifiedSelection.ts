@@ -527,6 +527,7 @@ export function resolveAgentCapability(
 
 /** 联合列表的一行:一个逻辑模型 (provider, 归一化 modelId),横跨它能用的所有引擎。 */
 export interface UnifiedModelEntry {
+  presentation?: CatalogModel["presentation"];
   providerId: string;
   /** ★**归一化 id**(行的稳定身份 / override / 收藏 key)。发请求请用 `capabilities[agent].wireModelId`。 */
   modelId: string;
@@ -816,6 +817,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       modelId: draft.keyModelId,
       displayName: display?.name ?? draft.keyModelId,
       ...(display?.description !== undefined ? { description: display.description } : {}),
+      ...(display?.presentation ? { presentation: display.presentation } : {}),
       ...(display?.group !== undefined ? { group: display.group } : {}),
       ...(display?.sortOrder !== undefined ? { sortOrder: display.sortOrder } : {}),
       ...(display?.icon !== undefined ? { icon: display.icon } : {}),

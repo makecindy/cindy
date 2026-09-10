@@ -6,7 +6,7 @@ import {
 import {
   applyModelProductDefaults,
   resolveModelProductDefaults,
-  resolveModelMetadata,
+  resolveModelMetadataWithSources as resolveModelMetadata,
   catalogModelMetadata,
   applyModelMetadata,
   pickModelMetadata,
@@ -842,7 +842,7 @@ function assembleRoot(
       return {
         ...applyModelMetadata(
           model,
-          resolveModelMetadata(registry, providerId, model.id, metadata, undefined, agent),
+          resolveModelMetadata(registry, providerId, model.id, metadata, undefined, agent, undefined, upstream?.discoveredMetadata ? "discovery" : "fallback"),
         ),
         ...(metadata ? { discoveredMetadata: metadata } : {}),
       };
@@ -880,6 +880,8 @@ function applyLayeredConsumer(
           model.discoveredMetadata,
           undefined,
           agent,
+          undefined,
+          model.fieldSources ? "fallback" : "discovery",
         ),
       )
     : overlaid;
@@ -1597,6 +1599,8 @@ function computeMerged(): Catalog {
                 model.discoveredMetadata ?? catalogModelMetadata(model),
                 undefined,
                 agent,
+                undefined,
+                model.discoveredMetadata ? "discovery" : "fallback",
               ),
             );
           }
@@ -1652,7 +1656,7 @@ function computeMerged(): Catalog {
                 model.userModelConfig
                   ? runtimeUserModelMetadata(model.userModelConfig)
                   : {}),
-              }),
+              }, undefined, undefined, "fallback"),
             );
           }
           return applyExistingModelLocalPatch(

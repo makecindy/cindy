@@ -164,6 +164,7 @@ export function ModelOptionsSheetView({
   disabled = false,
   testID = "modelOptions",
 }: ModelOptionsSheetViewProps) {
+  const [showSources, setShowSources] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState(false);
   const styles = useThemedStyles(makeStyles);
@@ -227,6 +228,13 @@ export function ModelOptionsSheetView({
 
   return (
     <View testID={testID}>
+      {model.fieldSources && <View style={styles.headerBlock}>
+        <Pressable accessibilityRole="button" accessibilityState={{expanded:showSources}} onPress={() => setShowSources(value => !value)} style={{minHeight:44,justifyContent:'center'}}><Text style={styles.metaLine}>{t('models.picker.provenance.title')}</Text></Pressable>
+        {showSources && <>
+          <Text style={styles.metaLine}>{t('models.picker.provenance.hint')}</Text>
+          {['name','description','presentation','mode','modalities','group','officialDocs','contextWindow','maxOutputTokens','efforts','defaultEffort','supportsFastMode','supportsImageInput','defaultFast','defaultEnabled','preferredAgent'].filter(field => model.fieldSources?.[field]?.length).map(field => <Text key={field} style={styles.metaLine}>{t(`models.picker.provenance.fields.${field}`)}: {model.fieldSources![field].map(record => `${t(`models.picker.provenance.sources.${record.source}`)}: ${record.value == null ? '—' : typeof record.value === 'object' ? JSON.stringify(record.value) : String(record.value)}`).join(' → ')}</Text>)}
+        </>}
+      </View>}
       {metaLine || price ? (
         <View style={styles.headerBlock}>
           {metaLine ? (

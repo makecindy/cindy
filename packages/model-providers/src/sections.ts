@@ -30,6 +30,9 @@ export function isModelVisible(
 
 /** 「按供应商分段」里每行模型的展示形状(从 catalog 派生,字段够渲染 + effort 配置用)。 */
 export interface SectionModel {
+  presentation?: CatalogModel["presentation"];
+  fieldSources?: CatalogModel["fieldSources"];
+  catalogDefaults?: CatalogModel["catalogDefaults"];
   defaultFast?: boolean;
   id: string;
   displayName: string;
@@ -177,6 +180,9 @@ export function buildProviderSections(args: {
     models: models.map((m) => {
       const sm: SectionModel = {
         id: m.id,
+        presentation: m.presentation,
+        fieldSources: m.fieldSources,
+        catalogDefaults: m.catalogDefaults,
         displayName: m.name,
         efforts: m.efforts,
         ...(m.displayEfforts ? { displayEfforts: m.displayEfforts } : {}),

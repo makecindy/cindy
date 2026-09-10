@@ -438,3 +438,25 @@ describe('app focus auto-refresh tracker', () => {
     expect(onMeaningfulForeground).not.toHaveBeenCalled();
   });
 });
+
+it('polls only public configuration while active, at five minutes even after a recent UI hint', async () => {
+  vi.useFakeTimers();
+  try {
+    const { configureProviderModelAutoRefresh, requestProviderModelAutoRefresh, PUBLIC_MODEL_CATALOG_REFRESH_MS } = await import('../provider-model-auto-refresh.js');
+    let active = false;
+    const listProviders = vi.fn(async () => []), refreshCatalog = vi.fn(async () => undefined), refreshProvider = vi.fn(async () => undefined);
+    configureProviderModelAutoRefresh({listProviders,refreshCatalog,refreshProvider,isActive:() => active,log:{debug:vi.fn(),warn:vi.fn()}});
+    await vi.advanceTimersByTimeAsync(PUBLIC_MODEL_CATALOG_REFRESH_MS);
+    expect(refreshCatalog).not.toHaveBeenCalled();
+    active = true;
+    await vi.advanceTimersByTimeAsync(PUBLIC_MODEL_CATALOG_REFRESH_MS-1000);
+    await requestProviderModelAutoRefresh('model-selector-open');
+    expect(refreshCatalog).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refreshCatalog).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(PUBLIC_MODEL_CATALOG_REFRESH_MS);
+    expect(refreshCatalog).toHaveBeenCalledTimes(3);
+    expect(listProviders).toHaveBeenCalledTimes(1);
+    expect(refreshProvider).not.toHaveBeenCalled();
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});

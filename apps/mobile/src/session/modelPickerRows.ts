@@ -32,6 +32,8 @@ export function budgetDisabledHint(): string {
 
 /** 行/展开区消费的最小模型形状(SectionModel 与 capabilities MobileModelOption 都满足)。 */
 export interface PickerRowModel {
+  fieldSources?: import("@cindy/model-providers").CatalogModel["fieldSources"];
+  catalogDefaults?: import("@cindy/model-providers").CatalogModel["catalogDefaults"];
   defaultFast?: boolean;
   id: string;
   efforts: readonly string[];

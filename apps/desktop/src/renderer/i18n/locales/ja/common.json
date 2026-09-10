@@ -1937,7 +1937,46 @@
           "contextLimitGptHint": "GPT は既定で最大 272K を使用します。ここで 1M に変更できます。Codex はウィンドウと自動圧縮のしきい値を同時に適用し、5% の余裕を確保します。実際の容量はモデルサービスに依存します。",
           "catalogRevision": "公開済み設定：{{revision}}",
           "personalWindow": "設定したコンテキスト上限を使用中",
-          "followCatalog": "公開済みの既定値を使用中"
+          "followCatalog": "公開済みの既定値を使用中",
+          "provenance": {
+            "title": "項目の情報源",
+            "hint": "左から右へ、後の値が前の値を上書きします。モデルの既定設定を表示します。既存タスクに保存された選択は維持されます。",
+            "noTrace": "このホストは項目の情報源を提供していません。",
+            "fields": {
+              "name": "名前",
+              "description": "説明",
+              "contextWindow": "コンテキスト枠",
+              "maxOutputTokens": "最大出力",
+              "efforts": "推論強度",
+              "defaultEffort": "既定の推論",
+              "supportsFastMode": "Fast 対応",
+              "supportsImageInput": "画像入力",
+              "defaultFast": "既定の Fast",
+              "defaultEnabled": "既定の表示",
+              "preferredAgent": "推奨エンジン", "mode": "モデルの種類", "modalities": "入力 / 出力", "group": "グループ", "officialDocs": "公式ドキュメント", "presentation": "公開された名前と説明"
+            },
+            "sources": {
+              "public": "共通モデル",
+              "provider": "プロバイダー既定",
+              "access": "接続既定",
+              "engine": "エンジン",
+              "discovery": "プロバイダー応答",
+              "verified": "検証済み修正",
+              "user": "個人設定",
+              "product": "公開済み既定",
+              "fallback": "内蔵の代替",
+              "constraint": "機能の制限"
+            },
+            "reasons": {
+              "disconnected": "プロバイダーは未接続です。",
+              "suspended": "プロバイダーは無効です。",
+              "disabled": "モデルは新しいリクエストに使用できません。",
+              "retired": "提供終了のため新しいリクエストには使用できません。",
+              "requires_payment": "アクセスにはサブスクリプションまたは支払いが必要です。",
+              "non_chat": "このモデルはエージェントの会話に対応していません。",
+              "hidden": "一覧から非表示です。明示的な呼び出しは無効化されません。"
+            }
+          }
         },
         "kindFilter": {
           "all": "すべて",

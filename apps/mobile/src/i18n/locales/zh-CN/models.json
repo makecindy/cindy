@@ -22,7 +22,46 @@
     "priceAmounts": "输入 {{input}} · 输出 {{output}}",
     "discountedVsStandard": "折扣中，较标准价省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
-    "fastTag": "快速"
+    "fastTag": "快速",
+    "provenance": {
+      "title": "字段来源",
+      "hint": "从左到右，后面的值覆盖前面的值。这里展示该模型的默认配置；已有任务中保存的选择保持不变。",
+      "noTrace": "当前主机未提供字段来源明细。",
+      "fields": {
+        "name": "名称",
+        "description": "简介",
+        "contextWindow": "使用窗口",
+        "maxOutputTokens": "最大输出",
+        "efforts": "思考档位",
+        "defaultEffort": "默认思考档位",
+        "supportsFastMode": "Fast 能力",
+        "supportsImageInput": "图片输入",
+        "defaultFast": "默认 Fast",
+        "defaultEnabled": "默认显示",
+        "preferredAgent": "默认引擎", "mode": "模型类型", "modalities": "输入 / 输出", "group": "分组", "officialDocs": "官方文档", "presentation": "发布的名称与简介"
+      },
+      "sources": {
+        "public": "共用型号",
+        "provider": "供应商默认",
+        "access": "接入默认",
+        "engine": "引擎差异",
+        "discovery": "供应商实报",
+        "verified": "已核实修正",
+        "user": "个人设置",
+        "product": "已发布默认",
+        "fallback": "内置兜底",
+        "constraint": "能力限制"
+      },
+      "reasons": {
+        "disconnected": "供应商尚未连接。",
+        "suspended": "供应商已停用。",
+        "disabled": "模型已停用，不能用于新请求。",
+        "retired": "模型已停止使用，不能发起新请求。",
+        "requires_payment": "当前账号尚无访问权限，需要订阅或付费。",
+        "non_chat": "此模型不支持 Agent 对话。",
+        "hidden": "已从清单隐藏；隐藏不会禁止明确指定调用。"
+      }
+    }
   },
   "options": {
     "fastMode": "快速模式",

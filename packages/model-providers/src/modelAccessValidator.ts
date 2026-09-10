@@ -1,3 +1,4 @@
+import { validModelPresentation } from "./modelPresentation.js";
 import { validModelProductDefaults } from "./modelCatalogPolicy.js";
 import {
   validModelMetadata,
@@ -1312,7 +1313,8 @@ export function parseModelRegistry(
     for (const base of value.baseModels) {
       if (
         !isPlainObject(base) ||
-        unknownFieldError(base, ["id", "aliases", "defaults"], "baseModel") ||
+        unknownFieldError(base, ["id", "aliases", "defaults", ...(value.schemaVersion === 5 ? ["presentation"] : [])], "baseModel") ||
+        (base.presentation !== undefined && !validModelPresentation(base.presentation)) ||
         typeof base.id !== "string" ||
         !base.id ||
         base.id.length > 256 ||

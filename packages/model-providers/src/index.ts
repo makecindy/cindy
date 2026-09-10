@@ -293,3 +293,14 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { applyModelProductDefaults, resolveModelProductDefaults } from "./modelCatalogPolicy.js";
 export type { ModelProductDefaults } from "./modelCatalogPolicy.js";
+
+export { localizedModelPresentation, mergeModelPresentation, MODEL_PRESENTATION_LOCALES } from "./modelPresentation.js";
+export type { ModelPresentation } from "./modelPresentation.js";
+
+export { resolveModelMetadataWithSources } from "./modelMetadataLayers.js";
+export { appendModelFieldSources } from "./modelFieldSources.js";
+export type { ModelFieldSources, ModelFieldSource } from "./modelFieldSources.js";
+
+export { modelNewRouteBlockReason } from "./classification.js";
+
+export { modelDescriptionKey } from "./legacyModelDescriptions.js";

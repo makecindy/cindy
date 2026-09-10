@@ -1,3 +1,9 @@
+import {
+  appendModelFieldSources,
+  type ModelFieldSources,
+  type ModelFieldSource,
+} from "./modelFieldSources.js";
+import type { ModelPresentation } from "./modelPresentation.js";
 import type { CatalogModel } from "./types.js";
 import type {
   ModelRegistry,
@@ -22,6 +28,7 @@ export interface ModelMetadata {
   supportsImageInput?: boolean;
 }
 export interface BaseModel {
+  presentation?: ModelPresentation;
   id: string;
   aliases: string[];
   defaults: ModelMetadata;
@@ -145,7 +152,7 @@ export function registryEntryDefaults(
       : undefined,
   );
 }
-export function resolveModelMetadata(
+function resolveMetadata(
   registry: ModelRegistry | undefined,
   providerId: string,
   modelId: string,
@@ -153,7 +160,9 @@ export function resolveModelMetadata(
   user?: ModelMetadata,
   agent?: string,
   providerDefaults?: ModelMetadata,
-): ModelMetadata {
+  liveSource: ModelFieldSource = "discovery",
+  baseModelRef?: string,
+): { metadata: ModelMetadata; fieldSources: ModelFieldSources } {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
     ids.push(modelId.slice(8));
@@ -176,8 +185,19 @@ export function resolveModelMetadata(
           .map((route) => ({ entry, route })),
       ) ?? [],
   )[0];
-  const defaults =
-    matched && registry
+  const defaults = baseModelRef
+    ? mergeModelMetadata(
+        presetBaseMetadata(registry, baseModelRef, agent ?? ""),
+        providerDefaults,
+        matched?.entry,
+        matched?.route.defaults,
+        agent
+          ? matched?.entry.perAgent?.[
+              agent as keyof NonNullable<ModelRegistryEntry["perAgent"]>
+            ]
+          : undefined,
+      )
+    : matched && registry
       ? registryEntryDefaults(
           registry,
           matched.entry,
@@ -195,6 +215,43 @@ export function resolveModelMetadata(
     matched?.route.forceOverrides,
     user,
   );
+  let fieldSources: ModelFieldSources = {};
+  const add = (
+    value: ModelMetadata | undefined,
+    source: ModelFieldSource,
+    details?: { reason?: string; verifiedAt?: string },
+  ) => {
+    fieldSources = appendModelFieldSources(
+      fieldSources,
+      pickModelMetadata(value),
+      source,
+      details,
+    );
+  };
+  add(
+    baseModelRef
+      ? presetBaseMetadata(registry, baseModelRef, agent ?? "")
+      : findBaseModel(registry, matched?.entry.modelRef ?? modelId)?.defaults,
+    "public",
+  );
+  add(providerDefaults, "provider");
+  add(matched?.entry, "access");
+  add(matched?.route.defaults, "access");
+  add(
+    agent
+      ? matched?.entry.perAgent?.[
+          agent as keyof NonNullable<ModelRegistryEntry["perAgent"]>
+        ]
+      : undefined,
+    "engine",
+  );
+  add(live, liveSource);
+  add(matched?.route.forceOverrides, "verified", {
+    reason: matched?.route.overrideReason,
+    verifiedAt: matched?.route.overrideVerifiedAt,
+  });
+  add(user, "user");
+  const requestedEffort = result.defaultEffort;
   if (result.efforts?.length === 0) result.defaultEffort = null;
   else if (
     result.defaultEffort != null &&
@@ -215,7 +272,20 @@ export function resolveModelMetadata(
       supported[0] ??
       null;
   }
-  return result;
+  if (result.defaultEffort !== requestedEffort)
+    add({ defaultEffort: result.defaultEffort }, "constraint");
+  return { metadata: result, fieldSources };
+}
+export function resolveModelMetadata(
+  ...args: Parameters<typeof resolveMetadata>
+): ModelMetadata {
+  return resolveMetadata(...args).metadata;
+}
+export function resolveModelMetadataWithSources(
+  ...args: Parameters<typeof resolveMetadata>
+): ModelMetadata & { fieldSources: ModelFieldSources } {
+  const result = resolveMetadata(...args);
+  return { ...result.metadata, fieldSources: result.fieldSources };
 }
 
 /** Legacy consumers receive fully expanded entries without losing saved IDs or routes. */
@@ -348,17 +418,49 @@ export function catalogModelMetadata(
 }
 export function applyModelMetadata(
   model: CatalogModel,
-  metadata: ModelMetadata,
+  metadata: ModelMetadata & { fieldSources?: ModelFieldSources },
 ): CatalogModel {
-  const { maxOutputTokens, ...fields } = metadata;
+  const { maxOutputTokens, fieldSources, ...fields } = metadata;
   const result = {
     ...model,
     ...fields,
+    ...(fieldSources
+      ? {
+          fieldSources: {
+            ...model.fieldSources,
+            ...Object.fromEntries(
+              Object.entries(fieldSources).map(([field, records]) => [
+                field,
+                records
+                  .flatMap((record) =>
+                    record.source === "fallback" && model.fieldSources?.[field]
+                      ? model.fieldSources[field]
+                      : [record],
+                  )
+                  .filter(
+                    (record, index, history) =>
+                      history.findLastIndex(
+                        (item) => item.source === record.source,
+                      ) === index,
+                  ),
+              ]),
+            ),
+          },
+        }
+      : {}),
     ...(metadata.contextWindow !== undefined
       ? { contextWindowVerified: true }
       : {}),
     ...(maxOutputTokens !== undefined ? { maxOutput: maxOutputTokens } : {}),
   };
+  if (fieldSources?.name?.at(-1)?.source === "user" && result.presentation) {
+    result.presentation = Object.fromEntries(
+      Object.entries(result.presentation).map(([locale, copy]) => [
+        locale,
+        { description: copy.description },
+      ]),
+    );
+  }
   if (
     result.efforts.length === 0 ||
     (result.defaultEffort != null &&
@@ -429,4 +531,21 @@ export function runtimeUserModelMetadata(
       ? { defaultEffort: m.reasoningDefaultEffort }
       : {}),
   });
+}
+
+export function presetBaseMetadata(
+  registry: ModelRegistry | undefined,
+  reference: string | undefined,
+  agent: string,
+): ModelMetadata | undefined {
+  if (!reference) return undefined;
+  const value = findBaseModel(registry, reference)?.defaults;
+  if (!value || agent !== "pi") return value;
+  const {
+    efforts: _efforts,
+    defaultEffort: _defaultEffort,
+    supportsFastMode: _fast,
+    ...facts
+  } = value;
+  return facts;
 }

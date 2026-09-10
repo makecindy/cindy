@@ -405,12 +405,18 @@ export function isModelSelectableForNewRoute(
   },
   opts?: { userProvider?: boolean },
 ): boolean {
-  return (
-    model.disabled !== true &&
-    model.status !== 'retired' &&
-    model.availability !== 'requires_payment' &&
-    isAgentSelectableModel(model, opts)
-  );
+  return modelNewRouteBlockReason(model, opts) === null;
+}
+
+/** The same reason is used by new-route admission and configuration diagnostics. Hidden is a display preference. */
+export function modelNewRouteBlockReason(
+  model: {id:string;group?:string;mode?:string;disabled?:boolean;status?:string;availability?:'available'|'requires_payment'},
+  opts?: {userProvider?:boolean},
+): 'disabled' | 'retired' | 'requires_payment' | 'non_chat' | null {
+  if (model.disabled === true) return 'disabled';
+  if (model.status === 'retired') return 'retired';
+  if (model.availability === 'requires_payment') return 'requires_payment';
+  return isAgentSelectableModel(model,opts) ? null : 'non_chat';
 }
 
 /** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */

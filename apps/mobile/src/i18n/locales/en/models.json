@@ -22,7 +22,46 @@
     "priceAmounts": "Input {{input}} · Output {{output}}",
     "discountedVsStandard": "Discounted · {{percent}}% off standard",
     "contextSuffix": "{{size}} context",
-    "fastTag": "Fast"
+    "fastTag": "Fast",
+    "provenance": {
+      "title": "Field sources",
+      "hint": "Read left to right; later values override earlier values. These are the defaults for this model. Saved task choices remain unchanged.",
+      "noTrace": "This host has no field source details.",
+      "fields": {
+        "name": "Name",
+        "description": "Description",
+        "contextWindow": "Context window",
+        "maxOutputTokens": "Maximum output",
+        "efforts": "Reasoning levels",
+        "defaultEffort": "Default reasoning",
+        "supportsFastMode": "Fast support",
+        "supportsImageInput": "Image input",
+        "defaultFast": "Default Fast",
+        "defaultEnabled": "Default visibility",
+        "preferredAgent": "Preferred engine", "mode": "Model type", "modalities": "Input / output", "group": "Group", "officialDocs": "Official documentation", "presentation": "Published name and description"
+      },
+      "sources": {
+        "public": "Shared model",
+        "provider": "Provider defaults",
+        "access": "Access defaults",
+        "engine": "Engine",
+        "discovery": "Provider response",
+        "verified": "Verified correction",
+        "user": "Personal setting",
+        "product": "Published defaults",
+        "fallback": "Installed fallback",
+        "constraint": "Capability limit"
+      },
+      "reasons": {
+        "disconnected": "Provider is disconnected.",
+        "suspended": "Provider is disabled.",
+        "disabled": "Model is disabled for new requests.",
+        "retired": "Model is retired; new requests are not allowed.",
+        "requires_payment": "Access requires a subscription or payment.",
+        "non_chat": "This model does not support agent conversations.",
+        "hidden": "Hidden from the list; hiding does not disable explicit invocation."
+      }
+    }
   },
   "options": {
     "fastMode": "Fast Mode",
