@@ -15,6 +15,7 @@ import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
 import { EnvCheckProvider, EnvCheckGuard } from '@/contexts/EnvCheckContext';
 import { WorktreeProvider } from '@/contexts/WorktreeContext';
 import { PrRefsProvider } from '@/contexts/PrRefsContext';
+import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SplashScreen } from '@/components/splash/SplashScreen';
 import { LoginFirstLaunchLightGateBridge } from '@/components/login/LoginFirstLaunchLightGateBridge';
 import { LoginBrandStage } from '@/components/login/LoginBrandStage';
@@ -131,7 +132,11 @@ function MakerBootstrap() {
 function OwnerScopedRouter() {
   const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
   const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
-  return <RouterProvider key={ownerKey} router={router} />;
+  return (
+    <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
+      <RouterProvider key={ownerKey} router={router} />
+    </MainViewHistoryProvider>
+  );
 }
 
 export function App() {

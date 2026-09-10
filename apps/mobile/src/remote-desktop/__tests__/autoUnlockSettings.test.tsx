@@ -21,8 +21,10 @@ const fixture = vi.hoisted(() => ({
   openLink: vi.fn(),
   ensure: vi.fn(),
   close: vi.fn(),
+  alert: vi.fn(),
 }));
 vi.mock("react-native", () => ({
+  Alert: { alert: fixture.alert },
   Platform: {
     get OS() {
       return fixture.platform;
@@ -60,8 +62,8 @@ vi.mock("../../../modules/cindy-remote-credentials/src", () => ({
     beginUnlock: vi.fn(),
   },
 }));
-vi.mock("../credentialSession", () => ({
-  credentialErrorKey: () => "credentialCancelled",
+vi.mock("../credentialSession", async (original) => ({
+  ...(await original<typeof import("../credentialSession")>()),
   RemoteDesktopCredentialSession: class {
     ensure = fixture.ensure;
     close = fixture.close;
@@ -99,6 +101,42 @@ it("does not perform any network or password operation when automatic unlock is 
   await act(async () => value.maybeUnlock());
   expect(fixture.invoke).not.toHaveBeenCalled();
   expect(fixture.ensure).not.toHaveBeenCalled();
+});
+it("shows an actionable signing error immediately when enabling automatic unlock fails", async () => {
+  fixture.invoke.mockRejectedValueOnce(
+    new Error("CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED private-test-detail"),
+  );
+  await act(async () => value.onAutoUnlock(true));
+  expect(fixture.alert).toHaveBeenCalledWith(
+    "remoteDesktop.autoUnlock",
+    "remoteDesktop.credentialSigningRequired",
+  );
+  expect(value.notice).toBe("remoteDesktop.credentialSigningRequired");
+  expect(value.autoUnlock).toBe(false);
+  expect(JSON.stringify(fixture.alert.mock.calls)).not.toContain(
+    "private-test-detail",
+  );
+});
+it("does not turn automatic retries into modal alerts", async () => {
+  fixture.settings.autoUnlock = true;
+  fixture.invoke
+    .mockResolvedValueOnce({ version: 1, state: "locked" })
+    .mockRejectedValueOnce(
+      new Error("CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED"),
+    );
+  await act(async () => value.maybeUnlock());
+  expect(value.notice).toBe("remoteDesktop.credentialSigningRequired");
+  expect(fixture.alert).not.toHaveBeenCalled();
+});
+it("shows Face ID setting failures without exposing native error details", async () => {
+  fixture.biometric.mockRejectedValueOnce(
+    new Error("native private-test-detail"),
+  );
+  await act(async () => value.onBiometricVerification(true));
+  expect(fixture.alert).toHaveBeenCalledWith(
+    "remoteDesktop.faceIdVerification",
+    "remoteDesktop.autoUnlockUnavailable",
+  );
 });
 it.each(["win32", "linux", undefined])(
   "does not access credentials for unsupported host %s",

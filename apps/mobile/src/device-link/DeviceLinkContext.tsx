@@ -145,6 +145,7 @@ import {
   schedulePresenceWipeTimer,
   updatePresenceAvailability,
 } from '@/device-link/presenceRecovery';
+import { createOfflineMirrorWipeQueue } from '@/device-link/offlineMirrorWipeQueue';
 import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
@@ -1950,16 +1951,24 @@ function requireClient(client: DeviceLinkClient | null): DeviceLinkClient {
   return client;
 }
 
-function markOfflineDeviceMirror(deviceId: string): void {
+function markOfflineDeviceMirrors(deviceIds: readonly string[]): void {
   // 普通离线只清依赖在线连接的 live 投影,保留 session/messages。这样用户切回
   // 刚看过的会话时先看到 last-known 内容,恢复后 marker 失效会触发后台窗口对账。
-  remoteSessionStore.markDeviceOffline(deviceId);
-  invalidateScheduleIndexForDevice(deviceId);
-  remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
-  evictDeviceProviders(deviceId);
-  evictDeviceModelMeta(deviceId);
-  evictAgentCapabilitiesForDevice(deviceId);
-  evictComposerPaletteCacheForDevice(deviceId);
+  // 批量入口:同一波离线两个 store 各 notify 一次,而不是每台各 notify 一轮——
+  // 逐台通知时设备数超过 React 嵌套更新上限即致命退出(2026-09-10)。
+  remoteSessionStore.markDevicesOffline(deviceIds);
+  for (const deviceId of deviceIds) {
+    invalidateScheduleIndexForDevice(deviceId);
+    evictDeviceProviders(deviceId);
+    evictDeviceModelMeta(deviceId);
+    evictAgentCapabilitiesForDevice(deviceId);
+    evictComposerPaletteCacheForDevice(deviceId);
+  }
+  remoteScheduleEventStore.invalidateDeviceMirrors(deviceIds);
+}
+
+function markOfflineDeviceMirror(deviceId: string): void {
+  markOfflineDeviceMirrors([deviceId]);
 }
 
 function wipeUnavailableDeviceMirror(deviceId: string): void {
@@ -1978,12 +1987,16 @@ function wipeUnavailableDeviceMirror(deviceId: string): void {
   evictComposerPaletteCacheForDevice(deviceId);
 }
 
+// 离线 wipe 的通知合并:同一 task 内到期/调度的多台设备收拢成一次批量清理。
+// 逐台通知时设备数超过 React 嵌套更新上限即致命退出(2026-09-10 Android)。
+const offlineMirrorWipeQueue = createOfflineMirrorWipeQueue(markOfflineDeviceMirrors);
+
 const basePresenceWipeTimerDeps = {
   now: Date.now,
   setTimer: (callback: () => void, delayMs: number) =>
     setTimeout(callback, delayMs),
   clearTimer: clearTimeout,
-  wipe: markOfflineDeviceMirror,
+  wipe: offlineMirrorWipeQueue.enqueue,
 };
 
 function scheduleUnavailableDeviceMirrorWipe(

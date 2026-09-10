@@ -92,6 +92,28 @@ describe('remote schedule event store', () => {
     off();
   });
 
+  it.each([40, 80, 100])('batch-invalidates %i devices with a single notification', (count) => {
+    const sub = vi.fn();
+    const off = remoteScheduleEventStore.subscribe(sub);
+    const deviceIds = Array.from({ length: count }, (_, i) => `wave-dev-${i}`);
+
+    remoteScheduleEventStore.invalidateDeviceMirrors(deviceIds);
+
+    // 整波只 notify 一轮,而不是逐台 N 轮——逐台通知在设备数超过 React 嵌套
+    // 更新上限时致命退出(2026-09-10 Android 冷启动,40/80 台隔离复现)。
+    expect(sub).toHaveBeenCalledTimes(1);
+    const snapshot = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    expect(snapshot.size).toBe(count);
+    for (const deviceId of deviceIds) expect(snapshot.get(deviceId)).toBe(1);
+
+    // 合并只在单波内:另起一波(第二次批量失效)各自再 notify 一轮。
+    remoteScheduleEventStore.invalidateDeviceMirrors(deviceIds);
+    expect(sub).toHaveBeenCalledTimes(2);
+    expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot().get('wave-dev-0')).toBe(2);
+
+    off();
+  });
+
   it('projects run lifecycle and read events into targeted refresh versions', () => {
     remoteScheduleEventStore.apply('dev-1', { type: 'fired', scheduleId: 'sched-1', runId: 'run-1' });
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({

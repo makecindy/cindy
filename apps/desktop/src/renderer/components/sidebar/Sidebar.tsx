@@ -229,7 +229,11 @@ export function Sidebar({
               完全隐藏态 w-0 自然裁掉。 */}
             {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
               对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
-            {!isRail && <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />}
+            {isRail ? (
+              <SidebarTopNav section="rail" />
+            ) : (
+              <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />
+            )}
 
             {/* Upper: feature-injected content slot.
               The current Feature Layout injects either an expanded or collapsed

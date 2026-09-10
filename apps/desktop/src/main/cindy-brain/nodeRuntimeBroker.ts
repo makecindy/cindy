@@ -103,6 +103,8 @@ export interface NodeWorkerProcess {
    * 观测的 utility-process-spawned。
    */
   onStartupObservation?(listener: (observation: NodeWorkerStartupObservation) => void): void;
+  /** Diagnostic-only adapter facts; absent on test/custom process implementations. */
+  readStartupState?(): NodeWorkerStartupState;
   /** 订阅 worker 引导层就绪后经 parentPort 上行的控制帧(代启子进程用;可选)。 */
   onControl?(listener: (message: unknown) => void): void;
   /** 给 worker 引导层下行一条控制帧(代启结果/子进程输出等;可选)。 */
@@ -114,6 +116,13 @@ export type NodeWorkerStartupStage = 'utility-process-spawned' | 'parent-port-re
 export interface NodeWorkerStartupObservation {
   stage: NodeWorkerStartupStage;
   pid?: number;
+}
+
+/** Main-only facts sampled at a failed startup deadline; never gate readiness. */
+export interface NodeWorkerStartupState {
+  messageCount: number;
+  readySeen: boolean;
+  adapterReady: boolean;
 }
 
 type NodeWorkerObservedTimeoutClass = 'native-not-observed' | 'native-observed-ready-not-observed';
@@ -193,6 +202,60 @@ function readDiagnosticPid(child: NodeWorkerProcess): number | undefined {
     return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
   } catch {
     return undefined;
+  }
+}
+
+type NodeWorkerStartupDiagnosticState = {
+  messageCount: number | 'unknown';
+  readySeen: boolean | 'unknown';
+  adapterReady: boolean | 'unknown';
+};
+
+function readDiagnosticStartupState(child: NodeWorkerProcess): NodeWorkerStartupDiagnosticState {
+  const unknown: NodeWorkerStartupDiagnosticState = {
+    messageCount: 'unknown',
+    readySeen: 'unknown',
+    adapterReady: 'unknown',
+  };
+  try {
+    const state = child.readStartupState?.();
+    if (!state) return unknown;
+    let messageCount: number | 'unknown' = 'unknown';
+    let readySeen: boolean | 'unknown' = 'unknown';
+    let adapterReady: boolean | 'unknown' = 'unknown';
+    try {
+      const value = state.messageCount;
+      messageCount = Number.isSafeInteger(value) && value >= 0 ? value : 'unknown';
+    } catch {
+      // A custom adapter may expose throwing diagnostic fields.
+    }
+    try {
+      readySeen = typeof state.readySeen === 'boolean' ? state.readySeen : 'unknown';
+    } catch {
+      // A custom adapter may expose throwing diagnostic fields.
+    }
+    try {
+      adapterReady = typeof state.adapterReady === 'boolean' ? state.adapterReady : 'unknown';
+    } catch {
+      // A custom adapter may expose throwing diagnostic fields.
+    }
+    return {
+      messageCount,
+      readySeen,
+      adapterReady,
+    };
+  } catch {
+    return unknown;
+  }
+}
+
+/** Best-effort state exposed by Electron's UtilityProcess adapter, not OS polling. */
+/** Adapter fact only; false means the adapter has not marked it killed, not OS liveness. */
+function readDiagnosticAdapterKilled(child: NodeWorkerProcess): boolean | 'unknown' {
+  try {
+    return typeof child.killed === 'boolean' ? child.killed : 'unknown';
+  } catch {
+    return 'unknown';
   }
 }
 
@@ -309,6 +372,10 @@ interface StartAttemptDiagnostic {
   observedMainWindowState: NodeRuntimeObservedMainWindowState;
   observedScreenState: NodeRuntimeObservedScreenState;
   observedStages: Set<NodeWorkerStartupStage>;
+  messageCount?: number | 'unknown';
+  readySeen?: boolean | 'unknown';
+  adapterReady?: boolean | 'unknown';
+  adapterKilledAtDeadline?: boolean | 'unknown';
   pid?: number;
   observedTimeoutClass?: NodeWorkerObservedTimeoutClass;
   observedStagesAtDeadline?: NodeWorkerStartupStage[];
@@ -441,6 +508,8 @@ export function createUtilityNodeWorkerProcess(
   let destroyed = false;
   let killed = false;
   let ready = false;
+  let messageCount = 0;
+  let readySeen = false;
   const readNativePid = (): number | undefined => {
     try {
       const value = child.pid;
@@ -471,6 +540,7 @@ export function createUtilityNodeWorkerProcess(
     }
   };
   const onMessage = (message: unknown) => {
+    messageCount += 1;
     if (
       !ready &&
       message &&
@@ -479,6 +549,7 @@ export function createUtilityNodeWorkerProcess(
       (message as Record<string, unknown>).type === 'ready'
     ) {
       ready = true;
+      readySeen = true;
       events.emit('spawn');
       // 子进程原样模式:就绪后一律不再收消息——它没有任何上行控制资格。
       if (isChild) child.removeListener('message', onMessage);
@@ -526,6 +597,9 @@ export function createUtilityNodeWorkerProcess(
     },
     stdout,
     stderr,
+    readStartupState(): NodeWorkerStartupState {
+      return { messageCount, readySeen, adapterReady: ready };
+    },
     onStartupObservation(listener: (observation: NodeWorkerStartupObservation) => void): void {
       if (nativeSpawnObservation) {
         try {
@@ -1463,7 +1537,17 @@ export class GhostNodeRuntimeBroker {
         if (cancelled) {
           debugDiagnostic(this.deps.log, 'ghost node startup settlement', settlement);
         } else {
-          warnDiagnostic(this.deps.log, 'ghost node start attempt failed', settlement);
+          warnDiagnostic(this.deps.log, 'ghost node start attempt failed', {
+            ...settlement,
+            ...(attemptDiagnostic.observedTimeoutClass
+              ? {
+                  messageCount: attemptDiagnostic.messageCount,
+                  readySeen: attemptDiagnostic.readySeen,
+                  adapterReady: attemptDiagnostic.adapterReady,
+                  adapterKilledAtDeadline: attemptDiagnostic.adapterKilledAtDeadline,
+                }
+              : {}),
+          });
         }
         if (!retryable) break;
       }
@@ -1641,6 +1725,14 @@ export class GhostNodeRuntimeBroker {
               attemptDiagnostic.observedStagesAtDeadline = STARTUP_STAGE_ORDER.filter((stage) =>
                 entry.startupStages.has(stage),
               );
+              attemptDiagnostic.messageCount = 'unknown';
+              attemptDiagnostic.readySeen = 'unknown';
+              attemptDiagnostic.adapterReady = 'unknown';
+              const state = readDiagnosticStartupState(entry.child);
+              attemptDiagnostic.messageCount = state.messageCount;
+              attemptDiagnostic.readySeen = state.readySeen;
+              attemptDiagnostic.adapterReady = state.adapterReady;
+              attemptDiagnostic.adapterKilledAtDeadline = readDiagnosticAdapterKilled(entry.child);
               reject(new WorkerStartError('Node 工作进程启动超时', false));
             }),
           DEFAULT_START_TIMEOUT_MS,

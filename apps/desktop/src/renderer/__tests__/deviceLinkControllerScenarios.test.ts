@@ -943,6 +943,55 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     }
   });
 
+  it.each([false, true])('propagates remote pagination loading synchronously to the rendered light state (fails=%s)', async (fails) => {
+    const s = sid();
+    host.enableHistoryView();
+    const rows = Array.from({ length: 30 }, (_, index) => dbMessage(s, String(index), 'visible',
+      new Date(1_750_000_000_000 + index * 1000).toISOString(), 'user'));
+    host.seedSession(s, {}, rows);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const view = getRemoteHistoryView(s)!;
+    const previousItems = view.getSnapshot().items;
+    expect(view.getSnapshot()).toMatchObject({ ready: true, loading: false, hasMore: true });
+    const invoke = host.invoke.getMockImplementation()!;
+    let release!: () => void;
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel === 'local-db:messages:view') {
+        await new Promise<void>((resolve) => { release = resolve; });
+        if (fails) throw new Error('page unavailable');
+      }
+      return invoke(device, channel, args);
+    });
+    const observed: boolean[] = [];
+    // MessageStream subscribes to this view while its parent reads the light
+    // store. Check both at the same notification, before any React scheduling.
+    const unsubscribe = view.subscribe(() => {
+      const loading = view.getSnapshot().loading;
+      expect(makerChatStore.getSnapshot(s).isLoadingMore).toBe(loading);
+      expect(makerChatStore.getLightSnapshot(s).isLoadingMore).toBe(loading);
+      observed.push(loading);
+    });
+    try {
+      const result = makerChatStore.loadOlderMessages(s).then(
+        (advanced) => ({ advanced }),
+        (error: Error) => ({ error: error.message }),
+      );
+      expect(observed).toEqual([true]);
+      expect(view.getSnapshot().items).toBe(previousItems);
+      expect(makerChatStore.getLightSnapshot(s).isLoadingMore).toBe(true);
+      release();
+      expect(await result).toEqual(fails ? { error: 'page unavailable' } : { advanced: true });
+      expect(observed).toEqual([true, false]);
+      expect(view.getSnapshot().items).toHaveLength(fails ? 20 : 30);
+      expect(makerChatStore.getLightSnapshot(s).isLoadingMore).toBe(false);
+    } finally {
+      unsubscribe();
+      makerChatStore.purgeSession(s);
+    }
+  });
+
   it.each(['delete', 'clear'])('retires loaded older projection pages after a remote %s', async (operation) => {
     const s = sid();
     host.enableHistoryView();

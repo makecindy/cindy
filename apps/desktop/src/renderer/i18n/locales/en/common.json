@@ -44,10 +44,10 @@
     "viewOnly": "View only",
     "upgrade": "Update Cindy on the computer to use remote desktop.",
     "disabled": "On the computer, enable remote desktop in Settings → Remote control.",
-    "busy": "Desktop input is busy. Release control on the other device or wait for the Agent action to finish.",
+    "busy": "Another device or Agent is using the computer. Stop controlling it from the other device or wait for the Agent to finish.",
     "connectionError": "Connection ended. Check that the computer is online, then reconnect.",
-    "releaseControl": "Release control",
-    "takeControl": "Take control",
+    "releaseControl": "Stop Controlling",
+    "takeControl": "Take Control",
     "pointer": "Trackpad",
     "touch": "Touch",
     "pan": "Move view",
@@ -6608,9 +6608,9 @@
       },
       "remote": {
         "deviceTooOldTitle": "Device version too old",
-        "deviceTooOldDesc": "The {{appName}} version on the other device is too old for remote review. Please upgrade the controlled device and try again.",
+        "deviceTooOldDesc": "The {{appName}} version on the other device is too old for remote review. Please upgrade the remote device and try again.",
         "oversizeTitle": "Changes too large",
-        "oversizeDesc": "The changes in this view exceed the device-link transfer limit. Please view them on the controlled device."
+        "oversizeDesc": "The changes in this view exceed the device-link transfer limit. Please view them on the remote device."
       },
       "unmodifiedLines_one": "{{count}} unmodified line",
       "unmodifiedLines_other": "{{count}} unmodified lines",
@@ -7071,6 +7071,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "Back to sessions",
     "vendorReadiness": {
       "loading": "Checking availability",
       "ready": "Ready",
@@ -7975,7 +7976,7 @@
       "openHint": "Bring in a Worker to help",
       "disabledHint": "Collaboration is disabled. Enable it in settings.",
       "unavailableHint": "Unable to verify the collaboration setting. Try again shortly.",
-      "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
+      "unsupportedRemoteHint": "The remote device is too old to support collaboration.",
       "remoteContinueNotice": " This message is still being sent as a single session.",
       "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
       "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
@@ -7996,16 +7997,16 @@
       "errors": {
         "INVALID_PARAMS": "The selected model or collaboration settings are no longer available. Choose again and retry.",
         "INVALID_PARAMS_CONTINUE": "The selected model or collaboration settings are no longer available. Collaboration was not started, and this message is continuing as a single session. Choose again and retry.",
-        "INVALID_PARAMS_REMOTE": "The controlled device does not support the selected model or collaboration settings. Choose a model available on that device and retry.",
+        "INVALID_PARAMS_REMOTE": "The remote device does not support the selected model or collaboration settings. Choose a model available on that device and retry.",
         "NO_PROVIDER_FOR_AGENT": "This device has no connected model provider for that agent. Connect one in Settings, then retry.",
         "NO_PROVIDER_FOR_AGENT_CONTINUE": "This device has no connected model provider for that agent. Collaboration was not started, and this message is continuing as a single session. Connect one in Settings, then retry.",
-        "NO_PROVIDER_FOR_AGENT_REMOTE": "The controlled device has no connected model provider for that agent. Connect one on the controlled device, then retry.",
+        "NO_PROVIDER_FOR_AGENT_REMOTE": "The remote device has no connected model provider for that agent. Connect one on the remote device, then retry.",
         "PROVIDER_ROUTE_UNAVAILABLE": "The selected provider and model route is unavailable. Choose an available model or provider, then retry.",
         "PROVIDER_ROUTE_UNAVAILABLE_CONTINUE": "The selected provider and model route is unavailable. Collaboration was not started, and this message is continuing as a single session. Choose an available model or provider, then retry.",
-        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "The selected provider and model route is unavailable on the controlled device. Choose a route available on that device, then retry.",
+        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "The selected provider and model route is unavailable on the remote device. Choose a route available on that device, then retry.",
         "BUDGET_MODEL_REQUIRES_API_MODE": "This Codex model requires an API key. Configure it in Settings, then try again.",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "This Codex model requires an API key. Collaboration was not started, and this message is continuing as a single session. Configure it in Settings, then try again.",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The controlled device does not have the API key required for this Codex model. Configure it on that device, then retry.",
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The remote device does not have the API key required for this Codex model. Configure it on that device, then retry.",
         "PRECONDITION_FAILED": "Collaboration is disabled or the session is not eligible.",
         "PRECONDITION_FAILED_CONTINUE": "Collaboration was not started. Continuing as a single session.",
         "PRECONDITION_FAILED_REMOTE": "The controlled session is not eligible for collaboration."
@@ -9191,10 +9192,10 @@
       "runningTool": "{{tool}} running…"
     },
     "remoteSession": {
-      "reconnecting": "Connection to the controlled device was lost — reconnecting…",
-      "hostOffline": "The controlled device is offline; can't sync right now",
-      "degraded": "Connection to the controlled device is unstable — retrying automatically…",
-      "actionsUnavailable": "The controlled device is unavailable. Reconnect it before changing this session.",
+      "reconnecting": "Connection to the remote device was lost — reconnecting…",
+      "hostOffline": "The remote device is offline; can't sync right now",
+      "degraded": "Connection to the remote device is unstable — retrying automatically…",
+      "actionsUnavailable": "The remote device is unavailable. Reconnect it before changing this session.",
       "resync": "Resync",
       "loading": "Loading session from the remote device…",
       "suspectStall": "This turn hasn't updated in a while — the stream may have dropped",
@@ -9283,8 +9284,8 @@
       "modelSwitchedFastModeOff": "Model switched, Fast Mode disabled"
     },
     "remoteDesktopConfirmation": {
-      "title": "Confirmation required on the controlled computer",
-      "description": "Open Cindy on the controlled computer to review and respond."
+      "title": "Confirmation required on the remote computer",
+      "description": "Open Cindy on the remote computer to review and respond."
     },
     "handoff": {
       "card": {
@@ -11555,7 +11556,7 @@
       "goToSettings": "Open Settings",
       "remoteCodexBinaryMissingTitle": "Codex component not ready on the remote device",
       "remotePiBinaryMissingTitle": "Pi component not ready on the remote device",
-      "remoteAuthDescription": "You need to finish setup on the controlled device \"{{device}}\" before you can start a session here. Configure it on that device and try again.",
+      "remoteAuthDescription": "You need to finish setup on the remote device \"{{device}}\" before you can start a session here. Configure it on that device and try again.",
       "remoteCodexNoSourceTitle": "No Codex source connected on the remote device",
       "remoteCodexNoSourceDescription": "\"{{device}}\" has no model source connected for Codex, so sessions can't be started from here. Open {{appName}} on that device, sign in to OpenAI or connect another source under Settings → Providers, then try again.",
       "remoteCcNoSourceTitle": "No Claude source connected on the remote device",
