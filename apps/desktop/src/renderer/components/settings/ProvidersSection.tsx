@@ -140,18 +140,22 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
 // 通用小件(与重构前一致)
 // ---------------------------------------------------------------------------
 
-function ConnectedPill() {
+function ConnectedPill({ identity }: { identity?: string } = {}) {
   const { t } = useTranslation();
   return (
     <span
-      className="flex h-[22px] shrink-0 items-center gap-1 rounded-full px-2.5 text-11 font-medium"
+      className="flex h-[22px] max-w-64 shrink-0 items-center gap-1 rounded-full px-2.5 text-11 font-medium"
       style={{
         backgroundColor: 'var(--settings-btn-secondary-bg)',
         color: 'var(--settings-section-desc)',
       }}
     >
-      <Check size={12} strokeWidth={2.5} />
-      {t('settings.providers.pill.connected')}
+      <Check size={12} className="shrink-0" strokeWidth={2.5} />
+      <span className="truncate">
+        {identity
+          ? `${t('settings.providers.pill.connected')} · ${identity}`
+          : t('settings.providers.pill.connected')}
+      </span>
     </span>
   );
 }
@@ -246,6 +250,7 @@ function DetailHeader({
   subtitle,
   status,
   primaryAction,
+  secondaryAction,
   editAction,
   deleteAction,
   provider,
@@ -262,6 +267,7 @@ function DetailHeader({
   subtitle: string;
   status?: { kind: 'connected' | 'reconnect-required' | 'neutral'; label?: string };
   primaryAction?: { label: string; onClick: () => void; disabled?: boolean };
+  secondaryAction?: { label: string; onClick: () => void; disabled?: boolean };
   editAction?: { label: string; onClick: () => void; disabled?: boolean };
   deleteAction?: { label: string; onClick: () => void };
   provider?: ProviderView;
@@ -354,7 +360,7 @@ function DetailHeader({
           <div className="flex shrink-0 items-center gap-2.5">
             <div
               data-testid="provider-detail-actions"
-              className="flex shrink-0 items-center gap-2.5"
+              className="flex shrink-0 flex-wrap items-center justify-end gap-2.5"
             >
               {status?.kind === 'connected' ? (
                 <ConnectedPill />
@@ -366,6 +372,7 @@ function DetailHeader({
                 </span>
               ) : null}
               {primaryAction && <PillButton {...primaryAction} />}
+              {secondaryAction && <PillButton {...secondaryAction} />}
             </div>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
@@ -540,7 +547,15 @@ function AnthropicHeader({
 // OpenAI —— OAuth(ChatGPT 订阅 / Codex),复用 useCodexAuth()。
 // ---------------------------------------------------------------------------
 
-function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
+function OpenAiHeader({
+  provider,
+  onChanged,
+  codexCliLoggedIn,
+}: {
+  provider?: ProviderView;
+  onChanged: () => void;
+  codexCliLoggedIn: boolean;
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const {
@@ -589,6 +604,15 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       toast.error(t('settings.connections.codex.toast.loginFailed'));
     }
   }, [triggerLogin, onChanged, t]);
+
+  const handleUseCodexCli = useCallback(async () => {
+    const outcome = await triggerLogin('local-cli');
+    if (outcome === 'authenticated') {
+      onChanged();
+    } else if (outcome === 'failed' || outcome === 'unverified') {
+      toast.error(t('settings.connections.codex.toast.cliConnectFailed'));
+    }
+  }, [onChanged, t, triggerLogin]);
 
   const handleRecovery = useCallback(async () => {
     if (recoveryCheck === 'checking' || loggingIn) return;
@@ -647,6 +671,14 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
             else void handleLogin();
           },
         };
+  const secondaryAction =
+    codexCliLoggedIn && (state.kind === 'unauthenticated' || state.kind === 'error')
+      ? {
+          label: t('settings.providers.openai.useCodexCli'),
+          disabled: oauthWritesBlocked,
+          onClick: () => void handleUseCodexCli(),
+        }
+      : undefined;
 
   return (
     <DetailHeader
@@ -664,6 +696,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       }
       status={status}
       primaryAction={primaryAction}
+      secondaryAction={secondaryAction}
       provider={provider}
       detail={recoveryDetail}
     />
@@ -1826,11 +1859,19 @@ export function ProvidersSection() {
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
         // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
         const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
+        // A reusable CLI OAuth login is an actionable OpenAI state, not merely an installed-CLI
+        // suggestion: keep the provider visible so both explicit login choices remain reachable.
+        const openaiHasReusableCliOAuth =
+          p.id === 'openai' &&
+          detections.some(
+            (d) => d.providerId === 'openai' && d.installed && d.oauthLoggedIn,
+          );
         if (
           p.id === 'xd' ||
           p.connected ||
           (p.id === 'openai' && openaiReconnectRequired) ||
-          openaiHasImageCap
+          openaiHasImageCap ||
+          openaiHasReusableCliOAuth
         ) {
           rows.push(p);
         }
@@ -1847,7 +1888,7 @@ export function ProvidersSection() {
       }
     }
     return rows;
-  }, [providers, openaiReconnectRequired]);
+  }, [providers, openaiReconnectRequired, detections]);
 
   const orderedVisibleProviders = useMemo(
     () => applyProviderOrder(visibleProviders, providerOrder),
@@ -2222,7 +2263,17 @@ export function ProvidersSection() {
   const renderDetailHeader = (p: ProviderView): ReactNode => {
     if (p.id === 'xd') return <XdGatewayHeader provider={p} onChanged={refetch} />;
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
-    if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
+    if (p.id === 'openai') {
+      return (
+        <OpenAiHeader
+          provider={p}
+          onChanged={refetch}
+          codexCliLoggedIn={detections.some(
+            (d) => d.providerId === 'openai' && d.installed && d.oauthLoggedIn,
+          )}
+        />
+      );
+    }
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
     if (
       p.source === 'builtin' &&

@@ -469,10 +469,14 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
   return Boolean(read.ok && read.bindings.revoked && provider in read.bindings.revoked);
 }
 
-/** Bind newly completed native OAuth to the current data owner. */
+/**
+ * Bind a user-confirmed native OAuth credential to the current data owner.
+ * `inheritedSystem` is reserved for an explicit "use this computer's CLI account" action: it
+ * clears a prior disconnect just like fresh authorization, but preserves inherited provenance.
+ */
 export function bindNativeProviderAuth(
   provider: NativeProviderId,
-  opts?: { instanceIsolated?: boolean },
+  opts?: { instanceIsolated?: boolean; inheritedSystem?: boolean },
 ): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
@@ -481,23 +485,28 @@ export function bindNativeProviderAuth(
     if (read.ok) {
       const bindings = read.bindings;
       const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
-      delete sharedSystemCredential[provider];
+      if (opts?.inheritedSystem) sharedSystemCredential[provider] = owner;
+      else delete sharedSystemCredential[provider];
       const instanceIsolatedCredential = instanceIsolatedCredentialOwners(bindings);
       if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
       else delete instanceIsolatedCredential[provider];
-      // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
+      // 用户再次明确表达「我要连它」，无论重新 OAuth 还是选用当前 CLI，撤销标记都作废。
       if (bindings.revoked && provider in bindings.revoked) {
         const revoked = { ...bindings.revoked };
         delete revoked[provider];
         bindings.revoked = revoked;
       }
-      // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
+      const selfAuthorized = { ...bindings.selfAuthorized };
+      if (opts?.inheritedSystem) delete selfAuthorized[provider];
+      else selfAuthorized[provider] = owner;
       writeBindings({
         ...bindings,
-        selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+        selfAuthorized,
         sources: {
           ...bindings.sources,
-          [provider]: 'explicit-provider-oauth',
+          [provider]: opts?.inheritedSystem
+            ? 'native-harness-inherited'
+            : 'explicit-provider-oauth',
         },
         sharedSystemCredential,
         instanceIsolatedCredential,
@@ -519,7 +528,8 @@ export function bindNativeProviderAuth(
     // 授权即可恢复。
     const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
     const sharedSystemCredential = sharedSystemCredentialOwners(salvaged);
-    delete sharedSystemCredential[provider];
+    if (opts?.inheritedSystem) sharedSystemCredential[provider] = owner;
+    else delete sharedSystemCredential[provider];
     const instanceIsolatedCredential = instanceIsolatedCredentialOwners(salvaged);
     if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
     else delete instanceIsolatedCredential[provider];
@@ -527,13 +537,18 @@ export function bindNativeProviderAuth(
     for (const other of NATIVE_PROVIDER_IDS) {
       if (other !== provider) suppressed[other] = owner;
     }
+    const selfAuthorized = { ...salvaged.selfAuthorized };
+    if (opts?.inheritedSystem) delete selfAuthorized[provider];
+    else selfAuthorized[provider] = owner;
     writeBindings({
       ...salvaged,
       revoked: suppressed,
-      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
+      selfAuthorized,
       sources: {
         ...salvaged.sources,
-        [provider]: 'explicit-provider-oauth',
+        [provider]: opts?.inheritedSystem
+          ? 'native-harness-inherited'
+          : 'explicit-provider-oauth',
       },
       sharedSystemCredential,
       instanceIsolatedCredential,

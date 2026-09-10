@@ -9,7 +9,7 @@
 import type { AuthState } from '../types/common.js';
 
 export type AgentCredentialMode = 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
-export type AgentLoginMode = 'browser' | 'device-code';
+export type AgentLoginMode = 'browser' | 'device-code' | 'local-cli';
 
 export interface AuthLoginOptions {
   mode?: AgentLoginMode;

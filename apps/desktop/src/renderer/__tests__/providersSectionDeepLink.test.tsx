@@ -369,6 +369,39 @@ describe('ProvidersSection — 深链定位', () => {
     expect(codexAuthActions.logout).not.toHaveBeenCalled();
   });
 
+  it('offers the detected Codex CLI account as a secondary OpenAI login action', async () => {
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        agents: ['codex'],
+        models: { codex: [] },
+      }),
+    ];
+    Object.assign(window.electronAPI.maker, {
+      scanLocalCli: vi.fn(async () => ({
+        detections: [
+          {
+            providerId: 'openai',
+            installed: true,
+            oauthLoggedIn: true,
+          },
+        ],
+      })),
+    });
+
+    renderAt('?tab=providers');
+
+    fireEvent.click(await screen.findByRole('button', { name: /^OpenAI/ }));
+    const useCli = await screen.findByRole('button', {
+      name: 'settings.providers.openai.useCodexCli',
+    });
+    expect(
+      screen.getByRole('button', { name: 'settings.providers.openai.connect' }),
+    ).toBeTruthy();
+    fireEvent.click(useCli);
+    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledWith('local-cli'));
+  });
+
   it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
     codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked' };
     providersState.providers = [

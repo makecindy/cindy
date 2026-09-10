@@ -130,6 +130,24 @@ afterEach(() => {
 });
 
 describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
+  it('CLI 探测只检查本机 CLI，不把 Release 登录态当成 CLI 登录', async () => {
+    const { releaseAuth, systemAuth } = fixture();
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({ tokens: { access_token: 'release-token', account_id: 'acct-release' } }),
+    );
+    bindReleaseOpenAi(releaseAuth);
+    h.dataOwnerId = 'owner-a';
+    const { hasSystemCodexOAuthLogin } = await import('../auth-adapters.js');
+
+    await expect(hasSystemCodexOAuthLogin()).resolves.toBe(true);
+    fs.writeFileSync(systemAuth, JSON.stringify({ OPENAI_API_KEY: 'invalid-test-api-key' }));
+    await expect(hasSystemCodexOAuthLogin()).resolves.toBe(false);
+    fs.rmSync(systemAuth);
+    await expect(hasSystemCodexOAuthLogin()).resolves.toBe(false);
+  });
+
   it('开关开:不建共享硬链,本地保持无凭证(登录后走独立文件)', async () => {
     const { localAuth, systemAuth } = fixture();
     trustIsolatedAuthSandbox();
@@ -301,6 +319,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
     const releaseBinding = bindReleaseOpenAi(releaseAuth);
     const releaseStat = fs.statSync(releaseAuth);
+    const releaseBytes = fs.readFileSync(releaseAuth);
+    const systemBytes = fs.readFileSync(systemAuth);
     const releaseBindingBytes = fs.readFileSync(releaseBinding);
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
@@ -312,6 +332,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       oauthWritesBlocked: true,
     });
     await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+    await expect(adapter.triggerLogin({ mode: 'local-cli' })).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'dev_oauth_write_blocked',
+      oauthWritesBlocked: true,
+    });
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
     expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
     expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
     expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
