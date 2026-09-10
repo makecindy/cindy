@@ -581,7 +581,7 @@ export async function migrateModelVisibilityDefaults(
 
 /**
  * 该 (agent, 来源, 模型) 当前是否应显示:显式开关优先，否则跟随当前目录 defaultEnabled。
- * 偏好 JSON 无法解析时 fail-closed（不当成从没拨过）。
+ * 偏好 JSON 无法解析、或旧开关尚未迁入 owner namespace 时 fail-closed（不当成从没拨过）。
  * model 至少需带 id + 可选 defaultEnabled(直接传 CatalogModel 即可)。
  */
 export function isModelEnabled(
@@ -593,6 +593,8 @@ export function isModelEnabled(
   const override = load()[key];
   if (override !== undefined) return override;
   if (mapCorrupt) return false;
+  // 旧全局开关还在等独占导入：不能用目录默认把用户关过的模型暂时打开。
+  if (activeOwnerMigrationPending && !mayInitializeDefaults) return false;
   return isModelVisible(undefined, model.defaultEnabled);
 }
 

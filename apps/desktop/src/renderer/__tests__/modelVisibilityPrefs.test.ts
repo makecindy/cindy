@@ -592,6 +592,17 @@ describe('modelVisibilityPrefs store', () => {
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(false);
   });
 
+  it('非独占推迟导入时不把尚未迁入的关闭开关当成目录默认开', async () => {
+    memStorage.setItem(
+      'xdt:modelVisibilityPrefs:v1',
+      JSON.stringify({ 'codex:openai:gpt-5.6': false }),
+    );
+    setOwnerClaim('owner-a', 1, true, false);
+    ownerClaim.profileOrigin = 'existing';
+    const module = await loadModuleForOwner();
+    expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6', defaultEnabled: true })).toBe(false);
+  });
+
   it('已归属但非独占时保存新 override，恢复独占后合并旧值且新值优先', async () => {
     memStorage.setItem(
       'xdt:modelVisibilityPrefs:v1',
@@ -860,7 +871,7 @@ describe('compact model defaults upgrade', () => {
     const prefs = await upgrade();
     expect(memStorage.getItem(scopedKey)).toBeNull();
     expect(memStorage.getItem(markerKey)).toBeNull();
-    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini' })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini' })).toBe(false);
     expect(syncModelVisibility).toHaveBeenLastCalledWith('owner-a', 1, {}, expect.objectContaining({ pending: true }));
     ownerClaim.profileOrigin = 'new';
     await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
