@@ -38,6 +38,14 @@ describe('native subscription instances', () => {
     expect(a.agents).toEqual(expect.arrayContaining(['claude-code', 'codex', 'pi']));
     expect(a.models).toEqual(b.models);
     for (const agent of a.agents) expect(a.routing[agent]?.authStrategy).toBe('provider-oauth-header');
+    const builtin = BUNDLED_CATALOG.providers.find(provider => provider.id === brand)!;
+    for (const agent of a.agents) {
+      expect(a.routing[agent]).toEqual({
+        ...builtin.routing[agent],
+        authStrategy: 'provider-oauth-header',
+        ...(native === 'claude' && agent === 'claude-code' ? { headerDelete: ['x-api-key'] } : {}),
+      });
+    }
     expect(a.auth.native).toBe(native);
     expect(a.imageModels).toBeUndefined();
     expect(a.imageDefaults).toBeUndefined();

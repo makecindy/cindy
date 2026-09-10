@@ -118,6 +118,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CINDY_CLAUDE_ACCOUNT_PROVIDER_ID',
   'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
   'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
   // 订阅身份元数据(与 OAUTH_TOKEN 配套,cc env-token 分支消费):不剥离的话,从
@@ -163,6 +164,7 @@ export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CINDY_CLAUDE_ACCOUNT_PROVIDER_ID',
   'CLAUDE_CODE_OAUTH_SCOPES',
   'CLAUDE_CODE_SUBSCRIPTION_TYPE',
   'CLAUDE_CODE_RATE_LIMIT_TIER',
@@ -448,7 +450,13 @@ export async function buildClaudeEnv(
     env.ANTHROPIC_BASE_URL = endpoint;
   }
   const authOptions = options.credentialMode
-    ? { credentialMode: options.credentialMode }
+    ? {
+        credentialMode: options.credentialMode,
+        // A remote gateway fallback must not pick credentials from the original subscription.
+        ...(options.credentialMode !== 'gateway-key' && options.sessionProviderId
+          ? { providerId: options.sessionProviderId }
+          : {}),
+      }
     : undefined;
   const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
   if (mode === 'remote') {

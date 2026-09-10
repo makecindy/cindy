@@ -506,7 +506,14 @@ export function buildUserProvider(
       source: 'user',
       auth: { method: 'oauth', native },
       routing: Object.fromEntries(Object.entries(identity.routing).map(([agent, route]) => [
-        agent, { ...route, authStrategy: 'provider-oauth-header' },
+        agent, {
+          ...route,
+          authStrategy: 'provider-oauth-header',
+          // Claude subscription requests must not carry a CLI placeholder API key alongside OAuth.
+          ...(native === 'claude' && agent === 'claude-code'
+            ? { headerDelete: [...new Set([...(route.headerDelete ?? []), 'x-api-key'])] }
+            : {}),
+        },
       ])),
       // Media remains explicitly bound to the original provider until it supports account selection.
       imageModels: undefined,

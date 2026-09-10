@@ -1215,7 +1215,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             providerId: opts.providerId,
             model: opts.model,
           });
-    const authOptions = credentialMode ? { credentialMode } : undefined;
+    const authOptions = credentialMode
+      ? {
+          credentialMode,
+          ...(credentialMode !== 'gateway-key' && opts.providerId ? { providerId: opts.providerId } : {}),
+        }
+      : undefined;
     const authState = await this.deps.auth.getState(authOptions);
     if (!authState.authenticated) {
       throw new AgentNotAuthenticatedError(
