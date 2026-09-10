@@ -34,7 +34,7 @@ export interface DesktopControllerDeps {
   input(events: DesktopInput[]): void;
   stopInput(): void;
   stopVideo(): void;
-  lockScreen?(isCurrent: () => boolean): Promise<void>;
+  lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   offer(
     lease: RemoteDesktopLease,
     sdp: string,
@@ -68,6 +68,7 @@ export class RemoteDesktopController {
     | null = null;
   private starting = false;
   private locking = false;
+  private lockAbort: AbortController | null = null;
   private startingPeer: string | null = null;
   private framePending = false;
   private clipboardPending = false;
@@ -123,6 +124,7 @@ export class RemoteDesktopController {
       if (this.startingPeer === peer) this.startingPeer = null;
       return;
     }
+    this.lockAbort?.abort();
     if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
     this.clipboardTransfer.reset();
     this.controlGeneration++;
@@ -237,14 +239,17 @@ export class RemoteDesktopController {
           if (!this.deps.lockScreen) throw new Error('DESKTOP_LOCK_UNAVAILABLE');
           if (this.locking || this.starting) throw new Error('DESKTOP_BUSY');
           this.locking = true;
+          const cancellation = new AbortController();
+          this.lockAbort = cancellation;
           active.controlling = false;
           this.controlGeneration++;
           try {
             await this.deps.lockScreen(() => {
               this.tick();
               return this.active === active && this.deps.authorized(peer);
-            });
+            }, cancellation.signal);
           } finally {
+            this.lockAbort = null;
             this.locking = false;
             if (this.active === active) this.stop(peer);
           }

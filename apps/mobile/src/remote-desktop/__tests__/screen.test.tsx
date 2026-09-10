@@ -602,6 +602,27 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
   });
+  it("hides iOS-only unlock settings on Android while retaining exit locking", async () => {
+    fixture.platform = "android";
+    await connect();
+    act(() => button("operations").click());
+    act(() => button("security").click());
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlock"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.biometricVerification"]'),
+    ).toBeNull();
+    expect(host.textContent).not.toContain(
+      "remoteDesktop.autoUnlockStorageHint",
+    );
+    expect(host.textContent).not.toContain(
+      "remoteDesktop.autoUnlockUnavailable",
+    );
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.lockOnExit"]'),
+    ).not.toBeNull();
+  });
   it.each(["light", "dark"])(
     "keeps panel geometry and controls stable across pages and loading in %s",
     async (theme) => {

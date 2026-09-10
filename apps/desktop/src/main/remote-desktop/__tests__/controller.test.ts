@@ -72,6 +72,30 @@ describe('remote desktop authority and lifecycle', () => {
     await expect(pending).rejects.toThrow('DESKTOP_LOCK_FAILED');
     expect(h.controller.state).toBeNull();
   });
+  it.each(['stop', 'expiry', 'revoke', 'account'])('cancels an in-flight lock on %s without cancelling for another peer', async reason => {
+    const h = harness();
+    let account = 'first';
+    h.deps.authenticationSession = () => account;
+    const first = await h.start();
+    let signal!: AbortSignal;
+    h.deps.lockScreen = async (_current, cancellation) => {
+      signal = cancellation;
+      await new Promise<void>((_resolve, reject) => {
+        cancellation.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      });
+    };
+    const pending = h.controller.request('phone', { op: 'stop', lease: first.lease, lockScreen: true });
+    const rejected = expect(pending).rejects.toThrow('cancelled');
+    h.controller.stop('other');
+    expect(signal.aborted).toBe(false);
+    if (reason === 'stop') h.controller.stop('phone');
+    if (reason === 'expiry') { h.advance(120000); h.controller.tick(); }
+    if (reason === 'revoke') { h.revoke(); h.controller.tick(); }
+    if (reason === 'account') { account = 'second'; h.controller.tick(); }
+    expect(signal.aborted).toBe(true);
+    await rejected;
+    expect(h.controller.state).toBeNull();
+  });
   it('releases a stalled fallback frame for another peer without stopping its lease', async () => {
     vi.useFakeTimers();
     try {

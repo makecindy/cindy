@@ -371,9 +371,9 @@ export const remoteDesktop = new RemoteDesktopController({
   input: (events) => input.input(events),
   stopInput: () => input.stop(),
   ...(process.platform === 'darwin' ? {
-    lockScreen: async (isCurrent: () => boolean) => {
+    lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
       await input.release();
-      await lockDesktopScreen(isCurrent);
+      await lockDesktopScreen(isCurrent, signal);
     },
   } : {}),
   offer,

@@ -57,65 +57,35 @@ export function RemoteDesktopSecuritySettings(
   );
   return (
     <View style={{ gap: spacing.sm }}>
-      <View
-        style={{
-          backgroundColor: colors.sheetActionSurface,
-          borderColor: colors.sheetActionBorder,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderRadius: radius.container,
-          overflow: "hidden",
-        }}
-      >
-        <View style={row}>
-          <View testID="remoteDesktop.securityProgressSlot" style={iconSlot}>
-            {props.busy ? (
-              <ActivityIndicator
-                size="small"
-                color={colors.textSecondary}
-                accessibilityLabel={t("remoteDesktop.loadingSettings")}
-              />
-            ) : (
-              <LockKeyhole
-                size={iconSize.lg}
-                strokeWidth={iconStroke.regular}
-                color={colors.textPrimary}
-              />
-            )}
-          </View>
-          <View style={{ flex: 1, gap: spacing.xs }}>
-            <Text
-              style={{ color: colors.textPrimary, fontSize: typeScale.body }}
-            >
-              {t("remoteDesktop.autoUnlock")}
-            </Text>
-            <Text style={hint}>{t("remoteDesktop.autoUnlockHint")}</Text>
-          </View>
-          <View style={switchSlot}>
-            <NativeSwitch
-              testID="remoteDesktop.autoUnlock"
-              accessibilityLabel={t("remoteDesktop.autoUnlock")}
-              value={props.autoUnlock}
-              disabled={props.busy || (!props.available && !props.autoUnlock)}
-              onValueChange={props.onAutoUnlock}
-            />
-          </View>
-        </View>
-        {props.autoUnlock && (
-          <>
-            <View
-              style={{
-                height: StyleSheet.hairlineWidth,
-                marginHorizontal: spacing.md,
-                backgroundColor: colors.sheetActionBorder,
-              }}
-            />
+      {Platform.OS === "ios" && (
+        <>
+          <View
+            style={{
+              backgroundColor: colors.sheetActionSurface,
+              borderColor: colors.sheetActionBorder,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderRadius: radius.container,
+              overflow: "hidden",
+            }}
+          >
             <View style={row}>
-              <View style={iconSlot}>
-                <ScanFace
-                  size={iconSize.lg}
-                  strokeWidth={iconStroke.regular}
-                  color={colors.textPrimary}
-                />
+              <View
+                testID="remoteDesktop.securityProgressSlot"
+                style={iconSlot}
+              >
+                {props.busy ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.textSecondary}
+                    accessibilityLabel={t("remoteDesktop.loadingSettings")}
+                  />
+                ) : (
+                  <LockKeyhole
+                    size={iconSize.lg}
+                    strokeWidth={iconStroke.regular}
+                    color={colors.textPrimary}
+                  />
+                )}
               </View>
               <View style={{ flex: 1, gap: spacing.xs }}>
                 <Text
@@ -124,30 +94,72 @@ export function RemoteDesktopSecuritySettings(
                     fontSize: typeScale.body,
                   }}
                 >
-                  {biometricLabel}
+                  {t("remoteDesktop.autoUnlock")}
                 </Text>
-                <Text style={hint}>
-                  {t("remoteDesktop.biometricVerificationHint")}
-                </Text>
+                <Text style={hint}>{t("remoteDesktop.autoUnlockHint")}</Text>
               </View>
               <View style={switchSlot}>
                 <NativeSwitch
-                  testID="remoteDesktop.biometricVerification"
-                  accessibilityLabel={biometricLabel}
-                  value={props.biometricVerification}
+                  testID="remoteDesktop.autoUnlock"
+                  accessibilityLabel={t("remoteDesktop.autoUnlock")}
+                  value={props.autoUnlock}
                   disabled={
-                    props.busy ||
-                    !props.autoUnlock ||
-                    props.biometricAvailable === false
+                    props.busy || (!props.available && !props.autoUnlock)
                   }
-                  onValueChange={props.onBiometricVerification}
+                  onValueChange={props.onAutoUnlock}
                 />
               </View>
             </View>
-          </>
-        )}
-      </View>
-      <Text style={hint}>{t("remoteDesktop.autoUnlockStorageHint")}</Text>
+            {props.autoUnlock && (
+              <>
+                <View
+                  style={{
+                    height: StyleSheet.hairlineWidth,
+                    marginHorizontal: spacing.md,
+                    backgroundColor: colors.sheetActionBorder,
+                  }}
+                />
+                <View style={row}>
+                  <View style={iconSlot}>
+                    <ScanFace
+                      size={iconSize.lg}
+                      strokeWidth={iconStroke.regular}
+                      color={colors.textPrimary}
+                    />
+                  </View>
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <Text
+                      style={{
+                        color: colors.textPrimary,
+                        fontSize: typeScale.body,
+                      }}
+                    >
+                      {biometricLabel}
+                    </Text>
+                    <Text style={hint}>
+                      {t("remoteDesktop.biometricVerificationHint")}
+                    </Text>
+                  </View>
+                  <View style={switchSlot}>
+                    <NativeSwitch
+                      testID="remoteDesktop.biometricVerification"
+                      accessibilityLabel={biometricLabel}
+                      value={props.biometricVerification}
+                      disabled={
+                        props.busy ||
+                        !props.autoUnlock ||
+                        props.biometricAvailable === false
+                      }
+                      onValueChange={props.onBiometricVerification}
+                    />
+                  </View>
+                </View>
+              </>
+            )}
+          </View>
+          <Text style={hint}>{t("remoteDesktop.autoUnlockStorageHint")}</Text>
+        </>
+      )}
       <View
         style={{
           ...row,
@@ -186,11 +198,12 @@ export function RemoteDesktopSecuritySettings(
           />
         </View>
       </View>
-      {(props.notice || (!props.available && !props.busy)) && (
-        <Text style={hint} accessibilityRole="alert">
-          {props.notice || t("remoteDesktop.autoUnlockUnavailable")}
-        </Text>
-      )}
+      {Platform.OS === "ios" &&
+        (props.notice || (!props.available && !props.busy)) && (
+          <Text style={hint} accessibilityRole="alert">
+            {props.notice || t("remoteDesktop.autoUnlockUnavailable")}
+          </Text>
+        )}
     </View>
   );
 }

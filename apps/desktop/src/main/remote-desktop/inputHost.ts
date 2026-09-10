@@ -130,12 +130,12 @@ export async function readDesktopInputPermission(): Promise<DesktopPermissionSta
   }
 }
 
-export async function lockDesktopScreen(isCurrent: () => boolean): Promise<void> {
+export async function lockDesktopScreen(isCurrent: () => boolean, signal: AbortSignal): Promise<void> {
   if (process.platform !== 'darwin') throw new Error('DESKTOP_LOCK_UNAVAILABLE');
   const binary = await resolveBinary();
-  if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  if (signal.aborted || !isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
   try {
-    const { stdout } = await exec(binary, ['--lock-screen'], { timeout: 5000, maxBuffer: 1024 });
+    const { stdout } = await exec(binary, ['--lock-screen'], { timeout: 5000, maxBuffer: 1024, signal });
     if (stdout.trim() !== 'locked') throw new Error('DESKTOP_LOCK_FAILED');
   } catch { throw new Error('DESKTOP_LOCK_FAILED'); }
 }

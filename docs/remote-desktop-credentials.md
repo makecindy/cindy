@@ -8,7 +8,9 @@ Mobile places **Security** at the bottom of the remote desktop control panel,
 after display settings. Automatic unlock defaults off. Face ID only protects a
 saved password; turning automatic unlock off deletes the local saved password.
 
-This implementation targets iOS controlling macOS. It does not add a new server,
+Automatic unlock targets iOS controlling macOS. Android hides the unsupported
+automatic-unlock and biometric settings; its independent lock-on-exit setting
+remains available when the host advertises support. This does not add a new server,
 identity registry, database migration, or deployment requirement. The existing
 relay still authenticates the account and carries messages. Native iOS/macOS
 credential code performs no identity-directory HTTP requests or polling.
