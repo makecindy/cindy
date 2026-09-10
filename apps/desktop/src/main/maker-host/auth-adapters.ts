@@ -1,4 +1,4 @@
-import { retainInvalidatedProviderPresentation, restoreProviderPresentationAfterLogin } from './provider-presentation-store.js';
+import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
 import { subscriptionAccountKind, subscriptionAccountState, readClaudeAccountOAuth, getValidClaudeAccountOAuth } from './subscription-account-auth.js';
 /**
  * apps/desktop/src/main/maker-host/auth-adapters.ts
@@ -1931,7 +1931,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
           unbindNativeProviderAuth('openai', { revoked: true });
           return { authenticated: false, errorReason: 'auth_boundary_clear_failed' };
         }
-        restoreProviderPresentationAfterLogin('openai');
+        retainProviderPresentationAfterAuthChange('openai');
         this.devReadOnlyDetached = false;
         this.suppressSystemCodexReconcile = false;
         this.oauthInvalidatedReason = null;
@@ -2191,7 +2191,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     await this.notifyCodexLoginSuccess();
     const cancelledAfterHostRestart = cancelFinalization();
     if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
-    restoreProviderPresentationAfterLogin('openai');
+    retainProviderPresentationAfterAuthChange('openai');
     return state;
   }
 

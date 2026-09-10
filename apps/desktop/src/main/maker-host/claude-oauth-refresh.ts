@@ -54,7 +54,7 @@ import {
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
 import { bindNativeProviderAuth, isNativeProviderCredentialRejected, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
-import { setProviderPresentation, restoreProviderPresentationAfterLogin } from './provider-presentation-store.js';
+import { retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 
@@ -746,7 +746,7 @@ export function backfillClaudeSubscriptionProfile(accessToken: string): Promise<
 export function disconnectClaudeAiOAuth(): void {
   invalidateClaudeOAuthRefresh();
   unbindNativeProviderAuth('anthropic', { revoked: true });
-  setProviderPresentation('anthropic', { removed: false });
+  retainProviderPresentationAfterAuthChange('anthropic');
 }
 
 /** Reattach the existing native login; never write or remove system credentials. */
@@ -755,7 +755,7 @@ export function reconnectClaudeAiOAuth(): boolean {
   if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth))) return false;
   invalidateClaudeOAuthRefresh();
   bindNativeProviderAuth('anthropic', { sharedSystem: true });
-  restoreProviderPresentationAfterLogin('anthropic');
+  retainProviderPresentationAfterAuthChange('anthropic');
   return true;
 }
 

@@ -1,4 +1,4 @@
-import { setProviderPresentation, restoreProviderPresentationAfterLogin } from './maker-host/provider-presentation-store.js';
+import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
 import { clearSubscriptionAccountDiscoveredModels, setSubscriptionAccountInvalidatedHandler } from './maker-host/subscription-account-auth.js';
@@ -4923,7 +4923,7 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
     if (result.ok) {
-      restoreProviderPresentationAfterLogin('xai');
+      retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
@@ -4964,7 +4964,7 @@ const registerIpcHandlers = () => {
     try {
       cancelGrokOAuthLogin();
       logoutGrok();
-      setProviderPresentation('xai', { removed: false });
+      retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       await clearXaiSubscriptionUsageSnapshot();
       if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
@@ -5577,7 +5577,7 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
-      restoreProviderPresentationAfterLogin(providerId as string);
+      retainProviderPresentationAfterAuthChange(providerId as string);
     },
   );
 
@@ -5588,7 +5588,7 @@ const registerIpcHandlers = () => {
       const active = getActiveAppSession();
       if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
-      setProviderPresentation(providerId as string, { removed: false });
+      retainProviderPresentationAfterAuthChange(providerId as string);
     },
   );
 

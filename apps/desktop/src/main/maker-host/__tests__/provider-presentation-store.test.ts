@@ -19,7 +19,7 @@ const {
   renameLocalCodexProvider,
   setLocalCodexProviderRemoved,
   retainInvalidatedProviderPresentation,
-  restoreProviderPresentationAfterLogin,
+  retainProviderPresentationAfterAuthChange,
 } = await import('../provider-presentation-store.js');
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -27,7 +27,7 @@ it.each(['openai', 'anthropic', 'xai', 'google'])('does not fail committed %s au
   owner = `failed-presentation-${id}`;
   const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('test readonly disk'); });
   try {
-    expect(() => restoreProviderPresentationAfterLogin(id)).not.toThrow();
+    expect(() => retainProviderPresentationAfterAuthChange(id)).not.toThrow();
     expect(write).toHaveBeenCalled();
   } finally {
     write.mockRestore();

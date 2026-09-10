@@ -64,3 +64,16 @@ it('preserves successful authentication if restoring the entry fails', () => {
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
+it('completes disconnect when display persistence fails without clearing native credentials', () => {
+  h.presentation.mockImplementationOnce(() => { throw new Error('disk full'); });
+  expect(() => disconnectClaudeAiOAuth()).not.toThrow();
+  expect(h.unbind).toHaveBeenCalledWith('anthropic', { revoked: true });
+  expect(h.presentation).toHaveBeenCalled();
+  expect(h.write).not.toHaveBeenCalled();
+  expect(h.clear).not.toHaveBeenCalled();
+});
+it('still reports failure when the binding cannot be revoked', () => {
+  h.unbind.mockImplementationOnce(() => { throw new Error('binding write failed'); });
+  expect(() => disconnectClaudeAiOAuth()).toThrow('binding write failed');
+  expect(h.presentation).not.toHaveBeenCalled();
+});

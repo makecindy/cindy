@@ -544,7 +544,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     }
   });
 
-  it.each(['success', 'failure', 'owner-change', 'cancel'] as const)('settles local runtime refresh with the correct credential boundary (%s)', async (outcome) => {
+  it.each(['success', 'failure', 'owner-change', 'cancel', 'cancel-cleanup-failure'] as const)('settles local runtime refresh with the correct credential boundary (%s)', async (outcome) => {
     const { systemAuth } = fixture();
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
@@ -564,7 +564,17 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(settled).not.toHaveBeenCalled();
     await expect(adapter.getAccessToken()).resolves.toBe('system-token');
     if (outcome === 'owner-change') h.dataOwnerId = 'owner-b';
-    if (outcome === 'cancel') adapter.cancelLogin();
+    if (outcome === 'cancel' || outcome === 'cancel-cleanup-failure') adapter.cancelLogin();
+    if (outcome === 'cancel-cleanup-failure') {
+      const error = new Error('test disconnect persistence failure');
+      vi.spyOn(adapter as unknown as { disconnectCodexOAuth(): Promise<void> }, 'disconnectCodexOAuth').mockRejectedValueOnce(error);
+      const rejected = expect(login).rejects.toBe(error);
+      release();
+      await rejected;
+      expect(settled).not.toHaveBeenCalled();
+      expect(fs.readFileSync(systemAuth)).toEqual(before);
+      return;
+    }
     release();
     await expect(login).resolves.toMatchObject(outcome === 'owner-change' || outcome === 'cancel'
       ? { authenticated: false, errorReason: 'login_cancelled' }

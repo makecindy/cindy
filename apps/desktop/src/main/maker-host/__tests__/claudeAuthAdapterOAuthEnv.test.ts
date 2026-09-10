@@ -34,7 +34,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../provider-presentation-store.js', () => ({
   retainInvalidatedProviderPresentation: h.retainPresentation,
-  restoreProviderPresentationAfterLogin: vi.fn(),
+  retainProviderPresentationAfterAuthChange: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
