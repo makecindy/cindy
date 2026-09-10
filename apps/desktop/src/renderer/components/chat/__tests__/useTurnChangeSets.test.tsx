@@ -128,6 +128,15 @@ describe('turn change card cache', () => {
     expect(restored.result.current[0]?.additions).toBe(9);
   });
 
+  it('keeps cached cards across a same-owner generation repair', async () => {
+    transport.list.mockResolvedValueOnce([summary()]);
+    const view = renderHook(() => useTurnChangeSets('a', null));
+    await act(async () => {});
+    setDataOwnerGeneration(`owner-${ownerNumber}`, 2);
+    view.rerender();
+    expect(view.result.current).toEqual([summary()]);
+  });
+
   it('uses authoritative refreshes to remove old cards and update undo state', async () => {
     transport.list.mockResolvedValueOnce([summary(), summary('deleted')]);
     const first = renderHook(() => useTurnChangeSets('a', null));

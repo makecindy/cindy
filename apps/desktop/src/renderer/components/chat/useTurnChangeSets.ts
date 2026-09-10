@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import {
   getDataOwnerGeneration,
-  isDataOwnerGenerationCurrent,
+  isDataOwnerIdCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
@@ -24,7 +24,9 @@ const cache = new Map<string, Entry>();
 let cacheOwner = getDataOwnerGeneration();
 
 function entryFor(sessionId: string): Entry {
-  if (!isDataOwnerGenerationCurrent(cacheOwner)) {
+  // Same-owner repairs advance generation without changing the storage
+  // namespace. Keep already rendered cards until the owner actually changes.
+  if (!isDataOwnerIdCurrent(cacheOwner)) {
     for (const entry of cache.values()) entry.unsubscribe?.();
     cache.clear();
     cacheOwner = getDataOwnerGeneration();
@@ -71,7 +73,7 @@ export function useTurnChangeSets(
     if (!enabled || !sessionId) return { getSnapshot: () => EMPTY, subscribe: () => () => {} };
     const entry = entryFor(sessionId);
     const current = () =>
-      isDataOwnerGenerationCurrent(owner) &&
+      isDataOwnerIdCurrent(owner) &&
       cache.get(sessionId) === entry &&
       !isRemoteSessionSticky(sessionId);
     return {
