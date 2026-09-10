@@ -494,6 +494,22 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(bindings.selfAuthorized?.openai).toBeUndefined();
   });
 
+  it.each([false, true])('local reconnect shares native refresh writes instead of copying (existing=%s)', async (existing) => {
+    const { codexHome, systemAuth, localAuth } = fixture();
+    h.isPackaged = true;
+    h.dataOwnerId = 'owner-a';
+    fs.mkdirSync(codexHome, { recursive: true });
+    if (existing) fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'old-copy' } }));
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
+    const renewed = JSON.stringify({ tokens: { access_token: 'renewed-native-token', account_id: 'acct-1' } });
+    fs.writeFileSync(localAuth, renewed);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(renewed);
+    await adapter.logout();
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(renewed);
+  });
+
   it('disconnects shared Dev when its credential path is also the Release path', async () => {
     const { releaseAuth } = fixture();
     h.dataOwnerId = 'owner-a';

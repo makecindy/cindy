@@ -17,7 +17,7 @@ import { subscriptionAccountKind, subscriptionAccountState, readClaudeAccountOAu
 
 import { app, safeStorage } from 'electron';
 import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.js';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -1880,11 +1880,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       const owner = getActiveAppSession();
       const systemAuth = getSystemCodexAuthPath();
       const localAuth = path.join(this.codexHome, 'auth.json');
-      // All credential/binding commits below are synchronous: cancellation and
-      // owner changes cannot interleave with reconnecting the existing login.
-      const staging = path.join(this.codexHome, `auth-${randomUUID()}.tmp`);
+      const stillCurrent = () => {
+        const current = getActiveAppSession();
+        return !this.loginAborted && !isCancelled() && !isAppSessionBoundaryPending() &&
+          !!owner.dataOwnerId && current.generation === loginOwner.generation &&
+          current.dataOwnerId === loginOwner.dataOwnerId;
+      };
       try {
-        if (this.loginAborted || isCancelled() || isAppSessionBoundaryPending() || !owner.dataOwnerId || owner.generation !== loginOwner.generation || owner.dataOwnerId !== loginOwner.dataOwnerId) {
+        if (!stillCurrent()) {
           return { authenticated: false, errorReason: 'login_cancelled' };
         }
         const invalidated = getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, localAuth);
@@ -1897,8 +1900,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
         if (!existsSync(localAuth) || !pathsReferToSameFileSync(localAuth, systemAuth)) {
           fs.mkdirSync(this.codexHome, { recursive: true, mode: 0o700 });
-          fs.writeFileSync(staging, raw, { mode: 0o600, flag: 'wx' });
-          fs.renameSync(staging, localAuth);
+          // Retain the existing read-only Dev exception; writable runtimes must share
+          // the native credential rather than rotate an independent refresh-token copy.
+          if (this.shouldSnapshotReleaseCodexAuth(systemAuth, localAuth)) {
+            const result = await copyCodexAuthSnapshot(systemAuth, localAuth);
+            if (result.kind !== 'copied') throw new Error('Local auth snapshot failed');
+          } else {
+            await relinkSharedCodexAuth(systemAuth, localAuth);
+            if (!pathsReferToSameFileSync(localAuth, systemAuth)) throw new Error('Local auth link failed');
+          }
+        }
+        if (!stillCurrent()) {
+          return { authenticated: false, errorReason: 'login_cancelled' };
         }
         bindNativeProviderAuth('openai', { sharedSystem: true });
         if (!clearInvalidatedSystemCodexAuthMarker(this.codexHome)) {
@@ -1917,11 +1930,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         this.loginCancellationOpen = false;
         return { authenticated: true, authSource: 'oauth', identity: identity?.label, credentialScope: 'system-shared' };
       } catch {
+        if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
         this.suppressSystemCodexReconcile = true;
         writeInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, CODEX_USER_DISCONNECT_REASON, localAuth);
         return { authenticated: false, errorReason: 'local_auth_unavailable' };
-      } finally {
-        try { fs.rmSync(staging, { force: true }); } catch { /* No credential was published from a failed staging file. */ }
       }
     }
     await this.ensureGlobalCodexAssets();
