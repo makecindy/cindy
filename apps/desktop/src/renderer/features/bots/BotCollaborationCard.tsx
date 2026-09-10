@@ -169,7 +169,7 @@ function SessionTaskCardBody({
   // Only the child's returned result supplies links. The objective can mention an
   // unrelated PR as context, and task completion says nothing about PR merge state.
   const pullRequests = extractPrRefs(row?.resultSummary ?? '');
-  const actionClass = 'w-full min-w-[104px] gap-1.5 px-3 font-normal';
+  const actionClass = 'w-full min-w-[104px] gap-1.5 px-3';
   const openPr = (url: string) => {
     setActionError(null);
     void window.electronAPI

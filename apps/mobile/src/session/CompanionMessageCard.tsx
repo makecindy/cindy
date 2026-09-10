@@ -10,6 +10,7 @@ import type {
 } from '@cindy/maker-shared/botDelegation';
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, radius, typeScale, iconSize } from '@/theme/tokens';
@@ -197,7 +198,7 @@ function CompanionTaskCard({
                     Math.max(width, Math.ceil(event.nativeEvent.layout.width)),
                   )
                 }
-                style={[styles.action, { minWidth: actionWidth }, pressed && styles.pressed]}
+                style={[styles.action, { minWidth: actionWidth }, pressed && mobileInteractionStyles.pressed]}
               >
                 <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />
                 <Text style={styles.actionLabel}>{t('devices.companions.viewPr')}</Text>
@@ -223,7 +224,7 @@ function CompanionTaskCard({
                     Math.max(width, Math.ceil(event.nativeEvent.layout.width)),
                   )
                 }
-                style={[styles.action, { minWidth: actionWidth }, pressed && styles.pressed]}
+                style={[styles.action, { minWidth: actionWidth }, pressed && mobileInteractionStyles.pressed]}
               >
                 <FileText size={iconSize.sm} color={colors.textPrimary} />
                 <Text style={styles.actionLabel}>{t('devices.companions.openTask')}</Text>
@@ -245,7 +246,7 @@ function CompanionTaskCard({
                     Math.max(width, Math.ceil(event.nativeEvent.layout.width)),
                   )
                 }
-                style={[styles.action, { minWidth: actionWidth }, pressed && styles.pressed]}
+                style={[styles.action, { minWidth: actionWidth }, pressed && mobileInteractionStyles.pressed]}
               >
                 <Square size={iconSize.sm} color={colors.textPrimary} />
                 <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
@@ -321,7 +322,6 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.pill,
       backgroundColor: colors.surfaceElevated,
     },
-    pressed: { backgroundColor: colors.surfaceChip },
     prOption: { minHeight: 44, justifyContent: 'center' },
     disabled: { opacity: 0.5 },
   });
