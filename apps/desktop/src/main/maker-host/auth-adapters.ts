@@ -1940,6 +1940,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         this.memoryOnlyInvalidatedSystemCredential = null;
         this.lastKnownCodexCredentialScope = 'system-shared';
         this.loginCancellationOpen = false;
+        await this.notifyCodexLoginSuccess();
+        if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
         return { authenticated: true, authSource: 'oauth', identity: identity?.label, credentialScope: 'system-shared' };
       } catch {
         if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
@@ -2180,7 +2182,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (cancelledAfterStateRead) return cancelledAfterStateRead;
     if (!state.authenticated) return state;
 
-    // 真正拿到 OAuth 后才重启本地 codex host；失败只记日志，不翻转登录结果。
+    await this.notifyCodexLoginSuccess();
+    const cancelledAfterHostRestart = cancelFinalization();
+    if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
+    restoreProviderPresentationAfterLogin('openai');
+    return state;
+  }
+
+  /** All explicit OAuth entry points retire the old host after committing credentials. */
+  private async notifyCodexLoginSuccess(): Promise<void> {
     if (this.onLoginSuccess) {
       try {
         await this.onLoginSuccess();
@@ -2188,10 +2198,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         log.warn('onLoginSuccess threw', { error: (e as Error).message });
       }
     }
-    const cancelledAfterHostRestart = cancelFinalization();
-    if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
-    restoreProviderPresentationAfterLogin('openai');
-    return state;
   }
 
   /** Codex OAuth 子进程 abort —— 用户在浏览器授权流半路反悔时调。 */
