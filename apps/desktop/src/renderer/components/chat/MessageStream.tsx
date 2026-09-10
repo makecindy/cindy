@@ -3593,6 +3593,14 @@ export function MessageStream({
     const items = itemsRef.current;
     const sizes = restoreSnapshotRef.current?.itemHeights;
     if (!items || !sizes) return;
+    // Some cards render null. Without one DOM row per item, index-based
+    // estimates would be applied to a neighbouring message instead.
+    if (items.children.length !== visibleRenderItems.length) {
+      for (const element of Array.from(items.children)) {
+        (element as HTMLElement).style.containIntrinsicBlockSize = '';
+      }
+      return;
+    }
     const width = items.getBoundingClientRect().width;
     visibleRenderItems.forEach((item, index) => {
       const element = items.children[index] as HTMLElement | undefined;
@@ -3654,10 +3662,12 @@ export function MessageStream({
     if (!sessionId || !measured) return;
     const items = itemsRef.current;
     let itemHeights: SessionScrollSnapshot['itemHeights'];
+    const visible = visibleRenderItemsRef.current;
     // Only capture sizes on leave, and bound them to the last mounted tail.
-    if (includeHeights && items) {
+    // A missing ghost/generated-files card shifts every following DOM index.
+    // Omit this optional cache rather than persisting heights under wrong keys.
+    if (includeHeights && items && items.children.length === visible.length) {
       const byKey: Record<string, number> = {};
-      const visible = visibleRenderItemsRef.current;
       for (
         let index = Math.max(0, visible.length - RENDER_WINDOW_INITIAL_ITEMS);
         index < visible.length;
