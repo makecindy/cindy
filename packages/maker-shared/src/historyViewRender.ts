@@ -77,19 +77,21 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     return row?.role === 'assistant' && !seen.has(id) ? [row] : [];
   });
   let pendingIndex = 0;
-  for (const source of options.liveMessages) {
-    const row = isPendingHandoff(source) && !seen.has(source.clientId)
-      ? pendingTail[pendingIndex++] : source;
+  const orderedLiveMessages = options.liveMessages.map((source) =>
+    isPendingHandoff(source) && !seen.has(source.clientId)
+      ? pendingTail[pendingIndex++] : source);
+  for (const row of orderedLiveMessages) {
     if (isLive(row) && !seen.has(row.clientId) && (row.role === 'assistant' || row.role === 'user')
       && (Date.parse(row.createdAt) >= endMs
         || isPendingHandoff(row))) rows.push(row);
   }
   // Local pending/blocked user bubbles belong to the current UI store, not
-  // persisted history. Keep their store order without trusting device clocks.
+  // persisted history. Anchor them to the same reordered slots used above,
+  // without trusting device clocks or changing their order relative to each other.
   const renderedIds = new Set(rows.map((row) => row.clientId));
   let beforeClientId: string | undefined;
-  for (let index = options.liveMessages.length - 1; index >= 0; index--) {
-    const row = options.liveMessages[index];
+  for (let index = orderedLiveMessages.length - 1; index >= 0; index--) {
+    const row = orderedLiveMessages[index];
     if (renderedIds.has(row.clientId)) {
       beforeClientId = row.clientId;
     } else if (row.role === 'user' && options.isLocalUser?.(row)) {
