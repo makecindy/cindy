@@ -320,6 +320,11 @@ function useProviderManagement(provider?: ProviderView) {
       )
         return;
       setBusy(true);
+      // Deleting the whole provider also revokes its legacy image API connection.
+      // Keep this separate from disconnecting only the ChatGPT subscription.
+      if (provider.id === 'openai') {
+        await window.electronAPI.builtinApiKeyRemove('openai-images', scope);
+      }
       await disconnectProvider(provider, scope);
       await window.electronAPI.maker.setProviderPresentation({
         providerId: provider.id,

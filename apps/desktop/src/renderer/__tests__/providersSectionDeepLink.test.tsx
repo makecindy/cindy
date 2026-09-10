@@ -192,6 +192,7 @@ beforeEach(() => {
       setProviderOrder: vi.fn(async () => ({ ok: true })),
     },
     openChatGPTApp: vi.fn(async () => ({ success: true })),
+    builtinApiKeyRemove: vi.fn(async () => undefined),
   };
 });
 
@@ -385,6 +386,35 @@ describe('ProvidersSection — 深链定位', () => {
     expect((disconnect as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(disconnect);
     await waitFor(() => expect(codexAuthActions.logout).toHaveBeenCalled());
+    expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('OpenAI deletion revokes the legacy image key before hiding (failure=%s)', async (failure) => {
+    codexAuthState.state = { kind: 'authenticated', authSource: 'oauth' };
+    providersState.providers = [makeProvider('openai', {
+      name: 'OpenAI', connected: true, agents: ['codex'], models: { codex: [] },
+    })];
+    const events: string[] = [];
+    vi.mocked(window.electronAPI.builtinApiKeyRemove).mockImplementationOnce(async () => {
+      events.push('image-key');
+      if (failure) throw new Error('remove failed');
+    });
+    codexAuthActions.logout.mockImplementation(async () => { events.push('subscription'); });
+    vi.mocked(window.electronAPI.maker.setProviderPresentation).mockImplementation(async (input) => {
+      if (input.action === 'remove') events.push('hide');
+    });
+    renderAt('?tab=providers&connect=openai');
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.custom.deleteAria' }));
+    if (failure) {
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith('settings.providers.custom.toast.deleteFailed'));
+      expect(events).toEqual(['image-key']);
+    } else {
+      await waitFor(() => expect(events).toEqual(['image-key', 'subscription', 'hide']));
+    }
+    expect(window.electronAPI.builtinApiKeyRemove).toHaveBeenCalledWith(
+      'openai-images', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+    );
   });
 
   it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
