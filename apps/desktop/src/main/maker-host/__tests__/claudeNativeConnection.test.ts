@@ -22,7 +22,7 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
   isNativeProviderCredentialRejected: (_provider: string, digest: string) => digest === h.rejected,
 }));
 vi.mock('../override-settings-file.js', () => ({ createOverrideSettingsFile: () => ({
-  invalidateIfChanged: vi.fn(), read: () => ({}), writePatch: h.presentation,
+  invalidateIfChanged: vi.fn(), read: () => ({}), updateAtomic: async (updater: (state: { value: object }) => object) => h.presentation(updater({ value: {} })),
 }) }));
 import { claudeOAuthCredentialDigest, disconnectClaudeAiOAuth, reconnectClaudeAiOAuth } from '../claude-oauth-refresh.js';
 beforeEach(() => {
@@ -31,49 +31,49 @@ beforeEach(() => {
   h.token = 'native-test-token';
   h.rejected = null;
 });
-it('rejects the revoked credential after disconnect but allows changed native credentials', () => {
+it('rejects the revoked credential after disconnect but allows changed native credentials', async () => {
   h.rejected = claudeOAuthCredentialDigest({ accessToken: h.token });
-  disconnectClaudeAiOAuth();
-  expect(reconnectClaudeAiOAuth()).toBe(false);
+  await disconnectClaudeAiOAuth();
+  expect(await reconnectClaudeAiOAuth()).toBe(false);
   expect(h.bind).not.toHaveBeenCalled();
   h.token = 'different-account-token';
-  expect(reconnectClaudeAiOAuth()).toBe(true);
+  expect(await reconnectClaudeAiOAuth()).toBe(true);
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
-it('disconnect and reconnect only change the Cindy binding, never native credentials', () => {
-  disconnectClaudeAiOAuth();
+it('disconnect and reconnect only change the Cindy binding, never native credentials', async () => {
+  await disconnectClaudeAiOAuth();
   expect(h.unbind).toHaveBeenCalledWith('anthropic', { revoked: true });
-  expect(reconnectClaudeAiOAuth()).toBe(true);
+  expect(await reconnectClaudeAiOAuth()).toBe(true);
   expect(h.bind).toHaveBeenCalledWith('anthropic', { sharedSystem: true });
   expect(h.presentation).toHaveBeenCalledWith({ providers: { anthropic: { removed: false } } });
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
-it('cannot attach a native source with no credentials', () => {
+it('cannot attach a native source with no credentials', async () => {
   h.available = false;
-  expect(reconnectClaudeAiOAuth()).toBe(false);
+  expect(await reconnectClaudeAiOAuth()).toBe(false);
   expect(h.bind).not.toHaveBeenCalled();
 });
-it('preserves successful authentication if restoring the entry fails', () => {
+it('preserves successful authentication if restoring the entry fails', async () => {
   h.presentation.mockImplementationOnce(() => {
     throw new Error('disk full');
   });
-  expect(reconnectClaudeAiOAuth()).toBe(true);
+  expect(await reconnectClaudeAiOAuth()).toBe(true);
   expect(h.unbind).not.toHaveBeenCalled();
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
-it('completes disconnect when display persistence fails without clearing native credentials', () => {
+it('completes disconnect when display persistence fails without clearing native credentials', async () => {
   h.presentation.mockImplementationOnce(() => { throw new Error('disk full'); });
-  expect(() => disconnectClaudeAiOAuth()).not.toThrow();
+  await expect(disconnectClaudeAiOAuth()).resolves.toBeUndefined();
   expect(h.unbind).toHaveBeenCalledWith('anthropic', { revoked: true });
   expect(h.presentation).toHaveBeenCalled();
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
-it('still reports failure when the binding cannot be revoked', () => {
+it('still reports failure when the binding cannot be revoked', async () => {
   h.unbind.mockImplementationOnce(() => { throw new Error('binding write failed'); });
-  expect(() => disconnectClaudeAiOAuth()).toThrow('binding write failed');
+  await expect(disconnectClaudeAiOAuth()).rejects.toThrow('binding write failed');
   expect(h.presentation).not.toHaveBeenCalled();
 });

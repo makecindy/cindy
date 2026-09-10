@@ -577,7 +577,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     } catch (error) {
       log.warn('claude credential revocation could not be persisted', { error: error instanceof Error ? error.message : String(error) });
     }
-    retainInvalidatedProviderPresentation('anthropic');
+    const presentation = retainInvalidatedProviderPresentation('anthropic');
     if (this.onInvalidatedBroadcast) {
       try {
         this.onInvalidatedBroadcast(reason);
@@ -585,6 +585,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         log.warn('onInvalidatedBroadcast threw', { error: (e as Error).message });
       }
     }
+    await presentation;
   }
 
   async ensureSharedGlobalSkills(): Promise<void> {
@@ -665,7 +666,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async logout(): Promise<void> {
     // Only disconnect Cindy's native subscription binding; keep system and Gateway credentials.
     if (hasClaudeAiOAuth() || isNativeProviderAuthRevoked('anthropic')) {
-      disconnectClaudeAiOAuth();
+      await disconnectClaudeAiOAuth();
       return;
     }
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
@@ -1931,7 +1932,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
           unbindNativeProviderAuth('openai', { revoked: true });
           return { authenticated: false, errorReason: 'auth_boundary_clear_failed' };
         }
-        retainProviderPresentationAfterAuthChange('openai');
         this.devReadOnlyDetached = false;
         this.suppressSystemCodexReconcile = false;
         this.oauthInvalidatedReason = null;
@@ -1941,6 +1941,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         this.memoryOnlyInvalidatedSystemCredential = null;
         this.lastKnownCodexCredentialScope = 'system-shared';
         this.loginCancellationOpen = false;
+        await retainProviderPresentationAfterAuthChange('openai');
+        if (!ownerCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+        if (!stillCurrent()) return this.disconnectCodexOAuth().then(() => ({
+          authenticated: false, errorReason: 'login_cancelled',
+        }));
         await this.notifyCodexLoginSuccess();
         if (!ownerCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
         // Match browser finalization: a late Cancel must revoke Cindy's committed binding.
@@ -2191,7 +2196,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     await this.notifyCodexLoginSuccess();
     const cancelledAfterHostRestart = cancelFinalization();
     if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
-    retainProviderPresentationAfterAuthChange('openai');
+    await retainProviderPresentationAfterAuthChange('openai');
+    const cancelledAfterPresentation = cancelFinalization();
+    if (cancelledAfterPresentation) return cancelledAfterPresentation;
     return state;
   }
 

@@ -743,19 +743,19 @@ export function backfillClaudeSubscriptionProfile(accessToken: string): Promise<
 }
 
 /** Stop Cindy refreshes and revoke only Cindy's use of the native subscription. */
-export function disconnectClaudeAiOAuth(): void {
+export async function disconnectClaudeAiOAuth(): Promise<void> {
   invalidateClaudeOAuthRefresh();
   unbindNativeProviderAuth('anthropic', { revoked: true });
-  retainProviderPresentationAfterAuthChange('anthropic');
+  await retainProviderPresentationAfterAuthChange('anthropic');
 }
 
 /** Reattach the existing native login; never write or remove system credentials. */
-export function reconnectClaudeAiOAuth(): boolean {
+export async function reconnectClaudeAiOAuth(): Promise<boolean> {
   const oauth = readClaudeAiOAuthUnbound();
   if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth))) return false;
   invalidateClaudeOAuthRefresh();
   bindNativeProviderAuth('anthropic', { sharedSystem: true });
-  retainProviderPresentationAfterAuthChange('anthropic');
+  await retainProviderPresentationAfterAuthChange('anthropic');
   return true;
 }
 

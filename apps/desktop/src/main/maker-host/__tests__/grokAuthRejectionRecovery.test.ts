@@ -117,6 +117,16 @@ afterEach(() => {
 });
 
 describe('recoverGrokAuthAfterRejection', () => {
+  it('does not report stale logout after credentials change during presentation persistence', async () => {
+    seedCredentials({ refresh_token: undefined });
+    retainPresentation.mockImplementationOnce(async () => {
+      bound = true;
+      seedCredentials({ access_token: 'new-login-token' });
+      resetGrokOAuthMemoryCache();
+    });
+    await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('superseded');
+    expect(peekGrokAccessToken()).toBe('new-login-token');
+  });
   it('refresh and logout affect only the selected account', async () => {
     seedCredentials();
     store.set('xai-second', JSON.stringify({ access_token: 'second-token', refresh_token: 'second-refresh', expires_at: Date.now() + 3600_000 }));

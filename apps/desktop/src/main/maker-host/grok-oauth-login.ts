@@ -939,8 +939,10 @@ function createGrokAccount(providerId: string) {
           // 冷却不回滚 —— 这一路确实发出了刷新请求,轮换已经消耗掉了。
           log.warn('xai refresh_token 已被服务端作废,清空本机凭证并回落未登录');
         }
-        if (providerId === 'xai') retainInvalidatedProviderPresentation(providerId);
         logoutGrok();
+        const loggedOutGeneration = getGrokOAuthCredentialGeneration();
+        if (providerId === 'xai') await retainInvalidatedProviderPresentation(providerId);
+        if (!currentScope() || loggedOutGeneration !== getGrokOAuthCredentialGeneration()) return 'superseded';
         return 'logged_out';
       }
       default:

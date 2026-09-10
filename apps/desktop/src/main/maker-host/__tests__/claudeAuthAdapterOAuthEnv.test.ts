@@ -293,6 +293,21 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
 
+  it('broadcasts revocation before waiting for auxiliary presentation persistence', async () => {
+    const adapter = await makeAdapter();
+    let release!: () => void;
+    h.retainPresentation.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+    const broadcast = vi.fn();
+    adapter.setOnInvalidatedBroadcast(broadcast);
+    const pending = adapter.invalidate('old-credential-rejected');
+    expect(broadcast).toHaveBeenCalledWith('old-credential-rejected');
+    h.revoked = false;
+    release();
+    await pending;
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(h.revoked).toBe(false);
+  });
+
   it('构造期接线 invalid_grant handler(刷新模块通知 → invalidate 链路可达)', async () => {
     await makeAdapter();
     expect(typeof h.invalidGrantHandler).toBe('function');

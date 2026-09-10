@@ -1169,7 +1169,7 @@ export function registerProviderHandlers(
     }
     if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
       if (provider.source === 'builtin' || provider.id === MANAGED_OLLAMA_PROVIDER_ID) {
-        setProviderPresentation(providerId, { name: value.name });
+        await setProviderPresentation(providerId, { name: value.name });
       } else {
         const id = storedCustomProviderId(providerId);
         const name = value.name.trim();
@@ -1184,12 +1184,13 @@ export function registerProviderHandlers(
       }
     } else if (value.action === 'remove' && provider.source === 'builtin') {
       if (provider.connected) throwIpcError('INVALID_PARAMS', 'Disconnect the provider first');
-      setProviderPresentation(providerId, { removed: true });
+      await setProviderPresentation(providerId, { removed: true });
     } else if (value.action === 'restore' && provider.source === 'builtin') {
-      setProviderPresentation(providerId, { removed: false });
+      await setProviderPresentation(providerId, { removed: false });
     } else {
       throwIpcError('INVALID_PARAMS', 'Invalid presentation action');
     }
+    assertRequestedProviderOwner(value.dataOwnerId as string | null, value.ownerGeneration);
     deps.broadcastChanged();
   });
 

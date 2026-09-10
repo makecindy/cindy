@@ -5604,8 +5604,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           /* 发现失败保持纯静态目录，不影响登录结果 */
         }
         if (isCurrent()) {
-          if (provider.source === 'builtin') retainProviderPresentationAfterAuthChange(providerId);
-          broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+          if (provider.source === 'builtin') await retainProviderPresentationAfterAuthChange(providerId);
+          if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
         }
       }
       return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}) };

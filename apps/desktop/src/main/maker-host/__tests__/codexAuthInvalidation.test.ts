@@ -133,7 +133,7 @@ it.each([false, true])('preserves successful shared login and native files when 
   );
   fs.linkSync(systemAuth, localAuth);
   const { setProviderPresentation, readProviderPresentation } = await import('../provider-presentation-store.js');
-  setProviderPresentation('openai', { name: 'My OpenAI', removed: true });
+  await setProviderPresentation('openai', { name: 'My OpenAI', removed: true });
   const nativeBefore = fs.readFileSync(systemAuth, 'utf8');
   if (failPresentation) {
     const write = fs.writeFileSync;
