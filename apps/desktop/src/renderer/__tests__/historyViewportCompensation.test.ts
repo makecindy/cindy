@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { toRenderItemViewportSnapshot } from '../components/chat/MessageStream';
 import { detectScrollAnchoringApplied } from '../components/chat/scrollAnchoringDetect';
 
-const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8');
+const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
 function between(start: string, end: string) {
   const from = source.indexOf(start);
   const to = source.indexOf(end, from);

@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { historyPrefetchThreshold } from '@cindy/maker-shared/message-window';
 import { decideUserIntentFillAction } from '../components/chat/viewportFillDetect';
 
-const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8');
+const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
 const start = source.indexOf('  const triggerUserIntentFill =');
 const end = source.indexOf('\n  useEffect(', start);
 const callback = ts.transpileModule(source.slice(start, end), {
